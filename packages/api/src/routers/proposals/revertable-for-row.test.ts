@@ -11,7 +11,8 @@
  * Rows are chosen where the candidate rules DISAGREE:
  *   - "false unless applied" (the old rule) vs the right one → a pending CREATE;
  *   - "true for every live row" (the lazy fix) vs the right one → a pending
- *     UPDATE, which has no before-snapshot and must stay false;
+ *     `edit` / non-entity update, which nothing stamps and must stay false
+ *     (an ENTITY update is true: its executor stamps an apply-time diff);
  *   - a COMPOSITE, which only the prediction path can answer (its created ids
  *     are stamped at approval);
  *   - every terminal status, which must stay false.
@@ -56,13 +57,57 @@ describe("a LIVE row answers 'would revert succeed once applied?'", () => {
     expect(revertableForRow(row("approval_failed"))).toBe(true);
   });
 
-  it("a pending UPDATE is NOT revertable — no before-snapshot (the lazy 'all live = true' fix fails here)", () => {
+  it("a pending ENTITY update is revertable — the `entity/update` executor stamps its apply-time diff", () => {
     expect(revertableForRow(row("pending", { proposalType: "update" }))).toBe(
-      false
+      true
     );
+  });
+
+  it("an update nothing stamps is NOT revertable (the lazy 'all live = true' fix fails here)", () => {
+    // `edit` routes to no entity/update executor; a non-entity update has no
+    // before-snapshot writer at all.
     expect(revertableForRow(row("pending", { proposalType: "edit" }))).toBe(
       false
     );
+    expect(
+      revertableForRow(
+        row("pending", { proposalType: "update", targetType: "cell" })
+      )
+    ).toBe(false);
+  });
+
+  it("an APPLIED entity update answers from its stamp: stamped → true, legacy (no stamp) → false", () => {
+    const stamped = {
+      materialized: {
+        propertyDiffs: [
+          {
+            entityId: "11111111-1111-1111-1111-111111111111",
+            before: { stage: "lead" },
+            after: { stage: "client" },
+            absentBefore: [],
+          },
+        ],
+      },
+    };
+    expect(
+      revertableForRow(
+        row("approved", { proposalType: "update", data: stamped })
+      )
+    ).toBe(true);
+    // An auto-approve receipt names its type `<subject>.<action>`.
+    expect(
+      revertableForRow(
+        row("auto_approved", { proposalType: "entity.update", data: stamped })
+      )
+    ).toBe(true);
+    expect(revertableForRow(row("approved", { proposalType: "update" }))).toBe(
+      false
+    );
+    expect(
+      revertableForRow(
+        row("auto_approved", { proposalType: "entity.update", data: {} })
+      )
+    ).toBe(false);
   });
 
   it("a pending entity DELETE is revertable (soft delete); a non-entity delete is not", () => {

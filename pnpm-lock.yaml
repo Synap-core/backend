@@ -883,6 +883,9 @@ importers:
       '@types/mdast':
         specifier: ^4.0.4
         version: 4.0.4
+      '@types/unist':
+        specifier: ^3.0.3
+        version: 3.0.3
       mdast-util-directive:
         specifier: ^3.1.0
         version: 3.1.0

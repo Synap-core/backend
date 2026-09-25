@@ -341,8 +341,21 @@ export const proposalsRouter = router({
          * carries no `automationId` column of its own.
          */
         automationId: z.string().uuid().optional(),
+        /**
+         * `validated` = approved ∪ auto_approved (the applied set, kept for its
+         * existing readers). `auto_approved` = ONLY the writes that executed
+         * without anyone deciding them — the "notice" tier of
+         * `resolveProposalAttention` (`@synap-core/types/proposals/attention`).
+         */
         status: z
-          .enum(["pending", "validated", "rejected", "reverted", "all"])
+          .enum([
+            "pending",
+            "validated",
+            "auto_approved",
+            "rejected",
+            "reverted",
+            "all",
+          ])
           .default("pending"),
         /** Cursor-based pagination: ISO timestamp of the last item's createdAt */
         cursor: z.string().optional(),
@@ -400,6 +413,10 @@ export const proposalsRouter = router({
             ProposalStatus.AUTO_APPROVED,
           ])
         );
+      } else if (input.status === "auto_approved") {
+        // Unseen writes only. `validated` mixes in the person's OWN approvals,
+        // which belong to history, not to "what agents did on your behalf".
+        conditions.push(eq(proposals.status, ProposalStatus.AUTO_APPROVED));
       } else if (input.status === "rejected") {
         conditions.push(eq(proposals.status, ProposalStatus.REJECTED));
       } else if (input.status === "reverted") {

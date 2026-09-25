@@ -37,7 +37,10 @@ import {
   subtractFromRecord,
   type CompleteMaterializedRecord,
 } from "./stamp-materialized.js";
-import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
+import type {
+  EntityDiffField,
+  EntityPropertyDiff,
+} from "../../utils/entity-property-diff.js";
 
 const logger = createLogger({ module: "revert-creations" });
 
@@ -71,6 +74,25 @@ export function revertTargetsFromPlan(
         before: diff.before[key],
         absentBefore: diff.absentBefore.includes(key),
       })),
+      // Keys an update REMOVED: restored to `before` while still absent.
+      ...(diff.absentAfter ?? []).map((key) => ({
+        kind: "property" as const,
+        entityId: diff.entityId,
+        key,
+        after: undefined,
+        before: diff.before[key],
+        absentBefore: false,
+        absentAfter: true,
+      })),
+      ...(Object.keys(diff.fields?.after ?? {}) as EntityDiffField[]).map(
+        (field) => ({
+          kind: "entity_field" as const,
+          entityId: diff.entityId,
+          field,
+          after: diff.fields?.after[field] ?? null,
+          before: diff.fields?.before[field] ?? null,
+        })
+      ),
       ...(diff.bodyDocumentId
         ? [
             {
@@ -104,6 +126,8 @@ export function describeRevertTarget(target: RevertTarget): string {
       return `"${target.key}" on entity ${target.entityId}`;
     case "entity_body":
       return `body of entity ${target.entityId}`;
+    case "entity_field":
+      return `${target.field === "preview" ? "description" : target.field} of entity ${target.entityId}`;
     default:
       return `${target.kind} ${target.id}`;
   }
@@ -121,10 +145,13 @@ export function revertSkipView(skip: RevertSkip): {
   return {
     kind: target.kind,
     id:
-      target.kind === "property" || target.kind === "entity_body"
+      target.kind === "property" ||
+      target.kind === "entity_body" ||
+      target.kind === "entity_field"
         ? target.entityId
         : target.id,
     ...(target.kind === "property" ? { key: target.key } : {}),
+    ...(target.kind === "entity_field" ? { key: target.field } : {}),
     reason: skip.reason,
     detail: skip.detail,
   };
@@ -191,9 +218,21 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
         break;
       case "property": {
         const diff = diffFor(target.entityId);
+        if (target.absentAfter) {
+          diff.absentAfter = [...(diff.absentAfter ?? []), target.key];
+          diff.before[target.key] = target.before;
+          break;
+        }
         diff.after[target.key] = target.after;
         if (target.absentBefore) diff.absentBefore.push(target.key);
         else diff.before[target.key] = target.before;
+        break;
+      }
+      case "entity_field": {
+        const diff = diffFor(target.entityId);
+        diff.fields ??= { before: {}, after: {} };
+        diff.fields.before[target.field] = target.before;
+        diff.fields.after[target.field] = target.after;
         break;
       }
       case "entity_body":
@@ -420,7 +459,10 @@ function emitRevertEvents(args: {
   }
 
   for (const diff of undone.propertyDiffs ?? []) {
-    const changedKeys = Object.keys(diff.after);
+    const changedKeys = [
+      ...Object.keys(diff.after),
+      ...(diff.absentAfter ?? []),
+    ];
     void recordDomainMutation({
       ...base,
       subjectType: "entity",

@@ -134,6 +134,18 @@ export interface RunGroup {
   completedCount: number;
   /** Runs that failed. */
   failedCount: number;
+  /** Runs still running. */
+  runningCount: number;
+  /**
+   * The MEASURED duration sample: completed runs that carry a `completedAt` at
+   * or after their `startedAt`. The two durations below are over exactly this
+   * set, and are `null` when it is empty — never 0, never a guess.
+   */
+  durationSampleCount: number;
+  /** Median `completedAt - startedAt` over the sample, in ms. */
+  medianDurationMs: number | null;
+  /** The newest sampled run's duration, in ms. */
+  lastDurationMs: number | null;
 }
 
 /**

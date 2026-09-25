@@ -1378,6 +1378,87 @@ export interface ListRunGroupsInput {
 }
 
 /**
+ * The MEASURED duration aggregates of a run group, over one rule: a run counts
+ * toward the sample only when it COMPLETED and carries a `completedAt` at or
+ * after its `startedAt`. A running, failed or cancelled run has no duration to
+ * measure, and a clock-skewed row would be a negative lie. Both groupers read
+ * these same three expressions, so the sample can never mean two things.
+ */
+function durationAggregates(cols: {
+  status: typeof automationRuns.status | typeof playbookRuns.status;
+  startedAt: typeof automationRuns.startedAt | typeof playbookRuns.startedAt;
+  completedAt:
+    typeof automationRuns.completedAt | typeof playbookRuns.completedAt;
+  id: typeof automationRuns.id | typeof playbookRuns.id;
+}) {
+  const sampled = drizzleSql`${cols.status} = 'completed' and ${cols.completedAt} is not null and ${cols.completedAt} >= ${cols.startedAt}`;
+  const ms = drizzleSql`(extract(epoch from (${cols.completedAt} - ${cols.startedAt})) * 1000)`;
+  return {
+    durationSampleCount: drizzleSql<number>`(count(*) filter (where ${sampled}))::int`,
+    // percentile_cont yields float8; `null` over an empty sample.
+    medianDurationMs: drizzleSql<
+      number | string | null
+    >`percentile_cont(0.5) within group (order by ${ms}) filter (where ${sampled})`,
+    lastDurationMs: drizzleSql<
+      number | string | null
+    >`(array_agg(${ms} order by ${cols.startedAt} desc, ${cols.id} asc) filter (where ${sampled}))[1]`,
+  };
+}
+
+/** A raw float aggregate → whole ms, keeping `null` as `null` (absent is not 0). */
+function roundMs(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+export interface RunTracksInput {
+  userId: string;
+  /** Flow ids already floored by the caller's own visibility read. */
+  playbookIds?: readonly string[];
+  automationIds?: readonly string[];
+}
+
+/**
+ * The TRACK RECORD of specific flows — the same `RunGroup` aggregate the runs
+ * feed groups by, narrowed to the given ids (one grouped query per ledger, no
+ * second aggregator). Keyed `${flowType}:${flowId}`. A flow with no visible
+ * run is ABSENT from the map: "never ran" is the caller's reading of absence.
+ */
+export async function listRunTracks(
+  input: RunTracksInput
+): Promise<Map<string, RunGroup>> {
+  const playbookIds = [...new Set(input.playbookIds ?? [])];
+  const automationIds = [...new Set(input.automationIds ?? [])];
+  const [automationGroups, playbookGroups] = await Promise.all([
+    automationIds.length > 0
+      ? groupAutomationRuns(
+          input.userId,
+          undefined,
+          automationIds.length,
+          undefined,
+          automationIds
+        )
+      : Promise.resolve([] as RunGroup[]),
+    playbookIds.length > 0
+      ? groupPlaybookRuns(
+          input.userId,
+          undefined,
+          playbookIds.length,
+          undefined,
+          playbookIds
+        )
+      : Promise.resolve([] as RunGroup[]),
+  ]);
+  return new Map(
+    [...automationGroups, ...playbookGroups].map((g) => [
+      `${g.flowType}:${g.flowId}`,
+      g,
+    ])
+  );
+}
+
+/**
  * Runs collapsed to ONE row per flow (automation / playbook), newest-active
  * first. USER-floored via the SAME `userVisibleWhere` predicate `listRuns` uses,
  * so a group never counts a run the user can't see. Each ledger is grouped in the
@@ -1443,7 +1524,8 @@ async function groupAutomationRuns(
   userId: string,
   workspaceId: string | undefined,
   limit: number,
-  cursor?: RunGroupCursor
+  cursor?: RunGroupCursor,
+  flowIds?: readonly string[]
 ): Promise<RunGroup[]> {
   const latest = drizzleSql<Date>`max(${automationRuns.startedAt})`;
   const afterCursor = cursor
@@ -1468,6 +1550,8 @@ async function groupAutomationRuns(
       // surface renders the two with distinct calm/red tones).
       failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy')))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${automationRuns.status} = 'running')`,
+      runningCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'running'))::int`,
+      ...durationAggregates(automationRuns),
       latestStartedAt: drizzleSql<Date>`max(${automationRuns.startedAt})`,
       latestRunId: drizzleSql<string>`(array_agg(${automationRuns.id} order by ${automationRuns.startedAt} desc, ${automationRuns.id} asc))[1]`,
       latestStatus: drizzleSql<string>`(array_agg(${automationRuns.status} order by ${automationRuns.startedAt} desc, ${automationRuns.id} asc))[1]`,
@@ -1477,7 +1561,8 @@ async function groupAutomationRuns(
     .where(
       and(
         userVisibleWhere(automationRuns.workspaceId, userId),
-        workspaceId ? eq(automationRuns.workspaceId, workspaceId) : undefined
+        workspaceId ? eq(automationRuns.workspaceId, workspaceId) : undefined,
+        flowIds ? inArray(automationRuns.automationId, [...flowIds]) : undefined
       )
     )
     .groupBy(automationRuns.automationId, automations.name)
@@ -1500,6 +1585,10 @@ async function groupAutomationRuns(
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
+    runningCount: r.runningCount,
+    durationSampleCount: r.durationSampleCount,
+    medianDurationMs: roundMs(r.medianDurationMs),
+    lastDurationMs: roundMs(r.lastDurationMs),
   }));
 }
 
@@ -1507,7 +1596,8 @@ async function groupPlaybookRuns(
   userId: string,
   workspaceId: string | undefined,
   limit: number,
-  cursor?: RunGroupCursor
+  cursor?: RunGroupCursor,
+  flowIds?: readonly string[]
 ): Promise<RunGroup[]> {
   const latest = drizzleSql<Date>`max(${playbookRuns.startedAt})`;
   const afterCursor = cursor
@@ -1529,6 +1619,8 @@ async function groupPlaybookRuns(
       completedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'completed'))::int`,
       failedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed'))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${playbookRuns.status} = 'running')`,
+      runningCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'running'))::int`,
+      ...durationAggregates(playbookRuns),
       latestStartedAt: drizzleSql<Date>`max(${playbookRuns.startedAt})`,
       latestRunId: drizzleSql<string>`(array_agg(${playbookRuns.id} order by ${playbookRuns.startedAt} desc, ${playbookRuns.id} asc))[1]`,
       latestStatus: drizzleSql<string>`(array_agg(${playbookRuns.status} order by ${playbookRuns.startedAt} desc, ${playbookRuns.id} asc))[1]`,
@@ -1538,7 +1630,8 @@ async function groupPlaybookRuns(
     .where(
       and(
         userVisibleWhere(playbookRuns.workspaceId, userId),
-        workspaceId ? eq(playbookRuns.workspaceId, workspaceId) : undefined
+        workspaceId ? eq(playbookRuns.workspaceId, workspaceId) : undefined,
+        flowIds ? inArray(playbookRuns.playbookId, [...flowIds]) : undefined
       )
     )
     .groupBy(playbookRuns.playbookId, playbooks.name)
@@ -1561,6 +1654,10 @@ async function groupPlaybookRuns(
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
+    runningCount: r.runningCount,
+    durationSampleCount: r.durationSampleCount,
+    medianDurationMs: roundMs(r.medianDurationMs),
+    lastDurationMs: roundMs(r.lastDurationMs),
   }));
 }
 

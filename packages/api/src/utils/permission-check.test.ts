@@ -2231,6 +2231,34 @@ describe("checkPermissionOrPropose — anonymous principal routed through decide
     // THE MARKER — positive and greppable. The agent path never sets it.
     expect(autoApprove.principal).toBe("anonymous");
     expect(autoApprove.matchedPattern).toBe("entity.create");
+    // No rule decided (rung 8 did) — so no rule is named.
+    expect(autoApprove.governanceRuleId).toBeUndefined();
+  });
+
+  it("the receipt names the governance_rules row when rung 2.8 is what auto-approved it", async () => {
+    setupAnonymousFlow({
+      ruleRow: {
+        id: "rule-anon-7",
+        principalKind: "any",
+        scopeKind: "workspace",
+        targetKind: "action",
+        targetPattern: "entity.create",
+        targetProfile: null,
+        verdict: "auto",
+        createdAt: new Date(),
+      },
+    });
+
+    const result = await anonymousWrite();
+
+    expect(result).toMatchObject({ granted: true });
+    const autoApprove = (
+      (insertedRows.at(-1) as Record<string, unknown>).data as Record<
+        string,
+        unknown
+      >
+    )._autoApprove as Record<string, unknown>;
+    expect(autoApprove.governanceRuleId).toBe("rule-anon-7");
   });
 
   it("a receipt INSERT failure never fails the write it is auditing", async () => {
@@ -2935,5 +2963,114 @@ describe("checkPermissionOrPropose — 4d pod-admin schema change (property_def/
     const agent = await write({ agentUserId: "agent-schema-1" });
     expect(agent).toEqual({ denied: true, reason: "Permission check error" });
     expect(insertPendingProposal).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * RULE ATTRIBUTION on the AGENT receipt. Drives the REAL (unmocked)
+ * `resolveAgentGovernanceDecision` against the shape-dispatched `db` mock: the
+ * governance_rules read returns one `auto` row, so rung 2.8 is the rung that
+ * executes and the receipt must name that row. Without a rule, rung 8
+ * (DEFAULT_AUTO_APPROVE) decides and no rule may be named.
+ */
+describe("checkPermissionOrPropose — agent receipt names the deciding governance rule", () => {
+  let insertedRows: Record<string, unknown>[];
+
+  function setupAgentFlow(ruleRow: Record<string, unknown> | null) {
+    mockDbSelect.mockImplementation((fields: Record<string, unknown> = {}) => {
+      const keys = Object.keys(fields);
+      let rows: unknown[] = [];
+      if (keys.includes("userType")) {
+        rows = [{ userType: "agent", agentMetadata: {} }];
+      } else if (keys.includes("settings")) {
+        rows = [{ settings: {}, workspaceType: "personal" }];
+      } else if (keys.length === 1 && keys[0] === "n") {
+        rows = [{ n: 0 }];
+      } else if (keys.includes("targetPattern")) {
+        rows = ruleRow ? [ruleRow] : [];
+      }
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue(rows),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve(rows).then(res, rej),
+      };
+      return b;
+    });
+  }
+
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+    mockFocusSessionFindFirst.mockReset().mockResolvedValue(undefined);
+    insertedRows = [];
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn((row: Record<string, unknown>) => {
+        insertedRows.push(row);
+        return {
+          returning: vi.fn().mockResolvedValue([{ id: "receipt-agent-1" }]),
+        };
+      }),
+    }));
+  });
+
+  afterEach(() => {
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn().mockReturnThis(),
+      returning: vi.fn().mockResolvedValue([{ id: "restored-insert" }]),
+      catch: vi.fn().mockReturnThis(),
+    }));
+  });
+
+  const agentUpdate = () =>
+    checkPermissionOrPropose({
+      userId: "user-abc",
+      agentUserId: "agent-rule-1",
+      workspaceId: "ws-123",
+      subjectType: "entity",
+      action: "update",
+      sessionId: "session-given",
+      data: { id: "ent-1", title: "Renamed" },
+    });
+
+  const receiptAutoApprove = () => {
+    const receipt = insertedRows.find(
+      (r) => r.status === "auto_approved"
+    ) as Record<string, unknown>;
+    expect(receipt).toBeDefined();
+    return (receipt.data as Record<string, unknown>)._autoApprove as Record<
+      string,
+      unknown
+    >;
+  };
+
+  it("an `auto` rule that decided is stamped as `governanceRuleId` beside `matchedPattern`", async () => {
+    setupAgentFlow({
+      id: "rule-42",
+      principalKind: "any",
+      scopeKind: "workspace",
+      targetKind: "action",
+      targetPattern: "entity.update",
+      targetProfile: null,
+      verdict: "auto",
+      createdAt: new Date(),
+    });
+
+    const result = await agentUpdate();
+
+    expect(result).toMatchObject({ granted: true });
+    const autoApprove = receiptAutoApprove();
+    expect(autoApprove.governanceRuleId).toBe("rule-42");
+    expect(autoApprove.matchedPattern).toBe("entity.update");
+  });
+
+  it("no rule matched (the default whitelist decided) ⇒ no rule is named", async () => {
+    setupAgentFlow(null);
+
+    const result = await agentUpdate();
+
+    expect(result).toMatchObject({ granted: true });
+    expect(receiptAutoApprove().governanceRuleId).toBeUndefined();
   });
 });

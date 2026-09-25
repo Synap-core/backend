@@ -1077,6 +1077,13 @@ export interface AgentPolicyInput {
    */
   governanceRuleVerdict?: "auto" | "propose";
   /**
+   * The id of the `governance_rules` row behind `governanceRuleVerdict`. Pure
+   * attribution: never read to decide, only echoed on the `execute` verdict
+   * when rung 2.8 is the rung that decided, so a receipt can name the rule
+   * that auto-approved it.
+   */
+  governanceRuleId?: string;
+  /**
    * Server-resolved TRUST of the acting channel's ORIGIN — the #4
    * instruction-provenance signal, consumed at rung 2.55. `"untrusted"` for an
    * EXTERNAL / bridge / `source`-produced channel (a message authored outside
@@ -1123,7 +1130,11 @@ export interface AgentPolicyInput {
  * `reason_code` column, which carries REJECTION semantics.
  */
 export type AgentPolicyVerdict =
-  | { verdict: "execute" }
+  /**
+   * `governanceRuleId` is present only when rung 2.8 decided and the caller
+   * passed the rule's id — the attribution a receipt stamps.
+   */
+  | { verdict: "execute"; governanceRuleId?: string }
   | { verdict: "propose"; reason?: string; reasonCode?: string }
   | { verdict: "deny"; reason: string };
 
@@ -1441,7 +1452,9 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // falling through byte-identical to every rung below.
   if (input.governanceRuleVerdict) {
     return input.governanceRuleVerdict === "auto"
-      ? { verdict: "execute" }
+      ? input.governanceRuleId
+        ? { verdict: "execute", governanceRuleId: input.governanceRuleId }
+        : { verdict: "execute" }
       : {
           verdict: "propose",
           reason: PROPOSE_REASON.GOVERNANCE_RULE,
@@ -1699,6 +1712,12 @@ export const GATE_WRITE_DOORS = {
   // until this door existed; this is its first call site.)
   "property_def/update": "gate",
   "relation/create": "gate",
+  // An EXPOSURE edge (`visible_to`, via `relations.exposeToAnchor`). Its own
+  // verb, not `relation/create`, because it widens WHO MAY SEE the entity:
+  // it lands in the access lane (`ACCESS_DOORS`, proposal-class.ts) and is
+  // deliberately absent from DEFAULT_AUTO_APPROVE, where `relation.create`
+  // sits. Approval writes the same edge (catch-all alias → materializer create).
+  "relation/expose": "gate",
   "relation/delete": "gate",
   "relation/update": "gate",
   "relation_def/create": "gate",

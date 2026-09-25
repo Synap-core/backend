@@ -116,7 +116,12 @@ export type AgentGovernanceResolution =
   | { decision: "not-agent" }
   | { decision: "deny"; reason: string }
   | { decision: "propose"; reason?: string; reasonCode?: string }
-  | { decision: "execute"; explicitAutoApproveFor?: readonly string[] };
+  | {
+      decision: "execute";
+      explicitAutoApproveFor?: readonly string[];
+      /** The `governance_rules` row that decided (rung 2.8), when one did. */
+      governanceRuleId?: string;
+    };
 
 /** A candidate row's specificity-scoring columns (subset of `governanceRules`). */
 interface GovernanceRuleCandidate {
@@ -952,6 +957,7 @@ export async function resolveAgentGovernanceDecision(
     forcePropose: input.forcePropose,
     podAdminSchemaChange: input.podAdminSchemaChange,
     governanceRuleVerdict: ruleMatch?.verdict,
+    governanceRuleId: ruleMatch?.ruleId,
     originTrust,
   };
 
@@ -1004,6 +1010,11 @@ export async function resolveAgentGovernanceDecision(
   return {
     decision: "execute",
     explicitAutoApproveFor: ruleMatch ? [ruleMatch.matchedPattern] : undefined,
+    // Set by the engine only when rung 2.8 decided — never inferred from a
+    // match alone, since a rung above it may have been the one that executed.
+    ...(decision.governanceRuleId
+      ? { governanceRuleId: decision.governanceRuleId }
+      : {}),
   };
 }
 

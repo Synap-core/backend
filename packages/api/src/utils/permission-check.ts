@@ -1040,6 +1040,8 @@ interface AnonymousPolicyFacts {
   podAdminSchemaChange: boolean;
   /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
   governanceRuleVerdict: "auto" | "propose" | undefined;
+  /** rung 2.8 attribution — the rule behind the verdict (echoed on execute, never decides). */
+  governanceRuleId: string | undefined;
   /** rung 2.55 — server-resolved trust of the acting channel's ORIGIN. */
   originTrust: "trusted" | "untrusted" | undefined;
 }
@@ -1131,6 +1133,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     forcePropose: facts.forcePropose,
     podAdminSchemaChange: facts.podAdminSchemaChange,
     governanceRuleVerdict: facts.governanceRuleVerdict,
+    governanceRuleId: facts.governanceRuleId,
     originTrust: facts.originTrust,
 
     // ── AGENT-ONLY INPUTS — omitted on purpose, never given a plausible
@@ -1887,6 +1890,11 @@ async function evaluatePermission(
                       ? gov.explicitAutoApproveFor
                       : undefined) ?? DEFAULT_AUTO_APPROVE
                   ),
+                  // The `governance_rules` row that decided (rung 2.8), set by
+                  // the engine only when that rung is the one that executed.
+                  ...(gov.decision === "execute" && gov.governanceRuleId
+                    ? { governanceRuleId: gov.governanceRuleId }
+                    : {}),
                   approvedAt: new Date().toISOString(),
                   approvedBy: "system:auto_approve",
                 },
@@ -2051,6 +2059,7 @@ async function evaluatePermission(
           forcePropose: effectiveForcePropose,
           podAdminSchemaChange,
           governanceRuleVerdict: ruleMatch?.verdict,
+          governanceRuleId: ruleMatch?.ruleId,
           originTrust,
         })
       );
@@ -2148,6 +2157,10 @@ async function evaluatePermission(
                     eventKey,
                     DEFAULT_AUTO_APPROVE
                   ),
+                  // Rung 2.8's rule, when it (not rung 8 / the toggle) decided.
+                  ...(gov.verdict === "execute" && gov.governanceRuleId
+                    ? { governanceRuleId: gov.governanceRuleId }
+                    : {}),
                   approvedAt: new Date().toISOString(),
                   approvedBy: "system:auto_approve",
                 },

@@ -5031,6 +5031,47 @@ export interface ReconcileReport {
 	 */
 	layers?: InstallLayerReport[];
 }
+/**
+ * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
+ *
+ * A strong-identity dedup does not create a row — it enriches one that was
+ * already there. Revert must never delete that entity (it is somebody's), but
+ * it must be able to put back what the run overwrote. So the merge records,
+ * per key, the prior value and the value it wrote; revert restores a key only
+ * while it still holds the written value (a key edited since is left alone).
+ *
+ * JSON cannot hold `undefined`, so "the key did not exist before" is a list
+ * (`absentBefore`), never a missing entry in `before`.
+ */
+export interface EntityPropertyDiff {
+	entityId: string;
+	/** Prior value of every changed key that EXISTED before the merge. */
+	before: Record<string, unknown>;
+	/** Value the merge wrote, for every changed key. */
+	after: Record<string, unknown>;
+	/** Changed keys that did not exist before the merge. */
+	absentBefore: string[];
+	/**
+	 * Body document the merge linked onto an entity that had none. Revert
+	 * unlinks it only while the entity still points at it.
+	 */
+	bodyDocumentId?: string;
+	/**
+	 * Keys the write REMOVED (an update's `deleteProperties`). Their prior value
+	 * is in `before`; revert restores one only while it is still absent.
+	 */
+	absentAfter?: string[];
+	/**
+	 * Entity COLUMNS an update changed (title; `preview` is the description).
+	 * Revert restores one only while it still holds the written value.
+	 */
+	fields?: {
+		before: Partial<Record<EntityDiffField, string | null>>;
+		after: Partial<Record<EntityDiffField, string | null>>;
+	};
+}
+/** The entity columns an update can change and revert can restore. */
+export type EntityDiffField = "title" | "preview";
 export type RevertTarget = {
 	kind: "entity";
 	id: string;
@@ -5078,12 +5119,23 @@ export type RevertTarget = {
 	/** Prior value (ignored when `absentBefore`). */
 	before: unknown;
 	absentBefore: boolean;
+	/** The run REMOVED the key — restore only while it is still absent. */
+	absentAfter?: boolean;
 }
 /** A body document a merge linked onto an entity that had none. */
  | {
 	kind: "entity_body";
 	entityId: string;
 	documentId: string;
+}
+/** One entity column (title / preview) an update changed. */
+ | {
+	kind: "entity_field";
+	entityId: string;
+	field: EntityDiffField;
+	/** The value the run wrote — restore only while the column still holds it. */
+	after: string | null;
+	before: string | null;
 };
 export type RevertSkipReason = 
 /** Changed after the work that created it. */
@@ -6420,32 +6472,6 @@ export interface WorkspaceRuleOffer {
 	/** Why it cannot be installed yet, in the pod's own words. */
 	reason: string;
 }
-/**
- * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
- *
- * A strong-identity dedup does not create a row — it enriches one that was
- * already there. Revert must never delete that entity (it is somebody's), but
- * it must be able to put back what the run overwrote. So the merge records,
- * per key, the prior value and the value it wrote; revert restores a key only
- * while it still holds the written value (a key edited since is left alone).
- *
- * JSON cannot hold `undefined`, so "the key did not exist before" is a list
- * (`absentBefore`), never a missing entry in `before`.
- */
-export interface EntityPropertyDiff {
-	entityId: string;
-	/** Prior value of every changed key that EXISTED before the merge. */
-	before: Record<string, unknown>;
-	/** Value the merge wrote, for every changed key. */
-	after: Record<string, unknown>;
-	/** Changed keys that did not exist before the merge. */
-	absentBefore: string[];
-	/**
-	 * Body document the merge linked onto an entity that had none. Revert
-	 * unlinks it only while the entity still points at it.
-	 */
-	bodyDocumentId?: string;
-}
 /** One relation op that was submitted but never created — the honest detail
  * behind a `created < submitted` gap on a materialize receipt. */
 export interface MaterializeRelationFailure {
@@ -6777,6 +6803,297 @@ declare const PROPOSAL_CLASSES: readonly [
 	"access"
 ];
 export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
+/**
+ * Which ledger a run came from.
+ *
+ * `agent_write` is the CATCH-ALL for a plain agent write that instantiates no
+ * flow at all — e.g. a CLI `synap capture` or an MCP `create_entity` that
+ * auto-approved. It produces an auto-approved proposal receipt + a `.completed`
+ * event and belongs to no automation, playbook, chat turn, or capability run, so
+ * before this member existed it rendered in NO flow type and was invisible in the
+ * unified feed — the "you did something on the pod, I got no way to see it" gap.
+ */
+export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session" | "chat" | "agent_write";
+/** Normalised lifecycle across all ledgers. */
+export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped" | "blocked_by_policy";
+/** One run, ledger-agnostic. */
+export interface UnifiedRun {
+	/** Run id (the ledger row id; the captureId for a capture run). */
+	id: string;
+	flowType: FlowType;
+	/** The flow this run instantiated (automationId / playbookId); null for capture. */
+	flowId: string | null;
+	/** Human label for the flow (automation/playbook name, session goal, "Capture"). */
+	flowName: string;
+	status: RunStatus;
+	startedAt: Date;
+	completedAt: Date | null;
+	/**
+	 * Most recent evidence this run is still MAKING PROGRESS — not merely that it
+	 * exists. `null` means UNKNOWN (this ledger records no activity timestamp),
+	 * and it must never be read as "no activity": age is the only honest signal
+	 * for those, and the stall classifier says so explicitly.
+	 *
+	 * Per ledger: session/playbook → `focus_sessions.updated_at` (every real step
+	 * touches it — the same signal `playbook-run-reaper` keys on); chat →
+	 * `chat_turns.updated_at`; automation/capture/capability/agent_write → null
+	 * (no such column; see `classifyRunStall` for what covers them instead).
+	 */
+	lastActivityAt: Date | null;
+	workspaceId: string | null;
+	projectId: string | null;
+	/** The entity this run is "about", when the ledger records one. */
+	subjectEntityId: string | null;
+	/** The durable channel that holds this run's activity (see the channel rule). */
+	channelId: string | null;
+	/** The correlationId that groups a capture's whole story (capture only). */
+	correlationId: string | null;
+	/** The run this one replays (automation/playbook lineage; null otherwise). */
+	replayOf: string | null;
+	summary: string | null;
+	error: string | null;
+	/** Who/what triggered the run (userId or "system"); null where the ledger has none. */
+	triggeredBy: string | null;
+	/** Steps that completed / failed (automation runs only; null for other ledgers). */
+	stepsCompleted: number | null;
+	stepsFailed: number | null;
+	/** The definition version this run executed (from definitionSnapshot); null if unsnapshotted. */
+	definitionVersion: number | null;
+}
+/**
+ * A run GROUP — one template's whole run footprint collapsed to a single row.
+ *
+ * Only the ledgers whose runs instantiate a reusable FLOW group: `automation` and
+ * `playbook` (both carry a `flowId`). Ad-hoc `capture`/`session` runs have no
+ * flowId, so they are never grouped — they stay individual `UnifiedRun` rows. The
+ * group key is (`flowType`, `flowId`). Counts are computed SERVER-side over the
+ * whole ledger (not a truncated page), so `runCount`/`latestRunId` are exact —
+ * the reason this is a dedicated grouped query and never a client fold.
+ */
+export interface RunGroup {
+	flowType: "automation" | "playbook";
+	/** The flow every run in this group instantiated (automationId / playbookId). */
+	flowId: string;
+	/** Human label for the flow (automation/playbook name). */
+	flowName: string;
+	/** Total runs of this flow the user can see. */
+	runCount: number;
+	/** The newest run's id — the drill target for "latest run". */
+	latestRunId: string;
+	/** The newest run's status (drives the group's status badge). */
+	latestStatus: RunStatus;
+	/** When the newest run started (the group's sort key in the merged feed). */
+	latestStartedAt: Date;
+	/** Any run of this flow currently running — drives the live pulse. */
+	hasRunning: boolean;
+	/** Runs that completed. */
+	completedCount: number;
+	/** Runs that failed. */
+	failedCount: number;
+	/** Runs still running. */
+	runningCount: number;
+	/**
+	 * The MEASURED duration sample: completed runs that carry a `completedAt` at
+	 * or after their `startedAt`. The two durations below are over exactly this
+	 * set, and are `null` when it is empty — never 0, never a guess.
+	 */
+	durationSampleCount: number;
+	/** Median `completedAt - startedAt` over the sample, in ms. */
+	medianDurationMs: number | null;
+	/** The newest sampled run's duration, in ms. */
+	lastDurationMs: number | null;
+}
+/**
+ * One entry in a run's activity timeline — a step (automation), a decision/trace
+ * (capture), or a lifecycle marker. Rich timelines come from automation steps and
+ * capture events; playbook/session runs carry a `channelId` so the UI opens the
+ * channel for their message-level story instead of duplicating it here.
+ */
+export interface GenericRunActivityItem {
+	id: string;
+	at: Date | null;
+	/** "step" | "ai_decision" | "capture_trace" | "lifecycle" | … */
+	kind: string;
+	status: string | null;
+	label: string;
+	/** A one-line, actionable hint (capture traces carry a fixHint). */
+	hint: string | null;
+	detail: Record<string, unknown> | null;
+}
+export type AutomationStepStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "blocked_by_policy";
+/**
+ * Stable per-node execution payload exposed to run-detail consumers.
+ *
+ * These fields mirror the automation step ledger so every UI does not have to
+ * reinterpret `Record<string, unknown>`. Nullable values are honest for old or
+ * in-flight rows that lack timing, labels, commands, or an error.
+ */
+export interface AutomationStepActivityDetail {
+	output: Record<string, unknown>;
+	resolvedInputs: Record<string, unknown>;
+	startedAt: Date | null;
+	completedAt: Date | null;
+	nodeId: string;
+	nodeLabel: string | null;
+	commandId: string | null;
+	errorMessage: string | null;
+	nodeType: AutomationNode["type"] | null;
+	/**
+	 * AI telemetry for a step that made one or more IS generations (0224).
+	 *
+	 * `finishReason` is the field that EXPLAINS an empty completion — `length`
+	 * (the maxTokens budget truncated it), `content-filter`, `error`, or `stop`
+	 * (the model genuinely emitted nothing). Null on a non-AI step, on any run
+	 * that predates the migration, and against an IS build that predates the
+	 * seam telemetry change.
+	 */
+	finishReason: string | null;
+	tokensIn: number | null;
+	tokensOut: number | null;
+	tokensUsed: number | null;
+}
+export interface AutomationStepActivityItem {
+	id: string;
+	at: Date | null;
+	kind: "step";
+	status: AutomationStepStatus;
+	label: string;
+	hint: string | null;
+	detail: AutomationStepActivityDetail;
+}
+/** Timeline item across all ledgers. Automation steps use the precise variant. */
+export type RunActivityItem = AutomationStepActivityItem | GenericRunActivityItem;
+/** Immutable definition recorded at the start of an automation run. */
+export interface RunDefinitionSnapshot {
+	version: number;
+	flowDefinition: FlowDefinition;
+}
+export interface UnifiedRunDetailBase {
+	run: UnifiedRun;
+	activity: RunActivityItem[];
+	/** The trigger that started this run — its principal + full payload (automation only). */
+	trigger: {
+		triggeredBy: string | null;
+		payload: unknown;
+	} | null;
+	/** The run's full output summary JSONB (automation only); null for other ledgers. */
+	outputSummary: unknown;
+	/**
+	 * Rich per-kind detail for a PLAYBOOK run — the objects it produced, the
+	 * changes it proposed (created/updated/removed), who worked it, and its
+	 * session card. Null for every other flow (additive; browsers infer absence).
+	 *
+	 * For automation runs the per-node story lives on `activity` (each step's
+	 * `detail` gains `nodeLabel` / `nodeId` / `commandId`), so there is no
+	 * automation-specific block here.
+	 */
+	playbookDetail?: PlaybookRunDetail | null;
+}
+export interface AutomationRunDetail extends UnifiedRunDetailBase {
+	run: UnifiedRun & {
+		flowType: "automation";
+	};
+	activity: AutomationStepActivityItem[];
+	trigger: {
+		triggeredBy: string | null;
+		payload: Record<string, unknown>;
+	};
+	outputSummary: Record<string, unknown> | null;
+	playbookDetail: null;
+	/** The flow definition this run executed; null only for legacy runs. */
+	definitionSnapshot: RunDefinitionSnapshot | null;
+	/**
+	 * Which edges of `definitionSnapshot.flowDefinition` this run actually walked
+	 * — `{ traversedEdgeIds, prunedEdgeIds }`, written by the executor at the
+	 * moment each branch decision was made. Null for automation runs that predate
+	 * the column or never executed:
+	 * null means UNKNOWN, never "nothing was pruned". An edge in neither list is
+	 * undecided (its source never ran).
+	 */
+	pathTaken: RunPathTaken | null;
+}
+export interface NonAutomationRunDetail extends UnifiedRunDetailBase {
+	run: UnifiedRun & {
+		flowType: Exclude<FlowType, "automation">;
+	};
+	definitionSnapshot: null;
+	pathTaken: null;
+}
+export type UnifiedRunDetail = AutomationRunDetail | NonAutomationRunDetail;
+/**
+ * A playbook run's rich footprint. Every list is user-floored and capped; the
+ * session is the run's ONE focus session (playbook → one session per run).
+ */
+export interface PlaybookRunDetail {
+	/** The run's session card — its goal, stage, progress, expected/verified outputs. */
+	session: RunSessionCard | null;
+	/** Entities the session produced (`session --produced--> entity`), user-visible only. */
+	produced: RunProducedEntity[];
+	/** The session's proposals — the created/updated/removed ledger the run wrote (cap 50). */
+	proposals: RunProposalItem[];
+	/** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
+	agents: RunAgent[];
+}
+/** The session card behind a playbook run. */
+export interface RunSessionCard {
+	id: string;
+	goal: string;
+	status: string;
+	/** Active playbook stage key, or null for a stageless (progress-only) playbook. */
+	currentStage: string | null;
+	/** 0-100 progress, or null until the runner sets it. */
+	progress: number | null;
+	/** Declared deliverables ([{ kind, label, status? }]); shape-within-jsonb, passed through. */
+	expectedOutputs: unknown;
+	/** The single closing verification report JSONB, or null. */
+	verificationReport: unknown;
+	/** The session's room — where its message-level story lives. */
+	channelId: string | null;
+}
+/** An entity a playbook run's session produced. */
+export interface RunProducedEntity {
+	entityId: string;
+	title: string | null;
+	/** Entity type slug (entities.type, from the profile slug). */
+	type: string;
+	producedAt: Date;
+}
+/**
+ * One change a playbook run proposed. `changeKind` is a compact create/update/
+ * delete class DERIVED from `proposalType` where the vocabulary maps cleanly
+ * (create*, update/edit/merge, delete*); null when the type does not map — in
+ * which case read the raw `proposalType`. APPROVED/auto-approved proposals are
+ * included: "objects updated" ≈ resolved update-class proposals.
+ */
+export interface RunProposalItem {
+	id: string;
+	proposalType: string;
+	changeKind: "create" | "update" | "delete" | null;
+	status: string;
+	targetType: string;
+	targetId: string;
+	rejectionReason: string | null;
+	/** How many times a human revised this proposal before it resolved (the "AI got it wrong" signal). */
+	revisionCount: number;
+	createdAt: Date;
+	reviewedAt: Date | null;
+}
+/**
+ * A best-effort actor who worked a playbook run. Two honest signals are unioned:
+ *   - `proposal` — the FK-backed `proposals.agentUserId` (guaranteed an agent-user).
+ *   - `message`  — a `routedTeammateId` on an AI-agent message in the run's
+ *     channel (the documented agent-user id). Plain AI-agent messages are NOT
+ *     counted: their `userId` is the requesting owner, not the agent.
+ * `name` is null when the id does not resolve to a `users` row.
+ */
+export interface RunAgent {
+	/** users.id of the agent-user. */
+	id: string;
+	/** Display name (name / agentType / email) where resolvable; null otherwise. */
+	name: string | null;
+	/** Where the actor was observed. */
+	source: "proposal" | "message" | "both";
+}
 /**
  * @synap/playbooks — Playbooks & Capability Substrate contracts
  *
@@ -7437,6 +7754,28 @@ export type ProposalPrincipal = {
 	kind: "delegated";
 	name?: string;
 };
+/**
+ * TRACK RECORD — the MEASURED run history of the flow a proposal would run
+ * again (a playbook session start, an automation run). Never a prediction: V0
+ * agents are bring-your-own, so no cost reaches the pod, and a duration exists
+ * only where completed runs measured one.
+ *
+ * `runs: 0` is a measured zero (the flow is visible and has never run) — the
+ * field is ABSENT when the flow is not visible or the kind has no flow.
+ * Durations are over `durationSamples` completed runs and absent when that is 0.
+ */
+export interface ProposalTrack {
+	runs: number;
+	completed: number;
+	failed: number;
+	running: number;
+	/** ISO timestamp of the newest run. Absent when `runs` is 0. */
+	lastRunAt?: string;
+	lastStatus?: string;
+	durationSamples: number;
+	medianDurationMs?: number;
+	lastDurationMs?: number;
+}
 /** One distinct origin behind a cluster's proposals. */
 export interface ProposalClusterSource {
 	agentLabel?: string;
@@ -8987,285 +9326,6 @@ export interface WireCreatedVerbResult {
 	catalogued: boolean;
 	/** Capability containers the verb joined as a `skill` member. */
 	capabilityIds: string[];
-}
-/**
- * Which ledger a run came from.
- *
- * `agent_write` is the CATCH-ALL for a plain agent write that instantiates no
- * flow at all — e.g. a CLI `synap capture` or an MCP `create_entity` that
- * auto-approved. It produces an auto-approved proposal receipt + a `.completed`
- * event and belongs to no automation, playbook, chat turn, or capability run, so
- * before this member existed it rendered in NO flow type and was invisible in the
- * unified feed — the "you did something on the pod, I got no way to see it" gap.
- */
-export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session" | "chat" | "agent_write";
-/** Normalised lifecycle across all ledgers. */
-export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped" | "blocked_by_policy";
-/** One run, ledger-agnostic. */
-export interface UnifiedRun {
-	/** Run id (the ledger row id; the captureId for a capture run). */
-	id: string;
-	flowType: FlowType;
-	/** The flow this run instantiated (automationId / playbookId); null for capture. */
-	flowId: string | null;
-	/** Human label for the flow (automation/playbook name, session goal, "Capture"). */
-	flowName: string;
-	status: RunStatus;
-	startedAt: Date;
-	completedAt: Date | null;
-	/**
-	 * Most recent evidence this run is still MAKING PROGRESS — not merely that it
-	 * exists. `null` means UNKNOWN (this ledger records no activity timestamp),
-	 * and it must never be read as "no activity": age is the only honest signal
-	 * for those, and the stall classifier says so explicitly.
-	 *
-	 * Per ledger: session/playbook → `focus_sessions.updated_at` (every real step
-	 * touches it — the same signal `playbook-run-reaper` keys on); chat →
-	 * `chat_turns.updated_at`; automation/capture/capability/agent_write → null
-	 * (no such column; see `classifyRunStall` for what covers them instead).
-	 */
-	lastActivityAt: Date | null;
-	workspaceId: string | null;
-	projectId: string | null;
-	/** The entity this run is "about", when the ledger records one. */
-	subjectEntityId: string | null;
-	/** The durable channel that holds this run's activity (see the channel rule). */
-	channelId: string | null;
-	/** The correlationId that groups a capture's whole story (capture only). */
-	correlationId: string | null;
-	/** The run this one replays (automation/playbook lineage; null otherwise). */
-	replayOf: string | null;
-	summary: string | null;
-	error: string | null;
-	/** Who/what triggered the run (userId or "system"); null where the ledger has none. */
-	triggeredBy: string | null;
-	/** Steps that completed / failed (automation runs only; null for other ledgers). */
-	stepsCompleted: number | null;
-	stepsFailed: number | null;
-	/** The definition version this run executed (from definitionSnapshot); null if unsnapshotted. */
-	definitionVersion: number | null;
-}
-/**
- * A run GROUP — one template's whole run footprint collapsed to a single row.
- *
- * Only the ledgers whose runs instantiate a reusable FLOW group: `automation` and
- * `playbook` (both carry a `flowId`). Ad-hoc `capture`/`session` runs have no
- * flowId, so they are never grouped — they stay individual `UnifiedRun` rows. The
- * group key is (`flowType`, `flowId`). Counts are computed SERVER-side over the
- * whole ledger (not a truncated page), so `runCount`/`latestRunId` are exact —
- * the reason this is a dedicated grouped query and never a client fold.
- */
-export interface RunGroup {
-	flowType: "automation" | "playbook";
-	/** The flow every run in this group instantiated (automationId / playbookId). */
-	flowId: string;
-	/** Human label for the flow (automation/playbook name). */
-	flowName: string;
-	/** Total runs of this flow the user can see. */
-	runCount: number;
-	/** The newest run's id — the drill target for "latest run". */
-	latestRunId: string;
-	/** The newest run's status (drives the group's status badge). */
-	latestStatus: RunStatus;
-	/** When the newest run started (the group's sort key in the merged feed). */
-	latestStartedAt: Date;
-	/** Any run of this flow currently running — drives the live pulse. */
-	hasRunning: boolean;
-	/** Runs that completed. */
-	completedCount: number;
-	/** Runs that failed. */
-	failedCount: number;
-}
-/**
- * One entry in a run's activity timeline — a step (automation), a decision/trace
- * (capture), or a lifecycle marker. Rich timelines come from automation steps and
- * capture events; playbook/session runs carry a `channelId` so the UI opens the
- * channel for their message-level story instead of duplicating it here.
- */
-export interface GenericRunActivityItem {
-	id: string;
-	at: Date | null;
-	/** "step" | "ai_decision" | "capture_trace" | "lifecycle" | … */
-	kind: string;
-	status: string | null;
-	label: string;
-	/** A one-line, actionable hint (capture traces carry a fixHint). */
-	hint: string | null;
-	detail: Record<string, unknown> | null;
-}
-export type AutomationStepStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "blocked_by_policy";
-/**
- * Stable per-node execution payload exposed to run-detail consumers.
- *
- * These fields mirror the automation step ledger so every UI does not have to
- * reinterpret `Record<string, unknown>`. Nullable values are honest for old or
- * in-flight rows that lack timing, labels, commands, or an error.
- */
-export interface AutomationStepActivityDetail {
-	output: Record<string, unknown>;
-	resolvedInputs: Record<string, unknown>;
-	startedAt: Date | null;
-	completedAt: Date | null;
-	nodeId: string;
-	nodeLabel: string | null;
-	commandId: string | null;
-	errorMessage: string | null;
-	nodeType: AutomationNode["type"] | null;
-	/**
-	 * AI telemetry for a step that made one or more IS generations (0224).
-	 *
-	 * `finishReason` is the field that EXPLAINS an empty completion — `length`
-	 * (the maxTokens budget truncated it), `content-filter`, `error`, or `stop`
-	 * (the model genuinely emitted nothing). Null on a non-AI step, on any run
-	 * that predates the migration, and against an IS build that predates the
-	 * seam telemetry change.
-	 */
-	finishReason: string | null;
-	tokensIn: number | null;
-	tokensOut: number | null;
-	tokensUsed: number | null;
-}
-export interface AutomationStepActivityItem {
-	id: string;
-	at: Date | null;
-	kind: "step";
-	status: AutomationStepStatus;
-	label: string;
-	hint: string | null;
-	detail: AutomationStepActivityDetail;
-}
-/** Timeline item across all ledgers. Automation steps use the precise variant. */
-export type RunActivityItem = AutomationStepActivityItem | GenericRunActivityItem;
-/** Immutable definition recorded at the start of an automation run. */
-export interface RunDefinitionSnapshot {
-	version: number;
-	flowDefinition: FlowDefinition;
-}
-export interface UnifiedRunDetailBase {
-	run: UnifiedRun;
-	activity: RunActivityItem[];
-	/** The trigger that started this run — its principal + full payload (automation only). */
-	trigger: {
-		triggeredBy: string | null;
-		payload: unknown;
-	} | null;
-	/** The run's full output summary JSONB (automation only); null for other ledgers. */
-	outputSummary: unknown;
-	/**
-	 * Rich per-kind detail for a PLAYBOOK run — the objects it produced, the
-	 * changes it proposed (created/updated/removed), who worked it, and its
-	 * session card. Null for every other flow (additive; browsers infer absence).
-	 *
-	 * For automation runs the per-node story lives on `activity` (each step's
-	 * `detail` gains `nodeLabel` / `nodeId` / `commandId`), so there is no
-	 * automation-specific block here.
-	 */
-	playbookDetail?: PlaybookRunDetail | null;
-}
-export interface AutomationRunDetail extends UnifiedRunDetailBase {
-	run: UnifiedRun & {
-		flowType: "automation";
-	};
-	activity: AutomationStepActivityItem[];
-	trigger: {
-		triggeredBy: string | null;
-		payload: Record<string, unknown>;
-	};
-	outputSummary: Record<string, unknown> | null;
-	playbookDetail: null;
-	/** The flow definition this run executed; null only for legacy runs. */
-	definitionSnapshot: RunDefinitionSnapshot | null;
-	/**
-	 * Which edges of `definitionSnapshot.flowDefinition` this run actually walked
-	 * — `{ traversedEdgeIds, prunedEdgeIds }`, written by the executor at the
-	 * moment each branch decision was made. Null for automation runs that predate
-	 * the column or never executed:
-	 * null means UNKNOWN, never "nothing was pruned". An edge in neither list is
-	 * undecided (its source never ran).
-	 */
-	pathTaken: RunPathTaken | null;
-}
-export interface NonAutomationRunDetail extends UnifiedRunDetailBase {
-	run: UnifiedRun & {
-		flowType: Exclude<FlowType, "automation">;
-	};
-	definitionSnapshot: null;
-	pathTaken: null;
-}
-export type UnifiedRunDetail = AutomationRunDetail | NonAutomationRunDetail;
-/**
- * A playbook run's rich footprint. Every list is user-floored and capped; the
- * session is the run's ONE focus session (playbook → one session per run).
- */
-export interface PlaybookRunDetail {
-	/** The run's session card — its goal, stage, progress, expected/verified outputs. */
-	session: RunSessionCard | null;
-	/** Entities the session produced (`session --produced--> entity`), user-visible only. */
-	produced: RunProducedEntity[];
-	/** The session's proposals — the created/updated/removed ledger the run wrote (cap 50). */
-	proposals: RunProposalItem[];
-	/** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
-	agents: RunAgent[];
-}
-/** The session card behind a playbook run. */
-export interface RunSessionCard {
-	id: string;
-	goal: string;
-	status: string;
-	/** Active playbook stage key, or null for a stageless (progress-only) playbook. */
-	currentStage: string | null;
-	/** 0-100 progress, or null until the runner sets it. */
-	progress: number | null;
-	/** Declared deliverables ([{ kind, label, status? }]); shape-within-jsonb, passed through. */
-	expectedOutputs: unknown;
-	/** The single closing verification report JSONB, or null. */
-	verificationReport: unknown;
-	/** The session's room — where its message-level story lives. */
-	channelId: string | null;
-}
-/** An entity a playbook run's session produced. */
-export interface RunProducedEntity {
-	entityId: string;
-	title: string | null;
-	/** Entity type slug (entities.type, from the profile slug). */
-	type: string;
-	producedAt: Date;
-}
-/**
- * One change a playbook run proposed. `changeKind` is a compact create/update/
- * delete class DERIVED from `proposalType` where the vocabulary maps cleanly
- * (create*, update/edit/merge, delete*); null when the type does not map — in
- * which case read the raw `proposalType`. APPROVED/auto-approved proposals are
- * included: "objects updated" ≈ resolved update-class proposals.
- */
-export interface RunProposalItem {
-	id: string;
-	proposalType: string;
-	changeKind: "create" | "update" | "delete" | null;
-	status: string;
-	targetType: string;
-	targetId: string;
-	rejectionReason: string | null;
-	/** How many times a human revised this proposal before it resolved (the "AI got it wrong" signal). */
-	revisionCount: number;
-	createdAt: Date;
-	reviewedAt: Date | null;
-}
-/**
- * A best-effort actor who worked a playbook run. Two honest signals are unioned:
- *   - `proposal` — the FK-backed `proposals.agentUserId` (guaranteed an agent-user).
- *   - `message`  — a `routedTeammateId` on an AI-agent message in the run's
- *     channel (the documented agent-user id). Plain AI-agent messages are NOT
- *     counted: their `userId` is the requesting owner, not the agent.
- * `name` is null when the id does not resolve to a `users` row.
- */
-export interface RunAgent {
-	/** users.id of the agent-user. */
-	id: string;
-	/** Display name (name / agentType / email) where resolvable; null otherwise. */
-	name: string | null;
-	/** Where the actor was observed. */
-	source: "proposal" | "message" | "both";
 }
 /** A single global-health section verdict. */
 export type HealthStatus = "ok" | "attention" | "degraded";
@@ -13998,6 +14058,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					before: Record<string, unknown>;
 					after: Record<string, unknown>;
 					absentBefore: string[];
+					absentAfter?: string[];
+					fields?: {
+						before: Partial<Record<EntityDiffField, string | null>>;
+						after: Partial<Record<EntityDiffField, string | null>>;
+					};
 				} | undefined;
 				status: string;
 				message: string;
@@ -14496,6 +14561,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				facetId: string;
 				facet: {
+					entityId: string;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
@@ -14510,7 +14576,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					deletedAt: Date | null;
 					metadata: unknown;
-					entityId: string;
 					contextEntityId: string | null;
 					status: string | null;
 				};
@@ -14548,6 +14613,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "updated";
 				message: string;
 				facet: {
+					entityId: string;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
@@ -14562,7 +14628,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					deletedAt: Date | null;
 					metadata: unknown;
-					entityId: string;
 					contextEntityId: string | null;
 					status: string | null;
 				};
@@ -14738,13 +14803,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				properties: {};
 				systemData: {};
 				workspaceName: string | null;
+				title: string | null;
+				preview: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
 				profileId: string | null;
 				type: string;
-				title: string | null;
-				preview: string | null;
 				documentId: string | null;
 				version: number;
 				createdByKind: ProvenanceKind | null;
@@ -14949,10 +15014,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				channelId: `${string}-${string}-${string}-${string}-${string}`;
 				channel: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
@@ -15125,10 +15190,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				branchDecision: BranchDecision | undefined;
 				branchThread: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
@@ -15521,10 +15586,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				branches: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
@@ -15588,10 +15653,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				channel: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
@@ -15703,10 +15768,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				tree: BranchTreeNode | null;
 				flatBranches: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
@@ -15734,10 +15799,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					mergedAt: Date | null;
 				}[];
 				activeBranches: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
@@ -15765,10 +15830,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					mergedAt: Date | null;
 				}[];
 				mergedBranches: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
@@ -16255,10 +16320,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subscriptions: never[];
 			} | {
 				channel: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
@@ -16420,7 +16485,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
 				automationId?: string | undefined;
-				status?: "reverted" | "pending" | "rejected" | "all" | "validated" | undefined;
+				status?: "reverted" | "pending" | "rejected" | "auto_approved" | "all" | "validated" | undefined;
 				cursor?: string | undefined;
 			};
 			output: {
@@ -16480,6 +16545,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelName?: string;
 					agentName?: string;
 					originChannelName?: string;
+					track?: ProposalTrack;
 					review: ProposalReviewModel;
 				}[];
 				pagination: {
@@ -16545,6 +16611,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelName?: string;
 					agentName?: string;
 					originChannelName?: string;
+					track?: ProposalTrack;
 					review: ProposalReviewModel;
 				}[];
 			};
@@ -16676,6 +16743,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelName?: string;
 				agentName?: string;
 				originChannelName?: string;
+				track?: ProposalTrack;
 				review: ProposalReviewModel;
 			};
 			meta: object;
@@ -18420,11 +18488,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				document: {
+					title: string;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
 					type: string;
-					title: string;
 					createdByKind: ProvenanceKind | null;
 					createdByUserId: string | null;
 					agentUserId: string | null;
@@ -18959,12 +19027,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				offset?: number | undefined;
 			};
 			output: {
+				title: string;
+				preview: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
 				type: string;
-				title: string;
-				preview: string | null;
 				createdAt: Date;
 				updatedAt: Date;
 				data: unknown;
@@ -19499,9 +19567,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				commands: {
+					title: string;
 					id: string;
 					workspaceId: string | null;
-					title: string;
 					createdAt: Date;
 					updatedAt: Date;
 					createdBy: string;
@@ -19525,9 +19593,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
+				title: string;
 				id: string;
 				workspaceId: string | null;
-				title: string;
 				createdAt: Date;
 				updatedAt: Date;
 				createdBy: string;
@@ -19559,9 +19627,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sharedScope?: "user" | "workspace" | undefined;
 			};
 			output: {
+				title: string;
 				id: string;
 				workspaceId: string | null;
-				title: string;
 				createdAt: Date;
 				updatedAt: Date;
 				createdBy: string;
@@ -20477,7 +20545,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						schema: ({
 							type: "heading";
 							text: string;
-							level?: 1 | 2 | 3 | undefined;
+							level?: 2 | 1 | 3 | undefined;
 						} | {
 							type: "text";
 							text: string;
@@ -21040,13 +21108,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				entities: {
+					title: string | null;
+					preview: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
 					profileId: string | null;
 					type: string;
-					title: string | null;
-					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
 					systemData: unknown;
@@ -21279,11 +21347,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				items: {
 					facetSlugs: string[];
+					title: string | null;
+					preview: string | null;
 					id: string;
 					workspaceId: string | null;
 					type: string;
-					title: string | null;
-					preview: string | null;
 				}[];
 				total: number;
 				pagination: {
@@ -21329,13 +21397,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				entity: {
+					title: string | null;
+					preview: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
 					profileId: string | null;
 					type: string;
-					title: string | null;
-					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
 					systemData: unknown;
@@ -21354,13 +21422,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				stats: null;
 			} | {
 				entity: {
+					title: string | null;
+					preview: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
 					profileId: string | null;
 					type: string;
-					title: string | null;
-					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
 					systemData: unknown;
@@ -21411,13 +21479,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				entities: {
+					title: string | null;
+					preview: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
 					profileId: string | null;
 					type: string;
-					title: string | null;
-					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
 					systemData: unknown;
@@ -21461,11 +21529,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				entities: {
 					facetSlugs: string[];
+					title: string | null;
+					preview: string | null;
 					id: string;
 					workspaceId: string | null;
 					type: string;
-					title: string | null;
-					preview: string | null;
 				}[];
 				relations: {
 					id: string;
@@ -23647,13 +23715,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				resource: {
+					title: string | null;
+					preview: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
 					profileId: string | null;
 					type: string;
-					title: string | null;
-					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
 					systemData: unknown;
@@ -26524,6 +26592,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				guidelines: {
+					key: string;
+					value: Record<string, unknown> | GuidelineValue;
 					id: string;
 					workspaceId: string | null;
 					version: number;
@@ -26534,8 +26604,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "sourceKind" | "channel" | "shape" | "channelType" | "default" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
-					key: string;
-					value: Record<string, unknown> | GuidelineValue;
 					scopeRef: string | null;
 					supersedesId: string | null;
 				}[];
@@ -26557,6 +26625,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				guideline: {
+					key: string;
+					value: Record<string, unknown> | GuidelineValue;
 					id: string;
 					workspaceId: string | null;
 					version: number;
@@ -26567,8 +26637,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "sourceKind" | "channel" | "shape" | "channelType" | "default" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
-					key: string;
-					value: Record<string, unknown> | GuidelineValue;
 					scopeRef: string | null;
 					supersedesId: string | null;
 				};
@@ -26581,6 +26649,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				guideline: {
+					key: string;
+					value: Record<string, unknown> | GuidelineValue;
 					id: string;
 					workspaceId: string | null;
 					version: number;
@@ -26591,8 +26661,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "sourceKind" | "channel" | "shape" | "channelType" | "default" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
-					key: string;
-					value: Record<string, unknown> | GuidelineValue;
 					scopeRef: string | null;
 					supersedesId: string | null;
 				} | undefined;
@@ -26607,6 +26675,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				guideline: {
+					key: string;
+					value: Record<string, unknown> | GuidelineValue;
 					id: string;
 					workspaceId: string | null;
 					version: number;
@@ -26617,12 +26687,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "sourceKind" | "channel" | "shape" | "channelType" | "default" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
-					key: string;
-					value: Record<string, unknown> | GuidelineValue;
 					scopeRef: string | null;
 					supersedesId: string | null;
 				};
 				previous: {
+					key: string;
+					value: Record<string, unknown> | GuidelineValue;
 					id: string;
 					workspaceId: string | null;
 					version: number;
@@ -26633,8 +26703,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "sourceKind" | "channel" | "shape" | "channelType" | "default" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
-					key: string;
-					value: Record<string, unknown> | GuidelineValue;
 					scopeRef: string | null;
 					supersedesId: string | null;
 				};
@@ -26647,6 +26715,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				versions: {
+					key: string;
+					value: Record<string, unknown> | GuidelineValue;
 					id: string;
 					workspaceId: string | null;
 					version: number;
@@ -26657,8 +26727,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "sourceKind" | "channel" | "shape" | "channelType" | "default" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
-					key: string;
-					value: Record<string, unknown> | GuidelineValue;
 					scopeRef: string | null;
 					supersedesId: string | null;
 				}[];
@@ -26680,6 +26748,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				status: "saved";
 				guideline: {
+					key: string;
+					value: Record<string, unknown> | GuidelineValue;
 					id: string;
 					workspaceId: string | null;
 					version: number;
@@ -26690,8 +26760,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "sourceKind" | "channel" | "shape" | "channelType" | "default" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
-					key: string;
-					value: Record<string, unknown> | GuidelineValue;
 					scopeRef: string | null;
 					supersedesId: string | null;
 				};
@@ -28194,7 +28262,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId?: string | undefined;
 				error?: string | undefined;
 				failure?: {
-					errorClass: "unknown" | "provider" | "auth" | "permission" | "validation" | "transient" | "no_connection" | "target_missing" | "missing_field" | "conflict";
+					errorClass: "unknown" | "provider" | "auth" | "permission" | "validation" | "transient" | "missing_field" | "no_connection" | "target_missing" | "conflict";
 					enableProposalId?: string | undefined;
 					next?: {
 						kind: "run" | "none" | "add" | "enable" | "connect";
@@ -30740,10 +30808,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automationId?: string | undefined;
 			};
 			output: ({
+				title: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -30799,10 +30867,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				items: ({
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -30871,10 +30939,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				accepted: true;
 				session: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -30915,10 +30983,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				discarded: true;
 				session: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -30994,10 +31062,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
 				session: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -31094,10 +31162,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: "run" | "receipt" | "work";
 				rerun: RerunAvailability;
 				continuation: ContinuationPacket;
+				title: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -31213,10 +31281,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				correlationId: string;
 			};
 			output: {
+				title: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -31290,10 +31358,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				dedupCandidates?: SessionTwinCandidate[] | undefined;
 				deduped: true;
+				title: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -31322,10 +31390,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbooks?: SessionPlaybookCandidates | undefined;
 				blockerLinks?: CreateTimeBlockerReport[] | undefined;
 				parentLink?: CreateTimeParentLink | undefined;
+				title: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -31460,10 +31528,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params?: Record<string, unknown> | undefined;
 			};
 			output: {
+				title: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -31498,10 +31566,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				verdict?: SessionVerdict | undefined;
 				warnings: string[];
+				title: string | null;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -32340,10 +32408,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			} | {
 				session: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -32481,10 +32549,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					summary: string | null;
 				} | null;
 				session: {
+					title: string | null;
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -32840,10 +32908,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
+				title: string;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string;
 				createdAt: Date;
 				updatedAt: Date;
 				state: "working" | "kept" | "swept";
@@ -32873,10 +32941,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				placement?: "desk" | "home" | "sidebar" | "library" | undefined;
 			};
 			output: {
+				title: string;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string;
 				createdAt: Date;
 				updatedAt: Date;
 				state: "working" | "kept" | "swept";
@@ -32900,10 +32968,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				placement?: "desk" | "home" | "sidebar" | "library" | undefined;
 			};
 			output: {
+				title: string;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
-				title: string;
 				createdAt: Date;
 				updatedAt: Date;
 				state: "working" | "kept" | "swept";

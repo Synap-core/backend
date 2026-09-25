@@ -28,11 +28,9 @@ import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
  *   - "delete-creations" → the proposal CREATED rows; the inverse is to delete
  *     them (entities/relations/documents the approval produced).
  *
- * Update/edit proposals: a propose-time before-snapshot IS captured and
- * persisted on the row (`captureEntityPreviousData`, permission-check.ts
- * :3304 / :3648) — this planner just doesn't consume it yet (no APPLY-time
- * snapshot exists for undo). Until that's wired up, reverting an update is
- * `unsupported` and the mutation FAILS LOUD rather than fabricating a state.
+ * Entity updates reuse "delete-creations" with ONLY `propertyDiffs`: the
+ * apply-time before/after the write stamped (`stampEntityUpdate`), restored
+ * compare-and-set — nothing is ever deleted for an update.
  *
  *   - "restore-delete" → the proposal DELETED an entity; entity deletes in this
  *     codebase are SOFT deletes (`entities.deletedAt`), so the inverse is to
@@ -91,8 +89,9 @@ export interface RevertPlannerInput {
  *     proposal target itself (generic `.validated` create where subjectId is the
  *     target; document create where documentId === targetId).
  *
- * Returns `unsupported` (→ fail loud) for update/edit proposals (no before-state)
- * and for anything we cannot positively map to created rows.
+ * Returns `unsupported` (→ fail loud) for an update with no apply-time stamp
+ * (legacy rows, non-entity updates) and for anything we cannot positively map
+ * to created rows.
  */
 export function planProposalRevert(
   proposal: RevertPlannerInput
@@ -118,6 +117,8 @@ export function planProposalRevert(
     (proposal.proposalType === "update" ||
       proposal.proposalType === "edit" ||
       proposal.proposalType === "user_edit" ||
+      // An auto-approve receipt names its type `<subject>.<action>`.
+      proposal.proposalType === `${proposal.targetType}.update` ||
       changeType === "update");
   const isDelete =
     !isCreate &&
@@ -129,21 +130,32 @@ export function planProposalRevert(
     !isDelete &&
     (proposal.proposalType === "merge" || changeType === "merge");
 
-  // Update/edit: a propose-time before-snapshot IS persisted on the row —
-  // `captureEntityPreviousData` (permission-check.ts :3648) runs at propose
-  // time and is stored into `RequestShapedProposalData.previousData`
-  // (permission-check.ts :3304). What's actually missing is an APPLY-time
-  // snapshot: this planner doesn't read the persisted `previousData` for
-  // revert, and a propose-time snapshot alone can go stale if the entity was
-  // edited again between propose and approve. Wiring an apply-time snapshot
-  // into this planner is a planned change awaiting the founder — until then,
-  // fail loud rather than revert against a snapshot that may not match what
-  // the approval actually applied.
+  // Update/edit: undo reads ONLY the APPLY-time record the write stamped
+  // (`stampEntityUpdate` — the `entity/update` executor and the auto-approve
+  // receipt in `entities.update`): per key, the value before and the value
+  // written. Revert restores a key only while it still holds the written value
+  // — a key edited since is kept and named in the result's `skipped`. The
+  // propose-time `previousData` is never used: it is for display, and goes
+  // stale if the entity changes between propose and approve.
+  //
+  // A row with no stamp (written before this existed, or a non-entity update)
+  // has no before-state, so it stays `unsupported` and the mutation fails loud.
   if (isUpdate) {
+    const diffs =
+      proposal.targetType === "entity"
+        ? (materialized as CompleteMaterializedRecord | undefined)
+            ?.propertyDiffs
+        : undefined;
+    if (diffs && diffs.length > 0) {
+      // Only the diffs — an update never deletes a row, whatever else a
+      // record might name.
+      return creationsPlanFromRecord({ propertyDiffs: diffs });
+    }
     return {
       kind: "unsupported",
-      reason:
-        "Revert of an update/edit proposal is not supported without a before-snapshot (none is persisted on the proposal).",
+      reason: diffs
+        ? "Revert of this update is not supported: it changed nothing, so there is nothing to undo."
+        : "Revert of an update/edit proposal is not supported without a before-snapshot (none was recorded when it was applied).",
     };
   }
 
@@ -297,11 +309,12 @@ export function planProposalRevert(
  * `planProposalRevert` reads the record approval stamps (`data.materialized`),
  * which a pending proposal does not have yet, so it cannot be asked as-is about
  * a live row. It CAN be asked about everything that does not need that record:
- * an update/edit has no before-snapshot, a non-entity delete has no recoverable
- * target, an unmapped type is unsupported — all knowable from the type alone.
- * The one case the planner decides from the record is a composite graph, whose
- * created ids are minted at approval and stamped then; it is predicted
- * reversible because approval's stamp is what makes its revert possible.
+ * a non-entity delete has no recoverable target, an unmapped type is
+ * unsupported — all knowable from the type alone. Two cases the planner decides
+ * from the record, which approval writes, are predicted from what approval
+ * WILL stamp: a composite graph (created ids minted and stamped at approval)
+ * and an entity update (the `entity/update` executor stamps its apply-time
+ * diff). Every other update/edit is stamped by nothing, so it stays false.
  *
  * The planner stays the ONE place the kind→inverse rule lives: this asks it,
  * with the status it will have, rather than mirroring its branches. `status` is
@@ -315,6 +328,10 @@ export function wouldBeRevertable(
       ? (proposal.data as StoredProposalData)
       : null;
   if (isCompositeProposalData(data)) return true;
+  // Exactly the rows the `entity/update` executor (key `entity/update`) runs.
+  if (proposal.targetType === "entity" && proposal.proposalType === "update") {
+    return true;
+  }
   return (
     planProposalRevert({ ...proposal, status: "approved" }).kind !==
     "unsupported"

@@ -34,7 +34,12 @@ import type { ProposalMaterializedRecord } from "@synap-core/types";
 import { opRef } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
 import type { MaterializeResult } from "../../utils/materialize-composite.js";
-import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
+import {
+  computeEntityUpdateDiff,
+  type EntityDiffField,
+  type EntityPropertyDiff,
+  type EntityUndoSnapshot,
+} from "../../utils/entity-property-diff.js";
 import {
   classifyThrownFailure,
   failureRecord,
@@ -353,19 +358,48 @@ function mergeDiff(
   const before = { ...older.before };
   const after = { ...older.after };
   const absentBefore = new Set(older.absentBefore);
+  const absentAfter = new Set(older.absentAfter ?? []);
+  const olderTouched = (key: string) =>
+    key in older.after || absentAfter.has(key);
   for (const [key, value] of Object.entries(newer.after)) {
-    if (!(key in older.after)) {
+    if (!olderTouched(key)) {
       if (newer.absentBefore.includes(key)) absentBefore.add(key);
       else before[key] = newer.before[key];
     }
+    absentAfter.delete(key);
     after[key] = value;
   }
+  // A key the newer write REMOVED: the older prior value still wins.
+  for (const key of newer.absentAfter ?? []) {
+    if (!olderTouched(key)) before[key] = newer.before[key];
+    delete after[key];
+    if (absentBefore.has(key)) {
+      // Absent before the first write and absent now: nothing to restore.
+      absentBefore.delete(key);
+      delete before[key];
+      absentAfter.delete(key);
+    } else {
+      absentAfter.add(key);
+    }
+  }
+  const fieldsBefore = {
+    ...(newer.fields?.before ?? {}),
+    ...(older.fields?.before ?? {}),
+  };
+  const fieldsAfter = {
+    ...(older.fields?.after ?? {}),
+    ...(newer.fields?.after ?? {}),
+  };
   const bodyDocumentId = older.bodyDocumentId ?? newer.bodyDocumentId;
   return {
     entityId: older.entityId,
     before,
     after,
     absentBefore: [...absentBefore],
+    ...(absentAfter.size > 0 ? { absentAfter: [...absentAfter] } : {}),
+    ...(Object.keys(fieldsAfter).length > 0
+      ? { fields: { before: fieldsBefore, after: fieldsAfter } }
+      : {}),
     ...(bodyDocumentId ? { bodyDocumentId } : {}),
   };
 }
@@ -436,19 +470,48 @@ export function subtractFromRecord(
     const gone = undoneDiffs.get(diff.entityId);
     if (!gone) return [diff];
     const keys = Object.keys(diff.after).filter((k) => !(k in gone.after));
+    const goneAbsentAfter = new Set(gone.absentAfter ?? []);
+    const absentAfter = (diff.absentAfter ?? []).filter(
+      (k) => !goneAbsentAfter.has(k)
+    );
+    const fieldKeys = (
+      Object.keys(diff.fields?.after ?? {}) as EntityDiffField[]
+    ).filter((f) => !(f in (gone.fields?.after ?? {})));
     const bodyDocumentId =
       diff.bodyDocumentId && diff.bodyDocumentId !== gone.bodyDocumentId
         ? diff.bodyDocumentId
         : undefined;
-    if (keys.length === 0 && !bodyDocumentId) return [];
+    if (
+      keys.length === 0 &&
+      absentAfter.length === 0 &&
+      fieldKeys.length === 0 &&
+      !bodyDocumentId
+    )
+      return [];
+    const beforeKeys = [...keys, ...absentAfter];
     return [
       {
         entityId: diff.entityId,
         before: Object.fromEntries(
-          keys.filter((k) => k in diff.before).map((k) => [k, diff.before[k]])
+          beforeKeys
+            .filter((k) => k in diff.before)
+            .map((k) => [k, diff.before[k]])
         ),
         after: Object.fromEntries(keys.map((k) => [k, diff.after[k]])),
         absentBefore: diff.absentBefore.filter((k) => keys.includes(k)),
+        ...(absentAfter.length > 0 ? { absentAfter } : {}),
+        ...(fieldKeys.length > 0
+          ? {
+              fields: {
+                before: Object.fromEntries(
+                  fieldKeys.map((f) => [f, diff.fields?.before[f] ?? null])
+                ),
+                after: Object.fromEntries(
+                  fieldKeys.map((f) => [f, diff.fields?.after[f] ?? null])
+                ),
+              },
+            }
+          : {}),
         ...(bodyDocumentId ? { bodyDocumentId } : {}),
       },
     ];
@@ -536,6 +599,45 @@ export async function stampMaterialized(args: {
     }
   }
   return merged;
+}
+
+/** The entity slice an update diff is computed from — read around the write. */
+export async function readEntityUndoSnapshot(
+  database: Pick<typeof db, "query">,
+  entityId: string
+): Promise<EntityUndoSnapshot | null> {
+  const row = await database.query.entities.findFirst({
+    where: eq(entities.id, entityId),
+    columns: { title: true, preview: true, properties: true },
+  });
+  return row ?? null;
+}
+
+/**
+ * Stamp what an entity UPDATE changed onto the proposal (or auto-approve
+ * receipt) that governed it — the APPLY-time record revert undoes from. The
+ * propose-time `previousData` is display only: it can be stale by approval.
+ *
+ * A write that changed nothing stamps an empty record, so revert answers
+ * "nothing to undo" instead of reading as a legacy, never-stamped row.
+ */
+export async function stampEntityUpdate(args: {
+  proposalId: string;
+  entityId: string;
+  before: EntityUndoSnapshot;
+  after: EntityUndoSnapshot;
+  database?: StampDatabase;
+  baseData?: Record<string, unknown> | null;
+  set?: Omit<Partial<ProposalColumns>, "data" | "id">;
+}): Promise<CompleteMaterializedRecord> {
+  const diff = computeEntityUpdateDiff(args.entityId, args.before, args.after);
+  return stampMaterialized({
+    proposalId: args.proposalId,
+    record: { propertyDiffs: diff ? [diff] : [] },
+    ...(args.database ? { database: args.database } : {}),
+    ...(args.baseData !== undefined ? { baseData: args.baseData } : {}),
+    ...(args.set ? { set: args.set } : {}),
+  });
 }
 
 const UUID_RE =

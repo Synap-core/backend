@@ -131,6 +131,12 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // Exposure rather than membership: this is the door that makes a workspace
   // projection readable by principals outside it, so it widens who may SEE.
   "workspace/configure_public_projection",
+  // The same, one entity at a time: a `visible_to` edge makes the entity
+  // readable by every member of the anchor (`exposureMemberWhere`). Filed under
+  // its own verb by `relations.exposeToAnchor` precisely so this PAIR can name
+  // it — `relation/create` stays objectWork, and nothing here reads the
+  // relation `type` out of the payload.
+  "relation/expose",
 ]);
 
 /**

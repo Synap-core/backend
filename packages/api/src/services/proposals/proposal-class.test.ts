@@ -238,6 +238,7 @@ describe("classifyProposal — access", () => {
       ["grant_capability", "focus_session"],
       ["vault.request", "vault"],
       ["configure_public_projection", "workspace"],
+      ["expose", "relation"],
     ];
     for (const [proposalType, targetType] of accessPairs) {
       expect(
@@ -269,6 +270,11 @@ describe("classifyProposal — access", () => {
     expect(classifyProposal("join", "entity")).toBe("objectWork");
     expect(classifyProposal("create", "entity")).toBe("objectWork");
     expect(classifyProposal("updateRole", "entity")).toBe("objectWork");
+    // An exposure edge is `access` only under its own verb. The same edge
+    // filed as `relation/create` stays objectWork — the payload's `type`
+    // (`visible_to`) is never read.
+    expect(classifyProposal("expose", "relation")).toBe("access");
+    expect(classifyProposal("create", "relation")).toBe("objectWork");
     expect(
       classifyProposal.length,
       "arity is still (proposalType, targetType)"

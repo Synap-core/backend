@@ -1259,11 +1259,11 @@ A chart in a document is a **snapshot by default**: `data` (the numbers you
 read) + `capturedAt`, with the query keys kept so a reader can "Make live".
 Omit `data` only for a dashboard-style live chart.
 
-| Directive      | Required attrs                    | Body                                   | Renders                                           |
-| -------------- | --------------------------------- | -------------------------------------- | ------------------------------------------------- |
-| `synap-entity` | `id` (entity UUID)                | optional fallback                      | Compact entity card (`__entity-block` cell)       |
-| `synap-view`   | `viewId` (view UUID)              | optional fallback                      | Embedded, read-only view (`__embedded-view` cell) |
-| `synap-cell`   | `instanceId` **OR** `cellKey`     | optional ` ```json ` props + fallback  | A persisted cell instance, or an inline cell      |
+| Directive      | Required attrs                | Body                                  | Renders                                           |
+| -------------- | ----------------------------- | ------------------------------------- | ------------------------------------------------- |
+| `synap-entity` | `id` (entity UUID)            | optional fallback                     | Compact entity card (`__entity-block` cell)       |
+| `synap-view`   | `viewId` (view UUID)          | optional fallback                     | Embedded, read-only view (`__embedded-view` cell) |
+| `synap-cell`   | `instanceId` **OR** `cellKey` | optional ` ```json ` props + fallback | A persisted cell instance, or an inline cell      |
 
 Name a record inline with a marker: `[[entity:<id>|<label>]]`, `[[view:<id>|<label>]]`.
 Only real IDs from prior tool results — never invent one. Never use a directive
@@ -1382,7 +1382,7 @@ POST /api/hub/documents
 
 ### Worked example 3 — report embedding an inline stat cell
 
-```json
+````json
 POST /api/hub/documents
 {
   "userId": "{userId}",
@@ -1392,7 +1392,7 @@ POST /api/hub/documents
   "entityId": "ent_project_eve",
   "content": "# Q2 summary\n\n:::synap-cell{cellKey=\"stat-card\"}\n```json\n{\"profileSlug\":\"task\",\"label\":\"Open tasks\"}\n```\n:::\n\nOpen tasks are trending down since [[entity:ent_project_eve|Project Eve]] started."
 }
-```
+````
 
 The props travel in the ` ```json ` block (escaped here only because `content` is
 itself a JSON string). The sentence about the number sits in the prose after the

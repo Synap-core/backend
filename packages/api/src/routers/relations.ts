@@ -694,11 +694,16 @@ export const relationsRouter = router({
       await assertAnchorAdmin(database, ctx.userId, anchorRow);
 
       const id = randomUUID();
+      // Its own verb, `expose` — never `create`. Exposure widens who may SEE
+      // the entity, so it classes `access` (proposal-class.ts, pair-keyed) and
+      // is NOT in DEFAULT_AUTO_APPROVE: an agent proposes, where under
+      // `relation.create` its exposure edge auto-executed. Approval writes the
+      // same edge (catch-all `relation/expose` alias → materializer create).
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         workspaceId: anchorRow.workspaceId,
         subjectType: "relation",
-        action: "create",
+        action: "expose",
         data: {
           id,
           sourceEntityId: input.entityId,
@@ -714,8 +719,9 @@ export const relationsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        // Governed/agent path: the proposal materializes via the materializer
-        // worker's `relation/create` case (writes the visible_to edge on approval).
+        // Governed/agent path: the `relation/expose` approval half hands the
+        // payload to the materializer worker's `relation/create` case (writes
+        // the visible_to edge on approval).
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
@@ -1607,31 +1613,14 @@ export const relationsRouter = router({
       const effectiveWorkspaceId =
         input.workspaceId || ctx.workspaceId || undefined;
 
-      // 1. Permission check
-      const perm = await checkPermissionOrPropose({
-        userId: ctx.userId,
-        workspaceId: effectiveWorkspaceId,
-        subjectType: "relation",
-        action: "delete",
-        data: { id: input.id },
-      });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return { status: "proposed" as const, proposalId: perm.proposalId };
-      }
-
-      // 2. Direct DB operation
       const database = await getDb();
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
-      const eventRepo = eventRepository;
-      const relationRepo = new RelationRepository(database, eventRepo);
 
-      // Snapshot relation data before deletion (for reverse sync)
+      // 1. Snapshot the relation BEFORE the permission check. The proposal
+      // carries the endpoints (so a pending unlink can name what it removes:
+      // "Unlink A from B"), and approval HARD-deletes the row, so they cannot
+      // be recovered afterwards. The same snapshot feeds reverse sync below.
+      // Floored before it reaches the payload: a caller who cannot write the
+      // relation's workspace gets no endpoint ids back through a proposal.
       const relationToDelete = await database.query.relations.findFirst({
         where: eq(relations.id, input.id),
         columns: {
@@ -1651,6 +1640,35 @@ export const relationsRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: relationToDelete.workspaceId,
       });
+
+      // 2. Permission check. `id` stays the executor's key
+      // (`executors/entity.ts` `relation/delete`); the endpoints are display.
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: effectiveWorkspaceId,
+        subjectType: "relation",
+        action: "delete",
+        data: {
+          id: input.id,
+          sourceEntityId: relationToDelete.sourceEntityId,
+          targetEntityId: relationToDelete.targetEntityId,
+          type: relationToDelete.type,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 3. Direct DB operation
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
+      const relationRepo = new RelationRepository(database, eventRepo);
 
       await relationRepo.delete(input.id, ctx.userId);
 

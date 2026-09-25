@@ -33,6 +33,8 @@ import {
 } from "../../utils/user-visible-where.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { visibleSkillsWhere } from "../../services/skills/visibility.js";
+import { listRunTracks } from "../../services/runs/index.js";
+import type { RunGroup } from "../../services/runs/types.js";
 import {
   proposalClassFields,
   type ProposalClassFields,
@@ -182,6 +184,77 @@ export function deriveProposalPrincipal(input: {
   const name = resolveName(subjectUserId);
   return name ? { kind: "delegated", name } : { kind: "delegated" };
 }
+/**
+ * TRACK RECORD — the MEASURED run history of the flow a proposal would run
+ * again (a playbook session start, an automation run). Never a prediction: V0
+ * agents are bring-your-own, so no cost reaches the pod, and a duration exists
+ * only where completed runs measured one.
+ *
+ * `runs: 0` is a measured zero (the flow is visible and has never run) — the
+ * field is ABSENT when the flow is not visible or the kind has no flow.
+ * Durations are over `durationSamples` completed runs and absent when that is 0.
+ */
+export interface ProposalTrack {
+  runs: number;
+  completed: number;
+  failed: number;
+  running: number;
+  /** ISO timestamp of the newest run. Absent when `runs` is 0. */
+  lastRunAt?: string;
+  lastStatus?: string;
+  durationSamples: number;
+  medianDurationMs?: number;
+  lastDurationMs?: number;
+}
+
+/**
+ * Which flow's track record a proposal row carries — `null` for every kind that
+ * does not (re)run a flow. Reads the SAME ids the name batches resolve
+ * (`referencedNameIds`), so a track can only attach where a name could.
+ * `capability.run` is deliberately absent: a DIRECT capability run records no
+ * event when it fails (`executeCapability` returns before
+ * `recordDirectCapabilityRun`), so its ledger can only ever say "all finished".
+ */
+export function trackFlowForRow(
+  row: Pick<ProposalRow, "targetType" | "proposalType">,
+  ids: ReferencedNameIds
+): { flowType: "playbook" | "automation"; flowId: string } | null {
+  if (row.targetType === "focus_session" && ids.playbook) {
+    return { flowType: "playbook", flowId: ids.playbook };
+  }
+  if (
+    row.targetType === "automation" &&
+    (row.proposalType === "execute" ||
+      row.proposalType === "automation.execute") &&
+    ids.automation
+  ) {
+    return { flowType: "automation", flowId: ids.automation };
+  }
+  return null;
+}
+
+/** A run group → the wire track (a flow with no visible run → a measured zero). */
+export function toProposalTrack(group: RunGroup | undefined): ProposalTrack {
+  if (!group) {
+    return { runs: 0, completed: 0, failed: 0, running: 0, durationSamples: 0 };
+  }
+  return {
+    runs: group.runCount,
+    completed: group.completedCount,
+    failed: group.failedCount,
+    running: group.runningCount,
+    lastRunAt: group.latestStartedAt.toISOString(),
+    lastStatus: group.latestStatus,
+    durationSamples: group.durationSampleCount,
+    ...(group.medianDurationMs !== null
+      ? { medianDurationMs: group.medianDurationMs }
+      : {}),
+    ...(group.lastDurationMs !== null
+      ? { lastDurationMs: group.lastDurationMs }
+      : {}),
+  };
+}
+
 // `ProposalClassFields` is spread onto every row below (`proposalClassFields`),
 // so it is part of the type: a spread the return type cannot see reaches
 // clients at runtime but only through a cast.
@@ -257,6 +330,8 @@ type DisplayEnrichedProposal = ProposalRow &
     /** Name of the channel the proposal was filed from (`thread_id`, read by
      * the frontend as `originChannelId`), when the viewer may see it. */
     originChannelName?: string;
+    /** The flow's measured run history — see {@link ProposalTrack}. */
+    track?: ProposalTrack;
     review: ProposalReviewModel;
   };
 
@@ -968,6 +1043,41 @@ export async function enrichProposalsForDisplay(
     userId
   );
 
+  // TRACK RECORD — batched by flow id, like the names. Only ids whose NAME
+  // resolved above are read: `playbookById` / `automationById` hold exactly the
+  // rows the viewer's `scopedDb(access).predicate` admitted, so a flow the
+  // viewer cannot see gets no track (and the runs themselves are user-floored
+  // inside the aggregate). Skipped entirely when no row reruns a flow.
+  const trackFlowByRow = rows.map((row, idx) =>
+    trackFlowForRow(row, nameIdsByRow[idx]!)
+  );
+  const visibleTrackIds = (flowType: "playbook" | "automation") => {
+    const visible = flowType === "playbook" ? playbookById : automationById;
+    return uniqueStrings(
+      trackFlowByRow.map((f) =>
+        f?.flowType === flowType && visible.has(f.flowId) ? f.flowId : undefined
+      )
+    );
+  };
+  const trackPlaybookIds = visibleTrackIds("playbook");
+  const trackAutomationIds = visibleTrackIds("automation");
+  const runTracks =
+    trackPlaybookIds.length + trackAutomationIds.length > 0
+      ? await listRunTracks({
+          userId,
+          playbookIds: trackPlaybookIds,
+          automationIds: trackAutomationIds,
+        })
+      : new Map<string, RunGroup>();
+  const trackForRow = (idx: number): ProposalTrack | undefined => {
+    const flow = trackFlowByRow[idx];
+    if (!flow) return undefined;
+    const visible =
+      flow.flowType === "playbook" ? playbookById : automationById;
+    if (!visible.has(flow.flowId)) return undefined;
+    return toProposalTrack(runTracks.get(`${flow.flowType}:${flow.flowId}`));
+  };
+
   return rows.map((row, idx) => {
     const request = requests[idx]!;
     const rowSetup = setups.get(row.id);
@@ -1315,6 +1425,10 @@ export async function enrichProposalsForDisplay(
       ...(nameResolvers.resolveOriginChannelName(row)
         ? { originChannelName: nameResolvers.resolveOriginChannelName(row)! }
         : {}),
+      ...(() => {
+        const track = trackForRow(idx);
+        return track ? { track } : {};
+      })(),
       request: {
         ...request,
         data: enrichedData,

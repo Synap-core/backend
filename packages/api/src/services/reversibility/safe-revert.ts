@@ -58,6 +58,7 @@ import {
   projects,
   links,
 } from "@synap/database";
+import type { EntityDiffField } from "../../utils/entity-property-diff.js";
 
 export type RevertTarget =
   | { kind: "entity"; id: string }
@@ -89,9 +90,20 @@ export type RevertTarget =
       /** Prior value (ignored when `absentBefore`). */
       before: unknown;
       absentBefore: boolean;
+      /** The run REMOVED the key — restore only while it is still absent. */
+      absentAfter?: boolean;
     }
   /** A body document a merge linked onto an entity that had none. */
-  | { kind: "entity_body"; entityId: string; documentId: string };
+  | { kind: "entity_body"; entityId: string; documentId: string }
+  /** One entity column (title / preview) an update changed. */
+  | {
+      kind: "entity_field";
+      entityId: string;
+      field: EntityDiffField;
+      /** The value the run wrote — restore only while the column still holds it. */
+      after: string | null;
+      before: string | null;
+    };
 
 export type RevertSkipReason =
   /** Changed after the work that created it. */
@@ -556,12 +568,41 @@ async function inspectProperty(
       ? null
       : skip(target, "edited_since", "the entity's body was changed since");
   }
-  const current = ((row.properties ?? {}) as Record<string, unknown>)[
-    target.key
-  ];
+  const props = (row.properties ?? {}) as Record<string, unknown>;
+  if (target.absentAfter) {
+    return Object.prototype.hasOwnProperty.call(props, target.key)
+      ? skip(target, "edited_since", `"${target.key}" was set again since`)
+      : null;
+  }
+  const current = props[target.key];
   return JSON.stringify(current) === JSON.stringify(target.after)
     ? null
     : skip(target, "edited_since", `"${target.key}" was edited since`);
+}
+
+async function inspectEntityField(
+  reader: Reader,
+  target: Extract<RevertTarget, { kind: "entity_field" }>
+): Promise<RevertSkip | null> {
+  const [row] = await reader
+    .select({
+      title: entities.title,
+      preview: entities.preview,
+      deletedAt: entities.deletedAt,
+    })
+    .from(entities)
+    .where(eq(entities.id, target.entityId))
+    .for("update");
+  if (!row || row.deletedAt) {
+    return skip(target, "not_found", "the entity no longer exists");
+  }
+  return (row[target.field] ?? null) === target.after
+    ? null
+    : skip(
+        target,
+        "edited_since",
+        `the ${target.field === "preview" ? "description" : target.field} was edited since`
+      );
 }
 
 async function inspect(
@@ -590,6 +631,8 @@ async function inspect(
     case "property":
     case "entity_body":
       return inspectProperty(reader, target);
+    case "entity_field":
+      return inspectEntityField(reader, target);
   }
 }
 
@@ -599,6 +642,7 @@ const APPLY_ORDER: Record<RevertTarget["kind"], number> = {
   link: 0,
   facet: 1,
   property: 2,
+  entity_field: 2,
   entity_body: 3,
   entity: 4,
   rule: 5,
@@ -641,6 +685,12 @@ async function apply(
         .where(eq(entities.id, target.entityId));
       return;
     }
+    case "entity_field":
+      await tx
+        .update(entities)
+        .set({ [target.field]: target.before, updatedAt: now })
+        .where(eq(entities.id, target.entityId));
+      return;
     case "entity_body":
       await tx
         .update(entities)

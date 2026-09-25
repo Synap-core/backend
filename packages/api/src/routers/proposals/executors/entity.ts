@@ -32,6 +32,10 @@ import {
 } from "../../entities.js";
 import { reconcileApprovedProperties } from "../../../services/proposals/reconcile-proposal-properties.js";
 import { completeKnowledgeProposalProperties } from "../../../services/proposals/complete-knowledge-proposal.js";
+import {
+  readEntityUndoSnapshot,
+  stampEntityUpdate,
+} from "../../../services/proposals/stamp-materialized.js";
 import { emitSideEffects } from "@synap/events";
 import type { Context } from "../../../context.js";
 import {
@@ -475,6 +479,11 @@ export function registerEntityExecutors(): void {
         }
       }
 
+      // APPLY-time before-state for undo: read right before the write, and
+      // after it (below), so the stamp records what this approval actually
+      // changed — not the propose-time `previousData`, which can be stale.
+      const undoBefore = await readEntityUndoSnapshot(db, entityId);
+
       await entityCaller.update({
         id: entityId,
         title: innerData.title as string | undefined,
@@ -483,6 +492,8 @@ export function registerEntityExecutors(): void {
         deleteProperties: innerData.deleteProperties as string[] | undefined,
         source: "system",
       });
+
+      const undoAfter = await readEntityUndoSnapshot(db, entityId);
 
       // A governed source-file attach: the bytes were STAGED before this
       // proposal was filed (`stageSourceBlob`) and only the small reference
@@ -510,15 +521,30 @@ export function registerEntityExecutors(): void {
         }
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+      const approvedSet = {
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      };
+      if (undoBefore && undoAfter) {
+        // One statement: the status flip and the undo record land together.
+        await stampEntityUpdate({
+          proposalId: input.proposalId,
+          entityId,
+          before: undoBefore,
+          after: undoAfter,
+          baseData: (proposal.data ?? null) as Record<string, unknown> | null,
+          set: approvedSet,
+        });
+      } else {
+        // The write above succeeded, so the row exists; a missing snapshot is
+        // a failed read. Approve anyway, unstamped — revert then says so.
+        await db
+          .update(proposals)
+          .set(approvedSet)
+          .where(eq(proposals.id, input.proposalId));
+      }
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);

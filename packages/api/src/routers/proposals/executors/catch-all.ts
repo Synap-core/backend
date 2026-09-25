@@ -6,6 +6,9 @@ import { addSessionBlocker } from "../../../services/focus-sessions/session-bloc
 import {
   registerProposalExecutor,
   type ProposalEffect,
+  type ProposalExecutor,
+  type ProposalExecutorArgs,
+  type ProposalExecutorResult,
   type StoredProposalData,
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
@@ -196,6 +199,19 @@ async function applyApprovedBlockedBy(
   return { applied: "verified", rows: result.inserted, subject: "link" };
 }
 
+/**
+ * Doors filed under their OWN verb whose approved write is another door's
+ * materializer write. The proposal keeps its verb (so it classes and renders
+ * as what it is); only the `.validated` handoff speaks the writer's action.
+ *
+ * `relation/expose` — an exposure edge (`relations.exposeToAnchor`). Its own
+ * verb puts it in the access lane and out of DEFAULT_AUTO_APPROVE; approval
+ * writes the SAME `visible_to` edge `materializeRelation` writes for a create.
+ */
+const MATERIALIZE_AS = {
+  "relation/expose": "create",
+} as const satisfies Partial<Record<ProposalExecutor["key"], string>>;
+
 /** Register the wildcard catch-all approve executor (must run LAST — see aggregator). */
 export function registerCatchAllExecutor(): void {
   // ── Catch-all (generic request-shaped) — replaces silent NOT_IMPLEMENTED ─────
@@ -204,9 +220,15 @@ export function registerCatchAllExecutor(): void {
   // reportProposalOutcome + emitProposalReviewed). Only a payload that ALSO
   // fails isRequestShapedProposalData throws — that throw is now EXPLICIT here,
   // no longer a forgotten-branch fallthrough.
-  registerProposalExecutor({
-    key: "*/*",
-    async execute({ proposal, payload, userId, input, deps }) {
+  //
+  // `materializeAs` (from {@link MATERIALIZE_AS}) replaces the stored change
+  // type for the materializer handoff ONLY — the event action and the door it
+  // is checked against. The stored proposal is never rewritten.
+  const catchAll = {
+    async execute(
+      { proposal, payload, userId, input, deps }: ProposalExecutorArgs,
+      materializeAs?: string
+    ): Promise<ProposalExecutorResult> {
       const isRequestShaped = deps.isRequestShapedProposalData as (
         p: unknown
       ) => boolean;
@@ -316,7 +338,8 @@ export function registerCatchAllExecutor(): void {
         // action picks whether that case's body does anything at all. Checking
         // the subject alone is what let `cell/update` and `relation/update`
         // report a handoff to a writer that returns immediately.
-        const materializerDoorKey = `${targetType}/${changeType}`;
+        const materializerAction = materializeAs ?? changeType;
+        const materializerDoorKey = `${targetType}/${materializerAction}`;
         if (
           acknowledgedNoopReason === undefined &&
           !MATERIALIZED_DOORS.has(materializerDoorKey)
@@ -336,7 +359,7 @@ export function registerCatchAllExecutor(): void {
 
         const validatedEvent = await auditLog({
           subjectType: targetType,
-          action: changeType,
+          action: materializerAction,
           phase: "validated",
           throwOnError: true,
           subjectId,
@@ -397,5 +420,18 @@ export function registerCatchAllExecutor(): void {
 
       return settle(effect);
     },
+  };
+
+  // Exact-key aliases resolve BEFORE the wildcard (`resolve()` precedence), so
+  // each is a registered approval half for its door, running the same body.
+  for (const [door, action] of Object.entries(MATERIALIZE_AS)) {
+    registerProposalExecutor({
+      key: door as ProposalExecutor["key"],
+      execute: (args) => catchAll.execute(args, action),
+    });
+  }
+  registerProposalExecutor({
+    key: "*/*",
+    execute: (args) => catchAll.execute(args),
   });
 }

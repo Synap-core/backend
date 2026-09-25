@@ -635,3 +635,44 @@ describe("(6) focus_session/create — the reference effect receipt", () => {
     expect(src).toContain(".onConflictDoNothing()");
   });
 });
+
+// ── (7) relation/expose — its own verb, the create edge's writer ─────────────
+
+describe("(7) relation/expose alias", () => {
+  it("resolves to an EXACT executor (a registered approval half, not the wildcard)", () => {
+    expect(proposalExecRegistry.resolveExact("relation/expose")).toBeDefined();
+    expect(proposalExecRegistry.resolve("relation/expose", "expose")).not.toBe(
+      catchAll()
+    );
+  });
+
+  it("hands the materializer a relation CREATE — the same edge exposeToAnchor writes directly", async () => {
+    const ex = proposalExecRegistry.resolve("relation/expose", "expose")!;
+    const result = await ex.execute(args("relation", "expose"));
+    expect(result.effect?.applied).toBe("deferred");
+    expect(auditCalls).toHaveLength(1);
+    // `materializeRelation` only writes `action === "create"`; an `expose`
+    // event would die at its inner guard.
+    expect(auditCalls[0]).toMatchObject({
+      subjectType: "relation",
+      action: "create",
+      phase: "validated",
+    });
+  });
+
+  it("without the alias the same proposal is a missing approval half", async () => {
+    // The wildcard alone, fed the same door, throws — so (above) is the alias.
+    await expect(
+      catchAll().execute(args("relation", "expose"))
+    ).rejects.toThrow(/no approval half/i);
+  });
+
+  it("never rewrites the stored proposal's change type", async () => {
+    const a = args("relation", "expose");
+    await proposalExecRegistry.resolve("relation/expose", "expose")!.execute(a);
+    expect((a.payload as { changeType: string }).changeType).toBe("expose");
+    expect(dbUpdates[0]).toMatchObject({
+      data: expect.objectContaining({ changeType: "expose" }),
+    });
+  });
+});

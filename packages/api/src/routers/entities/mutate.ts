@@ -39,6 +39,10 @@ import { getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../../utils/property-relation-sync.js";
 import { dispatchWebhooksForEvent } from "../../utils/webhook-delivery.js";
+import {
+  readEntityUndoSnapshot,
+  stampEntityUpdate,
+} from "../../services/proposals/stamp-materialized.js";
 import { createLogger } from "@synap-core/core";
 import {
   entityWriteVisibleWhere,
@@ -242,7 +246,19 @@ export const mutateProcs = {
         });
       }
 
-      await entityRepo.update(
+      // Undo record for an AUTO-APPROVED write: its receipt was minted by the
+      // gate above, BEFORE this write, so the apply-time before/after is only
+      // knowable here. (An approved proposal's executor stamps its own row.) A
+      // `documentId` change is not something undo can restore, so such a
+      // receipt stays unstamped and revert says it cannot undo it.
+      const receiptId =
+        "granted" in perm ? perm.autoApprovedProposalId : undefined;
+      const undoBefore =
+        receiptId && input.documentId === undefined
+          ? await readEntityUndoSnapshot(database, input.id)
+          : null;
+
+      const written = await entityRepo.update(
         input.id,
         {
           title: input.title || undefined,
@@ -256,6 +272,25 @@ export const mutateProcs = {
         },
         ctx.userId
       );
+
+      if (receiptId && undoBefore) {
+        // Best-effort: the write is committed; a failed stamp leaves the
+        // receipt unstamped (revert then fails loud), never fails the write.
+        try {
+          await stampEntityUpdate({
+            proposalId: receiptId,
+            entityId: input.id,
+            before: undoBefore,
+            after: written,
+            database,
+          });
+        } catch (err) {
+          logger.error(
+            { err, proposalId: receiptId, entityId: input.id },
+            "[entities.update] undo record NOT stamped on the auto-approve receipt — this write cannot be undone"
+          );
+        }
+      }
 
       // 3b. Persist explicit global placement changes after the content/property update.
       // `targetWorkspaceId` is a validation/overlay lens for legacy callers, not an

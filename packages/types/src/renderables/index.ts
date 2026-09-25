@@ -24,3 +24,4 @@ export {
 export * from "./catalog.js";
 export * from "./chart-data.js";
 export * from "./chart-shapers.js";
+export * from "./fences.js";

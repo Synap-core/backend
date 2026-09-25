@@ -121,6 +121,10 @@
       "types": "./dist/proposals/intent.d.ts",
       "import": "./dist/proposals/intent.js"
     },
+    "./proposals/attention": {
+      "types": "./dist/proposals/attention.d.ts",
+      "import": "./dist/proposals/attention.js"
+    },
     "./text": {
       "types": "./dist/text/index.d.ts",
       "import": "./dist/text/index.js"
