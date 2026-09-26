@@ -69,6 +69,12 @@ const STORED: Required<
   attestedAt: "2026-09-01T12:00:00.000Z",
   retiredAt: "2026-09-01T13:00:00.000Z",
   retiredReason: "session_cancelled",
+  answer: {
+    text: "Use the EU account",
+    messageId: "55555555-5555-5555-5555-555555555555",
+    answeredBy: "22222222-2222-2222-2222-222222222222",
+    answeredAt: "2026-09-01T14:00:00.000Z",
+  },
 };
 
 /** The forgery an agent would attempt for each — every one a real attack. */
@@ -86,6 +92,13 @@ const FORGED: typeof STORED = {
   attestedAt: "2026-09-08T12:00:00.000Z",
   retiredAt: "2026-09-08T13:00:00.000Z",
   retiredReason: "session_cancelled",
+  // An agent putting words in the person's mouth — and handing itself the slot.
+  answer: {
+    text: "Sure, ship it",
+    messageId: null,
+    answeredBy: "antoine",
+    answeredAt: "2026-09-08T14:00:00.000Z",
+  },
 };
 
 const LABEL = "Launch brief";

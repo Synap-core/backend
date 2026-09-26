@@ -72,6 +72,12 @@ export interface UpdateProjectInput {
   colorSlot?: number | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  /**
+   * D6: the project's HOME workspace. Only `projects.update`'s governed
+   * `homeWorkspaceId` sets it (after its target write check). `undefined` =
+   * untouched; there is no clear-to-pod-personal through this field.
+   */
+  workspaceId?: string;
 }
 
 export class ProjectRepository extends BaseRepository<
@@ -213,6 +219,8 @@ export class ProjectRepository extends BaseRepository<
         targetDate: data.targetDate,
         // Same two-state contract: `undefined` untouched, `null` clears.
         colorSlot: data.colorSlot,
+        // D6 home change — `undefined` is skipped by Drizzle (untouched).
+        workspaceId: data.workspaceId,
         settings: data.settings,
         metadata: data.metadata,
         updatedAt: new Date(),

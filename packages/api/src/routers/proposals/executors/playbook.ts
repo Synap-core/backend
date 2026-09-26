@@ -251,6 +251,7 @@ export function registerPlaybookExecutors(): void {
         "executor",
         "status",
         "scope",
+        "metadata",
       ] as const;
       const patch: Record<string, unknown> = { id: playbookId };
       for (const key of REPLAYED) {

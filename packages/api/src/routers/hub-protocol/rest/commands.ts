@@ -290,7 +290,7 @@ export function registerCommandsRoutes(app: HubHono): void {
       logger.error({ err }, "listCommands failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -526,7 +526,7 @@ export function registerCommandsRoutes(app: HubHono): void {
       logger.error({ err, command }, "commands.execute failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

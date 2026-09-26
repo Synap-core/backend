@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   KIND_INTENT,
   PROPOSAL_INTENTS,
+  isSessionStartChange,
   isSwipeSafe,
   resolveLinkOperation,
   resolveProposalImpact,
@@ -391,5 +392,25 @@ describe("isDocumentEditProposal", () => {
     expect(
       isDocumentEditProposal({ targetType: "document", proposalType: null })
     ).toBe(false);
+  });
+});
+
+describe("isSessionStartChange — which focus-session change starts one", () => {
+  it("a create, or a legacy row with no change type, starts a session", () => {
+    for (const changeType of ["create", "", undefined, null]) {
+      expect(isSessionStartChange(changeType)).toBe(true);
+    }
+  });
+
+  it("every change on an existing session starts nothing", () => {
+    for (const changeType of [
+      "update",
+      "grant_capability",
+      "stage_gate",
+      "plan_approval",
+      "delete",
+    ]) {
+      expect(isSessionStartChange(changeType)).toBe(false);
+    }
   });
 });

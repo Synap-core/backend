@@ -46,7 +46,7 @@ import {
   PublicProjectionQuerySchema,
   PublicProjectionResponseSchema,
 } from "./_codecs/public-projection.js";
-import { logger, type HubHono } from "./_shared.js";
+import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
 /** Default page size when `limit` is omitted or unparseable. */
 export const PROJECTION_DEFAULT_LIMIT = 20;
@@ -66,7 +66,9 @@ const PublicProjectionConfigSchema = z.object({
   fields: z.array(z.string().min(1)).default([]),
 });
 
-export type PublicProjectionConfig = z.infer<typeof PublicProjectionConfigSchema>;
+export type PublicProjectionConfig = z.infer<
+  typeof PublicProjectionConfigSchema
+>;
 
 /**
  * Read + validate `settings.publicProjection`. Returns the config ONLY when the
@@ -189,7 +191,9 @@ export function projectRow(
  * facet → entity (for title/properties). Only live (non-soft-deleted) facets and
  * entities are considered. No offset — capped limit only.
  */
-async function runProjectionQuery(spec: ProjectionSpec): Promise<ProjectionRow[]> {
+async function runProjectionQuery(
+  spec: ProjectionSpec
+): Promise<ProjectionRow[]> {
   const conditions = [
     // KEYSTONE — filter by the FACET's workspace, NOT the entity's.
     eq(entityFacets.workspaceId, spec.facetWorkspaceId),
@@ -226,7 +230,8 @@ export function registerPublicProjectionRoutes(app: HubHono): void {
     method: "get",
     path: "/public/projection",
     tags: ["Public"],
-    summary: "Unauthenticated, field-whitelisted public projection of a workspace",
+    summary:
+      "Unauthenticated, field-whitelisted public projection of a workspace",
     description:
       "Read-only search over the facet-scoped public data a workspace opts into " +
       "via settings.publicProjection. No auth. Returns 404 when the workspace has " +
@@ -239,7 +244,10 @@ export function registerPublicProjectionRoutes(app: HubHono): void {
         schema: PublicProjectionResponseSchema,
       },
       400: { description: "Bad request", schema: ErrorSchema },
-      404: { description: "No public projection for this workspace", schema: ErrorSchema },
+      404: {
+        description: "No public projection for this workspace",
+        schema: ErrorSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -279,7 +287,7 @@ export function registerPublicProjectionRoutes(app: HubHono): void {
       return c.json({ items, count: items.length });
     } catch (err) {
       logger.error({ err, workspaceId }, "public projection query failed");
-      return c.json({ error: "Internal error" }, 500);
+      return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));
     }
   });
 }

@@ -45,7 +45,7 @@ import {
 
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
 import { verifyTrustedIssuerJwt } from "../../../utils/jwks-client.js";
-import { logger, type HubHono } from "./_shared.js";
+import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
 /**
  * Minimal shape both routes' `c` argument needs from the Hono context — kept
@@ -292,7 +292,10 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
         { err, podUserId: row.podUserId },
         "mcp/redeem: mint failed"
       );
-      return c.json({ error: "Internal server error" }, 500);
+      return c.json(
+        { error: "Internal server error" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -367,7 +370,10 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
       return c.json({ revoked: true });
     } catch (err) {
       logger.error({ err, keyId }, "mcp/revoke: revoke failed");
-      return c.json({ error: "Internal server error" }, 500);
+      return c.json(
+        { error: "Internal server error" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 }

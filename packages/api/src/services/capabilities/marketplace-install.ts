@@ -69,7 +69,7 @@ import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import { createCapabilityFromDefinition } from "./create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
-import { createWorkspaceFromDefinitionIdempotent } from "../workspace-creation-service.js";
+import type { CreateWorkspaceFromDefinitionResult } from "../workspace-creation-service.js";
 // Type-only (erased at runtime) — the applier itself is imported dynamically at
 // its call site, mirroring the approve-executors, so this module never pulls the
 // post-workspace layer graph into an eager import cycle.
@@ -80,7 +80,10 @@ import {
   stampMarketSource,
   readMarketSource,
 } from "./market-source.js";
-import { summarizePostWorkspaceLayers } from "./install-layers.js";
+import {
+  summarizePostWorkspaceLayers,
+  installedTrackTemplates,
+} from "./install-layers.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "marketplace-install" });
@@ -509,9 +512,19 @@ export async function applyMarketInstall(
       // Idempotency: packageSlug/proposalId both set to the catalog slug, so a
       // re-install by the same user converges to the existing workspace
       // (createWorkspaceFromDefinitionIdempotent's own key, not re-derived here).
-      const result = await createWorkspaceFromDefinitionIdempotent({
+      // THE shared materialization core (the Hub `/packages/apply`, tRPC and
+      // approve-executor doors all drive it): resolves `dependencies`, layers
+      // an overlay (`compose`) or a PACK (D8 — never its own workspace) onto
+      // its base, else idempotently creates via
+      // `createWorkspaceFromDefinitionIdempotent`. This door used to call that
+      // create directly, so a pack installed through the agent door still left
+      // a stray suite workspace and an overlay became a rogue workspace.
+      const { materializeWorkspaceCore } =
+        await import("../workspace-materialization-service.js");
+      const core = await materializeWorkspaceCore({
         definition,
         userId: input.userId,
+        selfSlug: input.slug,
         proposalId: input.slug,
         packageSlug: input.slug,
         packageVersion: entry?.version ?? input.version ?? undefined,
@@ -519,6 +532,18 @@ export async function applyMarketInstall(
         templateId: input.slug,
         templateName: entry?.name ?? input.slug,
       });
+      // `created` (new or idempotent re-hit, with its reconcile outcome) or
+      // `composed` (layered onto an existing workspace — layer 2 always runs,
+      // exactly as the Hub door's composed branch does).
+      const result =
+        core.status === "created"
+          ? core.created
+          : {
+              workspaceId: (core as { workspaceId: string }).workspaceId,
+              created: false,
+              outcome: undefined as
+                CreateWorkspaceFromDefinitionResult["outcome"] | undefined,
+            };
 
       // ── LAYER 2 (post-workspace) ─────────────────────────────────────────
       // `createWorkspaceFromDefinitionIdempotent` materializes ONLY layer 1
@@ -719,6 +744,10 @@ export async function applyMarketInstall(
         // `capability.install` executor, which stores the object opaquely).
         ...(postWorkspace ? { postWorkspace } : {}),
         ...(layers.length > 0 ? { layers } : {}),
+        // W3b: the project-scope playbooks this install made startable, read
+        // through the same pure derivation `createFromDefinition` uses. A
+        // caller may OFFER to start one on a project; never auto-started.
+        trackTemplates: installedTrackTemplates(postWorkspace),
       };
     }
 

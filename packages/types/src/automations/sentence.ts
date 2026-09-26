@@ -59,9 +59,10 @@ export interface SentenceAction {
  *      `automation-trigger-match` reactor matches on
  *      `Boolean(payload.workspaceId) || subjectType === "external_message"`, so
  *      a workspace-less emit reaches search-indexing and webhooks and NEVER the
- *      matcher. This is what kept `sharing` and `user` off the list: both have
- *      live producers that pass no workspace, so a rule on them would install
- *      `active` and never fire.
+ *      matcher. This is what keeps `user` off the list: it has a live producer
+ *      that passes no workspace, so a rule on it would install `active` and
+ *      never fire. (`sharing` was withheld for the same reason until its only
+ *      producer, the dead `sharing` tRPC router, was deleted; it now has none.)
  *   3. `validateEventPattern` accepts the compiled pattern. The rule compiler
  *      (`services/rules/compile.ts:201`) runs it, so a subject outside
  *      `SUBJECT_TYPES` / `DOMAIN_SUBJECT_TYPES` / `CONNECTOR_SUBJECT_TYPES` is
@@ -80,8 +81,9 @@ export interface SentenceAction {
  * `external_channel` — ZERO producers. Its only textual match anywhere is
  *   inside `events/event-types.ts:235` — the catalog file's own note recording
  *   that it removed the entry for exactly this reason. A match in a catalog is
- *   not a call site. `user`, `sharing` — producers exist
- *   but pass no workspace (condition 2). `entity_facet` — condition 3.
+ *   not a call site. `sharing` — ZERO producers since its router was deleted.
+ *   `user` — a producer exists but passes no workspace (condition 2).
+ *   `entity_facet` — condition 3.
  *   `projectMember` — reachable, but only through ONE narrow path, and the
  *   emit is GENERIC. `jobs/workers/materializer.ts:313` is the producer: a
  *   post-write `emitSideEffects({ subjectType, … })` over the variable it read

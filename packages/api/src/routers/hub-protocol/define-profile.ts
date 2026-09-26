@@ -145,11 +145,21 @@ export async function defineProfile(
     };
   }
 
-  const createdProfile = result?.profile as { id?: string } | null | undefined;
+  const createdProfile = result?.profile as
+    | { id?: string; scope?: string; profileKind?: string | null }
+    | null
+    | undefined;
   const profileId = createdProfile?.id;
   if (fieldSpecs.length === 0 || !profileId) {
     return { ok: true, result };
   }
+  // W2b ROLE PRINCIPLE: re-declaring an EXISTING pod-wide role from a
+  // workspace ADDS that workspace's fields as OVERLAYS — the shared role's
+  // base schema is every workspace's, so one domain must not widen it for all.
+  const overlayOnSharedRole =
+    result?.existing === true &&
+    createdProfile?.profileKind === "role" &&
+    (createdProfile?.scope === "shared" || createdProfile?.scope === "system");
 
   const properties: Array<Record<string, unknown>> = [];
   for (const spec of fieldSpecs) {
@@ -214,7 +224,9 @@ export async function defineProfile(
         ...(typeof spec.displayOrder === "number"
           ? { displayOrder: spec.displayOrder }
           : {}),
-        ...(spec.overlay === true ? { overlay: true } : {}),
+        ...(spec.overlay === true || overlayOnSharedRole
+          ? { overlay: true }
+          : {}),
         reasoning: `Field of kind '${profileSlug}' defined via ${labels.door}`,
         ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
       });

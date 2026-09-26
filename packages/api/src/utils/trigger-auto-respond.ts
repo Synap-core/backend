@@ -27,6 +27,7 @@ import {
   messages,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { resolveTurnPrincipal } from "../services/messaging/turn-principal.js";
 
 const logger = createLogger({ module: "trigger-auto-respond" });
 
@@ -34,7 +35,11 @@ export async function triggerAutoRespond(params: {
   channelId: string;
   userMessageId: string;
   content: string;
-  /** The principal whose message triggered the response (sourceAgentUserId). */
+  /**
+   * The principal whose message triggered the response (sourceAgentUserId).
+   * LOAD-BEARING: the turn runs AS this summoner (`resolveTurnPrincipal`), not
+   * as the room owner — pass the real author, never the owner on their behalf.
+   */
   sourceUserId?: string | null;
   /** Active focus session ID for this channel — forwarded so the IS wakes up
    *  session-aware and tags all hub calls with X-Session-Id automatically. */
@@ -131,12 +136,21 @@ export async function triggerAutoRespond(params: {
           orderBy: (fs, { desc }) => [desc(fs.startedAt)],
         })
       )?.id;
+    // WHO the turn runs as (founder decision D): the SUMMONER, never the room
+    // owner on someone else's behalf. The IS turns this `userId` into its
+    // X-Delegated-Operator-Id, i.e. the read floor and the governance operator
+    // of every Hub call it makes — see `turn-principal.ts`. Owner flows (slot
+    // answers, delegated outputs) pass the owner and are unchanged.
+    const principal = await resolveTurnPrincipal({
+      roomOwnerId: channel.userId,
+      summonerId: params.sourceUserId,
+    });
     const { resolveIntelligenceService } =
       await import("./intelligence-routing.js");
     const { getBoss, A2AI_TRIGGER_QUEUE, A2AI_TRIGGER_JOB_OPTIONS } =
       await import("@synap/jobs");
     const resolvedService = await resolveIntelligenceService({
-      userId: channel.userId,
+      userId: principal.userId,
       // PERSONAL channels are pod-scoped (null) → undefined = user-default routing.
       workspaceId: channel.workspaceId ?? undefined,
       capability: "chat",
@@ -147,7 +161,7 @@ export async function triggerAutoRespond(params: {
         channelId: params.channelId,
         userMessageId: params.userMessageId,
         content: params.content,
-        userId: channel.userId,
+        userId: principal.userId,
         workspaceId: channel.workspaceId,
         agentType:
           typeof params.agentType === "string" && params.agentType.trim()

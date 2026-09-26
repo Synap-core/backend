@@ -29,6 +29,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 // ── Unified-run read schemas (the cross-flow diagnose door) ──────────────────
@@ -379,7 +380,7 @@ export function registerRunsRoutes(app: HubHono): void {
       logger.error({ err, runId }, "runs.capture failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -1,7 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { db, proposals, eq, focusSessions } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { mergeSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
   DEV_DEPLOY_APPROVAL_TYPE,
@@ -176,18 +175,6 @@ async function applyDevApproval(
     ids: updated.map((row) => row.id),
     subject: "focus_session",
   };
-
-  emitHubRealtimeEvent({
-    eventType: "focus_session.update.completed",
-    subjectId: sessionId,
-    userId,
-    data: {
-      id: sessionId,
-      workspaceId: session.workspaceId,
-      goal: session.goal,
-      currentStage: updated[0]?.currentStage ?? STAGE_AFTER[type],
-    },
-  });
 
   await db
     .update(proposals)

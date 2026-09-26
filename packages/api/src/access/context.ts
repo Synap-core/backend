@@ -27,9 +27,27 @@
  * Delegated hub reads already resolve `actor:"agent"` correctly:
  * `createHubProtocolCallerContext` stamps `agentUserId` onto the caller ctx and
  * `AccessContext.from(ctx)` consumes it.
+ *
+ * GUEST FLOOR (Sites W2). Who is a guest is decided in SQL, not on this object:
+ * `podGuestWhere` / `podReaderWhere` (`@synap/database` utils/pod-membership.ts)
+ * are inside the floor predicates themselves, so the ~265 call sites that pass a
+ * bare userId are guest-correct without ever building an AccessContext. The
+ * `audience()` accessor below evaluates the SAME predicates for JS-level
+ * branching (e.g. refusing a door to a guest); the security floor does not
+ * depend on it.
+ *
+ * ANONYMOUS: there is no anonymous AccessContext. Every factory throws without
+ * a userId (null, undefined or ""), and an id that names no `users` row is not
+ * a pod reader, so it reads nothing through the floors.
  */
 
-import { db, eq } from "@synap/database";
+import {
+  db,
+  eq,
+  drizzleSql,
+  podGuestWhere,
+  podReaderWhere,
+} from "@synap/database";
 import { podMembers } from "@synap/database/schema";
 import type { ExposureRelationType } from "../utils/project-scope.js";
 
@@ -37,6 +55,14 @@ export type Actor = "operator" | "agent";
 
 /** Pod-level role held by a `pod_members` row. */
 export type PodRole = "owner" | "admin" | "member";
+
+/**
+ * Who the caller is to this pod, from the floor's own predicates:
+ *   - `"member"`: a pod reader (a participant, or a known non-guest user);
+ *   - `"guest"`: `podGuestWhere` — a guest project role and no participation;
+ *   - `"unknown"`: neither — an id with no `users` row. Reads nothing.
+ */
+export type PodAudience = "member" | "guest" | "unknown";
 
 /**
  * A scope-lens dimension: `undefined` = no narrowing (the user floor) · `null` =
@@ -237,6 +263,39 @@ export class AccessContext {
   /** Convenience: this context's user's pod role, or `null` if not a member. */
   async podRole(): Promise<PodRole | null> {
     return (await this.podMembership()).podRole;
+  }
+
+  private audienceCache?: Promise<PodAudience>;
+
+  /**
+   * Resolve (and memoize) this caller's audience by evaluating the SAME SQL
+   * predicates the floor embeds (`podGuestWhere`, `podReaderWhere`) — one
+   * derivation, never a second JS re-statement. EMPTY ≠ FAILED: a failed read
+   * throws (and is not memoized); it never reads as "member".
+   */
+  async audience(): Promise<PodAudience> {
+    if (!this.audienceCache) {
+      const userId = this.userId;
+      this.audienceCache = (async (): Promise<PodAudience> => {
+        const res: unknown = await db.execute(
+          drizzleSql`SELECT ${podGuestWhere(userId)} AS "guest", ${podReaderWhere(userId)} AS "reader"`
+        );
+        // postgres-js returns the row array; PGlite returns `{ rows }`.
+        const rows = Array.isArray(res)
+          ? res
+          : (res as { rows?: unknown[] } | null)?.rows;
+        const row = rows?.[0] as { guest?: unknown; reader?: unknown };
+        if (!row) {
+          throw new Error("AccessContext.audience: the probe returned no row");
+        }
+        if (row.guest === true) return "guest";
+        return row.reader === true ? "member" : "unknown";
+      })().catch((err: unknown) => {
+        this.audienceCache = undefined;
+        throw err;
+      });
+    }
+    return this.audienceCache;
   }
 }
 

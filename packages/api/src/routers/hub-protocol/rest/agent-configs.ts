@@ -12,15 +12,19 @@
 import { z } from "@hono/zod-openapi";
 import { db, agentConfigs, eq, and } from "@synap/database";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 
 const ListAgentConfigsQuerySchema = z
   .object({
     userId: z.string().describe("Agent user ID (the personality)."),
-    workspaceId: z
-      .string()
+    workspaceId: uuidQueryParam
       .optional()
       .describe(
         "Workspace ID. If omitted, returns all configs for this userId across workspaces."
@@ -141,7 +145,7 @@ export function registerAgentConfigsRoutes(app: HubHono): void {
       logger.error({ err }, "listAgentConfigs failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

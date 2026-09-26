@@ -28,7 +28,6 @@ import {
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { randomUUID } from "node:crypto";
-import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
@@ -952,19 +951,6 @@ export async function createFocusSession(
           agentUserId,
         })
       : undefined;
-
-  emitHubRealtimeEvent({
-    eventType: "focus_session.create.completed",
-    subjectId: sessionOut.id,
-    userId,
-    data: {
-      id: sessionOut.id,
-      workspaceId: sessionOut.workspaceId,
-      status: sessionOut.status,
-      goal: sessionOut.goal,
-      progress: sessionOut.progress,
-    },
-  });
 
   // A slot can be born blocked; the same safety net as every other block door.
   const blockGuidelines = await guidanceForBlockedSlots({

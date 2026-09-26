@@ -367,7 +367,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_update_document: {
     "pod-mcp": "synap_update_document",
-    "cp-connector": null,
+    "cp-connector": "pod__update_document",
     raycast: null,
   },
   synap_update_entity: {

@@ -41,6 +41,7 @@ import { computeNextRunAt } from "@synap/jobs/workers/automation-cron-scheduler.
 // `automations` directly and would otherwise bypass it entirely.
 import { flowValidationErrorMessage } from "../automations/validate-flow.js";
 import { createLogger } from "@synap-core/core";
+import { playbookRunNodeLabel } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbook-cron-automation" });
 
@@ -150,9 +151,11 @@ export function buildPlaybookRunFlowDefinition(
 ): FlowDefinition {
   const mode = opts?.mode ?? "run";
   const runData = {
+    // The run fallback is the ONE vocabulary-composed node label
+    // (`playbookRunNodeLabel`, shared with the rule grammar) — never a literal.
     label:
       opts?.playbookName ??
-      (mode === "appointment" ? "Schedule session" : "Run playbook"),
+      (mode === "appointment" ? "Schedule session" : playbookRunNodeLabel()),
     playbookId,
     playbookName: opts?.playbookName,
     paramsMapping: opts?.paramsMapping,

@@ -22,7 +22,6 @@
 import { TRPCError } from "@trpc/server";
 import { db, proposals, focusSessions, eq, and } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import {
   registerProposalExecutor,
   type ProposalEffect,
@@ -88,21 +87,6 @@ export function registerPlaybookStageGateExecutors(): void {
                 "resumed, closed or cancelled. The gate is answered; the session " +
                 "keeps the state its owner left it in.",
             };
-
-      if (resumed.length > 0) {
-        emitHubRealtimeEvent({
-          eventType: "focus_session.update.completed",
-          subjectId: sessionId,
-          userId,
-          data: {
-            id: sessionId,
-            workspaceId: session.workspaceId,
-            status: "active",
-            goal: session.goal,
-            progress: session.progress,
-          },
-        });
-      }
 
       await db
         .update(proposals)

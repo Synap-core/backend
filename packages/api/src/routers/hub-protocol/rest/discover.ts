@@ -44,6 +44,7 @@ import {
   hasScope,
   logger,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import {
   loadProfileFill,
@@ -855,7 +856,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
       logger.error({ err }, "discover failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

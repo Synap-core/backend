@@ -63,6 +63,8 @@ function inlineText(
       case "emphasis":
       case "delete":
       case "mark":
+      case "underline":
+      case "textColor":
       case "link":
       case "linkReference":
         out += inlineText(node.children, nounFor);

@@ -35,6 +35,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 const ResolveIdentityRequestSchema = z
@@ -209,7 +210,7 @@ export function registerIdentityRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /identity/resolve failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

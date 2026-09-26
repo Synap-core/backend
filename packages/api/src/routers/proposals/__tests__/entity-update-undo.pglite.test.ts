@@ -100,6 +100,8 @@ import {
   workspaces,
   workspaceMembers,
   projectMembers,
+  podMembers,
+  users,
   type db as DatabaseHandle,
 } from "@synap/database";
 import { isSwipeSafe } from "@synap-core/types/proposals/intent";
@@ -146,9 +148,16 @@ async function freshDb() {
     workspaces,
     workspaceMembers,
     projectMembers,
+    podMembers,
+    users,
   ]) {
     await client.exec(ddlFor(table as unknown as PgTable));
   }
+  // A KNOWN principal (Sites W2 S2): an id with no `users` row is an unknown
+  // principal and reads no pod-level row — `podReaderWhere`.
+  await client.exec(
+    `insert into users (id, email) values ('${USER}', '${USER}@example.test')`
+  );
   const database = drizzle(client, {
     schema: { entities, proposals, workspaces, workspaceMembers },
   }) as unknown as Database;
@@ -420,6 +429,114 @@ describe("an APPROVED entity update is undoable from its apply-time stamp", () =
     await expect(
       (await revertCaller(database)).revert({ proposalId })
     ).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+  });
+});
+
+describe("an update undo cannot fully restore is never predicted revertable", () => {
+  it.each(["profileSlug", "global", "documentId", "sourceFile"] as const)(
+    "a pending update carrying %s is not revertable, so not swipe-safe",
+    async (key) => {
+      const { client } = await freshDb();
+      const entityId = await insertEntity(client);
+      const id = randomUUID();
+      const value =
+        key === "global"
+          ? true
+          : key === "sourceFile"
+            ? { storageKey: "k" }
+            : key === "documentId"
+              ? randomUUID()
+              : "invoice";
+      await client.query(
+        `insert into proposals (id, status, proposal_type, target_type, target_id, data, created_by, subject_user_id)
+         values ($1, 'pending', 'update', 'entity', $2, $3::jsonb, 'agent-1', $4)`,
+        [
+          id,
+          entityId,
+          JSON.stringify({
+            changeType: "update",
+            targetType: "entity",
+            data: { id: entityId, ...EDIT, [key]: value },
+          }),
+          USER,
+        ]
+      );
+      const row = await proposalRow(client, id);
+      const input = {
+        status: row.status,
+        targetType: row.target_type,
+        targetId: row.target_id,
+        proposalType: row.proposal_type,
+        data: row.data,
+      };
+      expect(revertableForRow(input)).toBe(false);
+      expect(
+        isSwipeSafe({
+          kind: "update",
+          changeType: "update",
+          revertable: revertableForRow(input),
+        })
+      ).toBe(false);
+      // Once applied with a stamp, the planner refuses it the same way —
+      // the prediction and the outcome never disagree.
+      expect(
+        revertableForRow({
+          ...input,
+          status: "approved",
+          data: {
+            ...row.data,
+            materialized: {
+              propertyDiffs: [
+                {
+                  entityId,
+                  before: { stage: "lead" },
+                  after: { stage: "client" },
+                  absentBefore: [],
+                },
+              ],
+            },
+          },
+        })
+      ).toBe(false);
+    }
+  );
+});
+
+describe("undo → reopen → re-approve → undo restores what the person kept", () => {
+  it.each([
+    ["approved→reopen (partial undo straight back to review)", true],
+    ["reverted→reopen (partial undo, then re-propose)", false],
+  ] as const)("%s", async (_label, reopenOnUndo) => {
+    const { client, database } = await freshDb();
+    const entityId = await insertEntity(client);
+    const proposalId = await insertPendingUpdate(client, entityId);
+    await approveThroughExecutor(client, proposalId);
+
+    // The person keeps their own `stage` and title after the agent's write.
+    await client.query(
+      `update entities set title = 'User title', properties = properties || '{"stage":"won"}'::jsonb where id = $1`,
+      [entityId]
+    );
+    const caller = await revertCaller(database);
+    if (reopenOnUndo) {
+      await caller.revert({ proposalId, reopen: true });
+    } else {
+      await caller.revert({ proposalId });
+      expect((await proposalRow(client, proposalId)).status).toBe("reverted");
+      await caller.revert({ proposalId, reopen: true });
+    }
+    expect((await proposalRow(client, proposalId)).status).toBe("pending");
+
+    // Re-approve: the write lands again over the person's values.
+    await approveThroughExecutor(client, proposalId);
+    expect((await entityRow(client, entityId)).title).toBe("New title");
+
+    // Undo again: the values the person had when it was RE-approved come back
+    // — never the original ones from before the first approval.
+    await caller.revert({ proposalId });
+    const after = await entityRow(client, entityId);
+    expect(after.title).toBe("User title");
+    expect(after.properties.stage).toBe("won");
   });
 });
 

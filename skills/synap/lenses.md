@@ -4,13 +4,15 @@ You don't work "inside a workspace" the way you'd work inside a folder. You oper
 
 Tool names below are stems; your door may prefix them.
 
-| Lens          | What it is                                                                                                                                        | Set it (MCP / CLI)                                                 |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| **Workspace** | an **operational domain** (CRM, Builder, Marketing). A thing lives in exactly ONE. How the work is separated; the default home for writes.        | `set_workspace_focus` / `synap use <name-or-id>`                   |
-| **Project**   | a **cross-cutting engagement** (a client mandate, a venture, a product line) that runs THROUGH several workspaces; a thing can belong to several. | `set_project_focus` or `projectId` / `synap project use <id>`      |
-| **Session**   | the **work room** for the current goal (goal, deliverables, progress). Pass its id on writes that belong to it.                                   | `start_session` / `synap session start --goal "…"` / `attach <id>` |
+What each word means (workspace, project, track, step, work): `concepts` — the one glossary. This file is only about scoping.
 
-**The project rule (one rule, every door):** a project is set ONLY when the user names it — declare it with `set_project_focus`, or pass `projectId` on the write. Filing work into a project grants its members access, so never infer one from content, and never let a session decide it: a write without a `sessionId` is grouped into YOUR session — the one you started, else one opened for you, never another client's — and that door-picked session never sets the project. When nobody named a project, leave it unset. Guessing a workspace is merely untidy; guessing a project is not.
+| Lens          | Scopes                                                     | Set it (MCP / CLI)                                                 |
+| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| **Workspace** | a domain; a thing lives in exactly ONE; default write home | `set_workspace_focus` / `synap use <name-or-id>`                   |
+| **Project**   | a commitment across workspaces; a thing can be in several  | `set_project_focus` or `projectId` / `synap project use <id>`      |
+| **Session**   | the work room for the current goal; pass its id on writes  | `start_session` / `synap session start --goal "…"` / `attach <id>` |
+
+**The project rule (one rule, every door):** a project is set ONLY when the user names it — declare it with `set_project_focus`, or pass `projectId` on the write. Filing into a project shares entities and documents with its members (a session is shared only through its room, never by filing), so never infer one from content, and never let a session decide it: a write without a `sessionId` is grouped into YOUR session — the one you started, else one opened for you, never another client's — and that door-picked session never sets the project. When nobody named a project, leave it unset. Guessing a workspace is merely untidy; guessing a project is not.
 
 **Reads:** pod-wide by default; find by name, id or role, and pass `workspaceId` / `projectId` only to narrow a list.
 
@@ -20,14 +22,11 @@ Tool names below are stems; your door may prefix them.
 
 **Where the kinds are:** `orient` names the kinds in use, most-used first; the profile-listing tool lists every kind and role. A kind's property schema (fields, enums, required): over MCP, `get_entity` on any existing entity of that kind returns it as `effectiveProperties`; over HTTP, `GET /api/hub/discover?profileSlugs=<slug>`; CLI `synap discover`. A write that breaks the schema is rejected with the valid fields quoted.
 
-**How they compose — this is the whole model:**
+**How they compose** (definitions: `concepts`):
 
-- A **project spans workspaces**: one engagement has a CRM, a Marketing, a Finance… each a different operational lens on the _same_ project.
-- A **workspace spans projects**: the Marketing workspace can hold work for several clients/projects at once.
+- A **project spans workspaces** and a **workspace spans projects**.
 - **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** (`belongs_to_project`) — that is the data ACL/filing edge. Separately, provisioning with a `projectId` also stamps **`project --uses--> workspace`**: an INDEX of domains the engagement runs through. That index is **not** an ACL and does **not** replace entity filing — set the project lens before writing work so entities compose into the project from any workspace.
-- **A method inside a project = a TRACK, never a child project or a workspace.** "The business-model side", "our content pipeline", "the build" are tracks: a project-scoped playbook started on the project with `start_track` (`list_tracks` shows what runs). A project runs several.
-- **User-speech "sub-project" / a bounded piece of work = session.** Start it inside its track (`trackId`) when it belongs to one; blockers and detours are `parentSessionId` / `blockedBySessionIds` under the same project lens. There are no nested projects.
-- Compose either way, or both. That's why they're lenses, not folders: **workspaces exist so that development, finance, marketing, and operations don't pile into one undifferentiated place** — they're the separation that makes the work legible.
+- A method inside a project is a **track**, never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a track). There are no nested projects.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
 - **These are per-Claude-session.** Two concurrent Claude sessions can sit on different projects/workspaces/sessions without colliding. `synap use` here rebinds **this** session only.

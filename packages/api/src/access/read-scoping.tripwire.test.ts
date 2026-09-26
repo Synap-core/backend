@@ -85,6 +85,13 @@ const SCOPING_HELPERS = [
   // call it by `views.podwide-access.test.ts`.
   "assertViewAccess",
   "workspaceLensWhere",
+  // The ONE focus-session read predicate (access/session-visibility.ts,
+  // decision C): owner, OR a human seat on the session's own minted room,
+  // floored on the session's workspace. It REPLACED the bare
+  // `eq(focusSessions.userId, …)` on the session read doors, so without this
+  // entry every widened door reads as unfloored. Its own guard is
+  // routers/focus-sessions.shared-read.pglite.test.ts.
+  "sessionReadableWhere",
   "validateWorkspaceAccess",
   "verifyPermission",
   "getWorkspaceRole",
@@ -588,6 +595,13 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
     // file hunts, so it is covered there rather than here; do not read these
     // tests as proof that no query param can influence the floor.
     "hub-protocol/rest/calendar-feed.ts::get /calendar/feed/:token",
+    // DELIBERATELY NOT LISTED (Sites W3): `GET /public/shares/:token` is the
+    // same by-design capability lookup as the calendar feed (hashed token →
+    // unique index → the ROW scopes every later read), but its reads live in
+    // `services/sharing/public-read.ts` via `db.select()`, which this scan
+    // cannot see — so it does not trip. An entry here would only pre-silence
+    // a FUTURE unfloored by-id read inlined into that handler. Its guard is
+    // `rest/public-shares.tripwire.test.ts` (uniform 404, snapshot-only).
   ]);
 
   it("every Hono GET handler by-id/inArray read of a registered scoped table applies a scope floor", () => {

@@ -26,9 +26,16 @@ export const views = pgTable("views", {
   // Project scope (cross-cutting lens): pins a scoped surface (whiteboard/home/
   // bento) to a project, independently of workspace_id (domain lens). Nullable —
   // ordinary views and pod/workspace surfaces leave it NULL. See 0166.
+  // Two meanings, told apart by `exposedAt` (0276):
+  //   project_id + exposed_at NULL = a surface PINNED to the project;
+  //   project_id + exposed_at set  = SHARED with that project's members.
+  // CHECK views_exposed_requires_project: exposed_at IS NULL OR project_id IS NOT NULL.
   projectId: uuid("project_id").references(() => projects.id, {
     onDelete: "cascade",
   }),
+  // Exposure marker (0276): when / by whom the view was shared with `projectId`.
+  exposedAt: timestamp("exposed_at", { mode: "date", withTimezone: true }),
+  exposedBy: text("exposed_by"),
 
   // View type (extensible)
   type: text("type").notNull(),

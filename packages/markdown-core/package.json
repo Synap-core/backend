@@ -58,6 +58,10 @@
     "./readable": {
       "types": "./dist/readable.d.ts",
       "import": "./dist/readable.js"
+    },
+    "./inline-format": {
+      "types": "./dist/inline-format.d.ts",
+      "import": "./dist/inline-format.js"
     }
   },
   "scripts": {

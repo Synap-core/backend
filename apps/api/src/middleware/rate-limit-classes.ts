@@ -5,6 +5,12 @@
  * middleware can share the same logic without a heavy import graph.
  */
 import { createHash } from "node:crypto";
+// Zero-import subpath (never the heavy `@synap/api` root): the ONE public-door
+// predicate, shared with hub auth, idempotency and the edge CORS.
+import {
+  isPublicDoorPath,
+  publicDoorTokenSegment,
+} from "@synap/api/public-doors";
 
 /**
  * Request classes for the pod-edge rate limiter.
@@ -14,6 +20,8 @@ import { createHash } from "node:crypto";
  * - ai_agent_turn: Discord/channel agent turns (higher AI budget)
  * - ai_interactive: external/OpenAI-compat chat
  * - calendar_feed: unauth ICS polls (not crud — calendar clients poll)
+ * - public_read: credentialless public-door reads (`/api/hub/public/*` GET)
+ * - public_submit: credentialless public-door writes (`/api/hub/public/*` POST)
  * - crud: everything else
  */
 export type RateLimitClass =
@@ -22,6 +30,8 @@ export type RateLimitClass =
   | "ai_agent_turn"
   | "ai_interactive"
   | "calendar_feed"
+  | "public_read"
+  | "public_submit"
   | "crud";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -39,7 +49,8 @@ function formatRetryAfter(windowMs: number): string {
 
 /** Tunable class budgets (env overrides; call at use-site for fresh reads). */
 export function getRateLimitClassConfig(): Record<
-  Exclude<RateLimitClass, "free">,
+  // Public-door classes carry their own nested budgets (getPublicDoorRateConfig).
+  Exclude<RateLimitClass, "free" | "public_read" | "public_submit">,
   { max: number; windowMs: number; retryAfter: string }
 > {
   const crudWindow = parsePositiveInt(
@@ -95,10 +106,25 @@ export function getRateLimitClassConfig(): Record<
 /**
  * Classify a request path into a rate-limit class.
  * Pure function — unit-tested; no env/side effects.
+ *
+ * `method` only matters for the public-door namespace (a read and a submit are
+ * budgeted apart); every other class is path-only, as before.
  */
-export function classifyRateLimitPath(path: string): RateLimitClass {
+export function classifyRateLimitPath(
+  path: string,
+  method: string = "GET"
+): RateLimitClass {
   // Hono's c.req.path is pathname-only; still strip query/hash defensively.
   const p = path.split(/[?#]/, 1)[0] || "/";
+
+  // Credentialless public doors — the ONE predicate (public-doors.ts). Checked
+  // first so no later rule can pull a public path into a Bearer-keyed class.
+  if (isPublicDoorPath(p)) {
+    const m = method.toUpperCase();
+    return m === "GET" || m === "HEAD" || m === "OPTIONS"
+      ? "public_read"
+      : "public_submit";
+  }
 
   // free — probes that must never burn budget
   if (
@@ -182,6 +208,81 @@ export function getCalendarFeedIpCeiling(): {
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
+}
+
+/**
+ * Public-door budgets (Sites W3). Every public bucket is keyed WITHOUT the
+ * Authorization header — a caller-chosen random Bearer must never buy a fresh
+ * budget (the defect the calendar feed already paid for).
+ *
+ * - read, per IP: 300 / 5 min. There is deliberately NO per-share read cap: a
+ *   page that goes viral must not 429 every reader.
+ * - submit, per IP: 10 / 10 min, checked FIRST (bounds a caller who varies the
+ *   token), then per share: 200 / hour (bounds what one form can absorb).
+ *
+ * KNOWN LIMITATION: behind a Cloudflare tunnel every request arrives from the
+ * `cloudflared` peer, so "per IP" is one shared bucket for the whole pod.
+ * `CF-Connecting-IP` is deliberately NOT trusted here (anyone reaching the
+ * public :80 could forge it); fixing it needs Caddy `trusted_proxies` on the
+ * pod, which a Caddyfile edit does not reach on existing pods.
+ */
+export function getPublicDoorRateConfig(): {
+  readIp: { max: number; windowMs: number; retryAfter: string };
+  submitIp: { max: number; windowMs: number; retryAfter: string };
+  submitShare: { max: number; windowMs: number; retryAfter: string };
+} {
+  const readWindow = parsePositiveInt(
+    process.env.RATE_LIMIT_PUBLIC_READ_WINDOW_MS,
+    5 * 60 * 1000
+  );
+  const submitIpWindow = parsePositiveInt(
+    process.env.RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS,
+    10 * 60 * 1000
+  );
+  const submitShareWindow = parsePositiveInt(
+    process.env.RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS,
+    60 * 60 * 1000
+  );
+  return {
+    readIp: {
+      max: parsePositiveInt(process.env.RATE_LIMIT_PUBLIC_READ_IP_MAX, 300),
+      windowMs: readWindow,
+      retryAfter: formatRetryAfter(readWindow),
+    },
+    submitIp: {
+      max: parsePositiveInt(process.env.RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX, 10),
+      windowMs: submitIpWindow,
+      retryAfter: formatRetryAfter(submitIpWindow),
+    },
+    submitShare: {
+      max: parsePositiveInt(
+        process.env.RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX,
+        200
+      ),
+      windowMs: submitShareWindow,
+      retryAfter: formatRetryAfter(submitShareWindow),
+    },
+  };
+}
+
+/**
+ * Public-door bucket keys. IP-only for the ceilings; the per-share key hashes
+ * the path's token segment. NEVER reads Authorization — there is no parameter
+ * for it on purpose.
+ */
+export function buildPublicDoorKey(
+  bucket: "read_ip" | "submit_ip" | "submit_share",
+  ip: string,
+  path: string
+): string {
+  if (bucket === "submit_share") {
+    const token = publicDoorTokenSegment(path);
+    // No token segment ⇒ fall back to the IP bucket's scope, never a shared "".
+    return token
+      ? `public_submit:share:${hashBearerToken(token)}`
+      : `public_submit:share-ip:${ip}`;
+  }
+  return `public_${bucket}:ip:${ip}`;
 }
 
 /**

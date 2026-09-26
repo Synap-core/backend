@@ -42,6 +42,7 @@ import {
   reopenChatTurn,
   type DurableChatTurn,
 } from "../../services/chat-turns/chat-turn-store.js";
+import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
 
 const logger = createLogger({ module: "openai-compat" });
 
@@ -481,11 +482,9 @@ openaiCompatApp.post(
       }
       resolvedWorkspaceId = membership.workspaceId;
     } else {
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: eq(workspaceMembers.userId, userId),
-        columns: { workspaceId: true },
-      });
-      if (!membership) {
+      // D7: never the pod-admin console, never archived (the ONE fallback).
+      const fallback = await findUserDefaultWorkspaceId(db, userId);
+      if (!fallback) {
         return c.json(
           oaiErrorBody(
             "No workspace found for this user",
@@ -495,7 +494,7 @@ openaiCompatApp.post(
           404
         );
       }
-      resolvedWorkspaceId = membership.workspaceId;
+      resolvedWorkspaceId = fallback;
     }
 
     // ── Resolve channel (auto-create personal channel) ───────────────────────

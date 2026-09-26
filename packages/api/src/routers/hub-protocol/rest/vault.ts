@@ -241,7 +241,7 @@ export function registerVaultRoutes(app: HubHono): void {
       logger.error({ err, workspaceId }, "vault.request failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -329,7 +329,7 @@ export function registerVaultRoutes(app: HubHono): void {
       logger.error({ err, proposalId }, "vault.request poll failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -421,7 +421,10 @@ export function registerVaultRoutes(app: HubHono): void {
         return c.json({ error: `Vault grant denied: ${err.code}` }, 403);
       }
       logger.error({ err, secretId: parsed.secretId }, "vault.redeem failed");
-      return c.json({ error: "Vault redeem failed" }, 500);
+      return c.json(
+        { error: "Vault redeem failed" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -544,7 +547,10 @@ export function registerVaultRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, secretId }, "vault.grant failed");
-      return c.json({ error: "Vault grant failed" }, 500);
+      return c.json(
+        { error: "Vault grant failed" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -669,7 +675,7 @@ export function registerVaultRoutes(app: HubHono): void {
       logger.error({ err }, "vault.secrets store failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -749,7 +755,7 @@ export function registerVaultRoutes(app: HubHono): void {
       logger.error({ err }, "vault.secrets list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

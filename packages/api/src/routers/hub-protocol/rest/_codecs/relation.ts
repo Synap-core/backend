@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 /** Wire shape of a relation row. */
 export const WireRelationSchema = z
@@ -22,7 +23,7 @@ export const WireRelationSchema = z
 export const ListRelationsQuerySchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     entityId: z
       .string()
       .optional()
@@ -35,7 +36,7 @@ export const ListRelationsQuerySchema = z
 export const CreateRelationRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     sourceEntityId: z.string(),
     targetEntityId: z.string(),
     type: z
@@ -52,7 +53,7 @@ export const CreateRelationRequestSchema = z
 export const DeleteRelationRequestSchema = z
   .object({
     userId: z.string().optional(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     agentUserId: z.string().optional(),
     reasoning: z.string().optional(),
     sourceMessageId: z.string().optional(),

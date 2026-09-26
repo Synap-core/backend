@@ -12,6 +12,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { db, proposals, eq, and, desc, count } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { proposalUserFloor } from "../proposals/scope-conditions.js";
+import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
 import { mergeProposalRevision } from "../../services/proposals/proposals-service.js";
 import {
   PROPOSAL_STATUS_FILTERS,
@@ -103,7 +104,7 @@ export const proposalsRouter = router({
       // COUNT the matching set, not the returned page. `total` is what a caller
       // needs to say "12 of 322"; without it the only honest thing a UI can
       // render is "at least N", and none of them did.
-      const [items, counted] = await Promise.all([
+      const [pageItems, counted] = await Promise.all([
         db.query.proposals.findMany({
           where,
           orderBy: desc(proposals.createdAt),
@@ -114,6 +115,11 @@ export const proposalsRouter = router({
       ]);
 
       const total = Number(counted[0]?.total ?? 0);
+      // An agent door: session content a proposal copied at write time is
+      // withheld unless the caller OWNS the target session (decision D1).
+      const items = await redactUnreadableSessionTargets(pageItems, {
+        userId: ctx.userId as string,
+      });
 
       // SETUP — derived per page from the capability manifest + live
       // vault/Nango state. This procedure is the source of the two Hub REST

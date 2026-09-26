@@ -51,6 +51,9 @@ import {
   events,
   workspaces,
   workspaceMembers,
+  podMembers,
+  users,
+  projectMembers,
 } from "@synap/database/schema";
 import { listRuns } from "../index.js";
 
@@ -175,9 +178,23 @@ async function insertDirectEvent(row: {
 const ids = (runs: Array<{ id: string }>) => runs.map((r) => r.id).sort();
 
 beforeAll(async () => {
-  for (const t of [workspaces, workspaceMembers, proposals, events]) {
+  for (const t of [
+    workspaces,
+    workspaceMembers,
+    proposals,
+    events,
+    podMembers,
+    users,
+    projectMembers,
+  ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
+  // A KNOWN principal (Sites W2 S2): an id with no `users` row is an unknown
+  // principal and reads no pod-level row (pod-wide globals, pod-visible
+  // workspaces) — `podReaderWhere`. This fixture models provisioned users.
+  await h.client!.exec(
+    `insert into users (id, email) values ('${USER}', '${USER}@example.test')`
+  );
 });
 
 beforeEach(async () => {

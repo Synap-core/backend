@@ -963,6 +963,24 @@ export interface FocusSessionExpectedOutput {
    * reason to match the slot's prose label back to a criterion.
    */
   criterionKey?: string;
+  /**
+   * The PERSON'S ANSWER to what an agent asked about this slot. Read-only here:
+   * the pod stamps it (needs-you tray, or the owner's reply to a `kind:
+   * 'question'` room post). Not a delivery — `status` is untouched; a
+   * human-owned slot goes back to the agent with the answer attached.
+   */
+  answer?: HubSlotAnswer;
+}
+
+/** A person's answer to an agent's question about one slot (pod-stamped). */
+export interface HubSlotAnswer {
+  text: string;
+  /** The room message carrying it; `null` when the session has no room. */
+  messageId: string | null;
+  answeredBy: string;
+  answeredAt: string;
+  /** What was asked, when known. */
+  question?: string;
 }
 
 /**
@@ -1179,6 +1197,12 @@ export type HubSessionNudges =
         current: string | null;
         stages: string[];
       };
+      /**
+       * Labels of outputs the PERSON ANSWERED that the agent has not yet acted
+       * on — read the answer (`continuation.aiCanDo[].answer` or
+       * GET /focus-sessions/:id/answers) and continue.
+       */
+      answered?: string[];
       /** Outputs handed to the person (`owner: 'human'`) still pending. */
       owedByPerson?: number;
       /** Ranked playbooks for a session born without one — offered once. */

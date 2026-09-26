@@ -23,6 +23,7 @@ import {
   asc,
   desc,
   inArray,
+  lte,
   drizzleSql,
   automations,
   automationRuns,
@@ -42,14 +43,17 @@ import {
   ChatTurnStatus,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { PROPOSAL_TRACK_RUN_WINDOW } from "@synap-core/types/proposals";
+import type { SQL } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { ProposalStatus } from "@synap/database/schema";
 import {
   userVisibleWhere,
   workspaceLensWhere,
-  ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
 import { authoredByUser } from "../agent-identity-service.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { AI_DECISION, AI_PROCESSING } from "../../lib/ai-events.js";
 import {
   AGENT_WRITE_EVENT_KIND,
@@ -197,6 +201,11 @@ export interface ListRunsInput {
   status?: RunStatus;
   /** Per-flow cap before the merge; the merged result is also capped. */
   limit?: number;
+  /**
+   * Honour the session roster branch (`sessionReadableWhere`): a HUMAN door
+   * passes `rosterReadFor(ctx)`. Default false — owner-only session reads.
+   */
+  roster?: boolean;
 }
 
 // ── Status normalisers ───────────────────────────────────────────────────────
@@ -436,7 +445,8 @@ async function listPlaybookRuns(
   scope: RunScope,
   limit: number,
   status?: RunStatus,
-  exactRunId?: string
+  exactRunId?: string,
+  roster = false
 ): Promise<UnifiedRun[]> {
   const statusValues = status ? playbookStatusValues(status) : null;
   if (statusValues && statusValues.length === 0) return [];
@@ -468,7 +478,19 @@ async function listPlaybookRuns(
     })
     .from(playbookRuns)
     .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
-    .leftJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
+    // The session half is joined ONLY when the viewer may read that session
+    // (`sessionReadableWhere`, decision D1): a colleague's run keeps its own
+    // workspace-floored row (flow name, status, summary) but its session's
+    // room / project / subject / activity come back NULL — never a door into a
+    // session they cannot open. A project/subject lens then drops such a run
+    // too, so the filter cannot be used as an oracle for where it was filed.
+    .leftJoin(
+      focusSessions,
+      and(
+        eq(focusSessions.id, playbookRuns.sessionId),
+        sessionReadableWhere({ userId, roster })
+      )
+    )
     .where(
       and(
         userVisibleWhere(playbookRuns.workspaceId, userId),
@@ -1061,7 +1083,8 @@ async function listSessionRuns(
   scope: RunScope,
   limit: number,
   status?: RunStatus,
-  exactRunId?: string
+  exactRunId?: string,
+  roster = false
 ): Promise<UnifiedRun[]> {
   const statusValues = status ? sessionStatusValues(status) : null;
   if (statusValues && statusValues.length === 0) return [];
@@ -1092,14 +1115,10 @@ async function listSessionRuns(
     .leftJoin(playbookRuns, eq(playbookRuns.sessionId, focusSessions.id))
     .where(
       and(
-        // focus_sessions is ownerPrivate — a NULL workspace is personal to
-        // `userId`, so owner-gate that branch (bare userVisibleWhere would leak
-        // every user's private standalone sessions to all callers).
-        ownerPrivateVisibleWhere(
-          focusSessions.workspaceId,
-          focusSessions.userId,
-          userId
-        ),
+        // A session's title/goal/status is CONTENT (decision D1): the ONE
+        // session read rule — owner, or (human door) a human seat on its own
+        // room. Workspace membership alone no longer lists a colleague's run.
+        sessionReadableWhere({ userId, roster }),
         exactRunId ? eq(focusSessions.id, exactRunId) : undefined,
         // No run row references this session → it is not double-counted by the
         // playbook ledger, so surface it here (see block comment above). Now
@@ -1291,7 +1310,7 @@ void _sessionLensClassified;
  * `flowType` is set only that ledger is read; otherwise all ledgers are merged.
  */
 export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
-  const { userId, flowType, flowId, status } = input;
+  const { userId, flowType, flowId, status, roster = false } = input;
   const scope = input.scope ?? {};
   const perFlow = Math.min(input.limit ?? 25, 100);
 
@@ -1316,7 +1335,17 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
   )
     jobs.push(listAutomationRuns(userId, flowId, scope, perFlow, status));
   if ((!flowType || flowType === "playbook") && sessionLensed("playbook"))
-    jobs.push(listPlaybookRuns(userId, flowId, scope, perFlow, status));
+    jobs.push(
+      listPlaybookRuns(
+        userId,
+        flowId,
+        scope,
+        perFlow,
+        status,
+        undefined,
+        roster
+      )
+    );
   // capture/capability/session/chat have no per-flow id, so a flowId filter
   // excludes them.
   if (
@@ -1332,7 +1361,9 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
     !flowId &&
     sessionLensed("session")
   )
-    jobs.push(listSessionRuns(userId, scope, perFlow, status));
+    jobs.push(
+      listSessionRuns(userId, scope, perFlow, status, undefined, roster)
+    );
   if (
     (!flowType || flowType === "agent_write") &&
     !flowId &&
@@ -1422,8 +1453,11 @@ export interface RunTracksInput {
 /**
  * The TRACK RECORD of specific flows — the same `RunGroup` aggregate the runs
  * feed groups by, narrowed to the given ids (one grouped query per ledger, no
- * second aggregator). Keyed `${flowType}:${flowId}`. A flow with no visible
- * run is ABSENT from the map: "never ran" is the caller's reading of absence.
+ * second aggregator) and to each flow's most recent
+ * `PROPOSAL_TRACK_RUN_WINDOW` visible runs, so a flow with a long history
+ * costs the same as a young one. `runCount` is therefore the SAMPLE size.
+ * Keyed `${flowType}:${flowId}`. A flow with no visible run is ABSENT from the
+ * map: "never ran" is the caller's reading of absence.
  */
 export async function listRunTracks(
   input: RunTracksInput
@@ -1437,7 +1471,8 @@ export async function listRunTracks(
           undefined,
           automationIds.length,
           undefined,
-          automationIds
+          automationIds,
+          PROPOSAL_TRACK_RUN_WINDOW
         )
       : Promise.resolve([] as RunGroup[]),
     playbookIds.length > 0
@@ -1446,7 +1481,8 @@ export async function listRunTracks(
           undefined,
           playbookIds.length,
           undefined,
-          playbookIds
+          playbookIds,
+          PROPOSAL_TRACK_RUN_WINDOW
         )
       : Promise.resolve([] as RunGroup[]),
   ]);
@@ -1520,12 +1556,41 @@ export async function listRunGroupsPage(
   };
 }
 
+/**
+ * Narrow a grouper to each flow's most recent `window` runs matching `where`
+ * (newest `started_at` first, ties by id — the same order the "latest run"
+ * aggregates read). The window is taken INSIDE the same predicate the grouper
+ * applies, so it is the latest `window` runs the viewer can see.
+ */
+function withinRecentRuns(
+  table: typeof automationRuns | typeof playbookRuns,
+  cols: { id: AnyPgColumn; flowId: AnyPgColumn; startedAt: AnyPgColumn },
+  where: SQL | undefined,
+  window: number
+): SQL {
+  const ranked = db
+    .select({
+      id: cols.id,
+      rn: drizzleSql<number>`row_number() over (partition by ${cols.flowId} order by ${cols.startedAt} desc, ${cols.id} asc)`.as(
+        "rn"
+      ),
+    })
+    .from(table)
+    .where(where)
+    .as("recent_runs");
+  return inArray(
+    cols.id,
+    db.select({ id: ranked.id }).from(ranked).where(lte(ranked.rn, window))
+  );
+}
+
 async function groupAutomationRuns(
   userId: string,
   workspaceId: string | undefined,
   limit: number,
   cursor?: RunGroupCursor,
-  flowIds?: readonly string[]
+  flowIds?: readonly string[],
+  recentPerFlow?: number
 ): Promise<RunGroup[]> {
   const latest = drizzleSql<Date>`max(${automationRuns.startedAt})`;
   const afterCursor = cursor
@@ -1539,6 +1604,11 @@ async function groupAutomationRuns(
         )
       : lt(latest, new Date(cursor.at))
     : undefined;
+  const scope = and(
+    userVisibleWhere(automationRuns.workspaceId, userId),
+    workspaceId ? eq(automationRuns.workspaceId, workspaceId) : undefined,
+    flowIds ? inArray(automationRuns.automationId, [...flowIds]) : undefined
+  );
   const rows = await db
     .select({
       flowId: automationRuns.automationId,
@@ -1559,11 +1629,21 @@ async function groupAutomationRuns(
     .from(automationRuns)
     .innerJoin(automations, eq(automations.id, automationRuns.automationId))
     .where(
-      and(
-        userVisibleWhere(automationRuns.workspaceId, userId),
-        workspaceId ? eq(automationRuns.workspaceId, workspaceId) : undefined,
-        flowIds ? inArray(automationRuns.automationId, [...flowIds]) : undefined
-      )
+      recentPerFlow
+        ? and(
+            scope,
+            withinRecentRuns(
+              automationRuns,
+              {
+                id: automationRuns.id,
+                flowId: automationRuns.automationId,
+                startedAt: automationRuns.startedAt,
+              },
+              scope,
+              recentPerFlow
+            )
+          )
+        : scope
     )
     .groupBy(automationRuns.automationId, automations.name)
     .having(afterCursor)
@@ -1597,7 +1677,8 @@ async function groupPlaybookRuns(
   workspaceId: string | undefined,
   limit: number,
   cursor?: RunGroupCursor,
-  flowIds?: readonly string[]
+  flowIds?: readonly string[],
+  recentPerFlow?: number
 ): Promise<RunGroup[]> {
   const latest = drizzleSql<Date>`max(${playbookRuns.startedAt})`;
   const afterCursor = cursor
@@ -1611,6 +1692,11 @@ async function groupPlaybookRuns(
         )
       : or(lt(latest, new Date(cursor.at)), eq(latest, new Date(cursor.at)))
     : undefined;
+  const scope = and(
+    userVisibleWhere(playbookRuns.workspaceId, userId),
+    workspaceId ? eq(playbookRuns.workspaceId, workspaceId) : undefined,
+    flowIds ? inArray(playbookRuns.playbookId, [...flowIds]) : undefined
+  );
   const rows = await db
     .select({
       flowId: playbookRuns.playbookId,
@@ -1628,11 +1714,21 @@ async function groupPlaybookRuns(
     .from(playbookRuns)
     .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
     .where(
-      and(
-        userVisibleWhere(playbookRuns.workspaceId, userId),
-        workspaceId ? eq(playbookRuns.workspaceId, workspaceId) : undefined,
-        flowIds ? inArray(playbookRuns.playbookId, [...flowIds]) : undefined
-      )
+      recentPerFlow
+        ? and(
+            scope,
+            withinRecentRuns(
+              playbookRuns,
+              {
+                id: playbookRuns.id,
+                flowId: playbookRuns.playbookId,
+                startedAt: playbookRuns.startedAt,
+              },
+              scope,
+              recentPerFlow
+            )
+          )
+        : scope
     )
     .groupBy(playbookRuns.playbookId, playbooks.name)
     .having(afterCursor)
@@ -1668,6 +1764,8 @@ export interface GetRunInput {
   flowType: FlowType;
   /** The run id (ledger row id, or captureId/correlationId for capture). */
   id: string;
+  /** Honour the session roster branch — see {@link ListRunsInput.roster}. */
+  roster?: boolean;
 }
 
 /**
@@ -1678,7 +1776,7 @@ export interface GetRunInput {
 export async function getRun(
   input: GetRunInput
 ): Promise<UnifiedRunDetail | null> {
-  const { userId, flowType, id } = input;
+  const { userId, flowType, id, roster = false } = input;
 
   if (flowType === "automation") {
     const [run] = await listAutomationRuns(
@@ -2083,8 +2181,8 @@ export async function getRun(
   // single lifecycle marker (the UI opens `run.channelId` for the messages).
   const [run] =
     flowType === "playbook"
-      ? await listPlaybookRuns(userId, undefined, {}, 1, undefined, id)
-      : await listSessionRuns(userId, {}, 1, undefined, id);
+      ? await listPlaybookRuns(userId, undefined, {}, 1, undefined, id, roster)
+      : await listSessionRuns(userId, {}, 1, undefined, id, roster);
   if (!run) return null;
   const activity: RunActivityItem[] = [
     {
@@ -2102,7 +2200,7 @@ export async function getRun(
   // shape — their story is their channel.
   const playbookDetail =
     flowType === "playbook"
-      ? await loadPlaybookRunDetail(userId, run.id)
+      ? await loadPlaybookRunDetail(userId, run.id, roster)
       : null;
   return {
     run: { ...run, flowType },
@@ -2128,9 +2226,11 @@ const RUN_MESSAGE_SCAN_CAP = 500;
  */
 async function loadPlaybookRunDetail(
   userId: string,
-  runId: string
+  runId: string,
+  roster: boolean
 ): Promise<PlaybookRunDetail> {
-  // The run's session card — user-floored (defense in depth; the run already is).
+  // The run's session card — through the ONE session read rule (decision D1).
+  // The run row is workspace-floored; its session is content and is not.
   const [sess] = await db
     .select({
       id: focusSessions.id,
@@ -2145,20 +2245,27 @@ async function loadPlaybookRunDetail(
     .from(playbookRuns)
     .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
     .where(
-      and(
-        eq(playbookRuns.id, runId),
-        // focus_sessions is ownerPrivate — owner-gate the NULL-workspace branch
-        // (defense in depth; the run row is already floored).
-        ownerPrivateVisibleWhere(
-          focusSessions.workspaceId,
-          focusSessions.userId,
-          userId
-        )
-      )
+      and(eq(playbookRuns.id, runId), sessionReadableWhere({ userId, roster }))
     )
     .limit(1);
 
-  if (!sess) return { session: null, produced: [], proposals: [], agents: [] };
+  if (!sess) {
+    // Tell "this run has a session you may not open" apart from "no session",
+    // so the run page renders a private-session placeholder instead of a blank.
+    // Only the run's own `session_id` is read — never a session column.
+    const [link] = await db
+      .select({ sessionId: playbookRuns.sessionId })
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, runId))
+      .limit(1);
+    return {
+      session: null,
+      sessionPrivate: !!link?.sessionId,
+      produced: [],
+      proposals: [],
+      agents: [],
+    };
+  }
 
   const [produced, proposalResult] = await Promise.all([
     loadRunProduced([sess.id], userId),
@@ -2170,6 +2277,7 @@ async function loadPlaybookRunDetail(
   );
 
   return {
+    sessionPrivate: false,
     session: {
       id: sess.id,
       goal: sess.goal,

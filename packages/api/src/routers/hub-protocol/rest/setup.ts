@@ -1738,8 +1738,11 @@ export function registerSetupRoutes(app: HubHono): void {
     }
 
     try {
+      // D7: no auto-created blank workspace — the owner starts with the
+      // pod-admin console and installs domain templates in onboarding.
+      // `workspaceId` in the response is therefore null on a new pod.
       const result = await createAdminUser(email, password, name, {
-        createWorkspace: true,
+        createWorkspace: false,
       });
 
       logger.info(

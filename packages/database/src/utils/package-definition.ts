@@ -71,7 +71,11 @@ export interface PackagePlaybook {
     defaultValue?: unknown;
   }>;
   executor?: "is-agent" | "external-agent" | "hybrid";
-  inputStrategy?: "none" | "static" | "rotating" | "query";
+  /**
+   * The stored `{kind, ...}` object (jsonb). Was typed as the bare kind string,
+   * which the exporter emitted — and which no apply door's schema accepts.
+   */
+  inputStrategy?: Record<string, unknown>;
   channelSpec?: {
     type: "GROUP" | "AGENT_COLLAB" | "THREAD";
     members?: string[];
@@ -85,6 +89,20 @@ export interface PackagePlaybook {
    */
   subjectProfile?: { profileSlug: string; filter?: Record<string, unknown> };
   status?: "draft" | "active" | "paused";
+  /**
+   * `session` (default) | `project` — a PROJECT method runs as a track across
+   * its `stages`. Authored by grants.yaml; the doors used to strip it. Shape
+   * validated by the ONE playbook definition schema at every apply door
+   * (@synap/api schemas/playbook-definition.ts).
+   */
+  scope?: "session" | "project";
+  /** Ordered stages (`{key, name, category, domain?, ...}`), validated at apply. */
+  stages?: Array<Record<string, unknown>>;
+  /** Binary acceptance criteria, validated at apply. */
+  criteria?: Array<Record<string, unknown>>;
+  expectedOutputs?: Array<Record<string, unknown>>;
+  /** Free-form → `playbooks.metadata` (never a `marketSource` link). */
+  metadata?: Record<string, unknown>;
 }
 
 // ─── Loop seeding ──────────────────────────────────────────────────────────

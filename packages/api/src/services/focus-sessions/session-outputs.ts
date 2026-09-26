@@ -43,6 +43,7 @@ import {
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { UUID_RE } from "./session-metadata.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 
 /**
  * One thing a session produced. `id` is the STABLE join coordinate
@@ -93,6 +94,8 @@ export interface ListSessionOutputsParams {
   db: typeof db;
   userId: string;
   sessionId: string;
+  /** Honour the human-roster read branch (`sessionReadableWhere`). Default false. */
+  roster?: boolean;
 }
 
 /** Minimal artifact shape the join needs — narrows the select, not the table. */
@@ -291,8 +294,9 @@ export function joinSessionOutputs(
 }
 
 /**
- * Fetch + join. Owner floor: the session row is loaded with `userId` in the
- * predicate — the SAME check `focusSessions.get` makes, and the row is needed
+ * Fetch + join. Read floor: the session row is loaded through
+ * `sessionReadableWhere` (owner, or a human roster member when the door passes
+ * `roster`) — the SAME check `focusSessions.get` makes, and the row is needed
  * anyway for `expectedOutputs`, so a separate `ownsFocusSession` round-trip
  * would re-ask a question this query already answers. Returns `null` when the
  * session does not exist OR is not the caller's (indistinguishable on purpose).
@@ -304,7 +308,7 @@ export function joinSessionOutputs(
 export async function listSessionOutputs(
   params: ListSessionOutputsParams
 ): Promise<SessionOutputsResult | null> {
-  const { db: database, userId, sessionId } = params;
+  const { db: database, userId, sessionId, roster } = params;
 
   const [session] = await database
     .select({
@@ -313,7 +317,10 @@ export async function listSessionOutputs(
     })
     .from(focusSessions)
     .where(
-      and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+      and(
+        eq(focusSessions.id, sessionId),
+        sessionReadableWhere({ userId, roster })
+      )
     )
     .limit(1);
   if (!session) return null;

@@ -53,6 +53,8 @@ import {
   registerProfilesRoutes,
   registerProjectsRoutes,
   registerTracksRoutes,
+  registerSharesRoutes,
+  registerFormsRoutes,
   registerPackagesRoutes,
   registerProposalsRoutes,
   registerRelationsRoutes,
@@ -107,6 +109,8 @@ import {
   registerCentralityRoutes,
   registerObservabilityRoutes,
   registerPublicProjectionRoutes,
+  registerPublicSharesRoutes,
+  registerPublicFormsRoutes,
   registerCalendarFeedRoutes,
 } from "./hub-protocol/rest/index.js";
 
@@ -296,6 +300,8 @@ registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerProjectsRoutes(app); // /projects*
 registerTracksRoutes(app); // /tracks*
+registerSharesRoutes(app); // /shares* (Sites W2 S3 owner share doors)
+registerFormsRoutes(app); // /forms* (Sites W4 owner public-form doors)
 registerPackagesRoutes(app); // /packages*
 registerRelationsRoutes(app); // /relations*
 registerLinksRoutes(app); // /links (config/runtime graph; knowledge↔config bridge)
@@ -353,6 +359,8 @@ registerObservabilityRoutes(app); // /observability/routing-health — decision/
 // argument for a second door over a `?deps=1` flag on /health.
 registerHealthDependenciesRoutes(app);
 registerPublicProjectionRoutes(app); // /public/projection — UNAUTH facet-scoped public read (skipAuthPaths)
+registerPublicSharesRoutes(app); // /public/shares/:token — credentialless read of a PUBLISHED share (public-doors.ts)
+registerPublicFormsRoutes(app); // /public/forms/:token — credentialless guest form (GET definition, POST → constant 202)
 registerCalendarFeedRoutes(app); // /calendar/feed — personal ICS (GET :token.ics is UNAUTH)
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────

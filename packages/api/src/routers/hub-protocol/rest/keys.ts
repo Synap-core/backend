@@ -13,8 +13,12 @@ import { apiKeys } from "@synap/database/schema";
 import type { ApiKeyScope } from "@synap/database";
 import { apiKeyService } from "../../../services/api-keys.js";
 import { INTEGRATION_HUB_SCOPES } from "../../../services/hub-integration-registration.js";
-import { ErrorSchema, bearerSecurity } from "./_codecs/_openapi.js";
-import { logger, type HubHono } from "./_shared.js";
+import {
+  ErrorSchema,
+  bearerSecurity,
+  trpcErrorResponses,
+} from "./_codecs/_openapi.js";
+import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
 export function registerKeysRoutes(app: HubHono): void {
   // ── POST /keys/rotate-cli ─────────────────────────────────────────────────
@@ -30,6 +34,7 @@ export function registerKeysRoutes(app: HubHono): void {
         "no extra scope check required beyond being active.",
       security: bearerSecurity,
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "New key issued",
           content: {
@@ -138,8 +143,8 @@ export function registerKeysRoutes(app: HubHono): void {
         logger.error({ err, keyId, userId }, "POST /keys/rotate-cli failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );

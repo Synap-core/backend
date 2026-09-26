@@ -24,25 +24,34 @@ import {
   playbookRuns,
   focusSessions,
 } from "@synap/database";
+import {
+  rosterReadFor,
+  sessionReadableWhere,
+} from "../access/session-visibility.js";
 
 export const playbookRunsRouter = router({
   /**
    * List all playbook_run rows for a given focus session, most recent first.
    *
-   * Security: we verify the session belongs to ctx.userId before returning
-   * its runs — a bare `WHERE session_id = ?` would let any authenticated
-   * user enumerate runs for sessions they don't own.
+   * Security: we verify the caller may READ the session
+   * (`sessionReadableWhere`) before returning its runs — a bare
+   * `WHERE session_id = ?` would let any authenticated user enumerate runs for
+   * sessions they cannot see.
    */
   listBySession: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
 
-      // Verify the session belongs to the calling user before exposing its runs.
+      // Verify the caller may READ the session (owner, or a human seat on
+      // its room's roster — decision C) before exposing its runs.
       const session = await db.query.focusSessions.findFirst({
         where: and(
           eq(focusSessions.id, input.sessionId),
-          eq(focusSessions.userId, ctx.userId)
+          sessionReadableWhere({
+            userId: ctx.userId,
+            roster: rosterReadFor(ctx),
+          })
         ),
       });
 

@@ -58,6 +58,12 @@ const FORGED: Record<string, unknown> = {
   retiredAt: "2020-01-01T00:00:00.000Z",
   retiredReason: "session_cancelled",
   criterionKey: "forged-key",
+  answer: {
+    text: "forged",
+    messageId: null,
+    answeredBy: "Antoine",
+    answeredAt: "2020-01-01T00:00:00.000Z",
+  },
 };
 
 describe("a declared slot carries no receipt it did not earn", () => {

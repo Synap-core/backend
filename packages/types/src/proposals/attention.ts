@@ -74,11 +74,23 @@ export const STATUS_ATTENTION = {
   expired: "history",
 } as const satisfies Record<ProposalStatusValue, ProposalAttention>;
 
+/** The target kind a bookkeeping receipt touches. */
+export const SESSION_BOOKKEEPING_TARGET_TYPE = "focus_session";
+
 /** The verbs that make a `focus_session` receipt the session's own record-keeping. */
-const SESSION_BOOKKEEPING_VERBS: ReadonlySet<string> = new Set([
-  "create",
-  "update",
-]);
+const SESSION_BOOKKEEPING_VERBS = ["create", "update"] as const;
+
+/**
+ * Every stored `proposal_type` spelling of a bookkeeping verb — the bare verb
+ * and the `focus_session.`-dotted form (see {@link ProposalAttentionInput}).
+ * {@link isSessionBookkeeping} and the list door's SQL filter both read THIS
+ * set, so the two can never disagree on what bookkeeping is.
+ */
+export const SESSION_BOOKKEEPING_PROPOSAL_TYPES: readonly string[] =
+  SESSION_BOOKKEEPING_VERBS.flatMap((verb) => [
+    verb,
+    `${SESSION_BOOKKEEPING_TARGET_TYPE}.${verb}`,
+  ]);
 
 export interface ProposalAttentionInput {
   status: string | null | undefined;
@@ -102,12 +114,8 @@ export interface ProposalAttentionInput {
  * update verbs qualify, in either the bare or the `focus_session.`-dotted form.
  */
 export function isSessionBookkeeping(input: ProposalAttentionInput): boolean {
-  if (input.targetType !== "focus_session") return false;
-  const type = input.proposalType ?? "";
-  const verb = type.startsWith("focus_session.")
-    ? type.slice("focus_session.".length)
-    : type;
-  return SESSION_BOOKKEEPING_VERBS.has(verb);
+  if (input.targetType !== SESSION_BOOKKEEPING_TARGET_TYPE) return false;
+  return SESSION_BOOKKEEPING_PROPOSAL_TYPES.includes(input.proposalType ?? "");
 }
 
 function isProposalStatus(value: string): value is ProposalStatusValue {

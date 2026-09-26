@@ -18,6 +18,7 @@
  */
 
 import { getCorsOrigins } from "./middleware/security.js";
+import { isPublicDoorPath } from "@synap/api/public-doors";
 import {
   and,
   arrayContains,
@@ -235,6 +236,11 @@ export function rejectsUnapprovedExternalPodApiRequest(input: {
   const applicationConnectionPath = input.path.startsWith(
     "/api/federation/application-connections/"
   );
+  // Credentialless public doors (Sites W3) are callable from ANY origin by
+  // design; their transport policy is `public-door-transport.ts`. The global
+  // middleware already skips them — this clause states the exemption in the
+  // pure rule too, so the two cannot disagree.
+  if (isPublicDoorPath(input.path)) return false;
   const podApiPath =
     input.path === "/trpc" ||
     input.path.startsWith("/trpc/") ||

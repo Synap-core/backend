@@ -40,10 +40,12 @@ describe("focus_sessions visibility rule", () => {
 
   it("declares a NULL workspace to mean a PERSONAL session, never pod-wide", () => {
     const { rule } = getVisibilityEntry(focusSessions);
-    // `workspace` (not `workspaceOwned`) would admit every NULL-workspace row to
-    // EVERYONE — and a session with no workspace is the most personal row there
-    // is, not shared substrate.
-    expect(rule.kind).toBe("workspaceOwned");
+    // `workspace` would admit every NULL-workspace row to EVERYONE — and a
+    // session with no workspace is the most personal row there is, not shared
+    // substrate. Since decision C (2026-09-25) the rule is `custom`: the ONE
+    // session read predicate (`sessionReadableWhere` — owner, or a human seat on
+    // the session's own room). It has no workspace-broadcast branch at all.
+    expect(rule.kind).toBe("custom");
     expect((rule as { nullWorkspaceMeans?: string }).nullWorkspaceMeans).toBe(
       "ownerPrivate"
     );

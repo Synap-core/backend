@@ -20,6 +20,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 const ActionSchema = z.object({
@@ -187,7 +188,7 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
       logger.error({ err }, "capabilities actions failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

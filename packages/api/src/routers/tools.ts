@@ -37,6 +37,25 @@ import { getLinksFor } from "../services/links/links-service.js";
 import { execFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { emitSideEffects } from "@synap/events";
+import { isFormToolMetadata } from "../services/forms/form-definition.js";
+
+/**
+ * A PUBLIC FORM is a `tools` row whose `metadata.form` holds its definition,
+ * token hash and actor (Sites W4). `update` below edits metadata with NO
+ * governance check (the config-only carve-out), so a generic door could swap a
+ * form's kind, actor or token hash. Every mutating door here refuses a form
+ * row — and refuses to CREATE one — the forms door
+ * (`services/forms/form-service.ts`) is its only writer.
+ */
+function refuseFormRow(metadata: unknown): void {
+  if (isFormToolMetadata(metadata)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "This tool is a public form. Manage it through the forms door (forms.*), not the generic tool doors.",
+    });
+  }
+}
 
 const TOOL_KINDS = [
   "builtin",
@@ -158,6 +177,7 @@ export const toolsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      refuseFormRow(input.metadata);
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId: input.agentUserId,
@@ -247,6 +267,8 @@ export const toolsRouter = router({
           code: "NOT_FOUND",
           message: `Tool ${input.id} not found`,
         });
+      refuseFormRow(existing.metadata);
+      refuseFormRow(input.metadata);
       // Pod-wide (null-workspace) tools have no RBAC layer inside
       // checkPermissionOrPropose (it grants when workspaceId is falsy), so gate
       // the privileged pod-level case explicitly — mirrors setApproved /
@@ -373,6 +395,7 @@ export const toolsRouter = router({
           code: "NOT_FOUND",
           message: `Tool ${input.id} not found`,
         });
+      refuseFormRow(existing.metadata);
       if (existing.workspaceId) {
         const role = await getWorkspaceRole(userId, existing.workspaceId);
         if (role !== "owner") {
@@ -417,6 +440,7 @@ export const toolsRouter = router({
       });
       if (!existing)
         throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
+      refuseFormRow(existing.metadata);
       if (existing.workspaceId) {
         const role = await getWorkspaceRole(userId, existing.workspaceId);
         if (role !== "owner")
@@ -520,6 +544,7 @@ export const toolsRouter = router({
       });
       if (!tool)
         throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
+      refuseFormRow(tool.metadata);
       if (tool.workspaceId) {
         const role = await getWorkspaceRole(userId, tool.workspaceId);
         if (role !== "owner")
@@ -664,6 +689,7 @@ export const toolsRouter = router({
           message: `Tool ${input.id} not found`,
         });
 
+      refuseFormRow(existing.metadata);
       // Write-gate on the LOADED row's workspaceId (never input.workspaceId).
       await assertWorkspaceWrite(db, userId, {
         workspaceId: existing.workspaceId,

@@ -62,6 +62,10 @@ import {
   resolveProfileIcon,
 } from "../../utils/profile-presentation.js";
 import { loadEntityUsage, usageByWorkspace } from "./usage-aggregate.js";
+import {
+  isDomainHomeWorkspace,
+  type WorkspaceHomeSignals,
+} from "../../lib/routing-candidates.js";
 import { buildStartHere, type PendingReviewState } from "./start-here.js";
 
 export type DiscoverDetail = "light" | "full";
@@ -301,6 +305,12 @@ interface DiscoverWorkspace {
   /** Operational-domain label: settings.workspaceSubtype ?? workspaceType. */
   domain: string | null;
   entityCount: number;
+  /**
+   * Present (and `false`) only when this workspace may NOT hold domain
+   * entities — an admin/agent/operational surface (`isDomainHomeWorkspace`).
+   * Listed anyway: a type is a property, not a filter. Absent = accepts.
+   */
+  acceptsEntities?: false;
   /** light: `{ goal }` only; full: the whole onboarding interview spec. */
   onboarding?: OnboardingSpec;
   /**
@@ -633,6 +643,7 @@ export async function discover(
             description: workspaces.description,
             settings: workspaces.settings,
             workspaceType: workspaces.workspaceType,
+            systemSlug: workspaces.systemSlug,
           })
           .from(workspaces)
           .where(inArray(workspaces.id, lensWsIds))
@@ -690,11 +701,13 @@ export async function discover(
   let hiddenEmptyWorkspaces = 0;
   const workspacesOut: DiscoverWorkspace[] = needWorkspaces
     ? wsRaw
-        .filter((w) => {
-          // Hide pure admin/system surfaces from the default domain map.
-          const t = w.workspaceType ?? "";
-          return t !== "operational" && t !== "agent";
-        })
+        // NO type filter: a workspace TYPE is a property, not a visibility
+        // rule. `operational` / `agent` used to be dropped here SILENTLY (not
+        // even counted in hiddenEmptyWorkspaceCount), so orient under-reported
+        // the pod — live 2026-09-25 it hid Finance, Agent Fleet and Synap Dev
+        // (14 visible workspaces, orient said 10 + 1 hidden). Whether a
+        // workspace may HOLD domain entities is surfaced per row instead
+        // (`acceptsEntities: false`), so an agent sees it and does not file there.
         .filter((w) => {
           if (detail === "full") return true;
           // Light hides EMPTY domains — an agent choosing where to write gains
@@ -736,6 +749,16 @@ export async function discover(
             domain,
             entityCount: entityCountByWs.get(w.id) ?? 0,
           };
+          // Same predicate the create doors refuse with — never a second rule.
+          if (
+            !isDomainHomeWorkspace({
+              workspaceType: w.workspaceType,
+              systemSlug: w.systemSlug,
+              settings: settings as WorkspaceHomeSignals["settings"],
+            })
+          ) {
+            out.acceptsEntities = false;
+          }
           if (onboarding) {
             out.onboarding =
               detail === "full"

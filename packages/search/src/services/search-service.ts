@@ -7,7 +7,7 @@ import { getTypesenseAdminClient } from "../client.js";
 import type { SearchResult } from "../types/index.js";
 import type { MultiSearchRequestSchema } from "../types/index.js";
 import { POD_WIDE_WORKSPACE_SCOPE } from "../utils/workspace-scope.js";
-import { getDb, eq, drizzleSql } from "@synap/database";
+import { getDb, eq, podVisibleWorkspaceWhere } from "@synap/database";
 import * as schema from "@synap/database/schema";
 
 export interface UnifiedSearchOptions {
@@ -280,8 +280,11 @@ export class SearchService {
       columns: { workspaceId: true },
     });
     const ids = new Set(memberRows.map((r) => r.workspaceId));
+    // Through the ONE pod-visible door (`podVisibleWorkspaceWhere`): a GUEST
+    // (Sites W2) and an unknown principal get no pod-visible workspace, so the
+    // keyword floor cannot widen a guest past the DB floor.
     const podReadable = await db.query.workspaces.findMany({
-      where: drizzleSql`${schema.workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
+      where: podVisibleWorkspaceWhere(userId),
       columns: { id: true },
     });
     for (const w of podReadable) ids.add(w.id);

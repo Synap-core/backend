@@ -80,6 +80,10 @@ import {
 } from "./session-statuses.js";
 import { projectSessionKind, type SessionKind } from "./session-kind.js";
 import { createLogger } from "@synap-core/core";
+import {
+  sessionReadableWhere,
+  type SessionReader,
+} from "../../access/session-visibility.js";
 
 const logger = createLogger({ module: "continuation-packet" });
 
@@ -106,6 +110,13 @@ export interface PacketSlotItem {
    * absence means "no criterion to highlight", never an error.
    */
   criterionKey?: string;
+  /**
+   * The PERSON'S ANSWER to what the agent asked about this slot
+   * (`answer-slot.ts`). On an `aiCanDo` item it means "you have an answer —
+   * continue": the slot came back to the agent with it. Absent when nobody
+   * answered.
+   */
+  answer?: { text: string; answeredAt: string; messageId: string | null };
 }
 
 export interface PacketProposalItem {
@@ -369,8 +380,14 @@ type SessionRow = typeof focusSessions.$inferSelect;
 
 export interface ProjectContinuationPacketCtx {
   database?: typeof db;
-  /** Owner floor for the outputs read. The row itself must already be owner-checked. */
+  /**
+   * The VIEWER — the read floor for the outputs read and every neighbour
+   * session (parent, children, blockers). The row itself must already be read
+   * through `sessionReadableWhere` by the door.
+   */
   userId: string;
+  /** Honour the human-roster read branch (`sessionReadableWhere`). Default false. */
+  roster?: boolean;
 }
 
 function slots(row: SessionRow): ExpectedOutput[] {
@@ -480,10 +497,15 @@ async function readPendingProposals(
  */
 async function readAllOutputs(
   database: typeof db,
-  userId: string,
+  reader: SessionReader,
   sessionId: string
 ): Promise<SessionOutput[]> {
-  const result = await listSessionOutputs({ db: database, userId, sessionId });
+  const result = await listSessionOutputs({
+    db: database,
+    userId: reader.userId,
+    roster: reader.roster,
+    sessionId,
+  });
   if (!result) throw new Error("session not found for outputs read");
   return result.outputs;
 }
@@ -513,7 +535,7 @@ function outputsSection(all: SessionOutput[]): PacketSection<PacketOutputItem> {
  */
 async function readInboundSessions(
   database: typeof db,
-  userId: string,
+  reader: SessionReader,
   sessionId: string,
   linkType: "spawned_from" | "blocked_by"
 ): Promise<PacketSection<PacketChildItem>> {
@@ -523,7 +545,7 @@ async function readInboundSessions(
     eq(links.toType, "session"),
     eq(links.linkType, linkType),
     eq(links.toId, sessionId),
-    eq(focusSessions.userId, userId)
+    sessionReadableWhere(reader)
   );
   // Exact total + only the top items — never every child row sliced in JS.
   const [[totalRow], rows] = await Promise.all([
@@ -573,7 +595,7 @@ async function readInboundSessions(
  */
 async function readOutboundSessions(
   database: typeof db,
-  userId: string,
+  reader: SessionReader,
   sessionId: string,
   linkType: "spawned_from" | "blocked_by"
 ): Promise<PacketSection<PacketChildItem>> {
@@ -583,7 +605,7 @@ async function readOutboundSessions(
     eq(links.toType, "session"),
     eq(links.linkType, linkType),
     eq(links.fromId, sessionId),
-    eq(focusSessions.userId, userId)
+    sessionReadableWhere(reader)
   );
   const [[totalRow], rows] = await Promise.all([
     database
@@ -634,7 +656,7 @@ async function readOutboundSessions(
  */
 async function readParentRow(
   database: typeof db,
-  userId: string,
+  reader: SessionReader,
   sessionId: string
 ): Promise<{
   id: string;
@@ -662,7 +684,7 @@ async function readParentRow(
         eq(links.toType, "session"),
         eq(links.linkType, "spawned_from"),
         eq(links.fromId, sessionId),
-        eq(focusSessions.userId, userId)
+        sessionReadableWhere(reader)
       )
     )
     .limit(1);
@@ -689,7 +711,7 @@ function parentSection(
 /** The detour named by this session's OWN suspend note, with its live status. */
 async function readSuspendedChild(
   database: typeof db,
-  userId: string,
+  reader: SessionReader,
   childSessionId: string
 ): Promise<PacketResumeSession | null> {
   const [row] = await database
@@ -701,10 +723,7 @@ async function readSuspendedChild(
     })
     .from(focusSessions)
     .where(
-      and(
-        eq(focusSessions.id, childSessionId),
-        eq(focusSessions.userId, userId)
-      )
+      and(eq(focusSessions.id, childSessionId), sessionReadableWhere(reader))
     )
     .limit(1);
   if (!row) return null;
@@ -725,7 +744,7 @@ async function readSuspendedChild(
  */
 async function readResume(
   database: typeof db,
-  userId: string,
+  reader: SessionReader,
   row: { id: string; metadata: unknown },
   parent: Awaited<ReturnType<typeof readParentRow>>
 ): Promise<ContinuationPacket["resume"]> {
@@ -758,7 +777,7 @@ async function readResume(
         intent: own.intent,
         at: own.at,
         child: own.childSessionId
-          ? await readSuspendedChild(database, userId, own.childSessionId)
+          ? await readSuspendedChild(database, reader, own.childSessionId)
           : null,
       }
     : null;
@@ -1179,6 +1198,18 @@ export function deriveNextMove(input: {
   }
   if (aiCanDo.status === "ok" && aiCanDo.items[0]) {
     const s = aiCanDo.items[0];
+    if (s.answer) {
+      const said =
+        s.answer.text.length > 140
+          ? `${s.answer.text.slice(0, 140)}…`
+          : s.answer.text;
+      return {
+        kind: "agent_slot",
+        actor: "ai",
+        label: `Continue "${s.label}"`,
+        reason: `The person answered: "${said}"`,
+      };
+    }
     return {
       kind: "agent_slot",
       actor: "ai",
@@ -1279,6 +1310,7 @@ export async function projectContinuationPacket(
   ctx: ProjectContinuationPacketCtx
 ): Promise<ContinuationPacket> {
   const database = ctx.database ?? db;
+  const reader: SessionReader = { userId: ctx.userId, roster: ctx.roster };
   const all = slots(row);
 
   const owed = projectOwedSlots({
@@ -1295,17 +1327,31 @@ export async function projectContinuationPacket(
   const blockers = section(
     owed.filter((s) => s.blockedReason !== undefined).map(owedItem)
   );
+  // An ANSWERED slot is the agent's most actionable work — the person already
+  // replied — so it leads (stable sort: declaration order otherwise).
   const aiCanDo = section(
-    all.filter(isOpenAgentSlot).map((s) => ({
-      label: s.label,
-      kind: s.kind,
-      ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
-    }))
+    all
+      .filter(isOpenAgentSlot)
+      .map((s): PacketSlotItem => ({
+        label: s.label,
+        kind: s.kind,
+        ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
+        ...(s.answer
+          ? {
+              answer: {
+                text: s.answer.text,
+                answeredAt: s.answer.answeredAt,
+                messageId: s.answer.messageId,
+              },
+            }
+          : {}),
+      }))
+      .sort((a, b) => Number(!!b.answer) - Number(!!a.answer))
   );
 
   // One rejected promise, shared: `outputs` and `alreadyDone` each turn it into
   // their own `unavailable` below.
-  const allOutputs = readAllOutputs(database, ctx.userId, row.id);
+  const allOutputs = readAllOutputs(database, reader, row.id);
   allOutputs.catch(() => undefined);
 
   const [
@@ -1354,28 +1400,28 @@ export async function projectContinuationPacket(
       );
       return { available: false, reason: "availability_unknown" };
     }),
-    readInboundSessions(database, ctx.userId, row.id, "spawned_from").catch(
+    readInboundSessions(database, reader, row.id, "spawned_from").catch(
       unavailable(
         row.id,
         "children",
         "This session's sub-sessions could not be read."
       )
     ),
-    readParentRow(database, ctx.userId, row.id).catch((err) => {
+    readParentRow(database, reader, row.id).catch((err) => {
       logger.warn(
         { err, sessionId: row.id, section: "parent" },
         "continuation packet: section read failed"
       );
       return "unavailable" as const;
     }),
-    readOutboundSessions(database, ctx.userId, row.id, "blocked_by").catch(
+    readOutboundSessions(database, reader, row.id, "blocked_by").catch(
       unavailable(
         row.id,
         "blockedBy",
         "The sessions this one waits on could not be read."
       )
     ),
-    readInboundSessions(database, ctx.userId, row.id, "blocked_by").catch(
+    readInboundSessions(database, reader, row.id, "blocked_by").catch(
       unavailable(
         row.id,
         "unblocks",
@@ -1455,7 +1501,7 @@ export async function projectContinuationPacket(
         status: "unavailable",
         reason: "This session's parent session could not be read.",
       }
-    : await readResume(database, ctx.userId, row, parentRow).catch(
+    : await readResume(database, reader, row, parentRow).catch(
         (err): ContinuationPacket["resume"] => {
           logger.warn(
             { err, sessionId: row.id, section: "resume" },

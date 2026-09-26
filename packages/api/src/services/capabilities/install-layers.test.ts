@@ -133,3 +133,87 @@ describe("install-layers ↔ applier identifier parity (source scan)", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// ─── W3b: installedTrackTemplates ────────────────────────────────────────────
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { installedTrackTemplates } from "./install-layers.js";
+
+describe("installedTrackTemplates — the startable methods an install produced", () => {
+  it("keeps project-scope playbooks with an id (created or reused), drops the rest", () => {
+    const bag = {
+      playbooks: [
+        {
+          name: "Grant Process",
+          status: "created",
+          playbookId: "p1",
+          scope: "project",
+        },
+        {
+          name: "Old Method",
+          status: "reused",
+          playbookId: "p2",
+          scope: "project",
+        },
+        {
+          name: "Digest",
+          status: "created",
+          playbookId: "p3",
+          scope: "session",
+        },
+        {
+          name: "Queued",
+          status: "proposed",
+          proposalId: "x",
+          scope: "project",
+        },
+        { name: "Broken", status: "error", message: "boom" },
+      ],
+    };
+    expect(installedTrackTemplates(bag)).toEqual([
+      { playbookId: "p1", name: "Grant Process" },
+      { playbookId: "p2", name: "Old Method" },
+    ]);
+  });
+
+  it("[] for an absent / non-array bag", () => {
+    expect(installedTrackTemplates(undefined)).toEqual([]);
+    expect(installedTrackTemplates({ playbooks: "nope" })).toEqual([]);
+  });
+});
+
+describe("createFromDefinition feeds EVERY post-workspace bag to installedTrackTemplates", () => {
+  // Derived set: every `applyPackagePostWorkspace(` call inside the
+  // createFromDefinition procedure. A new branch that applies the bag without
+  // reporting its track templates would silently drop the install offer.
+  // Granularity: call COUNT inside the procedure, not bag identity — a branch
+  // that reads the wrong bag would still pass.
+  const src = readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../routers/workspaces/definition-engine.ts"
+    ),
+    "utf8"
+  );
+  const start = src.indexOf("createFromDefinition: protectedProcedure");
+  // The procedure ends where the NEXT procedure key of the same object begins.
+  const nextKey = /\n  [A-Za-z]+: [A-Za-z]*Procedure\b/g;
+  nextKey.lastIndex = start + 1;
+  const end = nextKey.exec(src)?.index ?? -1;
+  const body = src.slice(start, end);
+
+  it("non-vacuity: the procedure body was found and applies bags", () => {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    expect(
+      body.match(/applyPackagePostWorkspace\(/g)?.length ?? 0
+    ).toBeGreaterThanOrEqual(3);
+  });
+
+  it("one installedTrackTemplates( per applyPackagePostWorkspace(", () => {
+    const applies = body.match(/applyPackagePostWorkspace\(/g)?.length ?? 0;
+    const reads = body.match(/installedTrackTemplates\(/g)?.length ?? 0;
+    expect(reads).toBe(applies);
+  });
+});

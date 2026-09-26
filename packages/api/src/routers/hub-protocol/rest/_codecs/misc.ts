@@ -16,6 +16,7 @@ import {
   workspaceChoiceSchema,
   workspaceDecisionRecordSchema,
 } from "../../../../lib/workspace-decision.js";
+import { uuidQueryParam } from "./_openapi.js";
 
 /**
  * Optional original-input descriptor carried with a proposal-first graph
@@ -62,7 +63,7 @@ export const WireMcpServerSchema = z
 /** GET /mcp-servers query. */
 export const ListMcpServersQuerySchema = z
   .object({
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
   })
   .openapi("ListMcpServersQuery");
 
@@ -82,7 +83,7 @@ export const WireAgentUserSchema = z
 /** GET /agent-users query. */
 export const ListAgentUsersQuerySchema = z
   .object({
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     parentUserId: z
       .string()
       .optional()
@@ -129,7 +130,7 @@ export const TerminalLogsResponseSchema = z
 /** POST /vault/request request body. */
 export const VaultRequestRequestSchema = z
   .object({
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     agentUserId: z.string().optional(),
     channelId: z.string().optional(),
     sourceMessageId: z.string().optional(),

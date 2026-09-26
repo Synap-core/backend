@@ -47,6 +47,9 @@ import {
   playbookRuns,
   automations,
   automationRuns,
+  podMembers,
+  users,
+  projectMembers,
 } from "@synap/database/schema";
 import { listRunTracks, listRunGroups } from "../index.js";
 
@@ -148,9 +151,18 @@ beforeAll(async () => {
     playbookRuns,
     automations,
     automationRuns,
+    podMembers,
+    users,
+    projectMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
+  // A KNOWN principal (Sites W2 S2): an id with no `users` row is an unknown
+  // principal and reads no pod-level row (pod-wide globals, pod-visible
+  // workspaces) — `podReaderWhere`. This fixture models provisioned users.
+  await h.client!.exec(
+    `insert into users (id, email) values ('${USER}', '${USER}@example.test')`
+  );
   // The stranger's workspace: owned by someone else, not pod-visible.
   await h.client!.query(
     `insert into workspaces (id, name, owner_id) values ($1, 'Theirs', 'someone-else')`,

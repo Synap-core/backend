@@ -6,6 +6,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 export const AutomationStatusSchema = z
   .enum(["draft", "active", "paused", "error"])
@@ -45,7 +46,7 @@ export const WireAutomationSchema = z
 export const ListAutomationsQuerySchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     status: AutomationStatusSchema.optional(),
     limit: z.string().optional(),
   })
@@ -56,7 +57,7 @@ export const CreateAutomationRequestSchema = z
   .object({
     userId: z.string().optional(),
     agentUserId: z.string().optional(),
-    workspaceId: z.string().nullable().optional(),
+    workspaceId: uuidQueryParam.nullable().optional(),
     sourceMessageId: z.string().optional(),
     name: z.string(),
     description: z.string().optional(),
@@ -72,7 +73,7 @@ export const CreateAutomationRequestSchema = z
 export const UpdateAutomationRequestSchema = z
   .object({
     userId: z.string().optional(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     name: z.string().optional(),
     description: z.string().optional(),
     triggerType: AutomationTriggerTypeSchema.optional(),
@@ -98,7 +99,7 @@ export const TriggerAutomationRequestSchema = z
       .max(2000)
       .optional()
       .describe("AI reasoning surfaced on the proposal card."),
-    workspaceId: z.string().nullable().optional(),
+    workspaceId: uuidQueryParam.nullable().optional(),
     payload: z
       .record(z.string(), z.unknown())
       .optional()
@@ -110,6 +111,6 @@ export const TriggerAutomationRequestSchema = z
 export const AutomationLifecycleRequestSchema = z
   .object({
     userId: z.string().optional(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
   })
   .openapi("AutomationLifecycleRequest");

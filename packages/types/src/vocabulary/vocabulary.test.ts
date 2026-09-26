@@ -35,6 +35,7 @@ describe("capture vocabulary", () => {
     expect(resolveStatusLabel("saved_without_ai")).toBe("Saved without AI");
     expect(humanizeToken("saved_without_ai")).not.toBe("Saved without AI");
     expect(resolveStatusLabel("needs_answer")).toBe("Needs your answer");
+    expect(resolveStatusLabel("needs_reauth")).toBe("Needs sign-in");
     expect(resolveStatusLabel("not_structured")).toBe("Not structured");
   });
 
@@ -308,7 +309,7 @@ describe("buildFallbackTitle — the regressions it shipped", () => {
       proposalType: "run",
       targetType: "capability",
     });
-    expect(title).toBe("Run Capability");
+    expect(title).toBe("Run Tool");
     expect(title).not.toBe("Update Capability");
   });
 
@@ -355,7 +356,7 @@ describe("buildObjectActionTitle", () => {
         fallbackAction: "update",
         objectKind: "capability",
       })
-    ).toBe("Run Capability");
+    ).toBe("Run Tool");
   });
 
   it("falls back to changeType when no proposalType", () => {

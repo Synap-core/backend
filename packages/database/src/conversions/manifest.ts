@@ -28,6 +28,7 @@ export type ConversionOp =
   | ExtractNonEntityOp
   | DedupeProfileRowsOp
   | ReconcileEntityScopeOp
+  | ReconcileFacetScopeOp
   | RemapPropertyValuesOp
   | MoveBasePropertyToFacetOp
   | RenamePropertyKeyOp;
@@ -278,6 +279,30 @@ export interface DedupeProfileRowsOp extends BaseOp {
 export interface ReconcileEntityScopeOp extends BaseOp {
   op: "reconcileEntityScope";
   /** Restrict to one kind's entities; omit to reconcile all pod-scope kinds. */
+  slug?: string;
+}
+
+/**
+ * W2b ROLE PRINCIPLE backfill — re-null the `workspace_id` LENS of live facets
+ * whose role is one hat pod-wide (`profiles.scope` 'shared' or 'system',
+ * `profile_kind = 'role'`), so a role worn in CRM is visible in Operations too.
+ * The facet write door already stores such facets pod-wide
+ * (`storedFacetWorkspaceId`); this aligns rows written before it.
+ *
+ * COLLISION-SAFE, never destructive: the live-facet unique key is
+ * (entity, profile, ctx, COALESCE(workspace)), so per (entity, profile, ctx)
+ * group only ONE row may become pod-wide — and only when the group has no
+ * pod-wide row yet (the EARLIEST lensed row is chosen). Every other lensed row
+ * of such a group is left exactly as-is and COUNTED (`facetsParked`) for a
+ * human merge — never deleted, never property-merged by this op.
+ *
+ * A `workspace`-scoped role (one workspace's private hat) is never touched.
+ * `slug` optional: omitted = every shared/system role; set = that role only.
+ * Idempotent: a re-run finds no group with lensed rows and no pod-wide row.
+ */
+export interface ReconcileFacetScopeOp extends BaseOp {
+  op: "reconcileFacetScope";
+  /** Restrict to one role slug; omit to reconcile every shared/system role. */
   slug?: string;
 }
 
@@ -1225,6 +1250,76 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     },
 
     // No reconcileEntityScope: note is pod-scope and notes keep their home workspace; capture had no live entities (2026-09-14).
+
+    // ─── W2b (2026-09-25): shared data stays shared — the ROLE principle ────
+    // One role per name, pod-wide. The facet write door now stores a
+    // shared/system role's facet pod-wide (storedFacetWorkspaceId); this
+    // re-nulls the lens of facets written before it, so a client hat worn in
+    // CRM is visible from Operations. Collision-safe (one row per (entity,
+    // role, ctx) group, earliest wins; the rest parked + counted, never
+    // deleted). DEFERRED AT BOOT: pod data moves only on a deliberate operator
+    // run — dry run first:
+    //   tsx src/scripts/run-conversions.ts --only w2b.reconcile-facet-scope.shared-roles
+    //   tsx src/scripts/run-conversions.ts --apply --only w2b.reconcile-facet-scope.shared-roles
+    // The one live role TWIN: CRM's workspace-scoped `partner` (13006be5…)
+    // beside the shared `partner` (7c7679b7…, granted Foundation + Ecosystem).
+    // Collapse it onto the shared row: facets repointed (collision-skipped),
+    // CRM base defs land as CRM overlays, the twin deactivated (destructive
+    // tail). MUST precede the facet re-null below so the repointed CRM facets
+    // are re-lensed pod-wide in the same operator pass. DEFERRED AT BOOT:
+    //   tsx src/scripts/run-conversions.ts --only w2b.merge.partner-twin-into-shared
+    //   tsx src/scripts/run-conversions.ts --apply --destructive-tail --only w2b.merge.partner-twin-into-shared,w2b.reconcile-facet-scope.shared-roles
+    {
+      op: "mergeInto",
+      opKey: "w2b.merge.partner-twin-into-shared",
+      fromSlugs: ["partner"],
+      intoSlug: "partner",
+      intoScope: "shared",
+      deferAtBoot: true,
+    },
+    {
+      op: "reconcileFacetScope",
+      opKey: "w2b.reconcile-facet-scope.shared-roles",
+      deferAtBoot: true,
+    },
+
+    // W2b placement clean-up — PER KIND, never unscoped (Builder's knowledge,
+    // notes, tasks and decisions are pod-scope kinds deliberately homed in a
+    // lens and must NOT move). Identity kinds only: the w8 person/company
+    // re-nulls are ledgered, but the session-stamp rung re-stamped them until
+    // the W2b ladder fix (live GET 2026-09-25: person 22 stamped — CRM 13,
+    // Builder 7, Pod Admin 2; company 13 — CRM 7, Builder 6). DEFERRED AT BOOT:
+    //   tsx src/scripts/run-conversions.ts --only w2b.reconcile.person,w2b.reconcile.company
+    //   tsx src/scripts/run-conversions.ts --apply --only w2b.reconcile.person,w2b.reconcile.company
+    {
+      op: "reconcileEntityScope",
+      opKey: "w2b.reconcile.person",
+      slug: "person",
+      deferAtBoot: true,
+    },
+    {
+      op: "reconcileEntityScope",
+      opKey: "w2b.reconcile.company",
+      slug: "company",
+      deferAtBoot: true,
+    },
+    // W4b — the remaining pod-scope kinds W2b measured stamped (live GET
+    // 2026-09-25: question 18 — Foundation 9, Builder 7, Research 2; bookmark 5;
+    // document 4; file 2; event 1). Same shape: slug-scoped, DEFERRED,
+    // operator-run (runbook scratch-W4b-pod-runbook-2026-09-25 step d). NEVER
+    // knowledge / note / task / decision / finding / research — those are
+    // deliberately homed in a lens (the guard in
+    // reconcile-facet-scope.pglite.test.ts refuses them). NOT `item` either:
+    // the w10 note/item fold keeps item entities on their home workspace
+    // (pinned by note-fold.pglite.test.ts) — re-homing items is a founder call.
+    ...(["question", "bookmark", "document", "file", "event"] as const).map(
+      (slug) => ({
+        op: "reconcileEntityScope" as const,
+        opKey: `w2b.reconcile.${slug}`,
+        slug,
+        deferAtBoot: true,
+      })
+    ),
   ],
 };
 
@@ -1241,6 +1336,7 @@ export const CONVERSION_OP_TYPES = [
   "extractNonEntity",
   "dedupeProfileRows",
   "reconcileEntityScope",
+  "reconcileFacetScope",
   "remapPropertyValues",
   "moveBasePropertyToFacet",
   "renamePropertyKey",
@@ -1301,7 +1397,8 @@ export function buildValueMapJson(
  *   - every op has a known discriminant
  *   - slugs are non-empty where required
  *   - convertToFacet has a targetKindSlug and ≥1 applicableKinds
- *   - mergeInto has ≥1 fromSlugs, an intoSlug, and never merges a slug into itself
+ *   - mergeInto has ≥1 fromSlugs, an intoSlug, and never merges a slug into
+ *     itself — except a cross-scope twin collapse (`intoScope` set)
  */
 export function validateManifest(manifest: ConversionManifest): void {
   if (!Number.isInteger(manifest.version) || manifest.version < 1) {
@@ -1389,7 +1486,12 @@ export function validateManifest(manifest: ConversionManifest): void {
         }
         for (const from of op.fromSlugs) {
           requireSlug(op.opKey, from, "fromSlug");
-          if (from === op.intoSlug) {
+          // A CROSS-SCOPE merge may name its own slug: that is the TWIN
+          // collapse (a workspace-scoped `partner` row folding onto the ONE
+          // pod-wide `partner`). The engine resolves the canonical by scope and
+          // only ever moves rows `slug = from AND id <> canonical`, so it can
+          // never merge the canonical into itself. Same-scope stays refused.
+          if (from === op.intoSlug && op.intoScope === undefined) {
             throw new Error(
               `Conversion manifest: mergeInto '${op.opKey}' cannot merge slug '${from}' into itself`
             );
@@ -1417,8 +1519,9 @@ export function validateManifest(manifest: ConversionManifest): void {
         }
         break;
       case "reconcileEntityScope":
-        // slug is OPTIONAL (omitted = all pod-scope kinds); when present it
-        // must be non-empty.
+      case "reconcileFacetScope":
+        // slug is OPTIONAL (omitted = all pod-scope kinds / shared roles);
+        // when present it must be non-empty.
         if (op.slug !== undefined) requireSlug(op.opKey, op.slug);
         break;
       case "remapPropertyValues":

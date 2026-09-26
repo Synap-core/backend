@@ -28,7 +28,11 @@ import {
 } from "@synap/database";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import {
+  ErrorSchema,
+  uuidQueryParam,
+  trpcErrorResponses,
+} from "./_codecs/_openapi.js";
 import {
   CreateKnowledgeRequestSchema,
   KnowledgeEntrySchema,
@@ -39,6 +43,7 @@ import {
   hasScope,
   logger,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { ask } from "../../../services/knowledge/index.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
@@ -67,12 +72,13 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       query: z.object({
         namespace: z.string().optional(),
         status: z.string().optional(),
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         limit: z.string().optional(),
         offset: z.string().optional(),
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Entries",
         content: {
@@ -131,8 +137,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err }, "list knowledge keys failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -149,11 +155,12 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       query: z.object({
         q: z.string().optional(),
         query: z.string().optional(),
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         limit: z.string().optional(),
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Matches",
         content: {
@@ -208,8 +215,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err }, "search knowledge keys failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -221,9 +228,10 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     summary: "Get a knowledge entry by key",
     request: {
       params: z.object({ key: z.string() }),
-      query: z.object({ workspaceId: z.string().optional() }),
+      query: z.object({ workspaceId: uuidQueryParam.optional() }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Entry",
         content: { "application/json": { schema: KnowledgeEntrySchema } },
@@ -279,8 +287,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err }, "get knowledge key failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -299,6 +307,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Created",
         content: { "application/json": { schema: KnowledgeEntrySchema } },
@@ -363,8 +372,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err }, "create knowledge key failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -384,6 +393,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Upserted",
         content: { "application/json": { schema: KnowledgeEntrySchema } },
@@ -442,8 +452,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err }, "upsert knowledge key failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -455,6 +465,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     summary: "Archive (soft-delete) a knowledge entry",
     request: { params: z.object({ key: z.string() }) },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Archived",
         content: {
@@ -490,8 +501,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err }, "archive knowledge key failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -512,6 +523,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Traversal results",
         content: {
@@ -608,8 +620,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err }, "traverseGraph failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -625,7 +637,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
   // POST /knowledge/ask is kept as a deprecated alias (see below).
   const retrievalBodySchema = z.object({
     query: z.string().min(1),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     projectId: z.string().optional(),
     limit: z.number().int().min(1).max(100).optional(),
     /**
@@ -773,6 +785,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Routed retrieval result",
         content: {
@@ -804,8 +817,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /knowledge/search failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -830,6 +843,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Routed retrieval result (identical to /knowledge/search)",
         content: {
@@ -861,8 +875,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /knowledge/ask failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -898,7 +912,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
             schema: z.object({
               query: z.string().min(1).optional(),
               question: z.string().min(1).optional(),
-              workspaceId: z.string().optional(),
+              workspaceId: uuidQueryParam.optional(),
               projectId: z.string().optional(),
               limit: z.number().int().min(1).max(100).optional(),
             }),
@@ -907,6 +921,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Synthesized answer with sources",
         content: {
@@ -1042,8 +1057,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /knowledge/answer failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 }

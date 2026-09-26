@@ -16,6 +16,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 import {
   getWorkflowPlace,
   getWorkflowPlaceFeed,
@@ -34,6 +35,7 @@ export const workflowsRouter = router({
         kind: input.kind,
         id: input.id,
         userId,
+        roster: rosterReadFor(ctx),
       });
       return place;
     }),
@@ -55,6 +57,7 @@ export const workflowsRouter = router({
         kind: input.kind,
         id: input.id,
         userId,
+        roster: rosterReadFor(ctx),
         cursor: input.cursor,
         limit: input.limit,
       });

@@ -79,7 +79,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   class ChannelRepository {
     constructor(_db: unknown) {}
     ensureAutomationRunChannel = mocks.ensureAutomationRunChannel;
-    ensureEntityChannel = vi.fn();
+    ensureObjectChannel = vi.fn();
     ensureUserPersonalChannel = vi.fn();
     ensureProactiveFeedChannel = vi.fn();
   }

@@ -31,6 +31,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 // ── OpenAPI response schema (mirrors the CapabilityCard contract) ─────────────
@@ -253,7 +254,7 @@ export function registerCapabilitiesCatalogRoutes(app: HubHono): void {
       logger.error({ err }, "capabilities catalog failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

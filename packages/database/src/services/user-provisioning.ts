@@ -5,7 +5,7 @@
  * meaningful without the trusted issuer that asserted it.
  */
 import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
-import { createHash, randomUUID } from "crypto";
+import { createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { db } from "../client-pg.js";
 import { users } from "../schema/users.js";
@@ -59,7 +59,12 @@ export interface SeedAdminUserInput {
 
 export interface SeedAdminUserResult {
   userId: string;
-  workspaceId: string;
+  /**
+   * The user's EXISTING personal workspace, or `null`. D7: bootstrap no longer
+   * creates a blank one — the owner starts with the pod-admin console only and
+   * gets domain workspaces by installing templates (onboarding).
+   */
+  workspaceId: string | null;
   alreadyExisted: boolean;
 }
 
@@ -975,66 +980,15 @@ export async function seedAdminUser(
       };
     }
 
-    const [workspace] = await tx
-      .insert(workspaces)
-      .values({
-        ownerId: identityId,
-        name: `${email.split("@")[0]}'s workspace`,
-        workspaceType: "personal",
-        settings: {
-          createdBy: "provisioning",
-          provisionedAt: new Date().toISOString(),
-        },
-      })
-      .returning({ id: workspaces.id });
-    if (!workspace)
-      throw new Error("seedAdminUser: failed to create workspace");
-    await tx.insert(workspaceMembers).values({
-      workspaceId: workspace.id,
-      userId: identityId,
-      role: "owner",
-    });
-
-    const existingTwin = await tx
-      .select({ id: users.id })
-      .from(users)
-      .where(
-        and(
-          eq(users.userType, "agent"),
-          eq(users.createdByUserId, identityId),
-          eq(users.agentTemplate, "twin")
-        )
-      )
-      .limit(1);
-    if (existingTwin.length === 0) {
-      const twinId = randomUUID();
-      await tx.insert(users).values({
-        id: twinId,
-        email: `agent-twin-${twinId.slice(0, 8)}@synap.agent`,
-        emailVerified: true,
-        userType: "agent",
-        agentTemplate: "twin",
-        agentType: "twin",
-        createdByUserId: identityId,
-        isPersonalAgent: false,
-        createdVia: "system",
-        agentMetadata: {
-          agentTemplate: "twin",
-          agentType: "twin",
-          createdByUserId: identityId,
-          writesRequireProposal: false,
-          isPersonalAgent: false,
-        },
-        timezone: "UTC",
-        locale: "en",
-      });
-      await tx.insert(workspaceMembers).values({
-        workspaceId: workspace.id,
-        userId: twinId,
-        role: "admin",
-      });
-    }
-    return { workspaceId: workspace.id, alreadyExisted: !!existingUser };
+    // D7 (concept consolidation): NO auto-created blank personal workspace.
+    // It used to be "<email>'s workspace" + the twin agent as its admin — an
+    // empty domain every new owner had to ignore or clean up. Domain
+    // workspaces now come only from template installs (onboarding). The twin
+    // was seeded ONLY as a member of that workspace (a twin is
+    // workspace-scoped, agent-users.ts) and nothing reads the seeded row, so
+    // it is not created here either. Existing pods keep theirs (returned
+    // above).
+    return { workspaceId: null, alreadyExisted: !!existingUser };
   });
 
   logger.info(

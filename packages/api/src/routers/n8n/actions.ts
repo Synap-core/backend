@@ -14,9 +14,10 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
-import { db, workspaceMembers, workspaces, eq, desc } from "@synap/database";
+import { db } from "@synap/database";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
+import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
 
 const logger = createLogger({ module: "n8n-router" });
 
@@ -84,17 +85,9 @@ export const n8nActionsRouter = router({
         // profiles) → those correctly land pod-wide (NULL) instead of pinned to an
         // arbitrary workspace. Deterministic fallback (most-recently-updated
         // membership); the old `.limit(1)` had no orderBy → arbitrary workspace.
-        const rows = await db
-          .select({ workspaceId: workspaceMembers.workspaceId })
-          .from(workspaceMembers)
-          .innerJoin(
-            workspaces,
-            eq(workspaces.id, workspaceMembers.workspaceId)
-          )
-          .where(eq(workspaceMembers.userId, userId))
-          .orderBy(desc(workspaces.updatedAt))
-          .limit(1);
-        const ambientWorkspaceId = rows[0]?.workspaceId;
+        // D7: the ONE fallback (most recently updated; never pod-admin).
+        const ambientWorkspaceId =
+          (await findUserDefaultWorkspaceId(db, userId, "recent")) ?? undefined;
 
         const callerContext = await createHubProtocolCallerContext(
           userId,

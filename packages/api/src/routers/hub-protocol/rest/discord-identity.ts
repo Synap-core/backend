@@ -48,6 +48,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
@@ -150,7 +151,7 @@ export function registerDiscordIdentityRoutes(app: HubHono): void {
       logger.error({ err, discordUserId }, "GET /discord/identity failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -221,7 +222,7 @@ export function registerDiscordIdentityRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -405,7 +406,7 @@ export function registerDiscordIdentityRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

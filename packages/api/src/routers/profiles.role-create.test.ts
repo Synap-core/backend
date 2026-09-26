@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
   createCalls: [] as Array<Record<string, unknown>>,
   /** What the POD-WIDE slug probe finds — the twin-slug suite sets this. */
   slugElsewhere: [] as Array<Record<string, unknown>>,
+  /** W2b role share: grants + updates the resolver writes through the repo. */
+  grants: [] as Array<[string, string]>,
+  updates: [] as Array<[string, Record<string, unknown>]>,
 }));
 
 vi.mock("../utils/split-brain-service.js", () => ({
@@ -50,6 +53,10 @@ vi.mock("@synap/database", async () => {
   const reserved = await vi.importActual<
     typeof import("../../../database/src/utils/reserved-profile-slugs.js")
   >("../../../database/src/utils/reserved-profile-slugs.js");
+  // The REAL share/reuse resolver (W2b) — driven against the stub repo below.
+  const resolver = await vi.importActual<
+    typeof import("../../../database/src/utils/resolve-profile-for-apply.js")
+  >("../../../database/src/utils/resolve-profile-for-apply.js");
 
   class ProfileRepository {
     async getBySlug() {
@@ -73,10 +80,27 @@ vi.mock("@synap/database", async () => {
         profileKind: input.profileKind ?? "kind",
       };
     }
-    async grantAccess() {}
+    async grantAccess(profileId: string, workspaceId: string) {
+      h.grants.push([profileId, workspaceId]);
+    }
+    async getBySlugForWorkspace() {
+      return null;
+    }
+    async findPodWideBySlugIncludingInactive() {
+      return [];
+    }
+    async findWorkspaceScopedBySlugIncludingInactive() {
+      return [];
+    }
+    async update(id: string, patch: Record<string, unknown>) {
+      h.updates.push([id, patch]);
+      const row = h.slugElsewhere.find((p) => p.id === id) ?? { id };
+      return { ...row, ...patch };
+    }
   }
   class ProfilePropertyRepository {}
   class ProfileResolutionService {
+    static invalidateEntityScopeCache() {}
     async getProfileHierarchy() {
       return [];
     }
@@ -95,6 +119,7 @@ vi.mock("@synap/database", async () => {
     and: drizzle.and,
     inArray: drizzle.inArray,
     reservedProfileSlugReason: reserved.reservedProfileSlugReason,
+    resolveProfileForApply: resolver.resolveProfileForApply,
     // The AMBIENT acting-agent read (AsyncLocalStorage, set at every key-auth
     // entry point). These tests drive the router directly, outside any request
     // scope, so the real function would return undefined here too — the stub
@@ -294,6 +319,8 @@ const base = {
 beforeEach(() => {
   h.createCalls.length = 0;
   h.slugElsewhere = [];
+  h.grants.length = 0;
+  h.updates.length = 0;
 });
 
 describe("profiles.create refuses a cross-workspace twin slug", () => {
@@ -335,5 +362,101 @@ describe("profiles.create refuses a cross-workspace twin slug", () => {
     await expect(
       caller().create({ slug: "finding", displayName: "Finding" } as never)
     ).resolves.toBeTruthy();
+  });
+});
+
+/**
+ * W2b ROLE PRINCIPLE — one role per name, pod-wide; never a twin. A ROLE whose
+ * slug already exists elsewhere is REUSED + SHARED into the calling workspace
+ * (the same `resolveProfileForApply` decision template apply makes), for every
+ * caller, `forceCreate` included. Drives the REAL resolver against the stub repo.
+ */
+const CALLER_WS = "808939d1-86b3-4c52-a153-ae06ece2c54e";
+const CRM_WS = "f73f40f0-c023-4f2e-b55a-10d3f7539b1f";
+const sharedPartner = {
+  id: "7c7679aa-0000-4000-8000-000000000001",
+  slug: "partner",
+  displayName: "Partner",
+  scope: "shared",
+  profileKind: "role",
+  applicableKinds: ["company"],
+  workspaceId: CRM_WS,
+  userId: "someone-else",
+  isActive: true,
+  uiHints: {},
+  createdAt: new Date("2026-08-01"),
+};
+const roleCall = {
+  slug: "partner",
+  displayName: "Partner",
+  profileKind: "role" as const,
+  applicableKinds: ["company", "person"],
+};
+
+describe("profiles.create — a role slug that exists elsewhere is SHARED, never twinned (W2b)", () => {
+  it("an AGENT with forceCreate reuses the shared role: grant + widen, no second row", async () => {
+    h.slugElsewhere = [sharedPartner];
+    const result = (await caller().create({
+      ...roleCall,
+      agentUserId: AGENT,
+      forceCreate: true,
+    } as never)) as Record<string, unknown>;
+    expect(h.createCalls, "a twin role was minted").toHaveLength(0);
+    expect(h.grants).toContainEqual([sharedPartner.id, CALLER_WS]);
+    expect(h.updates).toContainEqual([
+      sharedPartner.id,
+      { applicableKinds: ["company", "person"] },
+    ]);
+    expect(result).toMatchObject({
+      existing: true,
+      shared: true,
+      widened: true,
+    });
+  });
+
+  it("a HUMAN re-declaring their own workspace-private role PROMOTES it to shared (both lenses granted)", async () => {
+    h.slugElsewhere = [
+      { ...sharedPartner, scope: "workspace", userId: "user-1" },
+    ];
+    const result = (await caller().create({
+      ...roleCall,
+    } as never)) as Record<string, unknown>;
+    expect(h.createCalls).toHaveLength(0);
+    expect(h.grants).toEqual(
+      expect.arrayContaining([
+        [sharedPartner.id, CRM_WS],
+        [sharedPartner.id, CALLER_WS],
+      ])
+    );
+    expect(h.updates).toContainEqual([sharedPartner.id, { scope: "shared" }]);
+    expect(result).toMatchObject({ shared: true, promoted: true });
+  });
+
+  it("a KIND already holding the slug refuses the role (forceCreate included) — never a twin name", async () => {
+    h.slugElsewhere = [{ ...sharedPartner, profileKind: "kind" }];
+    await expect(
+      caller().create({ ...roleCall, forceCreate: true } as never)
+    ).rejects.toThrow(/cannot be created/);
+    expect(h.createCalls).toHaveLength(0);
+  });
+
+  it("governed: a proposed share writes NOTHING until approval", async () => {
+    h.slugElsewhere = [sharedPartner];
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      proposalId: "proposal-share",
+    } as never);
+    const result = await caller().create({
+      ...roleCall,
+      agentUserId: AGENT,
+    } as never);
+    expect(result).toMatchObject({ status: "proposed", shared: true });
+    expect(h.grants).toHaveLength(0);
+    expect(h.updates).toHaveLength(0);
+    expect(h.createCalls).toHaveLength(0);
+  });
+
+  it("NON-VACUITY: a role slug found nowhere is still created", async () => {
+    await caller().create({ ...roleCall, slug: "brand-new-role" } as never);
+    expect(h.createCalls).toHaveLength(1);
   });
 });

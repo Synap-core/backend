@@ -77,7 +77,7 @@ const ROUTER_LABELS = {
   "whiteboards.ts": "Whiteboards",
   "projects.ts": "Projects",
   "roles.ts": "Roles",
-  "sharing.ts": "Sharing",
+  "shares.ts": "Sharing",
   "setup.ts": "Workspace Setup",
   "system.ts": "System",
   "health.ts": "Health",

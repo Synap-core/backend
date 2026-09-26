@@ -42,6 +42,7 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
 import type { ProposalCluster } from "../proposals/fingerprint.js";
 import type { ProposalClass } from "../proposals/proposal-class.js";
+import { needsYouRole } from "../../notifications/registry.js";
 
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
@@ -171,6 +172,13 @@ export interface NotificationSignalInput {
   sourceType: string;
   sourceId: string | null;
   createdAt: Date;
+  /**
+   * The registry type (`notifications.type`). Read ONLY for the type's
+   * `needsYou` role (`needsYouRole`, registry.ts). Optional because this is a
+   * DB-free mirror; every real row carries it, and a row without one is an
+   * ordinary `"item"`.
+   */
+  type?: string;
   /**
    * The row's persisted registry actions (`notifications.actions`). Read ONLY
    * for a `navigate-object` action's `view`, so a notification that opens a
@@ -452,24 +460,129 @@ export function signalFromOwedSlot(row: OwedSlotSignalInput): Signal {
 }
 
 /**
- * The notifications that survive the dedupe: not proposal-sourced, and not
- * pointing at a proposal a cluster already represents. Exported separately from
+ * What the union knows about each session's LIVE need. A `"session-pointer"`
+ * notification (registry `needsYou`) is decided from this, never from the
+ * notification row itself.
+ */
+export interface SessionLiveNeeds {
+  /** Sessions with at least one owed slot in the scanned owed page. */
+  owedSessionIds: ReadonlySet<string>;
+  /**
+   * Sessions whose room holds an agent question nobody has answered yet
+   * (`sessionsWithOpenQuestion`). `undefined` means NOT MEASURED, which is a
+   * different fact from "no open question": an unmeasured pointer row keeps
+   * counting, so a caller that forgets this read over-reports a stale row
+   * rather than hiding a live question.
+   */
+  openQuestionSessionIds?: ReadonlySet<string>;
+}
+
+/** The session ids behind an owed page. */
+export function owedSessionIdsOf(
+  owedSlots: readonly OwedSlotSignalInput[]
+): Set<string> {
+  return new Set(owedSlots.map((s) => s.sessionId));
+}
+
+/**
+ * The notifications that survive the dedupe. Exported separately from
  * {@link unionNeedsYou} because `signals.count` needs the SAME filtered set
- * without paying for the mapping.
+ * without paying for the mapping. A row is dropped when:
+ *
+ *   - it is proposal-sourced, or points at a proposal a cluster already
+ *     represents (the proposal dedupe, see the file docblock);
+ *   - its type is `"informational"` in the registry. It is news, not an ask
+ *     (no registry row is tagged this way today — an agent's plain room
+ *     `update` produces no notification at all, per founder decision F,
+ *     2026-09-25 — but the role stays available for a future news-only type);
+ *   - its type is a `"session-pointer"` (`session.needs_you`) and the session
+ *     has an owed slot. The slot row IS that need, so the pointer folds into
+ *     it: one entry per session, counted once;
+ *   - its type is a `"session-pointer"` and the session has neither an owed
+ *     slot nor an open question. Whatever it announced was met, so a row the
+ *     person never opened must not keep the session in needs-you.
+ *
+ * A pointer row whose session has no owed slot but an open question stays, and
+ * counts once. The question has no row of its own in the union.
+ *
+ * WHY STATE, NOT MARK-READ. The row does not persist WHY it was written (a slot
+ * or a question; the registry's six-hour window merges both into one row), and
+ * slots are resolved through many doors (attest, answer, return, retire, a
+ * PATCH). Marking the row read at each door would be a list of doors that falls
+ * behind. Reading the session's state here is correct whichever door met the
+ * need. The cost: the row stays unread in the bell after the need is met. The
+ * bell is a history of news, and the badge is not read from it.
+ *
+ * LIMIT, stated. `owedSessionIds` comes from a CAPPED owed page. A session
+ * whose slots fell past the cap does not fold, and its pointer row counts on
+ * its own. That only happens when the owed count is already a floor
+ * (`owedTruncated`).
  */
 export function dedupeNotifications(
   rows: NotificationSignalInput[],
-  clusters: ProposalCluster[]
+  clusters: ProposalCluster[],
+  live: SessionLiveNeeds = { owedSessionIds: new Set() }
 ): NotificationSignalInput[] {
+  return partitionNotifications(rows, clusters, live).needsYou;
+}
+
+/**
+ * THE one pass that sorts unread notifications into buckets. `needsYou` is
+ * {@link dedupeNotifications}. `suggestions` is the sibling bucket: rows
+ * whose registry role is `"suggestion"`, meaning something an AI offered on its
+ * own initiative (`ai.proactive.*`, `agent.insight`). Both buckets come out of
+ * the SAME pass, so the proposal dedupe applies to both and a row can never
+ * land in both, or in neither by accident. A suggestion is never in needs-you.
+ */
+export function partitionNotifications(
+  rows: NotificationSignalInput[],
+  clusters: ProposalCluster[],
+  live: SessionLiveNeeds = { owedSessionIds: new Set() }
+): {
+  needsYou: NotificationSignalInput[];
+  suggestions: NotificationSignalInput[];
+} {
   const clusteredProposalIds = new Set<string>();
   for (const c of clusters) {
     for (const id of c.sampleProposalIds) clusteredProposalIds.add(id);
   }
-  return rows.filter((r) => {
-    if (r.sourceType === "proposal") return false;
-    if (r.sourceId && clusteredProposalIds.has(r.sourceId)) return false;
-    return true;
-  });
+  const needsYou: NotificationSignalInput[] = [];
+  const suggestions: NotificationSignalInput[] = [];
+  for (const r of rows) {
+    if (r.sourceType === "proposal") continue;
+    if (r.sourceId && clusteredProposalIds.has(r.sourceId)) continue;
+    const role = needsYouRole(r.type);
+    if (role === "suggestion") suggestions.push(r);
+    else if (role === "item") needsYou.push(r);
+    else if (role === "session-pointer" && pointerStillNeedsYou(r, live))
+      needsYou.push(r);
+    // "informational": in no bucket. It stays in the bell.
+  }
+  return { needsYou, suggestions };
+}
+
+/** A `"session-pointer"` row, decided from its session's live state. */
+function pointerStillNeedsYou(
+  r: NotificationSignalInput,
+  live: SessionLiveNeeds
+): boolean {
+  if (!r.sourceId) return true;
+  if (live.owedSessionIds.has(r.sourceId)) return false;
+  if (live.openQuestionSessionIds === undefined) return true;
+  return live.openQuestionSessionIds.has(r.sourceId);
+}
+
+/**
+ * The `suggestions` lens: unread AI suggestions, newest first. The sibling of
+ * {@link unionNeedsYou}, from the same partition. Unlike an owed slot, a
+ * suggestion decays, so newest first is the right order.
+ */
+export function unionSuggestions(
+  notifications: NotificationSignalInput[]
+): Signal[] {
+  return partitionNotifications(notifications, [])
+    .suggestions.map(signalFromNotification)
+    .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
 }
 
 /**
@@ -477,15 +590,18 @@ export function dedupeNotifications(
  * notifications. Pure — feed it the three doors' rows and it decides membership
  * and order.
  *
- * ── WHY OWED SLOTS DO NOT PARTICIPATE IN THE DEDUPE ─────────────────────────
- * The dedupe set is a set of PROPOSAL ids, and it stays that way. The block
- * door (`block-output.ts`) creates NO notification, so there is no owed-slot
- * double-count to kill. And keying owed slots into that set by `sourceId` would
- * introduce one: `session.unblocked` is written with `sourceType: "system"` and
- * `sourceId` = the SESSION id (`notifications/session-unblock-reactor.ts`), so a
- * session that both owes you a deliverable and just had its last blocker clear
- * would have the unblock notification silently dropped. Those are two different
- * pieces of news about one session and both are yours to see.
+ * ── OWED SLOTS FOLD ONLY A SESSION POINTER, NEVER "ANY ROW ABOUT THE SESSION" ─
+ * Until 2026-09-25 this said the block door creates no notification, so there
+ * was no owed-slot double-count. That stopped being true: every door that hands
+ * a slot to the person now writes `session.needs_you` (`notify-needs-you.ts`),
+ * and that row announced the SAME need the owed-slot row already shows. So the
+ * fold is keyed on the registry's `needsYou: "session-pointer"` role, never on
+ * `sourceId` alone. Matching by session id alone would introduce a different
+ * bug: `session.unblocked` is written with `sourceType: "system"` and `sourceId`
+ * = the SESSION id (`notifications/session-unblock-reactor.ts`), so a session
+ * that owes you a deliverable and just had its last blocker clear would lose the
+ * unblock notification. That is separate news, and it stays. See
+ * {@link dedupeNotifications}.
  *
  * ── ORDERING: OWED SLOTS FIRST, OLDEST FIRST ────────────────────────────────
  * The rest of the tray is newest-first because a proposal decays — a fresh one
@@ -503,15 +619,18 @@ export function unionNeedsYou(args: {
   /** Required, not optional: a caller that forgets the third source ships a
    *  tray that silently under-reports, which is the defect, not a default. */
   owedSlots: OwedSlotSignalInput[];
+  /** See {@link SessionLiveNeeds.openQuestionSessionIds}. Absent = unmeasured. */
+  openQuestionSessionIds?: ReadonlySet<string>;
 }): Signal[] {
   const owed = args.owedSlots
     .map(signalFromOwedSlot)
     .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
   const rest = [
     ...args.clusters.map(signalFromCluster),
-    ...dedupeNotifications(args.notifications, args.clusters).map(
-      signalFromNotification
-    ),
+    ...dedupeNotifications(args.notifications, args.clusters, {
+      owedSessionIds: owedSessionIdsOf(args.owedSlots),
+      openQuestionSessionIds: args.openQuestionSessionIds,
+    }).map(signalFromNotification),
   ].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
   return [...owed, ...rest];
 }
@@ -582,7 +701,9 @@ export function pageNeedsYou(signals: Signal[], limit: number): Signal[] {
  *
  * `decisions` / `notifications` / `blocked` / `review` are the PARTS the badge
  * is made of, and `needsYou === decisions + notifications + blocked + review`
- * by construction (asserted in `signals.union.test.ts`). `review` — sessions
+ * by construction (asserted in `signals.union.test.ts`). `suggestions` is
+ * shipped alongside and is deliberately NOT a part: AI suggestions never count
+ * toward needs-you. `review` — sessions
  * awaiting your review/close, THE needs-you rule's third population — is
  * counted under a project scope only and is 0 elsewhere. They exist so a surface
  * that states the number can also state what it is made of — Governance said
@@ -615,6 +736,8 @@ export function countNeedsYou(args: {
   owedSlots: OwedSlotSignalInput[];
   /** The owed page hit its limit, so its count is a floor too. */
   owedTruncated: boolean;
+  /** See {@link SessionLiveNeeds.openQuestionSessionIds}. Absent = unmeasured. */
+  openQuestionSessionIds?: ReadonlySet<string>;
   /**
    * Sessions finished and awaiting the person's review/close — THE needs-you
    * rule's third population (`needsYouReason === "review"`,
@@ -634,12 +757,18 @@ export function countNeedsYou(args: {
   notifications: number;
   /** Sessions awaiting your review / close (project scope only; else 0). */
   review: number;
+  /**
+   * Unread AI suggestions: the sibling bucket. NOT part of `needsYou` and
+   * not one of its parts. 0 under a container scope, like `notifications`.
+   */
+  suggestions: number;
 } {
   const decisions = args.distinctClusters;
-  const notifications = dedupeNotifications(
-    args.notifications,
-    args.clusters
-  ).length;
+  const buckets = partitionNotifications(args.notifications, args.clusters, {
+    owedSessionIds: owedSessionIdsOf(args.owedSlots),
+    openQuestionSessionIds: args.openQuestionSessionIds,
+  });
+  const notifications = buckets.needsYou.length;
   const blocked = args.owedSlots.length;
   const review = args.reviewSessions ?? 0;
   return {
@@ -657,5 +786,6 @@ export function countNeedsYou(args: {
       (args.reviewTruncated ?? false),
     blocked,
     review,
+    suggestions: buckets.suggestions.length,
   };
 }

@@ -19,6 +19,13 @@
  */
 
 import { notifyRoomPost } from "../../../services/messaging/notify-room-post.js";
+import { sessionContextStampRefusal } from "../../../services/focus-sessions/session-context-stamp.js";
+import {
+  ROOM_POST_META_KEY,
+  roomPostMeta,
+  withoutRoomPostMeta,
+} from "../../../services/messaging/room-post-kind.js";
+import { recordOwnerRoomReply } from "../../../services/focus-sessions/session-answer.js";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
   db,
@@ -642,6 +649,15 @@ export function registerThreadsRoutes(app: HubHono): void {
     const userId = acting.userId;
     const workspaceId = acting.workspaceId;
 
+    // A session-context stamp is the session OWNER's to write
+    // (`session-context-stamp.ts`).
+    const stampRefusal = await sessionContextStampRefusal({
+      userId,
+      contextObjectType: body.contextObjectType,
+      contextObjectId: body.contextObjectId,
+    });
+    if (stampRefusal) return c.json({ error: stampRefusal }, 403);
+
     const hasExternalKey =
       typeof body.externalSource === "string" &&
       body.externalSource.length > 0 &&
@@ -960,7 +976,8 @@ export function registerThreadsRoutes(app: HubHono): void {
         if (!anchorGate.ok) {
           return c.json({ error: anchorGate.error }, anchorGate.status);
         }
-        metadataByIndex.push(anchorGate.metadata);
+        // `roomPost` is server-owned — never accepted from a batch caller.
+        metadataByIndex.push(withoutRoomPostMeta(anchorGate.metadata));
       }
 
       // ATTRIBUTION — mirrors the single-message door below: the agent id comes
@@ -1182,6 +1199,17 @@ export function registerThreadsRoutes(app: HubHono): void {
       // already attributable to the session through the channel.
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
 
+      // `metadata.roomPost` is SERVER-OWNED (`room-post-kind.ts`): a caller's
+      // copy is dropped, and an AGENT's post gets its kind (+ the slot a
+      // question is about) persisted, so the owner's reply can answer it.
+      const clientMetadata = withoutRoomPostMeta(anchorGate.metadata);
+      const postMetadata = ctxAgentUserId
+        ? {
+            ...(clientMetadata ?? {}),
+            [ROOM_POST_META_KEY]: roomPostMeta(body.kind, body.slotLabel),
+          }
+        : clientMetadata;
+
       await db.insert(messages).values({
         id: msgId,
         channelId: threadId,
@@ -1198,7 +1226,7 @@ export function registerThreadsRoutes(app: HubHono): void {
             }
           : {}),
         hash,
-        ...(anchorGate.metadata ? { metadata: anchorGate.metadata } : {}),
+        ...(postMetadata ? { metadata: postMetadata } : {}),
       });
 
       // Keystone fact write: this door mirrors the MCP `synap_post_message`
@@ -1227,6 +1255,20 @@ export function registerThreadsRoutes(app: HubHono): void {
         agentUserId: ctxAgentUserId,
         kind: body.kind,
       });
+
+      // THE ANSWER LOOP: a HUMAN key's post (never an agent's) may be the
+      // session owner answering an agent's open question in its room — the
+      // same one service the tRPC send door calls. No wake when this post
+      // already schedules a turn (`autoRespond`). Never throws.
+      if (!ctxAgentUserId && body.role === "user") {
+        await recordOwnerRoomReply({
+          channelId: threadId,
+          messageId: msgId,
+          content: body.content,
+          userId,
+          wake: body.autoRespond !== true,
+        });
+      }
 
       if (body.autoRespond === true && body.role === "user") {
         // Parallel dispatch_agent stamps metadata.agentType so A2AI runs the

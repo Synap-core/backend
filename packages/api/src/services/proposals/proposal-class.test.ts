@@ -239,6 +239,7 @@ describe("classifyProposal — access", () => {
       ["vault.request", "vault"],
       ["configure_public_projection", "workspace"],
       ["expose", "relation"],
+      ["create", "share"],
     ];
     for (const [proposalType, targetType] of accessPairs) {
       expect(

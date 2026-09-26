@@ -32,7 +32,15 @@ export const projectMembers = pgTable(
 
     // Role in this specific project
     // Uses same roles as workspace for consistency
-    role: text("role").notNull().default("viewer"), // 'owner' | 'editor' | 'viewer'
+    // 'owner' | 'editor' | 'viewer' | 'guest'. A GUEST sees only what is
+    // explicitly shared with the project (`visible_to`), never edits (not in
+    // PROJECT_WRITE_ROLES). The set is enforced in zod, not a CHECK.
+    role: text("role").notNull().default("viewer"),
+
+    // The link (`resource_shares.id`) a guest membership was redeemed through
+    // (0276). The FK (ON DELETE SET NULL) lives in SQL only, to avoid a schema
+    // import cycle.
+    grantedViaShareId: uuid("granted_via_share_id"),
 
     // Metadata
     invitedBy: text("invited_by"), // Who added them to this project

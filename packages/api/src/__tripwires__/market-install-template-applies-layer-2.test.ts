@@ -111,8 +111,10 @@ describe("tripwire: market.install template branch applies post-workspace layer 
 
     // Layer 1 is expected to still be there — if it is not, this test is
     // asserting against a branch that no longer does what it is named for.
+    // W3a: layer 1 now goes through the SHARED materialization core (deps,
+    // compose overlays, D8 packs), which itself calls the idempotent create.
     expect(
-      body.includes("createWorkspaceFromDefinitionIdempotent("),
+      body.includes("materializeWorkspaceCore("),
       "the template branch no longer creates the workspace — this tripwire is stale, fix it deliberately"
     ).toBe(true);
 

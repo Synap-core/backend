@@ -140,6 +140,7 @@ export { sanitizeErrorEgress } from "./middleware/error-egress.js";
 // Export event streaming utilities
 export { eventStreamManager } from "./event-stream-manager.js";
 export { setupEventBroadcasting } from "./setup-event-broadcasting.js";
+export { startSessionChangedListener } from "./utils/session-changed-listener.js";
 
 // Export CORS cache for dynamic origin management
 export {
@@ -446,3 +447,12 @@ export {
   readBrokerTrustDiagnostics,
   type BrokerTrustDiagnostics,
 } from "./connectors/broker-trust-diagnostics.js";
+// W3a — playbook + overlay-pack convergence (boot pass consumers).
+export {
+  reconcileWorkspacePlaybooksToTemplate,
+  type WorkspacePlaybooksReconcileReport,
+} from "./services/playbooks/reconcile-installed-playbooks.js";
+export {
+  reconcileInstalledPacks,
+  type InstalledPackReconcileOutcome,
+} from "./services/reconcile-installed-packs.js";

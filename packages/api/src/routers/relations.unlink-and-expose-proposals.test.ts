@@ -6,9 +6,10 @@
  * it removed, and the card read "Delete relation". The endpoints come from a
  * snapshot taken under the write floor, BEFORE the gate is called.
  *
- * D3: an exposure edge is filed under its own verb, `relation/expose`, so it
- * classes `access` and is not auto-approved for an agent (`relation.create`
- * is in DEFAULT_AUTO_APPROVE; `relation.expose` is not).
+ * D3: an exposure edge is never filed as `relation/create` (in
+ * DEFAULT_AUTO_APPROVE). Since Sites W2 S3 `exposeToAnchor` is an alias of the
+ * share door and files `share/create` (ADMIN-floored, classes `access`);
+ * `relation.expose` stays floored for proposals filed before the alias.
  *
  * Harness: the same partial-mock shape as
  * relations.grant-anchor-membership.test.ts.
@@ -76,7 +77,6 @@ vi.mock("../utils/split-brain-service.js", () => ({
 
 import { TRPCError } from "@trpc/server";
 import { relationsRouter } from "./relations.js";
-import { VISIBLE_TO } from "../utils/project-scope.js";
 
 const USER = "00000000-0000-4000-8000-0000000000aa";
 const REL = "00000000-0000-4000-8000-000000000003";
@@ -170,25 +170,30 @@ describe("relations.delete — the unlink proposal names its endpoints", () => {
   });
 });
 
-describe("relations.exposeToAnchor — its own verb", () => {
-  it("files subjectType relation + action expose with the visible_to edge", async () => {
+describe("relations.exposeToAnchor — a thin alias of the share door (Sites W2 S3)", () => {
+  it("files the ADMIN-floored share/create pair (a guest share of the entity with the anchor)", async () => {
     const db = (await mockGetDb()) as unknown as { __queue: unknown[][] };
     db.__queue.length = 0;
     db.__queue.push(
       [{ id: SRC, workspaceId: WS, userId: USER }], // exposed entity
-      [{ id: TGT, workspaceId: WS, userId: USER }] // anchor (caller owns it)
+      [{ id: TGT, workspaceId: WS, userId: USER }], // anchor project (caller owns it)
+      [{ settings: {} }] // the entity's workspace: no exposure policy → default
     );
 
     const res = await caller.exposeToAnchor({ entityId: SRC, anchorId: TGT });
 
     expect(res).toEqual({ status: "proposed", proposalId: "prop-1" });
     const opts = mockCheckPermission.mock.calls[0][0];
-    expect(opts.subjectType).toBe("relation");
-    expect(opts.action).toBe("expose");
+    // Was `relation` / `expose`; the alias now files the share door's pair,
+    // which is in ADMIN_ACTIONS_LIVE (governance-policy share-floor.test.ts).
+    expect(opts.subjectType).toBe("share");
+    expect(opts.action).toBe("create");
+    expect(opts.workspaceId).toBe(WS);
     expect(opts.data).toMatchObject({
-      sourceEntityId: SRC,
-      targetEntityId: TGT,
-      type: VISIBLE_TO,
+      resourceType: "entity",
+      resourceId: SRC,
+      anchorProjectId: TGT,
+      audience: "guest",
       workspaceId: WS,
     });
   });

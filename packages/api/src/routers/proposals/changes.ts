@@ -101,8 +101,9 @@ export function buildProposalChanges(
     if (operation !== "update") return undefined;
     if (previousData) {
       // The snapshot stores keys as title/description/profileSlug/documentId.
+      // A recorded `null` passes through: it is "was empty", like a property's.
       const snapValue = previousData[key as keyof typeof previousData];
-      if (snapValue !== undefined) return snapValue ?? undefined;
+      if (snapValue !== undefined) return snapValue;
     }
     if (!current) return undefined;
     if (key === "title") return current.title ?? undefined;
@@ -150,7 +151,7 @@ export function buildProposalChanges(
   const propertyDrift = (key: string): ProposalFieldDrift =>
     driftOf(
       {
-        read: !!snapshotProps && key in snapshotProps,
+        read: !!snapshotProps && Object.hasOwn(snapshotProps, key),
         value: snapshotProps?.[key],
       },
       // The live row was read: a key it lacks is a READING ("empty now").
@@ -171,10 +172,20 @@ export function buildProposalChanges(
     }
   }
 
+  // A proposal WITH a property snapshot never reads the live row for a before:
+  // a recorded key (a stored `null` = "was empty") is the snapshot's; a key the
+  // snapshot did not record (a legacy capture that dropped absent keys, or a key
+  // a revision added) is UNKNOWN — substituting today's value would show a
+  // stale "before" with no mark. Only a proposal with NO snapshot (legacy)
+  // falls back to the live value, as before.
   const beforePropFor = (key: string): unknown => {
     if (operation !== "update") return undefined;
-    if (snapshotProps && key in snapshotProps) return snapshotProps[key];
-    return currentProps[key];
+    if (snapshotProps) {
+      return Object.hasOwn(snapshotProps, key) ? snapshotProps[key] : undefined;
+    }
+    // A live empty is not a RECORDED empty: `null` on the wire means only the
+    // latter (see `ProposalReviewChange.before`), so the live read never emits it.
+    return currentProps[key] ?? undefined;
   };
 
   const properties =

@@ -17,7 +17,13 @@ import { z } from "@hono/zod-openapi";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 import {
   discover,
   WorkspaceNotAccessibleError,
@@ -95,7 +101,7 @@ export function registerOrientRoutes(app: HubHono): void {
       logger.error({ err, userId }, "GET /orient failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

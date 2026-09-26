@@ -10,20 +10,14 @@ import { decodeHtmlEntities } from "@synap-core/types/text";
 import { router, podProcedure } from "../trpc.js";
 import {
   projects,
-  entities,
   eq,
   desc,
   and,
-  isNull,
-  inArray,
   getDb,
   EventRepository,
   sql,
   ProjectRepository,
-  findProjectDedupCandidates,
-  assessEvidenceGravity,
-  buildNearMatchMessage,
-  buildProjectProvenance,
+  or,
 } from "@synap/database";
 import {
   resolveStageCategory,
@@ -32,11 +26,16 @@ import {
 } from "@synap/playbooks";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  resolveProjectHomeChange,
+  stampProjectHomeUse,
+} from "../services/projects/project-home.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
-import { accessScopeWhere } from "../utils/project-scope.js";
+import { projectMemberBranch } from "../access/project-visibility.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 import {
   isSubjectEntityVisible,
   listProjectAutomations,
@@ -45,48 +44,18 @@ import {
   setProjectSubject,
 } from "../utils/project-subject.js";
 import { getProjectPath } from "../services/projects/project-path.js";
+import { createProjectGoverned } from "../services/projects/create-project.js";
 import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
 } from "../services/projects/project-outputs.js";
 import { AccessContext } from "../access/index.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
-import { startTrack } from "../services/tracks/tracks-service.js";
-import { deriveTrackStages } from "@synap-core/types/units";
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
 } from "../utils/project-workspace.js";
 
-/**
- * Count how many of `entityIds` actually exist and are visible to `userId`,
- * using the canonical entity access floor (`accessScopeWhere`) — never a
- * request-supplied predicate. Backs the agent evidence-gravity check so an
- * agent cannot claim gravity with ids it can't see or that don't exist.
- */
-async function countVisibleEntities(
-  db: Awaited<ReturnType<typeof getDb>>,
-  userId: string,
-  entityIds: string[]
-): Promise<number> {
-  if (entityIds.length === 0) return 0;
-  const rows = await db
-    .select({ id: entities.id })
-    .from(entities)
-    .where(
-      and(
-        inArray(entities.id, entityIds),
-        isNull(entities.deletedAt),
-        accessScopeWhere({
-          workspaceIdColumn: entities.workspaceId,
-          entityIdColumn: entities.id,
-          ownerColumn: entities.userId,
-          userId,
-        })
-      )
-    );
-  return new Set(rows.map((r) => r.id)).size;
-}
 // ─── Legacy project stages (READ-ONLY until the next wave) ─────────────────────
 
 /**
@@ -165,10 +134,15 @@ export const projectsRouter = router({
       const offset = input?.offset ?? 0;
 
       const conditions: ReturnType<typeof eq>[] = [
-        ownerPrivateVisibleWhere(
-          projects.workspaceId,
-          projects.userId,
-          ctx.userId
+        // Same floor as the `projects` VisibilityRule: owner / workspace, OR a
+        // project the caller is a member of (Sites W2 member branch).
+        or(
+          ownerPrivateVisibleWhere(
+            projects.workspaceId,
+            projects.userId,
+            ctx.userId
+          ),
+          projectMemberBranch(ctx.userId, undefined)
         )!,
       ];
 
@@ -237,10 +211,14 @@ export const projectsRouter = router({
       const project = await db.query.projects.findFirst({
         where: and(
           eq(projects.id, input.id),
-          ownerPrivateVisibleWhere(
-            projects.workspaceId,
-            projects.userId,
-            ctx.userId
+          // Agrees with the `projects` VisibilityRule, member branch included.
+          or(
+            ownerPrivateVisibleWhere(
+              projects.workspaceId,
+              projects.userId,
+              ctx.userId
+            ),
+            projectMemberBranch(ctx.userId, undefined)
           )!
         ),
       });
@@ -343,6 +321,8 @@ export const projectsRouter = router({
     .query(async ({ ctx, input }) => {
       const result = await getProjectPath({
         userId: ctx.userId,
+        // Shared sessions (human roster of their room) appear — decision C.
+        roster: rosterReadFor(ctx),
         projectId: input.projectId,
         workspaceIds: input.workspaceIds,
         lens: input.lens,
@@ -440,211 +420,46 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Decode an agent's XML-escaped name once, at the one door trpc/hub-rest/
-      // mcp all share (see `input.door` above) — see `entities/create.ts` for
-      // the full rationale.
-      if (input.name) input.name = decodeHtmlEntities(input.name);
-      const db = await getDb();
-      const isAgent = !!ctx.agentUserId;
-      const door = input.door ?? "trpc";
-
-      // Validate the subject BEFORE anything is created. `setProjectSubject`
-      // re-checks it too (it is the door's own floor), but failing there would
-      // leave a project already inserted and a caller told it failed.
-      if (input.subjectEntityId) {
-        const visible = await isSubjectEntityVisible(
-          db,
-          input.subjectEntityId,
-          ctx.userId
-        );
-        if (!visible) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Subject entity not found",
-          });
-        }
-      }
-
-      // ── Agent guardrails (P1) — run BEFORE the governance gate so an agent is
-      // told to reuse / gather evidence instead of silently filing a duplicate
-      // project proposal. Human creators skip this entirely.
-      if (isAgent) {
-        const match = await findProjectDedupCandidates(db, {
-          userId: ctx.userId,
-          name: input.name,
-        });
-
-        // Exact-normalized match → reuse idempotently; never a second project.
-        if (match.exact) {
-          return {
-            status: "deduped" as const,
-            projectId: match.exact.id,
-            reusedProjectId: match.exact.id,
-          };
-        }
-
-        // Gravity: a project is a commitment. Require ≥5 caller-visible entities.
-        const evidence = input.evidenceEntityIds ?? [];
-        const visibleCount = await countVisibleEntities(
-          db,
-          ctx.userId,
-          evidence
-        );
-        const gravity = assessEvidenceGravity({
-          providedCount: evidence.length,
-          visibleCount,
-          near: match.near,
-        });
-        if (!gravity.ok) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: gravity.message,
-          });
-        }
-
-        // Gravity satisfied but a near-duplicate exists → do NOT proceed
-        // silently; surface the candidate so the agent reuses it.
-        if (match.near.length > 0) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: buildNearMatchMessage(match.near),
-          });
-        }
-      }
-
-      const perm = await checkPermissionOrPropose({
+      // The ONE governed create path, shared with Hub REST `POST /projects`
+      // (W5c): subject pre-check, agent guardrails, governance with the full
+      // payload, insert, subject bind, audit, side effects. This door only
+      // maps the outcome onto its result.
+      const outcome = await createProjectGoverned({
         userId: ctx.userId,
-        // Bug fix (object-proposal manifest W1): forward the acting agent
-        // identity so an agent-authored project create is GOVERNED (routes to a
-        // proposal via the agent ladder) instead of auto-applying as if the human
-        // operator created it. Undefined for operator/human requests — unchanged.
         agentUserId: ctx.agentUserId ?? undefined,
-        workspaceId: ctx.workspaceId,
-        subjectType: "project",
-        action: "create",
-        // Carry the FULL create payload into the proposal, not just the name.
-        // The `project/create` executor reads these defensively and, until now,
-        // always found them absent — so an approved project lost its
-        // description, status, phase and subject. A reviewer also cannot judge
-        // a create they are only shown the name of.
-        // `!== undefined`, not truthiness — matching `update` below. An empty
-        // string is a MEANT value (clearing a description); truthiness dropped
-        // it from the proposal, so approving restored the old text instead.
-        data: {
-          name: input.name,
-          ...(input.description !== undefined
-            ? { description: input.description }
-            : {}),
-          ...(input.status !== undefined ? { status: input.status } : {}),
-          ...(input.phase !== undefined ? { phase: input.phase } : {}),
-          ...(input.targetDate !== undefined
-            ? { targetDate: input.targetDate }
-            : {}),
-          ...(input.subjectEntityId !== undefined
-            ? { subjectEntityId: input.subjectEntityId }
-            : {}),
-          ...(input.settings !== undefined ? { settings: input.settings } : {}),
-          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-          ...(isAgent && input.evidenceEntityIds
-            ? { evidenceEntityIds: input.evidenceEntityIds }
-            : {}),
-        },
+        workspaceId: ctx.workspaceId ?? null,
+        door: input.door ?? "trpc",
+        name: input.name,
+        description: input.description,
+        status: input.status,
+        phase: input.phase,
+        targetDate: input.targetDate,
+        subjectEntityId: input.subjectEntityId,
+        settings: input.settings,
+        metadata: input.metadata,
+        evidenceEntityIds: input.evidenceEntityIds,
       });
 
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
+      if (outcome.status === "deduped") return outcome;
+      if (outcome.status === "proposed") {
         return {
           status: "proposed",
           projectId: "",
-          proposalId: perm.proposalId,
+          proposalId: outcome.proposalId,
         };
       }
-
-      const eventRepo = new EventRepository(sql);
-      const projectRepo = new ProjectRepository(db, eventRepo);
-
-      const created = await projectRepo.create(
-        {
-          name: input.name,
-          description: input.description,
-          status: input.status,
-          phase: input.phase ?? null,
-          targetDate: input.targetDate ?? null,
-          settings: input.settings,
-          metadata: input.metadata,
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId ?? null,
-          provenance: buildProjectProvenance({
-            door,
-            agentUserId: ctx.agentUserId,
-            evidenceEntityIds: input.evidenceEntityIds,
-          }),
-        },
-        ctx.userId
-      );
-
-      // Idempotent reuse (exact-name match) emits no create side-effects.
-      if (created.deduped) {
-        return {
-          status: "deduped" as const,
-          projectId: created.id,
-          reusedProjectId: created.id,
-        };
-      }
-
-      // Bind the subject only on a REAL create. A deduped create returned above
-      // is somebody else's project being reused — rebinding its subject from
-      // this caller's payload would silently retitle a project they did not make.
-      //
-      // The result is CHECKED, and a failure is reported as a partial success
-      // rather than thrown. The project genuinely exists at this point and its
-      // `create.completed` event has fired, so throwing would tell the caller
-      // "failed" about a project that is now in their list — and retrying the
-      // identical create hits the exact-name dedup above, which deliberately
-      // skips the bind, leaving no way to repair it through this door at all.
-      // `subjectBound: false` says exactly what happened; the fix is one
-      // `projects.update`.
-      let subjectBound: boolean | undefined;
-      if (input.subjectEntityId) {
-        const bound = await setProjectSubject({
-          db,
-          projectId: created.id,
-          workspaceId: ctx.workspaceId ?? null,
-          entityId: input.subjectEntityId,
-          userId: ctx.userId,
-        });
-        subjectBound = bound.ok;
-      }
-
-      auditLog({
-        subjectType: "project",
-        action: "create",
-        phase: "completed",
-        subjectId: created.id,
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
-      });
-
-      emitSideEffects({
-        subjectType: "project",
-        action: "create",
-        subjectId: created.id,
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
-      });
-
       return {
         status: "created",
-        projectId: created.id,
+        projectId: outcome.projectId,
         // Present ONLY when a subject was requested. `false` = the project was
         // created but the binding did not land (the entity became unreachable
         // between the pre-check and the write) — the caller should surface that
         // rather than showing a silently unbound project.
-        ...(subjectBound !== undefined ? { subjectBound } : {}),
-        ...(created.dedupCandidates
-          ? { dedupCandidates: created.dedupCandidates }
+        ...(outcome.subjectBound !== undefined
+          ? { subjectBound: outcome.subjectBound }
+          : {}),
+        ...(outcome.row.dedupCandidates
+          ? { dedupCandidates: outcome.row.dedupCandidates }
           : {}),
       };
     }),
@@ -692,6 +507,16 @@ export const projectsRouter = router({
          * falls back to its plain typed name). Omitted = untouched.
          */
         subjectEntityId: z.string().uuid().nullable().optional(),
+        /**
+         * D6: move the project's HOME to another workspace (the domain it is
+         * filed under). Governed like every other field here (gate on the
+         * project's CURRENT workspace), AND the caller must be able to write
+         * the TARGET — checked before the gate, so an agent cannot even file a
+         * proposal into a workspace its user cannot write. The new home is
+         * stamped as a `uses` domain; the project's entities, sessions and
+         * existing `uses` edges stay where they are.
+         */
+        homeWorkspaceId: z.string().uuid().optional(),
         settings: z.record(z.string(), z.unknown()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         /**
@@ -713,6 +538,15 @@ export const projectsRouter = router({
           message: "Project not found",
         });
       }
+
+      // D6 — the TARGET home must be live and writable by the caller; a
+      // same-home "move" is dropped (no-op, never a proposal of nothing).
+      const homeWorkspaceId = await resolveProjectHomeChange(
+        db,
+        ctx.userId,
+        target.workspaceId,
+        input.homeWorkspaceId
+      );
 
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -743,6 +577,7 @@ export const projectsRouter = router({
           ...(input.subjectEntityId !== undefined
             ? { subjectEntityId: input.subjectEntityId }
             : {}),
+          ...(homeWorkspaceId !== undefined ? { homeWorkspaceId } : {}),
           ...(input.settings !== undefined ? { settings: input.settings } : {}),
           ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
         },
@@ -783,7 +618,18 @@ export const projectsRouter = router({
         }
       }
 
-      await projectRepo.update(input.id, input, ctx.userId);
+      await projectRepo.update(
+        input.id,
+        { ...input, workspaceId: homeWorkspaceId },
+        ctx.userId
+      );
+      if (homeWorkspaceId) {
+        await stampProjectHomeUse(db, {
+          projectId: input.id,
+          homeWorkspaceId,
+          userId: ctx.userId,
+        });
+      }
 
       // `undefined` = untouched; `null` = unbind. Both are distinguishable here
       // and neither is guessed at.
@@ -818,75 +664,6 @@ export const projectsRouter = router({
       });
 
       return { status: "updated" };
-    }),
-
-  /**
-   * Start a PROJECT-SCOPED playbook on a project — the proto-track door. No
-   * client calls it any more (browser/Relay start methods through
-   * `tracks.start`); it survives ONLY so a still-pending
-   * `project/instantiate_from_playbook` proposal can be approved (its executor
-   * replays through here). It is a THIN WRAPPER over `startTrack` (services/tracks), the one door a
-   * track is born through. It no longer writes `settings.stages` or seeds
-   * `phase`: the method's stages are pinned on the TRACK, and a project may run
-   * N methods, not one.
-   *
-   * Governance, both visibility floors, the scope refusal and the write floor
-   * all live in `startTrack` — this procedure adds none, so the two doors can
-   * never disagree. An agent call lands as a `track/create` proposal.
-   *
-   * The result keeps the old keys (`playbookId`, `playbookVersion`,
-   * `stageCount`, `phase`, `phaseSeeded`, `phaseKept`) so a caller written
-   * against the proto-track still reads it; `phaseSeeded` is now always false
-   * because no phase is written.
-   */
-  instantiateFromPlaybook: podProcedure
-    .input(
-      z.object({
-        projectId: z.string().uuid(),
-        playbookId: z.string().uuid(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      const project = await loadVisibleProject(db, input.projectId, ctx.userId);
-      if (!project) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Project not found",
-        });
-      }
-
-      const result = await startTrack({
-        projectId: input.projectId,
-        playbookId: input.playbookId,
-        actor: {
-          userId: ctx.userId,
-          agentUserId: ctx.agentUserId ?? null,
-          isHubProtocol: ctx.isHubProtocol,
-        },
-      });
-      if (result.status === "proposed") {
-        return { status: "proposed" as const, proposalId: result.proposalId };
-      }
-
-      // The SAME stage list every track read draws (malformed jsonb entries
-      // skipped), so this count never disagrees with the track's strip.
-      const stages = deriveTrackStages(
-        result.track.definitionSnapshot?.stages,
-        result.track.currentStage
-      ).length;
-      return {
-        status: "instantiated" as const,
-        trackId: result.track.id,
-        /** `started` — a new track; `exists` — this method already runs here. */
-        trackStatus: result.status,
-        playbookId: result.playbook.id,
-        playbookVersion: result.playbook.version,
-        stageCount: stages,
-        phase: project.phase,
-        phaseSeeded: false,
-        phaseKept: !!project.phase,
-      };
     }),
 
   /**

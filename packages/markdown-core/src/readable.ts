@@ -1,7 +1,9 @@
 /**
  * READABLE — the one rule that turns a stored document into what relay,
  * exports and other agents read: every `synap-*` embed replaced by its
- * markdown fallback, everything else byte-for-byte.
+ * markdown fallback, Synap-only inline formatting reduced to its text
+ * (`:u[x]` → `x`, `:color[x]{tone=…}` → `x`, `==x=={tone=…}` → `==x==`),
+ * everything else byte-for-byte.
  *
  * The pod's agent read (`format: "readable"`) and the user's export both call
  * `readableMarkdown`; there is no second copy of the walk.
@@ -11,8 +13,9 @@
  * `fallbackFor`, else the vocabulary noun). Core never invents a label.
  */
 
-import { parseMarkdown } from "./processor.js";
+import { highlightToneSuffixRange, parseMarkdown } from "./processor.js";
 import { readEmbed, type Embed } from "./embeds.js";
+import { readInlineFormatAt } from "./inline-format.js";
 
 /** An embed together with the character range of its source. */
 export interface LocatedEmbed {
@@ -76,6 +79,55 @@ export function readableMarkdown(
       ? markdown.slice(fallbackRange.start, fallbackRange.end)
       : `*${labelFor(embed)}*`;
     cursor = end;
+  }
+  return stripInlineFormatting(out + markdown.slice(cursor));
+}
+
+type Walked = {
+  type: string;
+  tone?: string | null;
+  children?: Walked[];
+  position?: { start: { offset?: number }; end: { offset?: number } };
+};
+
+/**
+ * Synap-only inline formatting reduced to its text, as DELETIONS of source
+ * ranges (the directive head, its `]{…}` tail, a highlight's tone suffix), so
+ * nesting composes and the label's own markdown is kept byte for byte.
+ * A tone suffix whose surrounding text was not verbatim source (an escape in
+ * the same run) has no known range and is left as written.
+ */
+export function stripInlineFormatting(markdown: string): string {
+  const cuts: Array<{ start: number; end: number }> = [];
+  const walk = (node: Walked) => {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (
+      (node.type === "underline" || node.type === "textColor") &&
+      start != null &&
+      end != null
+    ) {
+      const match = readInlineFormatAt(markdown.slice(start, end));
+      if (match) {
+        const labelStart = start + match.raw.indexOf("[") + 1;
+        const labelEnd = labelStart + match.label.length;
+        cuts.push({ start, end: labelStart }, { start: labelEnd, end });
+      }
+    }
+    if (node.type === "mark") {
+      const range = highlightToneSuffixRange(node);
+      if (range) cuts.push(range);
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(parseMarkdown(markdown) as unknown as Walked);
+  if (cuts.length === 0) return markdown;
+  cuts.sort((a, b) => a.start - b.start);
+  let out = "";
+  let cursor = 0;
+  for (const cut of cuts) {
+    out += markdown.slice(cursor, cut.start);
+    cursor = Math.max(cursor, cut.end);
   }
   return out + markdown.slice(cursor);
 }

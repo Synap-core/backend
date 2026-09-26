@@ -15,6 +15,7 @@ import { randomBytes } from "crypto";
 import { z } from "zod";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
+import { httpStatusForTrpcError } from "./_shared.js";
 
 const CreateWebhookSchema = z.object({
   url: z.string().url(),
@@ -149,7 +150,10 @@ export function registerWebhooksRoutes(app: HubHono) {
       );
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_err) {
-      return c.json({ error: "Failed to create webhook subscription" }, 500);
+      return c.json(
+        { error: "Failed to create webhook subscription" },
+        httpStatusForTrpcError(_err)
+      );
     }
   });
 
@@ -174,7 +178,10 @@ export function registerWebhooksRoutes(app: HubHono) {
       );
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_err) {
-      return c.json({ error: "Failed to list webhook subscriptions" }, 500);
+      return c.json(
+        { error: "Failed to list webhook subscriptions" },
+        httpStatusForTrpcError(_err)
+      );
     }
   });
 
@@ -200,7 +207,10 @@ export function registerWebhooksRoutes(app: HubHono) {
       return c.json({ success: true });
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_err) {
-      return c.json({ error: "Failed to delete webhook subscription" }, 500);
+      return c.json(
+        { error: "Failed to delete webhook subscription" },
+        httpStatusForTrpcError(_err)
+      );
     }
   });
 }

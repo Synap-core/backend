@@ -41,11 +41,12 @@ import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-con
 import { authoredByUser } from "../agent-identity-service.js";
 import type { ProposalRevision } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
   userVisibleWhere,
   ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
-import { visibleSkillsWhere } from "../skills/visibility.js";
+import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
 import { listRuns, listRunGroups, getRun } from "../runs/index.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import {
@@ -361,17 +362,10 @@ async function diagnoseObject(
         .where(
           and(
             eq(focusSessions.id, id),
-            // An OR against a bare `userVisibleWhere` WIDENS, it does not
-            // gate: that helper's `isNull(workspaceId)` branch is owner-BLIND,
-            // so it already returned true for ANOTHER user's pod-personal
-            // session. `focus_sessions` is `ownerPrivate` in the access
-            // registry — own the NULL branch, keep the workspace branch on the
-            // shared user floor.
-            ownerPrivateVisibleWhere(
-              focusSessions.workspaceId,
-              focusSessions.userId,
-              userId
-            )
+            // The ONE session read rule (decision D1). Diagnose is an agent
+            // door (MCP / Hub), so no roster branch: owner-only. A colleague's
+            // session answers exactly like a nonexistent id — no oracle.
+            sessionReadableWhere({ userId })
           )
         )
         .limit(1);
@@ -447,7 +441,7 @@ async function diagnoseObject(
           workspaceId: skills.workspaceId,
         })
         .from(skills)
-        .where(and(eq(skills.id, id), visibleSkillsWhere(userId)))
+        .where(and(eq(skills.id, id), visibleSkillsAnyWorkspaceWhere(userId)))
         .limit(1);
       if (skillRow) {
         return {

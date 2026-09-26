@@ -50,3 +50,13 @@ export const FOCUS_SESSION_PROMOTED_EVENT_TYPE =
 export const FOCUS_SESSION_REVERT_ACTION = "conversion_reverted" as const;
 export const FOCUS_SESSION_CONVERSION_REVERTED_EVENT_TYPE =
   `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_REVERT_ACTION}.completed` as const;
+
+/**
+ * The person answered what an agent asked about one slot (`answer-slot.ts`) —
+ * from the needs-you tray or by replying to the agent's question in the room.
+ * An answer is INPUT, never a delivery: a reactor may wake the asking agent on
+ * it, and nothing may treat it as the slot being done.
+ */
+export const FOCUS_SESSION_SLOT_ANSWER_ACTION = "slot_answered" as const;
+export const FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE =
+  `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_SLOT_ANSWER_ACTION}.completed` as const;

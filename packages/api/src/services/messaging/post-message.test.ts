@@ -77,6 +77,8 @@ vi.mock("@synap/database", () => {
     emitMessageEvent: async () => undefined,
     // Attribution: the insert stamps authorType (agent vs human) from the
     // acting principal — see `agentUserId` on PostChannelMessageParams.
+    // A comment post stamps `message_category` (Documents v2).
+    MessageCategory: { CHAT: "chat", COMMENT: "comment" },
     MessageAuthorType: {
       HUMAN: "human",
       AI_AGENT: "ai_agent",

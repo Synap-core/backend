@@ -16,7 +16,8 @@ const action = (process.env.ACTION || "list") as Action;
 const email = process.env.ADMIN_EMAIL || process.env.USER_EMAIL || "";
 const password = process.env.ADMIN_PASSWORD || process.env.USER_PASSWORD || "";
 const name = process.env.ADMIN_NAME || process.env.USER_NAME || "";
-const createWorkspace = process.env.CREATE_WORKSPACE !== "false";
+// D7: opt-in — no blank personal workspace unless CREATE_WORKSPACE=true.
+const createWorkspace = process.env.CREATE_WORKSPACE === "true";
 const limitRaw = process.env.LIMIT || "200";
 const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 200;
 

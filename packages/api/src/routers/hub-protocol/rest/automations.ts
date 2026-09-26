@@ -4,7 +4,7 @@
 
 import { z } from "@hono/zod-openapi";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import {
   AutomationLifecycleRequestSchema,
   CreateAutomationRequestSchema,
@@ -77,7 +77,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
       params: z.object({ automationId: z.string() }),
       query: z.object({
         userId: z.string(),
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
       }),
     },
     responses: {

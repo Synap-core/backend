@@ -48,6 +48,7 @@
  *                                `EventNames.AI_PROPOSAL` (mirrored here as a
  *                                literal for the same reason chat:stream is —
  *                                see the drift guard at the bottom of this file).
+ * - comments:changed           → services/comments/comments.ts (post / resolve).
  * - notification:new           → notifications/NotificationService.ts (bell feed).
  * - presence:init/update,
  *   user:joined/left           → @synap/realtime (server.ts, collaboration-manager.ts).
@@ -80,6 +81,11 @@ export const SERVER_CONVERSATION_EVENTS = {
   PROPOSAL_REVIEWED: "proposal:reviewed",
   /** A governed AI mutation was proposed instead of auto-applied. */
   AI_PROPOSAL: "ai:proposal",
+  /**
+   * An object's comment threads changed (a comment, a reply, a resolve) —
+   * `{channelId, objectType, objectId, rootId}` to the object room's readers.
+   */
+  COMMENTS_CHANGED: "comments:changed",
   /** Generic bell notification (filter on data.notification.sourceType). */
   NOTIFICATION_NEW: "notification:new",
   /** Initial "who's online" snapshot on connect (@synap/realtime). */

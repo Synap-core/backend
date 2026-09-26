@@ -198,6 +198,8 @@ describe("IS failure envelope", () => {
     const expected: Record<string, string> = {
       insufficient_credit: "quota",
       quota_exhausted: "plan_quota",
+      account_quota_exceeded: "account_quota",
+      not_entitled: "not_entitled",
       auth: "auth",
       rate_limit: "rate_limit",
       timeout: "timeout",

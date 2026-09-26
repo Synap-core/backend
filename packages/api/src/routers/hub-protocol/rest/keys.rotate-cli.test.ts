@@ -25,6 +25,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // `_shared.js` re-exports the whole hub router; we only need its logger.
 vi.mock("./_shared.js", () => ({
+  // Considered fallback (total-mock-missing-export ratchet): `importOriginal`
+  // cannot load the real `_shared.js` here — this file's TOTAL
+  // `@synap/database` mock lacks exports its module graph reads. The route's
+  // catch imports the status mapper; these tests never exercise a mapped
+  // error, so it answers the old blanket 500.
+  httpStatusForTrpcError: () => 500,
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 

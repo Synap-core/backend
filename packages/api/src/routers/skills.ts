@@ -42,8 +42,8 @@ import {
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
-import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
+import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { parseSkillMd } from "../skills/skill-md-parser.js";
@@ -1716,43 +1716,13 @@ export const skillsRouter = router({
   setApproved: protectedProcedure
     .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-      const existing = await ctx.db.query.skills.findFirst({
-        where: eq(skills.id, input.id),
+      // One door with `capabilities.setToolEnabled`: same gate, audit, resync.
+      const skill = await setSkillApproved({
+        userId: requireUserId(ctx.userId),
+        skillId: input.id,
+        approved: input.approved,
       });
-      if (!existing) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
-      }
-      if (existing.workspaceId) {
-        const role = await getWorkspaceRole(userId, existing.workspaceId);
-        if (role !== "owner") {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Only workspace owners can approve skill execution.",
-          });
-        }
-      } else {
-        // Pod-wide (null-workspace) skill — pod-level privileged action.
-        await requirePodAdmin(userId);
-      }
-
-      const [updated] = await db
-        .update(skills)
-        .set({ approved: input.approved, updatedAt: new Date() })
-        .where(eq(skills.id, input.id))
-        .returning();
-
-      auditLog({
-        subjectType: "skill",
-        action: "update",
-        phase: "completed",
-        subjectId: input.id,
-        userId,
-        workspaceId: existing.workspaceId || undefined,
-        data: { approved: input.approved },
-      });
-
-      return { skill: updated };
+      return { skill };
     }),
 
   /**

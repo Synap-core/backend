@@ -41,7 +41,14 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerAgentSkillsRoutes } from "../../../routers/hub-protocol/rest/agent-skills.js";
 import type { HubHono } from "../../../routers/hub-protocol/rest/_shared.js";
 import { reservedSkillSlugReason } from "../reserved-slug.js";
-import { skills, workspaces, workspaceMembers } from "@synap/database/schema";
+import {
+  skills,
+  workspaces,
+  workspaceMembers,
+  podMembers,
+  users,
+  projectMembers,
+} from "@synap/database/schema";
 import { searchInstructionSkills } from "../search.js";
 import { rankByTerms } from "../../../utils/term-match.js";
 import {
@@ -136,7 +143,14 @@ async function seed(s: Seed): Promise<void> {
 const EXPIRED = { rule: { expiresAt: "2000-01-01T00:00:00.000Z" } };
 
 beforeAll(async () => {
-  for (const t of [skills, workspaces, workspaceMembers] as PgTable[]) {
+  for (const t of [
+    skills,
+    workspaces,
+    workspaceMembers,
+    podMembers,
+    users,
+    projectMembers,
+  ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }
 

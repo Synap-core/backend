@@ -8,7 +8,10 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { ROOM_POST_KINDS } from "../../../../services/messaging/room-post-kind.js";
+import {
+  ROOM_POST_KINDS,
+  ROOM_POST_SLOT_LABEL_MAX,
+} from "../../../../services/messaging/room-post-kind.js";
 
 /** Single thread (channel) row as returned by GET /threads. */
 export const ThreadSchema = z
@@ -83,6 +86,13 @@ export const PostMessageRequestSchema = z
       .optional()
       .describe(
         "An AGENT's post only: 'question' when the person is needed (in a session room it pushes them, once per session window); 'update' (default) for progress/results — in-app only, never a push."
+      ),
+    slotLabel: z
+      .string()
+      .max(ROOM_POST_SLOT_LABEL_MAX)
+      .optional()
+      .describe(
+        "With kind 'question' (agent posts only): the label of the session output the question is about. The session owner's reply is recorded on that output as its `answer` and hands it back to the agent."
       ),
   })
   .openapi("PostMessageRequest");

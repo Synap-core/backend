@@ -3,6 +3,7 @@ import {
   canTransitionTrack,
   deriveTrackStages,
   partitionSessionsByTrack,
+  readTrackStage,
   readTrackStageHistory,
   trackStageTone,
   trackStatusMoves,
@@ -99,6 +100,23 @@ describe("deriveTrackStages — what the pinned stage declares (0274)", () => {
       gate: "check",
       indefinite: true,
     });
+  });
+
+  it("projects the stage's domain (a workspace template slug), trimmed; blank is not declared (W2a)", () => {
+    const [a, b, c] = deriveTrackStages(
+      [
+        { key: "a", domain: " crm " },
+        { key: "b", domain: "   " },
+        { key: "c", domain: 42 },
+      ],
+      "a"
+    );
+    expect(a!.domain).toBe("crm");
+    expect("domain" in b!).toBe(false);
+    expect("domain" in c!).toBe(false);
+    expect(readTrackStage([{ key: "x", domain: "finance" }], "x")?.domain).toBe(
+      "finance"
+    );
   });
 
   it("an unknown gate kind is not projected (never guessed)", () => {

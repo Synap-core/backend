@@ -8,7 +8,10 @@
 
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { entityFacets } from "../schema/entity-facets.js";
-import { facetVisibilityConditions } from "../utils/facet-visibility.js";
+import {
+  facetVisibilityConditions,
+  storedFacetWorkspaceId,
+} from "../utils/facet-visibility.js";
 import { entities } from "../schema/entities.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -116,7 +119,9 @@ export class FacetRepository extends BaseRepository<
    * Emits: entity_facets.create.completed
    */
   async attach(data: AttachFacetInput, userId: string): Promise<EntityFacet> {
-    const workspaceId = data.workspaceId ?? null;
+    // The caller's LENS: resolves the role and validates its (overlay)
+    // properties. Distinct from the STORED stamp below (W2b role principle).
+    const lensWorkspaceId = data.workspaceId ?? null;
 
     // 1. Resolve the role profile.
     const identifier = data.profileId ?? data.profileSlug;
@@ -126,11 +131,15 @@ export class FacetRepository extends BaseRepository<
     const profile = await this.profileResolution.resolveProfile(
       identifier,
       userId,
-      workspaceId ?? ""
+      lensWorkspaceId ?? ""
     );
     if (!profile) {
-      throw new ProfileNotFoundError(identifier, userId, workspaceId ?? "");
+      throw new ProfileNotFoundError(identifier, userId, lensWorkspaceId ?? "");
     }
+    // A shared/system role is one hat pod-wide → stored pod-wide so every lens
+    // that has the role sees it (storedFacetWorkspaceId). Only the ONE door
+    // decides this, so capture, graph materialize and facets.attach inherit it.
+    const workspaceId = storedFacetWorkspaceId(profile.scope, lensWorkspaceId);
 
     let validatedProperties: Record<string, unknown> = data.properties ?? {};
 
@@ -168,7 +177,7 @@ export class FacetRepository extends BaseRepository<
       const validationResult = await this.propertyValidation.validateProperties(
         data.properties ?? {},
         profile.id,
-        workspaceId,
+        lensWorkspaceId,
         { enforceRequired: false }
       );
       if (!validationResult.valid) {
@@ -218,10 +227,41 @@ export class FacetRepository extends BaseRepository<
           data.contextEntityId ?? null,
           workspaceId
         );
-        if (existing) return existing;
+        if (existing) {
+          // Lens-collapsed attach: a shared role attached from a SECOND lens
+          // lands on the pod-wide facet the first lens already created. Its
+          // workspace-overlay values must not be silently dropped — fill the
+          // keys the existing facet does not have yet (widen-only, never
+          // clobber a value another lens wrote).
+          if (workspaceId !== lensWorkspaceId) {
+            return this.fillMissingProperties(existing, validatedProperties);
+          }
+          return existing;
+        }
       }
       throw error;
     }
+  }
+
+  /** Widen-only property fill for a lens-collapsed attach (see attach()). */
+  private async fillMissingProperties(
+    existing: EntityFacet,
+    incoming: Record<string, unknown>
+  ): Promise<EntityFacet> {
+    const current = (existing.properties ?? {}) as Record<string, unknown>;
+    const missing = Object.fromEntries(
+      Object.entries(incoming).filter(([key]) => !(key in current))
+    );
+    if (Object.keys(missing).length === 0) return existing;
+    const [facet] = await this.db
+      .update(entityFacets)
+      .set({
+        properties: { ...current, ...missing },
+        updatedAt: new Date(),
+      } as Partial<NewEntityFacet>)
+      .where(eq(entityFacets.id, existing.id))
+      .returning();
+    return facet ?? existing;
   }
 
   /**

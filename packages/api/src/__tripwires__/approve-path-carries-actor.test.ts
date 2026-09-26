@@ -127,10 +127,25 @@ describe("TRIPWIRE: the approve path carries the agent actor", () => {
       ).toMatch(/agentUserId:\s*ctx\.agentUserId/);
       cursor = at + 1;
     }
+    // Two doors remain here. The third — the `visible_to` anchor door
+    // (`exposeToAnchor`) — MOVED to the share core in Sites W2 S3; it is
+    // pinned right below instead of being dropped from the count.
     expect(
       sites,
-      "expected at least the three known relationRepo.create( doors in relations.ts"
-    ).toBeGreaterThanOrEqual(3);
+      "expected at least the two known relationRepo.create( doors in relations.ts"
+    ).toBeGreaterThanOrEqual(2);
+
+    // The moved `visible_to` writer: the share core forwards the actor too.
+    const share = read("services/sharing/share-service.ts");
+    const shareAt = share.indexOf("new RelationRepository(");
+    expect(
+      shareAt,
+      "the share core's visible_to writer was not found"
+    ).toBeGreaterThan(-1);
+    expect(
+      share.slice(shareAt, shareAt + 900),
+      "the share core's RelationRepository.create must receive the acting agent"
+    ).toMatch(/agentUserId:\s*opts\.agentUserId/);
 
     // EVENT SPINE — loop `recordDomainMutation(` by NAME, exactly like the
     // `relationRepo.create(` loop above.

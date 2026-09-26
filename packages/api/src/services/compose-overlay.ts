@@ -30,11 +30,26 @@ import {
   db,
   eq,
   workspaces,
+  eventRepository,
+  WorkspaceRepository,
   reconcileWorkspaceFromDefinition,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import {
+  applyDefinitionSeeds,
+  definitionSeedEntities,
+  type DefinitionSeedRelation,
+  type DefinitionSeedResult,
+} from "./definition-seeds.js";
+
+/**
+ * The compose report: the schema reconcile plus the overlay's SEEDS, adopted
+ * onto the base by `(kind, title)` (W4b — before, an overlay install applied
+ * schema only, so its seed entities never landed on any install door).
+ */
+export type ComposeReport = ReconcileReport & { seeds?: DefinitionSeedResult };
 
 /**
  * The compose base workspace row was gone by the time we loaded it (a delete /
@@ -68,14 +83,85 @@ export interface ComposeOntoBaseInput {
   /** The OVERLAY's definition — layered additively onto the base. */
   definition: WorkspaceDefinitionInput;
   /**
-   * Package provenance to stamp onto the target workspace's settings. Supplied
-   * ONLY for an explicit install-onto-existing (`market attach --onto <ws>`),
-   * so `market update` can later track it; omitted for a natural declared/
-   * transitive compose so a shared base keeps its own stamp. Forwarded verbatim
-   * to `reconcileWorkspaceFromDefinition`, which writes them only when present.
+   * Explicit install-onto-existing (`market attach --onto <ws>`) provenance.
+   * Stamped as the workspace's template IDENTITY only when the target has none
+   * yet (or already carries this same slug). A target that already has its OWN
+   * identity keeps it — the package is recorded as an overlay pack instead.
+   * Before this, `--onto` clobbered e.g. Foundation's `packageSlug` with
+   * `business-model`, so Foundation stopped reconciling to foundation.yaml.
    */
   packageSlug?: string;
   packageVersion?: string;
+  /**
+   * The overlay package's own identity — recorded in the target's
+   * `settings.installedPacks` on EVERY compose (natural, transitive, or
+   * `--onto`), so the boot reconcile can re-sync the pack and drift surfaces can
+   * see it. Nothing wrote `installedPacks` server-side before, so a composed
+   * pack could never reconcile nor show drift.
+   */
+  overlay?: { slug?: string; version?: string };
+}
+
+/** One `settings.installedPacks` entry. */
+export interface InstalledPackEntry {
+  slug: string;
+  version: string;
+  installedAt: string;
+}
+
+/**
+ * Upsert a pack into an `installedPacks` ledger (by slug). A re-compose
+ * refreshes the version and keeps the first `installedAt`. Pure.
+ */
+export function upsertInstalledPack(
+  ledger: unknown,
+  pack: { slug: string; version?: string | null },
+  now: string
+): InstalledPackEntry[] {
+  const list = Array.isArray(ledger)
+    ? (ledger as Array<Partial<InstalledPackEntry>>).filter(
+        (e): e is InstalledPackEntry =>
+          !!e && typeof e === "object" && typeof e.slug === "string"
+      )
+    : [];
+  const existing = list.find((e) => e.slug === pack.slug);
+  const entry: InstalledPackEntry = {
+    slug: pack.slug,
+    version: pack.version ?? existing?.version ?? "",
+    installedAt: existing?.installedAt ?? now,
+  };
+  return [...list.filter((e) => e.slug !== pack.slug), entry];
+}
+
+/**
+ * The overlay definition with the base workspace's SHELL removed — what a pack
+ * may layer onto a workspace that has its own template identity. The settings
+ * step of `reconcileWorkspaceFromDefinition` overwrites `workspaceSubtype` /
+ * `workspaceVisibility` unconditionally and a `layoutConfig.primarySurface`
+ * REPLACES the live one; from an overlay each would rewrite the base's identity.
+ * Profiles, views, links, sidebar items, capabilities stay additive. Pure.
+ */
+export function overlayDefinitionForIdentifiedBase(
+  definition: WorkspaceDefinitionInput
+): WorkspaceDefinitionInput {
+  const {
+    workspaceSubtype: _subtype,
+    workspaceVisibility: _visibility,
+    ...rest
+  } = definition as WorkspaceDefinitionInput & {
+    workspaceSubtype?: unknown;
+    workspaceVisibility?: unknown;
+  };
+  const layout = (rest as { layoutConfig?: Record<string, unknown> })
+    .layoutConfig;
+  if (layout && "primarySurface" in layout) {
+    const { primarySurface: _primary, ...layoutRest } = layout;
+    return {
+      ...rest,
+      layoutConfig: layoutRest,
+    } as unknown as WorkspaceDefinitionInput;
+  }
+  return rest as WorkspaceDefinitionInput;
 }
 
 /**
@@ -85,35 +171,86 @@ export interface ComposeOntoBaseInput {
  */
 export async function composeOntoBaseWorkspace(
   input: ComposeOntoBaseInput
-): Promise<ReconcileReport> {
-  const {
-    composeTargetWorkspaceId,
-    userId,
-    definition,
-    packageSlug,
-    packageVersion,
-  } = input;
+): Promise<ComposeReport> {
+  const { composeTargetWorkspaceId, userId, definition } = input;
 
   const [baseWs] = await db
-    .select({ id: workspaces.id, ownerId: workspaces.ownerId })
+    .select({
+      id: workspaces.id,
+      ownerId: workspaces.ownerId,
+      settings: workspaces.settings,
+      packageSlug: workspaces.packageSlug,
+    })
     .from(workspaces)
     .where(eq(workspaces.id, composeTargetWorkspaceId))
     .limit(1);
   if (!baseWs) throw new ComposeBaseNotFoundError();
+
+  const baseSettings = (baseWs.settings ?? {}) as {
+    packageSlug?: string;
+    installedPacks?: unknown;
+  };
+  const baseIdentity = baseSettings.packageSlug ?? baseWs.packageSlug ?? null;
+  // Stamp the explicit `--onto` slug as IDENTITY only on an unidentified target
+  // (or a re-attach of the same slug). Otherwise it is an overlay pack.
+  const stampIdentity =
+    !!input.packageSlug &&
+    (baseIdentity === null || baseIdentity === input.packageSlug);
+  const overlaySlug = input.overlay?.slug ?? input.packageSlug;
+  const recordPack = !!overlaySlug && overlaySlug !== baseIdentity;
 
   try {
     await assertWorkspaceWrite(db, userId, {
       workspaceId: baseWs.id,
       ownerId: baseWs.ownerId,
     });
-    return await reconcileWorkspaceFromDefinition({
+    const report = await reconcileWorkspaceFromDefinition({
       workspaceId: composeTargetWorkspaceId,
       userId,
-      definition,
+      definition:
+        baseIdentity !== null && !stampIdentity
+          ? overlayDefinitionForIdentifiedBase(definition)
+          : definition,
       mergeCapabilities: true,
-      packageSlug,
-      packageVersion,
+      ...(stampIdentity
+        ? {
+            packageSlug: input.packageSlug,
+            packageVersion: input.packageVersion,
+          }
+        : {}),
     });
+    if (recordPack && !stampIdentity) {
+      const repo = new WorkspaceRepository(db, eventRepository);
+      await repo.mergeSettings(
+        composeTargetWorkspaceId,
+        {
+          installedPacks: upsertInstalledPack(
+            baseSettings.installedPacks,
+            {
+              slug: overlaySlug!,
+              version: input.overlay?.version ?? input.packageVersion,
+            },
+            new Date().toISOString()
+          ),
+        },
+        userId
+      );
+    }
+    // Seeds — adopt what the base already holds, create only what is missing.
+    // Per-seed failures are collected (never thrown), like the other doors.
+    const seedList = definitionSeedEntities(definition);
+    if (seedList.length === 0) return report;
+    const seeds = await applyDefinitionSeeds({
+      database: db,
+      eventRepo: eventRepository,
+      userId,
+      workspaceId: composeTargetWorkspaceId,
+      seeds: seedList,
+      relations: (
+        definition as { suggestedRelations?: DefinitionSeedRelation[] }
+      ).suggestedRelations,
+    });
+    return { ...report, seeds };
   } catch (e) {
     throw new ComposeOverlayError((e as Error).message);
   }

@@ -1,6 +1,6 @@
 ## Workspace design — is this concern a WORKSPACE, or something smaller?
 
-Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **method** (track), or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create.
+Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **method** (track), or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
 
 ## The decision rule — a concern earns a workspace ONLY if ALL FOUR hold
 
@@ -22,9 +22,9 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 
 1. **Name the source-of-truth noun.** What kind would this workspace _own_ that no existing workspace owns? Run `list_profiles` — if the noun already lives in another domain, you have a facet or a project, not a domain. STOP.
 2. **Test all four conditions.** Owns kinds AND own team AND native automations AND stable. Any one fails → fork below.
-3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity.
+3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity. One role per name, pod-wide: a role several workspaces use is ONE role, each workspace adding properties by overlay — never a per-workspace twin (`concepts`).
 4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data. **A project is a COMMITMENT WITH GRAVITY** — a real initiative that ties work together (a campaign, an engagement, a client, a launch). Tasks, plans, repos, themes, and topics are **entities**, never projects. Before you create one: (a) **search existing projects first** (`synap orient` / `GET /api/hub/projects`) and prefer **linking into an existing project** via `belongs_to_project` — near-duplicate names are rejected with the existing candidates; (b) an agent-created project must cite **≥5 existing entities** that would belong to it as `evidenceEntityIds` — the backend rejects a project with no gravity and tells you to store it as an entity or reuse an existing project instead; (c) **never create a project for the pod owner's own company** — the company _is_ the pod, not a project inside it.
-5. **If it's a method a project runs** ("the content side of the launch") → a **track**: `list_tracks`, then a project-scoped playbook (`list_playbooks` / `match_playbooks`) → `start_track`. Never a workspace, never a twin project.
+5. **If it's a method a project runs** ("the content side of the launch") → a **track**: `list_tracks`, then a track template (`list_playbooks` / `match_playbooks`) → `start_track`. Never a workspace, never a twin project.
 6. **If it's a stage inside a domain** → add a `status` property def (`create_property_def`) and a view; don't split the stage into its own space.
 7. **Only if all four held** → **template first** (escalation ladder L3):
    `market.search({query, kind: "template"})` and propose install of a matching
@@ -34,7 +34,7 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 
 ## The CRM corollary — the load-bearing example
 
-Operational state — **prospect → client → delivered** — is a **FLOW across domains**, expressed as **facets + a triggered project**, NEVER as workspaces and NEVER by bolting delivery onto the identity domain.
+Operational state — **prospect → client → delivered** — is a **FLOW across domains**, expressed as **facets + an engagement project** (its delivery runs as a track), NEVER as workspaces and NEVER by bolting delivery onto the identity domain.
 
 - CRM = **who** (owns `person`/`company`, confers the `lead`/`client` facets).
 - Operations = **what we do for them** (owns `engagement`/`contract`/`deliverable`).

@@ -11,7 +11,9 @@ import { eq, and } from "drizzle-orm";
 export interface AddProjectMemberInput {
   projectId: string;
   userId: string;
-  role: "owner" | "editor" | "viewer";
+  role: "owner" | "editor" | "viewer" | "guest";
+  /** The link a guest membership was redeemed through (0276). */
+  grantedViaShareId?: string;
 }
 
 export interface RemoveProjectMemberInput {
@@ -22,7 +24,7 @@ export interface RemoveProjectMemberInput {
 export interface UpdateProjectRoleInput {
   projectId: string;
   userId: string;
-  newRole: "owner" | "editor" | "viewer";
+  newRole: "owner" | "editor" | "viewer" | "guest";
 }
 
 export type ProjectMemberRow = typeof projectMembers.$inferSelect;
@@ -43,6 +45,7 @@ export class ProjectMemberRepository {
         projectId: input.projectId,
         userId: input.userId,
         role: input.role,
+        grantedViaShareId: input.grantedViaShareId ?? null,
       })
       .returning();
 

@@ -265,6 +265,19 @@ import type {
   CreateNotificationInput,
   HubWebhookDelivery,
 } from "./types.js";
+import type {
+  AdvanceTrackInput,
+  FocusSessionTrackScope,
+  HubAdvanceTrackResult,
+  HubStartStageSessionResult,
+  HubStartTrackResult,
+  HubTrack,
+  HubTrackStatus,
+  HubTrackWriteResult,
+  ListTracksOptions,
+  StartStageSessionInput,
+  StartTrackInput,
+} from "./tracks.js";
 
 export interface HubRestClientConfig {
   /** Pod URL, e.g. https://my-pod.synap.live */
@@ -2060,12 +2073,14 @@ export class HubRestClient {
    * A `status: "proposed"` result is normal under governance; not an error.
    */
   async createFocusSession(
-    input: CreateFocusSessionInput
+    input: CreateFocusSessionInput & FocusSessionTrackScope
   ): Promise<CreateFocusSessionResult> {
     const userId = await this.resolveUserId();
-    // Project-only creates must stay workspace-null — do not stamp this.workspaceId.
+    // Project-only (and track-born — a track names its project) creates must
+    // stay workspace-null — do not stamp this.workspaceId.
     const workspaceId =
-      input.workspaceId ?? (input.projectId ? undefined : this.workspaceId);
+      input.workspaceId ??
+      (input.projectId || input.trackId ? undefined : this.workspaceId);
     return this.request<CreateFocusSessionResult>(
       "POST",
       "/api/hub/focus-sessions",
@@ -2520,5 +2535,110 @@ export class HubRestClient {
    */
   async createRule(input: CreateRuleInput): Promise<HubCreateRuleResult> {
     return this.request<HubCreateRuleResult>("POST", "/api/hub/rules", input);
+  }
+
+  // ─── Tracks (a method running inside a project) ────────────────────────────
+  //
+  // ONE set of track methods for every consumer (IS, CLI, Raycast). Writes are
+  // governed server-side (checkPermissionOrPropose): `status: "proposed"` is a
+  // SUCCESS, queued for review. `missingDomains` / `domainsNote` and
+  // `domainFallback` / `domainNote` are returned UNTOUCHED — they are the
+  // pod's honest report that a stage's domain has no workspace to run in.
+
+  /** A project's tracks (archived omitted unless `includeArchived`). */
+  async listTracks(
+    projectId: string,
+    options?: ListTracksOptions
+  ): Promise<HubTrack[]> {
+    const params = new URLSearchParams({ projectId });
+    if (options?.includeArchived) params.set("includeArchived", "true");
+    const res = await this.request<{ items?: HubTrack[] }>(
+      "GET",
+      `/api/hub/tracks?${params.toString()}`
+    );
+    return res?.items ?? [];
+  }
+
+  /** One track, with its pinned stages positioned against `currentStage`. */
+  async getTrack(trackId: string): Promise<HubTrack> {
+    return this.request<HubTrack>(
+      "GET",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}`
+    );
+  }
+
+  /** Start a method (project-scoped playbook) on a project. Idempotent. */
+  async startTrack(input: StartTrackInput): Promise<HubStartTrackResult> {
+    return this.request<HubStartTrackResult>("POST", "/api/hub/tracks", input);
+  }
+
+  /** Move a track to any declared stage. Returns the entered stage's `offer`. */
+  async advanceTrack(
+    trackId: string,
+    input: AdvanceTrackInput
+  ): Promise<HubAdvanceTrackResult> {
+    return this.request<HubAdvanceTrackResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/advance`,
+      input
+    );
+  }
+
+  /** Pause, resume, complete or archive a track. */
+  async setTrackStatus(
+    trackId: string,
+    status: HubTrackStatus,
+    reasoning?: string
+  ): Promise<HubTrackWriteResult> {
+    return this.request<HubTrackWriteResult>(
+      "PATCH",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}`,
+      { status, ...(reasoning ? { reasoning } : {}) }
+    );
+  }
+
+  /** Answer (some of) the method's params — merged; `null` clears one. */
+  async setTrackParams(
+    trackId: string,
+    params: Record<string, unknown>,
+    reasoning?: string
+  ): Promise<HubTrackWriteResult> {
+    return this.request<HubTrackWriteResult>(
+      "PATCH",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/params`,
+      { params, ...(reasoning ? { reasoning } : {}) }
+    );
+  }
+
+  /**
+   * Start the session a stage offers (idempotent). Without `stageKey` the
+   * track's CURRENT stage is used — read from GET /tracks/:id, because the
+   * Hub route names the stage in its path. A track standing on no stage is
+   * refused here with the pod's own wording rather than guessed.
+   */
+  async startStageSession(
+    trackId: string,
+    input?: StartStageSessionInput
+  ): Promise<HubStartStageSessionResult> {
+    let stageKey = input?.stageKey;
+    if (!stageKey) {
+      const track = await this.getTrack(trackId);
+      if (!track.currentStage) {
+        throw new HubApiError(
+          `Track "${track.name}" stands on no stage — pass stageKey.`,
+          400,
+          { error: "no_current_stage" }
+        );
+      }
+      stageKey = track.currentStage;
+    }
+    const body: Record<string, string> = {};
+    if (input?.title) body.title = input.title;
+    if (input?.goal) body.goal = input.goal;
+    return this.request<HubStartStageSessionResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/stages/${encodeURIComponent(stageKey)}/sessions`,
+      body
+    );
   }
 }

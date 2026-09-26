@@ -115,6 +115,8 @@ import {
   documents,
   views,
   automations,
+  podMembers,
+  projectMembers,
 } from "@synap/database";
 import {
   advanceTrackStage,
@@ -208,9 +210,17 @@ beforeAll(async () => {
     automations,
     playbooks,
     projects,
+    podMembers,
+    projectMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
+  // A KNOWN principal (Sites W2 S2): an id with no `users` row is an unknown
+  // principal and reads no pod-level row (pod-wide globals, pod-visible
+  // workspaces) — `podReaderWhere`. This fixture models provisioned users.
+  await h.client!.exec(
+    `insert into users (id, email) values ('${USER}', '${USER}@example.test'), ('${STRANGER}', '${STRANGER}@example.test')`
+  );
   // The REAL table shape for tracks — defaults, the status CHECK and the
   // live-method unique index are what idempotency rides on.
   await h.client!.exec(`

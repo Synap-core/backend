@@ -51,6 +51,7 @@ import {
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "../client-pg.js";
 import { workspaceMembers, workspaces } from "../schema/workspaces.js";
+import { podReaderWhere } from "./pod-membership.js";
 
 /**
  * The workspace lens, as a composable scope dimension:
@@ -64,8 +65,11 @@ export type WorkspaceLens = string | string[] | null | undefined;
 
 /**
  * Returns a Drizzle predicate matching rows visible to `userId`:
- *   - rows where `workspaceIdColumn IS NULL` (pod-wide globals), OR
- *   - rows whose `workspaceId` is in any workspace the user is a member of.
+ *   - rows whose `workspaceId` is in any workspace the user is a member of or
+ *     owns, OR
+ *   - for a pod READER only (`podReaderWhere`: never a guest, never an unknown
+ *     principal): rows where `workspaceIdColumn IS NULL` (pod-wide globals) and
+ *     rows in a pod-visible / pod-joinable workspace.
  *
  * The subquery is correlated at the database level — Postgres can optimise
  * it as a semi-join, so one round-trip serves arbitrarily many workspaces
@@ -117,14 +121,32 @@ export function ownedWorkspaceIds(userId: string) {
     .where(eq(workspaces.ownerId, userId));
 }
 
-/** Workspaces readable pod-wide by design. */
-export function podVisibleWorkspaceIds() {
+/**
+ * The ONE spelling of "this workspace is pod-visible by setting". Private: a
+ * caller wants `podVisibleWorkspaceWhere(userId)`, which also applies the
+ * reader gate. Only `userVisibleWhere` composes it bare, because there the
+ * reader gate is hoisted once over both reader-only branches.
+ */
+function podVisibleSettingWhere(): SQL {
+  return drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible','pod_joinable')`;
+}
+
+/**
+ * Workspaces readable by every pod READER (`podReaderWhere`): a participant, a
+ * project-only non-guest member, or a known user who has joined nothing yet.
+ * NEVER by a guest (Sites W2) and never by an unknown principal. A predicate
+ * over `workspaces`, usable in any query/transaction.
+ */
+export function podVisibleWorkspaceWhere(userId: string): SQL {
+  return and(podVisibleSettingWhere(), podReaderWhere(userId))!;
+}
+
+/** The pod-visible workspace ids `userId` may read, as a subquery. */
+export function podVisibleWorkspaceIds(userId: string) {
   return db
     .select({ id: workspaces.id })
     .from(workspaces)
-    .where(
-      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible','pod_joinable')`
-    );
+    .where(podVisibleWorkspaceWhere(userId));
 }
 
 export function userVisibleWhere(
@@ -134,11 +156,21 @@ export function userVisibleWhere(
   // A user can see a row's workspace if they are a MEMBER of it, they OWN it
   // (ownerId is a first-class column, SEPARATE from workspace_members — a
   // sovereign/single-user pod's owner may not have a member row, so membership
-  // alone would hide their own data), or it is POD-VISIBLE (readable pod-wide by
-  // design). This mirrors getUserAccessibleWorkspaceIds so reads are consistent.
+  // alone would hide their own data), or it is POD-VISIBLE. This mirrors
+  // getUserAccessibleWorkspaceIds so reads are consistent.
+  //
+  // The two POD-LEVEL branches — pod-wide globals (NULL workspace) and
+  // pod-visible workspaces — are admitted only to a pod READER
+  // (`podReaderWhere`): never to a GUEST (Sites W2: a guest's floor is the
+  // exposure branch only) and never to an unknown principal. The gate is
+  // hoisted over both branches so it is emitted once. A guest holds no member
+  // or owned workspace by definition, so those two branches need no gate.
   const memberWs = memberWorkspaceIds(userId);
   const ownedWs = ownedWorkspaceIds(userId);
-  const podVisibleWs = podVisibleWorkspaceIds();
+  const podVisibleWs = db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(podVisibleSettingWhere());
 
   // `proposals.workspace_id` is TEXT while `workspaces.id` /
   // `workspace_members.workspace_id` are UUID — cast the column to uuid so the
@@ -148,10 +180,12 @@ export function userVisibleWhere(
   const col = drizzleSql`${workspaceIdColumn}::uuid`;
   // `or(...)` of non-null operands is non-null.
   return or(
-    isNull(workspaceIdColumn),
     inArray(col, memberWs),
     inArray(col, ownedWs),
-    inArray(col, podVisibleWs)
+    and(
+      podReaderWhere(userId),
+      or(isNull(workspaceIdColumn), inArray(col, podVisibleWs))
+    )
   )!;
 }
 
@@ -183,7 +217,10 @@ export function workspaceLensWhere(
   if (lens === undefined || (Array.isArray(lens) && lens.length === 0)) {
     return floor;
   }
-  if (lens === null) return isNull(workspaceIdColumn);
+  // Globals-only is still the POD-LEVEL branch: a guest / unknown principal
+  // gets no pod-wide global rows through it either (see `userVisibleWhere`).
+  if (lens === null)
+    return and(isNull(workspaceIdColumn), podReaderWhere(userId))!;
   // A SPECIFIC workspace (or set of workspaces) is selected → show THOSE
   // workspaces only; pod-wide globals do NOT bleed into a focused workspace
   // (product decision 2026-06-15). The exception is SUBSTRATE config (builtin

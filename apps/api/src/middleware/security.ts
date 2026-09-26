@@ -15,6 +15,8 @@ import {
   getRateLimitClassConfig,
   type RateLimitClass,
   getCalendarFeedIpCeiling,
+  getPublicDoorRateConfig,
+  buildPublicDoorKey,
 } from "./rate-limit-classes.js";
 
 // Re-export pure helpers so existing import sites can stay on security.js
@@ -190,6 +192,67 @@ const calendarFeedIpRateLimiter = rateLimiter({
   ),
 });
 
+const publicDoorRate = getPublicDoorRateConfig();
+
+/**
+ * Public-door key generator (Sites W3). IP-ONLY: the Authorization header is
+ * never read, so a random `Bearer` per request cannot mint a fresh bucket (the
+ * calendar-feed defect, closed here by construction — `buildPublicDoorKey` has
+ * no parameter for it). Loopback keeps the same local bypass as every class.
+ */
+function publicDoorKeyGenerator(
+  bucket: "read_ip" | "submit_ip" | "submit_share"
+) {
+  return (c: Context): string => {
+    const ip = clientIp(c);
+    if (
+      ip === "127.0.0.1" ||
+      ip === "::1" ||
+      ip === "localhost" ||
+      (process.env.NODE_ENV === "development" && ip === "unknown")
+    ) {
+      return `localhost-bypass-public_${bucket}-` + Math.random();
+    }
+    return buildPublicDoorKey(bucket, ip, c.req.path);
+  };
+}
+
+const publicReadIpRateLimiter = rateLimiter({
+  windowMs: publicDoorRate.readIp.windowMs,
+  limit: publicDoorRate.readIp.max,
+  standardHeaders: false,
+  keyGenerator: publicDoorKeyGenerator("read_ip"),
+  handler: classHandler(
+    "public_read",
+    publicDoorRate.readIp.max,
+    publicDoorRate.readIp.retryAfter
+  ),
+});
+
+const publicSubmitIpRateLimiter = rateLimiter({
+  windowMs: publicDoorRate.submitIp.windowMs,
+  limit: publicDoorRate.submitIp.max,
+  standardHeaders: false,
+  keyGenerator: publicDoorKeyGenerator("submit_ip"),
+  handler: classHandler(
+    "public_submit",
+    publicDoorRate.submitIp.max,
+    publicDoorRate.submitIp.retryAfter
+  ),
+});
+
+const publicSubmitShareRateLimiter = rateLimiter({
+  windowMs: publicDoorRate.submitShare.windowMs,
+  limit: publicDoorRate.submitShare.max,
+  standardHeaders: false,
+  keyGenerator: publicDoorKeyGenerator("submit_share"),
+  handler: classHandler(
+    "public_submit",
+    publicDoorRate.submitShare.max,
+    publicDoorRate.submitShare.retryAfter
+  ),
+});
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -197,7 +260,7 @@ const calendarFeedIpRateLimiter = rateLimiter({
  * per-class windows/limits. Health/metrics are skipped (unlimited).
  */
 export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
-  const cls = classifyRateLimitPath(c.req.path);
+  const cls = classifyRateLimitPath(c.req.path, c.req.method);
   switch (cls) {
     case "free":
       return next();
@@ -215,6 +278,16 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
         // void — so assign it onto the context rather than returning it, or a
         // per-token 429 is silently swallowed and the request proceeds.
         const limited = await calendarFeedRateLimiter(c, next);
+        if (limited instanceof Response) c.res = limited;
+      });
+    case "public_read":
+      // IP only. No per-share read cap, on purpose (a viral page must not 429).
+      return publicReadIpRateLimiter(c, next);
+    case "public_submit":
+      // IP ceiling FIRST (a caller varying the token still spends one budget),
+      // then the per-share bucket. Same nested-429 handling as the calendar feed.
+      return publicSubmitIpRateLimiter(c, async () => {
+        const limited = await publicSubmitShareRateLimiter(c, next);
         if (limited instanceof Response) c.res = limited;
       });
     case "crud":

@@ -8,7 +8,9 @@
  *   PERSONAL    → ensureAgentThread(userId, agentId) — pod-wide AI thread
  *                 (agentSlug resolves to UUID with orchestrator fallback).
  *   THREAD      → workspace context → ensureWorkspaceGroupChannel
- *                 entity/document/view/project/task → upsert per
+ *                 entity/document → the caller's PRIVATE sub-thread under the
+ *                 object's ONE room (`ensurePrivateObjectThread`)
+ *                 view/project/task/proposal → upsert per
  *                 (userId, workspaceId, contextObjectType, contextObjectId)
  *   SUB_THREAD  → create child of `parentChannelId` (required) with
  *                 branchPurpose. AI always active for sub-threads.
@@ -44,6 +46,7 @@ import {
   type ChannelOrigin,
 } from "../services/channels/channel-origin.js";
 import { assertProposalVisibleTo } from "./proposal-visibility.js";
+import { isObjectRoomType } from "./channel-visibility.js";
 import { randomUUID } from "crypto";
 
 /**
@@ -230,6 +233,24 @@ export async function resolveOrCreateChannel(
 
   // ── THREAD ─────────────────────────────────────────────────────────────────
   if (channelType === ChannelType.THREAD) {
+    // A DOCUMENT / ENTITY has ONE conversation, its object room (Documents v2).
+    // A person's thread about it is their PRIVATE "Ask AI about this" thread,
+    // a SUB_THREAD under that room (decision V3) — floored on the object's own
+    // read rule (the old per-user bind was "inert": no check at all). Their
+    // legacy per-user THREAD, if any, is adopted there, history intact.
+    if (contextObjectId && isObjectRoomType(contextObjectType)) {
+      // Lazy: the door reaches the access layer; this dispatcher is imported
+      // far and wide and stays light (the builtin-verbs precedent).
+      const { ensurePrivateObjectThread } =
+        await import("../services/comments/object-channel.js");
+      return ensurePrivateObjectThread({
+        userId,
+        ref: { type: contextObjectType, id: contextObjectId },
+        workspaceId: workspaceId ?? null,
+        projectId: projectId ?? null,
+        agentSlug,
+      });
+    }
     if (!workspaceId) {
       throw new TRPCError({
         code: "BAD_REQUEST",

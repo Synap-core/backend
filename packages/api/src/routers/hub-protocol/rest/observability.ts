@@ -26,7 +26,12 @@ import {
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 import {
   AI_DECISION,
   AI_CORRECTION,
@@ -389,7 +394,10 @@ export function registerObservabilityRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.warn({ err, userId }, "observability/routing-health failed");
-      return c.json({ error: "Failed to compute routing health" }, 500);
+      return c.json(
+        { error: "Failed to compute routing health" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 }

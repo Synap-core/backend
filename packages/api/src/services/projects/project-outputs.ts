@@ -165,6 +165,9 @@ export async function listProjectOutputs(
           projectId: query.projectId,
           workspaceIds: query.workspaceIds,
           lens: "default",
+          // Same door rule as the registry's session predicate: a HUMAN door
+          // also reads sessions whose room roster seats the caller.
+          roster: query.access.actor === "operator",
         }),
         scoped.predicate(focusSessions),
         ...(query.trackId ? [eq(focusSessions.trackId, query.trackId)] : []),

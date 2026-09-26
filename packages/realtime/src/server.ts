@@ -14,7 +14,7 @@ import { CollaborationManager } from "./collaboration-manager.js";
 import { setupYjsServer, type YjsServerInstance } from "./yjs-server.js";
 import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
-import { getKratosSessionByCookie, getKratosSessionByToken } from "@synap/auth";
+import { verifyHandshakeUser } from "./session-auth.js";
 import {
   db,
   and,
@@ -197,7 +197,6 @@ presenceNamespace.use(async (socket, next) => {
   const auth = socket.handshake.auth as Record<string, unknown>;
   const apiKey = typeof auth.apiKey === "string" ? auth.apiKey : null;
   const userId = typeof auth.userId === "string" ? auth.userId : null;
-  const token = typeof auth.token === "string" ? auth.token : null;
   const workspaceId =
     typeof auth.workspaceId === "string" ? auth.workspaceId : null;
 
@@ -220,41 +219,12 @@ presenceNamespace.use(async (socket, next) => {
   }
 
   if (userId) {
-    if (!token) {
-      console.error("[Presence] Missing session token for user handshake");
-      return next(new Error("Realtime auth: missing session token"));
+    const identity = await verifyHandshakeUser(auth);
+    if (!identity.ok) {
+      console.error(`[Presence] User handshake rejected: ${identity.error}`);
+      return next(new Error(identity.error));
     }
-
-    let session: Awaited<ReturnType<typeof getKratosSessionByToken>> | null;
-    try {
-      // The browser sends the Kratos API SESSION TOKEN (X-Session-Token), so
-      // validate it AS A TOKEN first. The old code passed it to the COOKIE
-      // validator (`getKratosSessionByCookie`), which does
-      // `toSession({ cookie: 'ory_kratos_session='+value })` — Kratos rejected the
-      // session-token as a malformed cookie → the socket NEVER connected → the AI
-      // chat showed a permanent false "Offline" banner while tRPC was perfectly
-      // healthy (tRPC sends the same token as a header, the correct path). Fall back
-      // to cookie validation for flows that pass a raw ory_kratos_session value as
-      // the token (local pod / Eve's raw-token-as-cookie flow).
-      session = await getKratosSessionByToken(token);
-      if (!session) {
-        session = await getKratosSessionByCookie(token);
-      }
-    } catch {
-      return next(new Error("Realtime auth: session validation unavailable"));
-    }
-
-    const resolvedUserId =
-      typeof session?.identity?.id === "string" ? session.identity.id : null;
-    if (!resolvedUserId || session?.active === false) {
-      console.error("[Presence] Invalid or inactive user session");
-      return next(new Error("Realtime auth: invalid session"));
-    }
-
-    if (resolvedUserId !== userId) {
-      console.error("[Presence] Handshake userId does not match session");
-      return next(new Error("Realtime auth: user mismatch"));
-    }
+    const resolvedUserId = identity.userId;
 
     if (workspaceId) {
       const membership = await db.query.workspaceMembers.findFirst({

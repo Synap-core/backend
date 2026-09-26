@@ -15,6 +15,11 @@
 export const SERVER_OWNED_WORKSPACE_SETTINGS_KEYS = [
   "controlPlane",
   "nango",
+  // Sites W2 S3 — what the owner lets a workspace share (guests, links, the
+  // public). Written ONLY by `shares.setPolicy` (owner, human) through
+  // `WorkspaceRepository.setExposurePolicy`; the repository's generic writers
+  // strip it too (`withoutExposurePolicy`, @synap/database).
+  "exposurePolicy",
 ] as const;
 
 /** The client's settings with every server-owned key removed. */

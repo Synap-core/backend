@@ -1166,6 +1166,9 @@ ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "embedded_view_ids" uuid[];
 ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
 ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+-- 0276 exposure marker (the CHECK exposed_at ⇒ project_id is added by 0276).
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "exposed_at" timestamp with time zone;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "exposed_by" text;
 
 CREATE INDEX IF NOT EXISTS "views_workspace_id_idx"
   ON "views" ("workspace_id");
@@ -1320,6 +1323,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS "channels_user_feed_uniq"
   WHERE "channel_type" = 'feed'
     AND "status" = 'active'
     AND "context_object_type" IS NULL;
+
+-- 0279: ONE active object room per object (ensureObjectChannel's arbiter).
+CREATE UNIQUE INDEX IF NOT EXISTS "channels_object_room_uniq"
+  ON "channels" ("context_object_type", "context_object_id")
+  WHERE "channel_type" = 'group'
+    AND "status" = 'active'
+    AND "context_object_type" IN ('document', 'entity');
 
 -- ─── 19. channel_connections + channel_link_tokens ───────────────────────────
 
@@ -1644,7 +1654,9 @@ CREATE TABLE IF NOT EXISTS "messages" (
   "session_id"       uuid  REFERENCES "sessions"("id") ON DELETE SET NULL,
   "deleted_at"       timestamp with time zone,
   "edited_at"        timestamp with time zone,
-  "ephemeral"        boolean NOT NULL DEFAULT false
+  "ephemeral"        boolean NOT NULL DEFAULT false,
+  "resolved_at"      timestamp with time zone,
+  "resolved_by"      text
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "channel_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
@@ -1664,6 +1676,16 @@ ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "se
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "edited_at" timestamp with time zone;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "ephemeral" boolean NOT NULL DEFAULT false;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "resolved_at" timestamp with time zone;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "resolved_by" text;
+
+-- 0279: the unresolved-comment count per object room.
+CREATE INDEX IF NOT EXISTS "messages_open_comment_root_idx"
+  ON "messages" ("channel_id")
+  WHERE "parent_id" IS NULL
+    AND "resolved_at" IS NULL
+    AND "deleted_at" IS NULL
+    AND ("metadata" -> 'anchor') IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS "messages_channel_id_idx"
   ON "messages" ("channel_id");
@@ -3218,6 +3240,19 @@ ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "created_at" timestamp wi
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "view_count" integer DEFAULT 0;
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "last_accessed_at" timestamp with time zone;
+-- 0276 exposure substrate columns. No FK / CHECK / NOT NULL / trigger here
+-- (`projects` is created by 0151): 0276 adds them on fresh databases too, since
+-- it runs after this file.
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "audience" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "anchor_project_id" uuid;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "state" text DEFAULT 'draft';
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_at" timestamp with time zone;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_by" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_document_version_id" uuid;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_properties" jsonb;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "token_prefix" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "revoked_by" text;
 
 -- ─── 48. sync tables (sync_peers, sync_state, sync_conflicts) ────────────────
 
@@ -4145,6 +4180,9 @@ CREATE INDEX IF NOT EXISTS "idx_project_members_user"
   ON "project_members" ("user_id");
 CREATE INDEX IF NOT EXISTS "idx_project_members_user_project"
   ON "project_members" ("user_id", "project_id");
+-- 0276: provenance of a link-granted (guest) membership. No FK here
+-- (resource_shares FK is added by 0276).
+ALTER TABLE "project_members" ADD COLUMN IF NOT EXISTS "granted_via_share_id" uuid;
 
 -- ── Capability Templates (templates-as-data, 0144 catch-up) ───────────────────
 -- (capability_templates table removed in 0154 — the Control Plane is the single
@@ -4637,3 +4675,48 @@ CREATE INDEX IF NOT EXISTS "idx_session_evaluations_session_id"
   ON "session_evaluations" ("session_id");
 CREATE INDEX IF NOT EXISTS "idx_session_evaluations_session_criterion"
   ON "session_evaluations" ("session_id", "criterion_key", "created_at");
+
+-- ---------------------------------------------------------------------------
+-- Live session updates (0277): every write to focus_sessions /
+-- session_evaluations NOTIFYs `focus_session_changed` with the session id only.
+-- The api's session-changed listener is the ONE consumer. See migration 0277.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION synap_notify_focus_session_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM pg_notify('focus_session_changed', OLD.id::text);
+  ELSE
+    PERFORM pg_notify('focus_session_changed', NEW.id::text);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION synap_notify_session_ledger_changed()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM pg_notify('focus_session_changed', OLD.session_id::text);
+  ELSE
+    PERFORM pg_notify('focus_session_changed', NEW.session_id::text);
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_focus_sessions_changed_notify ON focus_sessions;
+CREATE TRIGGER trg_focus_sessions_changed_notify
+  AFTER INSERT OR UPDATE OR DELETE ON focus_sessions
+  FOR EACH ROW
+  EXECUTE FUNCTION synap_notify_focus_session_changed();
+
+DROP TRIGGER IF EXISTS trg_session_evaluations_changed_notify ON session_evaluations;
+CREATE TRIGGER trg_session_evaluations_changed_notify
+  AFTER INSERT OR UPDATE OR DELETE ON session_evaluations
+  FOR EACH ROW
+  EXECUTE FUNCTION synap_notify_session_ledger_changed();

@@ -229,3 +229,22 @@ export type {
   CreateRuleInput,
   HubCreateRuleResult,
 } from "./types.js";
+
+// Tracks — a method running inside a project (Hub /tracks)
+export type {
+  HubTrack,
+  HubTrackStage,
+  HubTrackStatus,
+  HubTrackProposed,
+  ListTracksOptions,
+  StartTrackInput,
+  HubStartTrackResult,
+  HubStageSessionOffer,
+  AdvanceTrackInput,
+  HubAdvanceTrackResult,
+  HubTrackWriteResult,
+  StartStageSessionInput,
+  HubStageDomainFallbackReason,
+  HubStartStageSessionResult,
+  FocusSessionTrackScope,
+} from "./tracks.js";

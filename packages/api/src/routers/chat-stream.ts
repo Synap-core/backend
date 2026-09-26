@@ -79,6 +79,7 @@ import {
   requestChatTurnCancellation,
 } from "../services/chat-turns/chat-turn-store.js";
 import { abortActiveChatTurn } from "../services/chat-turns/chat-turn-runtime.js";
+import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 
 const logger = createLogger({ module: "chat-stream" });
 
@@ -370,14 +371,12 @@ chatStreamApp.post("/stream", async (c) => {
     }
     resolvedWorkspaceId = input.workspaceId;
   } else {
-    const membership = await db.query.workspaceMembers.findFirst({
-      where: eq(workspaceMembers.userId, userId),
-      columns: { workspaceId: true },
-    });
-    if (!membership) {
+    // D7: never the pod-admin console, never archived (the ONE fallback).
+    const fallback = await findUserDefaultWorkspaceId(db, userId);
+    if (!fallback) {
       return c.json({ error: "No workspace found for this user" }, 404);
     }
-    resolvedWorkspaceId = membership.workspaceId;
+    resolvedWorkspaceId = fallback;
   }
 
   // ── Resolve channelId ────────────────────────────────────────────────────
@@ -573,11 +572,8 @@ chatStreamApp.get("/history", async (c) => {
       return c.json({ error: "Workspace not found or access denied" }, 404);
     }
   } else {
-    const membership = await db.query.workspaceMembers.findFirst({
-      where: eq(workspaceMembers.userId, userId),
-      columns: { workspaceId: true },
-    });
-    if (!membership) {
+    // D7: never the pod-admin console, never archived (the ONE fallback).
+    if (!(await findUserDefaultWorkspaceId(db, userId))) {
       return c.json({ error: "No workspace found for this user" }, 404);
     }
   }

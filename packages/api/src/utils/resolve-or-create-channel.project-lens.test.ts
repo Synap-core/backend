@@ -95,6 +95,18 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: fakeDb };
 });
 
+// A DOCUMENT / ENTITY thread is the caller's private sub-thread under the
+// object's ONE room (Documents v2): the dispatcher only delegates. The rung-4
+// stamping itself now lives in `ensurePrivateObjectThread` and is pinned on
+// PGlite (`services/comments/comments.pglite.test.ts`).
+const privateThread = vi.fn(async (p: Record<string, unknown>) => ({
+  id: "private-thread",
+  ...p,
+}));
+vi.mock("../services/comments/object-channel.js", () => ({
+  ensurePrivateObjectThread: (p: Record<string, unknown>) => privateThread(p),
+}));
+
 // Imported AFTER the mock so the module binds the faked handle.
 const { resolveOrCreateChannel } =
   await import("./resolve-or-create-channel.js");
@@ -182,43 +194,45 @@ describe("sub_thread inherits its parent room's project (rung 3)", () => {
   });
 });
 
-describe("thread on an entity inherits the entity's project (rung 4)", () => {
-  it("stamps the subject entity's sole project", async () => {
-    state.channel = null; // no existing thread → create
-    state.belongsToProject = [{ targetEntityId: "proj-entity" }];
-
-    await resolveOrCreateChannel({
+describe("a thread about a document / entity is the private sub-thread of its ONE room", () => {
+  it("delegates an ENTITY thread, forwarding the caller's scope", async () => {
+    privateThread.mockClear();
+    const got = await resolveOrCreateChannel({
       userId: USER,
       channelType: ChannelType.THREAD,
       workspaceId: WORKSPACE,
+      projectId: "proj-explicit",
       contextObjectType: "entity",
       contextObjectId: ENTITY,
     });
-
-    expect(state.inserted?.projectId).toBe("proj-entity");
+    expect(got.id).toBe("private-thread");
+    expect(privateThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER,
+        ref: { type: "entity", id: ENTITY },
+        workspaceId: WORKSPACE,
+        projectId: "proj-explicit",
+      })
+    );
+    // No per-user THREAD row is minted here any more.
+    expect(state.inserted).toBe(null);
   });
 
-  it("SAFETY — a tie abstains rather than picking a winner", async () => {
-    state.channel = null;
-    state.belongsToProject = [
-      { targetEntityId: "proj-a" },
-      { targetEntityId: "proj-b" },
-    ];
-
+  it("delegates a DOCUMENT thread too — and needs no workspace", async () => {
+    privateThread.mockClear();
     await resolveOrCreateChannel({
       userId: USER,
       channelType: ChannelType.THREAD,
-      workspaceId: WORKSPACE,
-      contextObjectType: "entity",
+      contextObjectType: "document",
       contextObjectId: ENTITY,
     });
-
-    expect(
-      state.inserted?.projectId,
-      "a tie is an honest abstain — never a coin flip"
-    ).toBe(null);
+    expect(privateThread).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: { type: "document", id: ENTITY } })
+    );
   });
+});
 
+describe("thread on a non-object context (rung 4 safety)", () => {
   it("SAFETY — a NON-entity context object is never fed to the entity rung", async () => {
     state.channel = null;
     state.belongsToProject = [{ targetEntityId: "proj-should-not-be-used" }];
@@ -227,13 +241,13 @@ describe("thread on an entity inherits the entity's project (rung 4)", () => {
       userId: USER,
       channelType: ChannelType.THREAD,
       workspaceId: WORKSPACE,
-      contextObjectType: "document",
+      contextObjectType: "view",
       contextObjectId: ENTITY,
     });
 
     expect(
       state.relationLookups,
-      "a document/view/proposal id is not an entity id — passing it as " +
+      "a view/proposal id is not an entity id — passing it as " +
         "`relatedEntityIds` would be FABRICATING an input to make a rung fire"
     ).toBe(0);
     expect(state.inserted?.projectId).toBe(null);

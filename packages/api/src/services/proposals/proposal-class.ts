@@ -137,6 +137,10 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // it — `relation/create` stays objectWork, and nothing here reads the
   // relation `type` out of the payload.
   "relation/expose",
+  // Sites W2 S3 — the owner share door (`services/sharing`): exposes a record
+  // to a project's guests, or mints a link that redeems into a guest
+  // membership. An agent's share is always this proposal (ADMIN floor).
+  "share/create",
 ]);
 
 /**

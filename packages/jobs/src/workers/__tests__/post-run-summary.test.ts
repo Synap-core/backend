@@ -82,7 +82,7 @@ describe("resolveResultRouting", () => {
 describe("resolveRunChannel routing", () => {
   const entitySpy = vi.spyOn(
     ChannelRepository.prototype,
-    "ensureEntityChannel"
+    "ensureObjectChannel"
   );
   const typeSpy = vi.spyOn(
     ChannelRepository.prototype,
@@ -91,7 +91,10 @@ describe("resolveRunChannel routing", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    entitySpy.mockResolvedValue({ id: "entity-ch" } as Channel);
+    entitySpy.mockResolvedValue({
+      channel: { id: "entity-ch" } as Channel,
+      created: false,
+    });
     typeSpy.mockResolvedValue({ id: "type-ch" } as Channel);
   });
 
@@ -111,10 +114,18 @@ describe("resolveRunChannel routing", () => {
       run({ subjectEntityId: "ent-9", workspaceId: "ws-1" })
     );
     expect(id).toBe("entity-ch");
-    expect(entitySpy).toHaveBeenCalledWith("ent-9", "owner-1", "ws-1", {
-      title: "Nightly Sync",
-    });
+    expect(entitySpy).toHaveBeenCalledWith({ type: "entity", id: "ent-9" });
     expect(typeSpy).not.toHaveBeenCalled();
+  });
+
+  it("per_entity + a DELETED subject (no room) → falls back to the per-type run channel", async () => {
+    entitySpy.mockResolvedValue(null);
+    const id = await resolveRunChannel(
+      automationFor({ metadata: { resultRouting: "per_entity" } }),
+      run({ subjectEntityId: "ent-gone", workspaceId: "ws-1" })
+    );
+    expect(id).toBe("type-ch");
+    expect(typeSpy).toHaveBeenCalledOnce();
   });
 
   it("per_entity but no run subject → falls back to the per-type run channel", async () => {
@@ -176,9 +187,7 @@ describe("resolveRunChannel routing", () => {
     );
 
     expect(id).toBe("entity-ch");
-    expect(entitySpy).toHaveBeenCalledWith(clientId, "owner-1", "ws-1", {
-      title: "Nightly Sync",
-    });
+    expect(entitySpy).toHaveBeenCalledWith({ type: "entity", id: clientId });
     expect(typeSpy).not.toHaveBeenCalled();
   });
 });

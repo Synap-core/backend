@@ -408,6 +408,10 @@ export const inviteProcedures = {
             columns: { systemSlug: true },
           });
           if (ws?.systemSlug === "pod-admin") {
+            // JUSTIFIED KEEP of the bare pod-visible literal (Sites W2): this is
+            // not a caller-scoped READ, it enumerates EVERY pod-visible
+            // workspace to materialize pod admins into it, after the caller
+            // was already proven a pod-admin member. No floor applies.
             const podVisible = await db.query.workspaces.findMany({
               where: drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
               columns: { id: true, archivedAt: true },

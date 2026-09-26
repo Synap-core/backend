@@ -1132,6 +1132,19 @@ const channelEnsureHandler: BuiltinVerbHandler = async (params, ctx) => {
     });
   }
 
+  // A session-context stamp is the session OWNER's to write (a forged stamp
+  // looks like that session's room). NOT_FOUND: the id tells a stranger nothing.
+  const { sessionContextStampRefusal } =
+    await import("../focus-sessions/session-context-stamp.js");
+  const stampRefusal = await sessionContextStampRefusal({
+    userId: ctx.userId,
+    contextObjectType: input.contextObjectType,
+    contextObjectId: input.contextObjectId,
+  });
+  if (stampRefusal) {
+    throw new TRPCError({ code: "NOT_FOUND", message: stampRefusal });
+  }
+
   // Pre-existence probe (owner-scoped, same key resolveOrCreateChannel upserts on)
   // so we can report `created`. resolveOrCreateChannel is find-or-create but does
   // not itself signal which happened.
@@ -1143,7 +1156,11 @@ const channelEnsureHandler: BuiltinVerbHandler = async (params, ctx) => {
         eq(channels.userId, ctx.userId),
         eq(channels.workspaceId, ctx.workspaceId),
         eq(channels.contextObjectType, input.contextObjectType),
-        eq(channels.contextObjectId, input.contextObjectId)
+        eq(channels.contextObjectId, input.contextObjectId),
+        // The caller's own thread (a THREAD, or since Documents v2 the private
+        // SUB_THREAD under a document/entity's object room) — never the
+        // object room itself, which the caller may happen to own.
+        drizzleSql`${channels.channelType} in ('thread', 'sub_thread')`
       )
     )
     .limit(1);

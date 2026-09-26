@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 /** Wire shape of a widget definition row. */
 export const WireWidgetDefSchema = z
@@ -22,7 +23,7 @@ export const WireWidgetDefSchema = z
 /** GET /widget-definitions query. */
 export const ListWidgetDefsQuerySchema = z
   .object({
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
   })
   .openapi("ListWidgetDefsQuery");
 
@@ -34,7 +35,7 @@ export const ListWidgetDefsQuerySchema = z
 export const UpsertWidgetDefRequestSchema = z
   .object({
     userId: z.string().optional(),
-    workspaceId: z.string().nullable().optional(),
+    workspaceId: uuidQueryParam.nullable().optional(),
     kind: z.string(),
     name: z.string().optional(),
     category: z.string().optional(),

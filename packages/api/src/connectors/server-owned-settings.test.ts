@@ -49,6 +49,20 @@ describe("server-owned workspace settings", () => {
     });
   });
 
+  it("exposurePolicy (Sites W2 S3) can be neither planted nor erased by a settings round-trip", () => {
+    const planted = { kinds: { entity: { public: { read: "direct" } } } };
+    expect(
+      stripServerOwnedSettings({ theme: "dark", exposurePolicy: planted })
+    ).toEqual({ theme: "dark" });
+    const stored = { exposurePolicy: { kinds: {} } };
+    expect(
+      preserveServerOwnedSettings(
+        { theme: "light", exposurePolicy: planted },
+        stored
+      )
+    ).toEqual({ theme: "light", exposurePolicy: stored.exposurePolicy });
+  });
+
   it("a workspace that never had them does not gain them", () => {
     expect(
       preserveServerOwnedSettings(

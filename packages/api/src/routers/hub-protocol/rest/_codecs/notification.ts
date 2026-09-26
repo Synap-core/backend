@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 export const NotificationSourceTypeSchema = z
   .enum(["proposal", "connector", "agent", "system", "inbox_item"])
@@ -12,7 +13,7 @@ export const NotificationSourceTypeSchema = z
 export const CreateNotificationRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     type: z
       .string()
       .describe(

@@ -4,6 +4,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 /** Wire shape of a channel row. */
 export const WireChannelSchema = z
@@ -36,7 +37,7 @@ export const WireChannelSchema = z
 export const ChannelByContextRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     contextObjectId: z.string(),
     contextObjectType: z.enum(["entity", "document", "view"]),
   })
@@ -56,7 +57,7 @@ export const ChannelByContextResponseSchema = z
 export const PersonalChannelQuerySchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
   })
   .openapi("PersonalChannelQuery");
 
@@ -65,7 +66,7 @@ export const TriggerAiRequestSchema = z
   .object({
     channelId: z.string(),
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     systemPromptOverride: z.string(),
     skillId: z.string().optional(),
     entityId: z

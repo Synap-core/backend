@@ -20,11 +20,7 @@ import {
   FacetProfileKindError,
   FacetKindMismatchError,
 } from "@synap/database";
-import {
-  entities,
-  profiles,
-  profileWorkspaceAccess,
-} from "@synap/database/schema";
+import { entities, profiles } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import {
   checkPermissionOrPropose,
@@ -117,8 +113,6 @@ export const facetProcs = {
       let facetWorkspaceId: string | null;
       if (input.workspaceId !== undefined) {
         facetWorkspaceId = input.workspaceId;
-      } else if (parent.workspaceId != null) {
-        facetWorkspaceId = parent.workspaceId;
       } else {
         // Resolve the role-profile ROW ONCE, and make the lens decision against
         // THAT row.
@@ -174,17 +168,22 @@ export const facetProcs = {
         // such a role pod-wide (workspace_id = NULL). Only a role that is
         // genuinely single-workspace (workspace-scoped, or shared+granted to
         // exactly one ws) is eligible for the rung-2 ontology pin.
-        let stayPodWide = false;
-        if (activeRole?.scope === "system") {
-          stayPodWide = true;
-        } else if (activeRole?.scope === "shared") {
-          const grants = await db.query.profileWorkspaceAccess.findMany({
-            where: eq(profileWorkspaceAccess.profileId, activeRole.id),
-            columns: { workspaceId: true },
-          });
-          if (grants.length > 1) stayPodWide = true;
-        }
-        if (stayPodWide || !facetSlug) {
+        //
+        // W2b ROLE PRINCIPLE: one role per name, pod-wide. A shared role (any
+        // grant count — a grant added later must reach existing facets) or a
+        // system role is pod-wide REGARDLESS of the parent's workspace: pinning
+        // it to the parent's lens hid a client hat worn in CRM from Operations.
+        // `FacetRepository.attach` enforces the same rule on the stored row
+        // (storedFacetWorkspaceId); deciding it here too keeps the persisted
+        // `resolvedWorkspaceId` and the governance lens honest.
+        const stayPodWide =
+          activeRole?.scope === "system" || activeRole?.scope === "shared";
+        if (stayPodWide) {
+          facetWorkspaceId = null;
+        } else if (parent.workspaceId != null) {
+          // A workspace-private role (or a non-role row) follows its parent.
+          facetWorkspaceId = parent.workspaceId;
+        } else if (!facetSlug) {
           facetWorkspaceId = null;
         } else {
           const facetPlacement = await resolveWorkspacePlacement(db, {

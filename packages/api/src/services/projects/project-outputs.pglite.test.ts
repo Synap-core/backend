@@ -67,6 +67,8 @@ import {
   projects,
   projectTracks,
   sessionEvaluations,
+  podMembers,
+  projectMembers,
 } from "@synap/database";
 import { sessionNeedsYou, tallyNeedsYou } from "@synap-core/types/units";
 import { AccessContext } from "../../access/index.js";
@@ -208,6 +210,8 @@ beforeAll(async () => {
     projects,
     projectTracks,
     sessionEvaluations,
+    podMembers,
+    projectMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

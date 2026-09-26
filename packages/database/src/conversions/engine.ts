@@ -30,6 +30,7 @@ import type {
   DeclareKindOp,
   DedupeProfileRowsOp,
   ReconcileEntityScopeOp,
+  ReconcileFacetScopeOp,
   RemapPropertyValuesOp,
   MoveBasePropertyToFacetOp,
   RenamePropertyKeyOp,
@@ -102,6 +103,10 @@ export interface OpCounts {
   /** convertToKind: multi-hat entities left as-is (wear >1 family facet). */
   entitiesParked?: number;
   entitiesRescoped?: number;
+  /** reconcileFacetScope: shared/system-role facets whose lens was re-nulled (pod-wide). */
+  facetsRescoped?: number;
+  /** reconcileFacetScope: lensed shared-role facets left as-is (a pod-wide twin exists) — merge by hand. */
+  facetsParked?: number;
   viewsRewritten?: number;
   propertyDefsRepointed?: number;
   profilePropertiesRepointed?: number;
@@ -210,6 +215,7 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   moveBasePropertyToFacet: "advisory",
   renamePropertyKey: "advisory",
   reconcileEntityScope: "advisory",
+  reconcileFacetScope: "advisory",
   keep: "advisory",
   extractNonEntity: "advisory",
 };
@@ -503,6 +509,8 @@ async function applyOp(
       return applyDedupeProfileRows(tx, op, options.destructiveTail, plan);
     case "reconcileEntityScope":
       return applyReconcileEntityScope(tx, op);
+    case "reconcileFacetScope":
+      return applyReconcileFacetScope(tx, op);
     case "remapPropertyValues":
       return applyRemapPropertyValues(tx, op);
     case "moveBasePropertyToFacet":
@@ -1710,6 +1718,71 @@ async function applyReconcileEntityScope(
 }
 
 /**
+ * W2b role principle backfill. See ReconcileFacetScopeOp for the contract.
+ * One statement picks, per (entity, profile, ctx) group of LENSED live facets
+ * on a shared/system role that has NO pod-wide live row yet, the earliest row
+ * and re-nulls its lens — so the live unique key can never be violated. The
+ * remaining lensed rows of those roles are counted as parked (left as-is).
+ */
+async function applyReconcileFacetScope(
+  tx: Sql,
+  op: ReconcileFacetScopeOp
+): Promise<OpCounts> {
+  const slug = op.slug ?? null;
+  const res = await tx`
+    UPDATE entity_facets f
+    SET workspace_id = NULL, updated_at = now()
+    WHERE f.id IN (
+      SELECT DISTINCT ON (
+          lf.entity_id, lf.profile_id,
+          COALESCE(lf.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        ) lf.id
+      FROM entity_facets lf
+      JOIN profiles p ON p.id = lf.profile_id
+      WHERE lf.deleted_at IS NULL
+        AND lf.workspace_id IS NOT NULL
+        AND p.profile_kind = 'role'
+        AND p.scope IN ('shared', 'system')
+        AND (${slug}::text IS NULL OR p.slug = ${slug}::text)
+        AND NOT EXISTS (
+          SELECT 1 FROM entity_facets pw
+          WHERE pw.entity_id = lf.entity_id
+            AND pw.profile_id = lf.profile_id
+            AND pw.deleted_at IS NULL
+            AND pw.workspace_id IS NULL
+            AND COALESCE(pw.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+              = COALESCE(lf.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        )
+      ORDER BY
+        lf.entity_id, lf.profile_id,
+        COALESCE(lf.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid),
+        lf.created_at ASC, lf.id ASC
+    )
+  `;
+  const parked = await countLensedSharedRoleFacets(tx, slug);
+  const n = res.count ?? 0;
+  return {
+    ...(n > 0 ? { facetsRescoped: n } : {}),
+    ...(parked > 0 ? { facetsParked: parked } : {}),
+  };
+}
+
+/** Live lensed facets still on a shared/system role (the parked remainder). */
+async function countLensedSharedRoleFacets(
+  sql: Sql,
+  slug: string | null
+): Promise<number> {
+  const r = await sql<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n FROM entity_facets f
+    JOIN profiles p ON p.id = f.profile_id
+    WHERE f.deleted_at IS NULL AND f.workspace_id IS NOT NULL
+      AND p.profile_kind = 'role' AND p.scope IN ('shared', 'system')
+      AND (${slug}::text IS NULL OR p.slug = ${slug}::text)
+  `;
+  return r[0]?.n ?? 0;
+}
+
+/**
  * Remap a legacy property's VALUES onto a target key, then strip the legacy key.
  * See RemapPropertyValuesOp for the contract. One transaction (runConversions
  * wraps applyOp in `sql.begin`); idempotent (the `sourceKey` strip AND the
@@ -1943,6 +2016,35 @@ export async function computeCounts(
       // carries no field plan — opCarriesFieldPlan stays merge/dedupe only — but
       // its counts come from the same rolled-back apply, never a count query.)
       return (await planByRollback(sql, op, options)).counts;
+    case "reconcileFacetScope": {
+      // Would-rescope = the number of (entity, profile, ctx) groups the apply
+      // picks one row from; parked = every other lensed row of those roles.
+      const slug = op.slug ?? null;
+      const r = await sql<Array<{ n: number }>>`
+        SELECT COUNT(*)::int AS n FROM (
+          SELECT DISTINCT lf.entity_id, lf.profile_id,
+            COALESCE(lf.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+          FROM entity_facets lf
+          JOIN profiles p ON p.id = lf.profile_id
+          WHERE lf.deleted_at IS NULL AND lf.workspace_id IS NOT NULL
+            AND p.profile_kind = 'role' AND p.scope IN ('shared', 'system')
+            AND (${slug}::text IS NULL OR p.slug = ${slug}::text)
+            AND NOT EXISTS (
+              SELECT 1 FROM entity_facets pw
+              WHERE pw.entity_id = lf.entity_id AND pw.profile_id = lf.profile_id
+                AND pw.deleted_at IS NULL AND pw.workspace_id IS NULL
+                AND COALESCE(pw.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE(lf.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            )
+        ) g
+      `;
+      const n = r[0]?.n ?? 0;
+      const parked = (await countLensedSharedRoleFacets(sql, slug)) - n;
+      return {
+        ...(n > 0 ? { facetsRescoped: n } : {}),
+        ...(parked > 0 ? { facetsParked: parked } : {}),
+      };
+    }
     case "reconcileEntityScope": {
       const r = op.slug
         ? await sql<Array<{ n: number }>>`

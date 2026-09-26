@@ -74,3 +74,35 @@ describe("mergePackageSearchTags", () => {
     ]);
   });
 });
+
+describe("derived template kind token (W3b)", () => {
+  it("scope:project → track-template; session or absent → work-template", () => {
+    expect(
+      derivePackageSearchTokens({
+        playbooks: [{ name: "Grant Process", scope: "project" }],
+      })
+    ).toContain("track-template");
+    const session = derivePackageSearchTokens({
+      playbooks: [{ name: "Digest", scope: "session" }, { name: "Enrich" }],
+    });
+    expect(session).toContain("work-template");
+    expect(session).not.toContain("track-template");
+  });
+
+  it("reads a capability package's capability.playbooks too", () => {
+    expect(
+      derivePackageSearchTokens({
+        capability: {
+          key: "client.intel",
+          playbooks: [{ name: "Onboard", scope: "project" }],
+        },
+      })
+    ).toContain("track-template");
+  });
+
+  it("a package with no playbooks carries neither token", () => {
+    const tokens = derivePackageSearchTokens({ cells: [{ key: "k" }] });
+    expect(tokens).not.toContain("track-template");
+    expect(tokens).not.toContain("work-template");
+  });
+});

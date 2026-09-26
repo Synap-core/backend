@@ -56,7 +56,8 @@
     "schema:check": "tsx src/scripts/check-schema-coherence.ts",
     "conversions": "tsx src/scripts/run-conversions.ts",
     "rebuild-property-index": "tsx src/scripts/rebuild-property-index.ts",
-    "backfill:default-sources-edges": "tsx src/scripts/backfill-default-sources-edges.ts"
+    "backfill:default-sources-edges": "tsx src/scripts/backfill-default-sources-edges.ts",
+    "backfill:comment-threads": "tsx src/scripts/backfill-comment-threads.ts"
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",

@@ -40,6 +40,10 @@ import {
   startTrack,
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
+import {
+  missingStageDomainsNote,
+  stageDomainFallbackNote,
+} from "../../../services/tracks/stage-domain.js";
 
 const Uuid = z.string().uuid();
 const ParamsBag = z.record(z.string(), z.unknown());
@@ -130,10 +134,18 @@ export function registerTracksRoutes(app: HubHono): void {
         ...rest,
         actor: actorOf(c, reasoning),
       });
-      if (result.status === "proposed") return jsonGoverned(c, result);
+      const domainsNote = missingStageDomainsNote(result.missingDomains);
+      if (result.status === "proposed") {
+        return jsonGoverned(c, {
+          ...result,
+          ...(domainsNote ? { domainsNote } : {}),
+        });
+      }
       return jsonGoverned(c, {
         status: result.status,
         track: await loadWrittenTrackView(result.track, actorOf(c)),
+        missingDomains: result.missingDomains,
+        ...(domainsNote ? { domainsNote } : {}),
       });
     } catch (err) {
       return fail(c, err, "POST /tracks");
@@ -239,7 +251,8 @@ export function registerTracksRoutes(app: HubHono): void {
         ...body.data,
         actor: actorOf(c),
       });
-      return jsonGoverned(c, result);
+      const domainNote = stageDomainFallbackNote(result.domainFallback);
+      return jsonGoverned(c, domainNote ? { ...result, domainNote } : result);
     } catch (err) {
       return fail(c, err, "POST /tracks/:id/stages/:stageKey/sessions");
     }

@@ -12,9 +12,14 @@
 
 import { z } from "zod";
 import { diagnoseRouter } from "../../../services/diagnose/index.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 
 const DiagnoseRequestSchema = z.object({
   agentId: z.string().optional(),
@@ -30,7 +35,7 @@ const DiagnoseRequestSchema = z.object({
       "workspace",
     ])
     .optional(),
-  workspaceId: z.string().nullable().optional(),
+  workspaceId: uuidQueryParam.nullable().optional(),
   stuckThresholdHours: z.number().optional(),
   flowType: z
     .enum([
@@ -105,7 +110,7 @@ export function registerDiagnoseRoutes(app: HubHono): void {
       logger.error({ err, userId }, "diagnose failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

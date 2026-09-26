@@ -53,6 +53,8 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  podMembers,
+  projectMembers,
 } from "@synap/database/schema";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { readSessionUsage } from "../session-usage.js";
@@ -195,9 +197,17 @@ beforeAll(async () => {
     playbooks,
     playbookRuns,
     users,
+    podMembers,
+    projectMembers,
   ]) {
     await h.client!.exec(ddlFor(tbl as unknown as PgTable));
   }
+  // A KNOWN principal (Sites W2 S2): an id with no `users` row is an unknown
+  // principal and reads no pod-level row (pod-wide globals, pod-visible
+  // workspaces) — `podReaderWhere`. This fixture models provisioned users.
+  await h.client!.exec(
+    `insert into users (id, email) values ('${USER}', '${USER}@example.test'), ('${OTHER_USER}', '${OTHER_USER}@example.test')`
+  );
 
   for (const [id, owner, playbookId, agentIds] of [
     [SESSION, USER, PLAYBOOK, `{${AGENT}}`],

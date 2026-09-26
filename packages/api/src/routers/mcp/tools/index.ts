@@ -1409,7 +1409,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (companies/initiatives) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
+          "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3209,7 +3209,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update a project: rename, re-describe, change status, move its phase, or set/clear its target date. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
+          "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3230,6 +3230,11 @@ export const tools = {
               description:
                 "Deadline as an ISO-8601 date (e.g. '2026-12-15'). null clears it; omit to leave it.",
             },
+            homeWorkspaceId: {
+              type: "string",
+              description:
+                "Move the project's HOME to this workspace (UUID from synap_list_workspaces). You must be able to write it. Entities and sessions stay where they are.",
+            },
             reasoning: {
               type: "string",
               description:
@@ -3248,12 +3253,17 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed.",
+          "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
         inputSchema: {
           type: "object",
           properties: {
             projectId: { type: "string" },
             workspaceId: { type: "string" },
+            remove: {
+              type: "boolean",
+              description:
+                "true = REMOVE this project's uses edge to the workspace (e.g. a retired domain). Default false = add.",
+            },
             reasoning: {
               type: "string",
               description:
@@ -3297,7 +3307,16 @@ export const tools = {
               type: "string",
               enum: CREATABLE_VIEW_TYPE_KEYS,
             },
-            workspaceId: { type: "string" },
+            workspaceId: {
+              type: "string",
+              description:
+                "The workspace the view lives in. Required unless projectId is given.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "Pin the view to a project: it shows only the project's members. Without workspaceId it reads across every workspace the project spans.",
+            },
             profileId: {
               type: "string",
               description: "Profile UUID to scope the view (optional)",
@@ -3328,7 +3347,7 @@ export const tools = {
                 "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
-          required: ["name", "type", "workspaceId"],
+          required: ["name", "type"],
         },
       },
       {
@@ -3435,7 +3454,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. triggerAI only starts an agent turn when role is 'user' — pass role:'user' with triggerAI:true to start one. In a session's room (`session.channelId`) this is how you talk to the person: kind 'question' notifies them on their phone; 'update' (default) shows in-app only; an @mention of them notifies too.",
+          "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. triggerAI only starts an agent turn when role is 'user' — pass role:'user' with triggerAI:true to start one. In a session's room (`session.channelId`) this is how you talk to the person: kind 'question' notifies them on their phone; 'update' (default) shows in-app only; an @mention of them notifies too. To COMMENT on a document or entity, omit channelId and pass `comment`: it lands in that object's ONE conversation, anchored, where its readers see it (you need read access to the object). Comments are speech: to change the document, propose an edit instead.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3466,8 +3485,31 @@ export const tools = {
               description:
                 "'question' when you need the person's answer — in a session room it pushes a notification to them (once per session per few hours). 'update' for progress and results — in-app only, never a push.",
             },
+            slotLabel: {
+              type: "string",
+              maxLength: 500,
+              description:
+                "With kind 'question': the label of the session output the question is about. The person's reply is recorded on that output as its `answer` and hands it back to you.",
+            },
+            comment: {
+              type: "object",
+              description:
+                "Instead of channelId: a comment on an object. EITHER `anchor` (open a thread) OR `replyTo` (reply in one).",
+              properties: {
+                anchor: {
+                  type: "object",
+                  description:
+                    "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?}.",
+                },
+                replyTo: {
+                  type: "string",
+                  description:
+                    "A comment's message id (any message of its thread).",
+                },
+              },
+            },
           },
-          required: ["channelId", "content"],
+          required: ["content"],
         },
       },
 

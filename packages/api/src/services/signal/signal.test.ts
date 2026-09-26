@@ -58,7 +58,10 @@ vi.mock("../agent-identity-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-identity-service.js")>()),
   authoredByUser: mockAuthoredBy,
 }));
-vi.mock("../../utils/user-visible-where.js", () => ({
+vi.mock("../../utils/user-visible-where.js", async (importOriginal) => ({
+  // importOriginal (not a total replacement): the module under test also uses
+  // `podVisibleWorkspaceWhere` (Sites W2 S2); the mocked db ignores predicates.
+  ...(await importOriginal<Record<string, unknown>>()),
   userVisibleWhere: mockUserVisible,
 }));
 

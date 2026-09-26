@@ -479,12 +479,14 @@ export function registerEntityExecutors(): void {
         }
       }
 
-      // APPLY-time before-state for undo: read right before the write, and
-      // after it (below), so the stamp records what this approval actually
-      // changed — not the propose-time `previousData`, which can be stale.
+      // APPLY-time before-state for undo: read right before the write, with
+      // the after-state taken from the write's own result (below), so the
+      // stamp records what this approval actually changed — not the
+      // propose-time `previousData`, which can be stale, and not a peer's edit
+      // landing between the write and a second read.
       const undoBefore = await readEntityUndoSnapshot(db, entityId);
 
-      await entityCaller.update({
+      const updateResult = await entityCaller.update({
         id: entityId,
         title: innerData.title as string | undefined,
         description: innerData.description as string | undefined,
@@ -493,7 +495,7 @@ export function registerEntityExecutors(): void {
         source: "system",
       });
 
-      const undoAfter = await readEntityUndoSnapshot(db, entityId);
+      const undoAfter = "written" in updateResult ? updateResult.written : null;
 
       // A governed source-file attach: the bytes were STAGED before this
       // proposal was filed (`stageSourceBlob`) and only the small reference
@@ -538,8 +540,8 @@ export function registerEntityExecutors(): void {
           set: approvedSet,
         });
       } else {
-        // The write above succeeded, so the row exists; a missing snapshot is
-        // a failed read. Approve anyway, unstamped — revert then says so.
+        // No before read, or the door did not report a write. Approve anyway,
+        // unstamped — revert then says so.
         await db
           .update(proposals)
           .set(approvedSet)

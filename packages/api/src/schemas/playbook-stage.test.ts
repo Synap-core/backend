@@ -177,3 +177,30 @@ describe("lessons — bounded, validated at the write door", () => {
     }
   });
 });
+
+describe("playbookStageSchema — stage.domain (W2a)", () => {
+  it("accepts a workspace template slug, trimmed", () => {
+    const r = playbookStageSchema.safeParse({ ...validStage, domain: " crm " });
+    expect(r.success).toBe(true);
+    expect(r.success && r.data.domain).toBe("crm");
+    for (const ok of ["internal-runbook", "@acme/sales", "finance"]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, domain: ok }).success
+      ).toBe(true);
+    }
+  });
+
+  it("refuses a workspace id, a display name, or blank — a domain no workspace would ever carry", () => {
+    for (const bad of [
+      "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "Market Research",
+      "CRM",
+      "",
+      42,
+    ]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, domain: bad }).success
+      ).toBe(false);
+    }
+  });
+});

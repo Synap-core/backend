@@ -48,6 +48,7 @@ import { eventsRouter } from "./events.js";
 import { extractProposalName } from "../services/proposals/fingerprint.js";
 import {
   unionNeedsYou,
+  unionSuggestions,
   pageNeedsYou,
   countNeedsYou,
   type NotificationSignalInput,
@@ -56,6 +57,27 @@ import {
 } from "../services/signals/needs-you-union.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { countProjectSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
+import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
+import { needsYouRole } from "../notifications/registry.js";
+
+/**
+ * The open-question read for the `"session-pointer"` rows in a notification
+ * page (`session.needs_you`). The union decides those rows from the session's
+ * live state (see `dedupeNotifications`). This is the half of that state the
+ * owed door does not already return. Only pointer rows are looked up, so a page
+ * with none costs no query.
+ */
+function openQuestionSessionIdsFor(
+  rows: readonly NotificationSignalInput[]
+): Promise<Set<string>> {
+  return sessionsWithOpenQuestion(
+    rows.flatMap((r) =>
+      needsYouRole(r.type) === "session-pointer" && r.sourceId
+        ? [r.sourceId]
+        : []
+    )
+  );
+}
 
 /** How many unread notifications are pulled before dedupe. A page, not a total —
  *  `truncated` reports when the cap was hit rather than hiding it. */
@@ -236,11 +258,13 @@ async function countSignals(
       : Promise.resolve({ review: 0, truncated: false }),
   ]);
 
+  const notificationRows = notifs.notifications as NotificationSignalInput[];
   return countNeedsYou({
     distinctClusters: groups.distinct,
     clustersTruncated: groups.scanTruncated,
     clusters: groups.groups,
-    notifications: notifs.notifications as NotificationSignalInput[],
+    notifications: notificationRows,
+    openQuestionSessionIds: await openQuestionSessionIdsFor(notificationRows),
     notificationsTruncated:
       notifs.notifications.length >= NOTIFICATION_SCAN_LIMIT,
     owedSlots: owed as OwedSlotSignalInput[],
@@ -259,13 +283,35 @@ export const signalsRouter = router({
     .input(
       z.object({
         ...SignalScope,
-        lens: z.enum(["needs-you", "history"]).default("needs-you"),
+        /**
+         * `suggestions` = unread AI suggestions (registry role
+         * `"suggestion"`), the sibling of `needs-you` from the SAME
+         * partition (`partitionNotifications`). Never part of needs-you.
+         */
+        lens: z
+          .enum(["needs-you", "suggestions", "history"])
+          .default("needs-you"),
         limit: z.number().min(1).max(100).default(50),
         /** History lens only: return signals strictly older than this instant. */
         cursor: z.string().datetime().optional(),
       })
     )
     .query(async ({ ctx, input }): Promise<{ signals: Signal[] }> => {
+      if (input.lens === "suggestions") {
+        // Notifications carry no container column, so a container-scoped
+        // Suggestions list is empty, by the same rule as the needs-you half.
+        if (isContainerScoped(input)) return { signals: [] };
+        const notifs = await notifCenterRouter.createCaller(ctx).list({
+          workspaceId: floorLens(input.workspaceId),
+          status: "unread",
+          limit: NOTIFICATION_SCAN_LIMIT,
+        });
+        return {
+          signals: unionSuggestions(
+            notifs.notifications as NotificationSignalInput[]
+          ).slice(0, input.limit),
+        };
+      }
       if (input.lens === "needs-you") {
         // Container-scoped → proposals only. See `isContainerScoped`.
         const scoped = isContainerScoped(input);
@@ -300,10 +346,15 @@ export const signalsRouter = router({
             : Promise.resolve([]),
         ]);
 
+        const notificationRows =
+          notifs.notifications as NotificationSignalInput[];
         const signals = unionNeedsYou({
           clusters: groups.groups,
-          notifications: notifs.notifications as NotificationSignalInput[],
+          notifications: notificationRows,
           owedSlots: owed as OwedSlotSignalInput[],
+          // Same read as `count`, so the list and the badge fold the same rows.
+          openQuestionSessionIds:
+            await openQuestionSessionIdsFor(notificationRows),
         });
         // Paged through `pageNeedsYou`, never a bare slice: owed slots are an
         // unbounded, never-expiring source sitting FIRST, so one shared cap let
@@ -387,6 +438,10 @@ export const signalsRouter = router({
    * `isReviewCountable`), with
    * `needsYou === decisions + notifications + blocked + review`. A client reads
    * the part it needs; it never derives one by subtracting the others.
+   *
+   * `suggestions` (unread AI suggestions, the `suggestions` lens of `list`)
+   * ships in the same result but is NOT a part: it is never added into
+   * `needsYou`. It is 0 under a container scope, like `notifications`.
    *
    * ⚠️ Under a project scope `review` has no ROWS in `list` yet (it would need
    * a new `Signal` kind every tray renderer learns), so the project list is

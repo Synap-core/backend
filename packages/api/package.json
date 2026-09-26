@@ -20,6 +20,16 @@
       "import": "./dist/types/feed-config.js",
       "default": "./dist/types/feed-config.js"
     },
+    "./document-access": {
+      "types": "./dist/utils/document-edit-access.d.ts",
+      "import": "./dist/document-access.js",
+      "default": "./dist/document-access.js"
+    },
+    "./public-doors": {
+      "types": "./dist/public-doors.d.ts",
+      "import": "./dist/public-doors.js",
+      "default": "./dist/public-doors.js"
+    },
     "./services/DeliveryService": {
       "types": "./dist/services/DeliveryService.d.ts",
       "import": "./dist/services/DeliveryService.js",

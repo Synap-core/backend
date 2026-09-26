@@ -29,15 +29,24 @@
  * presets (relationType = `belongs_to_project`) so the project axis is unchanged.
  *
  * Both operate on whichever entity-id column the table exposes (e.g.
- * `entities.id`). Tables without an entity-graph identity (LENS-CONFIG tables
- * like views/property_defs) do NOT use this axis — see the per-table axis map in
- * team/platform/project-centric-scope.mdx.
+ * `entities.id`). DOCUMENTS carry no exposure edge of their own: a document
+ * FOLLOWS ITS ENTITY (`exposureDocumentWhere`: the document is visible when an
+ * entity whose `document_id` it is, is exposed). No writer ever put a document
+ * id on an exposure edge, so the old `exposureMemberWhere(documents.id, …)`
+ * shape matched nothing (Sites W2). Tables without an entity-graph identity
+ * (LENS-CONFIG tables like views/property_defs) do NOT use this axis — views
+ * get their own member branch (`utils/view-visibility.ts`).
+ *
+ * GUESTS (Sites W2). A `project_members.role = 'guest'` membership admits
+ * EXPLICIT shares only (`visible_to`), never `belongs_to_project` and never the
+ * legacy anchor twin entity. Any other role keeps today's semantics.
  */
 
 import { and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
-import type { SQL } from "drizzle-orm";
+import { not, sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
+import { sessionDocumentReadableWhere } from "../access/session-visibility.js";
 import {
   projectMembers,
   relations,
@@ -49,8 +58,12 @@ import {
   userVisibleWhere,
   workspaceLensWhere,
   podMemberWhere,
+  podGuestWhere,
+  GUEST_PROJECT_ROLE,
   type WorkspaceLens,
 } from "./user-visible-where.js";
+
+export { GUEST_PROJECT_ROLE };
 
 /** The canonical relation type that expresses project membership of an entity. */
 export const BELONGS_TO_PROJECT = "belongs_to_project";
@@ -83,16 +96,50 @@ export const EXPOSURE_RELATION_TYPES = [
  */
 export type ExposureRelationType = (typeof EXPOSURE_RELATION_TYPES)[number];
 
+/** A GUEST membership admits explicit shares only. */
+export const GUEST_EXPOSURE_RELATION_TYPES = [
+  VISIBLE_TO,
+] as const satisfies readonly ExposureRelationType[];
+
 /**
  * Subquery: the anchor ids the user is a member of (via `project_members`, keyed
- * on `projects.id`). Correlated/optimisable as a semi-join by Postgres — one
- * round-trip regardless of how many anchors.
+ * on `projects.id`), split by role. Correlated/optimisable as a semi-join by
+ * Postgres — one round-trip regardless of how many anchors.
+ *   - `member`: every role except `guest` (`IS DISTINCT FROM`, so a NULL role
+ *     can never silently drop a row);
+ *   - `guest`:  `role = 'guest'` only.
  */
-function userAnchorIdsSubquery(userId: string) {
+function userAnchorIdsSubquery(userId: string, which: "member" | "guest") {
   return db
     .select({ id: projectMembers.projectId })
     .from(projectMembers)
-    .where(eq(projectMembers.userId, userId));
+    .where(
+      and(
+        eq(projectMembers.userId, userId),
+        which === "guest"
+          ? eq(projectMembers.role, GUEST_PROJECT_ROLE)
+          : drizzleSql`${projectMembers.role} IS DISTINCT FROM ${GUEST_PROJECT_ROLE}`
+      )
+    );
+}
+
+/**
+ * `projectIdColumn` is a project the user holds a `project_members` row on,
+ * whatever the role (guests included). The member branch of the `projects`,
+ * `project_tracks` and exposed-`views` rules: being a member of a project shows
+ * you the project.
+ */
+export function projectMembershipWhere(
+  projectIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  return inArray(
+    projectIdColumn,
+    db
+      .select({ id: projectMembers.projectId })
+      .from(projectMembers)
+      .where(eq(projectMembers.userId, userId))
+  );
 }
 
 /**
@@ -130,6 +177,10 @@ function exposedByAnyAnchorSubquery(
  *
  * Project exposure is live: anchors are `projects.id` (`project_members.projectId`
  * → `projects.id`), and exposure edges target that same id.
+ *
+ * GUEST anchors (`role = 'guest'`) admit only the `visible_to` subset of
+ * `relationTypes`, and never case (a): least privilege — the project row itself
+ * reaches a guest through the `projects` member branch, not through its twin.
  */
 export function exposureMemberWhere(
   entityIdColumn: AnyPgColumn,
@@ -139,14 +190,67 @@ export function exposureMemberWhere(
   // Build the user's anchor-id subquery ONCE and reuse it for both branches —
   // distinct Drizzle subquery instances emit duplicate SQL (a second redundant
   // scan of project_members on a predicate that runs on every entity read).
-  const anchorIds = userAnchorIdsSubquery(userId);
-  return or(
-    inArray(entityIdColumn, anchorIds),
+  const memberAnchors = userAnchorIdsSubquery(userId, "member");
+  const branches: SQL[] = [
+    inArray(entityIdColumn, memberAnchors),
     inArray(
       entityIdColumn,
-      exposedByAnyAnchorSubquery(anchorIds, relationTypes)
+      exposedByAnyAnchorSubquery(memberAnchors, relationTypes)
+    ),
+  ];
+  const guestTypes = relationTypes.filter((t) =>
+    (GUEST_EXPOSURE_RELATION_TYPES as readonly string[]).includes(t)
+  );
+  if (guestTypes.length > 0) {
+    branches.push(
+      inArray(
+        entityIdColumn,
+        exposedByAnyAnchorSubquery(
+          userAnchorIdsSubquery(userId, "guest"),
+          guestTypes
+        )
+      )
+    );
+  }
+  return or(...branches)!;
+}
+
+/**
+ * Subquery: the `document_id`s of live entities matching `entityWhere`. The one
+ * shape by which a DOCUMENT follows its ENTITY on the exposure axis (floor and
+ * project lens alike). `document_id IS NOT NULL` keeps the id set NULL-free.
+ */
+function entityDocumentIdsSubquery(entityWhere: SQL) {
+  return db
+    .select({ id: entities.documentId })
+    .from(entities)
+    .where(
+      and(
+        isNull(entities.deletedAt),
+        isNotNull(entities.documentId),
+        entityWhere
+      )
+    );
+}
+
+/**
+ * FLOOR BRANCH — a DOCUMENT FOLLOWS ITS ENTITY on the exposure axis (Sites W2):
+ * the document is visible through anchor membership exactly when an entity
+ * whose body it is (`entities.document_id`) is. The SAME `exposureMemberWhere`
+ * predicate, evaluated on the entity — not a copy. A standalone document (no
+ * entity points at it) is never exposed.
+ */
+export function exposureDocumentWhere(
+  documentIdColumn: AnyPgColumn,
+  userId: string,
+  relationTypes: readonly ExposureRelationType[] = EXPOSURE_RELATION_TYPES
+): SQL {
+  return inArray(
+    documentIdColumn,
+    entityDocumentIdsSubquery(
+      exposureMemberWhere(entities.id, userId, relationTypes)
     )
-  )!;
+  );
 }
 
 /**
@@ -453,8 +557,18 @@ export function accessScopeWhere(args: {
    * when the entity it is attached to is pod-shared (`podSharedDocumentWhere`).
    * Plays the role `facetLens`'s pod branch plays for `entities`, in the floor
    * AND the `null` (pod) lens alike. Mutually exclusive with `facetLens`.
+   * It ALSO routes the exposure floor branch and the project lens through the
+   * entity (`exposureDocumentWhere`): `entityIdColumn` is then the DOCUMENT id
+   * column, and a document is exposed exactly when its entity is.
    */
   documentFollowsEntity?: boolean;
+  /**
+   * With `documentFollowsEntity`: honour the session ROSTER branch when
+   * deciding whether a SESSION's designated document is readable (decision
+   * D1 — see `sessionDocumentReadableWhere`). A human door passes
+   * `rosterReadFor(ctx)`; default false = owner-only.
+   */
+  sessionRoster?: boolean;
 }): SQL {
   const {
     workspaceIdColumn,
@@ -467,6 +581,7 @@ export function accessScopeWhere(args: {
     facetLens = false,
     includeGlobalsInLens = false,
     documentFollowsEntity = false,
+    sessionRoster = false,
   } = args;
 
   // Narrow-only guard. The type already refuses off-whitelist strings at every
@@ -487,7 +602,17 @@ export function accessScopeWhere(args: {
   }
 
   // ── Floor (security) — the union of all the ways the user may see a row. ──
-  const podPersonal = and(isNull(workspaceIdColumn), eq(ownerColumn, userId))!;
+  // GUEST FLOOR (Sites W2): for a guest (`podGuestWhere`) the floor is the
+  // EXPOSURE branch only. The other branches are closed for a guest as follows:
+  //   - pod-personal: gated here explicitly (`NOT guest`);
+  //   - workspace union: a guest has no member/owned workspace, and
+  //     `userVisibleWhere` admits pod-visible workspaces only to a pod READER;
+  //   - role-as-lens: needs a `workspace_members` row (a guest has none);
+  //   - pod-shared: needs a `pod_members` row (a guest has none).
+  const podPersonal = and(
+    and(isNull(workspaceIdColumn), eq(ownerColumn, userId)),
+    not(podGuestWhere(userId))
+  )!;
   const floorBranches: SQL[] = [
     podPersonal,
     // `isNotNull` guard so the workspace union doesn't re-admit the NULL rows
@@ -499,8 +624,11 @@ export function accessScopeWhere(args: {
     // Exposure membership — admits rows the user sees via anchor membership
     // (`projects.id`) + exposure edges. Default = BOTH axes (project +
     // visible_to); a caller-supplied `exposureRelationTypes` NARROWS this
-    // branch (portal guests: `visible_to` only).
-    exposureMemberWhere(entityIdColumn, userId, exposureRelationTypes),
+    // branch. A `documents` row follows its ENTITY's exposure (there is no
+    // document-id exposure edge).
+    documentFollowsEntity
+      ? exposureDocumentWhere(entityIdColumn, userId, exposureRelationTypes)
+      : exposureMemberWhere(entityIdColumn, userId, exposureRelationTypes),
   ];
   // Role-as-lens (opt-in, `entities` only): a pod-wide entity becomes visible to
   // a workspace's members once it carries a facet there. Widening-only; an
@@ -562,7 +690,33 @@ export function accessScopeWhere(args: {
   const projectNarrow =
     projectLens == null || projEmpty
       ? undefined
-      : exposureLensWhere(entityIdColumn, projectLens, EXPOSURE_RELATION_TYPES);
+      : documentFollowsEntity
+        ? inArray(
+            entityIdColumn,
+            entityDocumentIdsSubquery(
+              exposureLensWhere(
+                entities.id,
+                projectLens,
+                EXPOSURE_RELATION_TYPES
+              )
+            )
+          )
+        : exposureLensWhere(
+            entityIdColumn,
+            projectLens,
+            EXPOSURE_RELATION_TYPES
+          );
 
-  return and(floor, workspaceNarrow, projectNarrow)!;
+  // A document that is a SESSION's designated document is session content
+  // (decision D1): readable only when that session is, whatever the workspace
+  // rule says. Every documents read predicate passes `documentFollowsEntity`,
+  // so this is the one place it lands. Narrow-only.
+  const sessionDocNarrow = documentFollowsEntity
+    ? sessionDocumentReadableWhere(entityIdColumn, {
+        userId,
+        roster: sessionRoster,
+      })
+    : undefined;
+
+  return and(floor, workspaceNarrow, projectNarrow, sessionDocNarrow)!;
 }

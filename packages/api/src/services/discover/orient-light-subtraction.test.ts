@@ -328,3 +328,48 @@ describe("orient `who` — the person, not the building", () => {
     expect(full.who).toContain("Systems thinker.");
   });
 });
+
+describe("orient lists every workspace TYPE — a type is a property, not a filter", () => {
+  // Live 2026-09-25: `operational` (Finance, Synap Dev) and `agent` (Agent
+  // Fleet) workspaces were dropped SILENTLY — not even counted as hidden.
+  beforeEach(() => {
+    h.workspaceRows.push(
+      {
+        id: "ws-ops",
+        name: "Finance",
+        description: null,
+        settings: {},
+        workspaceType: "operational",
+      },
+      {
+        id: "ws-agent",
+        name: "Agent Fleet",
+        description: null,
+        settings: {},
+        workspaceType: "agent",
+      }
+    );
+    h.entityCountRows = [
+      { workspaceId: "ws-full", count: 901 },
+      { workspaceId: "ws-ops", count: 3 },
+      { workspaceId: "ws-agent", count: 2 },
+    ];
+  });
+
+  it("light and full both list operational + agent workspaces", async () => {
+    for (const detail of ["light", "full"] as const) {
+      const ids = (await run(detail)).workspaces.map((w) => w.id);
+      expect(ids).toEqual(expect.arrayContaining(["ws-ops", "ws-agent"]));
+    }
+  });
+
+  it("marks the ones that cannot hold entities — same predicate the create door refuses with", async () => {
+    const light = await run("light");
+    const byId = new Map(light.workspaces.map((w) => [w.id, w]));
+    expect(byId.get("ws-ops")?.acceptsEntities).toBe(false);
+    expect(byId.get("ws-agent")?.acceptsEntities).toBe(false);
+    expect(byId.get("ws-ops")?.domain).toBe("operational");
+    // A domain home carries no flag (absent = accepts).
+    expect(byId.get("ws-full")).not.toHaveProperty("acceptsEntities");
+  });
+});

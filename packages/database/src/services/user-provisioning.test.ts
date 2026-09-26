@@ -307,6 +307,56 @@ describe("seedAdminUser", () => {
   });
 });
 
+describe("seedAdminUser — D7: no auto-created blank workspace", () => {
+  it("a NEW owner gets pod-admin only: no personal workspace, no twin, workspaceId null", async () => {
+    mocks.userFind.mockResolvedValue(undefined);
+    // pod-admin missing (created here), then no personal workspace exists.
+    mocks.workspaceFind.mockResolvedValue(undefined);
+    mocks.workspaceMemberFind.mockResolvedValue(undefined);
+
+    const result = await seedAdminUser({
+      kratosIdentityId: "pod-user-new",
+      email: "new-owner@example.com",
+    });
+
+    expect(result).toEqual({
+      userId: "pod-user-new",
+      workspaceId: null,
+      alreadyExisted: false,
+    });
+    const workspaceRows = mocks.insertedValues.filter(
+      (v) => "workspaceType" in v
+    );
+    // Exactly the pod-admin console — nothing personal.
+    expect(workspaceRows).toHaveLength(1);
+    expect(workspaceRows[0]).toMatchObject({ systemSlug: "pod-admin" });
+    expect(mocks.insertedValues).not.toContainEqual(
+      expect.objectContaining({ agentTemplate: "twin" })
+    );
+  });
+
+  it("an EXISTING pod keeps its personal workspace (returned, untouched)", async () => {
+    mocks.userFind.mockResolvedValue({ id: "pod-user-1" });
+    mocks.workspaceFind
+      .mockResolvedValueOnce({
+        id: "pod-admin",
+        workspaceType: "operational",
+        settings: { systemSlug: "pod-admin", surfaceClass: "admin" },
+      })
+      .mockResolvedValueOnce({ id: "workspace-legacy" });
+    mocks.workspaceMemberFind.mockResolvedValue({ role: "owner" });
+
+    const result = await seedAdminUser({
+      kratosIdentityId: "pod-user-1",
+      email: "person@example.com",
+    });
+    expect(result.workspaceId).toBe("workspace-legacy");
+    expect(
+      mocks.insertedValues.filter((v) => "workspaceType" in v)
+    ).toHaveLength(0);
+  });
+});
+
 describe("projectPodUserAccess", () => {
   it("excludes archived workspaces from user-facing scopes", () => {
     const access = projectPodUserAccess([

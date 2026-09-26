@@ -22,6 +22,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
 import { entities } from "@synap/database/schema";
 import { accessScopeWhere } from "../utils/project-scope.js";
+import { podParticipantWhere } from "../utils/user-visible-where.js";
 
 const dialect = new PgDialect();
 const compile = (sql: SQL) => dialect.sqlToQuery(sql);
@@ -56,10 +57,17 @@ describe("podShared floor — pod members see pod-wide SHARED entities (Wave 2)"
     expect(sql).toContain("entity_facets");
     expect(sql).toContain('"deleted_at" is null');
 
-    // The pod-membership EXISTS binds the caller, not a row owner.
-    expect(q.sql).toContain(
-      'EXISTS (SELECT 1 FROM "pod_members" WHERE "pod_members"."user_id" = $'
+    // The pod-membership EXISTS binds the caller, not a row owner. Since Sites
+    // W2 S2 it is a query-BUILDER subquery (lower-case `exists (select 1 …)`),
+    // not a raw template: a relational query re-qualified the raw template's
+    // column with the OUTER alias (`"entities"."user_id" = <caller>`). Anchor on
+    // the pod-SHARED branch itself (the pod-wide facet subquery it gates) and
+    // resolve its bound value — it must be the caller.
+    const podSharedArm = q.sql.match(
+      /"entity_facets"\."workspace_id" is null and "entity_facets"\."deleted_at" is null\)\) and exists \(select 1 from "pod_members" where "pod_members"\."user_id" = \$(\d+)\)/
     );
+    expect(podSharedArm).not.toBeNull();
+    expect(q.params[Number(podSharedArm![1]) - 1]).toBe(B);
     // Every USER id bound anywhere in the predicate is B's own — B's predicate
     // never carries A's. (The other params are relation-type literals.)
     const userParams = q.params.filter(
@@ -113,7 +121,17 @@ describe("podShared floor — pod members see pod-wide SHARED entities (Wave 2)"
       })
     );
     const sql = q.sql.toLowerCase();
-    expect(sql).not.toContain("pod_members");
+    // Since Sites W2 the floor carries the AUDIENCE probes (the guest gate on
+    // pod-personal rows, the reader gate on pod-level rows); each embeds the
+    // participant probe, which names `pod_members`. Every `pod_members`
+    // occurrence must belong to such a probe — none to a pod-SHARED branch.
+    // The probe text is derived from `podParticipantWhere` itself (params
+    // normalised), then removed; nothing may name `pod_members` after that.
+    const norm = (s: string) => s.toLowerCase().replace(/\$\d+/g, "$");
+    const probe = norm(compile(podParticipantWhere(B)).sql);
+    expect(probe).toContain("pod_members");
+    expect(norm(q.sql)).toContain(probe);
+    expect(norm(q.sql).split(probe).join("")).not.toContain("pod_members");
     expect(sql).not.toContain("entity_facets");
   });
 

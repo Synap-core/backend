@@ -14,6 +14,8 @@
  *   POST   /focus-sessions/:id/channel — mint the session room if it has none
  *   POST   /focus-sessions/:id/outputs — record an existing object as an output
  *   POST   /focus-sessions/:id/outputs/delegate — hand a declared slot to an agent
+ *   POST   /focus-sessions/:id/outputs/answer — the person answers a slot (human keys only)
+ *   GET    /focus-sessions/:id/answers — poll the owner's answers since a cursor
  *   POST   /focus-sessions/:sessionId/complete-run — close running playbook_run
  *
  * Uses Drizzle directly — focusSessions lives on coreRouter, not hubProtocolRouter,
@@ -39,7 +41,6 @@ import {
   proposedMessageFor,
 } from "../../../utils/permission-check.js";
 import { createLinks } from "../../../services/links/links-service.js";
-import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
@@ -70,6 +71,15 @@ import {
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
 import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
+import {
+  answerSessionSlot,
+  type AnswerSessionSlotResult,
+} from "../../../services/focus-sessions/session-answer.js";
+import { SLOT_ANSWER_TEXT_MAX } from "../../../services/focus-sessions/answer-slot.js";
+import {
+  listSessionAnswers,
+  SESSION_ANSWERS_MAX_LIMIT,
+} from "../../../services/focus-sessions/list-session-answers.js";
 import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
@@ -374,6 +384,57 @@ const UnblockOutputBodySchema = z.object({
   expectedLabel: z.string().min(1).max(500),
 });
 
+/** The person's answer to what an agent asked about a slot. */
+const AnswerOutputBodySchema = z.object({
+  expectedLabel: z.string().min(1).max(500),
+  text: z.string().min(1).max(SLOT_ANSWER_TEXT_MAX),
+});
+
+/**
+ * Poll cursor. `since` must PARSE as a date (an ISO-8601 string from a prior
+ * page's `nextSince`); a garbage cursor is a 400, never "from the beginning".
+ */
+const SessionAnswersQuerySchema = z.object({
+  since: z
+    .string()
+    .refine((v) => !Number.isNaN(Date.parse(v)), "since must be an ISO date")
+    .optional(),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(SESSION_ANSWERS_MAX_LIMIT)
+    .optional(),
+});
+
+/** The answer door's refusals, named — the `answered` arm is the only success. */
+function answerRefusal(
+  result: AnswerSessionSlotResult,
+  expectedLabel: string,
+  sessionId: string
+): { status: 400 | 404; error: string } | null {
+  switch (result.status) {
+    case "not_found":
+      return { status: 404, error: `Focus session ${sessionId} not found` };
+    case "unknown_label":
+      return {
+        status: 404,
+        error: `This session declares no output labelled "${expectedLabel}"`,
+      };
+    case "already_done":
+      return { status: 400, error: `"${expectedLabel}" is already delivered` };
+    case "retired":
+      return {
+        status: 400,
+        error: `"${expectedLabel}" was retired with its cancelled session`,
+      };
+    case "empty_answer":
+      return { status: 400, error: "The answer is empty" };
+    default:
+      return null;
+  }
+}
+
 const UsedCapabilityBodySchema = z.object({
   capabilityKind: z.enum(["tool", "skill", "command"]),
   capabilityId: z.string().min(1),
@@ -622,6 +683,75 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ok: z.boolean(),
           expectedLabel: z.string(),
           kind: z.string(),
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/outputs/answer",
+    tags: ["FocusSessions"],
+    summary: "Answer what an agent asked about a deliverable (people only)",
+    description:
+      "Records the person's answer on the named slot and posts it into the " +
+      "session room as the person. Not a delivery: `status` is untouched. A " +
+      "slot that was handed to the person goes back to the agent with the " +
+      "answer attached, and a pod-run agent that asked is woken. Emits " +
+      "`focus_session.slot_answered.completed`. Refused (403) for an agent key.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: AnswerOutputBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Answered",
+        schema: z.object({
+          ok: z.boolean(),
+          expectedLabel: z.string(),
+          kind: z.string(),
+          answer: z.unknown(),
+          handedBack: z.boolean(),
+          messageId: z.string().nullable(),
+          questionId: z.string().nullable(),
+          wokeAgentType: z.string().nullable(),
+          triggered: z.boolean(),
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/focus-sessions/:id/answers",
+    tags: ["FocusSessions"],
+    summary: "Poll the session owner's answers since a cursor",
+    description:
+      "Answers the owner gave to agent questions and owed slots, " +
+      "`answeredAt > since`, oldest first, id-stable. Pass `nextSince` back " +
+      "as `since`. For agents the pod cannot wake (Claude Code, claude.ai, " +
+      "Raycast).",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      query: SessionAnswersQuerySchema,
+    },
+    responses: {
+      200: {
+        description: "A page of answers",
+        schema: z.object({
+          sessionId: z.string(),
+          since: z.string().nullable(),
+          answers: z.array(z.unknown()),
+          nextSince: z.string().nullable(),
+          hasMore: z.boolean(),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -1320,19 +1450,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         updated = result.session as typeof updated;
         follow = result.follow;
       }
-
-      emitHubRealtimeEvent({
-        eventType: "focus_session.update.completed",
-        subjectId: updated.id,
-        userId,
-        data: {
-          id: updated.id,
-          workspaceId: updated.workspaceId,
-          status: updated.status,
-          goal: updated.goal,
-          progress: updated.progress,
-        },
-      });
 
       // The safety net every block door carries (`block-guidelines.ts`): the
       // IS appends a slot through THIS wholesale array, so a guideline covering
@@ -2244,6 +2361,124 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }),
     UnblockOutputBodySchema
   );
+
+  /**
+   * POST /focus-sessions/:id/outputs/answer
+   *
+   * The person ANSWERS what an agent asked about a slot — the Hub twin of
+   * tRPC `focusSessions.answerOutput`, and the SAME service
+   * (`answerSessionSlot`) the owner's room reply reaches, so the tray and the
+   * room cannot answer one question two ways. The label rides in the BODY for
+   * the reason `DelegateOutputBodySchema` documents.
+   *
+   * A PERSON'S door: an AGENT key is refused (403). Hub REST is also the
+   * agents' door, and an agent answering its own question is the self-graded
+   * homework the attestation door refuses for the same reason. Owner-floored
+   * by the service (404 for missing and not-yours alike).
+   */
+  app.post("/focus-sessions/:id/outputs/answer", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    if (c.get("agentUserId")) {
+      return c.json(
+        { error: "Only the person can answer — an agent key cannot." },
+        403
+      );
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    const raw = await c.req.json().catch(() => null);
+    const parsed = AnswerOutputBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const result = await answerSessionSlot({
+        sessionId: id,
+        userId: acting.userId,
+        expectedLabel: parsed.data.expectedLabel,
+        text: parsed.data.text,
+      });
+      const refusal = answerRefusal(result, parsed.data.expectedLabel, id);
+      if (refusal) return c.json({ error: refusal.error }, refusal.status);
+      if (result.status !== "answered") {
+        return c.json({ error: "Unknown error" }, 500);
+      }
+      return c.json({
+        ok: true as const,
+        expectedLabel: result.expectedLabel,
+        kind: result.kind,
+        answer: result.answer,
+        handedBack: result.handedBack,
+        messageId: result.messageId,
+        questionId: result.questionId,
+        wokeAgentType: result.wokeAgentType,
+        triggered: result.triggered,
+      });
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.answerOutput failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * GET /focus-sessions/:id/answers?since=<iso>&limit=<n>
+   *
+   * The POLL door for agents the pod cannot wake (Claude Code, claude.ai,
+   * Raycast — `synap session wait` is built on it). Contract:
+   * `list-session-answers.ts`. Owner-floored; a failed read is a 500, never
+   * an empty page a waiter would sit on.
+   */
+  app.get("/focus-sessions/:id/answers", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    const q = SessionAnswersQuerySchema.safeParse({
+      since: c.req.query("since"),
+      limit: c.req.query("limit"),
+    });
+    if (!q.success) {
+      return c.json(
+        { error: "Invalid query", details: q.error.flatten() },
+        400
+      );
+    }
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const page = await listSessionAnswers({
+        sessionId: id,
+        userId: acting.userId,
+        since: q.data.since ? new Date(q.data.since) : null,
+        limit: q.data.limit,
+      });
+      if (!page) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      return c.json(page);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.answers failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
 
   app.post("/focus-sessions/:id/outputs", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {

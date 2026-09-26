@@ -224,7 +224,7 @@ describe("describeCleanupAction (moved from api, same output)", () => {
     );
     // Legacy groups still get a heading when a v1 pack is read.
     expect(describeCleanupAction("pause_automation", 2)).toBe(
-      "Pause 2 automations that never ran"
+      "Pause 2 rules that never ran"
     );
     expect(describeCleanupAction("expire_proposal", 1)).toBe(
       "Expire 1 old proposal"

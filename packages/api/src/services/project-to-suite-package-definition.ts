@@ -8,7 +8,7 @@
  *   3. Serialise each workspace via `workspaceToPackageDefinition` (lossy —
  *      same drop-list as `--from-workspace`).
  *   4. Compose ONE thin suite via `composeSuitePackageDefinition`
- *      (`suite` tag, `require` deps, harvested playbooks).
+ *      (`suite` tag, `require` deps; D8: no profile shell, no harvested playbooks).
  *   5. ALSO return the full constituent workspace definitions so a one-go
  *      publish can post them first — otherwise install hits required-absent.
  *
@@ -28,7 +28,7 @@ import { workspaceToPackageDefinition } from "./workspace-to-package-definition.
 import { composeSuitePackageDefinition } from "./compose-suite-package-definition.js";
 
 export interface ProjectToSuitePackageDefinitionResult {
-  /** Thin command-tower suite (require-deps + harvested playbooks). */
+  /** Thin pack (require-deps only — D8: layered onto its primary domain at install, never its own workspace). */
   definition: PackageDefinition;
   /**
    * Full workspace package bodies for each uses-edge. Publish these BEFORE

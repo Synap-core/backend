@@ -53,6 +53,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { completeFocusSession } from "../services/focus-sessions/complete-session.js";
 import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
+import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
@@ -1002,32 +1003,11 @@ export const capabilitiesRouter = router({
   setToolEnabled: protectedProcedure
     .input(z.object({ skillId: z.string().uuid(), enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-      const skill = await db.query.skills.findFirst({
-        where: eq(skills.id, input.skillId),
+      await setSkillApproved({
+        userId: requireUserId(ctx.userId),
+        skillId: input.skillId,
+        approved: input.enabled,
       });
-      if (!skill) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
-      }
-      if (skill.workspaceId) {
-        const role = await getWorkspaceRole(userId, skill.workspaceId);
-        if (role !== "owner") {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Only workspace owners can enable capability verbs.",
-          });
-        }
-      } else {
-        // Pod-scoped (null-workspace) verb — visible in every workspace, so
-        // flipping it is a pod-level privileged action.
-        await requirePodAdmin(userId);
-      }
-
-      await db
-        .update(skills)
-        .set({ approved: input.enabled, updatedAt: new Date() })
-        .where(eq(skills.id, input.skillId));
-
       return { success: true };
     }),
 

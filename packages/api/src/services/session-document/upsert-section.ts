@@ -25,6 +25,7 @@ import {
   findSessionDocumentId,
   getOrCreateSessionDocument,
   loadOwnedSession,
+  loadReadableSession,
   sessionStateStamp,
 } from "./session-document.js";
 
@@ -195,6 +196,8 @@ export async function upsertSessionDocumentSection(
 export async function readSessionDocument(input: {
   sessionId: string;
   userId: string;
+  /** Honour the human-roster read branch (`sessionReadableWhere`). Default false. */
+  roster?: boolean;
 }): Promise<{
   documentId: string | null;
   version: number | null;
@@ -209,7 +212,9 @@ export async function readSessionDocument(input: {
     sessionState: string | null;
   }>;
 }> {
-  const session = await loadOwnedSession(input.sessionId, input.userId);
+  const session = await loadReadableSession(input.sessionId, input.userId, {
+    roster: input.roster,
+  });
   const documentId = await findSessionDocumentId(session.id);
   if (!documentId) {
     return {

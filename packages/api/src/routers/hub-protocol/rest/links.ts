@@ -21,6 +21,7 @@ import {
   resolveActingContext,
   resolveActorId,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
@@ -400,7 +401,7 @@ export function registerLinksRoutes(app: HubHono): void {
       logger.error({ err }, "createLink failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -469,7 +470,7 @@ export function registerLinksRoutes(app: HubHono): void {
       logger.error({ err }, "getLinksFor failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

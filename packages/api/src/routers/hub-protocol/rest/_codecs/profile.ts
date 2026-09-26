@@ -9,6 +9,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 /** Wire shape for a profile row. */
 export const WireProfileSchema = z
@@ -102,7 +103,7 @@ export const WireProfileDigestSchema = z
 export const ListProfilesQuerySchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     detail: z
       .enum(["full"])
       .optional()
@@ -116,7 +117,7 @@ export const ListProfilesQuerySchema = z
 export const CreateProfileRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     slug: z.string().describe("Stable lower-kebab profile identifier."),
     displayName: z.string(),
     description: z.string().optional(),
@@ -165,7 +166,7 @@ export const CreateProfileRequestSchema = z
 export const ListPropertyDefsQuerySchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     profileId: z
       .string()
       .optional()
@@ -177,7 +178,7 @@ export const ListPropertyDefsQuerySchema = z
 export const CreatePropertyDefRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     profileId: z.string().optional(),
     slug: z.string(),
     valueType: z
@@ -208,7 +209,7 @@ export const CreatePropertyDefRequestSchema = z
 export const UpdatePropertyDefRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     slug: z
       .string()
       .optional()

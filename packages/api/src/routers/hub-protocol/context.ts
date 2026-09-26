@@ -14,12 +14,7 @@ import { entitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { db } from "@synap/database";
-import {
-  entities,
-  documents,
-  workspaceMembers,
-  channels,
-} from "@synap/database/schema";
+import { entities, documents, channels } from "@synap/database/schema";
 import { inArray, eq, and } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
@@ -28,6 +23,7 @@ import {
   type ProposalPromptContext,
 } from "../proposals/render-for-prompt.js";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
+import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
 
 export const contextRouter = router({
   /**
@@ -245,14 +241,9 @@ export const contextRouter = router({
       // floor shared by every hub-protocol delegation procedure).
       assertMayActAs(ctx, input.userId);
       // Look up user's primary workspace (by input.userId — the real user, not the API key owner)
-      const membership = await db
-        .select({ workspaceId: workspaceMembers.workspaceId })
-        .from(workspaceMembers)
-        .where(eq(workspaceMembers.userId, input.userId))
-        .limit(1)
-        .then((r) => r[0]);
+      // D7: the ONE fallback — never pod-admin, never archived.
       const workspaceId =
-        membership?.workspaceId ??
+        (await findUserDefaultWorkspaceId(db, input.userId)) ??
         ((ctx as Record<string, unknown>).workspaceId as string | null) ??
         null;
       // Use input.userId (the real user) not ctx.userId (the API key owner "system")

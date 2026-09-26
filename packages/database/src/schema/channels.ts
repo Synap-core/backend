@@ -369,6 +369,16 @@ export const channels = pgTable(
       .where(
         sql`${table.channelType} = 'thread' AND ${table.contextObjectType} = 'workspace' AND ${table.status} = 'active'`
       ),
+    /**
+     * ONE active object room per object (migration 0279) — the arbiter
+     * `ChannelRepository.ensureObjectChannel` conflicts on. The type list
+     * mirrors `OBJECT_ROOM_CONTEXT_TYPES` (utils/channel-visibility.ts).
+     */
+    objectRoomUnique: uniqueIndex("channels_object_room_uniq")
+      .on(table.contextObjectType, table.contextObjectId)
+      .where(
+        sql`${table.channelType} = 'group' AND ${table.status} = 'active' AND ${table.contextObjectType} IN ('document', 'entity')`
+      ),
   })
 );
 

@@ -299,9 +299,20 @@ export const readHandlers: McpHandlerMap = {
     // so the caller got an error instead of a list and could not enumerate
     // its own proposals at all. `detail: "full"` still returns everything,
     // so no capability is removed — only the default changes.
-    const rawRows = Array.isArray(result)
-      ? result
-      : ((result as { proposals?: unknown[] })?.proposals ?? []);
+    // Session content a proposal copied at write time is withheld unless this
+    // agent's principal OWNS the target session (decision D1, agent door).
+    const { redactUnreadableSessionTargets } =
+      await import("../../../services/proposals/session-content-redaction.js");
+    const rawRows = await redactUnreadableSessionTargets(
+      (Array.isArray(result)
+        ? result
+        : ((result as { proposals?: unknown[] })?.proposals ?? [])) as Array<{
+        targetType: string;
+        targetId: string | null;
+        data: unknown;
+      }>,
+      { userId }
+    );
     // SETUP — this door calls `listCreatedProposals` DIRECTLY (not
     // `hub.proposals.listProposals`), so the stamping the Hub procedure does
     // never happened here: `setup` was declared on the wire, forwarded by

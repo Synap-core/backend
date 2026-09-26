@@ -25,6 +25,7 @@ import { createLogger } from "@synap-core/core";
 import type { ProposalRevertPlan } from "../../routers/proposals/revert.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { syncRelationToPropertyOnDelete } from "../../utils/property-relation-sync.js";
+import { entityFieldApiName } from "../../utils/entity-property-diff.js";
 import {
   safeRevert,
   type RevertPass,
@@ -127,7 +128,7 @@ export function describeRevertTarget(target: RevertTarget): string {
     case "entity_body":
       return `body of entity ${target.entityId}`;
     case "entity_field":
-      return `${target.field === "preview" ? "description" : target.field} of entity ${target.entityId}`;
+      return `${entityFieldApiName(target.field)} of entity ${target.entityId}`;
     default:
       return `${target.kind} ${target.id}`;
   }
@@ -155,7 +156,7 @@ export function revertSkipView(skip: RevertSkip): {
     // `description` field on every entity door, so a kept key reads the way
     // the client humanizes every other field (vocabulary `humanizeToken`).
     ...(target.kind === "entity_field"
-      ? { key: target.field === "preview" ? "description" : target.field }
+      ? { key: entityFieldApiName(target.field) }
       : {}),
     reason: skip.reason,
     detail: skip.detail,

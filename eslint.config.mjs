@@ -260,7 +260,6 @@ export default [
       "packages/api/src/routers/relations.ts",
       "packages/api/src/routers/search.ts",
       "packages/api/src/routers/secrets-vault.ts",
-      "packages/api/src/routers/sharing.ts",
       "packages/api/src/routers/skills.ts",
       "packages/api/src/routers/subscriptions.ts",
       "packages/api/src/routers/sync.ts",

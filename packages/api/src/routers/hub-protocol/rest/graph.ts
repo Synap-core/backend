@@ -22,6 +22,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import {
   getObjectGraph,
@@ -149,7 +150,7 @@ export function registerGraphRoutes(app: HubHono): void {
       logger.error({ err, type, id }, "graph fetch failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

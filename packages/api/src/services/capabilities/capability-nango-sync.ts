@@ -632,6 +632,40 @@ export async function enqueueManualConnectionSync(input: {
   return { ok: true, queued, debounced };
 }
 
+/**
+ * Re-queue every live connection of ONE pack — what enabling a pack's verbs
+ * owes the sync. A lane that failed `permission` has no timer of its own; before
+ * this, approving the enable request left "installed but not turned on" on
+ * screen, with the approved request still offered as the fix (2026-09-25).
+ * Debounced per connection, so a whole pack approved verb-by-verb queues ONE
+ * run each. Queue faults throw; the caller decides whether that is fatal.
+ */
+export async function enqueueSyncForCapability(
+  capabilityId: string
+): Promise<{ queued: number; debounced: number }> {
+  const rows = await db
+    .select({ id: secrets.id, capabilityId: secrets.capabilityId })
+    .from(secrets)
+    .where(
+      and(eq(secrets.capabilityId, capabilityId), isNull(secrets.deletedAt))
+    );
+  let queued = 0;
+  let debounced = 0;
+  for (const row of rows) {
+    const synced = await resolveRowSyncProvider(capabilityId, row.id);
+    if (!synced) continue;
+    const result = await enqueueConnectionSync({
+      provider: synced.provider,
+      connectionId: row.id,
+      workspaceId: null,
+      reason: "manual",
+    });
+    if (result.queued) queued++;
+    else debounced++;
+  }
+  return { queued, debounced };
+}
+
 export type DisconnectOwnedOutcome =
   | { ok: true; provider: string }
   | { ok: false; reason: "not_found" | "list_failed"; error: string };

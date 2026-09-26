@@ -25,10 +25,6 @@ import {
   ProjectRepository,
   EventRepository,
   sql,
-  findProjectDedupCandidates,
-  assessEvidenceGravity,
-  buildNearMatchMessage,
-  buildProjectProvenance,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -43,6 +39,15 @@ import {
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { getProjectPath } from "../../../services/projects/project-path.js";
+import {
+  createProjectGoverned,
+  ProjectNearDuplicateError,
+  type CreateProjectGovernedOutcome,
+} from "../../../services/projects/create-project.js";
+import {
+  resolveProjectHomeChange,
+  stampProjectHomeUse,
+} from "../../../services/projects/project-home.js";
 import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
@@ -63,6 +68,15 @@ const CreateProjectSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().optional(),
   status: z.enum(["active", "archived", "completed"]).default("active"),
+  /** Lifecycle position — same field as tRPC `projects.create`. */
+  phase: z.string().max(120).optional(),
+  /**
+   * Deadline. `.nullable()` BEFORE the coercion is a guard, not symmetry:
+   * `new Date(null)` is the epoch (see tRPC `projects.create`).
+   */
+  targetDate: z.coerce.date().nullable().optional(),
+  /** The real-world thing this project is about — bound as `project --targets--> entity`. */
+  subjectEntityId: z.string().uuid().optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   workspaceId: z.string().uuid().optional(),
@@ -74,33 +88,6 @@ const CreateProjectSchema = z.object({
   evidenceEntityIds: z.array(z.string().uuid()).max(500).optional(),
 });
 
-/**
- * Count how many `entityIds` exist and are visible to `userId` via the canonical
- * entity access floor — backs the agent evidence-gravity check on this door.
- */
-async function countVisibleEntities(
-  userId: string,
-  entityIds: string[]
-): Promise<number> {
-  if (entityIds.length === 0) return 0;
-  const rows = await db
-    .select({ id: entities.id })
-    .from(entities)
-    .where(
-      and(
-        inArray(entities.id, entityIds),
-        isNull(entities.deletedAt),
-        accessScopeWhere({
-          workspaceIdColumn: entities.workspaceId,
-          entityIdColumn: entities.id,
-          ownerColumn: entities.userId,
-          userId,
-        })
-      )
-    );
-  return new Set(rows.map((r) => r.id)).size;
-}
-
 const UpdateProjectSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().optional(),
@@ -109,6 +96,12 @@ const UpdateProjectSchema = z.object({
   phase: z.string().max(120).nullable().optional(),
   /** Deadline. `null` clears it; omitted = untouched. */
   targetDate: z.coerce.date().nullable().optional(),
+  /**
+   * D6: move the project's HOME workspace. Governed with the rest of the
+   * patch; the caller must also be able to write the target (checked before
+   * the gate — same helper as the tRPC `projects.update`).
+   */
+  homeWorkspaceId: z.string().uuid().optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   /** Why — shown to the reviewer; never stored on the project. */
@@ -759,7 +752,6 @@ export function registerProjectsRoutes(app: HubHono): void {
     const userId = c.get("userId");
     const body = CreateProjectSchema.parse(await c.req.json());
     const agentUserId = c.get("agentUserId") as string | undefined;
-    const isAgent = !!agentUserId;
     // Item 3 Part 3: positively pin a bound service key to its workspace.
     // A mismatching bound key throws FORBIDDEN → surface 403 (this handler has
     // no outer try/catch, so map it here).
@@ -775,113 +767,71 @@ export function registerProjectsRoutes(app: HubHono): void {
       throw err;
     }
 
-    // ── Agent guardrails (P1) — dedup + gravity before the governance gate.
-    if (isAgent) {
-      const match = await findProjectDedupCandidates(db, {
+    // The ONE governed create path, shared with tRPC `projects.create` (W5c):
+    // subject pre-check, agent guardrails, governance, insert, subject bind,
+    // audit and side effects. This door used to re-implement the first three
+    // and skip the rest, so a CLI/Raycast project emitted no create events.
+    let outcome: CreateProjectGovernedOutcome;
+    try {
+      outcome = await createProjectGoverned({
         userId,
-        name: body.name,
-      });
-
-      // Exact-normalized match → reuse idempotently; never a second project.
-      if (match.exact) {
-        return c.json(
-          {
-            status: "deduped",
-            projectId: match.exact.id,
-            reusedProjectId: match.exact.id,
-          },
-          200
-        );
-      }
-
-      const evidence = body.evidenceEntityIds ?? [];
-      const visibleCount = await countVisibleEntities(userId, evidence);
-      const gravity = assessEvidenceGravity({
-        providedCount: evidence.length,
-        visibleCount,
-        near: match.near,
-      });
-      if (!gravity.ok) {
-        return c.json({ error: gravity.message }, 400);
-      }
-
-      // Gravity satisfied but a near-duplicate exists → surface it, don't create.
-      if (match.near.length > 0) {
-        return c.json(
-          {
-            error: buildNearMatchMessage(match.near),
-            dedupCandidates: match.near,
-          },
-          409
-        );
-      }
-    }
-
-    const perm = await checkPermissionOrPropose({
-      userId,
-      // Bug fix (object-proposal manifest W1): forward the auto-injected agent
-      // identity so an agent-authored project create is GOVERNED (routes to a
-      // proposal) instead of auto-applying. Undefined for operator requests.
-      agentUserId,
-      workspaceId: workspaceId ?? undefined,
-      subjectType: "project",
-      action: "create",
-      // Carry the full create payload, matching the tRPC door — the
-      // `project/create` executor replays these, and a reviewer cannot judge a
-      // create they are shown only the name of.
-      data: {
-        name: body.name,
-        ...(body.description ? { description: body.description } : {}),
-        ...(body.status ? { status: body.status } : {}),
-        ...(body.settings ? { settings: body.settings } : {}),
-        ...(body.metadata ? { metadata: body.metadata } : {}),
-        ...(isAgent && body.evidenceEntityIds
-          ? { evidenceEntityIds: body.evidenceEntityIds }
-          : {}),
-      },
-    });
-
-    if ("denied" in perm && perm.denied) {
-      return c.json({ error: perm.reason }, 403);
-    }
-    if ("proposalId" in perm) {
-      return jsonGoverned(c, {
-        status: "proposed",
-        proposalId: perm.proposalId,
-        ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
-        ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
-      });
-    }
-
-    const eventRepo = new EventRepository(sql);
-    const repo = new ProjectRepository(db, eventRepo);
-
-    const row = await repo.create(
-      {
+        agentUserId,
+        workspaceId: workspaceId ?? null,
+        door: "hub-rest",
         name: body.name,
         description: body.description,
         status: body.status,
+        phase: body.phase,
+        targetDate: body.targetDate,
+        subjectEntityId: body.subjectEntityId,
         settings: body.settings,
         metadata: body.metadata,
-        userId,
-        workspaceId: workspaceId ?? null,
-        provenance: buildProjectProvenance({
-          door: "hub-rest",
-          agentUserId,
-          evidenceEntityIds: body.evidenceEntityIds,
-        }),
-      },
-      userId
-    );
+        evidenceEntityIds: body.evidenceEntityIds,
+      });
+    } catch (err) {
+      // A near-duplicate hands its candidates back — `HubRestClient
+      // .createProject` turns this body into `{ status: "near_duplicate" }`.
+      if (err instanceof ProjectNearDuplicateError) {
+        return c.json(
+          { error: err.message, dedupCandidates: err.dedupCandidates },
+          409
+        );
+      }
+      const status = httpStatusForTrpcError(err);
+      if (status === 500) throw err;
+      return c.json({ error: (err as Error).message }, status);
+    }
 
-    if (row.deduped) {
+    if (outcome.status === "deduped") {
       return c.json(
-        { status: "deduped", projectId: row.id, reusedProjectId: row.id },
+        {
+          status: "deduped",
+          projectId: outcome.projectId,
+          reusedProjectId: outcome.reusedProjectId,
+        },
         200
       );
     }
+    if (outcome.status === "proposed") {
+      return jsonGoverned(c, {
+        status: "proposed",
+        proposalId: outcome.proposalId,
+        ...(outcome.reviewPath ? { reviewPath: outcome.reviewPath } : {}),
+        ...(outcome.reviewUrl ? { reviewUrl: outcome.reviewUrl } : {}),
+      });
+    }
 
-    return c.json(row, 201);
+    // Wire shape unchanged: the created row (callers read `id`), plus
+    // `subjectBound` only when a subject was requested.
+    return c.json(
+      {
+        ...outcome.row,
+        ...(outcome.subjectBound !== undefined
+          ? { subjectBound: outcome.subjectBound }
+          : {}),
+      },
+      201
+    );
   });
 
   // Update a project
@@ -894,7 +844,7 @@ export function registerProjectsRoutes(app: HubHono): void {
     if (!parsed.success) {
       return c.json({ error: `Invalid body: ${parsed.error.message}` }, 400);
     }
-    const { reasoning, ...body } = parsed.data;
+    const { reasoning, homeWorkspaceId: requestedHome, ...body } = parsed.data;
 
     // Load first, on the same visibility floor as GET /projects/:id: a
     // project the caller cannot see must 404 BEFORE governance — otherwise an
@@ -908,6 +858,22 @@ export function registerProjectsRoutes(app: HubHono): void {
       columns: { id: true, workspaceId: true },
     });
     if (!target) return c.json({ error: "Project not found" }, 404);
+
+    // D6 — the target home must be live and writable by the caller.
+    let homeWorkspaceId: string | undefined;
+    try {
+      homeWorkspaceId = await resolveProjectHomeChange(
+        db,
+        userId,
+        target.workspaceId,
+        requestedHome
+      );
+    } catch (err) {
+      return c.json(
+        { error: (err as Error).message },
+        httpStatusForTrpcError(err)
+      );
+    }
 
     const perm = await checkPermissionOrPropose({
       userId,
@@ -933,6 +899,7 @@ export function registerProjectsRoutes(app: HubHono): void {
         ...(body.targetDate !== undefined
           ? { targetDate: body.targetDate }
           : {}),
+        ...(homeWorkspaceId !== undefined ? { homeWorkspaceId } : {}),
         ...(body.settings !== undefined ? { settings: body.settings } : {}),
         ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
       },
@@ -954,7 +921,18 @@ export function registerProjectsRoutes(app: HubHono): void {
     const repo = new ProjectRepository(db, eventRepo);
 
     try {
-      const row = await repo.update(id, body, userId);
+      const row = await repo.update(
+        id,
+        { ...body, workspaceId: homeWorkspaceId },
+        userId
+      );
+      if (homeWorkspaceId) {
+        await stampProjectHomeUse(db, {
+          projectId: id,
+          homeWorkspaceId,
+          userId,
+        });
+      }
       return c.json(row);
     } catch (e) {
       return c.json({ error: (e as Error).message }, 404);

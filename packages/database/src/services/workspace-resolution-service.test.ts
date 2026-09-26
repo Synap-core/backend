@@ -940,3 +940,134 @@ describe("resolveGraphWorkspaceFromSlugs", () => {
     expect(r).toBeNull();
   });
 });
+
+// ── W2b: a POD-WIDE kind never takes the session/channel stamp ──────────────
+// Rung 3 used to pin ANY kind into the session's workspace, and create_entity
+// accepted that (rung ≤4) before its pod check — so a person captured inside a
+// Builder session was stamped Builder and vanished from every other lens. The
+// guard lives in the ladder, so every door that passes context inherits it.
+describe("resolveWorkspacePlacement — rung 3 (context) vs entityScope (W2b)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const seed = {
+    members: [WS_A, WS_B],
+    workspaces: [
+      { id: WS_A, name: "Builder" },
+      { id: WS_B, name: "CRM" },
+    ],
+    sessionWorkspaceId: WS_A,
+    channelWorkspaceId: WS_A,
+  };
+
+  it("pod kind inside a session → NOT stamped with the session workspace (pod-wide)", async () => {
+    const r = await resolveWorkspacePlacement(makeDb(seed), {
+      userId: USER,
+      kindSlug: "person",
+      entityScope: "pod",
+      ambientWorkspaceId: WS_A,
+      context: { sessionId: "s-1" },
+    });
+    expect(r.rung).toBe(6);
+    expect(r.workspaceId).toBeNull();
+  });
+
+  it("pod kind inside a bound channel → NOT stamped with the channel workspace", async () => {
+    const r = await resolveWorkspacePlacement(makeDb(seed), {
+      userId: USER,
+      kindSlug: "company",
+      entityScope: "pod",
+      ambientWorkspaceId: null,
+      context: { channelId: "c-1" },
+    });
+    expect(r.rung).toBe(6);
+    expect(r.workspaceId).toBeNull();
+  });
+
+  it("workspace-scoped kind inside a session → still takes the session workspace (unchanged)", async () => {
+    const r = await resolveWorkspacePlacement(makeDb(seed), {
+      userId: USER,
+      kindSlug: "task",
+      entityScope: "workspace",
+      ambientWorkspaceId: null,
+      context: { sessionId: "s-1" },
+    });
+    expect(r.rung).toBe(3);
+    expect(r.workspaceId).toBe(WS_A);
+  });
+
+  it("pod kind wearing a role enabled in 2 lenses → the session still TIE-BREAKS the rung-2 candidates", async () => {
+    const r = await resolveWorkspacePlacement(
+      makeDb({
+        ...seed,
+        profiles: [
+          { id: "p1", slug: "client", scope: "workspace", workspaceId: WS_A },
+          { id: "p2", slug: "client", scope: "workspace", workspaceId: WS_B },
+        ],
+      }),
+      {
+        userId: USER,
+        kindSlug: "person",
+        facetSlugs: ["client"],
+        entityScope: "pod",
+        ambientWorkspaceId: null,
+        context: { sessionId: "s-1" },
+      }
+    );
+    expect(r.rung).toBe(3);
+    expect(r.workspaceId).toBe(WS_A);
+  });
+
+  it("scope omitted → read from the kind's profile (pod ⇒ no stamp, workspace ⇒ stamp)", async () => {
+    const spy = vi
+      .spyOn(ProfileResolutionService.prototype, "getEntityScope")
+      .mockResolvedValue("pod");
+    const pod = await resolveWorkspacePlacement(makeDb(seed), {
+      userId: USER,
+      kindSlug: "person",
+      ambientWorkspaceId: null,
+      context: { sessionId: "s-1" },
+    });
+    expect(pod.workspaceId).toBeNull();
+    spy.mockResolvedValue("workspace");
+    const ws = await resolveWorkspacePlacement(makeDb(seed), {
+      userId: USER,
+      kindSlug: "task",
+      ambientWorkspaceId: null,
+      context: { sessionId: "s-1" },
+    });
+    expect(ws.rung).toBe(3);
+    expect(ws.workspaceId).toBe(WS_A);
+  });
+
+  it("no kind at all (capture's batch lens) → unknown scope keeps the session stamp", async () => {
+    const r = await resolveWorkspacePlacement(makeDb(seed), {
+      userId: USER,
+      ambientWorkspaceId: WS_B,
+      context: { sessionId: "s-1" },
+    });
+    expect(r.rung).toBe(3);
+    expect(r.workspaceId).toBe(WS_A);
+  });
+
+  it("graph helper: an all-pod graph in a session stays pod-wide; one workspace kind makes the session its home", async () => {
+    const spy = vi
+      .spyOn(ProfileResolutionService.prototype, "getEntityScope")
+      .mockImplementation(async (slug: string) =>
+        slug === "task" ? "workspace" : "pod"
+      );
+    const allPod = await resolveGraphWorkspaceFromSlugs(makeDb(seed), {
+      userId: USER,
+      routingSlugs: ["person", "company"],
+      sessionId: "s-1",
+    });
+    expect(allPod).toBeNull();
+    const mixed = await resolveGraphWorkspaceFromSlugs(makeDb(seed), {
+      userId: USER,
+      routingSlugs: ["person", "task"],
+      sessionId: "s-1",
+    });
+    expect(mixed).toBe(WS_A);
+    expect(spy).toHaveBeenCalled();
+  });
+});

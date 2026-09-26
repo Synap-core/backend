@@ -261,6 +261,17 @@ export interface ProposalReviewChange {
   path: string;
   label: string;
   operation: "create" | "update" | "delete" | "set";
+  /**
+   * The value before this change, on UPDATE rows only.
+   *
+   *   - `null`      — RECORDED empty: the propose-time snapshot read this
+   *     field and it had no value ("was empty");
+   *   - absent      — UNKNOWN: nothing recorded it (a legacy proposal, or a
+   *     key the snapshot did not capture).
+   *
+   * A live read never produces `null` here, so a client may render `null` as
+   * "was empty" without a second check.
+   */
   before?: unknown;
   after?: unknown;
   valueType?: string;
@@ -314,6 +325,33 @@ export interface ProposalRemoval {
   roles?: string[];
   /** Can the removal be undone once applied (entity deletes are soft). */
   recoverable: boolean;
+}
+
+/**
+ * How many of a flow's most recent runs a {@link ProposalTrack} is measured
+ * over. A flow with more runs is judged on its latest window, never on its
+ * whole history — so the aggregate stays bounded however long a flow has run.
+ */
+export const PROPOSAL_TRACK_RUN_WINDOW = 100;
+
+/**
+ * TRACK RECORD — the MEASURED run history of the flow a proposal would run
+ * again (a playbook session START, an automation run). Never a prediction.
+ *
+ * Measured over the flow's most recent {@link PROPOSAL_TRACK_RUN_WINDOW} runs
+ * the viewer can see: `runs` IS that sample's size (so `runs` never exceeds the
+ * window). `runs: 0` is a measured zero (the flow is visible and has never
+ * run); the whole track is ABSENT when the flow is not visible or the kind has
+ * no flow. Durations are over `durationSamples` completed runs within the
+ * window, and absent when that is 0.
+ */
+export interface ProposalTrack {
+  runs: number;
+  completed: number;
+  running: number;
+  durationSamples: number;
+  medianDurationMs?: number;
+  lastDurationMs?: number;
 }
 
 export interface ProposalReviewEvent {

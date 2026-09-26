@@ -57,6 +57,7 @@ import {
   type PackageCellDef,
   type WorkspaceSettings,
 } from "@synap/database";
+import { detachMarketSource } from "./capabilities/market-source.js";
 
 /** Home/profile bento block as stored in a bento view's `config.blocks`. */
 interface StoredBentoBlock {
@@ -373,9 +374,22 @@ export async function workspaceToPackageDefinition(opts: {
       schedule: playbooksTable.schedule,
       subjectProfile: playbooksTable.subjectProfile,
       status: playbooksTable.status,
+      // The track-template half of a definition. Not selected before, so a
+      // `--from-project` / `--from-workspace` export could never carry a
+      // project method (scope + stages) — the apply doors now accept them.
+      scope: playbooksTable.scope,
+      stages: playbooksTable.stages,
+      criteria: playbooksTable.criteria,
+      expectedOutputs: playbooksTable.expectedOutputs,
+      metadata: playbooksTable.metadata,
     })
     .from(playbooksTable)
-    .where(eq(playbooksTable.workspaceId, workspaceId));
+    .where(
+      and(
+        eq(playbooksTable.workspaceId, workspaceId),
+        ne(playbooksTable.status, "archived")
+      )
+    );
 
   if (playbookRows.length > 0) {
     // Resolve each playbook's `grants` link edges (playbook --grants--> tool|skill)
@@ -425,28 +439,9 @@ export async function workspaceToPackageDefinition(opts: {
       (grantsByPlaybook[e.fromId] ??= []).push(name);
     }
 
-    def.playbooks = playbookRows.map((p) => {
-      const inputStrategy = p.inputStrategy as { kind?: string } | null;
-      return {
-        name: p.name,
-        description: p.description ?? undefined,
-        goalTemplate: p.goalTemplate,
-        params: p.params as NonNullable<
-          PackageDefinition["playbooks"]
-        >[number]["params"],
-        executor: p.executor as "is-agent" | "external-agent" | "hybrid",
-        inputStrategy: inputStrategy?.kind as
-          "none" | "static" | "rotating" | "query" | undefined,
-        channelSpec: p.channelSpec as NonNullable<
-          PackageDefinition["playbooks"]
-        >[number]["channelSpec"],
-        schedule: p.schedule as { cron: string } | null,
-        subjectProfile: p.subjectProfile as
-          { profileSlug: string; filter?: Record<string, unknown> } | undefined,
-        grants: grantsByPlaybook[p.id],
-        status: p.status as "draft" | "active" | "paused" | undefined,
-      };
-    });
+    def.playbooks = playbookRows.map((p) =>
+      playbookRowToPackagePlaybook(p, grantsByPlaybook[p.id])
+    );
   }
 
   // ── Capabilities (containers → templateKey) ─────────────────────────────
@@ -649,4 +644,70 @@ export async function workspaceToPackageDefinition(opts: {
   }
 
   return def;
+}
+
+/** The playbook row columns the exporter reads (its own `select`). */
+export interface ExportedPlaybookRow {
+  name: string;
+  description: string | null;
+  goalTemplate: string;
+  params: unknown;
+  executor: string;
+  inputStrategy: unknown;
+  channelSpec: unknown;
+  schedule: unknown;
+  subjectProfile: unknown;
+  status: string;
+  scope: string | null;
+  stages: unknown;
+  criteria: unknown;
+  expectedOutputs: unknown;
+  metadata: unknown;
+}
+
+/**
+ * One live playbook row → its package definition. Pure, and exported so the
+ * round-trip test (`__tripwires__/playbook-definition-round-trip.test.ts`) can
+ * prove an exported project method re-installs with its scope + stages intact.
+ */
+export function playbookRowToPackagePlaybook(
+  p: ExportedPlaybookRow,
+  grants: string[] | undefined
+): NonNullable<PackageDefinition["playbooks"]>[number] {
+  const stages = (p.stages as Array<Record<string, unknown>> | null) ?? [];
+  const criteria = (p.criteria as Array<Record<string, unknown>> | null) ?? [];
+  const expectedOutputs =
+    (p.expectedOutputs as Array<Record<string, unknown>> | null) ?? [];
+  // Never export another package's source-link: the installing pod stamps
+  // its own. Every other metadata key (e.g. the propose-only governance
+  // marker) travels.
+  const metadata = detachMarketSource(
+    p.metadata as Record<string, unknown> | null
+  );
+  return {
+    name: p.name,
+    description: p.description ?? undefined,
+    goalTemplate: p.goalTemplate,
+    params: p.params as NonNullable<
+      PackageDefinition["playbooks"]
+    >[number]["params"],
+    executor: p.executor as "is-agent" | "external-agent" | "hybrid",
+    // The stored object, not its bare `kind` string — no apply door's
+    // schema accepts a string here, so the old export could not round-trip.
+    inputStrategy:
+      (p.inputStrategy as Record<string, unknown> | null) ?? undefined,
+    channelSpec: p.channelSpec as NonNullable<
+      PackageDefinition["playbooks"]
+    >[number]["channelSpec"],
+    schedule: p.schedule as { cron: string } | null,
+    subjectProfile: p.subjectProfile as
+      { profileSlug: string; filter?: Record<string, unknown> } | undefined,
+    grants,
+    status: p.status as "draft" | "active" | "paused" | undefined,
+    ...(p.scope ? { scope: p.scope as "session" | "project" } : {}),
+    ...(stages.length > 0 ? { stages } : {}),
+    ...(criteria.length > 0 ? { criteria } : {}),
+    ...(expectedOutputs.length > 0 ? { expectedOutputs } : {}),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
 }

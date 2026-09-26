@@ -48,7 +48,10 @@ vi.mock("../utils/project-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils/project-scope.js")>()),
   accessScopeWhere: mockAccessScopeWhere,
 }));
-vi.mock("../utils/channel-visibility.js", () => ({
+// Spread for the same reason as project-scope above: the session read predicate
+// (access/session-visibility.ts) imports SESSION_ROOM_CONTEXT_TYPE from here.
+vi.mock("../utils/channel-visibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/channel-visibility.js")>()),
   channelVisibilityWhere: mockChannelVisibilityWhere,
 }));
 vi.mock("../utils/user-visible-where.js", () => ({

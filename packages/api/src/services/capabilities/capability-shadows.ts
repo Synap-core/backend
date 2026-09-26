@@ -34,9 +34,10 @@ import {
   links,
   vaultGrants,
   isNull,
+  drizzleSql,
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { visibleSkillsWhere } from "../skills/visibility.js";
+import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
 
 export interface ShadowPart {
   id: string;
@@ -63,6 +64,13 @@ export interface ShadowInputs {
   containers: Array<{ id: string; name: string }>;
   skills: Array<ShadowPart & { kind: string; approved: boolean }>;
   tools: ShadowPart[];
+  /**
+   * `requires` edges: skill → tool. Optional — without them no DEPENDENT is
+   * derived. A dependent is a skill in no pack that shadows nothing by name but
+   * requires ONLY shadow tools: it can run only through a stale copy, so it is
+   * stale with them — and while it lives, its tools can never be removed.
+   */
+  requires?: Array<{ skillId: string; toolId: string }>;
 }
 
 /** Pure: which of these parts shadow a pack member. */
@@ -111,6 +119,31 @@ export function classifyShadows(input: ShadowInputs): CapabilityShadow[] {
   };
   scan("skill", input.skills);
   scan("tool", input.tools);
+
+  const shadowTools = new Map(
+    out.filter((s) => s.type === "tool").map((s) => [s.id, s])
+  );
+  const already = new Set(out.map((s) => s.id));
+  const needs = new Map<string, string[]>();
+  for (const r of input.requires ?? []) {
+    const list = needs.get(r.skillId) ?? [];
+    list.push(r.toolId);
+    needs.set(r.skillId, list);
+  }
+  for (const sk of input.skills) {
+    if (memberOf.has(sk.id) || already.has(sk.id)) continue;
+    const req = needs.get(sk.id);
+    if (!req || !req.every((t) => shadowTools.has(t))) continue;
+    out.push({
+      type: "skill",
+      id: sk.id,
+      name: sk.name,
+      workspaceId: sk.workspaceId,
+      skillKind: sk.kind,
+      approved: sk.approved,
+      shadows: shadowTools.get(req[0]!)!.shadows,
+    });
+  }
   return out.sort(
     (a, b) => a.name.localeCompare(b.name) || a.type.localeCompare(b.type)
   );
@@ -120,45 +153,61 @@ export function classifyShadows(input: ShadowInputs): CapabilityShadow[] {
 export async function findCapabilityShadows(
   userId: string
 ): Promise<CapabilityShadow[]> {
-  const [members, containers, skillRows, toolRows] = await Promise.all([
-    db
-      .select({
-        fromType: links.fromType,
-        fromId: links.fromId,
-        toId: links.toId,
-      })
-      .from(links)
-      .where(
-        and(
-          eq(links.linkType, "member_of"),
-          eq(links.toType, "capability"),
-          inArray(links.fromType, ["skill", "tool"])
-        )
-      ),
-    db
-      .select({ id: capabilities.id, name: capabilities.name })
-      .from(capabilities)
-      .where(userVisibleWhere(capabilities.workspaceId, userId)),
-    db
-      .select({
-        id: skills.id,
-        name: skills.name,
-        workspaceId: skills.workspaceId,
-        kind: skills.kind,
-        approved: skills.approved,
-      })
-      .from(skills)
-      // Only an ACTIVE skill can answer a verb, so only an active one shadows.
-      .where(and(visibleSkillsWhere(userId), eq(skills.status, "active"))),
-    db
-      .select({
-        id: tools.id,
-        name: tools.name,
-        workspaceId: tools.workspaceId,
-      })
-      .from(tools)
-      .where(userVisibleWhere(tools.workspaceId, userId)),
-  ]);
+  const [members, containers, skillRows, toolRows, requires] =
+    await Promise.all([
+      db
+        .select({
+          fromType: links.fromType,
+          fromId: links.fromId,
+          toId: links.toId,
+        })
+        .from(links)
+        .where(
+          and(
+            eq(links.linkType, "member_of"),
+            eq(links.toType, "capability"),
+            inArray(links.fromType, ["skill", "tool"])
+          )
+        ),
+      db
+        .select({ id: capabilities.id, name: capabilities.name })
+        .from(capabilities)
+        .where(userVisibleWhere(capabilities.workspaceId, userId)),
+      db
+        .select({
+          id: skills.id,
+          name: skills.name,
+          workspaceId: skills.workspaceId,
+          kind: skills.kind,
+          approved: skills.approved,
+        })
+        .from(skills)
+        // Only an ACTIVE skill can answer a verb, so only an active one shadows.
+        .where(
+          and(
+            visibleSkillsAnyWorkspaceWhere(userId),
+            eq(skills.status, "active")
+          )
+        ),
+      db
+        .select({
+          id: tools.id,
+          name: tools.name,
+          workspaceId: tools.workspaceId,
+        })
+        .from(tools)
+        .where(userVisibleWhere(tools.workspaceId, userId)),
+      db
+        .select({ skillId: links.fromId, toolId: links.toId })
+        .from(links)
+        .where(
+          and(
+            eq(links.linkType, "requires"),
+            eq(links.fromType, "skill"),
+            eq(links.toType, "tool")
+          )
+        ),
+    ]);
   return classifyShadows({
     members: members.map((m) => ({ ...m, toId: String(m.toId) })),
     containers: containers.map((c) => ({ id: String(c.id), name: c.name })),
@@ -173,6 +222,10 @@ export async function findCapabilityShadows(
       id: String(t.id),
       name: t.name,
       workspaceId: t.workspaceId ?? null,
+    })),
+    requires: requires.map((r) => ({
+      skillId: String(r.skillId),
+      toolId: String(r.toolId),
     })),
   });
 }
@@ -227,9 +280,13 @@ export async function retireCapabilityShadows(input: {
   );
   const toolIds = chosen.filter((s) => s.type === "tool").map((s) => s.id);
   if (toolIds.length > 0) {
+    // Joined to `skills`: a `requires` edge whose skill row is gone (a delete
+    // that left its edge behind) requires nothing and must not block — it
+    // held one live Discord tool hostage forever (2026-09-25).
     const requirers = await db
       .select({ skillId: links.fromId, toolId: links.toId })
       .from(links)
+      .innerJoin(skills, eq(drizzleSql`${skills.id}::text`, links.fromId))
       .where(
         and(
           eq(links.fromType, "skill"),

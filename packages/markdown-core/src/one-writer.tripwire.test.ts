@@ -8,6 +8,9 @@
  *     core's `serializeAttributes`.
  *  2. No `@label (id)` mention writer: inline references are `[[kind:id|label]]`
  *     only (plan §3, D-refs). The legacy form is READ, never written.
+ *  2b. No inline-formatting writer outside `inline-format.ts`: `:u[…]`,
+ *     `:color[…]` and a highlight's `{tone=…}` suffix have ONE writer each
+ *     (`serializeUnderline` / `serializeTextColor` / `serializeHighlight`).
  *  3. One markdown pipeline factory on the pod side: in synap-backend, the IS
  *     and the CLI, only `processor.ts` imports a markdown parser (the
  *     remark/micromark family, or marked / markdown-it). The web side is
@@ -123,6 +126,10 @@ const DIRECTIVE_WRITE =
   /(?:^|\n)[ \t]*(?::{2,}|\$\{[^}]*(?:colon|fence|":"\.repeat)[^}]*\})(?:synap-|\$\{)/i;
 /** The legacy mention form `@label (id)`. */
 const MENTION_WRITE = /@\$\{[^}]*\}\s*\(\s*\$\{[^}]*\}\s*\)/;
+/** An inline-formatting opener or tone suffix built at runtime. */
+const FORMAT_WRITE = /:(?:u|color)\[\$\{|==\$\{[^}]*\}==|\{tone=\$\{/;
+const FORMAT_WRITER =
+  "synap-backend/packages/markdown-core/src/inline-format.ts";
 
 const EMBED_WRITER = "synap-backend/packages/markdown-core/src/embeds.ts";
 /** Section writers: `synap-section` is a frame, not an embed. Why each exists. */
@@ -143,17 +150,20 @@ for (const r of ROOTS) walk(join(MONOREPO, r), files);
 
 const directiveHits: Hit[] = [];
 const mentionHits: Hit[] = [];
+const formatHits: Hit[] = [];
 for (const full of files) {
   const src = readFileSync(full, "utf8");
   const mayWrite = /synap-|colons?\b|fence/.test(src);
   const mayMention = src.includes("@${") || /["']@["']/.test(src);
-  if (!mayWrite && !mayMention) continue;
+  const mayFormat = /:u\[|:color\[|==|tone=/.test(src);
+  if (!mayWrite && !mayMention && !mayFormat) continue;
   const file = relative(MONOREPO, full);
   for (const text of dynamicStrings(file, src)) {
     if (mayWrite && DIRECTIVE_WRITE.test(text))
       directiveHits.push({ file, text });
     if (mayMention && MENTION_WRITE.test(text))
       mentionHits.push({ file, text });
+    if (mayFormat && FORMAT_WRITE.test(text)) formatHits.push({ file, text });
   }
 }
 
@@ -201,6 +211,29 @@ describe("tripwire: one embed writer (serializeEmbed)", () => {
   it("section writers write their attributes through serializeAttributes", () => {
     for (const h of directiveHits.filter((x) => x.file in SECTION_WRITERS))
       expect(h.text, h.file).toContain("serializeAttributes(");
+  });
+});
+
+describe("tripwire: one writer per inline format (inline-format.ts)", () => {
+  it("non-vacuous: sees the writers and a sample of each form", () => {
+    expect(formatHits.map((h) => h.file)).toContain(FORMAT_WRITER);
+    const sample = [
+      "const a = `:u[${inner}]`;",
+      'const b = ":color[" + inner + "]";',
+      "const c = `==${inner}==`;",
+      "const d = `{tone=${tone}}`;",
+    ].join("\n");
+    expect(
+      dynamicStrings("sample.ts", sample).filter((t) => FORMAT_WRITE.test(t))
+    ).toHaveLength(4);
+  });
+
+  it("no inline format is written anywhere else", () => {
+    expect(
+      formatHits
+        .filter((h) => h.file !== FORMAT_WRITER)
+        .map((h) => `${h.file}: ${h.text.slice(0, 80)}`)
+    ).toEqual([]);
   });
 });
 

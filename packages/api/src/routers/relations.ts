@@ -48,7 +48,6 @@ import {
   RelationRepository,
   RelationDefRepository,
   ProjectMemberRepository,
-  getWorkspaceMembership,
   SYSTEM_RELATION_TYPES,
   inArray,
   loadFacetSlugsBatch,
@@ -105,29 +104,13 @@ import {
   structuralNeighbor,
   type EntityConnection,
 } from "../services/object-graph/entity-connections.js";
-
-/**
- * Administer-the-anchor authz (chantier α, GO-LIVE control #1). Granting anchor
- * membership / exposing entities to an anchor admits a principal to that anchor's
- * exposed set (cross-workspace) — higher-privilege than ordinary edits. So gate
- * on the anchor ENTITY OWNER or a workspace OWNER/ADMIN, NOT a mere editor.
- */
-async function assertAnchorAdmin(
-  db: unknown,
-  userId: string,
-  anchor: { workspaceId: string | null; userId: string | null }
-): Promise<void> {
-  if (anchor.userId && anchor.userId === userId) return; // anchor entity owner
-  if (anchor.workspaceId) {
-    const m = await getWorkspaceMembership(db, anchor.workspaceId, userId);
-    if (m && (m.role === "owner" || m.role === "admin")) return;
-  }
-  throw new TRPCError({
-    code: "FORBIDDEN",
-    message:
-      "Only the anchor owner or a workspace owner/admin may administer this anchor.",
-  });
-}
+import {
+  rosterReadFor,
+  sessionReadableWhere,
+} from "../access/session-visibility.js";
+import { assertAnchorAdmin } from "../services/sharing/anchor-admin.js";
+import { shareResource } from "../services/sharing/share-service.js";
+import { shareActorFromCtx } from "./shares.js";
 
 /**
  * Direction schema for relation queries
@@ -640,127 +623,34 @@ export const relationsRouter = router({
    * visible to members of `anchorId` via the exposure floor (`exposureMemberWhere`).
    * AuthZ: caller must be able to WRITE the exposed entity AND ADMINISTER the anchor
    * (both gated on the LOADED rows, never request-supplied ids).
+   *
+   * THE ANCHOR IS A `projects` ROW (Sites W2 id-space fix). The floor keys on
+   * `project_members.project_id` → `projects.id`; since 0151 a project created by
+   * `ProjectRepository.create` has NO entity twin, so the old `entities` lookup
+   * could never target a modern project (NOT_FOUND) and only reached legacy twins.
+   * A pod-personal (NULL-workspace) project is still refused as an anchor.
+   * Sites W2 S3: now a thin alias of `services/sharing/share-service.ts`.
    */
   exposeToAnchor: protectedProcedure
     .input(
       z.object({
         entityId: z.string().uuid(),
         anchorId: z.string().uuid(),
-        metadata: z.record(z.string(), z.any()).optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
-      const database = await getDb();
-      const [entityRow] = await database
-        .select({
-          id: entities.id,
-          workspaceId: entities.workspaceId,
-          userId: entities.userId,
-        })
-        .from(entities)
-        .where(eq(entities.id, input.entityId))
-        .limit(1);
-      const [anchorRow] = await database
-        .select({
-          id: entities.id,
-          workspaceId: entities.workspaceId,
-          userId: entities.userId,
-        })
-        .from(entities)
-        .where(eq(entities.id, input.anchorId))
-        .limit(1);
-      if (!entityRow) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
-      }
-      if (!anchorRow) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Anchor entity not found",
-        });
-      }
-      if (!anchorRow.workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Anchor entity must be workspace-scoped",
-        });
-      }
-
-      // AuthZ — gate on the LOADED rows: the caller must be able to write the
-      // exposed entity AND administer the anchor. (Never gate on input ids.)
-      await assertWorkspaceWrite(database, ctx.userId, {
-        workspaceId: entityRow.workspaceId,
-        ownerId: entityRow.userId,
-      });
-      await assertAnchorAdmin(database, ctx.userId, anchorRow);
-
-      const id = randomUUID();
-      // Its own verb, `expose` — never `create`. Exposure widens who may SEE
-      // the entity, so it classes `access` (proposal-class.ts, pair-keyed) and
-      // is NOT in DEFAULT_AUTO_APPROVE: an agent proposes, where under
-      // `relation.create` its exposure edge auto-executed. Approval writes the
-      // same edge (catch-all `relation/expose` alias → materializer create).
-      const perm = await checkPermissionOrPropose({
-        userId: ctx.userId,
-        workspaceId: anchorRow.workspaceId,
-        subjectType: "relation",
-        action: "expose",
-        data: {
-          id,
-          sourceEntityId: input.entityId,
-          targetEntityId: input.anchorId,
-          type: VISIBLE_TO,
-          // Mirror the direct-write provenance so a materialized proposal carries
-          // the right owner/workspace (not the sync fallback).
-          userId: ctx.userId,
-          workspaceId: anchorRow.workspaceId,
-        },
-      });
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        // Governed/agent path: the `relation/expose` approval half hands the
-        // payload to the materializer worker's `relation/create` case (writes
-        // the visible_to edge on approval).
-        return { status: "proposed" as const, proposalId: perm.proposalId };
-      }
-
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
-      const eventRepo = eventRepository;
-      const relationRepo = new RelationRepository(database, eventRepo);
-      const relation = await relationRepo.create(
-        {
-          id,
-          sourceEntityId: input.entityId,
-          targetEntityId: input.anchorId,
-          type: VISIBLE_TO,
-          workspaceId: anchorRow.workspaceId,
-          userId: ctx.userId,
-          metadata: input.metadata,
-          // Provenance (Wave B3) — same contract as `relations.create`: the
-          // agent stays the ACTOR, `ctx.userId` is the human who authorized it.
-          agentUserId: ctx.agentUserId ?? undefined,
-          sourceProposalId: ctx.governanceProposalId,
-        },
-        ctx.userId
-      );
-      auditLog({
-        subjectType: "relation",
-        action: "create",
-        phase: "completed",
-        subjectId: relation.id,
-        userId: ctx.userId,
-        workspaceId: anchorRow.workspaceId,
-        data: {
-          type: VISIBLE_TO,
-          entityId: input.entityId,
-          anchorId: input.anchorId,
-        },
-      });
-      return { status: "created" as const, id: relation.id };
-    }),
+    .mutation(({ input, ctx }) =>
+      // A THIN ALIAS of the share core (Sites W2 S3): a GUEST share of an
+      // entity with the anchor project. Same authz (write the entity,
+      // administer the anchor, pod-personal anchors refused), same policy,
+      // same gate (`share/create`, ADMIN-floored — an agent always proposes),
+      // same idempotency. No rule lives here.
+      shareResource(shareActorFromCtx(ctx), {
+        resourceType: "entity",
+        resourceId: input.entityId,
+        anchorProjectId: input.anchorId,
+        audience: "guest",
+      })
+    ),
 
   /**
    * Grant a user membership of an anchor (chantier α P2, GO-LIVE control #1)
@@ -778,7 +668,10 @@ export const relationsRouter = router({
       z.object({
         anchorId: z.string().uuid(),
         userId: z.string().uuid(),
-        role: z.enum(["owner", "editor", "viewer"]).default("viewer"),
+        // `guest` (Sites W2): sees only what is explicitly shared with the
+        // project (`visible_to`), never edits, and reads no pod-level data.
+        // The default stays `viewer` until the share doors (S3) decide it.
+        role: z.enum(["owner", "editor", "viewer", "guest"]).default("viewer"),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1286,7 +1179,10 @@ export const relationsRouter = router({
         db.query.focusSessions.findMany({
           where: and(
             eq(focusSessions.subjectEntityId, input.entityId),
-            eq(focusSessions.userId, ctx.userId),
+            sessionReadableWhere({
+              userId: ctx.userId,
+              roster: rosterReadFor(ctx),
+            }),
             focusSessionConnectionVisibilityWhere(input.workspaceId)
           ),
           orderBy: (fs, { desc }) => [desc(fs.startedAt)],

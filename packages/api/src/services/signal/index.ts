@@ -81,7 +81,10 @@ import type {
   ResolvedGuideline,
 } from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  podVisibleWorkspaceWhere,
+} from "../../utils/user-visible-where.js";
 import { authoredByUser } from "../agent-identity-service.js";
 import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { getCapabilityMemberParts } from "../links/links-service.js";
@@ -997,9 +1000,7 @@ async function resolveBoundEntityProfiles(
     db
       .select({ id: workspaces.id })
       .from(workspaces)
-      .where(
-        drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
-      ),
+      .where(podVisibleWorkspaceWhere(userId)),
   ]);
   const allowedWorkspaceIds = [
     ...new Set([

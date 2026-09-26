@@ -33,12 +33,7 @@ import {
   isServerVaultAvailable,
   getWorkspaceMembership,
 } from "@synap/database";
-import {
-  secrets,
-  tools,
-  workspaces,
-  workspaceMembers,
-} from "@synap/database/schema";
+import { secrets, tools, workspaces } from "@synap/database/schema";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   BrokerRefusalError,
@@ -72,6 +67,7 @@ import { resolveCapabilityNangoProviderKeys } from "../services/capabilities/cap
 import { getConnectionSyncStatus } from "../services/event-sync/connection-sync.js";
 import { loadProviderSyncKinds } from "../connectors/sync-kinds.js";
 import type { SyncConnectorConnection } from "../connectors/SyncConnector.js";
+import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 
 /**
  * A pod brokered by its control plane must never take a LOCAL Nango key: it
@@ -182,17 +178,15 @@ async function resolveImportWorkspaceId(
     });
     return requestedWorkspaceId;
   }
-  const membership = await database.query.workspaceMembers.findFirst({
-    where: eq(workspaceMembers.userId, userId),
-    columns: { workspaceId: true },
-  });
-  if (!membership?.workspaceId) {
+  // D7: never the pod-admin console, never archived (the ONE fallback).
+  const fallback = await findUserDefaultWorkspaceId(database, userId);
+  if (!fallback) {
     throw new TRPCError({
       code: "NOT_FOUND",
       message: "No workspace found to scope the import proposal.",
     });
   }
-  return membership.workspaceId;
+  return fallback;
 }
 
 /**

@@ -28,6 +28,7 @@ import {
   workspaceMembers,
   workspaces,
   BELONGS_TO_PROJECT,
+  podVisibleWorkspaceWhere,
 } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { matchMessageShape, type MessageEnvelope } from "@synap/database";
@@ -895,9 +896,9 @@ async function getAccessibleWorkspaceFloor(userId: string): Promise<string[]> {
   const podReadable = await db
     .select({ workspaceId: workspaces.id })
     .from(workspaces)
-    .where(
-      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
-    );
+    // The ONE pod-visible door (Sites W2): a guest owner reads no pod-visible
+    // workspace, so an automation can never widen past its owner's floor.
+    .where(podVisibleWorkspaceWhere(userId));
   for (const row of podReadable) ids.add(row.workspaceId);
 
   return Array.from(ids);

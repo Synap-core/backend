@@ -6,7 +6,7 @@ The loop has three moves that compound. Each takes a one-off act and, if it's wo
 
 | Do-once (author)                        | → Crystallize (curate)              | Tool                          |
 | --------------------------------------- | ----------------------------------- | ----------------------------- |
-| Work a multi-step goal in a **session** | → a **playbook** (the process)      | `promote_session_to_playbook` |
+| Work a multi-step goal in a **session** | → a **work template** (the process) | `promote_session_to_playbook` |
 | Show a result in a **cell**             | → a **renderer** for an entity type | `promote_cell_to_renderer`    |
 
 ### 1. Open a session for real work
@@ -28,16 +28,18 @@ When a cell is a _good, recurring way to present a whole entity type or step_ �
 - This is **governed**: for you it returns `{ status: "proposed", proposalId }`. That is the point — you author the renderer, the user reviews and curates it before it becomes every entity's view. Surface the proposal plainly ("I've proposed this as the detail view for bookmarks — review it when you like"), don't treat it as a failure.
 - Use `scope: "pod"` only when the presentation should apply in every workspace; default to workspace scope.
 
-### 4. Promote a finished session to a playbook — recurring process
+### 4. Promote a finished session to a template — recurring process
 
-When the session is done **and the work was a repeatable process** (not a one-off), promote it with `promote_session_to_playbook({ sessionId })`. This captures the goal, tasks, expected outputs, and steps as a reusable session template — so next time the process starts pre-built instead of from scratch.
+When the session is done **and the work was a repeatable process** (not a one-off), promote it with `promote_session_to_playbook({ sessionId })`. This captures the goal, tasks, expected outputs, and phases as a reusable **work template** (one sitting) — so next time the process starts pre-built instead of from scratch. Words: `concepts`.
 
 - Do this at the _end_, once the promised outputs are produced and verified.
-- Judge repeatability honestly: a bespoke, never-again investigation is not a playbook. A "weekly competitor scan" or "new-client onboarding" is.
+- Judge repeatability honestly: a bespoke, never-again investigation is not a template. "New-client onboarding" is a work template.
+- If it should **run on its own** ("a weekly competitor scan"), that is a **Rule** that starts the work each cycle (`create_rule`), not a template alone.
+- If the process spans **several steps over weeks**, each holding its own work, it is a **track template** (`create_playbook` with `scope: "project"`), run on a project with `start_track`.
 - Governed like the others — `promoted` (applied) or `proposed` (awaiting review) are both normal.
 
 ### The symmetry
 
-Sessions and cells are the two things you _do_; playbooks and renderers are the two things you _keep_. The instinct to build: **first do it once concretely, watch it work, then offer to crystallize it** — and let the user decide what becomes standing config. Never crystallize speculatively before the one-off has proven itself.
+Sessions and cells are the two things you _do_; templates and renderers are the two things you _keep_. The instinct to build: **first do it once concretely, watch it work, then offer to crystallize it** — and let the user decide what becomes standing config. Never crystallize speculatively before the one-off has proven itself.
 
 This is escalation ladder **L4**: crystallize only after proof. Blocked/missing structure climbs L2→L3 first (`escalation-ladder.md`); L4 is the success path, not a substitute for discovery.

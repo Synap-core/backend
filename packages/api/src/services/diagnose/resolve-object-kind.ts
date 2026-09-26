@@ -46,13 +46,14 @@ import {
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { accessScopeWhere } from "../../utils/project-scope.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
   userVisibleWhere,
   ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
 import { visibleWorkspaceWhere } from "./workspace.js";
 import { authoredByUser } from "../agent-identity-service.js";
-import { visibleSkillsWhere } from "../skills/visibility.js";
+import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
 import type { ObjectKind } from "./types.js";
@@ -196,17 +197,10 @@ export async function resolveObjectKind(
           .where(
             and(
               eq(focusSessions.id, id),
-              // Sessions carry an owner (userId) AND a workspace lens — a user
-              // sees their own sessions and those in workspaces they can read.
-              // NOT `eq(userId) OR userVisibleWhere(...)`: that OR widens rather
-              // than gates, because `userVisibleWhere`'s `isNull(workspaceId)`
-              // branch is owner-blind and already admitted every other user's
-              // pod-personal session.
-              ownerPrivateVisibleWhere(
-                focusSessions.workspaceId,
-                focusSessions.userId,
-                userId
-              )
+              // The ONE session read rule (decision D1): a session's title is
+              // content. Callers are agent doors (Hub resolve, diagnose), so
+              // no roster branch — owner-only; anything else is "unknown".
+              sessionReadableWhere({ userId })
             )
           )
           .limit(1);
@@ -249,7 +243,7 @@ export async function resolveObjectKind(
         const [skillRow] = await db
           .select({ name: skills.name, workspaceId: skills.workspaceId })
           .from(skills)
-          .where(and(eq(skills.id, id), visibleSkillsWhere(userId)))
+          .where(and(eq(skills.id, id), visibleSkillsAnyWorkspaceWhere(userId)))
           .limit(1);
         if (skillRow)
           return {

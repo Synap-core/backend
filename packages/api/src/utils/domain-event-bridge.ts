@@ -15,8 +15,8 @@
  * - workspaceMembers.add.completed → workspace:member_added
  * - workspaceMembers.remove.completed → workspace:member_removed
  * - widget_definition.*.completed → widget_definition:changed
- * - focus_session.*.completed → focus_session:updated (id-only, owner + room
- *   roster user rooms — never the workspace room; see emitSessionUpdated)
+ * - (focus sessions are NOT bridged here: `focus_session:updated` has ONE
+ *   producer, the DB-trigger listener in `session-changed-listener.ts`)
  * - artifact.changed.completed → artifact:changed
  * - entity_facet.*.completed → entity_facet:attached | entity_facet:updated | entity_facet:detached
  *
@@ -28,30 +28,16 @@
  */
 
 import { randomUUID } from "crypto";
-import {
-  db,
-  eq,
-  and,
-  focusSessions,
-  channels,
-  channelMembers,
-  ChannelMemberKind,
-  projectWorkspaceSettings,
-  type EventRecord,
-} from "@synap/database";
+import { projectWorkspaceSettings, type EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
 import { bridgeRequestHeaders } from "./chat-realtime-broadcast.js";
-import { SESSION_ROOM_CONTEXT_TYPE } from "./channel-visibility.js";
 
 const logger = createLogger({ module: "domain-event-bridge" });
 
 function getRealtimeUrl(): string {
   return process.env.REALTIME_URL || "http://localhost:4001";
 }
-
-/** Wire name kept for the clients (`socket-io-manager.ts` maps it). */
-const FOCUS_SESSION_UPDATED = "focus_session:updated";
 
 /** Map backend eventType to Socket.IO event name and whether we have workspaceId for targeting. */
 function mapToSocketEvent(
@@ -140,18 +126,6 @@ function mapToSocketEvent(
       event: "widget_definition:changed",
       workspaceIdRequired: false,
     },
-    // Focus sessions — NOT workspace-routed: a session is owner-private, so
-    // `emitDomainEventToRealtime` hands these to `emitSessionUpdated` (id-only,
-    // owner + room roster user rooms). `workspaceIdRequired: false` so a
-    // pod-scoped (NULL-workspace) session still pushes.
-    "focus_session.create.completed": {
-      event: FOCUS_SESSION_UPDATED,
-      workspaceIdRequired: false,
-    },
-    "focus_session.update.completed": {
-      event: FOCUS_SESSION_UPDATED,
-      workspaceIdRequired: false,
-    },
     // Artifacts — always workspace-scoped
     "artifact.changed.completed": {
       event: "artifact:changed",
@@ -221,10 +195,6 @@ export function emitHubRealtimeEvent(opts: {
 export function emitDomainEventToRealtime(event: EventRecord): void {
   const mapped = mapToSocketEvent(event.eventType);
   if (!mapped) return;
-  if (mapped.event === FOCUS_SESSION_UPDATED) {
-    emitSessionUpdated(event.subjectId);
-    return;
-  }
 
   let workspaceId =
     (event.data?.workspaceId as string | undefined) ?? undefined;
@@ -285,7 +255,7 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
 }
 
 /** POST one body to the bridge; a refusal (401/4xx/5xx) is logged, not swallowed. */
-function postToBridge(body: string, ctx: Record<string, unknown>): void {
+export function postToBridge(body: string, ctx: Record<string, unknown>): void {
   fetch(`${getRealtimeUrl()}/bridge/emit`, {
     method: "POST",
     headers: bridgeRequestHeaders(),
@@ -305,65 +275,6 @@ function postToBridge(body: string, ctx: Record<string, unknown>): void {
         "Domain event bridge: failed to emit to realtime"
       );
     });
-}
-
-/**
- * `focus_session:updated` — ID-ONLY, to the `user:<id>` rooms of the session's
- * owner and the human roster of its minted room. Never the workspace room and
- * never the goal/title: a session is owner-private, and the workspace room is
- * every member's socket. Clients refetch through their own read floor.
- */
-function emitSessionUpdated(sessionId: string): void {
-  void (async () => {
-    let audience: string[];
-    try {
-      audience = await sessionUpdateAudience(sessionId);
-    } catch (err) {
-      logger.warn(
-        { err, sessionId },
-        "focus_session:updated audience read failed"
-      );
-      return;
-    }
-    const data = { id: sessionId, sessionId };
-    for (const userId of audience) {
-      postToBridge(
-        JSON.stringify({ event: FOCUS_SESSION_UPDATED, data, userId }),
-        { sessionId, socketEvent: FOCUS_SESSION_UPDATED }
-      );
-    }
-  })();
-}
-
-/** Owner ∪ human roster of the session's MINTED room (never a borrowed channel). */
-export async function sessionUpdateAudience(
-  sessionId: string
-): Promise<string[]> {
-  const [session] = await db
-    .select({
-      userId: focusSessions.userId,
-      channelId: focusSessions.channelId,
-    })
-    .from(focusSessions)
-    .where(eq(focusSessions.id, sessionId))
-    .limit(1);
-  if (!session) return [];
-  const out = new Set<string>([session.userId]);
-  if (session.channelId) {
-    const roster = await db
-      .select({ memberId: channelMembers.memberId })
-      .from(channelMembers)
-      .innerJoin(channels, eq(channels.id, channelMembers.channelId))
-      .where(
-        and(
-          eq(channelMembers.channelId, session.channelId),
-          eq(channels.contextObjectType, SESSION_ROOM_CONTEXT_TYPE),
-          eq(channelMembers.memberKind, ChannelMemberKind.HUMAN)
-        )
-      );
-    for (const r of roster) out.add(r.memberId);
-  }
-  return [...out];
 }
 
 /**

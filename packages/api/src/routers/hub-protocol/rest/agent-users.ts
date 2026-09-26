@@ -20,6 +20,7 @@ import {
   hasScope,
   logger,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 export function registerAgentUsersRoutes(app: HubHono): void {
@@ -71,7 +72,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       logger.error({ err }, "POST /agent-users failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -234,7 +235,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       logger.error({ err }, "listAgentUsers failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -386,7 +387,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

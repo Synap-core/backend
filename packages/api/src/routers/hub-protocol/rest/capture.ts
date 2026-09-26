@@ -405,7 +405,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /import/enqueue-corpus failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -897,7 +897,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /capture/structure failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1109,7 +1109,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /import/analyze failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1429,7 +1429,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /import/store-unit failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1769,7 +1769,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /capture/graph failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

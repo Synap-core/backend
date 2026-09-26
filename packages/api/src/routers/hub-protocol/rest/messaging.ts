@@ -27,7 +27,11 @@ import {
   ChannelType,
   ensureExternalChannel,
 } from "@synap/database";
-import { hasScope, resolveActingContext } from "./_shared.js";
+import {
+  hasScope,
+  resolveActingContext,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 import type { MessagingAccount as DbMessagingAccount } from "@synap/database";
 
 import { getServiceSecret, upsertServiceSecret } from "@synap/database";
@@ -36,7 +40,11 @@ import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
 import { pullToImport } from "../../../services/connector-import-bridge.js";
 import { landInboundMessage } from "../../../services/connectors/land-inbound-message.js";
 import { recordChannelOrigin } from "../../../services/channels/channel-origin.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import {
+  ErrorSchema,
+  uuidQueryParam,
+  trpcErrorResponses,
+} from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono } from "./_shared.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
@@ -248,7 +256,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -261,6 +269,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       tags: ["Messaging"],
       summary: "List connected messaging accounts for the current user",
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "List of connected accounts",
           content: {
@@ -333,8 +342,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         logger.error({ err, userId }, "GET /messaging/accounts failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -353,6 +362,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Auth URL",
           content: {
@@ -388,7 +398,7 @@ export function registerMessagingRoutes(app: HubHono): void {
           "GET /messaging/auth-url failed"
         );
         c.header("Cache-Control", "no-store");
-        return c.json({ error: message }, 500);
+        return c.json({ error: message }, httpStatusForTrpcError(err)) as never;
       }
     }
   );
@@ -401,6 +411,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       tags: ["Messaging"],
       summary: "Sync live accounts from the connector into the database",
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Sync result",
           content: {
@@ -471,8 +482,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         logger.error({ err, userId }, "POST /messaging/accounts/sync failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -698,6 +709,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         params: z.object({ accountId: z.string() }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Account disconnected",
           content: {
@@ -757,8 +769,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -782,6 +794,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Conversations",
           content: {
@@ -985,8 +998,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         logger.error({ err, userId }, "GET /messaging/conversations failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1027,6 +1040,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         },
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Channel created, upgraded, or already exists",
           content: {
@@ -1112,8 +1126,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1130,6 +1144,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         params: z.object({ channelId: z.string() }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Channel unlinked",
           content: {
@@ -1174,8 +1189,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1191,6 +1206,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       summary: "Clear unread flag for a linked channel",
       request: { params: z.object({ channelId: z.string() }) },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Marked as read",
           content: {
@@ -1236,8 +1252,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1253,6 +1269,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       tags: ["Messaging"],
       summary: "All unread conversations linked to entities",
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Unread linked conversations",
           content: {
@@ -1353,8 +1370,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         logger.error({ err, userId }, "GET /messaging/linked-unread failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1371,6 +1388,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         query: z.object({ accountId: z.string() }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Messages",
           content: { "application/json": { schema: z.array(MessageSchema) } },
@@ -1416,8 +1434,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         logger.error({ err, threadId, accountId }, "GET messages failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1445,7 +1463,7 @@ export function registerMessagingRoutes(app: HubHono): void {
               schema: z
                 .object({
                   accountId: z.string(),
-                  workspaceId: z.string().optional(),
+                  workspaceId: uuidQueryParam.optional(),
                   sessionId: z.string().optional(),
                 })
                 .openapi("ImportThreadRequest"),
@@ -1454,6 +1472,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         },
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Import proposal created (or no messages to import)",
           content: {
@@ -1543,8 +1562,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1569,6 +1588,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         },
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Message sent",
           content: {
@@ -1625,8 +1645,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         logger.error({ err, threadId, accountId }, "POST send failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1648,6 +1668,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "External channels list",
           content: {
@@ -1719,8 +1740,8 @@ export function registerMessagingRoutes(app: HubHono): void {
         logger.error({ err, userId }, "GET /messaging/channels failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );

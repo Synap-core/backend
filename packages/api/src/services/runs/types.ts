@@ -284,6 +284,13 @@ export type UnifiedRunDetail = AutomationRunDetail | NonAutomationRunDetail;
 export interface PlaybookRunDetail {
   /** The run's session card — its goal, stage, progress, expected/verified outputs. */
   session: RunSessionCard | null;
+  /**
+   * The run HAS a session the viewer may not read (decision D1: a session is
+   * content, readable by its owner and its room's human roster). `session` is
+   * then null and the page renders the "private session" placeholder — no
+   * goal, no door. False when there is a readable session or none at all.
+   */
+  sessionPrivate: boolean;
   /** Entities the session produced (`session --produced--> entity`), user-visible only. */
   produced: RunProducedEntity[];
   /** The session's proposals — the created/updated/removed ledger the run wrote (cap 50). */

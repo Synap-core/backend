@@ -199,6 +199,10 @@ export interface IsFailureEnvelope {
     | "auth"
     | "rate_limit"
     | "quota_exhausted"
+    /** IS quota middleware: THIS account's monthly plan quota is used up. */
+    | "account_quota_exceeded"
+    /** IS entitlement middleware: the account's plan does not include AI. */
+    | "not_entitled"
     | "timeout"
     | "circuit_open"
     | "provider_error"

@@ -50,7 +50,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
-import { playbookStagesSchema } from "../../../schemas/playbook-stage.js";
+import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
 
@@ -146,29 +146,16 @@ export const SkillDefSchema = z.object({
   requires: z.array(z.string()).optional(),
 });
 
-// A PLAYBOOK template the definition seeds — mirrors the `playbooks.create`
-// tRPC input shape (createInputSchema in routers/playbooks.ts). String fields
+// A PLAYBOOK template the definition seeds — the ONE playbook definition
+// schema (schemas/playbook-definition.ts), the definition half of
+// `playbooks.create`'s input. The local copy it replaces had no `scope`, so a
+// capability-embedded project method was forced session-scoped. String fields
 // support `{{param}}` interpolation like the rest of the definition.
-export const PlaybookDefSchema = z.object({
-  name: z.string().min(1).max(500),
-  description: z.string().optional(),
-  goalTemplate: z.string().min(1).max(5000),
-  params: z.array(z.record(z.string(), z.unknown())).optional(),
-  inputStrategy: z.record(z.string(), z.unknown()).optional(),
-  channelSpec: z.record(z.string(), z.unknown()).optional(),
-  expectedOutputs: z.array(z.record(z.string(), z.unknown())).optional(),
-  // PlaybookStage[] — the ONE runtime schema (@synap/playbooks): `category` is
-  // REQUIRED and stage keys must be unique. No longer a loose bag.
-  stages: playbookStagesSchema.optional(),
-  // { profileSlug, filter? } — Wave 0 subject spine: which entity type the playbook operates over.
-  subjectProfile: z.record(z.string(), z.unknown()).optional(),
+export const PlaybookDefSchema = playbookDefinitionSchema.extend({
   // Kind + Facets: { facetSlug, filter? } — the facet twin of subjectProfile
   // (which role the playbook operates over). Type-level / forward-compat only:
   // validated at the definition boundary, not yet persisted (no column).
   subjectFacet: z.record(z.string(), z.unknown()).optional(),
-  schedule: z.unknown().optional(),
-  executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
-  status: z.enum(["draft", "active", "paused", "archived"]).optional(),
 });
 
 export const McpServerDefSchema = z.object({

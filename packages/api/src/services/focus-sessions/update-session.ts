@@ -285,6 +285,18 @@ export const expectedOutputWireSchema = z.object({
   // `evaluations/record.ts`, never authored by a client. On the wire for the
   // same round-trip reason as `owedSince`: a naive echo must not lose it.
   criterionKey: z.string().optional(),
+  // The person's answer — stamped by `answerExpectedOutput` only. On the wire
+  // for the same round-trip reason as `attestedBy`: a naive echo must not lose
+  // it at the parse, and the merge refuses a client authoring one.
+  answer: z
+    .object({
+      text: z.string(),
+      messageId: z.string().nullable(),
+      answeredBy: z.string(),
+      answeredAt: z.string(),
+      question: z.string().optional(),
+    })
+    .optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -376,6 +388,9 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // merely erasure-protected: an agent that could author it would point the
   // scorecard at a criterion it did not fail.
   "criterionKey",
+  // The person's answer (`answer-slot.ts`). An agent that could author it
+  // would put words in the person's mouth and hand itself its own slot back.
+  "answer",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**

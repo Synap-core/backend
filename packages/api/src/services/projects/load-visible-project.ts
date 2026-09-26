@@ -30,8 +30,8 @@ export async function loadVisibleProject(
   // `userId` / `phase` / `settings` are additive to the original
   // `{ id, workspaceId }`. `userId` is the owner floor a pod-personal
   // project's writes gate on (`assertWorkspaceWrite`, e.g. the tracks
-  // service). `phase` feeds `instantiateFromPlaybook`'s legacy `phaseKept`
-  // key. `settings` was read by the proto-track to merge `settings.stages`
+  // service). `phase` fed the retired `instantiateFromPlaybook`'s legacy
+  // `phaseKept` key. `settings` was read by the proto-track to merge `settings.stages`
   // into — nothing writes that any more (tracks pin stages, 0272); it stays
   // selected so no caller silently loses a field. Existing callers
   // destructure only what they use.

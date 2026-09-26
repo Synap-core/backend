@@ -43,6 +43,23 @@ export type { WorkspaceLens } from "@synap/database";
 export { podMemberWhere } from "@synap/database";
 
 /**
+ * Sites W2 audience predicates — implementation in `@synap/database`
+ * (utils/pod-membership.ts), re-exported under the same names:
+ *   - `podParticipantWhere`: pod_members OR workspace_members OR owns a workspace;
+ *   - `podGuestWhere`: holds a `role='guest'` project membership AND is not a
+ *     participant — the guest's floor is the exposure branch only;
+ *   - `podReaderWhere`: may read pod-visible workspaces and pod-wide globals
+ *     (a participant, or a known non-guest user).
+ */
+export {
+  podParticipantWhere,
+  podGuestWhere,
+  podReaderWhere,
+  podVisibleWorkspaceWhere,
+  GUEST_PROJECT_ROLE,
+} from "@synap/database";
+
+/**
  * OWNER-PRIVATE floor for tables that have BOTH a `workspace_id` and a per-user
  * owner column, where a NULL workspace means "personal to the owner" — the
  * `ownerPrivate` shape in the access registry (focus_sessions, entities,

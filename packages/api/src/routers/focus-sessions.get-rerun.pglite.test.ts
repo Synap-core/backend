@@ -50,6 +50,10 @@ import {
   chatTurns,
   workspaces,
   workspaceMembers,
+  channels,
+  channelMembers,
+  podMembers,
+  projectMembers,
 } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
 
@@ -112,6 +116,11 @@ describe("focusSessions.get projects the rerun door's own availability", () => {
       chatTurns,
       workspaces,
       workspaceMembers,
+      // The session read predicate's roster branch joins these (decision C).
+      channels,
+      channelMembers,
+      podMembers,
+      projectMembers,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

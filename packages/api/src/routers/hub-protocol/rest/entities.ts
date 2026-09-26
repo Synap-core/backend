@@ -61,10 +61,15 @@ import {
   WireEntitySchema,
   entityToWire,
 } from "./_codecs/entity.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import {
+  ErrorSchema,
+  trpcErrorResponses,
+  uuidQueryParam,
+} from "./_codecs/_openapi.js";
 import {
   getCaller,
   getUserAccessibleWorkspaceIds,
+  httpStatusForTrpcError,
   hasScope,
   logger,
   mayActAsUser,
@@ -150,11 +155,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .string()
           .optional()
           .describe("Deprecated alias for profileSlug."),
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         limit: z.string().optional(),
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Array of entities",
         content: {
@@ -208,8 +214,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, userId }, "getEntities failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never; // typed routes can't take a union status; every status it can return is declared via trpcErrorResponses
     }
   });
 
@@ -228,7 +234,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       query: z.object({
         q: z.string().optional().describe("Free-text search query."),
         profileSlug: z.string().optional(),
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         projectId: z
           .string()
           .optional()
@@ -298,6 +304,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Array of entities",
         content: { "application/json": { schema: z.array(WireEntitySchema) } },
@@ -476,6 +483,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
             })
           )
         );
+        // Every lens failing is a FAILED read, not an empty one — rethrow so
+        // the catch maps it (an undeclared facetSlug is a 404 here too, not a
+        // calm `[]`). A partial failure still returns what the other lenses read.
+        const firstRejection = settled.find((r) => r.status === "rejected");
+        if (firstRejection && settled.every((r) => r.status === "rejected")) {
+          throw (firstRejection as PromiseRejectedResult).reason;
+        }
         const fulfilled = settled.flatMap((r) =>
           r.status === "fulfilled" ? (r.value as unknown[]) : []
         );
@@ -536,8 +550,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, userId }, "GET /entities failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never; // typed routes can't take a union status; every status it can return is declared via trpcErrorResponses
     }
   });
 
@@ -556,11 +570,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
       params: z.object({ id: uuidPathParam }),
       query: z.object({
         userId: z.string().optional(),
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         limit: z.string().optional(),
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Relations list with summary counts",
         content: {
@@ -630,8 +645,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, entityId }, "getConnections failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never; // typed routes can't take a union status; every status it can return is declared via trpcErrorResponses
     }
   });
 
@@ -657,6 +672,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Canonical entity wire record",
         content: { "application/json": { schema: WireEntitySchema } },
@@ -725,7 +741,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, entityId }, "entities.get failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -750,7 +766,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
             schema: z.object({
               query: z.string().min(1),
               profileSlug: z.string().optional(),
-              workspaceId: z.string().optional(),
+              workspaceId: uuidQueryParam.optional(),
               limit: z.number().int().min(1).max(100).optional(),
             }),
           },
@@ -758,6 +774,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Merged entity results",
         content: {
@@ -852,8 +869,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /entities/recall fetch failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never; // typed routes can't take a union status; every status it can return is declared via trpcErrorResponses
     }
   });
 
@@ -882,7 +899,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           "application/json": {
             schema: z.object({
               query: z.string().min(1),
-              workspaceId: z.string().optional(),
+              workspaceId: uuidQueryParam.optional(),
               limit: z.number().int().min(1).max(100).optional(),
             }),
           },
@@ -890,6 +907,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Ranked entities + retrieval understanding",
         content: {
@@ -964,8 +982,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, userId }, "POST /entities/retrieve failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never; // typed routes can't take a union status; every status it can return is declared via trpcErrorResponses
     }
   });
 
@@ -1302,7 +1320,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           "application/json": {
             schema: z.object({
               userId: z.string().optional(),
-              workspaceId: z.string().optional(),
+              workspaceId: uuidQueryParam.optional(),
               // Upload+link mode: provide the image bytes. A NEW file entity is
               // created and linked.
               filename: z.string().min(1).optional(),
@@ -1318,6 +1336,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Created file entity + link result",
         content: { "application/json": { schema: z.object({}).passthrough() } },
@@ -1554,7 +1573,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, entityId }, "POST /entities/:id/attachments failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1717,7 +1736,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1916,7 +1935,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         logger.error({ err }, "POST /files failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
+          httpStatusForTrpcError(err)
         );
       }
     }
@@ -1966,7 +1985,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err }, "POST /files failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -2159,13 +2178,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
     request: {
       params: z.object({ entityId: uuidPathParam }),
       query: z.object({
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         userId: z.string().optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().optional(),
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Deletion result (completed or proposed)",
         content: { "application/json": { schema: z.object({}).passthrough() } },
@@ -2257,7 +2277,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, entityId }, "deleteEntity failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -206,7 +206,8 @@ export function selectRunChannelBranch(input: {
  * this is the single source of truth. Switches on `metadata.resultRouting`:
  *
  *  - `per_entity` + a run subject → THIS run's subject's own channel
- *    (`ensureEntityChannel`), the per-client recap spine. Choosing `per_entity`
+ *    (`ensureObjectChannel`, the entity's ONE object room), the per-client
+ *    recap spine. Choosing `per_entity`
  *    is a deliberate opt-in, so it wins over a trigger-bound channel.
  *  - otherwise an explicit trigger-bound channel wins (a Discord-triggered
  *    automation posts back to its source channel) — this is the historical
@@ -236,14 +237,13 @@ export async function resolveRunChannel(
   const repo = new ChannelRepository(db);
 
   if (decision.branch === "subject_entity") {
-    const channel = await repo.ensureEntityChannel(
+    const room = await repo.ensureObjectChannel({
+      type: "entity",
       // Narrowed by `hasSubject` above — the branch is only returned when set.
-      run.subjectEntityId!,
-      automation.createdBy,
-      run.workspaceId ?? undefined,
-      { title: automation.name ?? undefined }
-    );
-    return channel.id;
+      id: run.subjectEntityId!,
+    });
+    // A deleted subject has no room: fall through to the run channel.
+    if (room) return room.channel.id;
   }
 
   const channel = await repo.ensureAutomationRunChannel(

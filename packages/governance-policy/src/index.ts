@@ -397,6 +397,17 @@ export const ADMIN_ACTIONS_LIVE: readonly GateEventKey[] = [
   // `projectMember.create`, so no rule or `autoApproveFor` entry (e.g.
   // `relation.*`) may lift it to auto-execute.
   "relation.expose",
+  // Sharing (Sites W2). Real gate: `services/sharing/share-service.ts` —
+  // `shareResource` passes `subjectType: "share"` + `action: "create"` (door
+  // `share/create`) for every owner share door: tRPC `shares.share`, Hub REST
+  // `POST /shares`, and the `relations.exposeToAnchor` alias. A share exposes a
+  // record to a project's guests or mints a LINK that redeems into a guest
+  // membership — the same SCOPE CHANGE as `projectMember.create`. Floored HERE
+  // (rung 2, above rules 2.8 / autoApproveFor 4 / DEFAULT_AUTO_APPROVE 8) so an
+  // agent's share is ALWAYS a proposal: no `governance_rules` row (`*`,
+  // `relation.*`, `entity.*`, `share.create` itself) can widen it. A human owner
+  // never reaches this engine, so the owner share stays direct.
+  "share.create",
   // Agent capability grants — `routers/agent-users.ts`.
   "agent.updateCapabilities",
   // API keys. `apiKey.create` was already correct; the DELETE door is spelled
@@ -1686,6 +1697,11 @@ export const GATE_WRITE_DOORS = {
   "focus_session/grant_capability": "gate",
   "focus_session/update": "gate+automation",
   "link/create": "gate",
+  // Removing an edge — today only `project --uses--> workspace` (MCP
+  // `synap_project_use_workspace {remove:true}`), replayed on approval by
+  // `routers/proposals/executors/link.ts`. `delete` is a DESTRUCTIVE_ACTIONS
+  // verb, so an agent's removal always proposes.
+  "link/delete": "gate",
   "playbook/archive": "gate",
   "playbook/create": "gate",
   "playbook/promote": "gate",
@@ -1739,6 +1755,13 @@ export const GATE_WRITE_DOORS = {
   // also the door that ACTIVATES a draft, which is a recompile-and-refuse, not
   // a status flip.
   "rule/update": "gate",
+  // SHARING (Sites W2) — expose a record to a project's guests, or mint a
+  // link row. ADMIN-floored (`share.create` in ADMIN_ACTIONS_LIVE): an agent
+  // always proposes. Approval is `services/sharing/share-executors.ts`, which
+  // replays the SAME core (`applyShare`) re-floored on the proposal's subject
+  // and creates a link row WITHOUT a token (the human mints it). Revoke /
+  // unshare is direct for everyone and never reaches the gate.
+  "share/create": "gate",
   "role/create": "gate",
   "role/delete": "gate",
   "role/update": "gate",
@@ -1749,7 +1772,7 @@ export const GATE_WRITE_DOORS = {
   "tool/delete": "gate",
   "tool/update": "gate",
   // TRACKS (0272) — a method running inside a project. `create` starts one
-  // (the door `projects.instantiateFromPlaybook` now wraps); `update` is the
+  // (the legacy `project/instantiate_from_playbook` executor replays through it); `update` is the
   // status (pause/resume/complete/archive) and stage-advance door. Both are
   // replayed by `routers/proposals/executors/track.ts` through the SAME
   // service (`services/tracks`).

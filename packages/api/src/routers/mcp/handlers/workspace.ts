@@ -23,6 +23,7 @@ import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import {
   linkProjectToWorkspace,
   listProjectsUsingWorkspaces,
+  unlinkProjectFromWorkspace,
 } from "../../../utils/project-workspace.js";
 import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
@@ -631,6 +632,10 @@ export const workspaceHandlers: McpHandlerMap = {
       ...(typeof args.targetDate === "string" || args.targetDate === null
         ? { targetDate: args.targetDate as unknown as Date | null }
         : {}),
+      // D6: governed home change (target write-checked in projects.update).
+      ...(typeof args.homeWorkspaceId === "string"
+        ? { homeWorkspaceId: args.homeWorkspaceId }
+        : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
@@ -645,6 +650,10 @@ export const workspaceHandlers: McpHandlerMap = {
     if (!projectId || !workspaceId) {
       return ok({ error: "projectId and workspaceId are required" });
     }
+    // `remove: true` — the inverse door, governed as a link DELETE (a
+    // DESTRUCTIVE verb: an agent's removal always proposes). Approval replays
+    // it through `executors/link.ts` → `unlinkProjectFromWorkspace`.
+    const remove = args.remove === true;
     // The SAME pre-governance endpoint floor as REST POST /links: the project
     // must be visible and the caller a member of the workspace — otherwise an
     // unreachable edge becomes a proposal approval would write.
@@ -664,12 +673,16 @@ export const workspaceHandlers: McpHandlerMap = {
       agentUserId,
       workspaceId,
       subjectType: "link",
-      action: "create",
+      action: remove ? "delete" : "create",
       reasoning:
         readReasoning(args) ??
-        "Project uses workspace (INDEX, not ACL) via MCP synap_project_use_workspace",
+        (remove
+          ? "Project no longer uses workspace via MCP synap_project_use_workspace"
+          : "Project uses workspace (INDEX, not ACL) via MCP synap_project_use_workspace"),
       data: {
-        title: "project --uses--> workspace",
+        title: remove
+          ? "remove project --uses--> workspace"
+          : "project --uses--> workspace",
         fromType: "project",
         fromId: projectId,
         toType: "workspace",
@@ -688,6 +701,20 @@ export const workspaceHandlers: McpHandlerMap = {
       });
     }
     const database = await getDb();
+    if (remove) {
+      const removed = await unlinkProjectFromWorkspace(database, {
+        projectId,
+        workspaceId,
+        userId,
+      });
+      if (!removed.unlinked) return ok({ error: "Project not found" });
+      return ok({
+        status: "unlinked",
+        projectId,
+        workspaceId,
+        removed: removed.rows,
+      });
+    }
     const uses = await linkProjectToWorkspace(database, {
       projectId,
       workspaceId,

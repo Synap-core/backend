@@ -20,6 +20,10 @@
 
 // Importing registry.ts runs its registration side effects.
 import "./registry.js";
+// …and the object-room floors (`channelVisibilityWhere` branch 5: a document's
+// / entity's ONE room is visible exactly when the object is) — built from the
+// rules registered above.
+import "../utils/object-room-floors.js";
 
 export { AccessContext, accessFor, type Actor } from "./context.js";
 export {

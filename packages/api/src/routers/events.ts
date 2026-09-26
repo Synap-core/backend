@@ -16,10 +16,56 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { createSynapEvent } from "@synap-core/core";
 import { db, getEventRepository } from "@synap/database";
 import { resolveSubjectNames, subjectKey } from "./subscriptions.js";
+import { and, inArray } from "drizzle-orm";
+import { focusSessions } from "@synap/database/schema";
+import {
+  rosterReadFor,
+  sessionReadableWhere,
+  type SessionReader,
+} from "../access/session-visibility.js";
 import type { EventType } from "@synap/events";
 import { randomUUID } from "crypto";
 
 // Temporary schemas until we refactor
+/**
+ * A session's events ARE its story (decision D1: a session's goal, status and
+ * summary are CONTENT). An event whose subject is a focus session, or that was
+ * recorded inside one (`events.session_id`), is returned only when the caller
+ * may read that session — `sessionReadableWhere`, the one session read rule.
+ *
+ * OMIT, not strip: the event's TYPE and TIMESTAMP already tell a non-reader
+ * what happened in a colleague's session and when ("closed", "stage advanced"),
+ * so a payload-less row would still be a leak — and a row with its payload
+ * gutted renders as an unexplained blank. The cost is honest: a page can come
+ * back shorter than `limit`; paging by `offset` still reaches every row.
+ */
+async function omitUnreadableSessionEvents<
+  E extends {
+    subjectType?: string | null;
+    subjectId?: string | null;
+    sessionId?: string | null;
+  },
+>(events: E[], reader: SessionReader): Promise<E[]> {
+  const sessionOf = (e: E): string[] =>
+    [
+      e.subjectType === "focus_session" ? e.subjectId : null,
+      e.sessionId,
+    ].filter((id): id is string => !!id);
+  const ids = [...new Set(events.flatMap(sessionOf))];
+  if (ids.length === 0) return events;
+  const readable = new Set(
+    (
+      await db
+        .select({ id: focusSessions.id })
+        .from(focusSessions)
+        .where(
+          and(inArray(focusSessions.id, ids), sessionReadableWhere(reader))
+        )
+    ).map((r) => r.id)
+  );
+  return events.filter((e) => sessionOf(e).every((id) => readable.has(id)));
+}
+
 const subjectTypeSchema = z.enum([
   "entity",
   "relation",
@@ -352,7 +398,7 @@ export const eventsRouter = router({
       }
 
       // Perform search
-      const events = await eventRepo.searchEvents({
+      const found = await eventRepo.searchEvents({
         userId: input.userId,
         eventType: input.eventType,
         subjectType: input.subjectType,
@@ -364,6 +410,10 @@ export const eventsRouter = router({
         toDate: input.toDate,
         limit: input.limit,
         offset: input.offset,
+      });
+      const events = await omitUnreadableSessionEvents(found, {
+        userId: requireUserId(ctx.userId),
+        roster: rosterReadFor(ctx),
       });
 
       // ── NAME THE SUBJECT ────────────────────────────────────────────────

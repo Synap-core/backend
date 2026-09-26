@@ -179,4 +179,31 @@ describe("approved application origin CORS policy (origin allowlist plane)", () 
       })
     ).toBe(false);
   });
+
+  it("never rejects a credentialless public door, and still rejects the legacy projection (Sites W3)", () => {
+    const foreign = {
+      origin: "https://someone.vercel.app",
+      firstPartyOrigin: false,
+      approvedApplicationOrigin: false,
+    };
+    for (const path of [
+      "/api/hub/public/shares/tok",
+      "/api/hub-protocol/public/forms/tok/submissions",
+    ]) {
+      expect(
+        rejectsUnapprovedExternalPodApiRequest({
+          ...foreign,
+          path,
+          method: "POST",
+        })
+      ).toBe(false);
+    }
+    expect(
+      rejectsUnapprovedExternalPodApiRequest({
+        ...foreign,
+        path: "/api/hub/public/projection",
+        method: "GET",
+      })
+    ).toBe(true);
+  });
 });

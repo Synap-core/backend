@@ -69,6 +69,12 @@ import {
   attestExpectedOutput,
   type AttestExpectedOutputResult,
 } from "../services/focus-sessions/satisfy-expected-output.js";
+import { answerSessionSlot } from "../services/focus-sessions/session-answer.js";
+import { SLOT_ANSWER_TEXT_MAX } from "../services/focus-sessions/answer-slot.js";
+import {
+  listSessionAnswers,
+  SESSION_ANSWERS_MAX_LIMIT,
+} from "../services/focus-sessions/list-session-answers.js";
 import { listOwedSlots } from "../services/focus-sessions/owed-outputs.js";
 import { readSessionDocument } from "../services/session-document/upsert-section.js";
 
@@ -126,6 +132,14 @@ import {
 } from "../services/focus-sessions/session-interactions.js";
 import type { ContinuationNextMove } from "../services/focus-sessions/continuation-packet.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
+import {
+  rosterReadFor,
+  sessionReadableWhere,
+} from "../access/session-visibility.js";
+import {
+  withViewerRole,
+  type SessionViewerRole,
+} from "../services/focus-sessions/viewer-role.js";
 import {
   attachSessionParticipants,
   withSessionParticipants,
@@ -282,11 +296,14 @@ const sessionLinksRouter = router({
   bySession: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      // Verify session ownership before exposing its link graph.
+      // Verify the caller may READ the session before exposing its link graph.
       const session = await db.query.focusSessions.findFirst({
         where: and(
           eq(focusSessions.id, input.sessionId),
-          eq(focusSessions.userId, ctx.userId)
+          sessionReadableWhere({
+            userId: requireUserId(ctx.userId),
+            roster: rosterReadFor(ctx),
+          })
         ),
       });
 
@@ -420,6 +437,11 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
     /** Present with `nextMove: true` — the counts a state mark reads. */
     unitFacts?: SessionUnitCounts;
     interactions?: SessionInteractionsSection;
+    /**
+     * `owner` | `member` (decision C) — present on every row the door returns;
+     * optional on the type only because the intermediate projections build it.
+     */
+    viewerRole?: SessionViewerRole;
   };
 
 /**
@@ -438,7 +460,9 @@ export const focusSessionsRouter = router({
   /**
    * THE one door for focus sessions (collapses the old list/listAll split).
    *
-   * Floor = `eq(userId)` (sessions are user-owned). No lens → ALL the user's
+   * Floor = `sessionReadableWhere` (the owner's sessions, plus — on this human
+   * door — the sessions whose room roster seats the caller; each row carries
+   * `viewerRole`). No lens → ALL the user's
    * sessions across workspaces, INCLUDING project-only sessions (null
    * workspaceId). A workspace and/or project lens only NARROWS:
    *   - no `workspaceId` (and no active-ws header) → all my sessions
@@ -561,6 +585,8 @@ export const focusSessionsRouter = router({
           statusSince: input.statusSince,
           unfiled: input.unfiled,
           includeTrackedRuns: input.includeTrackedRuns,
+          // Shared sessions (human roster of the room) list too — decision C.
+          roster: rosterReadFor(ctx),
         },
         input.limit,
         input.order
@@ -575,13 +601,22 @@ export const focusSessionsRouter = router({
       const withInteractions: SessionListRow[] = input.interactions
         ? await attachSessionInteractions(withMove)
         : withMove;
-      if (!input.edges) return withInteractions;
+      // `viewerRole` LAST: on a member row it also neutralises the
+      // owner-directed `unitFacts`, so a shared session never counts toward
+      // the member's needs-you (see `viewer-role.ts`).
+      const viewer = requireUserId(ctx.userId);
+      if (!input.edges)
+        return withInteractions.map((r) => withViewerRole(r, viewer));
       // Second batch projection, ONE more links query for the whole page.
       const withEdges = await attachSessionEdges(withInteractions);
       // Third: the DERIVED output dependencies. Owner-floored explicitly —
       // unlike `blocked_by`, these edges have no single producer that floors
       // both ends, so the counterparty can belong to another user.
-      return attachSessionOutputDependencies(withEdges, ctx.userId);
+      const withDeps = await attachSessionOutputDependencies(
+        withEdges,
+        ctx.userId
+      );
+      return withDeps.map((r) => withViewerRole(r, viewer));
     }),
   /**
    * BROWSE — the full, searchable, paged session list behind "See all".
@@ -635,6 +670,7 @@ export const focusSessionsRouter = router({
               statusSince: input.statusSince,
               q: input.q,
               unfiled: input.unfiled,
+              roster: rosterReadFor(ctx),
             })
           )
         )
@@ -643,8 +679,11 @@ export const focusSessionsRouter = router({
         .limit(input.limit + 1)
         .offset(input.offset);
       const { items, pagination } = buildPaginatedResponse(rows, input);
+      const viewer = requireUserId(ctx.userId);
       return {
-        items: await projectSessionRows(items, ctx.userId),
+        items: (await projectSessionRows(items, ctx.userId)).map((r) =>
+          withViewerRole(r, viewer)
+        ),
         pagination,
       };
     }),
@@ -1019,6 +1058,7 @@ export const focusSessionsRouter = router({
       const result = await listRunSources({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
+        roster: rosterReadFor(ctx),
       });
       if (!result) {
         throw new TRPCError({
@@ -1091,10 +1131,11 @@ export const focusSessionsRouter = router({
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
+      const roster = rosterReadFor(ctx);
       const row = await db.query.focusSessions.findFirst({
         where: and(
           eq(focusSessions.id, input.id),
-          eq(focusSessions.userId, ctx.userId)
+          sessionReadableWhere({ userId: requireUserId(ctx.userId), roster })
         ),
       });
 
@@ -1123,9 +1164,12 @@ export const focusSessionsRouter = router({
       const continuation = await projectContinuationPacket(row, {
         database: db,
         userId: requireUserId(ctx.userId),
+        roster,
       });
       return withParentSessionId({
         ...staffed,
+        // `owner` | `member` — a member reads, never writes (decision C).
+        viewerRole: withViewerRole(row, requireUserId(ctx.userId)).viewerRole,
         triage: projectTriage(row),
         kind: projectSessionKind(row),
         rerun: continuation.rerun,
@@ -1155,7 +1199,7 @@ export const focusSessionsRouter = router({
       const row = await db.query.focusSessions.findFirst({
         where: and(
           eq(focusSessions.id, input.sessionId),
-          eq(focusSessions.userId, userId)
+          sessionReadableWhere({ userId, roster: rosterReadFor(ctx) })
         ),
       });
       if (!row) {
@@ -1166,9 +1210,12 @@ export const focusSessionsRouter = router({
       }
       const { listSessionEvaluations, summarizeEvaluations } =
         await import("../services/focus-sessions/evaluations/record.js");
+      // The session row is the authorization (read above); its evaluations
+      // carry the OWNER's user id — same contract as
+      // `loadSessionEvaluationSummary`.
       const history = await listSessionEvaluations({
         sessionId: row.id,
-        userId,
+        userId: row.userId,
       });
       return { ...summarizeEvaluations(row.criteria, history), history };
     }),
@@ -2286,6 +2333,106 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * ANSWER — the person answers what an agent asked about a slot (the
+   * needs-you tray's reply verb). The SAME service the owner's reply in the
+   * session room reaches (`answerSessionSlot`, `session-answer.ts`), so the
+   * tray and the room cannot answer one question two ways.
+   *
+   * Not a delivery: `status` is untouched. A slot handed to the person goes
+   * back to the agent with `answer` attached; the answer is also posted into
+   * the room as the person; a pod-run agent that asked is woken. A session's
+   * OWNER only (the service's floor) — and never an agent key, which would be
+   * an agent answering its own question.
+   */
+  answerOutput: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().min(1).max(500),
+        text: z.string().min(1).max(SLOT_ANSWER_TEXT_MAX),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can answer — an agent key cannot.",
+        });
+      }
+      const result = await answerSessionSlot({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        expectedLabel: input.expectedLabel,
+        text: input.text,
+      });
+      switch (result.status) {
+        case "answered":
+          return { ok: true as const, ...result };
+        case "not_found":
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.sessionId} not found`,
+          });
+        case "unknown_label":
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `This session declares no output labelled "${input.expectedLabel}"`,
+          });
+        case "already_done":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `"${input.expectedLabel}" is already delivered`,
+          });
+        case "retired":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `"${input.expectedLabel}" was retired with its cancelled session`,
+          });
+        case "empty_answer":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "The answer is empty",
+          });
+      }
+    }),
+
+  /**
+   * ANSWERS — the owner's answers on this session since a cursor. The tRPC
+   * twin of Hub `GET /focus-sessions/:id/answers` (contract:
+   * `list-session-answers.ts`).
+   */
+  answers: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        since: z.string().datetime({ offset: true }).optional(),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(SESSION_ANSWERS_MAX_LIMIT)
+          .optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const page = await listSessionAnswers({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        // A human roster member reads the owner's answers too (decision C).
+        roster: rosterReadFor(ctx),
+        since: input.since ? new Date(input.since) : null,
+        limit: input.limit,
+      });
+      if (!page) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return page;
+    }),
+
+  /**
    * OWED — every deliverable blocked on YOU, across every session you own.
    *
    * NOT composed over `list`, and it must never become so: `list` is capped at
@@ -2333,6 +2480,7 @@ export const focusSessionsRouter = router({
         db,
         userId: ctx.userId,
         sessionId: input.sessionId,
+        roster: rosterReadFor(ctx),
       });
       if (!result) {
         throw new TRPCError({
@@ -2356,6 +2504,7 @@ export const focusSessionsRouter = router({
       const result = await readSessionUsage({
         userId: requireUserId(ctx.userId),
         sessionId: input.id,
+        roster: rosterReadFor(ctx),
       });
       if (!result) {
         throw new TRPCError({
@@ -2373,8 +2522,9 @@ export const focusSessionsRouter = router({
    * Pod tRPC mirror of the hub-protocol `getSessionDocument` procedure
    * (`routers/hub-protocol/documents.ts`) — both call the same
    * `readSessionDocument`, never a re-implementation. A session the caller
-   * doesn't own (or a malformed id) is NOT_FOUND, enforced by
-   * `loadOwnedSession` inside `readSessionDocument`.
+   * cannot read (or a malformed id) is NOT_FOUND, enforced by
+   * `loadReadableSession` inside `readSessionDocument` (owner, or a human
+   * roster member on this human door).
    */
   document: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }))
@@ -2382,6 +2532,7 @@ export const focusSessionsRouter = router({
       readSessionDocument({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
+        roster: rosterReadFor(ctx),
       })
     ),
 });

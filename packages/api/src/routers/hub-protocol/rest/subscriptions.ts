@@ -16,9 +16,15 @@
 
 import { z } from "@hono/zod-openapi";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { errCode, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  errCode,
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { subscriptionsRouter } from "../../subscriptions.js";
 import { webhooksRouter } from "../../webhooks.js";
@@ -45,7 +51,7 @@ export function registerSubscriptionsRoutes(app: HubHono): void {
       "Returns the timestamp-sorted union of reactive events for the user. Each item is a ReactionEvent shell; call /subscriptions/{eventId}/fanout for its dense reactions[].",
     request: {
       query: z.object({
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         limit: z.coerce.number().min(1).max(500).optional(),
         kind: reactionKindSchema.optional(),
         eventType: z.string().optional(),
@@ -133,7 +139,7 @@ export function registerSubscriptionsRoutes(app: HubHono): void {
       logger.error({ err, userId }, "subscriptions list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -166,7 +172,7 @@ export function registerSubscriptionsRoutes(app: HubHono): void {
       logger.error({ err, userId, eventId }, "subscriptions fanout failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -198,7 +204,7 @@ export function registerSubscriptionsRoutes(app: HubHono): void {
       logger.error({ err, userId, id }, "webhook deliveries failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

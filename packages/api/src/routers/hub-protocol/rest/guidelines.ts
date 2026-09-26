@@ -44,6 +44,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 const GuidelinesQuerySchema = z
@@ -178,7 +179,7 @@ export function registerGuidelinesRoutes(app: HubHono) {
       logger.error({ err }, "guidelines.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -255,7 +256,7 @@ export function registerGuidelinesRoutes(app: HubHono) {
       logger.error({ err }, "guidelines.history failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

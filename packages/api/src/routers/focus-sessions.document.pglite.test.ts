@@ -69,6 +69,13 @@ import {
   documentVersions,
   focusSessions,
   artifacts,
+  channels,
+  channelMembers,
+  users,
+  podMembers,
+  projectMembers,
+  workspaces,
+  workspaceMembers,
 } from "@synap/database/schema";
 import { db } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
@@ -143,7 +150,21 @@ Draft one.
 `;
 
 beforeAll(async () => {
-  for (const table of [documents, documentVersions, focusSessions, artifacts]) {
+  // channels … workspace_members: the session read predicate's roster branch
+  // and its workspace floor (decision C).
+  for (const table of [
+    documents,
+    documentVersions,
+    focusSessions,
+    artifacts,
+    channels,
+    channelMembers,
+    users,
+    podMembers,
+    projectMembers,
+    workspaces,
+    workspaceMembers,
+  ]) {
     await h.client!.exec(ddlFor(table as PgTable));
   }
 });

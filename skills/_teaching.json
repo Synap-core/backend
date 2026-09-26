@@ -445,6 +445,17 @@
       "capability": null
     }
   },
+  "synap/concepts": {
+    "teachesTools": [],
+    "skillGroup": "core",
+    "alwaysOn": true,
+    "summary": "The one glossary: workspace, project, track, step, work, template, pack, rule, approvals, tools, to review, role (one role per name, pod-wide).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap/escalation-ladder": {
     "teachesTools": [
       "list_profiles",

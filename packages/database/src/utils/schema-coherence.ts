@@ -52,7 +52,7 @@ interface RequiredColumn {
  *
  * Keep this list in sync with 0099_schema_reconciliation.sql.
  */
-const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
+export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   // Wave B3 provenance — tripwire on the KG core (0107). Checking 2 of the 5
   // per table is enough to confirm the migration ran (it adds all 5 together).
   //
@@ -287,6 +287,16 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "messages",
     column: "ephemeral",
     addedBy: "0178_messages_ephemeral.sql",
+  },
+  {
+    table: "messages",
+    column: "resolved_at",
+    addedBy: "0279_object_rooms_and_comment_resolve.sql",
+  },
+  {
+    table: "messages",
+    column: "resolved_by",
+    addedBy: "0279_object_rooms_and_comment_resolve.sql",
   },
 
   // entities
@@ -1552,6 +1562,54 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "documents",
     column: "working_state_revision",
     addedBy: "0275_document_content_revision.sql",
+  },
+  // 0276 — exposure substrate. Every share read and write names the audience,
+  // state, anchor and workspace of a `resource_shares` row, so without them
+  // every sharing door 500s.
+  {
+    table: "resource_shares",
+    column: "audience",
+    addedBy: "0276_exposure_substrate.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "state",
+    addedBy: "0276_exposure_substrate.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "anchor_project_id",
+    addedBy: "0276_exposure_substrate.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "workspace_id",
+    addedBy: "0276_exposure_substrate.sql",
+  },
+  // The publication snapshot: the public projection reads ONLY this object.
+  {
+    table: "resource_shares",
+    column: "published_properties",
+    addedBy: "0276_exposure_substrate.sql",
+  },
+  // The pinned document checkpoint (by row id) the projection serves.
+  {
+    table: "resource_shares",
+    column: "published_document_version_id",
+    addedBy: "0276_exposure_substrate.sql",
+  },
+  // The views floor will read the exposure marker on every view read, so a
+  // missing column would 500 every view read.
+  {
+    table: "views",
+    column: "exposed_at",
+    addedBy: "0276_exposure_substrate.sql",
+  },
+  // Link redemption writes the provenance of a guest membership.
+  {
+    table: "project_members",
+    column: "granted_via_share_id",
+    addedBy: "0276_exposure_substrate.sql",
   },
   // Governance Rules (Phase A) — the ONE store for agent/pod auto-approve
   // policy. New table; checking one column confirms the migration ran.

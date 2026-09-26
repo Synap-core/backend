@@ -35,7 +35,12 @@
  */
 
 import {
-  type ReconcileReport,
+  db,
+  and,
+  eq,
+  isNull,
+  workspaces,
+  workspaceMembers,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import {
@@ -47,7 +52,55 @@ import {
   type PackageDependencyResolverDefinition,
   type ResolvedPackageDependency,
 } from "./package-dependency-resolver.js";
-import { composeOntoBaseWorkspace } from "./compose-overlay.js";
+import {
+  composeOntoBaseWorkspace,
+  type ComposeReport,
+} from "./compose-overlay.js";
+import { isPackDefinition, primaryPackDomain } from "./pack-definition.js";
+import { resolveWorkspaceTemplate } from "./capabilities/resolve-workspace-template.js";
+
+/**
+ * Is this install a PACK (D8: never its own workspace)? Reads the definition's
+ * own `_meta.tags`; a door whose definition carries no `_meta` (tRPC) is
+ * resolved by slug through the same cache-first resolver.
+ */
+async function isPackInstall(
+  definition: WorkspaceDefinitionInput,
+  slug: string | undefined
+): Promise<boolean> {
+  const meta = (definition as { _meta?: { tags?: unknown } })._meta;
+  if (meta?.tags !== undefined) return isPackDefinition(definition);
+  if (!slug) return false;
+  const resolved = await resolveWorkspaceTemplate(slug);
+  return isPackDefinition(resolved?.packageDefinition);
+}
+
+/**
+ * A LEGACY suite workspace (created by a pack install before D8) the user is a
+ * member of. It keeps working exactly as before — re-installing the pack
+ * reuses it instead of layering a second copy onto the primary domain.
+ */
+async function findLegacyPackWorkspace(
+  slug: string,
+  userId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .innerJoin(
+      workspaceMembers,
+      eq(workspaceMembers.workspaceId, workspaces.id)
+    )
+    .where(
+      and(
+        eq(workspaces.packageSlug, slug),
+        eq(workspaceMembers.userId, userId),
+        isNull(workspaces.archivedAt)
+      )
+    )
+    .limit(1);
+  return row?.id ?? null;
+}
 
 /**
  * The compose mechanics now live in `compose-overlay.ts` — the ONE door shared
@@ -101,7 +154,8 @@ export type MaterializeCoreResult =
       workspaceId: string;
       composeTargetWorkspaceId: string;
       dependencies: ResolvedPackageDependency[];
-      reconcile: ReconcileReport;
+      /** Schema reconcile + the overlay's adopted/created seeds (W4b). */
+      reconcile: ComposeReport;
     }
   | {
       /**
@@ -141,6 +195,8 @@ export interface MaterializeWorkspaceCoreInput {
   proposalId?: string;
   workspaceName?: string;
   templateId?: string;
+  /** Display name of the template (market.install passes the catalog name). */
+  templateName?: string;
   packageSlug?: string;
   /**
    * Caller-supplied version for `packageSlug` (Hub: `_meta.version`, fetched
@@ -211,7 +267,7 @@ export async function materializeWorkspaceCore(
   if (composeTargetWorkspaceId) {
     // The ONE compose door (shared with the resolver's transitive compose):
     // loads + write-gates the base, then reconciles ADDITIVELY onto it.
-    const reconcile: ReconcileReport = await composeOntoBaseWorkspace({
+    const reconcile: ComposeReport = await composeOntoBaseWorkspace({
       composeTargetWorkspaceId,
       userId,
       definition,
@@ -228,11 +284,56 @@ export async function materializeWorkspaceCore(
             packageVersion: input.packageVersion,
           }
         : {}),
+      // Always record the overlay in the target's `installedPacks` so the boot
+      // reconcile re-syncs it and drift surfaces see it. `composeOntoBaseWorkspace`
+      // stamps the `--onto` slug as IDENTITY only on an unidentified target.
+      overlay: {
+        slug: input.packageSlug ?? selfSlug,
+        version: input.packageVersion,
+      },
     });
     return {
       status: "composed",
       workspaceId: composeTargetWorkspaceId,
       composeTargetWorkspaceId,
+      dependencies,
+      reconcile,
+    };
+  }
+
+  // ── PACK (D8): never a workspace of its own ──────────────────────────────
+  // Layer the pack onto its PRIMARY domain (first `require`d workspace, which
+  // step 0 just ensured) through the ONE compose door — recorded in that
+  // workspace's `installedPacks` — and let the caller's post-workspace layer
+  // apply its playbooks/rules there. A legacy suite workspace falls through to
+  // the idempotent create below, which reuses it.
+  const packSlug = input.packageSlug ?? selfSlug;
+  if (
+    (await isPackInstall(definition, packSlug)) &&
+    !(packSlug && (await findLegacyPackWorkspace(packSlug, userId)))
+  ) {
+    const declared =
+      (
+        definition as {
+          dependencies?: Array<{
+            slug: string;
+            kind?: string;
+            relation?: string;
+          }>;
+        }
+      ).dependencies ?? [];
+    const primary = primaryPackDomain(declared, dependencies);
+    if (!primary) throw new ComposeBaseUnavailableError(dependencies);
+    const reconcile: ComposeReport = await composeOntoBaseWorkspace({
+      composeTargetWorkspaceId: primary.workspaceId,
+      userId,
+      definition,
+      overlay: { slug: packSlug, version: input.packageVersion },
+    });
+    return {
+      status: "composed",
+      workspaceId: primary.workspaceId,
+      composeTargetWorkspaceId: primary.workspaceId,
       dependencies,
       reconcile,
     };
@@ -249,6 +350,7 @@ export async function materializeWorkspaceCore(
     proposalId: input.proposalId,
     workspaceName: input.workspaceName,
     templateId: input.templateId,
+    templateName: input.templateName,
     packageSlug: input.packageSlug,
     packageVersion: input.packageVersion,
     workspaceType: input.workspaceType,

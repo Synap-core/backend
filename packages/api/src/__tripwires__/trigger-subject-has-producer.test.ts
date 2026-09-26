@@ -27,7 +27,9 @@ import { validateEventPattern } from "@synap-core/types/events/unified";
  *      `Boolean(payload.workspaceId) || subjectType === "external_message"`, so
  *      a workspace-less emit never reaches the matcher at all. This is the
  *      condition a producer census alone misses, and it is the one that keeps
- *      `sharing` and `user` off the list — both have live producers.
+ *      `user` off the list — it has a live producer. (`sharing` was withheld on
+ *      this condition too until its only producer, the dead `sharing` tRPC
+ *      router, was deleted; it is now pinned in the zero-producer group.)
  *   3. The compiled pattern passes `validateEventPattern`, which the rule
  *      compiler runs (`services/rules/compile.ts:201`). This keeps
  *      `entity_facet` off the list: workspace-scoped producer, but the subject
@@ -198,7 +200,7 @@ describe("every offered rule subject can actually fire", () => {
   it("the matcher reactor still gates on workspaceId — the premise of this guard", () => {
     // Condition 2 is derived from ONE line in ONE file. If that line changes,
     // every "inert because workspace-less" verdict below is wrong and the
-    // withheld subjects (`sharing`, `user`) must be reconsidered.
+    // withheld subject (`user`) must be reconsidered.
     const src = fs.readFileSync(
       path.join(REPO, "packages/events/src/side-effects.ts"),
       "utf8"
@@ -214,8 +216,8 @@ describe("every offered rule subject can actually fire", () => {
     expect(
       reactor![1]!.replace(/\s+/g, " ").trim(),
       "The reactor no longer requires a workspace (or exempts a different " +
-        "subject). Subjects withheld for passing no workspace — `sharing`, " +
-        "`user` — may now be fireable, and this guard's condition 2 is stale."
+        "subject). The subject withheld for passing no workspace — `user` — " +
+        "may now be fireable, and this guard's condition 2 is stale."
     ).toBe(
       'Boolean(payload.workspaceId) || payload.subjectType === "external_message",'
     );
@@ -396,8 +398,18 @@ describe("every offered rule subject can actually fire", () => {
     // Zero producers anywhere.
     expect(verdict("external_channel").producers).toBe(0);
     expect(verdict("tag").producers).toBe(0);
+    // `sharing` stays in `SUBJECT_TYPES` so historical `sharing.*` events still
+    // render, but its only producer (the `sharing` tRPC router) was deleted as
+    // dead and unsafe. A producer reappearing is a DECISION, not drift: if it
+    // passes a workspace, add `sharing` to TRIGGER_SUBJECT_CATEGORIES; if not,
+    // move it back into the workspace-less group below.
+    expect(
+      verdict("sharing").producers,
+      "`sharing` has a producer again — decide whether it is a trigger subject " +
+        "(see the comment above) instead of leaving it silently withheld."
+    ).toBe(0);
     // Producers exist but NONE passes a workspace → cannot reach the matcher.
-    for (const s of ["user", "sharing"]) {
+    for (const s of ["user"]) {
       expect(verdict(s).producers, `${s} lost its producer`).toBeGreaterThan(0);
       expect(
         verdict(s).reaching,

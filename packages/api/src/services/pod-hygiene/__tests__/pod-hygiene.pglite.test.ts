@@ -175,6 +175,8 @@ import {
   ProfileRepository,
   readProfileRetirement,
   resolveProfileForApply,
+  podMembers,
+  projectMembers,
 } from "@synap/database";
 import {
   proposeProfileRetire,
@@ -359,6 +361,8 @@ beforeAll(async () => {
     workspaceMembers,
     relationDefs,
     profileWorkspaceAccess,
+    podMembers,
+    projectMembers,
   ]) {
     await h.client!.exec(ddlFor(t as PgTable));
   }

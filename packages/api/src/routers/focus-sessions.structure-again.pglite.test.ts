@@ -127,6 +127,7 @@ import {
   focusSessions,
   documents,
   documentVersions,
+  users,
 } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
 
@@ -261,6 +262,7 @@ describe("focusSessions.structureAgain — an entity's text through the capture 
       focusSessions,
       documents,
       documentVersions,
+      users,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

@@ -10,7 +10,11 @@
  *   - runs in a workspace the viewer cannot see are not counted;
  *   - a visible flow that never ran is a measured zero, not an absence;
  *   - kinds that rerun no flow — and `capability.run`, whose ledger cannot
- *     record a failed direct run — carry no track.
+ *     record a failed direct run — carry no track;
+ *   - a session row carries one only when it STARTS the session: an update
+ *     or a stage gate on a live session reruns nothing;
+ *   - the record is measured over the flow's most recent
+ *     `PROPOSAL_TRACK_RUN_WINDOW` runs, and `runs` states that sample.
  *
  * What it CANNOT see: production Postgres constraints (tables are generated
  * without FKs / NOT NULL / enums) and the list/get access-check on the
@@ -38,6 +42,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
+import { PROPOSAL_TRACK_RUN_WINDOW } from "@synap-core/types/proposals";
 import { enrichProposalsForDisplay } from "./display.js";
 
 const VIEWER = "viewer-track";
@@ -49,6 +54,7 @@ const PLAYBOOK_SEEN = id();
 const PLAYBOOK_NEVER_RAN = id();
 const PLAYBOOK_HIDDEN = id();
 const AUTOMATION_SEEN = id();
+const AUTOMATION_BUSY = id();
 const SKILL_SEEN = id();
 
 const BASIC =
@@ -141,8 +147,19 @@ beforeAll(async () => {
     [PLAYBOOK_SEEN, WS_SEEN, PLAYBOOK_NEVER_RAN, PLAYBOOK_HIDDEN, WS_HIDDEN]
   );
   await q(
-    `insert into automations (id, name, workspace_id) values ($1,'Daily briefing',$2)`,
-    [AUTOMATION_SEEN, WS_SEEN]
+    `insert into automations (id, name, workspace_id) values ($1,'Daily briefing',$2),($3,'Busy sync',$2)`,
+    [AUTOMATION_SEEN, WS_SEEN, AUTOMATION_BUSY]
+  );
+  // Busy sync: 2 OLD failed runs, then a full window of newer completed runs.
+  // Only the newest PROPOSAL_TRACK_RUN_WINDOW may be measured.
+  await q(
+    `insert into automation_runs (id, automation_id, workspace_id, status, started_at, completed_at)
+     select gen_random_uuid(), $1, $2,
+            case when g <= 2 then 'failed' else 'completed' end,
+            $3::timestamptz + (g || ' minutes')::interval,
+            $3::timestamptz + (g || ' minutes')::interval + interval '1 minute'
+     from generate_series(1, $4::int + 2) g`,
+    [AUTOMATION_BUSY, WS_SEEN, at(0).toISOString(), PROPOSAL_TRACK_RUN_WINDOW]
   );
   await q(
     `insert into skills (id, name, slug, user_id, scope) values ($1,'Seen skill','seen',$2,'user')`,
@@ -203,15 +220,12 @@ describe("enrichProposalsForDisplay — track record", () => {
   it("session start on a visible playbook: the measured record arrives, hidden-workspace runs excluded", async () => {
     const track = await trackOf({
       targetType: "focus_session",
-      data: { playbookId: PLAYBOOK_SEEN },
+      data: { changeType: "create", playbookId: PLAYBOOK_SEEN },
     });
     expect(track).toEqual({
       runs: 3,
       completed: 0,
-      failed: 3,
       running: 0,
-      lastRunAt: at(20).toISOString(),
-      lastStatus: "failed",
       durationSamples: 0,
     });
   });
@@ -225,7 +239,6 @@ describe("enrichProposalsForDisplay — track record", () => {
     expect(track).toMatchObject({
       runs: 3,
       completed: 3,
-      failed: 0,
       durationSamples: 3,
       medianDurationMs: 6 * MIN,
       lastDurationMs: 8 * MIN,
@@ -235,12 +248,11 @@ describe("enrichProposalsForDisplay — track record", () => {
   it("a visible playbook that never ran is a MEASURED zero", async () => {
     const track = await trackOf({
       targetType: "focus_session",
-      data: { playbookId: PLAYBOOK_NEVER_RAN },
+      data: { changeType: "create", playbookId: PLAYBOOK_NEVER_RAN },
     });
     expect(track).toEqual({
       runs: 0,
       completed: 0,
-      failed: 0,
       running: 0,
       durationSamples: 0,
     });
@@ -249,7 +261,7 @@ describe("enrichProposalsForDisplay — track record", () => {
   it("FLOOR: a playbook the viewer cannot see gets no track (its runs are no oracle)", async () => {
     const track = await trackOf({
       targetType: "focus_session",
-      data: { playbookId: PLAYBOOK_HIDDEN },
+      data: { changeType: "create", playbookId: PLAYBOOK_HIDDEN },
     });
     expect(track).toBeUndefined();
   });
@@ -269,6 +281,40 @@ describe("enrichProposalsForDisplay — track record", () => {
         data: { skillId: SKILL_SEEN },
       })
     ).toBeUndefined();
+  });
+
+  it("a session row that does not START the session carries no track", async () => {
+    // The start is the positive control: the same playbook, a create.
+    expect(
+      await trackOf({
+        targetType: "focus_session",
+        data: { changeType: "create", playbookId: PLAYBOOK_SEEN },
+      })
+    ).toMatchObject({ runs: 3 });
+    for (const changeType of ["update", "stage_gate", "grant_capability"]) {
+      expect(
+        await trackOf({
+          targetType: "focus_session",
+          proposalType: changeType,
+          data: { changeType, playbookId: PLAYBOOK_SEEN },
+        })
+      ).toBeUndefined();
+    }
+  });
+
+  it("is measured over the flow's most recent window, and says so in `runs`", async () => {
+    const track = await trackOf({
+      targetType: "automation",
+      proposalType: "execute",
+      data: { automationId: AUTOMATION_BUSY },
+    });
+    // 102 runs exist; the 2 oldest (failed) fall outside the window.
+    expect(PROPOSAL_TRACK_RUN_WINDOW).toBe(100);
+    expect(track).toMatchObject({
+      runs: PROPOSAL_TRACK_RUN_WINDOW,
+      completed: PROPOSAL_TRACK_RUN_WINDOW,
+      durationSamples: PROPOSAL_TRACK_RUN_WINDOW,
+    });
   });
 
   it("batches: two rows on the same flow get the same record from one read", async () => {

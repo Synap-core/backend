@@ -157,6 +157,7 @@ CREATE TABLE entity_facets (
   metadata jsonb DEFAULT '{}',
   created_by_kind text,
   deleted_at timestamptz,
+  created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
 CREATE TABLE property_defs (

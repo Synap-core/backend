@@ -794,3 +794,72 @@ describe("cross-scope mergeInto into a SYSTEM canonical (intoScope:'system')", (
     expect(e.profile_id).toBe(ids.src); // not moved onto the shared decoy either
   });
 });
+
+/**
+ * W2b — the ROLE TWIN collapse: a workspace-scoped `partner` row (CRM) beside
+ * the ONE pod-wide shared `partner`. The same slug on both sides is legal for a
+ * cross-scope merge (the canonical is resolved by SCOPE and excluded from the
+ * moved set), and it is driven by the REAL manifest entry.
+ */
+describe("cross-scope mergeInto — same-slug role twin (w2b.merge.partner-twin-into-shared)", () => {
+  it("repoints the twin's facets onto the shared row, re-stamps its base defs as CRM overlays, retires the twin", async () => {
+    const { CONVERSION_MANIFEST } = await import("./manifest.js");
+    const { selectManifestOps } = await import("./select.js");
+    const db = new PGlite();
+    await db.exec(SCHEMA);
+    const q = async (text: string, params: unknown[] = []) =>
+      (await db.query(text, params)).rows as any[];
+    const [shared] = await q(
+      `INSERT INTO profiles (slug, display_name, profile_kind, scope, workspace_id, applicable_kinds)
+       VALUES ('partner','Partner','role','shared',NULL,ARRAY['company','person']) RETURNING id`
+    );
+    const [twin] = await q(
+      `INSERT INTO profiles (slug, display_name, profile_kind, scope, workspace_id, applicable_kinds)
+       VALUES ('partner','Partner (CRM)','role','workspace',$1,ARRAY['company','person']) RETURNING id`,
+      [WS_CRM]
+    );
+    const [facet] = await q(
+      `INSERT INTO entity_facets (entity_id, profile_id, user_id, workspace_id, properties)
+       VALUES (gen_random_uuid(), $1, $2, $3, '{"tier":"gold"}') RETURNING id`,
+      [twin.id, USER, WS_CRM]
+    );
+    await q(
+      `INSERT INTO property_defs (profile_id, slug, workspace_id) VALUES ($1,'tier',NULL)`,
+      [twin.id]
+    );
+
+    const summary = await runConversions(
+      makePgliteSql(db),
+      selectManifestOps(CONVERSION_MANIFEST, [
+        "w2b.merge.partner-twin-into-shared",
+      ]),
+      { dryRun: false, destructiveTail: true }
+    );
+    expect(
+      summary.results[0].error ?? null,
+      summary.results[0].error ?? ""
+    ).toBeNull();
+    expect(summary.results[0].counts).toMatchObject({
+      facetsRepointed: 1,
+      profilesDeactivated: 1,
+    });
+    const [f] = await q(
+      `SELECT profile_id, properties FROM entity_facets WHERE id = $1`,
+      [facet.id]
+    );
+    expect(f.profile_id).toBe(shared.id);
+    expect(f.properties).toEqual({ tier: "gold" });
+    const [pd] = await q(
+      `SELECT profile_id, workspace_id FROM property_defs WHERE slug = 'tier'`
+    );
+    expect(pd).toEqual({ profile_id: shared.id, workspace_id: WS_CRM });
+    const rows = await q(
+      `SELECT id, is_active FROM profiles WHERE slug = 'partner' ORDER BY is_active DESC`
+    );
+    expect(rows).toEqual([
+      { id: shared.id, is_active: true },
+      { id: twin.id, is_active: false },
+    ]);
+    await db.close();
+  });
+});

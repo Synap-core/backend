@@ -380,12 +380,29 @@ export const buildHandlers: McpHandlerMap = {
       agentUserId,
       caller,
       requestedWorkspaceId,
+      confinedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    const projectId =
+      typeof args.projectId === "string" && args.projectId.trim()
+        ? args.projectId.trim()
+        : undefined;
+    // A PROJECT view spans the project's workspaces: with a projectId and no
+    // explicit workspaceId, the agent's advisory focus must NOT pin it to one
+    // workspace — only an explicit id or a service-key clamp does (W2a).
+    const workspaceId = projectId
+      ? (confinedWorkspaceId ?? null)
+      : requestedWorkspaceId;
+    if (!workspaceId && !projectId) {
+      return ok({
+        error:
+          "workspaceId or projectId is required — a view lives in a workspace, or is pinned to a project (it then reads across the project's workspaces).",
+      });
+    }
     const result = await caller.views.createView({
       userId,
       // Confined workspace (service-key clamp) — not the raw model-supplied id.
-      workspaceId: requestedWorkspaceId as string,
+      workspaceId,
       name: args.name as string,
       type: args.type as string,
       profileId: args.profileId as string | undefined,
@@ -399,6 +416,7 @@ export const buildHandlers: McpHandlerMap = {
       ...(typeof args.expectedLabel === "string"
         ? { expectedLabel: args.expectedLabel }
         : {}),
+      ...(projectId ? { projectId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
@@ -465,6 +483,37 @@ export const buildHandlers: McpHandlerMap = {
   synap_post_message: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    // A COMMENT goes through the comments door (the object's ONE room,
+    // floored on the object) — not a second path into the room.
+    const comment = args.comment as
+      { anchor?: unknown; replyTo?: unknown } | undefined;
+    if (comment && typeof comment === "object") {
+      if (args.channelId) {
+        return toolError(
+          `Tool '${toolName}': pass either channelId (a post) or comment (a comment on an object), not both.`
+        );
+      }
+      const { postComment } =
+        await import("../../../services/comments/comments.js");
+      const posted = await postComment({
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        ...(comment.anchor !== undefined
+          ? { anchor: comment.anchor as never }
+          : {}),
+        ...(typeof comment.replyTo === "string"
+          ? { parentId: comment.replyTo }
+          : {}),
+        content: String(args.content ?? ""),
+        idempotencyKey: args.idempotencyKey as string | undefined,
+      });
+      return ok({ success: true, ...posted });
+    }
+    if (typeof args.channelId !== "string") {
+      return toolError(
+        `Tool '${toolName}' needs channelId (or comment, to comment on a document or entity).`
+      );
+    }
     const { postChannelMessage } =
       await import("../../../services/messaging/post-message.js");
     const result = await postChannelMessage({
@@ -478,6 +527,9 @@ export const buildHandlers: McpHandlerMap = {
       // 'question' pushes the person (session rooms); anything else is an
       // in-app 'update'. Validated by the tool schema's enum.
       kind: args.kind === "question" ? "question" : "update",
+      // The owed slot a question is about — the owner's reply is recorded on it.
+      slotLabel:
+        typeof args.slotLabel === "string" ? args.slotLabel : undefined,
       userId,
       // `userId` is the human OWNER even on an agent key. Pass the agent
       // principal so the row records WHICH agent posted — otherwise every agent

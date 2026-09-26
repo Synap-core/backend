@@ -53,9 +53,9 @@ const projPart = `Projects (companies/initiatives): ${Array.from(
 describe("MCP instructions budget", () => {
   it("the static reflexes are the real reflexes.md, not the fallback (non-vacuity)", () => {
     // The fallback is one sentence; the real file carries the numbered reflexes
-    // and ends on the lenses-skill pointer.
+    // and ends on the concepts-glossary pointer (W1: it replaced lenses).
     expect(SYNAP_INSTRUCTIONS).toMatch(/1\. \*\*Recall first/);
-    expect(SYNAP_INSTRUCTIONS).toContain("system/synap/lenses");
+    expect(SYNAP_INSTRUCTIONS).toContain("system/synap/concepts");
     expect(bytes(SYNAP_INSTRUCTIONS)).toBeGreaterThan(600);
   });
 

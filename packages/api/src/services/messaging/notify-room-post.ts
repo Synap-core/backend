@@ -18,8 +18,9 @@
  *     so mentioning them counts.
  *   - An agent's `kind: 'question'` in a SESSION room → `session.needs_you`
  *     (push, once per session window) to the session's owner.
- *   - An agent's `kind: 'update'` (the default) in a session room →
- *     `session.room_update`, in-app only (the registry caps its channels).
+ *   - An agent's `kind: 'update'` (the default) in a session room produces NO
+ *     notification (founder decision F, 2026-09-25) — it lives only in the
+ *     room and the session's state mark.
  *   - Someone already @mentioned is not told twice about the same post.
  *   - A human's own post notifies only the humans it @mentions (never themself).
  *
@@ -30,31 +31,27 @@ import {
   channels,
   channelMembers,
   ChannelMemberKind,
-  focusSessions,
   users,
+  ChannelType,
   and,
   eq,
-  desc,
+  inArray,
 } from "@synap/database";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  isObjectRoomType,
+  listChannelAudienceUserIds,
+} from "../../utils/channel-visibility.js";
 import { createLogger } from "@synap-core/core";
 import { extractHumanMentionHandles } from "../../utils/agent-handles.js";
 import { handleCandidatesFor } from "../../routers/channels/helpers.js";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { notifySessionNeedsYou } from "../focus-sessions/notify-needs-you.js";
+import { resolveRoomSession } from "./room-session.js";
 
 const logger = createLogger({ module: "notify-room-post" });
 
 export { ROOM_POST_KINDS, type RoomPostKind } from "./room-post-kind.js";
 import type { RoomPostKind } from "./room-post-kind.js";
-
-/** Declared lower-case first for the producer-allowlist scan (see record.ts). */
-const notificationType = "session.room_update" as const;
-export const SESSION_ROOM_UPDATE_NOTIFICATION_TYPE = notificationType;
-
-export function sessionRoomUpdateGroupKey(sessionId: string): string {
-  return `${SESSION_ROOM_UPDATE_NOTIFICATION_TYPE}:${sessionId}`;
-}
 
 const PREVIEW_MAX = 140;
 const preview = (content: string) =>
@@ -82,7 +79,7 @@ export async function notifyHumanMentions(p: {
   if (handles.length === 0) return [];
   const notified: string[] = [];
   try {
-    const humanMembers = await db
+    const rosterMembers = await db
       .select({ memberId: channelMembers.memberId, name: users.name })
       .from(channelMembers)
       .innerJoin(users, eq(users.id, channelMembers.memberId))
@@ -92,6 +89,16 @@ export async function notifyHumanMentions(p: {
           eq(channelMembers.memberKind, ChannelMemberKind.HUMAN)
         )
       );
+    // An OBJECT ROOM has no roster: its people are everyone who may read the
+    // object (the channel read rule, branch 5). A mention there reaches a
+    // reader of the document, never someone the document excludes.
+    const readers = await objectRoomHumanReaders(p.channelId);
+    const humanMembers = [
+      ...rosterMembers,
+      ...readers.filter(
+        (r) => !rosterMembers.some((m) => m.memberId === r.memberId)
+      ),
+    ];
 
     const senderName = p.agentUserId
       ? await agentDisplayName(p.agentUserId)
@@ -140,6 +147,36 @@ export async function notifyHumanMentions(p: {
   return notified;
 }
 
+/**
+ * The HUMAN readers of an object room (empty for any other channel) — the
+ * channel's own audience rule (`listChannelAudienceUserIds`), never a list.
+ */
+async function objectRoomHumanReaders(
+  channelId: string
+): Promise<Array<{ memberId: string; name: string | null }>> {
+  const [room] = await db
+    .select({
+      channelType: channels.channelType,
+      contextObjectType: channels.contextObjectType,
+    })
+    .from(channels)
+    .where(eq(channels.id, channelId))
+    .limit(1);
+  if (
+    !room ||
+    room.channelType !== ChannelType.GROUP ||
+    !isObjectRoomType(room.contextObjectType)
+  ) {
+    return [];
+  }
+  const audience = await listChannelAudienceUserIds(db, channelId);
+  if (audience.length === 0) return [];
+  return db
+    .select({ memberId: users.id, name: users.name })
+    .from(users)
+    .where(and(inArray(users.id, audience), eq(users.userType, "human")));
+}
+
 async function agentDisplayName(agentUserId: string): Promise<string> {
   const row = await db.query.users.findFirst({
     where: eq(users.id, agentUserId),
@@ -150,8 +187,9 @@ async function agentDisplayName(agentUserId: string): Promise<string> {
 
 /**
  * Everything a room post owes the people in the room: mentions for any
- * author, and — for an AGENT's post in a session room — the question push or
- * the in-app update. Call AFTER the message row landed (a duplicate/replayed
+ * author, and — for an AGENT's `question` post in a session room — the
+ * `session.needs_you` push. A plain `update` owes nothing (founder decision
+ * F, 2026-09-25). Call AFTER the message row landed (a duplicate/replayed
  * post must not notify again).
  */
 export async function notifyRoomPost(p: {
@@ -176,21 +214,8 @@ export async function notifyRoomPost(p: {
   if (!p.agentUserId) return;
 
   try {
-    // The session whose ROOM this is. A room can be borrowed by more than one
-    // session; the most recently touched one is the work being talked about.
-    // SESSION-KIND-LENS-EXEMPT: resolves ONE session (id/owner/title) to address a notification — no session row is ever returned to a consumer.
-    const [session] = await db
-      .select({
-        id: focusSessions.id,
-        userId: focusSessions.userId,
-        workspaceId: focusSessions.workspaceId,
-        title: focusSessions.title,
-        goal: focusSessions.goal,
-      })
-      .from(focusSessions)
-      .where(eq(focusSessions.channelId, p.channelId))
-      .orderBy(desc(focusSessions.updatedAt))
-      .limit(1);
+    // The session whose ROOM this is — the ONE room→session resolution.
+    const session = await resolveRoomSession(p.channelId);
     if (!session) return;
     // Already told about THIS post by name — one notification per person.
     if (mentioned.includes(session.userId)) return;
@@ -201,24 +226,11 @@ export async function notifyRoomPost(p: {
         byAgent: true,
         reason: { kind: "question", text: p.content, channelId: p.channelId },
       });
-      return;
     }
-    await NotificationService.create({
-      type: SESSION_ROOM_UPDATE_NOTIFICATION_TYPE,
-      userId: session.userId,
-      workspaceId: session.workspaceId ?? null,
-      sourceType: "session",
-      sourceId: session.id,
-      groupKey: sessionRoomUpdateGroupKey(session.id),
-      data: {
-        sessionId: session.id,
-        sessionTitle: resolveSessionTitle(session),
-        sender: await agentDisplayName(p.agentUserId),
-        preview: preview(p.content),
-        channelId: p.channelId,
-        messageId: p.messageId,
-      },
-    });
+    // A plain `update` (the default) is NOT a notification (founder decision
+    // F, 2026-09-25): it lives in the room and the session's state mark
+    // only. There used to be an in-app `session.room_update` row here —
+    // removed along with its registry entry; see room-post-kind.ts.
   } catch (err) {
     logger.warn(
       { err, channelId: p.channelId },

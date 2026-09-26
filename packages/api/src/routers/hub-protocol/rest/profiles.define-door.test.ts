@@ -46,6 +46,17 @@ vi.mock("@synap/database", async (importOriginal) => {
     async findActiveBySlugAnyScope() {
       return [];
     }
+    // W2b: a ROLE define now plans through `resolveProfileForApply` (reuse +
+    // share instead of a twin), which probes these too. Empty = a new role.
+    async getBySlugForWorkspace() {
+      return null;
+    }
+    async findPodWideBySlugIncludingInactive() {
+      return [];
+    }
+    async findWorkspaceScopedBySlugIncludingInactive() {
+      return [];
+    }
   }
   return {
     ...actual,

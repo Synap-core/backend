@@ -181,6 +181,18 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   retire: { imperative: "Retire", past: "Retired" },
   close: { imperative: "Close", past: "Closed" },
   expire: { imperative: "Expire", past: "Expired" },
+  // Sharing (Sites W2–W5, `services/sharing/share-service.ts`). `publish`
+  // above is reused for putting a record on the public web — one word for one
+  // act, whether it finishes a draft or opens a record to strangers. `unshare`
+  // and `unpublish` NARROW (reversible: sharing again restores access);
+  // `revoke` is PERMANENT (0276: a revoked link row is frozen, sharing again
+  // mints a new one), so it must never be rendered as "Unshared". `redeem` is a
+  // signed-in person turning a link into a guest membership.
+  share: { imperative: "Share", past: "Shared" },
+  unshare: { imperative: "Unshare", past: "Unshared" },
+  unpublish: { imperative: "Unpublish", past: "Unpublished" },
+  revoke: { imperative: "Revoke", past: "Revoked" },
+  redeem: { imperative: "Redeem", past: "Redeemed" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
   // these keys resolve the full proposal types. They are NOT bare "approve":
@@ -276,6 +288,20 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
   // Ported from event-renderer's local `DOMAIN_NAMES` map, which the vocabulary
   // consolidation narrowed to grouping-only (see `renderers.tsx`).
   proactive: "Proactive AI",
+  // Sharing (Sites). A SHARE LINK (a `resource_shares` row with audience
+  // `link`, redeemed into a guest membership) is NOT a `link` — `link` is the
+  // canonical noun of a RELATION (`relation` → `link` in OBJECT_KIND_ALIASES).
+  // Its own key keeps the two apart: `share_link` → "Share link", `link` /
+  // `relation` → "Link". Never alias one to the other.
+  share_link: "Share link",
+  // A person outside the workspace who was given access to one project
+  // (`project_members.role = 'guest'`) — or who filed through a public form.
+  guest: "Guest",
+  // A public form (a `tools` row carrying `metadata.form`, W4) and what a
+  // stranger sends through it. Neither is a registry kind: a form renders as
+  // its tool, a submission as the proposal / record it became.
+  form: "Form",
+  submission: "Submission",
 };
 
 /**
@@ -415,8 +441,9 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   // handled.
   governance_structure_guideline: "Extraction guideline",
   governance_work_guideline: "Work guideline",
-  capability_run: "Run capability",
-  automation_run: "Run automation",
+  // "Tool" / "Rule" are the user words (concepts.md, founder D1/D2).
+  capability_run: "Run tool",
+  automation_run: "Run rule",
   // Server-side dev-loop HUMAN GATES. The chip is the first thing a reviewer
   // reads, and the two gates ask genuinely different questions — one is about
   // work not yet done, one is about shipping work already verified — so they
@@ -424,6 +451,33 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   dev_plan_approval: "Approve a plan",
   dev_deploy_approval: "Approve a deploy",
 };
+
+// ─── Tool kinds (one user word, the kind on the detail) ──────────────────────
+
+/**
+ * The KIND chip for something the user calls a "Tool" (concepts.md → Tools,
+ * founder D2). Lists, counts and mentions say "Tool" (`resolveObjectNoun`);
+ * a tool's own detail page shows WHICH kind of tool it is, with this.
+ *
+ * These are the three DB kinds behind the one word, named for what they are
+ * to a user: a `skill` is instructions an agent follows, a `capability` is an
+ * action the pod can run, a `tool` row is a connected integration (the
+ * `tools` table holds integrations — CLAUDE.md "tools (integrations)").
+ * Anything else humanizes; it is never "Tool", which would say nothing on a
+ * page already titled as one.
+ */
+export const TOOL_KIND_LABELS: Readonly<Record<string, string>> = {
+  skill: "Skill",
+  capability: "Action",
+  tool: "Integration",
+};
+
+export function resolveToolKindLabel(kind: string | null | undefined): string {
+  if (!kind) return "";
+  const key = kind.toLowerCase();
+  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
+  return TOOL_KIND_LABELS[canonical] ?? humanizeToken(canonical);
+}
 
 /**
  * The human label for a proposal kind. Unknown/new kinds humanize rather than
@@ -581,6 +635,21 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   saved_without_ai: "Saved without AI",
   needs_answer: "Needs your answer",
   not_structured: "Not structured",
+  // CONNECTION credential state (`secrets.connection_state`). Humanized it read
+  // "Needs reauth" — jargon for "sign in again".
+  needs_reauth: "Needs sign-in",
+  // SHARING. `published` is `resource_shares.state` (`draft` is shared with the
+  // run of drafts above). `revoked` is a link or publication killed for good
+  // (0276: permanent). `private` / `shared` / `link` / `public` are the SHARE
+  // STATE lenses `resolveShareState` (`@synap-core/types/units`) derives —
+  // never stored. `link` reads "Shared by link" so a chip can never be taken
+  // for the RELATION noun "Link" (`resolveObjectNoun("link")`).
+  published: "Published",
+  revoked: "Revoked",
+  private: "Private",
+  shared: "Shared",
+  link: "Shared by link",
+  public: "Public",
 };
 
 /**
@@ -669,6 +738,11 @@ export const PROVENANCE_LABELS: Readonly<Record<string, string>> = {
   // messages.authorType only: an automated system message. Distinct from
   // `ai_agent` (a reasoning agent) and from `system` (the platform itself).
   bot: "Bot",
+  // A stranger who filed through a public form (Sites W4). The proposal carries
+  // the form's own actor as `agentUserId`, but NOBODY'S MODEL wrote it — so it
+  // must never read "AI agent". The discriminator is the actor row
+  // (`guestProvenanceFor` in the pod), never the display string.
+  guest: "Guest",
 };
 
 /**
@@ -681,6 +755,31 @@ export function resolveProvenanceLabel(
 ): string {
   if (!kind) return "";
   return PROVENANCE_LABELS[kind.toLowerCase()] ?? humanizeToken(kind);
+}
+
+/**
+ * SUBMISSION OUTCOME — what happens to a public form's submission, keyed by the
+ * form's stored `mode` (`FormConfig.mode` in the pod, `"direct" | "proposal"`).
+ *
+ * Its OWN table: a mode is neither a lifecycle status (`STATUS_LABELS`) nor a
+ * verb. It is the promise the owner reads when choosing a mode, and the mark a
+ * reviewer reads on a submission: `proposal` → it waits for the owner;
+ * `direct` → it became a record straight away. Humanized, the tokens would say
+ * "Proposal" / "Direct" — the mechanism, not the consequence.
+ *
+ * The public REPLY never uses this: the anonymous door answers a constant 202
+ * whatever the mode (W4, no oracle). This is owner-side vocabulary only.
+ */
+export const SUBMISSION_OUTCOME_LABELS: Readonly<Record<string, string>> = {
+  proposal: "Held for your review",
+  direct: "Added immediately",
+};
+
+export function resolveSubmissionOutcomeLabel(
+  mode: string | null | undefined
+): string {
+  if (!mode) return "";
+  return SUBMISSION_OUTCOME_LABELS[mode.toLowerCase()] ?? humanizeToken(mode);
 }
 
 /**
@@ -837,4 +936,28 @@ export function resolveNotificationRoutingRuleLabel(
   return (
     NOTIFICATION_ROUTING_RULE_LABELS[rule.toLowerCase()] ?? humanizeToken(rule)
   );
+}
+
+// ─── Withheld objects (a reference the viewer may not open) ──────────────────
+
+/**
+ * The label for an object that EXISTS but that the viewer may not read — e.g. a
+ * colleague's session named on a proposal or run the viewer can see (decision
+ * D1, 2026-09-26: a session's title/goal is content). It replaces the title and
+ * renders with no door; it never carries the object's name, goal or id.
+ *
+ *   "focus_session" → "Private session"
+ *
+ * The noun comes from {@link resolveObjectNoun}, so the placeholder can never
+ * call the kind something the rest of the product does not. Its first letter
+ * is lowered unless it opens an acronym ("API key" stays "API key").
+ */
+export function resolvePrivateObjectLabel(
+  kind: string | null | undefined
+): string {
+  const noun = resolveObjectNoun(kind) || "item";
+  const lowered = /^[A-Z]{2}/.test(noun)
+    ? noun
+    : noun.charAt(0).toLowerCase() + noun.slice(1);
+  return `Private ${lowered}`;
 }

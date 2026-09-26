@@ -60,6 +60,8 @@ import {
 import {
   orderWorkspacesByTemplateDependencies,
   resolveWorkspaceTemplate,
+  reconcileWorkspacePlaybooksToTemplate,
+  reconcileInstalledPacks,
   type ResolvedWorkspaceTemplate,
 } from "@synap/api";
 
@@ -215,6 +217,34 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
     }
 
     try {
+      // PLAYBOOKS FIRST — the stamp must be EARNED (backend-rules invariant 1).
+      // `packageVersion` is the CP's whole-template hash, so the pod cannot
+      // narrow it; this pass used to stamp it after a layer-1 reconcile that
+      // explicitly did NOT look at playbooks, so template_health reported
+      // "in sync" while a template's playbook stages / scope never arrived.
+      // Fix chosen: WIDEN the comparator to what the stamp claims — converge the
+      // template's playbooks (source-linked 3-way merge; unstamped rows are
+      // adopted; owner edits reported, never overwritten) and stamp the version
+      // ONLY when that converged. No comparator version is needed because this
+      // pass is not stamp-gated: it runs every boot, so a stamp an older, blinder
+      // pass wrote is re-checked on the next boot.
+      const playbookReport = await reconcileWorkspacePlaybooksToTemplate({
+        workspaceId: ws.id,
+        userId: ws.ownerId,
+        templatePlaybooks:
+          (resolved.packageDefinition.playbooks as unknown[] | undefined) ?? [],
+        packageSlug: templateKey,
+        packageVersion: resolved.version ?? null,
+        installedAt: new Date().toISOString(),
+      });
+      const playbooksConverged = playbookReport.failed.length === 0;
+      if (!playbooksConverged) {
+        logger.warn(
+          { workspaceId: ws.id, templateKey, failed: playbookReport.failed },
+          "Template playbooks did not converge — packageVersion stamp withheld"
+        );
+      }
+
       // STAMP-ON-WRITE: pass the slug+version this pass is converging TO, so
       // `settings.packageVersion` advances in lockstep with the content it
       // reconciled. Before this, the boot sweep reconciled content but left the
@@ -232,7 +262,7 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         definition:
           resolved.workspaceDefinition as unknown as WorkspaceDefinitionInput,
         packageSlug: templateKey,
-        packageVersion: resolved.version,
+        packageVersion: playbooksConverged ? resolved.version : undefined,
       });
 
       const changed =
@@ -265,6 +295,40 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
       logger.warn(
         { err, workspaceId: ws.id, templateKey },
         "Workspace template reconcile failed (non-fatal)"
+      );
+    }
+  }
+
+  // ── Overlay packs (`settings.installedPacks`) ─────────────────────────────
+  // A pack layered onto a workspace (business-model on Foundation, grants on
+  // Operations, a D8 pack on its primary domain) is NOT the workspace's
+  // identity, so the pass above never saw it. Re-sync each recorded pack
+  // additively (never its identity) + its playbooks; its ledger version
+  // advances only when that converged.
+  const packMemo = new Map<string, Promise<ResolvedWorkspaceTemplate | null>>();
+  const resolvePack = (slug: string) => {
+    if (!packMemo.has(slug)) packMemo.set(slug, resolveWorkspaceTemplate(slug));
+    return packMemo.get(slug)!;
+  };
+  for (const ws of rows) {
+    try {
+      const outcomes = await reconcileInstalledPacks({
+        workspaceId: ws.id,
+        ownerId: ws.ownerId,
+        settings: ws.settings as Record<string, unknown> | null,
+        resolve: resolvePack,
+      });
+      const notable = outcomes.filter((o) => o.status !== "skipped");
+      if (notable.length > 0) {
+        logger.info(
+          { workspaceId: ws.id, packs: notable },
+          "Installed packs reconciled"
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        { err, workspaceId: ws.id },
+        "Installed-pack reconcile failed (non-fatal)"
       );
     }
   }

@@ -13,6 +13,7 @@ import { createHubProtocolCallerContext } from "../utils.js";
 import { verifyCpJwt } from "../../../utils/jwks-client.js";
 
 import { logger, type HubHono } from "./_shared.js";
+import { findUserDefaultWorkspaceId } from "../../../utils/user-default-workspace.js";
 
 export function registerEntityShareRoutes(app: HubHono): void {
   /**
@@ -57,7 +58,7 @@ export function registerEntityShareRoutes(app: HubHono): void {
     const snapshot = body.entitySnapshot;
 
     // Resolve the recipient user on this pod by email (from CP JWT)
-    const { users, workspaceMembers } = await import("@synap/database/schema");
+    const { users } = await import("@synap/database/schema");
     const podUser = await db.query.users.findFirst({
       where: eq(users.email, payload.email),
       columns: { id: true },
@@ -77,14 +78,11 @@ export function registerEntityShareRoutes(app: HubHono): void {
       );
     }
 
-    // Find the recipient's first active workspace on this pod
-    const membership = await db.query.workspaceMembers.findFirst({
-      where: eq(workspaceMembers.userId, podUser.id),
-      with: { workspace: { columns: { id: true } } },
-      orderBy: (m, { asc }) => [asc(m.joinedAt)],
-    });
+    // The recipient's first DOMAIN workspace on this pod (D7: never the
+    // pod-admin console, never archived — the ONE fallback).
+    const workspaceId = await findUserDefaultWorkspaceId(db, podUser.id);
 
-    if (!membership?.workspace?.id) {
+    if (!workspaceId) {
       logger.warn(
         { userId: podUser.id, shareId: body.shareId },
         "entity-share/deliver: recipient has no workspace on this pod"
@@ -92,7 +90,6 @@ export function registerEntityShareRoutes(app: HubHono): void {
       return c.json({ error: "Recipient has no workspace on this pod" }, 422);
     }
 
-    const workspaceId = membership.workspace.id;
     const profileSlug =
       (snapshot.profileSlug as string | undefined) ??
       (snapshot.type as string | undefined) ??

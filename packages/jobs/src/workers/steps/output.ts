@@ -663,9 +663,9 @@ export async function executeOutputStep(
       //       it is reachable from the automation's OWN workspace at RUN time
       //       (see the scope check below).
       //   (b) `config.channelEntityRef` (a template expr deep-resolved above to an
-      //       ENTITY ID) → the find-or-create INTERNAL channel bound to that entity
-      //       (ensureEntityChannel EXCLUDES the external client-comms surface —
-      //       "the internal team channel for this entity", never the client↔us one).
+      //       ENTITY ID) → that entity's ONE object room (`ensureObjectChannel`,
+      //       a GROUP room never the external client-comms surface — "the internal
+      //       conversation about this entity", never the client↔us one).
       //   (c) `config.channelType`:
       //         'personal_thread' → user's personal thread (channelType=PERSONAL)
       //         'proactive'       → user's feed channel (channelType='feed', feedScope='user')
@@ -842,13 +842,13 @@ export async function executeOutputStep(
             )
             .limit(1);
           if (entityRow) {
+            // The entity's ONE object room (its read floor decides who sees it).
             channelId = (
-              await new ChannelRepository(db).ensureEntityChannel(
-                entityId,
-                ownerId,
-                workspaceId
-              )
-            ).id;
+              await new ChannelRepository(db).ensureObjectChannel({
+                type: "entity",
+                id: entityId,
+              })
+            )?.channel.id;
           }
           // else: unknown/unresolved ref → leave channelId unset so the default
           // run channel (d) receives the message rather than a dangling void.
@@ -871,8 +871,8 @@ export async function executeOutputStep(
       }
 
       // Post into THIS run's subject's own channel — the write-twin of the
-      // entity-bound read, via the same ChannelRepository resolver the executor's
-      // per_entity routing uses (reuse-first, THREAD-on-create, never client-comms).
+      // entity-bound read, via the same ChannelRepository door the executor's
+      // per_entity routing uses (the entity's object room, never client-comms).
       if (!channelId && config.channelType === "subjectEntity") {
         if (!runSubjectEntityId) {
           throw new Error(
@@ -880,12 +880,11 @@ export async function executeOutputStep(
           );
         }
         channelId = (
-          await new ChannelRepository(db).ensureEntityChannel(
-            runSubjectEntityId,
-            ownerId,
-            workspaceId
-          )
-        ).id;
+          await new ChannelRepository(db).ensureObjectChannel({
+            type: "entity",
+            id: runSubjectEntityId,
+          })
+        )?.channel.id;
       }
 
       // (d) DEFAULT — no explicit target resolved: post to the automation's own

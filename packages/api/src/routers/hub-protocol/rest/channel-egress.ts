@@ -25,7 +25,12 @@ import {
   drizzleSql,
 } from "@synap/database";
 
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
 // A `failed` row is RETRIABLE until it has been attempted this many times, then it
@@ -115,7 +120,7 @@ export function registerChannelEgressRoutes(app: HubHono): void {
       logger.error({ err }, "channel-egress pending query failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -170,7 +175,7 @@ export function registerChannelEgressRoutes(app: HubHono): void {
       logger.error({ err, id }, "channel-egress ack failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

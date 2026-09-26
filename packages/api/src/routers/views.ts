@@ -52,6 +52,7 @@ import {
   ProfileRepository,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
+  projectMembers,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
@@ -67,15 +68,18 @@ import {
 import { randomUUID } from "crypto";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
-import {
-  workspaceLensWhere,
-  ownerPrivateVisibleWhere,
-} from "../utils/user-visible-where.js";
+import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import { projectLensWhere, accessScopeWhere } from "../utils/project-scope.js";
+import {
+  viewReadableWhere,
+  exposedViewMemberWhere,
+} from "../utils/view-visibility.js";
 import { recordSessionArtifact } from "../services/focus-sessions/record-session-artifact.js";
+import { loadVisibleProject } from "../services/projects/load-visible-project.js";
 
+/** Every view the caller may read, no lens — the one predicate (view-visibility.ts). */
 function viewVisibleWhere(userId: string) {
-  return ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)!;
+  return viewReadableWhere(userId, undefined);
 }
 
 /**
@@ -101,12 +105,36 @@ function viewVisibleWhere(userId: string) {
  * `verifyPermission` the call sites called before, and for a pod-wide view it
  * admits strictly ONE user (the creator) where the old write doors admitted
  * NOBODY and the old read doors already admitted exactly that same one user.
+ *
+ * EXPOSED views (Sites W2): a READ of a view whose `exposedAt` and `projectId`
+ * are set is admitted for any member (guest included) of that project — the
+ * imperative twin of `exposedViewMemberWhere`. Exposure never grants a WRITE.
+ * A caller that loads the row without `exposedAt`/`projectId` gets the old,
+ * narrower answer (the branch cannot fire), never a wider one.
  */
 export async function assertViewAccess(
-  view: { workspaceId: string | null; userId: string },
+  view: {
+    workspaceId: string | null;
+    userId: string;
+    projectId?: string | null;
+    exposedAt?: Date | null;
+  },
   callerUserId: string,
   requiredPermission: "read" | "write"
 ): Promise<void> {
+  if (requiredPermission === "read" && view.exposedAt && view.projectId) {
+    const [membership] = await db
+      .select({ id: projectMembers.id })
+      .from(projectMembers)
+      .where(
+        and(
+          eq(projectMembers.projectId, view.projectId),
+          eq(projectMembers.userId, callerUserId)
+        )
+      )
+      .limit(1);
+    if (membership) return;
+  }
   if (!view.workspaceId) {
     if (view.userId !== callerUserId) {
       throw new TRPCError({
@@ -304,9 +332,9 @@ function assertValidRendererRef(config: Record<string, unknown>): void {
  *   - `reconcile-workspace-from-definition.ts` matches on (workspaceId, name);
  *   - the scoped-surface unique index includes `type` and the project scope.
  * `type` is kept in the key because a "Tasks" kanban and a "Tasks" table are
- * legitimately different surfaces; `project_id IS NULL` because this door never
- * accepts a projectId, so a project-pinned surface must never be handed back as
- * "the existing one". Name match is case-insensitive, oldest-wins — the same
+ * legitimately different surfaces; the project pin is part of the key (W2a: the
+ * door now accepts `projectId`), so a project-pinned view is never handed back
+ * for an unpinned create, nor the reverse. Name match is case-insensitive, oldest-wins — the same
  * rule `findNonArchivedPlaybookByName` uses.
  *
  * FOLLOW-UP (deliberately NOT in this wave): a partial unique index on
@@ -316,7 +344,8 @@ function assertValidRendererRef(config: Record<string, unknown>): void {
  */
 async function findViewByIdentity(
   database: Awaited<ReturnType<typeof getDb>>,
-  workspaceId: string,
+  workspaceId: string | null,
+  projectId: string | null,
   name: string,
   type: string
 ) {
@@ -325,8 +354,10 @@ async function findViewByIdentity(
     .from(views)
     .where(
       and(
-        eq(views.workspaceId, workspaceId),
-        isNull(views.projectId),
+        workspaceId
+          ? eq(views.workspaceId, workspaceId)
+          : isNull(views.workspaceId),
+        projectId ? eq(views.projectId, projectId) : isNull(views.projectId),
         eq(views.type, type),
         sql`lower(${views.name}) = lower(${name})`
       )
@@ -391,6 +422,14 @@ export const viewsRouter = router({
          * `session+kind+refId+expectedLabel` regardless.)
          */
         expectedLabel: z.string().min(1).max(500).optional(),
+        /**
+         * PIN the view to a project (W2a): `execute` then narrows its rows to
+         * the project's members (`belongs_to_project`). With NO workspace the
+         * view reads the caller's full visible access narrowed to the project
+         * — a project spans workspaces. The project must be visible to the
+         * caller (`loadVisibleProject`), or the create is NOT_FOUND.
+         */
+        projectId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -403,6 +442,20 @@ export const viewsRouter = router({
 
       // Resolve placement: omitted workspace means an intentional pod-wide view.
       const effectiveWorkspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+
+      // A project pin is refused for a project the caller cannot see — the
+      // same floor as every single-project read. Checked before the gate, so
+      // no proposal is filed for a pin approval could never honour.
+      const pinnedProjectId = input.projectId ?? null;
+      if (
+        pinnedProjectId &&
+        !(await loadVisibleProject(await getDb(), pinnedProjectId, ctx.userId))
+      ) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
 
       // Emit .requested before the proposal gate so pending proposals are tied
       // to a real event-chain node.
@@ -417,12 +470,15 @@ export const viewsRouter = router({
         data: { name: input.name, type: input.type, id: reservedViewId },
       });
 
-      // If workspace available, check permissions (including AI proposal gate)
-      if (effectiveWorkspaceId) {
+      // If workspace available, check permissions (including AI proposal gate).
+      // A project-pinned view with no workspace is gated too: it reads across
+      // the project's workspaces, so it is never an ungoverned agent write.
+      if (effectiveWorkspaceId || pinnedProjectId) {
         const gateOpts = {
           userId: ctx.userId,
           agentUserId: input.agentUserId,
-          workspaceId: effectiveWorkspaceId,
+          workspaceId: effectiveWorkspaceId ?? undefined,
+          ...(pinnedProjectId ? { projectId: pinnedProjectId } : {}),
           subjectType: "view" as const,
           action: "create" as const,
           source: input.source,
@@ -443,6 +499,7 @@ export const viewsRouter = router({
             embeddedViewIds: input.embeddedViewIds,
             metadata: input.metadata,
             initialContent: input.initialContent,
+            ...(pinnedProjectId ? { projectId: pinnedProjectId } : {}),
           },
         };
 
@@ -470,6 +527,7 @@ export const viewsRouter = router({
           const existingView = await findViewByIdentity(
             await getDb(),
             effectiveWorkspaceId,
+            pinnedProjectId,
             input.name,
             input.type
           );
@@ -652,6 +710,7 @@ export const viewsRouter = router({
           documentId: docId,
           yjsRoomId,
           workspaceId: effectiveWorkspaceId,
+          projectId: pinnedProjectId,
           userId: ctx.userId,
           scopeProfileIds: input.scopeProfileIds,
           scopeMode: input.scopeMode || "explicit",
@@ -739,13 +798,21 @@ export const viewsRouter = router({
               viewVisibleWhere(ctx.userId)
             )
           : input.workspaceId !== undefined
-            ? viewLensWhere(ctx.userId, input.workspaceId, {
-                includePodWide: input.includePodWide,
-              })
-            : ctx.workspaceId
-              ? viewLensWhere(ctx.userId, ctx.workspaceId, {
+            ? or(
+                viewLensWhere(ctx.userId, input.workspaceId, {
                   includePodWide: input.includePodWide,
-                })
+                }),
+                // Views EXPOSED to a project the caller is a member of, under
+                // the same lens (Sites W2).
+                exposedViewMemberWhere(ctx.userId, input.workspaceId)
+              )
+            : ctx.workspaceId
+              ? or(
+                  viewLensWhere(ctx.userId, ctx.workspaceId, {
+                    includePodWide: input.includePodWide,
+                  }),
+                  exposedViewMemberWhere(ctx.userId, ctx.workspaceId)
+                )
               : viewVisibleWhere(ctx.userId);
 
       const results = await db.query.views.findMany({
@@ -1169,9 +1236,17 @@ export const viewsRouter = router({
       const conditions: any[] = [];
 
       const lensWorkspaceId = view.workspaceId ?? null;
+      // A PROJECT-PINNED view (W2a) narrows to its project whatever the input
+      // says; an input projectId can only narrow further (both are ANDed).
+      const pinnedProjectId = view.projectId ?? null;
+      // Pinned + no workspace ⇒ the caller's FULL visible access narrowed to
+      // the project (a project spans workspaces) — the same rule as
+      // `entities.list` with a project lens (entities/read.ts). Without a pin,
+      // a null-workspace view stays pod-personal.
+      const projectWide = pinnedProjectId !== null && lensWorkspaceId === null;
       const facetVisibilityScope = await resolveFacetVisibilityScope(
         ctx.userId,
-        lensWorkspaceId
+        projectWide ? undefined : lensWorkspaceId
       );
       // includePodWide MUST be true: pod-scoped entities (person/company and any
       // profile whose entityScope is 'pod') live with workspaceId IS NULL and are
@@ -1182,12 +1257,19 @@ export const viewsRouter = router({
       conditions.push(
         lensWorkspaceId
           ? entityLensWhereForViews(ctx.userId, lensWorkspaceId, true)
-          : entityLensWhereForViews(ctx.userId, null, true)
+          : entityLensWhereForViews(
+              ctx.userId,
+              projectWide ? undefined : null,
+              true
+            )
       );
 
-      // Project lens — narrow to a single project when set (mirrors entities.list pattern)
-      if (input.projectId) {
-        conditions.push(projectLensWhere(entities.id, input.projectId));
+      // Project lens — the view's pin and/or the input's; each only narrows
+      // (the `belongs_to_project` predicate, ANDed with the floor above).
+      for (const projectId of new Set(
+        [pinnedProjectId, input.projectId].filter((p): p is string => !!p)
+      )) {
+        conditions.push(projectLensWhere(entities.id, projectId));
       }
 
       // Filter by scope profiles — polymorphic (Kind + Facets). A scope id can

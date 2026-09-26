@@ -7,6 +7,7 @@ import { kratosAdmin } from "@synap/auth";
 import { getDb } from "@synap/database";
 import { and, eq } from "drizzle-orm";
 import { users, workspaces, workspaceMembers } from "@synap/database/schema";
+import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 
 /**
  * Seed the system "pod-admin" workspace if it doesn't exist, then ensure
@@ -98,7 +99,9 @@ async function ensurePodAdminWorkspace(
  *   • Kratos identity present  → look it up, optionally rotate password.
  *   • `users` row missing      → backfill from the identity.
  *   • pod-admin workspace      → ensure exists, ensure owner membership.
- *   • personal workspace       → ensure exists if `createWorkspace`.
+ *   • personal workspace       → ensure exists ONLY if `createWorkspace`
+ *                                  (opt-in; D7: no auto-created blank
+ *                                  workspace — domains come from templates).
  *
  * The previous implementation threw on Kratos 409 (identity exists) or on
  * `users` PK violation (row exists), leaving the operator permanently
@@ -112,7 +115,7 @@ export async function createAdminUser(
   name?: string,
   options?: { createWorkspace?: boolean; resetPassword?: boolean }
 ): Promise<{ identityId: string; userId: string; workspaceId: string | null }> {
-  const createWorkspace = options?.createWorkspace ?? true;
+  const createWorkspace = options?.createWorkspace ?? false;
   const resetPassword = options?.resetPassword ?? false;
   const db = await getDb();
   const normalizedEmail = email.trim().toLowerCase();
@@ -309,11 +312,11 @@ export async function ensureWorkspaceForUser(
   name?: string
 ): Promise<string> {
   const db = await getDb();
-  const existingMembership = await db.query.workspaceMembers.findFirst({
-    where: eq(workspaceMembers.userId, identityId),
-    columns: { workspaceId: true },
-  });
-  if (existingMembership) return existingMembership.workspaceId;
+  // A DOMAIN workspace only: the pod-admin membership (created just before
+  // this, step 3) used to satisfy this check, so the "personal workspace" this
+  // returned was the operator console.
+  const existing = await findUserDefaultWorkspaceId(db, identityId);
+  if (existing) return existing;
 
   const [workspace] = await db
     .insert(workspaces)

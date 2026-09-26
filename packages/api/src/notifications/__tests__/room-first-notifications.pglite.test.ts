@@ -9,8 +9,9 @@
  *   inside the window writes nothing; the person's OWN block writes nothing.
  * M2 — an agent's room post reaches the person: `postChannelMessage` (MCP
  *   `post_message`) with an @mention of the operator → `chat.mention` push
- *   (an agent post is NOT a self-mention); a plain `update` → in-app
- *   `session.room_update`, no push; a `question` → `session.needs_you` push.
+ *   (an agent post is NOT a self-mention); a plain `update` → NO notification
+ *   at all (founder decision F, 2026-09-25 — it lives only in the room and
+ *   the session's state mark); a `question` → `session.needs_you` push.
  *
  * Real: the doors above, `notifySessionNeedsYou`, `notifyRoomPost`,
  * `NotificationService.create` (preference lookup, dedupe gate, channel
@@ -77,9 +78,12 @@ vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
     h.sockets.push(e);
   },
 }));
-vi.mock("../../utils/channel-visibility.js", async () => {
+vi.mock("../../utils/channel-visibility.js", async (importOriginal) => {
   const { sql } = await import("drizzle-orm");
-  return { channelVisibilityWhere: () => sql`true` };
+  // Partial: the object-room helpers (`isObjectRoomType`, the audience) stay
+  // real — the mention door asks them whether a room is an object room.
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, channelVisibilityWhere: () => sql`true` };
 });
 vi.mock("../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -121,7 +125,6 @@ import {
   newlyOwedSlots,
 } from "../../services/focus-sessions/notify-needs-you.js";
 import { postChannelMessage } from "../../services/messaging/post-message.js";
-import { SESSION_ROOM_UPDATE_NOTIFICATION_TYPE } from "../../services/messaging/notify-room-post.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -344,7 +347,7 @@ describe("room-first notifications", () => {
     expect(rows[0]!.user_id).toBe(USER);
     expect(rows[0]!.title).toBe("Claude Code mentioned you");
     expect(h.pushes).toHaveLength(1);
-    // Told ONCE about this post — no room_update / needs_you on top.
+    // Told ONCE about this post — no update / needs_you notification on top.
     expect(await notifs()).toHaveLength(1);
   });
 
@@ -355,17 +358,13 @@ describe("room-first notifications", () => {
     expect(h.pushes).toHaveLength(0);
   });
 
-  it("M2: an agent's plain update in a session room is in-app only — no push", async () => {
+  it("M2: an agent's plain update in a session room creates NO notification at all (founder decision F, 2026-09-25)", async () => {
     const room = await seedRoom();
-    const sid = await seedSession({ channelId: room, title: "Ship billing" });
+    await seedSession({ channelId: room, title: "Ship billing" });
     await post(room, "Typecheck is green, moving to the migration.");
 
-    const rows = await notifs(SESSION_ROOM_UPDATE_NOTIFICATION_TYPE);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.source_id).toBe(sid);
-    expect(rows[0]!.title).toBe("Claude Code in Ship billing");
+    expect(await notifs()).toHaveLength(0);
     expect(h.pushes).toHaveLength(0);
-    expect(await notifs(SESSION_NEEDS_YOU_NOTIFICATION_TYPE)).toHaveLength(0);
   });
 
   it("M2: an agent's question in a session room pushes the session owner", async () => {

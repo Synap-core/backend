@@ -104,3 +104,41 @@ export function summarizePostWorkspaceLayers(
     },
   ];
 }
+
+/**
+ * A track template this install made startable — a playbook the applier
+ * created or reused with `scope: "project"` and a real row id.
+ */
+export interface InstalledTrackTemplate {
+  playbookId: string;
+  name: string;
+}
+
+/**
+ * The project-scope playbooks in an `applyPackagePostWorkspace` result bag —
+ * what a client offers to "Start on a project…" after an install (offered,
+ * never auto-started: from-intent.md). Pure, like `summarizePostWorkspaceLayers`,
+ * so every install door reads the bag the same way.
+ *
+ * Only rows with an id: a `proposed` playbook has none yet (nothing to start),
+ * and an `error` row reports through `layers[]` instead. `[]` means "this
+ * install made no track template startable" — a failed layer is `layers[]`'s
+ * fact, not this one's.
+ */
+export function installedTrackTemplates(
+  bag: { playbooks?: unknown } | null | undefined
+): InstalledTrackTemplate[] {
+  const list = bag?.playbooks;
+  if (!Array.isArray(list)) return [];
+  const out: InstalledTrackTemplate[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const pb = item as Record<string, unknown>;
+    if (pb.scope !== "project") continue;
+    if (pb.status === "error") continue;
+    if (typeof pb.playbookId !== "string" || !pb.playbookId) continue;
+    if (typeof pb.name !== "string") continue;
+    out.push({ playbookId: pb.playbookId, name: pb.name });
+  }
+  return out;
+}

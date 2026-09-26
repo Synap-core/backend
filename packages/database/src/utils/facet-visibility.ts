@@ -133,3 +133,30 @@ export function facetVisibilityConditions(opts: {
 
   return conditions;
 }
+
+/**
+ * WRITE-side twin of the lens rule (W2b, the ROLE principle): which
+ * `entity_facets.workspace_id` a new facet is STORED with.
+ *
+ * A role is ONE per name, pod-wide: a `shared` role (granted to one or more
+ * workspaces) or a `system` role is the same hat in every lens, so every entity
+ * wearing it must be visible in all of them. A facet pinned to the workspace
+ * that happened to attach it is invisible in every other lens that has the
+ * role (`facetVisibilityConditions` lens W = W OR NULL), so such a facet is
+ * always stored pod-wide (NULL) — whatever lens the caller attached from.
+ * Workspace overlay properties still validate under the caller's lens; only
+ * the stored stamp changes. Pod-wide rather than "the granted set" because a
+ * grant added later must reach facets that already exist, and NULL is exactly
+ * the stamp both read predicates (this file + the access-layer VisibilityRule)
+ * already show in every lens — so neither read side changes.
+ *
+ * A `workspace`-scoped role (one workspace's private hat) keeps the caller's
+ * lens. Unknown scope → the caller's lens (never widen what we cannot classify).
+ */
+export function storedFacetWorkspaceId(
+  roleScope: string | null | undefined,
+  requestedWorkspaceId: string | null
+): string | null {
+  if (roleScope === "shared" || roleScope === "system") return null;
+  return requestedWorkspaceId;
+}

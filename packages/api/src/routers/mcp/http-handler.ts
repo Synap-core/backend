@@ -138,8 +138,8 @@ export async function buildGrounding(
       projNames.length === 0
         ? ""
         : projNames.length <= 6
-          ? `Projects (companies/initiatives): ${projNames.join(", ")}. `
-          : `${projNames.length} projects (companies/initiatives). `;
+          ? `Projects (commitments): ${projNames.join(", ")}. `
+          : `${projNames.length} projects (commitments). `;
     if (wsIds.length === 0) {
       if (projNames.length === 0) return undefined;
       return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;

@@ -114,6 +114,11 @@ export function registerViewExecutors(): void {
         embeddedViewIds: innerData.embeddedViewIds as string[] | undefined,
         metadata: innerData.metadata as Record<string, unknown> | undefined,
         initialContent: innerData.initialContent,
+        // The project pin (W2a) — the reviewer approved a PINNED view.
+        projectId:
+          typeof innerData.projectId === "string"
+            ? innerData.projectId
+            : undefined,
       };
       try {
         await viewCaller.create(

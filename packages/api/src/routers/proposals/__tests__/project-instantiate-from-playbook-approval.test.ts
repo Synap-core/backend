@@ -11,6 +11,11 @@
  * as the APPROVER matches no row, throws before the status update, and leaves
  * the proposal PENDING forever. The replay must run as the project's owner.
  *
+ * W5c: the replay calls `startTrack` (services/tracks) DIRECTLY — the retired
+ * `projects.instantiateFromPlaybook` wrapper is no longer in the path. The
+ * router mock below deliberately exposes NO `instantiateFromPlaybook`, so a
+ * replay that still went through the router would throw.
+ *
  * DB + router access are mocked; assertions are on the calls issued.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,14 +29,12 @@ let projectRow:
 let membership: { role: string } | undefined;
 let selectRows: Array<{ status: string }> = [];
 const proposalUpdates: Array<Record<string, unknown>> = [];
-const bindCalls: Array<{ ctx: CallerCtx; args: unknown }> = [];
-let bindResult: { status?: string } = { status: "instantiated" };
-
-interface CallerCtx {
-  userId: string;
-  workspaceId: string | null | undefined;
-  workspaceRole: string | undefined;
-}
+const bindCalls: Array<{
+  projectId: string;
+  playbookId: string;
+  actor: { userId: string; agentUserId?: string | null };
+}> = [];
+let bindResult: { status?: string } = { status: "started" };
 
 const dbStub = {
   query: { projects: { findFirst: async () => projectRow } },
@@ -69,15 +72,18 @@ vi.mock("../../../utils/audit-log.js", () => ({ auditLog: async () => null }));
 
 vi.mock("../../projects.js", () => ({
   projectsRouter: {
-    createCaller: (ctx: CallerCtx) => ({
+    createCaller: () => ({
       create: async () => ({}),
       update: async () => ({}),
       setAutomationMembership: async () => ({}),
-      instantiateFromPlaybook: async (args: unknown) => {
-        bindCalls.push({ ctx, args });
-        return bindResult;
-      },
     }),
+  },
+}));
+
+vi.mock("../../../services/tracks/tracks-service.js", () => ({
+  startTrack: async (args: (typeof bindCalls)[number]) => {
+    bindCalls.push(args);
+    return bindResult;
   },
 }));
 
@@ -133,7 +139,7 @@ beforeEach(() => {
   selectRows = [];
   proposalUpdates.length = 0;
   bindCalls.length = 0;
-  bindResult = { status: "instantiated" };
+  bindResult = { status: "started" };
 });
 
 describe("project/instantiate_from_playbook approval", () => {
@@ -148,15 +154,12 @@ describe("project/instantiate_from_playbook approval", () => {
 
     expect(result).toMatchObject({ success: true });
     expect(bindCalls).toHaveLength(1);
-    expect(bindCalls[0].args).toEqual({
+    // Straight into the ONE track door, as the OWNER (not the approver), with
+    // no agent attribution — the approver is the authority, so it applies.
+    expect(bindCalls[0]).toEqual({
       projectId: PROJECT_ID,
       playbookId: PLAYBOOK_ID,
-    });
-    // The OWNER, not the approver — ProjectRepository.update gates on ownership.
-    expect(bindCalls[0].ctx).toMatchObject({
-      userId: OWNER,
-      workspaceId: "ws-1",
-      workspaceRole: "admin",
+      actor: { userId: OWNER, agentUserId: null, isHubProtocol: false },
     });
     // …and the proposal is closed, attributed to whoever actually approved.
     expect(proposalUpdates[0]).toMatchObject({
@@ -173,10 +176,7 @@ describe("project/instantiate_from_playbook approval", () => {
       runArgs({ data: { id: PROJECT_ID, playbookId: PLAYBOOK_ID } }, null)
     );
 
-    expect(bindCalls[0].ctx).toMatchObject({
-      userId: OWNER,
-      workspaceId: undefined,
-    });
+    expect(bindCalls[0].actor).toMatchObject({ userId: OWNER });
     expect(proposalUpdates[0]).toMatchObject({ status: "approved" });
   });
 

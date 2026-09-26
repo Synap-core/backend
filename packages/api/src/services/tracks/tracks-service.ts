@@ -8,9 +8,9 @@
  * `methodVersion`) so editing the method never rewrites a live track.
  *
  * ── THE DOORS, ALL HERE ─────────────────────────────────────────────────────
- *   startTrack        — the ONE way a track is born. `projects.instantiateFromPlaybook`
- *                       (the proto-track, 1 method per project) is now a thin
- *                       wrapper over it; there is no second mechanism.
+ *   startTrack        — the ONE way a track is born. The proto-track door
+ *                       `projects.instantiateFromPlaybook` was retired (W5c);
+ *                       its legacy approval executor calls startTrack directly.
  *   setTrackStatus    — pause / resume / complete / archive.
  *   advanceTrackStage — the ONE writer of `project_tracks.current_stage` after
  *                       birth. Gate evaluation is the subject-agnostic core in
@@ -85,6 +85,13 @@ import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
 import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
 import { createLinks } from "../links/links-service.js";
+import { linkProjectToWorkspace } from "../../utils/project-workspace.js";
+import {
+  listMissingStageDomains,
+  resolveStageDomainWorkspace,
+  workspacePackageSlug,
+  type StageDomainFallbackReason,
+} from "./stage-domain.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -429,25 +436,24 @@ export async function listTracks(params: {
   actor: TrackActor;
   includeArchived?: boolean;
 }): Promise<ProjectTrack[] | null> {
-  const db = await getDb();
-  const project = await loadVisibleProject(
-    db,
-    params.projectId,
-    params.actor.userId
-  );
+  // A READ: the project is checked through the SAME `projects` VisibilityRule
+  // the tracks below are floored on — member branch included (Sites W2 S2: a
+  // project member, guest included, sees the project's tracks). NOT
+  // `loadVisibleProject`: that floor also gates WRITES, so it deliberately has
+  // no member branch.
+  const access = AccessContext.from(params.actor);
+  const project = await scopedDb(access).findFirst<{ id: string }>(projects, {
+    where: eq(projects.id, params.projectId),
+    columns: { id: true },
+  });
   if (!project) return null;
-  return scopedDb(AccessContext.from(params.actor)).findMany<ProjectTrack>(
-    projectTracks,
-    {
-      where: and(
-        eq(projectTracks.projectId, params.projectId),
-        params.includeArchived
-          ? undefined
-          : ne(projectTracks.status, "archived")
-      ),
-      orderBy: [asc(projectTracks.createdAt), asc(projectTracks.id)],
-    }
-  );
+  return scopedDb(access).findMany<ProjectTrack>(projectTracks, {
+    where: and(
+      eq(projectTracks.projectId, params.projectId),
+      params.includeArchived ? undefined : ne(projectTracks.status, "archived")
+    ),
+    orderBy: [asc(projectTracks.createdAt), asc(projectTracks.id)],
+  });
 }
 
 /**
@@ -523,13 +529,21 @@ export interface StartTrackInput {
   id?: string;
 }
 
-export type StartTrackResult =
+export type StartTrackResult = (
   | {
       status: "started" | "exists";
       track: ProjectTrack;
       playbook: { id: string; name: string; version: number };
     }
-  | ProposedOutcome;
+  | ProposedOutcome
+) & {
+  /**
+   * Stage domains (workspace template slugs) with no live workspace the
+   * caller can see — ADVISORY, never a refusal: those stages' sessions fall
+   * back to the project's home workspace (and say so) until one is installed.
+   */
+  missingDomains: string[];
+};
 
 /**
  * Start a method on a project. Idempotent: a live (non-archived) track of the
@@ -575,6 +589,13 @@ export async function startTrack(
 
   await assertProjectWrite(project, actor.userId);
 
+  // Advisory, computed from the method AS IT STANDS (what would be pinned).
+  const missingDomains = await listMissingStageDomains(
+    db,
+    playbook.stages,
+    actor.userId
+  );
+
   const playbookRef = {
     id: playbook.id,
     name: playbook.name,
@@ -599,6 +620,7 @@ export async function startTrack(
       status: "exists",
       track: live as ProjectTrack,
       playbook: playbookRef,
+      missingDomains,
     };
   }
 
@@ -636,14 +658,17 @@ export async function startTrack(
     throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
   }
   if ("proposalId" in perm) {
-    return proposed(
-      perm,
-      buildObjectActionTitle({
-        action: "create",
-        objectKind: "track",
-        objectName: trackName,
-      }) + " — proposed for review"
-    );
+    return {
+      ...proposed(
+        perm,
+        buildObjectActionTitle({
+          action: "create",
+          objectKind: "track",
+          objectName: trackName,
+        }) + " — proposed for review"
+      ),
+      missingDomains,
+    };
   }
 
   const snapshot = buildTrackSnapshot(playbook);
@@ -700,6 +725,7 @@ export async function startTrack(
     status: created ? "started" : "exists",
     track,
     playbook: playbookRef,
+    missingDomains,
   };
 }
 
@@ -1300,7 +1326,37 @@ export async function applyTrackParams(
 
 // ── the stage session (M2) ──────────────────────────────────────────────────
 
-export type StartStageSessionResult =
+/**
+ * Where a stage that names a DOMAIN was worked (W2a). Present only when the
+ * pinned stage declares `domain` — absent means "no domain asked for".
+ */
+export type StageSessionDomainOutcome =
+  | {
+      /** The session was placed in (or found in) a workspace of that template. */
+      domain: {
+        wanted: string;
+        workspaceId: string;
+        /**
+         * `project --uses--> workspace` was stamped. `false` only on a
+         * PROPOSED session — nothing exists yet to have used the domain; the
+         * stamp lands when this door next returns the approved session.
+         */
+        usesStamped: boolean;
+      };
+      domainFallback?: never;
+    }
+  | {
+      /**
+       * NO workspace of that template could take the session: it was placed
+       * in the project's HOME workspace instead. Never silent — `reason` says
+       * what would fix it.
+       */
+      domainFallback: { wanted: string; reason: StageDomainFallbackReason };
+      domain?: never;
+    }
+  | { domain?: never; domainFallback?: never };
+
+export type StartStageSessionResult = (
   | {
       /**
        * `created` — a new session; `existing` — the caller already had an open
@@ -1315,7 +1371,9 @@ export type StartStageSessionResult =
       stageKey: string;
       /** Present only when the governance door returned one — never invented. */
       reviewUrl?: string;
-    });
+    })
+) &
+  StageSessionDomainOutcome;
 
 /**
  * THE ONE DOOR that starts a stage's session (M2). Entering a stage only
@@ -1361,13 +1419,61 @@ export async function startStageSession(input: {
   }
   const stage = readTrackStage(track.definitionSnapshot?.stages, stageKey);
 
-  const open = await openStageSession(track.id, stageKey, actor.userId);
-  if (open) return { status: "existing", stageKey, session: open };
-
   const db = await getDb();
+  const open = await openStageSession(track.id, stageKey, actor.userId);
+  if (open) {
+    // A session approved AFTER a proposal comes back here: it now exists in
+    // the domain's workspace, so the `uses` stamp the proposal could not make
+    // lands now. Only when the session really sits in that template's
+    // workspace — never re-derived from the stage alone.
+    if (
+      stage?.domain &&
+      open.workspaceId &&
+      (await workspacePackageSlug(db, open.workspaceId)) === stage.domain
+    ) {
+      const uses = await linkProjectToWorkspace(db, {
+        projectId: track.projectId,
+        workspaceId: open.workspaceId,
+        userId: actor.userId,
+      });
+      return {
+        status: "existing",
+        stageKey,
+        session: open,
+        domain: {
+          wanted: stage.domain,
+          workspaceId: open.workspaceId,
+          usesStamped: uses.linked,
+        },
+      };
+    }
+    return { status: "existing", stageKey, session: open };
+  }
+
   const project = await loadVisibleProject(db, track.projectId, actor.userId);
   if (!project) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+  }
+
+  // PER-STEP DOMAIN (W2a): the stage names a workspace TEMPLATE; work it in a
+  // live workspace of that template the caller can write to (one the project
+  // already uses wins). None ⇒ the project's home, REPORTED, never silent.
+  let sessionWorkspaceId: string | null = project.workspaceId ?? null;
+  let domainWorkspaceId: string | null = null;
+  let domainFallback:
+    { wanted: string; reason: StageDomainFallbackReason } | undefined;
+  if (stage?.domain) {
+    const resolved = await resolveStageDomainWorkspace(db, {
+      slug: stage.domain,
+      projectId: project.id,
+      userId: actor.userId,
+    });
+    if (resolved.resolved) {
+      sessionWorkspaceId = resolved.workspaceId;
+      domainWorkspaceId = resolved.workspaceId;
+    } else {
+      domainFallback = { wanted: resolved.slug, reason: resolved.reason };
+    }
   }
 
   const goal =
@@ -1383,7 +1489,7 @@ export async function startStageSession(input: {
   const result = await createFocusSession({
     userId: actor.userId,
     agentUserId: actor.agentUserId ?? undefined,
-    workspaceId: project.workspaceId ?? null,
+    workspaceId: sessionWorkspaceId,
     projectId: track.projectId,
     trackId: track.id,
     trackStage: stageKey,
@@ -1410,6 +1516,18 @@ export async function startStageSession(input: {
     // Check-then-create under ONE lock: the probe above is only a fast path.
     oneOpenPerStage: true,
   });
+  const domainOutcome = (usesStamped: boolean): StageSessionDomainOutcome =>
+    domainWorkspaceId && stage?.domain
+      ? {
+          domain: {
+            wanted: stage.domain,
+            workspaceId: domainWorkspaceId,
+            usesStamped,
+          },
+        }
+      : domainFallback
+        ? { domainFallback }
+        : {};
   if (result.status === "proposed") {
     return {
       status: "proposed",
@@ -1418,11 +1536,26 @@ export async function startStageSession(input: {
       proposalType: result.proposalType ?? "focus_session.create",
       message: result.message,
       ...(result.reviewUrl ? { reviewUrl: result.reviewUrl } : {}),
+      ...domainOutcome(false),
     };
+  }
+  // The session EXISTS in the domain's workspace: stamp the project's use of
+  // it through the one `uses` door — a derived index under the session create
+  // that governance already allowed, never a raw link insert.
+  let usesStamped = false;
+  if (domainWorkspaceId && result.session.workspaceId === domainWorkspaceId) {
+    usesStamped = (
+      await linkProjectToWorkspace(db, {
+        projectId: project.id,
+        workspaceId: domainWorkspaceId,
+        userId: actor.userId,
+      })
+    ).linked;
   }
   return {
     status: result.status === "deduped" ? "deduped" : "created",
     stageKey,
     session: result.session,
+    ...domainOutcome(usesStamped),
   };
 }

@@ -16,7 +16,7 @@ let behavior: "ok" | "throw" = "ok";
 const FIXTURE_STATUS = {
   provider: "google",
   connectionId: "conn-1",
-  workspaceId: "ws-1",
+  workspaceId: "0eeeeeee-0000-4000-8000-000000000001",
   kind: "event",
   enabled: true,
   profileSlugs: ["event"],
@@ -121,13 +121,20 @@ describe("GET /connectors/sync-status", () => {
     // (connection-sync.ts), not hand-copied — this is the field that a
     // hand-copy previously dropped (P2). Asserted explicitly so a future
     // re-introduction of a hand-copied schema fails here, not silently.
-    expect(body.statuses[0].workspaceId).toBe("ws-1");
+    expect(body.statuses[0].workspaceId).toBe(
+      "0eeeeeee-0000-4000-8000-000000000001"
+    );
   });
 
   it("forwards provider and workspaceId from the query string", async () => {
-    await get("?provider=google&workspaceId=ws-1");
+    await get(
+      "?provider=google&workspaceId=0eeeeeee-0000-4000-8000-000000000001"
+    );
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ provider: "google", workspaceId: "ws-1" });
+    expect(calls[0]).toMatchObject({
+      provider: "google",
+      workspaceId: "0eeeeeee-0000-4000-8000-000000000001",
+    });
   });
 
   it("omits workspaceId (undefined, not null) when the query does not carry one", async () => {

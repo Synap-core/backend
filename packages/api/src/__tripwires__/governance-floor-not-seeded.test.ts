@@ -120,12 +120,23 @@ describe("tripwire: DEFAULT_AUTO_APPROVE floor is never materialized as governan
     //     dropping it from a list. Classified 2026-09-20; it appeared when the
     //     B4a-B4g executors were consolidated into this one door, and the walk
     //     below correctly flagged it as unclassified rather than assuming.
+    //   - services/forms/form-service.ts → the owner's public-form door (Sites
+    //     W4). Writes ONE row per form: agent principal = that form's own actor,
+    //     workspace scope, exact action `entity.create`, verdict from the
+    //     owner's explicit mode choice. Not floor flood: the actor carries
+    //     `writesRequireProposal: true`, so rung 5 proposes BEFORE the rung-8
+    //     floor — the `auto` row is the owner's deliberate widening past rung 5
+    //     (and the guest door still forces a proposal unless the stored config
+    //     ALSO says direct), and the `propose` row is a tightening. Routing it
+    //     through `filterUncoveredActions` would delete exactly that choice.
+    //     Classified 2026-09-26.
     const ALLOWLIST = new Set(
       [
         "packages/api/src/routers/governance-rules.ts",
         "packages/api/src/routers/proposals/apply-approval.ts",
         "packages/database/src/utils/connection-governance.ts",
         "packages/api/src/services/proposals/gov-config.ts",
+        "packages/api/src/services/forms/form-service.ts",
       ].map((p) => p.split("/").join(sep))
     );
 

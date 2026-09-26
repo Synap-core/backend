@@ -29,6 +29,8 @@ export const DIAGNOSTIC_CODES = [
   "missing-ref",
   /** A `synap-*` directive name no reader understands. */
   "unknown-directive",
+  /** A `:color[…]` or `==…==` names a tone that is not a Synap tone (it draws plain). */
+  "unknown-tone",
 ] as const;
 export type DiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];
 

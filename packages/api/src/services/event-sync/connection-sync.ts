@@ -59,6 +59,7 @@ import {
   resolveConnectionSyncDecision,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { withConnectionFacts } from "./sync-status-facts.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import {
   humanizeToken,
@@ -1506,6 +1507,15 @@ export const ConnectionSyncStatusSchema = z.object({
     ruleId: z.string().optional(),
     available: z.boolean(),
   }),
+  /**
+   * The broker connection this registry row mirrors (`secrets.account_hint` —
+   * the id `connectors.connections` lists), so a client can put each row on
+   * the card of the connection it belongs to. Two connections of one provider
+   * are two cards; joining by provider showed both on each (2026-09-25).
+   */
+  brokerConnectionId: z.string().nullable().optional(),
+  /** The pod's recorded credential state for that connection. */
+  connectionState: z.enum(["needs_reauth"]).nullable().optional(),
   error: z.string().optional(),
   /**
    * The CLASS of `error` (`@synap-core/types/failures`) and, when known, where
@@ -1516,8 +1526,18 @@ export const ConnectionSyncStatusSchema = z.object({
   failure: z
     .object({
       errorClass: z.enum(FAILURE_ERROR_CLASSES),
-      /** The owner-approvable pack-enable request (`permission` only). */
+      /**
+       * The owner-approvable pack-enable request (`permission` only). Present
+       * only while that request is still PENDING — a decided one is never
+       * offered as the fix.
+       */
       enableProposalId: z.string().optional(),
+      /**
+       * The cause was removed after this run failed (its enable request has
+       * since been approved): the next run should pass, so the fix is "sync
+       * again", not the request the user already approved.
+       */
+      resolved: z.literal(true).optional(),
       next: z
         .object({
           kind: z.enum(["add", "connect", "enable", "run", "none"]),
@@ -1653,7 +1673,7 @@ export async function getConnectionSyncStatus(input: {
   const visible = input.userId
     ? scopeSyncStatusToUser(out, await readOwnedConnectionIds(input.userId))
     : out;
-  return withKeepSyncing(visible, liveOwner);
+  return withKeepSyncing(await withConnectionFacts(visible), liveOwner);
 }
 
 type KeepSyncing = { enabled: boolean; ruleId?: string; available: boolean };

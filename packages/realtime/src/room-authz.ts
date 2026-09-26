@@ -8,6 +8,10 @@
 import { db, and, eq } from "@synap/database";
 import { workspaceMembers, views } from "@synap/database/schema";
 import { canUserSeeChannel } from "@synap/database/channel-visibility";
+// Registers the object-room floors (a document's / entity's ONE room is
+// joinable by exactly the object's readers — `channelVisibilityWhere` branch
+// 5). Without it an object room fails CLOSED here: owner and roster only.
+import "./vendor/document-access.js";
 
 /** Is `userId` a member of `workspaceId`? */
 async function isWorkspaceMember(

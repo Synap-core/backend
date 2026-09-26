@@ -33,7 +33,7 @@
  * no membership filter, so naive use would leak workspace existence.
  */
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   channels,
@@ -52,6 +52,7 @@ import {
   type WorkspaceRoutingMode,
 } from "./capture-routing.js";
 import { ProfileResolutionService } from "./profile-resolution-service.js";
+import { podVisibleWorkspaceWhere } from "../utils/user-visible-where.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 
@@ -391,11 +392,28 @@ export async function resolveGraphWorkspaceFromSlugs(
   }
 ): Promise<string | null> {
   if (input.routingSlugs.length === 0) return null;
+  // A graph's lens is the PROCESS HOME of its workspace-scoped rows
+  // (stampScopeAwareHomesOnOps never pins a pod kind to it). So the graph is
+  // "workspace"-scoped for the rung-3 guard as soon as ANY of its slugs is, and
+  // "pod" only when every slug is pod-wide — an all-pod graph captured inside
+  // a session then stays pod-wide instead of taking the session's workspace.
+  let graphScope: "pod" | "workspace" | undefined;
+  if (input.sessionId) {
+    const scopes = new ProfileResolutionService(db);
+    graphScope = "pod";
+    for (const slug of input.routingSlugs) {
+      if ((await scopes.getEntityScope(slug, null)) === "workspace") {
+        graphScope = "workspace";
+        break;
+      }
+    }
+  }
   const placement = await resolveWorkspacePlacement(db, {
     userId: input.userId,
     kindSlug: input.routingSlugs[0],
     facetSlugs: input.routingSlugs.slice(1),
     ambientWorkspaceId: null,
+    ...(graphScope ? { entityScope: graphScope } : {}),
     ...(input.sessionId ? { context: { sessionId: input.sessionId } } : {}),
   });
   return acceptDeterministicGraphWorkspace(placement);
@@ -558,7 +576,9 @@ async function loadRoutingMemberIds(db: Db, userId: string): Promise<string[]> {
   });
   const ids = new Set(rows.map((r) => r.workspaceId));
   const podReadable = await db.query.workspaces.findMany({
-    where: sql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
+    // Through the ONE pod-visible door: a guest (Sites W2) reads no pod-visible
+    // workspace, so it can never be routed into one.
+    where: podVisibleWorkspaceWhere(userId),
     columns: { id: true },
   });
   for (const w of podReadable) ids.add(w.id);
@@ -734,8 +754,35 @@ export async function resolveWorkspacePlacement(
   const inCandidates = (id: string) =>
     candidates.length === 0 || candidates.some((c) => c.id === id);
 
+  // ── Rung 3 guard — a POD-WIDE kind never takes a context stamp (W2b) ──
+  // A session/channel lives in ONE workspace, but a pod-wide kind (person,
+  // company, knowledge, question — entityScope 'pod') is shared data: stamping
+  // it with the session's workspace makes it INVISIBLE from every other lens
+  // (entity visibility is by `entities.workspace_id`). So for a pod kind the
+  // context may only TIE-BREAK an ontology candidate set rung 2 already built
+  // (the role is enabled in several lenses → pick the one the work is in); it
+  // never pins on its own. A workspace-scoped kind (task, deal, …) is
+  // unchanged. Unknown scope (no kindSlug, no entityScope — e.g. capture's
+  // batch lens) keeps the historical behaviour: we cannot claim it is pod.
+  const contextMayPin = async (): Promise<boolean> => {
+    if (candidates.length > 0) return true; // tie-break of rung-2 candidates
+    if (input.workspaceScopedFlag) return true;
+    let scope: string | null | undefined = input.entityScope;
+    if (scope == null && input.kindSlug) {
+      scope = await new ProfileResolutionService(db).getEntityScope(
+        input.kindSlug,
+        ambient
+      );
+    }
+    if (scope == null) return true;
+    return normalizeEntityScope(scope) !== "pod";
+  };
+
   // ── Rung 3 — context-implied (channel binding → focus session) ──
-  if (input.context?.channelId || input.context?.sessionId) {
+  if (
+    (input.context?.channelId || input.context?.sessionId) &&
+    (await contextMayPin())
+  ) {
     const map = await getMemberMap();
     if (input.context.channelId) {
       const ch = await db.query.channels.findFirst({

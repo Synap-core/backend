@@ -34,6 +34,10 @@ import {
 } from "../../../services/external-user-mapping.js";
 import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
 import type { HubVariables } from "../rest/_shared.js";
+import {
+  isPublicDoorPath,
+  PUBLIC_PROJECTION_PATH,
+} from "../../../public-doors.js";
 
 const logger = createLogger({ module: "hub-protocol-auth" });
 
@@ -97,8 +101,9 @@ export const hubAuthMiddleware = async (
     // a workspace's opt-in public data. Safe to expose without a key because the
     // handler is default-deny (404 unless settings.publicProjection.enabled ===
     // true), facet-workspace-scoped (never returns pod-wide private entities), and
-    // field-whitelisted.
-    "/public/projection",
+    // field-whitelisted. (Kept OUTSIDE the credentialless public-door
+    // namespace below — see `public-doors.ts`.)
+    PUBLIC_PROJECTION_PATH,
     // CP→pod OIDC federation client push — authenticated by the CP's ISSUER
     // SIGNATURE (verifyIssuerJwt against the pinned trusted issuer), not an API
     // key, exactly like /auth/exchange. The handler runs its own verification.
@@ -123,6 +128,12 @@ export const hubAuthMiddleware = async (
   const rel = mount ? reqPath.slice(mount.length) || "/" : reqPath;
   if (
     skipAuthPaths.includes(rel) ||
+    // Credentialless public doors (`/public/*`, Sites W3): the capability is in
+    // the path (a hashed share token) and NO credential is ever read — an
+    // Authorization / X-Session-Token sent here is ignored, never resolved, so
+    // it cannot change the response. The ONE predicate also drives the
+    // idempotency skip, the transport CORS and the rate class.
+    isPublicDoorPath(reqPath) ||
     // The pending-agent review/approve/reject subtree is token-protected (the
     // secret keyId IS the capability) and opened in a browser with no auth
     // header. Matched on the de-prefixed path — boundary-safe (no longer skips

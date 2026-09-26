@@ -54,6 +54,12 @@ export interface TrackStage {
   gate?: "human" | "check";
   /** May the track sit in this stage indefinitely? */
   indefinite?: boolean;
+  /**
+   * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
+   * (`workspaces.package_slug`), never a workspace id, so a method stays
+   * portable across pods. `startStageSession` resolves it to a live workspace.
+   */
+  domain?: string;
 }
 
 type ReadStage = Omit<TrackStage, "position" | "sessionCount">;
@@ -98,6 +104,9 @@ function readStage(raw: unknown): ReadStage | null {
     out.gate = gate.kind;
   }
   if (typeof r.indefinite === "boolean") out.indefinite = r.indefinite;
+  if (typeof r.domain === "string" && r.domain.trim()) {
+    out.domain = r.domain.trim();
+  }
   return out;
 }
 

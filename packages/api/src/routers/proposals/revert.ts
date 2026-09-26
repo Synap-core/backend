@@ -12,6 +12,7 @@ import type { StoredProposalData } from "@synap-core/types";
 import {
   isRequestShapedProposalData,
   isCompositeProposalData,
+  isNestedEnvelope,
 } from "@synap-core/types/proposals";
 import type { CompleteMaterializedRecord } from "../../services/proposals/stamp-materialized.js";
 import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
@@ -141,6 +142,16 @@ export function planProposalRevert(
   // A row with no stamp (written before this existed, or a non-entity update)
   // has no before-state, so it stays `unsupported` and the mutation fails loud.
   if (isUpdate) {
+    if (
+      proposal.targetType === "entity" &&
+      carriesUnrevertableEntityChange(proposal.data)
+    ) {
+      return {
+        kind: "unsupported",
+        reason:
+          "Revert of this update is not supported: it changes the entity's kind, scope or linked file, which undo cannot restore.",
+      };
+    }
     const diffs =
       proposal.targetType === "entity"
         ? (materialized as CompleteMaterializedRecord | undefined)
@@ -303,6 +314,40 @@ export function planProposalRevert(
 }
 
 /**
+ * The entity-update payload keys an apply-time stamp cannot undo. The stamp
+ * (`computeEntityUpdateDiff`) records title, description and properties only:
+ *
+ *   - `profileSlug` — a KIND change (force-proposed as `SCOPE_IDENTITY_CHANGE`);
+ *   - `global`      — a promotion to pod-wide (a SCOPE change);
+ *   - `documentId`  — a body-document link (`entities.update` leaves such a
+ *     receipt unstamped for the same reason);
+ *   - `sourceFile`  — a governed file attach, which takes the `document_id`
+ *     link on approval.
+ *
+ * A proposal carrying any of them is therefore never revertable — neither
+ * predicted pending nor planned applied — so it is never swipe-safe: the one
+ * class of update governance insists a person reads is not waved through.
+ */
+const UNREVERTABLE_ENTITY_UPDATE_KEYS = [
+  "profileSlug",
+  "global",
+  "documentId",
+  "sourceFile",
+] as const;
+
+function carriesUnrevertableEntityChange(data: unknown): boolean {
+  const payload = isNestedEnvelope(data)
+    ? (data as { data: Record<string, unknown> }).data
+    : data && typeof data === "object"
+      ? (data as Record<string, unknown>)
+      : undefined;
+  if (!payload) return false;
+  return UNREVERTABLE_ENTITY_UPDATE_KEYS.some(
+    (key) => payload[key] !== undefined
+  );
+}
+
+/**
  * Would `revert` succeed for this proposal ONCE IT IS APPLIED? — the answer a
  * reviewer needs BEFORE deciding (swipe or tap? warn "can't be undone"?).
  *
@@ -328,9 +373,11 @@ export function wouldBeRevertable(
       ? (proposal.data as StoredProposalData)
       : null;
   if (isCompositeProposalData(data)) return true;
-  // Exactly the rows the `entity/update` executor (key `entity/update`) runs.
+  // Exactly the rows the `entity/update` executor (key `entity/update`) runs —
+  // unless the payload carries a change its stamp cannot record, which the
+  // planner will refuse once applied (`carriesUnrevertableEntityChange`).
   if (proposal.targetType === "entity" && proposal.proposalType === "update") {
-    return true;
+    return !carriesUnrevertableEntityChange(proposal.data);
   }
   return (
     planProposalRevert({ ...proposal, status: "approved" }).kind !==

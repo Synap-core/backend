@@ -24,7 +24,6 @@ import {
   drizzleSql,
   messages,
   channelContextItems,
-  workspaceMembers,
   ChannelContextObjectType,
   ChannelContextRelationshipType,
 } from "@synap/database";
@@ -32,6 +31,7 @@ import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
 import type { InboundAttachmentJobData } from "@synap/jobs/workers/inbound-attachment-worker.js";
 import { createGovernedFileEntityFromBuffer } from "../../routers/create-governed-file-entity.js";
+import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
 
 const logger = createLogger({ module: "ingest-inbound-attachments" });
 
@@ -65,11 +65,8 @@ export async function runInboundAttachmentIngest(
   // falls back to any workspace the owner belongs to; if none, we can't store.
   let workspaceId = input.workspaceId;
   if (!workspaceId) {
-    const membership = await db.query.workspaceMembers.findFirst({
-      where: eq(workspaceMembers.userId, input.userId),
-      columns: { workspaceId: true },
-    });
-    workspaceId = membership?.workspaceId ?? null;
+    // D7: never the pod-admin console, never archived (the ONE fallback).
+    workspaceId = await findUserDefaultWorkspaceId(db, input.userId);
   }
   if (!workspaceId) {
     logger.warn(

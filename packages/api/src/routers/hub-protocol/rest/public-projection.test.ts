@@ -37,24 +37,42 @@ vi.mock("@synap/database", () => {
     return chain;
   };
   return {
-  db: {
-    query: { workspaces: { findFirst: findFirstMock } },
-    select: () => makeSelectChain(),
-  },
-  entities: { id: "e.id", title: "e.title", preview: "e.preview", properties: "e.props", deletedAt: "e.deletedAt" },
-  entityFacets: { workspaceId: "f.ws", profileId: "f.pid", entityId: "f.eid", properties: "f.props", deletedAt: "f.deletedAt" },
-  profiles: { id: "p.id", slug: "p.slug" },
-  workspaces: { id: "w.id" },
-  eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
-  and: (...c: unknown[]) => ({ op: "and", c }),
-  or: (...c: unknown[]) => ({ op: "or", c }),
-  inArray: (a: unknown, b: unknown) => ({ op: "inArray", a, b }),
-  isNull: (a: unknown) => ({ op: "isNull", a }),
-  ilike: (a: unknown, b: unknown) => ({ op: "ilike", a, b }),
+    db: {
+      query: { workspaces: { findFirst: findFirstMock } },
+      select: () => makeSelectChain(),
+    },
+    entities: {
+      id: "e.id",
+      title: "e.title",
+      preview: "e.preview",
+      properties: "e.props",
+      deletedAt: "e.deletedAt",
+    },
+    entityFacets: {
+      workspaceId: "f.ws",
+      profileId: "f.pid",
+      entityId: "f.eid",
+      properties: "f.props",
+      deletedAt: "f.deletedAt",
+    },
+    profiles: { id: "p.id", slug: "p.slug" },
+    workspaces: { id: "w.id" },
+    eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
+    and: (...c: unknown[]) => ({ op: "and", c }),
+    or: (...c: unknown[]) => ({ op: "or", c }),
+    inArray: (a: unknown, b: unknown) => ({ op: "inArray", a, b }),
+    isNull: (a: unknown) => ({ op: "isNull", a }),
+    ilike: (a: unknown, b: unknown) => ({ op: "ilike", a, b }),
   };
 });
 
 vi.mock("./_shared.js", () => ({
+  // Considered fallback (total-mock-missing-export ratchet): `importOriginal`
+  // cannot load the real `_shared.js` here — this file's TOTAL
+  // `@synap/database` mock lacks exports its module graph reads. The route's
+  // catch imports the status mapper; these tests never exercise a mapped
+  // error, so it answers the old blanket 500.
+  httpStatusForTrpcError: () => 500,
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
@@ -123,9 +141,17 @@ describe("parsePublicProjectionConfig — default-deny", () => {
 
   it("accepts a valid opt-in config", () => {
     const cfg = parsePublicProjectionConfig({
-      publicProjection: { enabled: true, roles: ["sponsor"], fields: ["website"] },
+      publicProjection: {
+        enabled: true,
+        roles: ["sponsor"],
+        fields: ["website"],
+      },
     });
-    expect(cfg).toEqual({ enabled: true, roles: ["sponsor"], fields: ["website"] });
+    expect(cfg).toEqual({
+      enabled: true,
+      roles: ["sponsor"],
+      fields: ["website"],
+    });
   });
 });
 
@@ -200,7 +226,10 @@ describe("projectRow — field whitelist", () => {
       id: "e1",
       title: "Acme",
       role: "sponsor",
-      properties: { website: "https://acme.example", tagline: "We build things" },
+      properties: {
+        website: "https://acme.example",
+        tagline: "We build things",
+      },
     });
     // Explicit leak assertions.
     expect(item.properties).not.toHaveProperty("internalNotes");
@@ -211,7 +240,13 @@ describe("projectRow — field whitelist", () => {
 
   it("returns empty properties when the allowlist is empty", () => {
     const item = projectRow(
-      { id: "e1", title: "x", role: "sponsor", entityProperties: { a: 1 }, facetProperties: {} },
+      {
+        id: "e1",
+        title: "x",
+        role: "sponsor",
+        entityProperties: { a: 1 },
+        facetProperties: {},
+      },
       []
     );
     expect(item.properties).toEqual({});
@@ -223,7 +258,9 @@ describe("projectRow — field whitelist", () => {
 describe("GET /public/projection — handler", () => {
   it("returns 404 and never runs the projection query when not opted in", async () => {
     findFirstMock.mockResolvedValue({
-      settings: { publicProjection: { enabled: false, roles: ["sponsor"], fields: [] } },
+      settings: {
+        publicProjection: { enabled: false, roles: ["sponsor"], fields: [] },
+      },
     });
     const app = buildApp();
     const res = await app.request(`/public/projection?workspace=${WS}`);
@@ -250,21 +287,33 @@ describe("GET /public/projection — handler", () => {
         id: "company-1",
         title: "Acme",
         role: "sponsor",
-        entityProperties: { website: "https://acme.example", ownerEmail: "leak@x" },
+        entityProperties: {
+          website: "https://acme.example",
+          ownerEmail: "leak@x",
+        },
         facetProperties: { tagline: "public tagline" },
       },
     ]);
     const app = buildApp();
-    const res = await app.request(`/public/projection?workspace=${WS}&q=acme&limit=999`);
+    const res = await app.request(
+      `/public/projection?workspace=${WS}&q=acme&limit=999`
+    );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      items: Array<{ id: string; role: string; properties: Record<string, unknown> }>;
+      items: Array<{
+        id: string;
+        role: string;
+        properties: Record<string, unknown>;
+      }>;
       count: number;
     };
     expect(body.count).toBe(1);
     expect(body.items[0].id).toBe("company-1");
     // Private key stripped end-to-end.
-    expect(body.items[0].properties).toEqual({ website: "https://acme.example", tagline: "public tagline" });
+    expect(body.items[0].properties).toEqual({
+      website: "https://acme.example",
+      tagline: "public tagline",
+    });
     expect(body.items[0].properties).not.toHaveProperty("ownerEmail");
     // Limit was capped (999 → PROJECTION_MAX_LIMIT).
     expect(limitMock).toHaveBeenCalledWith(PROJECTION_MAX_LIMIT);

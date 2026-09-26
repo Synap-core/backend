@@ -300,7 +300,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       logger.error({ err }, "agent-skills/executable list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -373,7 +373,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       logger.error({ err }, "agent-skills/executable create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -435,7 +435,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.error({ err }, "list agent skills failed");
-      return c.json({ error: "Internal error" }, 500);
+      return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));
     }
   });
 
@@ -615,7 +615,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json(wireSkill(result.skill), 200);
     } catch (err) {
       logger.error({ err }, "create agent skill failed");
-      return c.json({ error: "Internal error" }, 500);
+      return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));
     }
   });
 
@@ -651,7 +651,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json(wireSkill(row), 200);
     } catch (err) {
       logger.error({ err }, "update agent skill failed");
-      return c.json({ error: "Internal error" }, 500);
+      return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));
     }
   });
 
@@ -903,7 +903,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       logger.error({ err }, "import agent skill failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

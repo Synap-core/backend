@@ -52,16 +52,24 @@ import {
   profiles,
   documents,
   agents,
+  governanceRules,
 } from "@synap/database/schema";
 import { visibleAgentsWhere } from "../hub-protocol/rest/link-endpoint-visibility.js";
+import {
+  sessionDocumentReadableWhere,
+  sessionReadableWhere,
+} from "../../access/session-visibility.js";
+import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
   ProposalReviewEvent,
   ProposalReviewModel,
+  ProposalTrack,
   StoredProposalData,
 } from "@synap-core/types";
-import { STATUS_ATTENTION } from "@synap-core/types/proposals/attention";
+import { resolveProposalAttention } from "@synap-core/types/proposals/attention";
+import { isSessionStartChange } from "@synap-core/types/proposals/intent";
 import { revertableForRow } from "./revert.js";
 import {
   isCompositeProposalData,
@@ -190,41 +198,27 @@ export function deriveProposalPrincipal(input: {
   return name ? { kind: "delegated", name } : { kind: "delegated" };
 }
 /**
- * TRACK RECORD — the MEASURED run history of the flow a proposal would run
- * again (a playbook session start, an automation run). Never a prediction: V0
- * agents are bring-your-own, so no cost reaches the pod, and a duration exists
- * only where completed runs measured one.
- *
- * `runs: 0` is a measured zero (the flow is visible and has never run) — the
- * field is ABSENT when the flow is not visible or the kind has no flow.
- * Durations are over `durationSamples` completed runs and absent when that is 0.
- */
-export interface ProposalTrack {
-  runs: number;
-  completed: number;
-  failed: number;
-  running: number;
-  /** ISO timestamp of the newest run. Absent when `runs` is 0. */
-  lastRunAt?: string;
-  lastStatus?: string;
-  durationSamples: number;
-  medianDurationMs?: number;
-  lastDurationMs?: number;
-}
-
-/**
  * Which flow's track record a proposal row carries — `null` for every kind that
  * does not (re)run a flow. Reads the SAME ids the name batches resolve
  * (`referencedNameIds`), so a track can only attach where a name could.
+ * A `focus_session` row carries one only when it STARTS a session
+ * (`isSessionStartChange` on the request's change type — the same rule every
+ * surface titles "Start …" by): a grant or stage gate acts on a session
+ * already live, so it reruns nothing.
  * `capability.run` is deliberately absent: a DIRECT capability run records no
  * event when it fails (`executeCapability` returns before
  * `recordDirectCapabilityRun`), so its ledger can only ever say "all finished".
  */
 export function trackFlowForRow(
   row: Pick<ProposalRow, "targetType" | "proposalType">,
-  ids: ReferencedNameIds
+  ids: ReferencedNameIds,
+  changeType: string | undefined
 ): { flowType: "playbook" | "automation"; flowId: string } | null {
-  if (row.targetType === "focus_session" && ids.playbook) {
+  if (
+    row.targetType === "focus_session" &&
+    isSessionStartChange(changeType) &&
+    ids.playbook
+  ) {
     return { flowType: "playbook", flowId: ids.playbook };
   }
   if (
@@ -241,15 +235,12 @@ export function trackFlowForRow(
 /** A run group → the wire track (a flow with no visible run → a measured zero). */
 export function toProposalTrack(group: RunGroup | undefined): ProposalTrack {
   if (!group) {
-    return { runs: 0, completed: 0, failed: 0, running: 0, durationSamples: 0 };
+    return { runs: 0, completed: 0, running: 0, durationSamples: 0 };
   }
   return {
     runs: group.runCount,
     completed: group.completedCount,
-    failed: group.failedCount,
     running: group.runningCount,
-    lastRunAt: group.latestStartedAt.toISOString(),
-    lastStatus: group.latestStatus,
     durationSamples: group.durationSampleCount,
     ...(group.medianDurationMs !== null
       ? { medianDurationMs: group.medianDurationMs }
@@ -320,6 +311,14 @@ type DisplayEnrichedProposal = ProposalRow &
      * the raw uuid to head the group with.
      */
     sessionGoal?: string;
+    /**
+     * The proposal came from a session the viewer may NOT read (decision D1: a
+     * session's title/goal is content, readable by its owner and its room's
+     * human roster). The spine renders the vocabulary's private-session label
+     * with no door; `sessionGoal` is then absent. Absent when the session is
+     * readable, gone, or there is none.
+     */
+    sessionPrivate?: true;
     // NEW: Resolved names for commonly referenced IDs across proposal kinds
     /** The focus_session proposal's subject entity — "Start {playbook} for
      * {subjectName}". Falls back to `projectName` when a session has no
@@ -337,13 +336,38 @@ type DisplayEnrichedProposal = ProposalRow &
     originChannelName?: string;
     /** The flow's measured run history — see {@link ProposalTrack}. */
     track?: ProposalTrack;
+    /**
+     * The rule that let this write run without asking (an auto-approved
+     * receipt stamped with `_autoApprove.governanceRuleId`), when the viewer
+     * may read it. Absent when unknown or unreadable — never an id alone.
+     */
+    governanceRule?: ProposalGovernanceRule;
+    /**
+     * The id of the rule that let this write run without asking — read ONCE,
+     * here, from the receipt's `_autoApprove.governanceRuleId` and kept only
+     * when it is a uuid (`autoApproveRuleId`). Present even when the viewer
+     * may not read the rule itself (then `governanceRule` is absent): it
+     * answers "did a rule run this", never "which one". A machine field —
+     * never rendered.
+     */
+    governanceRuleId?: string;
     review: ProposalReviewModel;
   };
 
 export async function enrichProposalsForDisplay(
-  rows: ProposalRow[],
-  userId: string
+  inputRows: ProposalRow[],
+  userId: string,
+  /** `roster`: honour the session roster branch — a HUMAN door passes
+   *  `rosterReadFor(ctx)`; default owner-only (decision D1). */
+  opts: { roster?: boolean } = {}
 ): Promise<DisplayEnrichedProposal[]> {
+  // Session content copied into a row at write time (goal as `targetName`, a
+  // close's goal/summary as `data`) is withheld HERE, before any derivation
+  // reads it, when the viewer may not read the target session (decision D1).
+  const rows = await redactUnreadableSessionTargets(inputRows, {
+    userId,
+    roster: opts.roster ?? false,
+  });
   const requests = rows.map((row) => {
     const req = buildRequestFromProposal(row);
     return {
@@ -549,7 +573,9 @@ export async function enrichProposalsForDisplay(
     workspaceRows,
     channelRows,
     agentRows,
-    removalRelationPairs,
+    removalRelationCounts,
+    setups,
+    receiptRuleRows,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -674,11 +700,11 @@ export async function enrichProposalsForDisplay(
           .limit(1)
           .then((rows) => rows.length > 0)
       : Promise.resolve(false),
-    // Session goals, floored by `ownerPrivateVisibleWhere` — focus_sessions is
-    // an ownerPrivate table (a NULL workspace means "personal to the owner"), so
-    // a plain userVisibleWhere would hand another user's private session goal to
-    // every reviewer. A session the viewer may not see simply resolves to no
-    // label, and the spine falls back to the id.
+    // Session titles through the ONE session read rule (decision D1): a
+    // session's title/goal is content — its owner and (human door) its room's
+    // human roster read it; a workspace colleague does not. A session the
+    // viewer may not read resolves to no label and is marked `sessionPrivate`
+    // below, so the spine shows a placeholder instead of the id.
     sessionIds.length > 0
       ? db
           .select({
@@ -690,11 +716,7 @@ export async function enrichProposalsForDisplay(
           .where(
             and(
               inArray(focusSessions.id, sessionIds),
-              ownerPrivateVisibleWhere(
-                focusSessions.workspaceId,
-                focusSessions.userId,
-                userId
-              )
+              sessionReadableWhere({ userId, roster: opts.roster ?? false })
             )
           )
       : Promise.resolve(
@@ -714,7 +736,12 @@ export async function enrichProposalsForDisplay(
                 documents.workspaceId,
                 documents.userId,
                 userId
-              )
+              ),
+              // A session's document is titled with the session (D1).
+              sessionDocumentReadableWhere(documents.id, {
+                userId,
+                roster: opts.roster ?? false,
+              })
             )
           )
       : Promise.resolve([] as Array<{ id: string; title: string }>),
@@ -901,39 +928,56 @@ export async function enrichProposalsForDisplay(
             )
         : Promise.resolve([] as Array<{ id: string; name: string }>);
     })(),
-    // REMOVAL link counts — ONE grouped read for every entity a delete on this
-    // page removes, floored by the `relations` VisibilityRule (the same
+    // REMOVAL link counts for every entity a delete on this page removes,
+    // floored by the `relations` VisibilityRule (the same
     // `scopedDb(access).predicate` the name batches use), so a link the viewer
-    // cannot see is not counted. Grouped by endpoint PAIR (a relation touches
-    // its entity from either end); `countRelationsByEntity` folds pairs → ids.
+    // cannot see is not counted. Aggregated PER REMOVED ID in SQL — one grouped
+    // read per end (a relation touches its entity from either end; the target
+    // end skips a self-link, which the source end already counted) — so the
+    // result is bounded by 2·|ids| rows however many links a hub entity has.
     removalEntityIds.length > 0
-      ? db
-          .select({
-            sourceEntityId: relations.sourceEntityId,
-            targetEntityId: relations.targetEntityId,
-            n: drizzleSql<number>`count(*)::int`,
-          })
-          .from(relations)
-          .where(
-            and(
-              or(
+      ? Promise.all([
+          db
+            .select({
+              entityId: relations.sourceEntityId,
+              n: drizzleSql<number>`count(*)::int`,
+            })
+            .from(relations)
+            .where(
+              and(
                 inArray(relations.sourceEntityId, removalEntityIds),
-                inArray(relations.targetEntityId, removalEntityIds)
-              ),
-              nameAccess.predicate(relations)
+                nameAccess.predicate(relations)
+              )
             )
-          )
-          .groupBy(relations.sourceEntityId, relations.targetEntityId)
-      : Promise.resolve(
-          [] as Array<{
-            sourceEntityId: string | null;
-            targetEntityId: string | null;
-            n: number;
-          }>
-        ),
+            .groupBy(relations.sourceEntityId),
+          db
+            .select({
+              entityId: relations.targetEntityId,
+              n: drizzleSql<number>`count(*)::int`,
+            })
+            .from(relations)
+            .where(
+              and(
+                inArray(relations.targetEntityId, removalEntityIds),
+                drizzleSql`${relations.sourceEntityId} is distinct from ${relations.targetEntityId}`,
+                nameAccess.predicate(relations)
+              )
+            )
+            .groupBy(relations.targetEntityId),
+        ]).then(([bySource, byTarget]) => [...bySource, ...byTarget])
+      : Promise.resolve([] as Array<{ entityId: string | null; n: number }>),
+    // SETUP — "what does this still need from a human", recomputed on EVERY
+    // read from the capability's own manifest + live vault/Nango state, so
+    // adding the missing key makes the gap disappear without touching the
+    // proposal. A page with no `capability.install` row does no work at all.
+    // See `services/proposals/proposal-setup.ts`.
+    resolveProposalSetups(rows as unknown as Record<string, unknown>[], userId),
+    // The rules behind this page's auto-approved receipts (names resolved
+    // below, from the loaded users first).
+    readReceiptRules(rows, userId),
   ]);
   const relationCountByEntityId = countRelationsByEntity(
-    removalRelationPairs,
+    removalRelationCounts,
     removalEntityIds
   );
 
@@ -947,8 +991,9 @@ export async function enrichProposalsForDisplay(
    * It cannot be folded into the query above: an agent's owner id is
    * `users.createdByUserId` on the AGENT's own row, so it is unknown until that
    * row has been read. One extra round-trip for the whole page (not per row),
-   * skipped entirely when no proposal on the page has an agent actor — which is
-   * every human-authored page.
+   * run TOGETHER with the track record below (both need only the first batch),
+   * and skipped entirely when there is nothing unloaded to name. It also loads
+   * the agents a receipt's rule trusts, when the page did not already load them.
    */
   const ownerIds = uniqueStrings([
     ...rows.map((row) => {
@@ -972,25 +1017,27 @@ export async function enrichProposalsForDisplay(
       if (userById.has(row.subjectUserId)) return undefined;
       return row.subjectUserId;
     }),
+    ...receiptRuleAgentIds(receiptRuleRows).filter((id) => !userById.has(id)),
   ]);
-  if (ownerIds.length > 0) {
-    const ownerRows = await db
-      .select({
-        id: users.id,
-        name: users.name,
-        email: users.email,
-        userType: users.userType,
-        agentMetadata: users.agentMetadata,
-        createdByUserId: users.createdByUserId,
-      })
-      .from(users)
-      .where(inArray(users.id, ownerIds));
-    for (const row of ownerRows) userById.set(row.id, row);
-  }
   const traceByCorrelationId = new Map<string, EventRecord[]>(traceEntries);
   const facetById = new Map(facetRows.map((row) => [row.id, row]));
   const sessionGoalById = new Map(
     sessionRows.map((row) => [row.id, resolveSessionTitle(row)])
+  );
+  // Sessions that EXIST but the viewer may not read — only ids are selected,
+  // never a session column, so "private" never carries its title.
+  const unreadSessionIds = uniqueStrings(
+    rows.map((row) => row.sessionId ?? undefined)
+  ).filter((id) => isLikelyUUID(id) && !sessionGoalById.has(id));
+  const privateSessionIds = new Set(
+    unreadSessionIds.length > 0
+      ? (
+          await db
+            .select({ id: focusSessions.id })
+            .from(focusSessions)
+            .where(inArray(focusSessions.id, unreadSessionIds))
+        ).map((row) => row.id)
+      : []
   );
   const documentTitleById = new Map(
     documentRows.map((row) => [row.id, row.title])
@@ -1091,23 +1138,13 @@ export async function enrichProposalsForDisplay(
     return meta.title ?? meta.preview ?? undefined;
   };
 
-  // SETUP — "what does this still need from a human", recomputed on EVERY read
-  // from the capability's own manifest + live vault/Nango state, so adding the
-  // missing key makes the gap disappear without touching the proposal. Batched
-  // once per page; a page with no `capability.install` row does no work at all.
-  // See `services/proposals/proposal-setup.ts`.
-  const setups = await resolveProposalSetups(
-    rows as unknown as Record<string, unknown>[],
-    userId
-  );
-
   // TRACK RECORD — batched by flow id, like the names. Only ids whose NAME
   // resolved above are read: `playbookById` / `automationById` hold exactly the
   // rows the viewer's `scopedDb(access).predicate` admitted, so a flow the
   // viewer cannot see gets no track (and the runs themselves are user-floored
   // inside the aggregate). Skipped entirely when no row reruns a flow.
   const trackFlowByRow = rows.map((row, idx) =>
-    trackFlowForRow(row, nameIdsByRow[idx]!)
+    trackFlowForRow(row, nameIdsByRow[idx]!, requests[idx]!.changeType)
   );
   const visibleTrackIds = (flowType: "playbook" | "automation") => {
     const visible = flowType === "playbook" ? playbookById : automationById;
@@ -1119,14 +1156,31 @@ export async function enrichProposalsForDisplay(
   };
   const trackPlaybookIds = visibleTrackIds("playbook");
   const trackAutomationIds = visibleTrackIds("automation");
-  const runTracks =
+  // SECOND ROUND — the two reads that need the first batch, run together.
+  const [ownerRows, runTracks] = await Promise.all([
+    ownerIds.length > 0
+      ? db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            userType: users.userType,
+            agentMetadata: users.agentMetadata,
+            createdByUserId: users.createdByUserId,
+          })
+          .from(users)
+          .where(inArray(users.id, ownerIds))
+      : Promise.resolve([]),
     trackPlaybookIds.length + trackAutomationIds.length > 0
-      ? await listRunTracks({
+      ? listRunTracks({
           userId,
           playbookIds: trackPlaybookIds,
           automationIds: trackAutomationIds,
         })
-      : new Map<string, RunGroup>();
+      : Promise.resolve(new Map<string, RunGroup>()),
+  ]);
+  for (const row of ownerRows) userById.set(row.id, row);
+  const receiptRules = toReceiptRules(receiptRuleRows, userById);
   const trackForRow = (idx: number): ProposalTrack | undefined => {
     const flow = trackFlowByRow[idx];
     if (!flow) return undefined;
@@ -1159,6 +1213,7 @@ export async function enrichProposalsForDisplay(
       stringProp(payload, "type") ??
       entityMeta?.type ??
       undefined;
+    const governanceRuleId = autoApproveRuleId(row.data);
     const authorRow = userById.get(
       row.agentUserId ?? row.createdBy ?? request.sourceId
     );
@@ -1452,6 +1507,13 @@ export async function enrichProposalsForDisplay(
       targetName,
       ...(row.sessionId && sessionGoalById.has(row.sessionId)
         ? { sessionGoal: sessionGoalById.get(row.sessionId)! }
+        : {}),
+      ...(row.sessionId && privateSessionIds.has(row.sessionId)
+        ? { sessionPrivate: true as const }
+        : {}),
+      ...(governanceRuleId ? { governanceRuleId } : {}),
+      ...(governanceRuleId && receiptRules.has(governanceRuleId)
+        ? { governanceRule: receiptRules.get(governanceRuleId)! }
         : {}),
       // NEW: Resolved names for commonly referenced IDs across proposal kinds
       ...(subjectName ? { subjectName } : {}),
@@ -2166,37 +2228,23 @@ function isDeleteProposal(
  * so the two readings of "not yet applied" cannot diverge.
  */
 function isLiveProposalStatus(status: string): boolean {
-  return (
-    (STATUS_ATTENTION as Record<string, string | undefined>)[status] ===
-    "decide"
-  );
+  return resolveProposalAttention({ status }) === "decide";
 }
 
 /**
- * Fold the grouped `(source, target) → n` relation rows into a per-entity link
- * count for `ids`. A relation counts once for each removed entity it touches
- * (a self-link counts once). An id with no visible relation reads 0 — it WAS
- * measured, by the one query that asked about it.
+ * Sum the per-end `(entityId, n)` relation counts into one link count per id
+ * in `ids`. A relation counts once for each removed entity it touches (the SQL
+ * already skips a self-link's second end). An id with no visible relation
+ * reads 0 — it WAS measured, by the query that asked about it.
  */
 export function countRelationsByEntity(
-  pairs: ReadonlyArray<{
-    sourceEntityId: string | null;
-    targetEntityId: string | null;
-    n: number;
-  }>,
+  perEnd: ReadonlyArray<{ entityId: string | null; n: number }>,
   ids: readonly string[]
 ): Map<string, number> {
   const counts = new Map<string, number>(ids.map((id) => [id, 0]));
-  for (const { sourceEntityId, targetEntityId, n } of pairs) {
-    if (sourceEntityId && counts.has(sourceEntityId)) {
-      counts.set(sourceEntityId, counts.get(sourceEntityId)! + Number(n));
-    }
-    if (
-      targetEntityId &&
-      targetEntityId !== sourceEntityId &&
-      counts.has(targetEntityId)
-    ) {
-      counts.set(targetEntityId, counts.get(targetEntityId)! + Number(n));
+  for (const { entityId, n } of perEnd) {
+    if (entityId && counts.has(entityId)) {
+      counts.set(entityId, counts.get(entityId)! + Number(n));
     }
   }
   return counts;
@@ -2318,4 +2366,102 @@ export function valueTypeOf(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   return typeof value;
+}
+
+/**
+ * WHICH RULE let an auto-approved write run without asking. The rules store
+ * (`governance_rules`, migration 0215) has no label column, so the rule is
+ * named by what it matches (`targetPattern`, worded client-side by the shared
+ * `describeWritePattern`) and, for an agent-principal rule, whose it is.
+ */
+export interface ProposalGovernanceRule {
+  id: string;
+  targetPattern: string;
+  /** The agent the rule trusts — its NAME only; absent when it has none. */
+  agentName?: string;
+}
+
+/** The rung-2.8 rule id the auto-approve path stamped on a receipt, if any. */
+export function autoApproveRuleId(data: unknown): string | undefined {
+  const marker =
+    data && typeof data === "object"
+      ? (data as { _autoApprove?: unknown })._autoApprove
+      : undefined;
+  const ruleId =
+    marker && typeof marker === "object"
+      ? (marker as { governanceRuleId?: unknown }).governanceRuleId
+      : undefined;
+  return typeof ruleId === "string" && isLikelyUUID(ruleId)
+    ? ruleId
+    : undefined;
+}
+
+type ReceiptRuleRow = Pick<
+  typeof governanceRules.$inferSelect,
+  "id" | "targetPattern" | "principalKind" | "agentUserId"
+>;
+
+/**
+ * The rules behind a page's receipts — ONE batched read, floored by the SAME
+ * predicate the rules editor's `governanceRules.listAll` uses
+ * (`userVisibleWhere` on `workspace_id`: pod-scope rules ∪ rules of the
+ * viewer's workspaces). A rule the viewer may not read, or one that no longer
+ * exists, is simply ABSENT — the surface keeps its generic wording, never an
+ * id. Revoked rules are kept on purpose: a revoked rule still is the reason
+ * that past write ran.
+ */
+async function readReceiptRules(
+  rows: ReadonlyArray<Pick<ProposalRow, "data">>,
+  userId: string
+): Promise<ReceiptRuleRow[]> {
+  const ruleIds = uniqueStrings(rows.map((row) => autoApproveRuleId(row.data)));
+  if (ruleIds.length === 0) return [];
+  return db
+    .select({
+      id: governanceRules.id,
+      targetPattern: governanceRules.targetPattern,
+      principalKind: governanceRules.principalKind,
+      agentUserId: governanceRules.agentUserId,
+    })
+    .from(governanceRules)
+    .where(
+      and(
+        inArray(governanceRules.id, ruleIds),
+        userVisibleWhere(governanceRules.workspaceId, userId)
+      )
+    );
+}
+
+/** The agents the page's rules trust — the ids whose names the rules need. */
+function receiptRuleAgentIds(rules: readonly ReceiptRuleRow[]): string[] {
+  return uniqueStrings(
+    rules.map((r) =>
+      r.principalKind === "agent" ? (r.agentUserId ?? undefined) : undefined
+    )
+  );
+}
+
+/**
+ * Rule rows → the wire shape, naming an agent-principal rule's agent from the
+ * page's loaded users. Names only: a user row with no name contributes
+ * nothing (never its id).
+ */
+function toReceiptRules(
+  rules: readonly ReceiptRuleRow[],
+  userById: ReadonlyMap<string, { name: string | null }>
+): Map<string, ProposalGovernanceRule> {
+  const out = new Map<string, ProposalGovernanceRule>();
+  for (const rule of rules) {
+    if (!rule.targetPattern) continue;
+    const agentName =
+      rule.principalKind === "agent" && rule.agentUserId
+        ? userById.get(rule.agentUserId)?.name?.trim() || undefined
+        : undefined;
+    out.set(rule.id, {
+      id: rule.id,
+      targetPattern: rule.targetPattern,
+      ...(agentName ? { agentName } : {}),
+    });
+  }
+  return out;
 }

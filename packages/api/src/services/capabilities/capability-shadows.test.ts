@@ -123,6 +123,30 @@ describe("classifyShadows", () => {
     expect(classifyShadows(input).map((s) => s.id)).not.toContain("odd");
   });
 
+  it("a skill in no pack that requires ONLY stale tools is stale with them", () => {
+    const input = livePod();
+    input.skills.push({
+      id: "dep",
+      name: "unique_ingest",
+      workspaceId: BUILDER,
+      kind: "code",
+      approved: false,
+    });
+    input.requires = [
+      { skillId: "dep", toolId: "tool-old" },
+      // A user's own skill that also needs a LIVE tool is not dragged along.
+      { skillId: "own", toolId: "tool-old" },
+      { skillId: "own", toolId: "tool-live" },
+    ];
+    const shadows = classifyShadows(input);
+    const dep = shadows.find((s) => s.id === "dep");
+    expect(dep).toMatchObject({
+      type: "skill",
+      shadows: [{ containerId: PACK }],
+    });
+    expect(shadows.map((s) => s.id)).not.toContain("own");
+  });
+
   it("nothing in any pack → nothing is a shadow", () => {
     const input = livePod();
     input.members = [];

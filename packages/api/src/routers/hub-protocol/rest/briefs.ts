@@ -24,7 +24,12 @@ import { resolveSkillDoor } from "../../../services/capability-briefs/resolve-sk
 import { MCP_TOOL_TEACHING_KEYS } from "../../mcp/tool-verb-aliases.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 
 const BriefsQuerySchema = z.object({
   tools: z.string().min(1),
@@ -138,7 +143,7 @@ export function registerBriefsRoutes(app: HubHono): void {
         logger.error({ err }, "briefs: runnable action projection failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
+          httpStatusForTrpcError(err)
         );
       }
     }

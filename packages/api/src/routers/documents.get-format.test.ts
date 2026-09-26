@@ -43,7 +43,7 @@ vi.mock("../utils/document-edit-access.js", async (importOriginal) => {
   return {
     ...actual,
     loadReadableDocument: vi.fn(async () => ({ id: "doc-1", type: h.type })),
-    canEditDocument: vi.fn(async () => true),
+    canEditDocument: vi.fn(async () => ({ allowed: true, reason: null })),
   };
 });
 

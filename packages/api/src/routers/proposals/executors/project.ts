@@ -19,6 +19,7 @@ import { emitSideEffects } from "@synap/events";
 import { auditLog } from "../../../utils/audit-log.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { projectsRouter } from "../../projects.js";
+import { startTrack } from "../../../services/tracks/tracks-service.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
@@ -277,6 +278,10 @@ export function registerProjectExecutors(): void {
             ...("subjectEntityId" in innerData
               ? { subjectEntityId: innerData.subjectEntityId as string | null }
               : {}),
+            // D6 home change — the replay re-runs the target write check.
+            ...("homeWorkspaceId" in innerData
+              ? { homeWorkspaceId: innerData.homeWorkspaceId as string }
+              : {}),
             ...("settings" in innerData
               ? { settings: innerData.settings as Record<string, unknown> }
               : {}),
@@ -370,25 +375,28 @@ export function registerProjectExecutors(): void {
       // Act as the project's OWNER, not the approver. HISTORY: the proto-track
       // wrote `settings.stages` through `ProjectRepository.update`, whose
       // `.where(eq(projects.userId, userId))` is an OWNERSHIP predicate, so the
-      // approver would have matched no row. Since 0272 `instantiateFromPlaybook`
-      // is a thin wrapper over `startTrack`, which is NOT owner-floored (it
-      // gates on `assertWorkspaceWrite`) — acting as the owner is kept because
-      // the owner always passes that floor and the track's `userId`
-      // attribution then names the project's owner, as the proto-track did.
+      // approver would have matched no row. The replay now calls `startTrack`
+      // (services/tracks) DIRECTLY — the one door a track is born through; the
+      // `projects.instantiateFromPlaybook` wrapper it used to go through was
+      // retired (W5c). `startTrack` is NOT owner-floored (it gates on
+      // `assertProjectWrite`) — acting as the owner is kept because the owner
+      // always passes that floor and the track's `userId` attribution then
+      // names the project's owner, as the proto-track did. No `agentUserId`:
+      // the approver is the authority, so the governance gate auto-grants.
       // The approver's authority was established by `computeCanReviewApproval`
       // upstream plus the membership check above; `reviewedBy` still records
       // who approved.
-      const projectCaller = projectsRouter.createCaller({
-        db,
-        authenticated: true as const,
-        userId: project.userId,
-        workspaceId: project.workspaceId ?? undefined,
-        workspaceRole: membership?.role,
-      } as unknown as Context);
-
       // The replay must APPLY, never re-propose — see `assertApplied`.
       assertApplied(
-        await projectCaller.instantiateFromPlaybook({ projectId, playbookId })
+        await startTrack({
+          projectId,
+          playbookId,
+          actor: {
+            userId: project.userId,
+            agentUserId: null,
+            isHubProtocol: false,
+          },
+        })
       );
 
       await db

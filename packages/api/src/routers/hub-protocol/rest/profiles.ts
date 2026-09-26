@@ -220,7 +220,7 @@ export function registerProfilesRoutes(app: HubHono): void {
       logger.error({ err }, "listProfiles failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -411,7 +411,7 @@ export function registerProfilesRoutes(app: HubHono): void {
       logger.error({ err }, "profiles.setRenderer failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -443,7 +443,7 @@ export function registerProfilesRoutes(app: HubHono): void {
       logger.error({ err }, "listPropertyDefs failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -535,7 +535,7 @@ export function registerProfilesRoutes(app: HubHono): void {
       logger.error({ err }, "createPropertyDef failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -618,7 +618,7 @@ export function registerProfilesRoutes(app: HubHono): void {
       logger.error({ err }, "updatePropertyDef failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -736,7 +736,7 @@ export function registerProfilesRoutes(app: HubHono): void {
       logger.error({ err }, "getEffectiveRenderers failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

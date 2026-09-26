@@ -5,6 +5,7 @@
 import { z } from "@hono/zod-openapi";
 import { DocumentPatchOpsSchema } from "../../../../services/document-patch/patch-ops.js";
 import { DOCUMENT_READ_FORMATS } from "../../../../services/document-patch/read-document.js";
+import { uuidQueryParam } from "./_openapi.js";
 
 export const DocumentTypeSchema = z
   .enum(["text", "markdown", "code", "html", "pdf", "docx"])
@@ -29,7 +30,7 @@ export const WireDocumentSchema = z
 export const CreateDocumentRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string().nullable().optional(),
+    workspaceId: uuidQueryParam.nullable().optional(),
     title: z.string(),
     content: z.string().optional(),
     type: DocumentTypeSchema.optional(),

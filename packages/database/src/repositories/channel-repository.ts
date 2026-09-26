@@ -5,7 +5,7 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, asc, desc, ne, isNull, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, asc, desc, isNull, sql as drizzleSql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 import {
@@ -17,6 +17,9 @@ import {
   ChannelStatus,
 } from "../schema/channels.js";
 import { agents } from "../schema/agents.js";
+import { documents } from "../schema/documents.js";
+import { entities } from "../schema/entities.js";
+import type { ObjectRoomType } from "../utils/channel-visibility.js";
 import { EventRepository } from "./event-repository.js";
 import { sql } from "../client-pg.js";
 
@@ -407,32 +410,6 @@ export class ChannelRepository {
     });
   }
 
-  /**
-   * Get or create THE channel for posting activity ABOUT an entity — the
-   * WRITE-twin of the entity-bound channel READ used across the executor
-   * (`contextObjectType='entity' + contextObjectId=entityId`, e.g.
-   * `executeMessagesQueryStep`). This is the per-entity result-routing spine: it
-   * lets a per-client automation post each run's recap into that client's own
-   * room rather than one shared automation feed.
-   *
-   * REUSE-FIRST: if a channel is already bound to the entity we post INTO it
-   * rather than spawning a new room — the whole point is the client's existing
-   * discussion surface. We deliberately EXCLUDE `external` (client-comms)
-   * channels from reuse: an automation recap is an INTERNAL, operator-facing
-   * summary and must never land in the surface that mirrors back to the client
-   * (`executeMessagesQueryStep` reads the EXTERNAL one precisely because it is
-   * the client's comms). If only an external channel exists we create a fresh
-   * internal thread instead.
-   *
-   * CREATED TYPE = THREAD bound to the entity — the natural "discussion about
-   * this client" surface (mirrors `channels.createEntityComment`, which makes
-   * exactly this THREAD+entity shape). Not a FEED: a per-client recap is a
-   * conversation a teammate can reply in, not a read-only broadcast.
-   *
-   * Resolver-only (no unique index on the entity binding — same as
-   * `ensureAutomationRunChannel`): the oldest-wins read keeps it deterministic if
-   * a rare first-run race ever inserts two.
-   */
   /** Lookup the active RUN channel for (flowType, flowId), if any. */
   async findRunChannel(
     flowType: string,
@@ -511,51 +488,112 @@ export class ChannelRepository {
     }
   }
 
-  async ensureEntityChannel(
-    entityId: string,
-    ownerId: string,
-    workspaceId?: string,
-    opts?: { title?: string }
-  ): Promise<Channel> {
-    const [existing] = await this.db
-      .select()
-      .from(channels)
-      .where(
-        and(
-          eq(channels.contextObjectType, "entity"),
-          eq(channels.contextObjectId, entityId),
-          // Never route an internal recap into a client-comms surface.
-          ne(channels.channelType, ChannelType.EXTERNAL),
-          eq(channels.status, ChannelStatus.ACTIVE),
-          // Reuse ONLY within the requesting run's workspace scope. A pod-scoped
-          // entity can be touched by automations in different workspaces; without
-          // this, workspace Y's per-entity recap would reuse (and disclose into)
-          // a channel workspace X created for the same entity — the channel
-          // read-visibility gate is keyed on channels.workspaceId. So we scope
-          // reuse per-workspace (pod-wide runs reuse the pod-scoped channel),
-          // creating a fresh per-(entity, workspace) thread on a miss. Unlike
-          // ensureAutomationRunChannel (automationId is single-workspace by
-          // construction), the entity binding is not.
-          workspaceId
-            ? eq(channels.workspaceId, workspaceId)
-            : isNull(channels.workspaceId)
+  /**
+   * The ONE door to an object's linked channel — its "object room" (Documents
+   * v2, founder model 2026-09-25): every document / entity has exactly ONE
+   * conversation, and a comment on it is an anchored message in that room.
+   *
+   * - Keyed per OBJECT, never per user or per workspace: the room is the
+   *   object's, so its owner is the OBJECT's owner and its workspace the
+   *   object's own. Who may read it is the object's read floor (branch 5 of
+   *   `channelVisibilityWhere`), not the room's workspace.
+   * - Race-safe: the partial unique index `channels_object_room_uniq`
+   *   (migration 0279) is the arbiter — insert ON CONFLICT DO NOTHING, then
+   *   re-select, so two concurrent opens converge on one row.
+   * - NO access check here: this package cannot see the access layer. A HUMAN
+   *   or agent door must floor the caller on the object first (the api's
+   *   `ensureObjectChannelFor`). System producers (automation recaps) call it
+   *   directly — they already act for the run.
+   *
+   * Returns `null` when the object does not exist (or is deleted).
+   */
+  async ensureObjectChannel(ref: {
+    type: ObjectRoomType;
+    id: string;
+    title?: string;
+  }): Promise<{ channel: Channel; created: boolean } | null> {
+    const find = async () => {
+      const [row] = await this.db
+        .select()
+        .from(channels)
+        .where(
+          and(
+            eq(channels.channelType, ChannelType.GROUP),
+            eq(channels.status, ChannelStatus.ACTIVE),
+            eq(channels.contextObjectType, ref.type),
+            eq(channels.contextObjectId, ref.id)
+          )
         )
-      )
-      // Deterministic oldest-wins on duplicate entity-bound channels.
-      .orderBy(asc(channels.createdAt))
+        .limit(1);
+      return row as Channel | undefined;
+    };
+
+    const existing = await find();
+    if (existing) return { channel: existing, created: false };
+
+    const owner = await this.objectOwner(ref);
+    if (!owner) return null;
+
+    const inserted = await this.db
+      .insert(channels)
+      .values({
+        id: crypto.randomUUID(),
+        userId: owner.userId,
+        workspaceId: owner.workspaceId,
+        title: ref.title ?? owner.title ?? undefined,
+        channelType: ChannelType.GROUP,
+        scope: owner.workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
+        contextObjectType: ref.type,
+        contextObjectId: ref.id,
+        status: ChannelStatus.ACTIVE,
+        metadata: { origin: "object-room" },
+      })
+      .onConflictDoNothing()
+      .returning();
+    if (inserted.length > 0) {
+      return { channel: inserted[0] as Channel, created: true };
+    }
+    // Lost the race — the winner's row is the room.
+    const raced = await find();
+    if (!raced) {
+      throw new Error(
+        `ensureObjectChannel: no room for ${ref.type}:${ref.id} after a conflicting insert`
+      );
+    }
+    return { channel: raced, created: false };
+  }
+
+  /** The object's own owner + workspace (the room inherits both). */
+  private async objectOwner(ref: {
+    type: ObjectRoomType;
+    id: string;
+  }): Promise<{
+    userId: string;
+    workspaceId: string | null;
+    title: string | null;
+  } | null> {
+    if (ref.type === "document") {
+      const [doc] = await this.db
+        .select({
+          userId: documents.userId,
+          workspaceId: documents.workspaceId,
+          title: documents.title,
+        })
+        .from(documents)
+        .where(and(eq(documents.id, ref.id), isNull(documents.deletedAt)))
+        .limit(1);
+      return doc ?? null;
+    }
+    const [entity] = await this.db
+      .select({
+        userId: entities.userId,
+        workspaceId: entities.workspaceId,
+        title: entities.title,
+      })
+      .from(entities)
+      .where(and(eq(entities.id, ref.id), isNull(entities.deletedAt)))
       .limit(1);
-
-    if (existing) return existing;
-
-    return await this.create({
-      userId: ownerId,
-      workspaceId,
-      title: opts?.title,
-      channelType: ChannelType.THREAD,
-      scope: workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
-      contextObjectType: "entity",
-      contextObjectId: entityId,
-    });
+    return entity ?? null;
   }
 
   /**

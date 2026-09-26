@@ -139,18 +139,22 @@ describe("H2 — structured knowledge floor no longer leaks pod-wide entities", 
     // `("entities"."workspace_id" is null or …` leak. (A later `is null or` does
     // appear, but only in the includeGlobals LENS narrow and the dead
     // `is not null AND (is null …)` branch — both dominated by the membership floor.)
+    // (One more leading paren since Sites W2: the owner-gated pod-personal
+    // branch is now ANDed with `NOT guest` — an appended conjunct.)
     expect(
       q.sql.startsWith(
-        '((("entities"."workspace_id" is null and "entities"."user_id" = $1)'
+        '(((("entities"."workspace_id" is null and "entities"."user_id" = $1)'
       )
     ).toBe(true);
     // The lens still surfaces pod-wide globals (includeGlobalsInLens) — the narrow
-    // ORs `workspace_id is null` with the selected workspace.
-    // (Param index is $10, not $9, since Wave 2 added the `podShared` floor
-    // branch — one more bound caller id ahead of the lens. Same assertion.)
-    expect(q.sql).toContain(
-      '"entities"."workspace_id" is null or "entities"."workspace_id" = $10'
+    // ORs `workspace_id is null` with the selected workspace. The param index is
+    // resolved, not hand-numbered (it moved with Wave 2's `podShared` branch and
+    // again with Sites W2's audience probes): the bound value must be the lens.
+    const lensArm = q.sql.match(
+      /"entities"\."workspace_id" is null or "entities"\."workspace_id" = \$(\d+)/
     );
+    expect(lensArm).not.toBeNull();
+    expect(q.params[Number(lensArm![1]) - 1]).toBe("ws-1");
     expect(q.params).toContain("ws-1");
     // Caller-bound throughout.
     expect(q.params).toContain(B);

@@ -36,16 +36,9 @@ import { CONTENT_KINDS } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
 import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
+import { packagePlaybookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
-
-const ParamSpecSchema = z.object({
-  name: z.string(),
-  type: z.enum(["text", "number", "entity", "choice", "boolean"]),
-  label: z.string().optional(),
-  required: z.boolean().optional(),
-  default: z.unknown().optional(),
-});
 
 const CapabilitySchema = z.object({
   templateKey: z.string().optional(),
@@ -77,31 +70,11 @@ const AutomationSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-const PlaybookSchema = z.object({
-  name: z.string().min(1).max(500),
-  description: z.string().optional(),
-  goalTemplate: z.string(),
-  params: z.array(ParamSpecSchema).optional(),
-  executor: z
-    .enum(["is-agent", "external-agent", "hybrid"])
-    .default("is-agent"),
-  inputStrategy: z.record(z.string(), z.unknown()).optional(),
-  channelSpec: z.record(z.string(), z.unknown()).optional(),
-  schedule: z.unknown().optional(),
-  grants: z.array(z.string()).optional(),
-  // Which entity kind this playbook operates on. Load-bearing: `subject_profile`
-  // is what `playbooks.matchForEntity` keys on to surface a playbook for a
-  // captured entity. A plain z.object strips undeclared keys, so this MUST be
-  // declared here or template-seeded playbooks reach the DB with subject_profile
-  // NULL and never match.
-  subjectProfile: z
-    .object({
-      profileSlug: z.string(),
-      filter: z.record(z.string(), z.unknown()).optional(),
-    })
-    .optional(),
-  status: z.enum(["draft", "active", "paused"]).default("active"),
-});
+// A playbook DEFINITION — the ONE wire schema, in its package form
+// (schemas/playbook-definition.ts). Re-declaring the object here is what
+// stripped `scope` / `stages` / `criteria` / `expectedOutputs` / `metadata`
+// from every Hub, `market.install` and approve-executor install.
+export const PackagePlaybookSchema = packagePlaybookDefinitionSchema;
 
 const LoopSchema = z.object({
   templateKey: z.string().optional(),
@@ -415,7 +388,7 @@ export const PackageApplySchema = z.object({
   // Phase 2 layers
   capabilities: z.array(CapabilitySchema).optional(),
   automations: z.array(AutomationSchema).optional(),
-  playbooks: z.array(PlaybookSchema).optional(),
+  playbooks: z.array(PackagePlaybookSchema).optional(),
   loops: z.array(LoopSchema).optional(),
   // Entity-detail action placements — merged into `settings.actionPlacements`
   // by `applyPackagePostWorkspace` AFTER playbooks/loops so their refs resolve
@@ -644,6 +617,18 @@ export function registerPackagesRoutes(app: HubHono): void {
             viewsAdded: core.reconcile.views.added,
             entityLinksAdded: core.reconcile.entityLinks.added,
             propertyConflicts: core.reconcile.properties.conflicts,
+            // W4b: the overlay's seeds, adopted by (kind, title) — reported,
+            // never silent (created 0 + adopted N = nothing duplicated).
+            ...(core.reconcile.seeds
+              ? {
+                  seeds: {
+                    created: core.reconcile.seeds.entitiesCreated,
+                    adopted: core.reconcile.seeds.entitiesAdopted,
+                    relationsCreated: core.reconcile.seeds.relationsCreated,
+                    errors: core.reconcile.seeds.errors,
+                  },
+                }
+              : {}),
           },
         };
         auditLog({

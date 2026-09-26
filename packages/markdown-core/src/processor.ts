@@ -16,7 +16,9 @@
  *
  * The plugins, in order:
  *   1. `remark-gfm` + `remark-directive` — syntax (tables, `:::name{…}`).
- *   2. `remarkRestoreProse` — a non-`synap-*` TEXT directive is prose, put back
+ *   2. `remarkInlineFormat` — `:u[…]` / `:color[…]{tone}` become `underline` /
+ *      `textColor` nodes (inline-format.ts), before the restore below.
+ *   2b. `remarkRestoreProse` — a non-`synap-*` TEXT directive is prose, put back
  *      byte-for-byte ("10:30", "ratio:high", the id inside `[[entity:id|x]]`).
  *   3. `remarkRepairEmbeds` — an UNTERMINATED embed (closed only by its
  *      parent's fence or the end of the document) keeps its props block and
@@ -25,7 +27,8 @@
  *      something (props + fallback) without an unclosed `:::synap-cell{…}`
  *      swallowing the rest of a report.
  *   4. `remarkGithubAlerts` — `> [!NOTE]` becomes a marked blockquote.
- *   5. `remarkHighlight` — `==x==` becomes a `mark` node (the editor's highlight).
+ *   5. `remarkHighlight` — `==x==` becomes a `mark` node (the editor's highlight),
+ *      `==x=={tone=info}` a toned one.
  *   6. `remark-math` (`singleDollarTextMath: false`, D-math: inline `$…$` is
  *      OFF, so "$5 and $10" is prose) + `remarkDisplayMath` — a `$$…$$` alone
  *      in its paragraph is a display `math` block, like a `$$` fence.
@@ -53,12 +56,20 @@ import type {} from "mdast-util-directive";
 import { VFile } from "vfile";
 import { closerColons, splitLines } from "./scan.js";
 import type { Diagnostic } from "./diagnostics.js";
+import {
+  highlightProperties,
+  isTextTone,
+  readHighlightTone,
+  remarkInlineFormat,
+  unknownToneDiagnostic,
+} from "./inline-format.js";
 
 type AnyNode = {
   type: string;
   name?: string;
   value?: string;
   lang?: string | null;
+  tone?: string | null;
   children?: AnyNode[];
   data?: Record<string, unknown>;
   position?: {
@@ -383,8 +394,10 @@ export interface MarkData extends Data {
 }
 export interface Mark extends Parent {
   type: "mark";
+  /** `==x=={tone=<tone>}`: the tone as written (may be unknown); absent = default. */
+  tone?: string | null;
   children: PhrasingContent[];
-  data?: MarkData;
+  data?: MarkData & { hProperties?: Record<string, unknown> };
 }
 
 /**
@@ -418,10 +431,14 @@ declare module "mdast" {
  *     longer `=` run (`===` stays prose);
  *   - opener and closer live in text nodes of the SAME parent, so a highlight
  *     never crosses a paragraph, and code / URLs (not text nodes) are never
- *     read at all.
+ *     read at all;
+ *   - an opener at the END of a text node counts only when the next sibling
+ *     is not text (`==**b**==`, `==:u[x]==`), and a closer at the START of one
+ *     only when the previous sibling is not text — the source rule
+ *     (`readHighlightAt`) sees the `*` / `]` there as the non-space neighbour.
  */
-const OPENER_RE = /(?<!=)==(?=[^\s=])/g;
-const CLOSER_RE = /(?<=[^\s=])==(?!=)/g;
+const OPENER_RE = /(?<!=)==(?=[^\s=]|$)/g;
+const CLOSER_RE = /(?:(?<=[^\s=])|^)==(?!=)/g;
 
 function findDelimiter(re: RegExp, value: string, from: number): number {
   re.lastIndex = from;
@@ -429,23 +446,97 @@ function findDelimiter(re: RegExp, value: string, from: number): number {
   return m ? m.index : -1;
 }
 
-function textNode(value: string): AnyNode {
-  return { type: "text", value };
+/**
+ * Source offsets of text fragments, kept OFF the tree (a field on the node
+ * would reach every consumer's deep-equal). A micromark text node is tracked
+ * only when its value is its source verbatim (no escape, no entity), so an
+ * offset is never a guess.
+ */
+const textOffsets = new WeakMap<AnyNode, number>();
+/** Where a toned highlight's `{tone=…}` suffix sits in the source, when known. */
+const toneSuffixRanges = new WeakMap<object, { start: number; end: number }>();
+
+/**
+ * The source range of a toned `mark`'s `{tone=…}` suffix (readable export
+ * strips it), or null when the text around it was not verbatim source.
+ */
+export function highlightToneSuffixRange(
+  mark: object
+): { start: number; end: number } | null {
+  return toneSuffixRanges.get(mark) ?? null;
 }
 
-function highlightChildren(node: AnyNode): void {
+function textNode(value: string, offset?: number): AnyNode {
+  const node: AnyNode = { type: "text", value };
+  if (offset != null) textOffsets.set(node, offset);
+  return node;
+}
+
+function offsetOf(node: AnyNode, source: string): number | undefined {
+  const known = textOffsets.get(node);
+  if (known != null) return known;
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  if (start == null || end == null) return undefined;
+  return source.slice(start, end) === node.value ? start : undefined;
+}
+
+const plus = (base: number | undefined, n: number) =>
+  base == null ? undefined : base + n;
+
+type Report = (d: Diagnostic) => void;
+
+/**
+ * The mark just closed; `rest` is the text after its closer. A leading
+ * `{tone=…}` belongs to the mark: record it and return what follows it.
+ */
+function takeTone(
+  mark: AnyNode,
+  rest: string,
+  restOffset: number | undefined,
+  report: Report,
+  line: number | undefined
+): string {
+  const suffix = readHighlightTone(rest);
+  if (!suffix) return rest;
+  mark.tone = suffix.tone;
+  if (restOffset != null)
+    toneSuffixRanges.set(mark, {
+      start: restOffset,
+      end: restOffset + suffix.length,
+    });
+  const props = highlightProperties(suffix.tone);
+  if (props) (mark.data ??= {}).hProperties = props;
+  if (!isTextTone(suffix.tone))
+    report(unknownToneDiagnostic("A highlight", suffix.tone, line));
+  return rest.slice(suffix.length);
+}
+
+function highlightChildren(
+  node: AnyNode,
+  report: Report,
+  source: string
+): void {
   if (!node.children || node.type === "mark") return;
   const queue = [...node.children];
   const out: AnyNode[] = [];
   while (queue.length) {
     const child = queue.shift()!;
     if (child.type !== "text") {
-      highlightChildren(child);
+      highlightChildren(child, report, source);
       out.push(child);
       continue;
     }
     const value = child.value ?? "";
-    const open = findDelimiter(OPENER_RE, value, 0);
+    const base = offsetOf(child, source);
+    let open = findDelimiter(OPENER_RE, value, 0);
+    // `==` ending the node: an opener only before a non-text sibling.
+    if (
+      open !== -1 &&
+      open + 2 === value.length &&
+      (queue[0]?.type ?? "text") === "text"
+    )
+      open = -1;
     if (open === -1) {
       out.push(child);
       continue;
@@ -453,49 +544,79 @@ function highlightChildren(node: AnyNode): void {
     const before = value.slice(0, open);
     const sameNodeClose = findDelimiter(CLOSER_RE, value, open + 2);
     if (sameNodeClose !== -1) {
-      if (before) out.push(textNode(before));
-      out.push({
+      if (before) out.push(textNode(before, base));
+      const mark: AnyNode = {
         type: "mark",
         data: { hName: "mark" },
-        children: [textNode(value.slice(open + 2, sameNodeClose))],
-      });
-      const after = value.slice(sameNodeClose + 2);
-      if (after) queue.unshift(textNode(after));
+        children: [
+          textNode(value.slice(open + 2, sameNodeClose), plus(base, open + 2)),
+        ],
+      };
+      out.push(mark);
+      const rest = value.slice(sameNodeClose + 2);
+      const after = takeTone(
+        mark,
+        rest,
+        plus(base, sameNodeClose + 2),
+        report,
+        node.position?.start.line
+      );
+      if (after)
+        queue.unshift(textNode(after, plus(base, value.length - after.length)));
       continue;
     }
-    const j = queue.findIndex(
-      (n) =>
-        n.type === "text" && findDelimiter(CLOSER_RE, n.value ?? "", 0) !== -1
-    );
+    const j = queue.findIndex((n, k) => {
+      if (n.type !== "text") return false;
+      const at = findDelimiter(CLOSER_RE, n.value ?? "", 0);
+      if (at === -1) return false;
+      // `==` starting the node: a closer only after a non-text sibling.
+      return at > 0 || (k > 0 && queue[k - 1]!.type !== "text");
+    });
     if (j === -1) {
       out.push(child);
       continue;
     }
     const middle = queue.splice(0, j);
-    middle.forEach(highlightChildren);
+    middle.forEach((n) => highlightChildren(n, report, source));
     const closing = queue.shift()!;
+    const closingBase = offsetOf(closing, source);
     const close = findDelimiter(CLOSER_RE, closing.value ?? "", 0);
     const head = value.slice(open + 2);
     const tail = (closing.value ?? "").slice(0, close);
-    if (before) out.push(textNode(before));
-    out.push({
+    if (before) out.push(textNode(before, base));
+    const mark: AnyNode = {
       type: "mark",
       data: { hName: "mark" },
       children: [
-        ...(head ? [textNode(head)] : []),
+        ...(head ? [textNode(head, plus(base, open + 2))] : []),
         ...middle,
-        ...(tail ? [textNode(tail)] : []),
+        ...(tail ? [textNode(tail, closingBase)] : []),
       ],
-    });
-    const rest = (closing.value ?? "").slice(close + 2);
-    if (rest) queue.unshift(textNode(rest));
+    };
+    out.push(mark);
+    const closingValue = closing.value ?? "";
+    const rest = takeTone(
+      mark,
+      closingValue.slice(close + 2),
+      plus(closingBase, close + 2),
+      report,
+      node.position?.start.line
+    );
+    if (rest)
+      queue.unshift(
+        textNode(rest, plus(closingBase, closingValue.length - rest.length))
+      );
   }
   node.children = out;
 }
 
 export function remarkHighlight() {
-  return (tree: Root) => {
-    highlightChildren(tree as unknown as AnyNode);
+  return (tree: Root, file?: VFile) => {
+    highlightChildren(
+      tree as unknown as AnyNode,
+      (d) => pushDiagnostic(file, d),
+      String(file?.value ?? "")
+    );
   };
 }
 
@@ -510,6 +631,7 @@ export const synapRemarkPlugins = [
   remarkGfm,
   remarkDirective,
   remarkMathBlocks,
+  remarkInlineFormat,
   remarkRestoreProse,
   remarkDisplayMath,
   remarkRepairEmbeds,

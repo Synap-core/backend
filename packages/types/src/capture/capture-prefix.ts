@@ -18,14 +18,41 @@
  * Pure, dependency-free: safe in browser, Electron, React Native, Node, CLI.
  */
 
-/** Is this text an explicit capture prefix (`!text` or `/capture text`)? */
+/**
+ * The ONE token rule both functions below read. A capture marker is, after
+ * optional leading whitespace, EITHER:
+ *   - `/capture` as a WHOLE word — followed by whitespace or the end of the
+ *     text — case-insensitively (`/Capture x` is a capture; `/captured notes`
+ *     and `/capturefoo` are NOT: they are other words that happen to share a
+ *     prefix), OR
+ *   - a single leading `!` (`!x` and `! x` both; `x!` is not — the bang must
+ *     lead).
+ * Group 1 is the whole marker plus the whitespace after it, so detect and
+ * strip can never disagree about where the marker ends. (They used to: detect
+ * was a case-SENSITIVE `startsWith("/capture")`, strip a case-INSENSITIVE
+ * regex, so "/captured notes" was detected AND stripped to "d notes", while
+ * "/Capture x" was stripped but never detected.)
+ */
+const CAPTURE_MARKER = /^\s*(?:\/capture(?=\s|$)|!)\s*/i;
+
+/**
+ * Is this text an explicit capture (`!text` or `/capture text`)?
+ *
+ * A marker with NOTHING after it is not a capture yet: bare `!` and bare
+ * `/capture` (with or without trailing spaces) answer `false`. That keeps the
+ * original intent of the old `length < 2` guard — "a lone `!` is not a
+ * capture" — and applies it evenly to both markers, so a half-typed
+ * `/capture` does not pin an input to Capture with an empty body to submit.
+ */
 export function isExplicitCapturePrefix(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed.length < 2) return false;
-  return trimmed.startsWith("/capture") || trimmed.startsWith("!");
+  const m = CAPTURE_MARKER.exec(text);
+  return m !== null && text.slice(m[0].length).trim().length > 0;
 }
 
-/** Strip the explicit capture markers so the seeded/captured text is clean. */
+/**
+ * Strip ONE leading capture marker (same token rule as the detector) so the
+ * seeded/captured text is clean. Text without a marker is returned unchanged.
+ */
 export function stripCapturePrefix(text: string): string {
-  return text.replace(/^\/capture\s*/i, "").replace(/^!\s*/, "");
+  return text.replace(CAPTURE_MARKER, "");
 }

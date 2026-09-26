@@ -287,6 +287,24 @@ export function resolveLinkOperation(
   return "create";
 }
 
+/**
+ * True when a `focus_session` proposal's change type STARTS a session — a
+ * create, or a legacy row with no change type. `grant_capability`,
+ * `stage_gate` and every other focus-session change act on a session that
+ * already exists. Read by the pod (only a start carries a track record) and
+ * by every surface that titles or draws a session "Start …".
+ */
+export function isSessionStartChange(
+  changeType: string | null | undefined
+): boolean {
+  return (
+    changeType === undefined ||
+    changeType === null ||
+    changeType === "" ||
+    changeType === "create"
+  );
+}
+
 const LINK_INTENT: Readonly<Record<LinkOperation, ProposalIntent>> = {
   create: "create",
   update: "change",

@@ -26,7 +26,10 @@ import { apiKeys } from "@synap/database/schema";
 
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
-import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  podVisibleWorkspaceWhere,
+} from "../../../utils/user-visible-where.js";
 import { authoredByUser } from "../../../services/agent-identity-service.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -697,7 +700,7 @@ export async function verifyWorkspaceReadAccess(
   const podReadable = await db.query.workspaces.findFirst({
     where: and(
       eq(workspaces.id, workspaceId),
-      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
+      podVisibleWorkspaceWhere(userId)
     ),
     columns: { id: true },
   });

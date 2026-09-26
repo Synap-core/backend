@@ -18,6 +18,10 @@ import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Workspace, NewWorkspace } from "../schema/workspaces.js";
 import { projectWorkspaceSettings } from "../utils/workspace-client-projection.js";
+import {
+  EXPOSURE_POLICY_SETTINGS_KEY,
+  withoutExposurePolicy,
+} from "../utils/exposure-policy-settings.js";
 
 export interface PurgeWorkspaceResult {
   entityIds: string[];
@@ -78,7 +82,11 @@ export class WorkspaceRepository extends BaseRepository<
         id: data.id,
         name: data.name,
         ownerId: data.ownerId,
-        settings: data.settings || {},
+        // `exposurePolicy` is server-owned: a template / client blob never
+        // seeds it (see utils/exposure-policy-settings.ts).
+        settings: withoutExposurePolicy(
+          (data.settings || {}) as Record<string, unknown>
+        ),
         // Dual-write promoted columns (0039) from the settings blob.
         systemSlug: s.systemSlug ?? null,
         packageSlug: s.packageSlug ?? null,
@@ -110,7 +118,15 @@ export class WorkspaceRepository extends BaseRepository<
       .update(workspaces)
       .set({
         name: data.name,
-        settings: data.settings,
+        // REPLACE semantics, except `exposurePolicy` (server-owned): dropped
+        // from the incoming blob and carried over from the STORED row, in one
+        // atomic statement, so a settings round-trip can neither plant nor
+        // erase it.
+        settings: data.settings
+          ? sql`${JSON.stringify(
+              withoutExposurePolicy(data.settings as Record<string, unknown>)
+            )}::jsonb || CASE WHEN ${workspaces.settings} -> ${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)} IS NOT NULL THEN jsonb_build_object(${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)}, ${workspaces.settings} -> ${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)}) ELSE '{}'::jsonb END`
+          : undefined,
         // When settings is fully replaced, keep the promoted columns (0039) in sync.
         ...(s
           ? {
@@ -153,7 +169,12 @@ export class WorkspaceRepository extends BaseRepository<
     const [workspace] = await this.db
       .update(workspaces)
       .set({
-        settings: sql`${workspaces.settings} || ${JSON.stringify(patch)}::jsonb`,
+        // `exposurePolicy` is server-owned: a patch (package applier,
+        // reconciler, settings router) can never set it. The stored value is
+        // untouched — `||` keeps every key the patch does not name.
+        settings: sql`${workspaces.settings} || ${JSON.stringify(
+          withoutExposurePolicy(patch as Record<string, unknown>)
+        )}::jsonb`,
         // Lift promoted keys (0039) into their real columns when the patch sets
         // them — keeps columns in sync through the atomic JSONB merge path
         // (the provisioning-status transitions flow only through here).
@@ -210,6 +231,39 @@ export class WorkspaceRepository extends BaseRepository<
           ) || jsonb_build_object('primarySurface', ${encodedSurface}::jsonb),
           true
         )`,
+        updatedAt: new Date(),
+      } as Partial<NewWorkspace>)
+      .where(eq(workspaces.id, id))
+      .returning();
+
+    if (!workspace) {
+      throw new Error("Workspace not found");
+    }
+
+    await this.emitWorkspaceCompleted("update", workspace, userId);
+    return workspace;
+  }
+
+  /**
+   * THE ONE WRITER of `settings.exposurePolicy` (Sites W2 S3). Called only by
+   * the owner's `shares.setPolicy`, which validates the value against the
+   * policy schema first. `null` removes the key (back to the code default).
+   * Every other settings path strips the key — see
+   * `utils/exposure-policy-settings.ts`.
+   */
+  async setExposurePolicy(
+    id: string,
+    policy: Record<string, unknown> | null,
+    userId: string
+  ): Promise<Workspace> {
+    const key = sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`);
+    const [workspace] = await this.db
+      .update(workspaces)
+      .set({
+        settings:
+          policy === null
+            ? sql`COALESCE(${workspaces.settings}, '{}'::jsonb) - ${key}`
+            : sql`COALESCE(${workspaces.settings}, '{}'::jsonb) || jsonb_build_object(${key}, ${JSON.stringify(policy)}::jsonb)`,
         updatedAt: new Date(),
       } as Partial<NewWorkspace>)
       .where(eq(workspaces.id, id))

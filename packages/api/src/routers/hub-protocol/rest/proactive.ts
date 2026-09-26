@@ -19,6 +19,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 export function registerProactiveRoutes(app: HubHono): void {
@@ -230,7 +231,7 @@ export function registerProactiveRoutes(app: HubHono): void {
           posted: false,
           reason: err instanceof Error ? err.message : "unknown_error",
         },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

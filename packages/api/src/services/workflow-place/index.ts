@@ -12,10 +12,13 @@
  *     here only with the definitionSnapshot-presence flag that UnifiedRun does
  *     not carry.
  *   - the user floor is `userVisibleWhere` everywhere — the identical predicate
- *     the runs substrate uses; a specific-workflow read never widens it.
+ *     the runs substrate uses; a specific-workflow read never widens it —
+ *     EXCEPT sessions, which are content and go through the ONE session read
+ *     rule (`sessionReadableWhere`, decision D1). Everything derived from the
+ *     session set (results, session-attributed proposals, the feed) inherits it.
  *
  * Security note (the feed): `events` has NO workspace_id. The floor is the
- * user-visible SESSION set — events are queried ONLY for sessions the user can
+ * READABLE SESSION set — events are queried ONLY for sessions the user can
  * see, and never unfloored.
  */
 
@@ -44,9 +47,9 @@ import type { SQL } from "drizzle-orm";
 import {
   userVisibleWhere,
   workspaceLensWhere,
-  ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { listRuns } from "../runs/index.js";
 import type {
   WorkflowKind,
@@ -73,12 +76,16 @@ export interface GetWorkflowPlaceInput {
   kind: WorkflowKind;
   id: string;
   userId: string;
+  /** Honour the session roster branch (human door: `rosterReadFor(ctx)`). */
+  roster?: boolean;
 }
 
 export interface GetWorkflowPlaceFeedInput {
   kind: WorkflowKind;
   id: string;
   userId: string;
+  /** Honour the session roster branch (human door: `rosterReadFor(ctx)`). */
+  roster?: boolean;
   cursor?: string;
   limit?: number;
 }
@@ -86,7 +93,10 @@ export interface GetWorkflowPlaceFeedInput {
 // ── Session scope (the derivation floor shared by every sub-query) ───────────
 
 /**
- * The user-floored predicate for "focus sessions of this workflow":
+ * The predicate for "focus sessions of this workflow the viewer may READ" —
+ * the ONE session read rule (`sessionReadableWhere`, decision D1: a session is
+ * content, so a workspace colleague off the room's roster sees neither it nor
+ * its events, results or session-attributed proposals):
  *   - playbook   → `playbook_id = id`
  *   - automation → `metadata->>'automationId' = id` (the run-session convention
  *     the runs substrate's session adapter uses to exclude automation-origin
@@ -95,16 +105,11 @@ export interface GetWorkflowPlaceFeedInput {
 function sessionScopeWhere(
   kind: WorkflowKind,
   id: string,
-  userId: string
+  userId: string,
+  roster: boolean
 ): SQL {
   return and(
-    // focus_sessions is ownerPrivate — owner-gate the NULL-workspace branch so a
-    // caller can't enumerate another user's private standalone sessions.
-    ownerPrivateVisibleWhere(
-      focusSessions.workspaceId,
-      focusSessions.userId,
-      userId
-    ),
+    sessionReadableWhere({ userId, roster }),
     kind === "playbook"
       ? eq(focusSessions.playbookId, id)
       : drizzleSql`${focusSessions.metadata}->>'automationId' = ${id}`
@@ -197,7 +202,8 @@ async function loadDefinition(
 async function loadSessions(
   kind: WorkflowKind,
   id: string,
-  userId: string
+  userId: string,
+  roster: boolean
 ): Promise<WorkflowSession[]> {
   // SESSION-KIND-LENS-EXEMPT: a place FEED projects its own summary shape
   // (id/goal/status/stage), never a session row, so there is nothing for a row
@@ -216,7 +222,7 @@ async function loadSessions(
       progress: focusSessions.progress,
     })
     .from(focusSessions)
-    .where(sessionScopeWhere(kind, id, userId))
+    .where(sessionScopeWhere(kind, id, userId, roster))
     .orderBy(desc(focusSessions.startedAt))
     .limit(SESSION_CAP);
   return rows.map((r) => ({
@@ -238,9 +244,10 @@ async function loadSessions(
 async function loadRuns(
   kind: WorkflowKind,
   id: string,
-  userId: string
+  userId: string,
+  roster: boolean
 ): Promise<WorkflowPlaceRun[]> {
-  const runs = await listRuns({ userId, flowType: kind, flowId: id });
+  const runs = await listRuns({ userId, flowType: kind, flowId: id, roster });
   const runIds = runs.map((r) => r.id);
   if (runIds.length === 0) return [];
 
@@ -482,16 +489,16 @@ async function loadProposals(
 export async function getWorkflowPlace(
   input: GetWorkflowPlaceInput
 ): Promise<WorkflowPlace | null> {
-  const { kind, id, userId } = input;
+  const { kind, id, userId, roster = false } = input;
 
   const definition = await loadDefinition(kind, id, userId);
   if (!definition) return null;
 
-  const sessions = await loadSessions(kind, id, userId);
+  const sessions = await loadSessions(kind, id, userId, roster);
   const sessionIds = sessions.map((s) => s.id);
 
   const [runs, channelRefs, results, proposalRefs] = await Promise.all([
-    loadRuns(kind, id, userId),
+    loadRuns(kind, id, userId, roster),
     loadChannels(kind, id, userId, sessions),
     loadResults(sessionIds, userId),
     loadProposals(kind, id, sessionIds, userId),
@@ -549,7 +556,7 @@ function decodeCursor(raw: string | undefined): FeedCursor | null {
 export async function getWorkflowPlaceFeed(
   input: GetWorkflowPlaceFeedInput
 ): Promise<WorkflowPlaceFeed> {
-  const { kind, id, userId } = input;
+  const { kind, id, userId, roster = false } = input;
   const limit = Math.min(Math.max(input.limit ?? 50, 1), 100);
 
   // Bounded like loadSessions: the feed covers the workflow's most recent
@@ -558,7 +565,7 @@ export async function getWorkflowPlaceFeed(
   const sessionRows = await db
     .select({ id: focusSessions.id })
     .from(focusSessions)
-    .where(sessionScopeWhere(kind, id, userId))
+    .where(sessionScopeWhere(kind, id, userId, roster))
     .orderBy(desc(focusSessions.createdAt))
     .limit(SESSION_CAP);
   const sessionIds = sessionRows.map((r) => r.id);

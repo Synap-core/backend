@@ -38,6 +38,7 @@ import {
   messages,
   MessageRole,
   MessageAuthorType,
+  MessageCategory,
   RoutedSource,
   computeMessageHash,
   emitMessageEvent,
@@ -55,7 +56,11 @@ import {
 } from "../../utils/write-door-idempotency.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { notifyRoomPost } from "./notify-room-post.js";
-import type { RoomPostKind } from "./room-post-kind.js";
+import {
+  ROOM_POST_META_KEY,
+  roomPostMeta,
+  type RoomPostKind,
+} from "./room-post-kind.js";
 
 const logger = createLogger({ module: "post-message" });
 
@@ -96,6 +101,25 @@ export interface PostChannelMessageParams {
    * whose only notifications are the @mentions it names.
    */
   kind?: RoomPostKind;
+  /**
+   * For a `kind: 'question'` post: the declared label of the owed slot the
+   * question is about. Persisted with the kind (`messages.metadata.roomPost`),
+   * so the session owner's reply can be recorded on THAT slot
+   * (`session-answer.ts`). Ignored on an update or a human's post.
+   */
+  slotLabel?: string;
+  /**
+   * A COMMENT in an object room (Documents v2): the thread root it replies to
+   * (`messages.parent_id`), and/or the object anchor a root carries
+   * (`messages.metadata.anchor`, the D19 contract). Written ONLY by the
+   * comments service (`services/comments`), which floors the caller on the
+   * object and validates both first — never passed straight from a wire.
+   * Either one marks the row `message_category = 'comment'`.
+   */
+  comment?: {
+    parentId?: string;
+    anchor?: Record<string, unknown>;
+  };
   /**
    * ⚠️ NOT written to `messages.sessionId`. That column FKs to `sessions` (the
    * channel-scoped conversation-memory session), whereas `X-Session-Id` carries
@@ -221,6 +245,12 @@ export async function postChannelMessage(
     // the AI on would otherwise be swallowed and the turn dropped). Explicit-key
     // idempotency still applies above; only the content-window guard is skipped.
     msgId = randomUUID();
+  } else if (params.comment) {
+    // A COMMENT is keyed by its thread, which the content window cannot see:
+    // "Agreed" on two threads of one document within the window is two
+    // comments, not a retry (every thread shares the object room). Retry
+    // safety for a comment lives on the explicit `idempotencyKey` only.
+    msgId = randomUUID();
   } else {
     msgId = randomUUID();
     try {
@@ -282,6 +312,32 @@ export async function postChannelMessage(
         : {}),
       hash,
       previousHash: "",
+      // The kind is PERSISTED, not only routed: the answer loop has to find
+      // "the agent's open question in this room" later. Agent posts only —
+      // `kind` is ignored on a human's post.
+      ...(agentUserId || params.comment?.anchor
+        ? {
+            metadata: {
+              ...(agentUserId
+                ? {
+                    [ROOM_POST_META_KEY]: roomPostMeta(
+                      params.kind,
+                      params.slotLabel
+                    ),
+                  }
+                : {}),
+              ...(params.comment?.anchor
+                ? { anchor: params.comment.anchor }
+                : {}),
+            } as (typeof messages.$inferInsert)["metadata"],
+          }
+        : {}),
+      ...(params.comment
+        ? {
+            messageCategory: MessageCategory.COMMENT,
+            parentId: params.comment.parentId ?? null,
+          }
+        : {}),
     })
     .onConflictDoNothing({ target: messages.id })
     .returning({ id: messages.id });

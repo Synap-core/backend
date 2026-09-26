@@ -41,13 +41,18 @@ function brokerUnavailable(resolved: { reason: string; error: string }) {
       };
 }
 import { createHubProtocolCallerContext } from "../utils.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import {
+  ErrorSchema,
+  uuidQueryParam,
+  trpcErrorResponses,
+} from "./_codecs/_openapi.js";
 import {
   hasScope,
   logger,
   resolveActingContext,
   resolveActorId,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 export function registerConnectorsRoutes(app: HubHono): void {
@@ -260,10 +265,11 @@ export function registerConnectorsRoutes(app: HubHono): void {
       request: {
         query: z.object({
           provider: z.string().optional(),
-          workspaceId: z.string().optional(),
+          workspaceId: uuidQueryParam.optional(),
         }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Sync status rows",
           content: {
@@ -313,8 +319,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -347,7 +353,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
               schema: z
                 .object({
                   provider: z.string().optional(),
-                  workspaceId: z.string().optional(),
+                  workspaceId: uuidQueryParam.optional(),
                   onBehalfOfUserId: z.string().optional(),
                   // Force a fresh OAuth session even when a connection record
                   // already exists — the reconnect path for an EXPIRED/revoked
@@ -362,6 +368,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description:
             "Connection status: connected | setup_required | provider_required | provider_unavailable",
@@ -705,8 +712,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -725,7 +732,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
               schema: z
                 .object({
                   providerId: z.string().optional(),
-                  workspaceId: z.string().optional(),
+                  workspaceId: uuidQueryParam.optional(),
                   /**
                    * Optional: bind the resulting Nango connection to ANOTHER
                    * workspace member instead of the caller (the operator). Used
@@ -742,6 +749,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Session URL",
           content: {
@@ -869,8 +877,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
             error:
               "Could not start a connection session with this pod's Nango. A pod admin needs to check that the integration is fully configured.",
           },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
       return c.json(
         {
@@ -893,6 +901,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         params: z.object({ connectionId: z.string() }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Connection revoked",
           content: {
@@ -947,8 +956,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -976,6 +985,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Connection revoked",
           content: {
@@ -1031,8 +1041,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1059,6 +1069,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         params: z.object({ provider: z.string() }),
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Connection list",
           content: {
@@ -1135,8 +1146,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );
@@ -1190,7 +1201,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
                    * Optional acting workspace — routes a `propose` verdict's
                    * review proposal to the right workspace and scopes the gate.
                    */
-                  workspaceId: z.string().optional(),
+                  workspaceId: uuidQueryParam.optional(),
                   /**
                    * Optional AI-agent identity. Verified to be a real agent user
                    * before it's trusted; threaded to the capability-execution
@@ -1213,6 +1224,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
       responses: {
+        ...trpcErrorResponses,
         200: {
           description: "Execution result",
           content: {
@@ -1357,8 +1369,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+          httpStatusForTrpcError(err)
+        ) as never;
       }
     }
   );

@@ -72,6 +72,7 @@ import { resolveWorkspaceTemplate } from "./capabilities/resolve-workspace-templ
 import type { PackageDefinitionOutput } from "@synap-core/workspace-templates";
 import { createWorkspaceFromDefinitionIdempotent } from "./workspace-creation-service.js";
 import { composeOntoBaseWorkspace } from "./compose-overlay.js";
+import { isPackDefinition, primaryPackDomain } from "./pack-definition.js";
 import {
   applyPackagePostWorkspace,
   type PackagePostWorkspaceBody,
@@ -636,6 +637,9 @@ async function ensureWorkspaceDependencyPresent(
   const baseDeps = resolvedTemplate.dependencies;
   const ownComposeDep = assertSingleComposeDep(baseDeps, slug);
   let ownComposeBase: ResolveResult | undefined;
+  // Every nested workspace dep's resolution, in declared order — a PACK layers
+  // onto the first `require`d one that resolved (D8, see pack-definition.ts).
+  const nestedResults: Array<{ slug: string; workspaceId?: string }> = [];
 
   path.add(slug);
   try {
@@ -683,6 +687,10 @@ async function ensureWorkspaceDependencyPresent(
         installed,
         agentUserId
       );
+      nestedResults.push({
+        slug: nested.slug,
+        workspaceId: nestedRes.workspaceId,
+      });
       if (ownComposeDep && nested.slug === ownComposeDep.slug) {
         ownComposeBase = nestedRes;
       }
@@ -715,6 +723,9 @@ async function ensureWorkspaceDependencyPresent(
       composeTargetWorkspaceId: ownComposeBase.workspaceId,
       userId,
       definition,
+      // Record the transitive overlay (e.g. grants on Operations) in the base's
+      // `installedPacks`, so boot re-syncs its layers + playbooks.
+      overlay: { slug, version: resolvedTemplate.version },
     });
     // The overlay's own capabilities/automations/playbooks/loops attach to the
     // base workspace it composed onto (e.g. grants' 4 grant capabilities land on
@@ -737,7 +748,43 @@ async function ensureWorkspaceDependencyPresent(
     );
   }
 
-  // 4b. Install via the canonical idempotent create path.
+  // 4b. PACK (D8) — a pack never becomes a workspace of its own. Its domains
+  //     were just ensured by step 3; layer the pack onto its PRIMARY domain
+  //     (first `require`d workspace) through the ONE compose door, recorded in
+  //     that workspace's `installedPacks`, and seed its playbooks/rules there.
+  //     A legacy suite workspace already on the pod was reused by step 1.
+  if (isPackDefinition(resolvedTemplate.packageDefinition)) {
+    const primary = primaryPackDomain(baseDeps, nestedResults);
+    if (!primary) {
+      return record({
+        action: "required-absent",
+        message: `Pack "${slug}" could not resolve any of the workspace templates it requires — install one of them first.`,
+      });
+    }
+    await composeOntoBaseWorkspace({
+      composeTargetWorkspaceId: primary.workspaceId,
+      userId,
+      definition,
+      overlay: { slug, version: resolvedTemplate.version },
+    });
+    const seedOutcome = await seedDependencyPostWorkspace(
+      primary.workspaceId,
+      slug,
+      userId,
+      agentUserId,
+      resolvedTemplate.packageDefinition
+    );
+    return record(
+      {
+        workspaceId: primary.workspaceId,
+        action: "composed",
+        message: `Pack "${slug}" layered onto its primary domain "${primary.slug}".`,
+      },
+      seedOutcome
+    );
+  }
+
+  // 4c. Install via the canonical idempotent create path.
   //     `proposalId` is the BARE TEMPLATE SLUG — the same key the Hub door
   //     (`POST /api/hub/packages/apply`, i.e. `synap launch`) writes as
   //     `body._meta.slug`. The two doors MUST agree: this resolver used to

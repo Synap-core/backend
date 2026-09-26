@@ -14,7 +14,12 @@ import {
   notInArray,
 } from "@synap/database";
 
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 import {
   findOrCreateServiceAgentUser,
   linkAgentToUser,
@@ -95,7 +100,10 @@ export function registerAgentsRoutes(app: HubHono): void {
         { err, serviceId },
         "Failed to resolve intelligence service"
       );
-      return c.json({ error: "Failed to resolve intelligence service" }, 500);
+      return c.json(
+        { error: "Failed to resolve intelligence service" },
+        httpStatusForTrpcError(err)
+      );
     }
 
     if (!resolvedServiceId) {
@@ -256,7 +264,7 @@ export function registerAgentsRoutes(app: HubHono): void {
       logger.error({ err, serviceId }, "POST /agents/sync failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

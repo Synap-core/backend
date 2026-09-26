@@ -260,6 +260,12 @@ beforeAll(async () => {
       }
     }
   }
+  // A KNOWN principal (Sites W2 S2): an id with no `users` row is an unknown
+  // principal and reads no pod-level row (pod-wide globals, pod-visible
+  // workspaces) — `podReaderWhere`. This fixture models provisioned users.
+  await h.client!.exec(
+    `insert into users (id, email) values ('${USER}', '${USER}@example.test')`
+  );
   await h.client!.exec(
     `create unique index if not exists idx_links_unique_edge on links (from_type, from_id, to_type, to_id, link_type);`
   );

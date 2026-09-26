@@ -187,6 +187,13 @@ vi.mock("../../projects.js", () => ({
   },
 }));
 
+// W5c: `project/instantiate_from_playbook` replays through `startTrack`
+// directly; its module pulls the access registry, which this file's total
+// schema mock cannot satisfy. Not exercised here — stubbed at the seam.
+vi.mock("../../../services/tracks/tracks-service.js", () => ({
+  startTrack: async () => ({ status: "started" }),
+}));
+
 vi.mock("../../../services/proposals/reconcile-proposal-properties.js", () => ({
   reconcileApprovedProperties: async (a: { properties: unknown }) => ({
     properties: a.properties,
@@ -374,6 +381,25 @@ describe("project/update — pod-personal (NULL workspaceId) approval", () => {
 
     expect(projectUpdateCalls).toEqual([]);
     expect(proposalUpdates).toEqual([]);
+  });
+
+  it("D6: an approved HOME change replays homeWorkspaceId (target re-checked by update)", async () => {
+    projectRow = { id: "p-1", workspaceId: "ws-9", userId: OTHER_MEMBER };
+    membership = { role: "admin" };
+
+    await executor("project/update").execute(
+      runArgs({
+        workspaceId: "ws-9",
+        targetId: "p-1",
+        data: { data: { id: "p-1", homeWorkspaceId: "ws-market" } },
+      })
+    );
+
+    expect(projectUpdateCalls).toHaveLength(1);
+    expect(projectUpdateCalls[0].args).toEqual({
+      id: "p-1",
+      homeWorkspaceId: "ws-market",
+    });
   });
 });
 

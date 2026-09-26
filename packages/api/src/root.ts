@@ -28,12 +28,14 @@ import {
 import { viewsRouter } from "./routers/views.js";
 import { preferencesRouter } from "./routers/preferences.js";
 import { rolesRouter } from "./routers/roles.js";
-import { sharingRouter } from "./routers/sharing.js";
+import { sharesRouter } from "./routers/shares.js";
+import { formsRouter } from "./routers/forms.js";
 import { templatesRouter } from "./routers/templates.js";
 import { whiteboardsRouter } from "./routers/whiteboards.js";
 import { skillsRouter } from "./routers/skills.js";
 import { toolsRouter } from "./routers/tools.js";
 import { messageLinksRouter } from "./routers/message-links.js";
+import { commentsRouter } from "./routers/comments.js";
 import { profilesRouter } from "./routers/profiles.js";
 import { surfacesRouter } from "./routers/surfaces.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
@@ -128,12 +130,17 @@ export const coreRouter = router({
   views: viewsRouter,
   preferences: preferencesRouter,
   roles: rolesRouter,
-  sharing: sharingRouter,
+  // Sites W2 S3 — the owner's share doors (services/sharing).
+  shares: sharesRouter,
+  // Sites W4 — the owner's public-form doors (services/forms).
+  forms: formsRouter,
   templates: templatesRouter,
   whiteboards: whiteboardsRouter,
   skills: skillsRouter,
   tools: toolsRouter,
   messageLinks: messageLinksRouter,
+  // Documents v2 — comments are anchored messages in the object's ONE room.
+  comments: commentsRouter,
   // Dynamic Schema System
   profiles: profilesRouter,
   // Surfaces plane — renderer usage-health (how each record type is displayed)

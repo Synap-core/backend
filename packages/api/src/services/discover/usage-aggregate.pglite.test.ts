@@ -84,6 +84,9 @@ import {
   proposals,
   profiles,
   focusSessions,
+  podMembers,
+  users,
+  projectMembers,
 } from "@synap/database";
 import {
   loadEntityUsage,
@@ -186,6 +189,9 @@ beforeAll(async () => {
     proposals,
     profiles,
     focusSessions,
+    podMembers,
+    users,
+    projectMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

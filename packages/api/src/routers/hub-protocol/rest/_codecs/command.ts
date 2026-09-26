@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 /** Wire shape of an intelligence command. */
 export const WireCommandSchema = z
@@ -23,7 +24,7 @@ export const WireCommandSchema = z
 /** GET /commands query. */
 export const ListCommandsQuerySchema = z
   .object({
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
   })
   .openapi("ListCommandsQuery");
 
@@ -53,8 +54,7 @@ export const ExecuteCommandRequestSchema = z
       .optional()
       .describe("Defaults to 30s. Hard-capped at 5 minutes."),
     userId: z.string().optional(),
-    workspaceId: z
-      .string()
+    workspaceId: uuidQueryParam
       .optional()
       .describe(
         "Workspace context. When set, rate-limit (10/min) applies and an event is emitted on completion."

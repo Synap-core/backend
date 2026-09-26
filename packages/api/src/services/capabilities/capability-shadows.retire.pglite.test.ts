@@ -216,6 +216,26 @@ describe("retireCapabilityShadows", () => {
     ).toBe(1);
   });
 
+  it("a requires edge whose skill row is gone does not block the tool", async () => {
+    const { client, id, load, count } = await seed();
+    // The live pod had exactly this: a stale tool whose only requirer had
+    // been deleted without its edge — "Remove" refused it forever.
+    await client.query(`delete from skills where id = $1`, [id.calOld]);
+    const res = await retireCapabilityShadows({
+      userId: "u1",
+      ids: [id.toolOld],
+      authorize: allow,
+      load,
+    });
+    expect(res.refused).toEqual([]);
+    expect(res.retired.map((r) => r.id)).toEqual([id.toolOld]);
+    expect(
+      await count(`select count(*)::int n from tools where id = $1`, [
+        id.toolOld,
+      ])
+    ).toBe(0);
+  });
+
   it("a row the caller may not remove is refused with the floor's reason", async () => {
     const { id, load, count } = await seed();
     const res = await retireCapabilityShadows({

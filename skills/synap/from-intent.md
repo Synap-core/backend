@@ -26,12 +26,12 @@ If a close project exists, **reuse it**. Do not mint a twin. Name-match is enoug
 
 ### 1. Ask before you build (required)
 
-Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard. Never a 7-step implementation plan in the first reply.
+Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard. Never a 7-step implementation plan in the first reply. What each word means (project, track, step, template, pack, role): `concepts`.
 
 | Question                                                                             | You are distinguishing                                                                  |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | What is the **commitment** (the thing we are driving toward over weeks)?             | **Project** (optional; gravity). Not a folder.                                          |
-| Which **methods** will it run (business model, content pipeline, build…)?            | **Tracks** — one project-scoped playbook each, started with `synap_start_track`.        |
+| Which **methods** will it run (business model, content pipeline, build…)?            | **Tracks** — one track template each, started with `synap_start_track`.                 |
 | Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
@@ -90,12 +90,12 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 
 ### 2c. A new kind of work inside a project → a TRACK
 
-A **track** is a method (a playbook with `scope: "project"`) running inside ONE project; a project runs several (Business model, Content, Build). It pins its method version and has re-enterable stages.
+A **track** runs a track template (a playbook with `scope: "project"`) inside ONE project; a project runs several (Business model, Content, Build). It pins its template version and has re-enterable steps (`stages`). A track owns no workspace: each step names the domain it works in (today its session lands in the project's home workspace). Work that repeats inside a track is an open-ended step plus a Rule that starts work into it each cycle. Definitions: `concepts`.
 
 | The user needs…                               | Do this                                                                                                                                      |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | a **method** in an existing project           | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track`  |
-| no method fits                                | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved                      |
+| no method fits                                | propose a track template: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once approved               |
 | one bounded piece of work in that method      | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`      |
 | the work of ONE stage (its goal is the brief) | `synap_start_stage_session` (`trackId`, optional `stageKey`) — idempotent, files the session at that stage with the stage's outputs/criteria |
 | new **kinds of things** no workspace owns     | a workspace (four-test, `workspace-design`) — never to represent a method                                                                    |
@@ -112,6 +112,7 @@ Pause, resume (a check gate holds a track until at least one session filed at th
 | Schema: facet, overlay, child kind, new kind | `system/synap-schema/extend-first` then `extend-vs-create` |
 | Missing operational domain                   | `system/agent-os/skill`                                    |
 | Views / cards once the model exists          | `system/synap-ui/skill`                                    |
+| What a word means (the one glossary)         | `system/synap/concepts`                                    |
 | Lenses, gravity, sessions                    | `system/synap/lenses`                                      |
 | Four-test for a workspace                    | `system/synap/workspace-design`                            |
 | Index of everything                          | `catalog`                                                  |
@@ -135,4 +136,4 @@ Pause, resume (a check gate holds a track until at least one session filed at th
 
 ### After it works
 
-Offer L4, one at a time: session → playbook; cell → renderer; **project → suite pack** (`synap_export_project_pack` / CLI `--from-project`). Export returns a thin suite **plus** full constituent workspace packages — publish constituents first, then the suite (CLI does both). Install with `projectName` (human) or `projectId` (agent) to mint/reuse a named engagement and stamp uses-edges. Optional `projectSurface` lands in `projects.settings.layout` (engagement UI). Not live entity rows. Never crystallize a guess. No `app` package type.
+Offer L4, one at a time: session → work template; stages of a method → track template; cell → renderer; **project → pack** (a `suite`) (`synap_export_project_pack` / CLI `--from-project`). Export returns a thin suite **plus** full constituent workspace packages — publish constituents first, then the suite (CLI does both). Install with `projectName` (human) or `projectId` (agent) to mint/reuse a named engagement and stamp uses-edges. Optional `projectSurface` lands in `projects.settings.layout` (engagement UI). Not live entity rows. Never crystallize a guess. No `app` package type.

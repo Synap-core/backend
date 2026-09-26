@@ -25,7 +25,6 @@ import {
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import {
   registerProposalExecutor,
   type ProposalEffect,
@@ -528,22 +527,6 @@ export function registerFocusSessionExecutors(): void {
         });
       }
 
-      // Mirror create-session so the browser mirrors the new session live.
-      if (created) {
-        emitHubRealtimeEvent({
-          eventType: "focus_session.create.completed",
-          subjectId: created.id,
-          userId,
-          data: {
-            id: created.id,
-            workspaceId: created.workspaceId,
-            status: created.status,
-            goal: created.goal,
-            progress: created.progress,
-          },
-        });
-      }
-
       await db
         .update(proposals)
         .set({
@@ -581,7 +564,7 @@ export function registerFocusSessionExecutors(): void {
   // (closed | cancelled | failed) reuses completeFocusSession
   // (human authority — no agentUserId) so playbook_run + verificationReport stay
   // consistent with the direct complete door. Non-close applies defined fields
-  // via direct db.update and emits focus_session.update.completed.
+  // via direct db.update (the 0277 row trigger pushes the live update).
   registerProposalExecutor({
     key: "focus_session/update",
     async execute({ proposal, userId, input, deps }) {
@@ -845,21 +828,6 @@ export function registerFocusSessionExecutors(): void {
             );
           }
         }
-
-        if (updated) {
-          emitHubRealtimeEvent({
-            eventType: "focus_session.update.completed",
-            subjectId: updated.id,
-            userId,
-            data: {
-              id: updated.id,
-              workspaceId: updated.workspaceId,
-              status: updated.status,
-              goal: updated.goal,
-              progress: updated.progress,
-            },
-          });
-        }
       }
 
       await db
@@ -999,7 +967,8 @@ async function instantiateApprovedPlaybook(args: {
     // The prompt was rendered against the caller's RESOLVED params at propose
     // time and rides here, so the approved row dispatches exactly what the
     // reviewer read. The params themselves ride too (`data.params`, written by
-    // `playbooks.instantiate`) so the session STORES what it was given —
+    // the since-retired `playbooks.instantiate`; still-pending proposals it
+    // filed carry them) so the session STORES what it was given —
     // without them `metadata.params` would be `{}` on the approved path alone,
     // which is the two-paths-disagree shape.
     ...(innerData.params && typeof innerData.params === "object"

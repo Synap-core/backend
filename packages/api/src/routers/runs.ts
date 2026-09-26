@@ -17,6 +17,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { listRuns, getRun, listRunGroupsPage } from "../services/runs/index.js";
 import { listRecentRunsByFlows } from "../services/runs/recent-by-flows.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 
 /**
  * Must mirror the domain type `FlowType` (`services/runs/types.ts`) exactly.
@@ -94,7 +95,11 @@ export const runsRouter = router({
             "scope.sessionId and scope.projectId cannot be combined — a session already pins its project, and the pair would silently drop every direct capability run. Pass one or the other.",
         });
       }
-      const runs = await listRuns({ userId, ...input });
+      const runs = await listRuns({
+        userId,
+        ...input,
+        roster: rosterReadFor(ctx),
+      });
       return { runs };
     }),
 
@@ -157,6 +162,7 @@ export const runsRouter = router({
         userId,
         flowType: input.flowType,
         id: input.id,
+        roster: rosterReadFor(ctx),
       });
       return detail;
     }),

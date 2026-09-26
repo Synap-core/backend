@@ -85,6 +85,7 @@ import {
   hasScope,
   logger,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 /** Every kind this door can report. Mirrors the CP `PACKAGE_TYPES` install kinds. */
@@ -552,7 +553,10 @@ export function registerInstalledRoutes(app: HubHono): void {
       return c.json({ installed: rows, driftComputed, counts });
     } catch (err) {
       logger.error({ err }, "GET /installed failed");
-      return c.json({ error: "Failed to list installed packages" }, 500);
+      return c.json(
+        { error: "Failed to list installed packages" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 }

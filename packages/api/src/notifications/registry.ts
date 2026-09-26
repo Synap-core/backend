@@ -122,7 +122,32 @@ export interface NotificationDef {
    * type with no resolvable groupKey is never deduped (and says so in the log).
    */
   dedupeWindowMs?: number;
+  /**
+   * How an UNREAD row of this type takes part in the needs-you union
+   * (`services/signals/needs-you-union.ts`). Omit ⇒ `"item"`.
+   *
+   * - `"item"` — the row is its own needs-you entry until it is read.
+   * - `"informational"` — the row NEVER counts as needing you. It stays in the
+   *   bell; it is not an ask. Use it for news that does not wait on the person.
+   * - `"session-pointer"` — the row POINTS AT a session's live need rather than
+   *   being one. The union decides from the session's state, not from the row:
+   *   the row folds into the session's owed-slot row when there is one, counts
+   *   once when the session has an open room question, and counts ZERO when
+   *   neither is true, because whatever it announced has been resolved. A
+   *   pointer row's `sourceId` must be the session id.
+   * - `"suggestion"` — something an AI offered on its own initiative (a nudge,
+   *   an insight, a briefing). It NEVER counts toward needs-you. It goes to
+   *   its own sibling bucket instead: `signals.list({ lens: "suggestions" })`
+   *   and `signals.count().suggestions`, shown as "Suggestions".
+   *
+   * Data on the row, never a list of type strings in the union. A new
+   * informational type is left out of needs-you because its own row says so.
+   */
+  needsYou?: NotificationNeedsYouRole;
 }
+
+export type NotificationNeedsYouRole =
+  "item" | "informational" | "session-pointer" | "suggestion";
 
 /**
  * The suppression window both session-attention types use: one notification per
@@ -136,15 +161,6 @@ export interface NotificationDef {
  * that covers a working block without making that claim.
  */
 export const SESSION_ATTENTION_DEDUPE_WINDOW_MS = 6 * 60 * 60 * 1000;
-
-/**
- * An agent's room UPDATES (in-app only): at most one bell row per session per
- * thirty minutes. Shorter than the attention window on purpose — an update is
- * not a stop, so a later one in the same afternoon is still worth a glance —
- * and long enough that an agent narrating every step writes one row, not
- * twenty. The room itself carries every message in realtime regardless.
- */
-export const SESSION_ROOM_UPDATE_DEDUPE_WINDOW_MS = 30 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -458,6 +474,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    needsYou: "suggestion",
   },
   {
     // The generic `notification` automation output node (see `case "notification"`
@@ -561,6 +578,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    needsYou: "suggestion",
   },
   {
     type: "ai.proactive.weekly_digest",
@@ -572,6 +590,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    needsYou: "suggestion",
   },
   {
     type: "ai.proactive.health_check",
@@ -583,6 +602,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    needsYou: "suggestion",
   },
   {
     type: "ai.proactive.insight",
@@ -594,6 +614,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    needsYou: "suggestion",
   },
   {
     type: "ai.proactive.nudge",
@@ -605,6 +626,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    needsYou: "suggestion",
   },
   /*
    * `suggestion` and `alert` complete the set. `ProactiveMessageType`
@@ -635,6 +657,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    needsYou: "suggestion",
   },
   {
     type: "ai.proactive.alert",
@@ -646,6 +669,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    needsYou: "suggestion",
   },
 
   // ── System ────────────────────────────────────────────────────────────────
@@ -817,6 +841,54 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
       },
     ],
   },
+  {
+    // Someone replied to a comment thread this person started (Documents v2:
+    // a comment is a message in the object's room). `sourceId` is the object
+    // room's channelId — the room shows the thread with its jump door. A
+    // reply that @mentions the author is a `chat.mention` instead, never both.
+    type: "comment.reply",
+    category: "inbox",
+    label: "Reply to your comment",
+    icon: "message-square",
+    priority: "normal",
+    titleTemplate: "{{sender}} replied to your comment",
+    bodyTemplate: "{{preview}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "View",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "channel" },
+      },
+    ],
+  },
+  {
+    // The room's owner added this person to a SESSION room
+    // (`chat.addRoomMember`). Session rooms are roster-only, so this is the
+    // moment the room was shared with them — the notification is their door
+    // into it. `sourceId` is the channelId. News, not an ask: it never counts
+    // toward needs-you.
+    type: "chat.room_member_added",
+    category: "inbox",
+    label: "Added to a room",
+    icon: "user-plus",
+    priority: "normal",
+    titleTemplate: "{{inviterName}} added you to {{roomTitle}}",
+    bodyTemplate: "Open the room to catch up on the work.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    needsYou: "informational",
+    actions: [
+      {
+        id: "view",
+        label: "Open room",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "channel" },
+      },
+    ],
+  },
 
   // ── Sessions ──────────────────────────────────────────────────────────────
   {
@@ -956,6 +1028,10 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
     groupBy: "sessionId",
     dedupeWindowMs: SESSION_ATTENTION_DEDUPE_WINDOW_MS,
+    // The push is the interrupt; the live need is the owed slot or the open
+    // question. Counting the row too would count one need twice, and would
+    // keep counting it after the need was met.
+    needsYou: "session-pointer",
     actions: [
       {
         id: "view",
@@ -963,41 +1039,6 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         variant: "primary",
         // `sourceId` is the session id (see the producer).
         handler: { type: "navigate-object", kind: "session" },
-      },
-    ],
-  },
-  {
-    /**
-     * An AGENT posted a progress UPDATE in a session's room (`post_message`,
-     * default `kind: 'update'`). Producer: `notifyRoomPost`
-     * (`services/messaging/notify-room-post.ts`).
-     *
-     * IN-APP ONLY, and capped there (`channelCeiling`): ordinary AI chatter
-     * never rings a phone — the same rule the `ai.proactive.*` rows state. A
-     * question (`kind: 'question'`) or an explicit @mention of the person is
-     * what pushes, through `session.needs_you` / `chat.mention`.
-     *
-     * One row per session per {@link SESSION_ROOM_UPDATE_DEDUPE_WINDOW_MS}: the
-     * bell says "this session has news", the room holds every line of it.
-     */
-    type: "session.room_update",
-    category: "ai",
-    label: "Session room update",
-    icon: "message-square",
-    priority: "low",
-    titleTemplate: "{{sender}} in {{sessionTitle}}",
-    bodyTemplate: "{{preview}}",
-    defaultChannels: ["in_app"],
-    channelCeiling: ["in_app"],
-    ttl: 0,
-    groupBy: "sessionId",
-    dedupeWindowMs: SESSION_ROOM_UPDATE_DEDUPE_WINDOW_MS,
-    actions: [
-      {
-        id: "open-room",
-        label: "Open room",
-        variant: "primary",
-        handler: { type: "navigate-object", kind: "session", view: "room" },
       },
     ],
   },
@@ -1051,4 +1092,17 @@ export const NOTIFICATION_REGISTRY_MAP = new Map<string, NotificationDef>(
 
 export function getNotificationDef(type: string): NotificationDef | undefined {
   return NOTIFICATION_REGISTRY_MAP.get(type);
+}
+
+/**
+ * The needs-you role of a notification type — its registry row's `needsYou`,
+ * `"item"` when the row omits it. An unknown type (a legacy row whose
+ * definition was retired) is also an `"item"`: an unread row nobody can
+ * classify stays visible rather than silently dropping out of the count.
+ */
+export function needsYouRole(
+  type: string | undefined
+): NotificationNeedsYouRole {
+  if (!type) return "item";
+  return NOTIFICATION_REGISTRY_MAP.get(type)?.needsYou ?? "item";
 }

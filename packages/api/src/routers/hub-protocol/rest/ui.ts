@@ -10,7 +10,7 @@
 
 import { z } from "@hono/zod-openapi";
 import { emitTyped } from "../../../utils/event-emit.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { hasScope, logger, type HubHono } from "./_shared.js";
 
@@ -27,7 +27,7 @@ const SurfaceSchema = z.object({
   appId: z.string().optional(),
   placement: z.enum(["main", "side"]).optional(),
   title: z.string().optional(),
-  workspaceId: z.string().optional(),
+  workspaceId: uuidQueryParam.optional(),
 });
 
 const FocusBodySchema = z.object({

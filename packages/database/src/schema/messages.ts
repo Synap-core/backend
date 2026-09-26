@@ -195,6 +195,11 @@ export const messages = pgTable(
     // all channel history/list reads, so it disappears on reload. Powers the
     // "catch me up" recap flow: visible live, gone on refresh.
     ephemeral: boolean("ephemeral").notNull().default(false),
+
+    // Resolve — state on a comment thread's ROOT message (an anchored message
+    // in an object room, migration 0279). Written only by the comments door.
+    resolvedAt: timestamp("resolved_at", { mode: "date", withTimezone: true }),
+    resolvedBy: text("resolved_by"),
   },
   (table) => ({
     channelIdIdx: index("messages_channel_id_idx").on(table.channelId),
@@ -239,6 +244,8 @@ export interface MessageRow {
   deletedAt: Date | null;
   editedAt: Date | null;
   ephemeral: boolean;
+  resolvedAt: Date | null;
+  resolvedBy: string | null;
 }
 export type NewMessageRow = Partial<
   Omit<MessageRow, "id" | "timestamp" | "hash">

@@ -70,6 +70,7 @@ import {
   type SessionParticipant,
 } from "./participants.js";
 import { UUID_RE } from "./session-metadata.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 
 /** One capability (skill) the session ran, with how often and how recently. */
 export interface SessionUsageCapability {
@@ -470,15 +471,18 @@ async function resolvePlaybook(
 }
 
 /**
- * Returns `null` when the session does not exist OR is not the caller's — the
- * same owner floor every `focusSessions` read door uses, so the two are
+ * Returns `null` when the session does not exist OR the caller cannot read it
+ * — the same read floor (`sessionReadableWhere`) every `focusSessions` read
+ * door uses, so the two are
  * indistinguishable to the caller (the router maps it to NOT_FOUND).
  */
 export async function readSessionUsage(params: {
   userId: string;
   sessionId: string;
+  /** Honour the human-roster read branch (`sessionReadableWhere`). Default false. */
+  roster?: boolean;
 }): Promise<SessionUsage | null> {
-  const { userId, sessionId } = params;
+  const { userId, sessionId, roster } = params;
   if (!isUuid(sessionId)) return null;
 
   const [session] = await db
@@ -489,7 +493,10 @@ export async function readSessionUsage(params: {
     })
     .from(focusSessions)
     .where(
-      and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+      and(
+        eq(focusSessions.id, sessionId),
+        sessionReadableWhere({ userId, roster })
+      )
     )
     .limit(1);
   if (!session) return null;

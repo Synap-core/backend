@@ -13,7 +13,13 @@ import {
   SearchResponseSchema,
   VectorSearchQuerySchema,
 } from "./_codecs/search.js";
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 
 export function registerSearchRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -140,7 +146,7 @@ export function registerSearchRoutes(app: HubHono): void {
       logger.error({ err }, "searchCollection failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -190,7 +196,7 @@ export function registerSearchRoutes(app: HubHono): void {
       logger.error({ err }, "search failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -223,7 +229,7 @@ export function registerSearchRoutes(app: HubHono): void {
       logger.error({ err }, "searchDocuments failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -259,7 +265,7 @@ export function registerSearchRoutes(app: HubHono): void {
       logger.error({ err }, "vectorSearch failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

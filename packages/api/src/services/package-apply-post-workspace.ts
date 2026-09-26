@@ -24,6 +24,14 @@ import {
 } from "./cells/install-cell-from-definition.js";
 import type { WorkspaceSettings } from "@synap/database";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
+import {
+  projectPlaybookDefinition,
+  stampPlaybookMarketSource,
+} from "./playbooks/playbook-market-source.js";
+import {
+  reconcileInstalledPlaybook,
+  type InstalledPlaybookReconcileResult,
+} from "./playbooks/reconcile-installed-playbooks.js";
 import type { playbooksRouter as playbooksRouterType } from "../routers/playbooks.js";
 
 /** The `playbooks.create` input, as the applier must satisfy it. */
@@ -275,7 +283,7 @@ export interface PackagePostWorkspaceBody {
      * `playbooks.subject_profile` (forwarded to `playbooksRouter.create` below),
      * making it matchable by `playbooks.matchForEntity`.
      */
-    subjectProfile?: { profileSlug: string; filter?: Record<string, unknown> };
+    subjectProfile?: Record<string, unknown>;
     /** tool/skill keys this playbook grants (see materialization note below). */
     grants?: string[];
     /**
@@ -302,6 +310,10 @@ export interface PackagePostWorkspaceBody {
      * playbook session-scoped.
      */
     scope?: "session" | "project";
+    /** → `playbooks.expected_outputs` (the ONE definition schema carries it). */
+    expectedOutputs?: Record<string, unknown>[];
+    /** → `playbooks.criteria`; validated by `playbooks.create`. */
+    criteria?: unknown[];
   }>;
   loops?: Array<{
     templateKey?: string;
@@ -618,6 +630,60 @@ async function applyPackagePostWorkspaceInner(
     } = await import("@synap/database");
     const caller = playbooksRouter.createCaller(ctx as never);
     const pbs: unknown[] = [];
+    // Package identity for the playbook source-link (`metadata.marketSource`).
+    // Absent (an ad-hoc definition with no `_meta.slug`) ⇒ no stamp, no
+    // reconcile — there is no template to converge to.
+    const packageSlug = body._meta?.slug;
+    const packageVersion = body._meta?.version ?? null;
+    // Converge a REUSED row to this definition and report its effective scope.
+    // Never throws: a reconcile failure is reported on the row's entry, the
+    // reuse itself (and the grants just ensured) stands.
+    const reconcileReusedPlaybook = async (
+      playbookId: string,
+      p: NonNullable<PackagePostWorkspaceBody["playbooks"]>[number]
+    ): Promise<{
+      scope: string;
+      reconcile?: Pick<
+        InstalledPlaybookReconcileResult,
+        "kind" | "applied" | "ownerOwned"
+      > & { error?: string };
+    }> => {
+      const [row] = await db
+        .select()
+        .from(playbooksTable)
+        .where(eq(playbooksTable.id, playbookId))
+        .limit(1);
+      const rowScope = (row?.scope as string | null) ?? "session";
+      if (!row || !packageSlug) return { scope: rowScope };
+      try {
+        const r = await reconcileInstalledPlaybook({
+          ctx: ctx as never,
+          row: row as unknown as Record<string, unknown>,
+          templateElement: p,
+          packageSlug,
+          packageVersion,
+          installedAt: new Date().toISOString(),
+        });
+        return {
+          scope: r.applied.includes("scope") ? (p.scope ?? rowScope) : rowScope,
+          reconcile: {
+            kind: r.kind,
+            applied: r.applied,
+            ownerOwned: r.ownerOwned,
+          },
+        };
+      } catch (e) {
+        return {
+          scope: rowScope,
+          reconcile: {
+            kind: "up-to-date",
+            applied: [],
+            ownerOwned: [],
+            error: (e as Error).message,
+          },
+        };
+      }
+    };
     for (const p of body.playbooks) {
       try {
         if (workspaceId) {
@@ -640,10 +706,18 @@ async function applyPackagePostWorkspaceInner(
             // Reuse still ensures grants idempotently — a re-applied package
             // must not leave a pre-existing playbook's grants unwired.
             await grantPlaybookLinks(existing.id, p.grants, workspaceId);
+            // A re-install / version update REACHES the reused row: converge its
+            // managed fields to this definition (3-way merge; owner edits are
+            // reported, never overwritten; an unstamped row is adopted). Before
+            // this, reuse-by-name meant a fixed template never reached a pod.
+            const reused = await reconcileReusedPlaybook(existing.id, p);
             pbs.push({
               name: p.name,
               status: "reused",
               playbookId: existing.id,
+              // `session` | `project` — see the created branch below.
+              scope: reused.scope,
+              ...(reused.reconcile ? { reconcile: reused.reconcile } : {}),
             });
             continue;
           }
@@ -664,21 +738,29 @@ async function applyPackagePostWorkspaceInner(
           p.stages === undefined
             ? undefined
             : playbookStagesSchema.parse(p.stages);
-        const r = await caller.create({
-          name: p.name,
-          description: p.description,
-          goalTemplate: p.goalTemplate,
-          params: p.params as Record<string, unknown>[] | undefined,
-          executor: p.executor as PlaybookCreateInput["executor"],
-          inputStrategy: p.inputStrategy as Record<string, unknown> | undefined,
-          channelSpec: p.channelSpec as Record<string, unknown> | undefined,
-          schedule: p.schedule,
+        // THE projection: every managed definition field, derived from ONE
+        // list (`PLAYBOOK_MANAGED_FIELDS`). The baseline stamped below is this
+        // same object, so the reconcile compares exactly what was written.
+        // Never add a definition field to the literal below — add it to the
+        // schema and classify it (playbook-market-source.ts); the parity
+        // tripwire refuses anything else.
+        // (`goalTemplate` is non-empty here — checked just above.)
+        const projected = projectPlaybookDefinition({
+          ...p,
           stages,
-          scope: p.scope,
-          // Subject kind → `playbooks.subject_profile`; unlocks matchForEntity.
-          subjectProfile: p.subjectProfile,
-          // Propose-only governance marker (maintenance playbooks) → playbooks.metadata.
-          metadata: p.metadata,
+        }) as Partial<PlaybookCreateInput> & { goalTemplate: string };
+        const r = await caller.create({
+          ...projected,
+          name: p.name,
+          // Propose-only governance marker (maintenance playbooks) + the
+          // package source-link → playbooks.metadata.
+          metadata: packageSlug
+            ? stampPlaybookMarketSource(p.metadata, projected, {
+                packageSlug,
+                packageVersion,
+                installedAt: new Date().toISOString(),
+              })
+            : p.metadata,
           status: p.status as PlaybookCreateInput["status"],
           agentUserId,
           source: "intelligence",
@@ -701,6 +783,9 @@ async function applyPackagePostWorkspaceInner(
           status: rr.status,
           playbookId: rr.playbook?.id,
           proposalId: rr.proposalId,
+          // `session` | `project`: lets a client offer "Start on a project…"
+          // for a method (never auto-started — from-intent.md).
+          scope: p.scope ?? "session",
         });
       } catch (e) {
         pbs.push({

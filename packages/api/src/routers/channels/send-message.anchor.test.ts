@@ -60,6 +60,11 @@ function selectChain(): any {
       rows = table === proposalsTable ? [PROPOSAL_ROW] : [];
       return chain;
     },
+    // The channel read rule's object-room branch builds the entities floor
+    // with `db.select().innerJoin` subqueries (never executed here).
+    innerJoin: () => chain,
+    leftJoin: () => chain,
+    as: () => chain,
     where: () => chain,
     orderBy: () => chain,
     limit: () => Promise.resolve(rows),

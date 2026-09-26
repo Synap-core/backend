@@ -5,9 +5,10 @@
  * belongs to, and silently filter a requested list to accessible IDs only.
  */
 
-import { eq, inArray, and, drizzleSql } from "@synap/database";
+import { eq, inArray, and } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { db } from "@synap/database";
+import { podVisibleWorkspaceWhere } from "./user-visible-where.js";
 
 /**
  * Return all workspace IDs the user is a member of.
@@ -20,7 +21,8 @@ export async function getUserWorkspaceIds(userId: string): Promise<string[]> {
   const ids = new Set(rows.map((r) => r.workspaceId));
 
   const podReadable = await db.query.workspaces.findMany({
-    where: drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
+    // The ONE pod-visible door: never a guest's (Sites W2), never an unknown id's.
+    where: podVisibleWorkspaceWhere(userId),
     columns: { id: true },
   });
   for (const workspace of podReadable) ids.add(workspace.id);
@@ -54,7 +56,7 @@ export async function validateWorkspaceAccess(
   const podReadable = await db.query.workspaces.findMany({
     where: and(
       inArray(workspaces.id, requested),
-      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
+      podVisibleWorkspaceWhere(userId)
     ),
     columns: { id: true },
   });

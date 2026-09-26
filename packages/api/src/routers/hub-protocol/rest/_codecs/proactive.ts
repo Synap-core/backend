@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 export const ProactiveTypeSchema = z
   .enum([
@@ -20,7 +21,7 @@ export const ProactiveTypeSchema = z
 export const ProactivePostRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     content: z
       .string()
       .max(10_000)

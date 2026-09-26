@@ -18,7 +18,10 @@ import * as core from "./index.js";
 
 const PROSE =
   "Meet at 10:30 today; the ratio:high case, a ==highlighted== word, it costs $5 and $10.";
-const DOC = `# Notes 10:30, $5 and $10\n\nMeet at 10:30 today; the ratio:high case.\n\n::::synap-section{id="s1"}\n## ratio:high\n\n${PROSE}\n::::\n`;
+/** v2 V1 inline formatting: every reader keeps the words and drops the syntax. */
+const FORMATTED =
+  "An :u[underlined] word, a :color[tinted]{tone=info} one and a ==toned=={tone=success} one.";
+const DOC = `# Notes 10:30, $5 and $10\n\nMeet at 10:30 today; the ratio:high case.\n\n::::synap-section{id="s1"}\n## ratio:high\n\n${PROSE}\n\n${FORMATTED}\n::::\n`;
 
 /** Every string a reader produced, however deep. */
 function strings(value: unknown, out: string[] = []): string[] {
@@ -70,6 +73,7 @@ const READERS: Record<string, Probe> = {
   // Markdown out (source slices around each embed): kept as a reader so a
   // readable export can never drop prose the stored document has.
   readableMarkdown: () => core.readableMarkdown(DOC, () => "embed"),
+  stripInlineFormatting: () => core.stripInlineFormatting(DOC),
   // The hast mapping runs after the pipeline; it must not reintroduce the loss.
   remarkSynapDirectives: () => {
     const p = core.createMarkdownProcessor().use(core.remarkSynapDirectives);
@@ -108,6 +112,21 @@ const NOT_READERS: Record<string, string> = {
   remarkGithubAlerts: "plugin (in every reader)",
   remarkHighlight: "plugin (in every reader)",
   remarkDisplayMath: "plugin (in every reader)",
+  remarkInlineFormat: "plugin (in every reader)",
+  highlightToneSuffixRange: "reads a parsed node",
+  // inline formatting (inline-format.ts; conformance in inline-format.test.ts)
+  TEXT_TONES: "data",
+  WITHHELD_TEXT_TONES: "data",
+  isTextTone: "predicate",
+  serializeUnderline: "writer",
+  serializeTextColor: "writer",
+  serializeHighlight: "writer",
+  readInlineFormatAt: "inline grammar at a position (editor tokenizer)",
+  readHighlightAt: "inline grammar at a position (editor tokenizer)",
+  readHighlightTone: "inline grammar (a tone suffix)",
+  isInlineFormatDirective: "predicate (a parsed node)",
+  unknownToneDiagnostic: "diagnostic builder",
+  highlightProperties: "hast properties builder",
   synapRemarkPlugins: "plugin list (in every reader)",
   ALERT_KINDS: "data",
   isMarkerHref: "predicate (a URL, no parse)",
@@ -174,6 +193,7 @@ describe("prose survives every reader", () => {
     "listSections",
     "segmentSlides",
     "readableMarkdown",
+    "stripInlineFormatting",
   ]);
   for (const [name, probe] of Object.entries(READERS)) {
     if (SOURCE_SLICES.has(name)) continue;
@@ -181,6 +201,19 @@ describe("prose survives every reader", () => {
       const read = probe();
       expect(read).toContain("highlighted");
       expect(read).not.toContain("==");
+    });
+  }
+
+  // Readers that return markdown keep `==` (a highlight is markdown there) but
+  // never the Synap-only syntax; tree/text readers keep only the words.
+  const KEEPS_SOURCE = new Set(["listSections", "segmentSlides"]);
+  for (const [name, probe] of Object.entries(READERS)) {
+    if (KEEPS_SOURCE.has(name)) continue;
+    it(`${name}: :u / :color / a highlight tone read as their words`, () => {
+      const read = probe();
+      for (const word of ["underlined", "tinted", "toned"])
+        expect(read).toContain(word);
+      expect(read).not.toMatch(/:u\[|:color\[|\{tone=/);
     });
   }
 

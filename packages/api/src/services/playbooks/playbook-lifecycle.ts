@@ -469,9 +469,10 @@ export async function instantiateSessionRow(
   }
 
   // PARAMS — validated HERE and nowhere else. This function is the single
-  // funnel behind all six run doors (playbooks.run, playbooks.instantiate, the
-  // Hub run door, MCP synap_run_playbook, the cron path and the
-  // approved-proposal path); six doors each validating is how drift starts.
+  // funnel behind every run door (playbooks.run, the Hub run door, MCP
+  // synap_run_playbook, the cron path and the approved-proposal path;
+  // `playbooks.instantiate` was retired in W5c); N doors each validating is
+  // how drift starts.
   //
   // Until this existed the declaration was decorative: nothing read `required`,
   // `default` or `type` on any run path, so a missing required param rendered

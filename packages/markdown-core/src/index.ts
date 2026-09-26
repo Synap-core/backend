@@ -16,3 +16,4 @@ export * from "./diagnostics.js";
 export * from "./blame.js";
 export * from "./diff.js";
 export * from "./readable.js";
+export * from "./inline-format.js";

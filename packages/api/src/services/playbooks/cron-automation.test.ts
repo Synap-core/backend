@@ -164,3 +164,37 @@ describe("normalizePlaybookScheduleMode — the ONE decision about an unknown mo
     }
   });
 });
+
+/**
+ * W5c: a nameless run node's label is the vocabulary-composed one
+ * (`playbookRunNodeLabel` — "Run" + the playbook noun), the same label the rule
+ * grammar gives the same node. A literal "Run playbook" here was a second,
+ * drifting copy of the user word.
+ */
+describe("buildPlaybookRunFlowDefinition — fallback label", () => {
+  it("uses the vocabulary label, not a literal", async () => {
+    const { playbookRunNodeLabel } =
+      await import("@synap-core/types/automations");
+    const { resolveObjectNoun } = await import("@synap-core/types/vocabulary");
+    const run = buildPlaybookRunFlowDefinition("pb-5").nodes.find(
+      (n) => n.type === "playbook_run"
+    );
+    const label = (run?.data as { label: string }).label;
+    expect(label).toBe(playbookRunNodeLabel());
+    // Reachability, not sameness alone: the label carries the CURRENT noun.
+    expect(label.toLowerCase()).toContain(
+      resolveObjectNoun("playbook").toLowerCase()
+    );
+  });
+
+  it("keeps the playbook's own name and the appointment label", () => {
+    const named = buildPlaybookRunFlowDefinition("pb-6", {
+      playbookName: "Weekly digest",
+    }).nodes[0];
+    expect((named.data as { label: string }).label).toBe("Weekly digest");
+    const appt = buildPlaybookRunFlowDefinition("pb-7", {
+      mode: "appointment",
+    }).nodes[0];
+    expect((appt.data as { label: string }).label).toBe("Schedule session");
+  });
+});

@@ -43,6 +43,7 @@ import {
   hasUsefulAssistantForTurn,
   reopenChatTurn,
 } from "../../services/chat-turns/chat-turn-store.js";
+import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
 
 const logger = createLogger({ module: "external-chat" });
 
@@ -170,15 +171,12 @@ externalChatApp.post(
       }
       resolvedWorkspaceId = input.workspaceId;
     } else {
-      // Use first workspace membership
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: eq(workspaceMembers.userId, userId),
-        columns: { workspaceId: true },
-      });
-      if (!membership) {
+      // D7: the user's default domain workspace — never pod-admin/archived.
+      const fallback = await findUserDefaultWorkspaceId(db, userId);
+      if (!fallback) {
         return c.json({ error: "No workspace found for this user" }, 404);
       }
-      resolvedWorkspaceId = membership.workspaceId;
+      resolvedWorkspaceId = fallback;
     }
 
     // ── Step 2: Resolve channelId ────────────────────────────────────────────

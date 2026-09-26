@@ -12,7 +12,7 @@ import {
 } from "@synap/database";
 import { protectedProcedure, router } from "../trpc.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
-import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
+import { viewReadableWhere } from "../utils/view-visibility.js";
 
 const resourceTypeSchema = z.enum(["entity", "view"]);
 const semanticSizeSchema = z.enum(["small", "medium", "large"]);
@@ -31,8 +31,9 @@ function entityVisibleWhere(userId: string) {
   });
 }
 
+/** The ONE view read predicate (utils/view-visibility.ts), no lens. */
 function viewVisibleWhere(userId: string) {
-  return ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)!;
+  return viewReadableWhere(userId, undefined);
 }
 
 async function assertResourceVisible(

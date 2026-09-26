@@ -85,10 +85,13 @@ describe("CONVERSION_MANIFEST — Wave 3C (CRM-family)", () => {
     }
   });
 
-  it("every mergeInto op's intoSlug differs from all fromSlugs", () => {
+  it("every SAME-scope mergeInto op's intoSlug differs from all fromSlugs", () => {
     const merges = CONVERSION_MANIFEST.ops.filter((o) => o.op === "mergeInto");
     expect(merges.length).toBeGreaterThan(0);
     for (const op of merges) {
+      // A cross-scope twin collapse (W2b) legitimately names its own slug —
+      // the canonical is resolved by scope and never moved (validateManifest).
+      if (op.intoScope !== undefined) continue;
       expect(op.fromSlugs).not.toContain(op.intoSlug);
     }
   });
@@ -503,6 +506,22 @@ describe("validateManifest", () => {
       ],
     };
     expect(() => validateManifest(m)).toThrow(/cannot merge slug/);
+  });
+
+  it("ALLOWS a cross-scope mergeInto naming its own slug — the role TWIN collapse (W2b)", () => {
+    const m: ConversionManifest = {
+      version: 1,
+      ops: [
+        {
+          op: "mergeInto",
+          opKey: "x",
+          fromSlugs: ["partner"],
+          intoSlug: "partner",
+          intoScope: "shared",
+        },
+      ],
+    };
+    expect(() => validateManifest(m)).not.toThrow();
   });
 
   it("rejects mergeInto with no fromSlugs", () => {

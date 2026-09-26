@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { archiveObjectChannels } from "../../services/comments/object-channel.js";
 import { ownedDocumentIds } from "../../utils/store-entity-source-blob.js";
 import { podAdminProcedure } from "../../trpc.js";
 import {
@@ -169,6 +170,8 @@ export const adminProcs = {
       if (!deleted) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
       }
+      // Its conversation outlives it, archived (Documents v2).
+      await archiveObjectChannels("entity", [deleted.id]);
       // B1: a HARD delete reclaims EVERY document row the entity owned + ALL
       // their storage objects (current content + every version snapshot).
       // Resolving only `entities.document_id` missed the source-file document
@@ -231,6 +234,10 @@ export const adminProcs = {
       // source-file provenance) + their storage objects. Reading only
       // `document_id` left the source blob orphaned — see `adminDelete` above.
       // Best-effort per row so one cleanup miss never aborts the batch.
+      await archiveObjectChannels(
+        "entity",
+        deleted.map((row) => row.id)
+      );
       const bodyService = new EntityBodyService(database, eventRepository);
       for (const row of deleted) {
         for (const documentId of ownedDocumentIds(row)) {

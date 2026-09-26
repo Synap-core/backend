@@ -163,6 +163,8 @@ export function registerViewsRoutes(app: HubHono): void {
       reasoning?: string;
       sourceMessageId?: string;
       expectedLabel?: string;
+      /** Pin the view to a project (W2a) — validated as a uuid downstream. */
+      projectId?: string;
     };
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext (and thus the re-supplied createView input).
@@ -206,6 +208,9 @@ export function registerViewsRoutes(app: HubHono): void {
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
         ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
+        ...(typeof body.projectId === "string"
+          ? { projectId: body.projectId }
+          : {}),
       });
       return jsonGoverned(c, result);
     } catch (err) {

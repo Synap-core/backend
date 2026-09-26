@@ -448,6 +448,13 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     attestedAt: "2026-09-08T12:00:00.000Z",
     retiredAt: "2026-09-08T13:00:00.000Z",
     retiredReason: "session_cancelled",
+    answer: {
+      text: "Use the EU account",
+      messageId: "55555555-5555-5555-5555-555555555555",
+      answeredBy: "44444444-4444-4444-4444-444444444444",
+      answeredAt: "2026-09-08T14:00:00.000Z",
+      question: "Which Stripe account?",
+    },
   };
 
   it("carries EVERY declared field onto the matched output", () => {

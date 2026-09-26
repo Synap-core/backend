@@ -34,6 +34,9 @@ const SECRET_PATH_PATTERNS: ReadonlyArray<RegExp> = [
   /(\/calendar\/feed\/)([^/?#]+?)(\.ics)/gi,
   // Agent setup hand-off — the keyId is a bearer-equivalent secret.
   /(\/setup\/agent\/pending\/)([^/?#]+)/gi,
+  // Credentialless public doors (`/public/<resource>/<token>…`, Sites W3) —
+  // the segment after the resource IS the share capability.
+  /(\/public\/[^/?#]+\/)([^/?#]+)/gi,
 ];
 
 /** `[redacted]` keeps the segment countable in a log without being replayable. */

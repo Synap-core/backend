@@ -451,7 +451,18 @@ export const mutateProcs = {
         }
       }
 
-      return { status: "updated", message: "Entity updated" };
+      return {
+        status: "updated",
+        message: "Entity updated",
+        // The row as THIS write left it — what an approval's undo stamp
+        // records as `after`, read from the write itself so a concurrent edit
+        // landing just after it is never recorded as this write's change.
+        written: {
+          title: written.title,
+          preview: written.preview,
+          properties: written.properties,
+        },
+      };
     }),
   delete: podProcedure
     .input(

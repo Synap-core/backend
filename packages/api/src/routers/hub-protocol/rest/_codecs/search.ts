@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 export const SearchCollectionSchema = z
   .enum([
@@ -42,7 +43,7 @@ export const SearchQuerySchema = z
   .object({
     userId: z.string(),
     query: z.string(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     collections: z
       .string()
       .optional()
@@ -60,7 +61,7 @@ export const SearchCollectionQuerySchema = z
     userId: z.string(),
     collection: SearchCollectionSchema,
     query: z.string(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     limit: z.string().optional(),
     page: z.string().optional(),
   })
@@ -87,7 +88,7 @@ export const VectorSearchQuerySchema = z
       .describe(
         "Comma-separated subject types to search (e.g. entity,document)."
       ),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     limit: z.string().optional(),
   })
   .openapi("VectorSearchQuery");

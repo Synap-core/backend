@@ -113,6 +113,13 @@ import {
   playbooks,
   playbookRuns,
   proposals,
+  channels,
+  channelMembers,
+  users,
+  podMembers,
+  projectMembers,
+  workspaces,
+  workspaceMembers,
 } from "@synap/database";
 import {
   recordSessionEvaluation,
@@ -218,7 +225,21 @@ const sessionRow = (id: string) =>
 
 describe("session evaluations", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, playbooks, playbookRuns, proposals]) {
+    // channels … workspace_members: the session read predicate's roster branch
+    // and its workspace floor (decision C).
+    for (const t of [
+      focusSessions,
+      playbooks,
+      playbookRuns,
+      proposals,
+      channels,
+      channelMembers,
+      users,
+      podMembers,
+      projectMembers,
+      workspaces,
+      workspaceMembers,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
     await h.client!.exec(

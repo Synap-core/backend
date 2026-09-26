@@ -46,6 +46,15 @@ export const ENTITY_DIFF_FIELDS: readonly EntityDiffField[] = [
   "preview",
 ];
 
+/**
+ * The API field name of an entity column: the `preview` column is the
+ * `description` field on every entity door, so a column named to a client or
+ * in a receipt reads the way every other field does.
+ */
+export function entityFieldApiName(field: EntityDiffField): string {
+  return field === "preview" ? "description" : field;
+}
+
 /** The slice of an entity row an update diff is computed from. */
 export interface EntityUndoSnapshot {
   title: string | null;

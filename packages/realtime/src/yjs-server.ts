@@ -19,12 +19,10 @@ import {
   claimDocumentRevision,
   INHERIT_LAST_AUTHOR,
 } from "@synap/database";
-import {
-  documents,
-  documentSessions,
-  views,
-  workspaceMembers,
-} from "@synap/database/schema";
+import { documents, documentSessions } from "@synap/database/schema";
+import { resolveDocumentRoomAccess } from "./vendor/document-access.js";
+import type { Socket } from "socket.io";
+import { verifyHandshakeUser } from "./session-auth.js";
 import { storage } from "@synap/storage";
 import { recordYjsPersist, recordYjsPersistFailure } from "./bridge.js";
 import {
@@ -61,65 +59,70 @@ function parseRoomName(roomName: string): string | null {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** What a socket may do in a Yjs room. */
+export type RoomAccess = "edit" | "read" | "none";
+
 /**
- * Authorize a user against the ROOM they are joining.
+ * Authorize a (server-proven) user against the ROOM they are joining.
  *
- * The room name carries the documentId, so the owning workspace is *derived*
- * here rather than taken from the client-supplied handshake — a client can no
- * longer claim membership of workspace A and then open a document of workspace B.
+ * The room name carries the documentId; the answer is the DOCUMENT'S OWN
+ * floor, through the one predicate the api uses (`resolveDocumentRoomAccess`
+ * in `@synap/api/document-access` — never a copy):
+ *   - `edit` — the user may change the document (`canEditDocument`: editor+
+ *     workspace member, editor+ project member, the owner of a pod-wide
+ *     document, a pod member on a pod-shared body);
+ *   - `read` — the document is visible to them (the `documents` VisibilityRule:
+ *     viewer, project viewer/guest, portal exposure…) but not editable;
+ *   - `none` — invisible, missing, or not a document room.
  *
- * Resolution order:
- *   1. `documents.workspace_id` — set for workspace-scoped documents.
- *   2. the owning `views` row (`views.document_id`) — canvas surfaces created
- *      pod-wide leave `documents.workspace_id` NULL but may still carry a
- *      workspace on the view.
- *   3. neither → a genuinely pod-wide surface. Any member of any workspace on
- *      this pod may open it (matching `entityScope: 'pod'` semantics); a
- *      non-member is still refused.
+ * There is NO "any workspace membership" fallback any more: a document with no
+ * workspace used to admit a member of ANY workspace on the pod. Whiteboard
+ * rooms (`whiteboard-{documentId}`) follow the same floor — canvas documents
+ * are created with their view's workspace (`views.create`,
+ * `views.resolveScopedSurface`).
  *
- * Exported for `__tests__/yjs-room-auth.test.ts` — this is the security floor
- * for every Yjs room, so it is covered directly rather than only through the
- * middleware that calls it.
+ * Exported for `__tests__/yjs-room-auth.test.ts`.
  */
 export async function authorizeRoomAccess(
   roomName: string,
   userId: string
-): Promise<boolean> {
+): Promise<RoomAccess> {
   const documentId = parseRoomName(roomName);
-  if (!documentId || !UUID_RE.test(documentId)) return false;
-
-  const doc = await db.query.documents.findFirst({
-    where: eq(documents.id, documentId),
-    columns: { id: true, workspaceId: true },
-  });
-  if (!doc) return false;
-
-  let owningWorkspaceId: string | null = doc.workspaceId ?? null;
-  if (!owningWorkspaceId) {
-    const view = await db.query.views.findFirst({
-      where: eq(views.documentId, documentId),
-      columns: { workspaceId: true },
-    });
-    owningWorkspaceId = view?.workspaceId ?? null;
-  }
-
-  if (!owningWorkspaceId) {
-    const anyMembership = await db.query.workspaceMembers.findFirst({
-      where: eq(workspaceMembers.userId, userId),
-      columns: { id: true },
-    });
-    return anyMembership != null;
-  }
-
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, owningWorkspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { id: true },
-  });
-  return membership != null;
+  if (!documentId || !UUID_RE.test(documentId)) return "none";
+  return resolveDocumentRoomAccess(userId, documentId);
 }
+
+/**
+ * `ALLOW_INSECURE_YJS=true` disables the gates — for LOCAL DEV only. It is
+ * refused outright in production, so a copied `.env` can never open every
+ * document on a pod.
+ */
+export function insecureYjsAllowed(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (env.ALLOW_INSECURE_YJS !== "true") return false;
+  if (env.NODE_ENV === "production") {
+    console.error(
+      "[Yjs] ALLOW_INSECURE_YJS=true is IGNORED in production — document authorization stays ON."
+    );
+    return false;
+  }
+  return true;
+}
+
+/** The access the room gate granted this socket (set before `connection`). */
+function socketAccess(socket: Socket): RoomAccess {
+  const access = (socket.data as { yjsAccess?: RoomAccess }).yjsAccess;
+  return access ?? "none";
+}
+
+/**
+ * The verified user of a handshake, handed from the library's `authenticate`
+ * (which sees only the handshake) to the room gate (which sees the socket, and
+ * `socket.handshake` is the SAME object) — so the Kratos session is validated
+ * once per connection.
+ */
+const verifiedHandshakes = new WeakMap<object, string>();
 
 /** Tldraw store snapshot format: Record<id, record> */
 type TldrawStoreSnapshot = Record<string, unknown>;
@@ -547,6 +550,66 @@ class DatabasePersistence {
   }
 }
 
+/** The two per-socket hooks y-socket.io@1.1.3 calls on every `connection`. */
+interface YSocketIOSyncHooks {
+  initSyncListeners: (socket: Socket, doc: Y.Doc) => void;
+  startSynchronization: (socket: Socket, doc: Y.Doc) => void;
+}
+
+/**
+ * Make the room READ-ONLY for sockets the gate admitted with `read`, and tell
+ * every socket its access. y-socket.io@1.1.3 applies a client's updates in
+ * exactly two places, both reached through these instance hooks:
+ *   - `initSyncListeners`: `socket.on("sync-update", u => applyUpdate(doc, u))`;
+ *   - `startSynchronization`: `socket.emit("sync-step-1", sv, diff =>
+ *     applyUpdate(doc, diff))` — the client's answer carries its local state.
+ * For a reader both are routed through a socket facade that drops the update;
+ * everything that SENDS to the reader (sync-step-1 replies, awareness) is
+ * unchanged. Throws at boot if the hooks are gone (a library upgrade), so the
+ * server never runs with read-only silently disabled.
+ */
+export function installReadOnlySync(yServer: unknown): void {
+  const hooks = yServer as Partial<YSocketIOSyncHooks>;
+  const initSync = hooks.initSyncListeners;
+  const startSync = hooks.startSynchronization;
+  if (typeof initSync !== "function" || typeof startSync !== "function") {
+    throw new Error(
+      "[Yjs] y-socket.io no longer exposes initSyncListeners/startSynchronization — cannot enforce read-only rooms"
+    );
+  }
+
+  hooks.initSyncListeners = (socket, doc) => {
+    const access = socketAccess(socket);
+    socket.emit("yjs-access", { access });
+    if (access === "edit") return initSync(socket, doc);
+    const facade = Object.create(socket) as Socket;
+    facade.on = ((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === "sync-update") {
+        return socket.on(event, () => {
+          console.warn(
+            `[Yjs] Dropped an update from a read-only socket in ${String((doc as Y.Doc & { name?: string }).name)}`
+          );
+        });
+      }
+      return socket.on(event, listener);
+    }) as Socket["on"];
+    return initSync(facade, doc);
+  };
+
+  hooks.startSynchronization = (socket, doc) => {
+    if (socketAccess(socket) === "edit") return startSync(socket, doc);
+    const facade = Object.create(socket) as Socket;
+    facade.emit = ((event: string, ...args: unknown[]) => {
+      if (event === "sync-step-1") {
+        // Answer the reader's state vector's diff with nothing.
+        return socket.emit(event, args[0], () => {});
+      }
+      return socket.emit(event, ...args);
+    }) as Socket["emit"];
+    return startSync(facade, doc);
+  };
+}
+
 export interface YjsServerInstance {
   /** Active Yjs documents keyed by room name (exposed by y-socket.io at runtime). */
   documents: Map<string, Y.Doc>;
@@ -569,87 +632,52 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
   //
   // Access model — TWO gates, both of which must pass:
   //
-  //   1. `authenticate` (handshake gate, below). The client sends
-  //      { userId, workspaceId } in the SocketIOProvider auth object; the user
-  //      must be a member of that workspace.
-  //   2. the room gate (namespace middleware, installed further down). It derives
-  //      the documentId from the room name and checks the user against the
-  //      document's *own* workspace.
+  //   1. `authenticate` (handshake gate, below): WHO is connecting. The client
+  //      sends `{ userId, token }` — the same contract as `/presence` — and the
+  //      Kratos session in `token` must resolve to `userId`
+  //      (`verifyHandshakeUser`, shared with `/presence`). A client-asserted
+  //      `userId` alone is refused. `workspaceId`, if sent, is ignored: it is
+  //      client-supplied and never load-bearing.
+  //   2. the room gate (namespace middleware, installed further down): WHAT
+  //      they may do in THIS room — `edit`, `read` or refused — from the
+  //      document's own floor (`authorizeRoomAccess`).
   //
   // Gate 2 has to be a separate middleware because y-socket.io@1.1.3 hands
   // `authenticate` only the handshake — `dist/server/index.js` calls
   // `this.configuration.authenticate(e.handshake)`, and the room name lives on
-  // `socket.nsp.name`, not on the handshake. Gate 1 therefore structurally
-  // cannot see which document is being opened; on its own it lets any member of
-  // any one workspace open any room pod-wide.
+  // `socket.nsp.name`, not on the handshake.
   //
-  // Both gates fail CLOSED, including on DB error. `ALLOW_INSECURE_YJS=true`
-  // is an explicit opt-IN to the old permissive behaviour, for local dev only.
-  const allowInsecure = process.env.ALLOW_INSECURE_YJS === "true";
+  // READ-ONLY sockets: y-socket.io has no per-client read-only mode, so the
+  // two per-socket hooks it calls on `connection` (`initSyncListeners`,
+  // `startSynchronization`) are wrapped below: a reader is served the document
+  // but every update it sends (`sync-update`, and its answer to the server's
+  // `sync-step-1`) is dropped. The socket is told its access with a
+  // `yjs-access` event so the client can render read-only.
+  //
+  // Both gates fail CLOSED, including on DB / Kratos error.
+  const allowInsecure = insecureYjsAllowed();
   if (allowInsecure) {
     console.warn(
-      "[Yjs] ⚠️  ALLOW_INSECURE_YJS=true — document authorization is DISABLED. Never set this in production."
+      "[Yjs] ⚠️  ALLOW_INSECURE_YJS=true — document authorization is DISABLED (dev only)."
     );
   }
 
   const yServer = new YSocketIO(io, {
     gcEnabled: true,
     authenticate: async (handshake) => {
-      const { userId, workspaceId } = (handshake.auth ?? {}) as {
-        userId?: string;
-        workspaceId?: string;
-      };
-
-      if (!userId) {
-        console.warn("[Yjs] Auth rejected: missing userId");
-        return allowInsecure;
-      }
-
-      // NOTE: `workspaceId` is OPTIONAL here by design. It is client-supplied and
-      // therefore NOT load-bearing for access control — the room middleware below
-      // derives the owning workspace from the document itself and authorizes against
-      // that. Gate 1 only establishes *who* is connecting; gate 2 decides *what* they
-      // may open.
-      //
-      // Requiring it here would also break every pod-wide surface: pod-scoped
-      // boards and documents legitimately carry no workspace, so the client
-      // sends `auth: { userId }` with no workspaceId.
-      //
-      // (History, because it bit us: both clients used to omit the `auth` object
-      // ENTIRELY when workspaceId was falsy, which meant fail-closing on a
-      // missing userId silently reconnect-looped every pod-wide surface. They now
-      // always send `userId` — `useWhiteboardCollaboration.ts` and
-      // `documentRoomCache.ts`. Do not re-tighten this branch without checking
-      // BOTH clients first.)
-      if (!workspaceId) {
-        return true; // identity established; room authorization happens in gate 2
-      }
-
-      try {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, workspaceId),
-            eq(workspaceMembers.userId, userId)
-          ),
-          columns: { id: true },
-        });
-
-        if (!membership) {
-          console.warn(
-            `[Yjs] Auth rejected: userId=${userId} is not a member of workspace=${workspaceId}`
-          );
-          return false;
-        }
-
+      const identity = await verifyHandshakeUser(
+        handshake.auth as Record<string, unknown> | undefined
+      );
+      if (identity.ok) {
+        verifiedHandshakes.set(handshake, identity.userId);
         return true;
-      } catch (err) {
-        // DB error — fail CLOSED. A transient outage must not open every
-        // document on the pod to every connecting client.
-        console.error("[Yjs] Auth check failed (DB error), rejecting:", err);
-        return allowInsecure;
       }
+      console.warn(`[Yjs] Auth rejected: ${identity.error}`);
+      return allowInsecure;
     },
   });
+
+  installReadOnlySync(yServer);
 
   // CRITICAL: Set persistence directly on the YSocketIO instance.
   // The library awaits persistence.bindState() BEFORE starting sync with clients.
@@ -714,16 +742,23 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
   // ParentNamespace.createChild copies them into every child namespace).
   yjsNamespace.use((socket, next) => {
     const roomName = socket.nsp.name.replace(/^\/yjs\|/, "");
-    const { userId } = (socket.handshake.auth ?? {}) as { userId?: string };
+    const userId = verifiedHandshakes.get(socket.handshake);
+    const data = socket.data as { yjsAccess?: RoomAccess };
 
-    if (typeof userId !== "string" || userId.length === 0) {
-      if (allowInsecure) return next();
+    if (!userId) {
+      if (allowInsecure) {
+        data.yjsAccess = "edit";
+        return next();
+      }
       return next(new Error("Unauthorized"));
     }
 
     void authorizeRoomAccess(roomName, userId)
-      .then((allowed) => {
-        if (allowed) return next();
+      .then((access) => {
+        if (access !== "none") {
+          data.yjsAccess = access;
+          return next();
+        }
         console.warn(
           `[Yjs] Room access denied: userId=${userId} room=${roomName}`
         );
@@ -734,7 +769,10 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
           `[Yjs] Room auth failed (DB error) for room=${roomName}, rejecting:`,
           err
         );
-        if (allowInsecure) return next();
+        if (allowInsecure) {
+          data.yjsAccess = "edit";
+          return next();
+        }
         next(new Error("Unauthorized"));
       });
   });

@@ -28,7 +28,6 @@ import {
   createWorkspaceFromDefinition,
   preflightWorkspaceFromDefinition,
   reconcileWorkspaceFromDefinition,
-  ONBOARDING_SCAFFOLD_SYSTEM_DATA,
   type WorkspaceDefinitionInput,
   type ReconcileReport,
   type InstallLayerReport,
@@ -37,7 +36,6 @@ import type { WorkspaceSettings } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
-import { inheritRelationWorkspaceId } from "../../lib/relation-workspace-inherit.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertPackageTierAccess } from "../../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -56,8 +54,17 @@ import {
   ComposeBaseNotFoundError,
 } from "../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../services/package-apply-post-workspace.js";
-import { summarizePostWorkspaceLayers } from "../../services/capabilities/install-layers.js";
+import {
+  applyDefinitionSeeds,
+  type DefinitionSeedResult,
+} from "../../services/definition-seeds.js";
+import {
+  summarizePostWorkspaceLayers,
+  installedTrackTemplates,
+  type InstalledTrackTemplate,
+} from "../../services/capabilities/install-layers.js";
 import { workspacePrimarySurfaceSchema } from "../../schemas/workspace-primary-surface.js";
+import { playbookDefinitionSchema } from "../../schemas/playbook-definition.js";
 import {
   logger,
   isPodReadableWorkspace,
@@ -485,52 +492,16 @@ export const definitionEngineProcedures = {
                 })
               )
               .optional(),
-            /** Playbook templates (session templates with goal + capabilities) */
+            /**
+             * Playbook templates — the ONE playbook definition schema
+             * (schemas/playbook-definition.ts). The local z.object it replaces
+             * had no `scope` / `stages` / `criteria` / `metadata`, so a browser
+             * install landed every project method as a stageless session
+             * template. Extended only with this door's grant shape.
+             */
             playbooks: z
               .array(
-                z.object({
-                  name: z.string().min(1).max(500),
-                  goalTemplate: z.string().min(1).max(5000),
-                  description: z.string().optional(),
-                  params: z
-                    .array(
-                      z.object({
-                        name: z.string(),
-                        type: z.enum(["string", "number", "boolean"]),
-                        default: z
-                          .union([z.string(), z.number(), z.boolean()])
-                          .optional(),
-                        description: z.string().optional(),
-                      })
-                    )
-                    .optional(),
-                  executor: z
-                    .enum(["is-agent", "external-agent", "hybrid"])
-                    .optional(),
-                  /**
-                   * Scheduled cadence (`{cron, enabled}`) — e.g. a radar's
-                   * weekly scan. Undeclared here, zod STRIPPED it and the
-                   * template's schedule never reached the DB on this door.
-                   */
-                  schedule: z
-                    .object({
-                      cron: z.string(),
-                      enabled: z.boolean().optional(),
-                    })
-                    .nullable()
-                    .optional(),
-                  /**
-                   * Entity kind the playbook operates over → persisted to
-                   * `playbooks.subject_profile`, making it matchable by
-                   * `playbooks.matchForEntity`. Forwarded into the LoopDefinition
-                   * below and materialized by `createLoopFromDefinition`.
-                   */
-                  subjectProfile: z
-                    .object({
-                      profileSlug: z.string(),
-                      filter: z.record(z.string(), z.unknown()).optional(),
-                    })
-                    .optional(),
+                playbookDefinitionSchema.extend({
                   /**
                    * Workspace templates author grants as BARE NAMES
                    * (`grants: [exa_search, entity.create]`) — the same form the
@@ -550,14 +521,6 @@ export const definitionEngineProcedures = {
                           ref: z.string(),
                         }),
                       ])
-                    )
-                    .optional(),
-                  expectedOutputs: z
-                    .array(
-                      z.object({
-                        description: z.string(),
-                        type: z.enum(["document", "entities", "csv", "report"]),
-                      })
                     )
                     .optional(),
                 })
@@ -820,8 +783,11 @@ export const definitionEngineProcedures = {
       ): Promise<{
         report: ReconcileReport | undefined;
         layers: InstallLayerReport[];
+        /** W3b: project-scope playbooks this sync made startable. */
+        trackTemplates: InstalledTrackTemplate[];
       }> => {
         const layers: InstallLayerReport[] = [];
+        let trackTemplates: InstalledTrackTemplate[] = [];
         // ── 1. Additive profiles / property-defs / views / entityLinks sync.
         const outcome = await reconcileWorkspaceIfStale({
           workspaceId,
@@ -915,6 +881,7 @@ export const definitionEngineProcedures = {
               scopes: [],
             });
             layers.push(...summarizePostWorkspaceLayers(post));
+            trackTemplates = installedTrackTemplates(post);
           } catch (err) {
             // A1 — THE CHANNEL THAT WAS MISSING NOW EXISTS. Historical note kept
             // deliberately: this catch is still non-fatal (the workspace really
@@ -952,7 +919,7 @@ export const definitionEngineProcedures = {
         // `result.reconciled` (both UIs derive that via `RouterOutputs`) sees the
         // same verdict as one reading the top-level `layers`.
         if (report && layers.length > 0) report = { ...report, layers };
-        return { report, layers };
+        return { report, layers, trackTemplates };
       };
 
       // Serialise concurrent calls with the same (userId, proposalId) so a
@@ -1080,6 +1047,8 @@ export const definitionEngineProcedures = {
                 // property present on only SOME members of a union cannot be
                 // accessed at all. Keep the key uniform; vary only the value.
                 layers: layers.length > 0 ? layers : undefined,
+                // W3b: project-scope playbooks the client may OFFER to start.
+                trackTemplates: reconcileOutcome?.trackTemplates ?? [],
                 // E4 fix: explicit discriminator alongside `reconciled` so a
                 // caller doesn't have to infer "reused vs freshly reconciled"
                 // from presence/absence of the report.
@@ -1196,6 +1165,7 @@ export const definitionEngineProcedures = {
                 // A1: see the sibling branch above — uniform key, never a
                 // conditional spread.
                 layers: layers.length > 0 ? layers : undefined,
+                trackTemplates: reconcileOutcome?.trackTemplates ?? [],
                 // E4 fix: `status:"created"` above is the pre-existing
                 // (overloaded) field, kept for backward-compat. `outcome` is
                 // the honest discriminator: this branch is ALWAYS an
@@ -1283,6 +1253,7 @@ export const definitionEngineProcedures = {
               // `reconcileExisting` does, and returned an equally clean payload.
               // Same shape, same non-fatal posture, now reported.
               const composeLayers: InstallLayerReport[] = [];
+              let composeTrackTemplates: InstalledTrackTemplate[] = [];
               try {
                 const composePost = await applyPackagePostWorkspace({
                   workspaceId: core.composeTargetWorkspaceId,
@@ -1297,6 +1268,7 @@ export const definitionEngineProcedures = {
                 composeLayers.push(
                   ...summarizePostWorkspaceLayers(composePost)
                 );
+                composeTrackTemplates = installedTrackTemplates(composePost);
               } catch (err) {
                 composeLayers.push({
                   layer: "post-workspace",
@@ -1331,6 +1303,7 @@ export const definitionEngineProcedures = {
                 // the returned union, which is what made `composed` unreadable
                 // on the union for every consumer.
                 layers: composeLayers.length > 0 ? composeLayers : undefined,
+                trackTemplates: composeTrackTemplates,
               };
             }
             // status "resolved" — no compose base. Fall through to the normal
@@ -1586,6 +1559,7 @@ export const definitionEngineProcedures = {
           // path — discarded the bag entirely and always returned `layers`
           // undefined. Same shape, same derivation, now reported here too.
           const layers: InstallLayerReport[] = [];
+          let trackTemplates: InstalledTrackTemplate[] = [];
           if (hasPostWork) {
             try {
               const post = await applyPackagePostWorkspace({
@@ -1596,6 +1570,7 @@ export const definitionEngineProcedures = {
                 scopes: [],
               });
               layers.push(...summarizePostWorkspaceLayers(post));
+              trackTemplates = installedTrackTemplates(post);
               logger.info(
                 { workspaceId: result.workspaceId, layers: Object.keys(post) },
                 "createFromDefinition: post-workspace layers applied (shared door)"
@@ -1682,6 +1657,9 @@ export const definitionEngineProcedures = {
             // A1 parity — uniform key, never a conditional spread. See the
             // sibling branches above (`reconcileExisting`, compose-overlay).
             layers: layers.length > 0 ? layers : undefined,
+            // W3b: project-scope playbooks the client may OFFER to start on a
+            // project (never auto-started). `[]` = none made startable.
+            trackTemplates,
           };
         }
       ); // close withWorkspaceProposalIdLock
@@ -2238,145 +2216,25 @@ export const definitionEngineProcedures = {
           }
         }
 
-        // Check existing entities for idempotency
-        const existingEntities = await database.query.entities.findMany({
-          where: and(
-            eq(entities.userId, ctx.userId),
-            eq(entities.workspaceId, input.workspaceId)
-          ),
-          columns: { id: true, type: true, title: true },
+        // 3. Seed entities + seeded relations — the ONE seed door, shared
+        // with every overlay install (composeOntoBaseWorkspace): adopt by
+        // (kind, title) in this workspace or pod-wide, create only what is
+        // missing, dedupe edges.
+        const seeded = await applyDefinitionSeeds({
+          database,
+          eventRepo,
+          userId: ctx.userId,
+          workspaceId: input.workspaceId,
+          seeds: allEntities,
+          relations: input.definition.suggestedRelations,
+          profileIds: profileCache,
         });
-        const existingEntityKeys = new Map<string, string>();
-        for (const e of existingEntities) {
-          existingEntityKeys.set(`${e.type}:${e.title}`, e.id);
-        }
-
-        // Create entities
-        const entityIds: Record<string, string> = {};
-        let entitiesCreated = 0;
-        let entitiesSkipped = 0;
-        const entityRepo = new EntityRepository(database, eventRepo);
-
-        for (const e of allEntities) {
-          const cacheKey = `${e.profileSlug}:${e.title}`;
-          const refKey = e.refKey ?? cacheKey;
-
-          if (existingEntityKeys.has(cacheKey)) {
-            entityIds[refKey] = existingEntityKeys.get(cacheKey)!;
-            entitiesSkipped++;
-            continue;
-          }
-
-          const profileId = profileCache.get(e.profileSlug);
-          if (!profileId) {
-            errors.push({
-              stage: "entities",
-              refKey,
-              error: `Profile ${e.profileSlug} not found`,
-            });
-            continue;
-          }
-
-          try {
-            const result = await entityRepo.create(
-              {
-                profileId,
-                title: e.title,
-                properties: e.properties,
-                systemData: ONBOARDING_SCAFFOLD_SYSTEM_DATA,
-                workspaceId: input.workspaceId,
-                userId: ctx.userId,
-                createdByKind: "system",
-                skipValidation: true,
-              },
-              ctx.userId
-            );
-            entityIds[refKey] = result.id;
-            entitiesCreated++;
-          } catch (err) {
-            errors.push({
-              stage: "entities",
-              refKey,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-
-        // 3. Batch create relations
-        const relationRepo = new RelationRepository(database, eventRepo);
-        // D4: placement is a function of the endpoints, not the ambient
-        // workspace — an idempotency check filtered to this workspace can't
-        // see a pod-wide (NULL) duplicate of the same (source,target,type)
-        // triple, so it would re-create it. Same fix as relations.batchCreate.
-        const seededEntityIds = Object.values(entityIds);
-        const endpointRows = seededEntityIds.length
-          ? await database.query.entities.findMany({
-              where: inArray(entities.id, seededEntityIds),
-              columns: { id: true, workspaceId: true },
-            })
-          : [];
-        const endpointWorkspaceById = new Map(
-          endpointRows.map((e) => [e.id, e.workspaceId])
-        );
-        const existingRelations = await database.query.relations.findMany({
-          columns: { sourceEntityId: true, targetEntityId: true, type: true },
-        });
-        const existingRelKeys = new Set<string>();
-        for (const r of existingRelations) {
-          existingRelKeys.add(
-            `${r.sourceEntityId}:${r.targetEntityId}:${r.type}`
-          );
-        }
-
-        let relationsCreated = 0;
-        let relationsSkipped = 0;
-
-        for (const rel of input.definition.suggestedRelations ?? []) {
-          const sourceId = entityIds[rel.sourceRef];
-          const targetId = entityIds[rel.targetRef];
-          if (!sourceId || !targetId) {
-            errors.push({
-              stage: "relations",
-              refKey: `${rel.sourceRef}->${rel.targetRef}`,
-              error: `Source or target entity not found: ${rel.sourceRef}=${sourceId}, ${rel.targetRef}=${targetId}`,
-            });
-            continue;
-          }
-
-          const key = `${sourceId}:${targetId}:${rel.type}`;
-          if (existingRelKeys.has(key)) {
-            relationsSkipped++;
-            continue;
-          }
-
-          try {
-            const relationWorkspaceId = inheritRelationWorkspaceId(
-              [
-                endpointWorkspaceById.get(sourceId) ?? null,
-                endpointWorkspaceById.get(targetId) ?? null,
-              ],
-              input.workspaceId
-            );
-            await relationRepo.create(
-              {
-                sourceEntityId: sourceId,
-                targetEntityId: targetId,
-                type: rel.type,
-                workspaceId: relationWorkspaceId,
-                userId: ctx.userId,
-                metadata: rel.metadata,
-              },
-              ctx.userId
-            );
-            relationsCreated++;
-          } catch (err) {
-            errors.push({
-              stage: "relations",
-              refKey: `${rel.sourceRef}->${rel.targetRef}`,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        errors.push(...seeded.errors);
+        const entityIds = seeded.entityIds;
+        const entitiesCreated = seeded.entitiesCreated;
+        const entitiesSkipped = seeded.entitiesAdopted;
+        const relationsCreated = seeded.relationsCreated;
+        const relationsSkipped = seeded.relationsSkipped;
 
         return {
           workspaceId: input.workspaceId,
@@ -2406,6 +2264,7 @@ export const definitionEngineProcedures = {
       // below reads `createResult.entityIds`). Only runs when deps are declared —
       // a plain definition skips it and creates byte-for-byte as before.
       let composedTarget: string | null = null;
+      let composeSeeds: DefinitionSeedResult | undefined;
       if (
         (input.definition as { dependencies?: unknown[] }).dependencies?.length
       ) {
@@ -2444,6 +2303,8 @@ export const definitionEngineProcedures = {
         }
         if (core.status === "composed") {
           composedTarget = core.composeTargetWorkspaceId;
+          // The compose door already adopted/created the seeds (W4b).
+          composeSeeds = core.reconcile.seeds;
         }
       }
 
@@ -2471,59 +2332,18 @@ export const definitionEngineProcedures = {
       const relDefRepo = new RelationDefRepository(database);
 
       // Entity IDs. On the create path they come back positionally from
-      // createFromDefinition. On the compose path the shared reconcile is
-      // schema-only (never seeds entity INSTANCES), so seed the definition's
-      // entities onto the base workspace here via the canonical EntityRepository.
+      // createFromDefinition. On the compose path the ONE compose door
+      // (composeOntoBaseWorkspace) already landed the seeds + seeded edges
+      // through the shared seed helper — adopting by (kind, title), never
+      // duplicating (W4b: this branch used to create them again, unkeyed).
       const entityIds: Record<string, string> = {};
       const allEntities =
         input.definition.suggestedEntities ??
         input.definition.seedEntities ??
         [];
       if (composedTarget) {
-        const { ProfileRepository } = await import("@synap/database");
-        const profileRepo = new ProfileRepository(database);
-        const entityRepo = new EntityRepository(database, eventRepo);
-        const existingProfiles = await profileRepo.getAccessibleProfiles(
-          ctx.userId,
-          workspaceId
-        );
-        const profileCache = new Map<string, string>(
-          existingProfiles.map((p) => [p.slug, p.id])
-        );
-        for (const e of allEntities) {
-          const refKey = e.refKey ?? `${e.profileSlug}:${e.title}`;
-          const profileId = profileCache.get(e.profileSlug);
-          if (!profileId) {
-            errors.push({
-              stage: "entities",
-              refKey,
-              error: `Profile ${e.profileSlug} not found on compose base`,
-            });
-            continue;
-          }
-          try {
-            const created = await entityRepo.create(
-              {
-                profileId,
-                title: e.title,
-                properties: e.properties,
-                systemData: ONBOARDING_SCAFFOLD_SYSTEM_DATA,
-                workspaceId,
-                userId: ctx.userId,
-                createdByKind: "system",
-                skipValidation: true,
-              },
-              ctx.userId
-            );
-            entityIds[refKey] = created.id;
-          } catch (err) {
-            errors.push({
-              stage: "entities",
-              refKey,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        Object.assign(entityIds, composeSeeds?.entityIds ?? {});
+        errors.push(...(composeSeeds?.errors ?? []));
       } else {
         const createEntityIds = (createResult as any)?.entityIds ?? [];
         for (
@@ -2555,10 +2375,12 @@ export const definitionEngineProcedures = {
         relationDefsCreated++;
       }
 
-      // Create relations
-      let relationsCreated = 0;
-      let relationsSkipped = 0;
-      for (const rel of input.definition.suggestedRelations ?? []) {
+      // Create relations (the compose path's edges came from the seed door).
+      let relationsCreated = composeSeeds?.relationsCreated ?? 0;
+      let relationsSkipped = composeSeeds?.relationsSkipped ?? 0;
+      for (const rel of composedTarget
+        ? []
+        : (input.definition.suggestedRelations ?? [])) {
         const sourceId = entityIds[rel.sourceRef];
         const targetId = entityIds[rel.targetRef];
         if (!sourceId || !targetId) continue;
@@ -2583,8 +2405,10 @@ export const definitionEngineProcedures = {
       return {
         workspaceId,
         profilesCreated: 0,
-        entitiesCreated: allEntities.length,
-        entitiesSkipped: 0,
+        entitiesCreated: composedTarget
+          ? (composeSeeds?.entitiesCreated ?? 0)
+          : allEntities.length,
+        entitiesSkipped: composeSeeds?.entitiesAdopted ?? 0,
         relationsCreated,
         relationsSkipped,
         relationDefsCreated,

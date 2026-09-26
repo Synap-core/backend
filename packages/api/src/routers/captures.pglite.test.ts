@@ -58,6 +58,7 @@ import {
   links,
   messages,
   profiles,
+  users,
 } from "@synap/database";
 import { capturesRouter } from "./captures.js";
 import { AccessContext, scopedDb } from "../access/index.js";
@@ -183,6 +184,7 @@ describe("captures API", () => {
       links,
       messages,
       profiles,
+      users,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

@@ -40,8 +40,10 @@ import {
 // Note: channelsTable.externalId is the canonical dedup field — same as externalChannelId at insert time.
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
+import { sessionContextStampRefusal } from "../../../services/focus-sessions/session-context-stamp.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { sessionReadableWhere } from "../../../access/session-visibility.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import {
   ChannelByContextRequestSchema,
   ChannelByContextResponseSchema,
@@ -56,6 +58,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import {
@@ -147,7 +150,7 @@ export function registerChannelsRoutes(app: HubHono): void {
     request: {
       query: z.object({
         userId: z.string().optional(),
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         channelType: z.string().optional(),
         contextObjectId: z.string().optional(),
         q: z
@@ -240,7 +243,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       logger.error({ err, userId, workspaceId }, "channels.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : String(err) },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -260,7 +263,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       "partial unique index.",
     request: {
       body: z.object({
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         externalSource: z.string().min(1),
         externalChannelId: z.string().min(1),
         contextObjectId: z.string().optional(),
@@ -437,7 +440,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       logger.error({ err, body }, "channels/by-context failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -481,7 +484,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : String(err) },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -568,7 +571,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : String(err) },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -630,7 +633,7 @@ export function registerChannelsRoutes(app: HubHono): void {
         { err, externalChannelId, messageId },
         "POST /channels/:externalChannelId/pins/:messageId enqueue failed"
       );
-      return c.json({ error: msg }, 500);
+      return c.json({ error: msg }, httpStatusForTrpcError(err));
     }
   });
 
@@ -712,7 +715,7 @@ export function registerChannelsRoutes(app: HubHono): void {
         { err, externalChannelId },
         "POST /channels/:externalChannelId/rename enqueue failed"
       );
-      return c.json({ error: msg }, 500);
+      return c.json({ error: msg }, httpStatusForTrpcError(err));
     }
   });
 
@@ -855,7 +858,7 @@ export function registerChannelsRoutes(app: HubHono): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       logger.error({ err, channelId }, "POST /channels/:channelId/bind failed");
-      return c.json({ error: msg }, 500);
+      return c.json({ error: msg }, httpStatusForTrpcError(err));
     }
   });
 
@@ -914,6 +917,14 @@ export function registerChannelsRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId } = acting;
+    // A session-context stamp is the session OWNER's to write
+    // (`session-context-stamp.ts`) — the body type is a cast, not a check.
+    const stampRefusal = await sessionContextStampRefusal({
+      userId,
+      contextObjectType: body.contextObjectType,
+      contextObjectId: body.contextObjectId,
+    });
+    if (stampRefusal) return c.json({ error: stampRefusal }, 403);
     // Item 3 Part 3: positively pin a bound service key to its workspace. The
     // `if (!workspaceId)` guard below narrows the clamped value to a string.
     // A mismatching bound key throws FORBIDDEN → surface 403, not a blanket 500.
@@ -1080,7 +1091,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1196,6 +1207,10 @@ export function registerChannelsRoutes(app: HubHono): void {
       }));
 
       // 3. Active sessions running in this channel (+ playbook name + stage).
+      // Seeing the CHANNEL is not reading its sessions (decision D1: status and
+      // stage are session content): only sessions the caller may read — this
+      // is an agent door, so owner-only. A colleague's session in a shared or
+      // borrowed channel is omitted.
       const sessRows = await db
         .select({
           id: focusSessions.id,
@@ -1211,7 +1226,8 @@ export function registerChannelsRoutes(app: HubHono): void {
         .where(
           and(
             eq(focusSessions.channelId, channel.id),
-            eq(focusSessions.status, "active")
+            eq(focusSessions.status, "active"),
+            sessionReadableWhere({ userId })
           )
         );
       const sessions = sessRows.map((s) => {
@@ -1371,7 +1387,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

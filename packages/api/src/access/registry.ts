@@ -46,12 +46,18 @@ import {
   projects,
   projectTracks,
   views,
+  resourceShares,
 } from "@synap/database/schema";
 import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
 import { projectVisibleWhere } from "./project-visibility.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
+import {
+  sessionReadableWhere,
+  sessionEvaluationReadableWhere,
+} from "./session-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
+import { viewReadableWhere } from "../utils/view-visibility.js";
 import {
   workspaceLensWhere,
   podMemberWhere,
@@ -360,8 +366,14 @@ registerVisibility({
         projectLens: access.projectLens,
         exposureRelationTypes: access.exposureRelationTypes,
         // A document follows its entity: the body of a pod-shared entity is
-        // pod-shared too (`podSharedDocumentWhere`).
+        // pod-shared too (`podSharedDocumentWhere`), and the body of an EXPOSED
+        // entity is exposed too (`exposureDocumentWhere`, Sites W2). The
+        // exposure branch used to test `documents.id` against exposure edges,
+        // which only ever carry ENTITY ids — it matched nothing.
         documentFollowsEntity: true,
+        // A session's document follows its session (decision D1) — the same
+        // door rule as the `focusSessions` rule below.
+        sessionRoster: access.actor === "operator",
       }),
     nullWorkspaceMeans: "ownerPrivate",
   },
@@ -540,34 +552,50 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
-// A focus session is one person's goal-bound work room. Every read floors on
-// `eq(focusSessions.userId, …)` today — the routers, the MCP handlers, the Hub
-// REST doors and the object-graph's `session` hydration branch all hand-inline
-// it — so the shape was already `workspaceOwned`, just undeclared. Declaring it
-// matters now that the object graph surfaces SESSIONS as neighbours of an
-// object: an undeclared table is not a safe table, and `hydration-floor-owner-
-// private.test.ts` explicitly names focus_sessions as one whose semantics nobody
-// had stated. A NULL workspace here is a PERSONAL session, never pod-wide.
+// A focus session is one person's goal-bound work room, READABLE by its owner
+// and by the HUMAN roster of its own minted room (founder decision C,
+// 2026-09-25) — `sessionReadableWhere`, the one predicate every session read
+// uses (access/session-visibility.ts). Until then it was `workspaceOwned`
+// (owner-only). The roster branch is for HUMAN doors: an agent actor reads
+// owner-only (v1). Writes are NOT governed by this rule: they keep the owner floor.
+// A NULL workspace here is a PERSONAL session, never pod-wide: the predicate
+// has no workspace-broadcast branch at all.
 registerVisibility({
   table: focusSessions,
   query: () => db.query.focusSessions,
   rule: {
-    kind: "workspaceOwned",
-    workspaceColumn: focusSessions.workspaceId,
-    userColumn: focusSessions.userId,
+    kind: "custom",
+    // AND the workspace lens floor on every row — exactly what `workspaceOwned`
+    // applied to the owner before, so an owner's own rows read as they did.
+    predicate: (access) =>
+      and(
+        sessionReadableWhere({
+          userId: access.userId,
+          lens: access.workspaceLens,
+          roster: access.actor === "operator",
+        }),
+        workspaceLensWhere(
+          focusSessions.workspaceId,
+          access.userId,
+          access.workspaceLens
+        )
+      ),
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
-// A session's evaluations carry the session's own `user_id` / `workspace_id`
-// (copied by the one write door, `recordSessionEvaluation`), so they are exactly
-// as visible as the session they grade — the same rule, not a looser one.
+// A session's evaluations are exactly as visible as the session they grade —
+// the same predicate through the parent row, not a looser one.
 registerVisibility({
   table: sessionEvaluations,
   query: () => db.query.sessionEvaluations,
   rule: {
-    kind: "workspaceOwned",
-    workspaceColumn: sessionEvaluations.workspaceId,
-    userColumn: sessionEvaluations.userId,
+    kind: "custom",
+    predicate: (access) =>
+      sessionEvaluationReadableWhere({
+        userId: access.userId,
+        lens: access.workspaceLens,
+        roster: access.actor === "operator",
+      }),
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
@@ -614,22 +642,43 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
+// Views add a third, MEMBER branch (Sites W2): a view explicitly EXPOSED to a
+// project (`exposed_at` set) is readable by that project's members. The one
+// predicate lives in utils/view-visibility.ts, shared with the view doors.
 registerVisibility({
   table: views,
   query: () => db.query.views,
   rule: {
     kind: "custom",
     predicate: (access) =>
+      viewReadableWhere(access.userId, access.workspaceLens),
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// `resource_shares` (link + publication rows, 0276) — who a record is shared
+// WITH is itself data: workspace rows follow membership (narrowed by the lens),
+// a pod-wide (NULL-workspace) row is private to its creator. Same shape as
+// `relations`. No public door reads through this rule: link redemption and the
+// public projection use an indexed hash lookup in a service (Sites W2 S3).
+registerVisibility({
+  table: resourceShares,
+  query: () => db.query.resourceShares,
+  rule: {
+    kind: "custom",
+    predicate: (access) =>
       or(
         and(
-          isNotNull(views.workspaceId),
+          isNotNull(resourceShares.workspaceId),
           workspaceLensWhere(
-            views.workspaceId,
+            resourceShares.workspaceId,
             access.userId,
             access.workspaceLens
           )
         ),
-        and(isNull(views.workspaceId), eq(views.userId, access.userId))
+        and(
+          isNull(resourceShares.workspaceId),
+          eq(resourceShares.createdBy, access.userId)
+        )
       ),
     nullWorkspaceMeans: "ownerPrivate",
   },

@@ -10,7 +10,8 @@ import { createAdminUser } from "./create-admin-user.js";
 const email = process.env.ADMIN_EMAIL;
 const password = process.env.ADMIN_PASSWORD;
 const name = process.env.ADMIN_NAME;
-const createWorkspace = process.env.CREATE_WORKSPACE !== "false";
+// D7: opt-in — no blank personal workspace unless CREATE_WORKSPACE=true.
+const createWorkspace = process.env.CREATE_WORKSPACE === "true";
 
 if (!email || !password) {
   console.error(

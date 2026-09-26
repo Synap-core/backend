@@ -45,6 +45,7 @@ import {
   logger,
   getUserAccessibleWorkspaceIds,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 // ─── DTO ────────────────────────────────────────────────────────────────────
@@ -370,7 +371,7 @@ export function registerPodConfigRoutes(app: HubHono): void {
       logger.error({ err, userId }, "GET /pod/config failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

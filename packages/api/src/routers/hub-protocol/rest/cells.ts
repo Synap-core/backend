@@ -28,8 +28,10 @@ import {
   verifyWorkspaceAccess,
   verifyWorkspaceReadAccess,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import { uuidQueryParam } from "./_codecs/_openapi.js";
 
 // deps validation now lives INSIDE the defineCell door (security review
 // 2026-07-12: marketplace-install called defineCell without it — enforcing at
@@ -39,7 +41,7 @@ export { validateDeps };
 const InstallBodySchema = z.object({
   packageSlug: z.string().min(1),
   cellKey: z.string().min(1),
-  workspaceId: z.string().optional(),
+  workspaceId: uuidQueryParam.optional(),
 });
 
 function getCpUrl(): string {
@@ -112,7 +114,7 @@ export function registerCellsRoutes(app: HubHono): void {
       logger.error({ err }, "cells.listInstalled failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -243,7 +245,7 @@ export function registerCellsRoutes(app: HubHono): void {
       logger.error({ err }, "cells.install failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -279,7 +281,7 @@ export function registerCellsRoutes(app: HubHono): void {
       .object({
         name: z.string().min(1).max(120),
         rendererSource: z.string().min(1),
-        workspaceId: z.string().min(1).optional(),
+        workspaceId: uuidQueryParam.min(1).optional(),
         typeKey: z.string().min(1).max(120).optional(),
         description: z.string().max(500).optional(),
         defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
@@ -457,7 +459,7 @@ export function registerCellsRoutes(app: HubHono): void {
       logger.error({ err }, "cells.define failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -495,7 +497,7 @@ export function registerCellsRoutes(app: HubHono): void {
       logger.error({ err }, "cells.uninstall failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

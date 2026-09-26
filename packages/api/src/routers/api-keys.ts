@@ -19,7 +19,6 @@ import {
   db,
   and,
   eq,
-  asc,
   inArray,
   getDb,
   EventRepository,
@@ -51,6 +50,7 @@ import {
   getOAuthConsentContext,
 } from "./oauth/consent.js";
 import { OAuthError } from "./oauth/protocol.js";
+import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 
 /**
  * The authorize parameters pod-admin's consent screen round-trips.
@@ -751,12 +751,10 @@ export const apiKeysRouter = router({
           });
         }
       } else {
-        // No workspace supplied — use caller's first workspace
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: eq(workspaceMembers.userId, ctx.userId),
-          orderBy: [asc(workspaceMembers.joinedAt)],
-        });
-        resolvedWorkspaceId = membership?.workspaceId;
+        // No workspace supplied — the caller's first DOMAIN workspace (D7:
+        // never the pod-admin console); none ⇒ an unscoped key, as before.
+        resolvedWorkspaceId =
+          (await findUserDefaultWorkspaceId(db, ctx.userId)) ?? undefined;
       }
 
       // Standard permission gate — same as `create`. Will auto-approve for

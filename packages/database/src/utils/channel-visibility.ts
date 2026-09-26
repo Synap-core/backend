@@ -54,9 +54,25 @@
  * predicate encodes the correct channel semantics instead: only branch 4's
  * SHARED-type NULL-workspace channels are pod-wide, never personal ones.
  *
+ * OBJECT ROOMS FOLLOW THEIR OBJECT (Documents v2, 2026-09-26). An object's ONE
+ * linked channel (`channel_type = group`, `context_object_type` in
+ * {@link OBJECT_ROOM_CONTEXT_TYPES}, minted only by
+ * `ChannelRepository.ensureObjectChannel`) is visible exactly when the OBJECT is
+ * visible — branch 5 below evaluates the object's own read floor, REGISTERED by
+ * the layer that owns it (`registerObjectRoomFloor`; the api registers the
+ * `documents` / `entities` VisibilityRules in `utils/object-room-floors.ts`).
+ * Like a session room it is carved OUT of the broadcast branches 3/4: GROUP is
+ * a shared type, and without the carve-out a pod-wide document's room would be
+ * visible to the whole pod, and a workspace document's room to members the
+ * document itself excludes (a project-exposed doc, a private pod-wide doc).
+ * An unregistered type FAILS CLOSED: owner (1) and roster (2) only.
+ *
  * `userId` may be a literal id OR a column (`users.id`): the realtime audience
  * of a channel is "every user this predicate admits", computed by correlating
- * it against `users` — derived from the rule, never a hand-listed roster.
+ * it against `users` — derived from the rule, never a hand-listed roster. A
+ * registered object floor takes a literal id only, so for an object room the
+ * audience is completed per user through the same predicate
+ * (`listChannelAudienceUserIds`).
  */
 import {
   and,
@@ -66,6 +82,7 @@ import {
   isNotNull,
   isNull,
   ne,
+  not,
   or,
   sql as drizzleSql,
   type AnyColumn,
@@ -89,6 +106,77 @@ export const SESSION_ROOM_CONTEXT_TYPE = "focus_session";
 
 /** Subqueries only — never executed on their own, so no client is needed. */
 const qb = new QueryBuilder();
+
+/**
+ * The object kinds that own ONE linked channel (an "object room"). Mirrors the
+ * partial unique index `channels_object_room_uniq` (migration 0279) — a type
+ * added here needs the index widened in the same change.
+ */
+export const OBJECT_ROOM_CONTEXT_TYPES = ["document", "entity"] as const;
+export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
+
+export function isObjectRoomType(value: unknown): value is ObjectRoomType {
+  return (
+    typeof value === "string" &&
+    (OBJECT_ROOM_CONTEXT_TYPES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * An object's read floor as SQL, correlated to the object id expression it is
+ * handed (`channels.context_object_id`). Must admit exactly the rows the
+ * object's own read door admits — the api builds it from the registered
+ * VisibilityRule, never a copy.
+ */
+export type ObjectRoomFloor = (userId: string, objectId: AnyColumn) => SQL;
+
+const objectRoomFloors = new Map<ObjectRoomType, ObjectRoomFloor>();
+
+/** Register the read floor an object room of `type` follows (idempotent). */
+export function registerObjectRoomFloor(
+  type: ObjectRoomType,
+  floor: ObjectRoomFloor
+): void {
+  objectRoomFloors.set(type, floor);
+}
+
+/** Is a floor registered for `type`? (Diagnostics + tests.) */
+export function hasObjectRoomFloor(type: ObjectRoomType): boolean {
+  return objectRoomFloors.has(type);
+}
+
+/** The row IS an object room (GROUP + a bindable object stamp). */
+function objectRoomWhere(): SQL {
+  return and(
+    eq(channels.channelType, ChannelType.GROUP),
+    inArray(channels.contextObjectType, [...OBJECT_ROOM_CONTEXT_TYPES])
+  )!;
+}
+
+/** NOT an object room — gates the broadcast branches (3, 4). */
+function notObjectRoom(): SQL {
+  return or(
+    ne(channels.channelType, ChannelType.GROUP),
+    isNull(channels.contextObjectType),
+    not(inArray(channels.contextObjectType, [...OBJECT_ROOM_CONTEXT_TYPES]))
+  )!;
+}
+
+/**
+ * Branch 5: an object room whose object the caller may read. Literal ids only
+ * (see the audience note in the docblock); an unregistered type contributes
+ * nothing (fail closed).
+ */
+function objectRoomBranch(userId: string | AnyColumn): SQL | undefined {
+  if (typeof userId !== "string" || objectRoomFloors.size === 0) return;
+  const arms = [...objectRoomFloors].map(([type, floor]) =>
+    and(
+      eq(channels.contextObjectType, type),
+      floor(userId, channels.contextObjectId)
+    )
+  );
+  return and(eq(channels.channelType, ChannelType.GROUP), or(...arms));
+}
 
 /**
  * NOT a session room. Gates the two broadcast branches (3, 4) so a session room
@@ -143,6 +231,7 @@ export function channelVisibilityWhere(userId: string | AnyColumn): SQL {
       inArray(channels.channelType, [...SHARED_CHANNEL_TYPES]),
       isNotNull(channels.workspaceId),
       notSessionRoom(),
+      notObjectRoom(),
       or(exists(memberOfWs), exists(ownerOfWs))
     ),
     // 4. Pod-wide-shared: a SHARED-type channel with a NULL workspace. Wave-3
@@ -155,8 +244,11 @@ export function channelVisibilityWhere(userId: string | AnyColumn): SQL {
     and(
       isNull(channels.workspaceId),
       inArray(channels.channelType, [...SHARED_CHANNEL_TYPES]),
-      notSessionRoom()
-    )
+      notSessionRoom(),
+      notObjectRoom()
+    ),
+    // 5. An object room whose OBJECT the caller may read (see the docblock).
+    objectRoomBranch(userId)
   )!;
 }
 
@@ -183,6 +275,29 @@ export async function canUserSeeChannel(
  * is exactly the read rule's, by construction.
  */
 export async function listChannelAudienceUserIds(
+  database: SelectDb,
+  channelId: string
+): Promise<string[]> {
+  const base = await correlatedAudience(database, channelId);
+  // An object room's branch 5 needs a literal id, so it is completed per user
+  // through the SAME predicate (`canUserSeeChannel`). Pods are small; this runs
+  // only for object rooms.
+  const [room] = await database
+    .select({ id: channels.id })
+    .from(channels)
+    .where(and(eq(channels.id, channelId), objectRoomWhere()))
+    .limit(1);
+  if (!room) return base;
+  const seen = new Set(base);
+  const everyone = await database.select({ id: users.id }).from(users);
+  for (const { id } of everyone) {
+    if (seen.has(id)) continue;
+    if (await canUserSeeChannel(database, channelId, id)) seen.add(id);
+  }
+  return [...seen];
+}
+
+async function correlatedAudience(
   database: SelectDb,
   channelId: string
 ): Promise<string[]> {

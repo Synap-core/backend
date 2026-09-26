@@ -8,7 +8,12 @@ import {
   TerminalLogsResponseSchema,
 } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 
 export function registerTerminalRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -160,7 +165,7 @@ export function registerTerminalRoutes(app: HubHono): void {
       logger.error({ err, service }, "terminal.logs failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

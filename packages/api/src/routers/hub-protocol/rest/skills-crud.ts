@@ -377,7 +377,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       logger.error({ err }, "skills create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -424,7 +424,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       logger.error({ err }, "skills list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -654,7 +654,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       logger.error({ err, id }, "skills dry-run failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -19,7 +19,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import {
   CreateMemoryRequestSchema,
   MemoryBatchResponseSchema,
@@ -29,7 +29,12 @@ import {
   MemoryTurnsRequestSchema,
   MemoryWritesRequestSchema,
 } from "./_codecs/memory.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 
 const DeleteMemoryResponseSchema = z
   .object({ success: z.boolean() })
@@ -52,6 +57,7 @@ export function registerMemoryRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Saved fact",
         content: { "application/json": { schema: MemoryFactSchema } },
@@ -133,8 +139,8 @@ export function registerMemoryRoutes(app: HubHono): void {
       logger.error({ err }, "saveFact failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -153,6 +159,7 @@ export function registerMemoryRoutes(app: HubHono): void {
       }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Matching facts",
         content: { "application/json": { schema: z.array(MemoryFactSchema) } },
@@ -210,8 +217,8 @@ export function registerMemoryRoutes(app: HubHono): void {
       logger.error({ err }, "searchFacts failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -228,6 +235,7 @@ export function registerMemoryRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Matching facts",
         content: { "application/json": { schema: z.array(MemoryFactSchema) } },
@@ -282,8 +290,8 @@ export function registerMemoryRoutes(app: HubHono): void {
       logger.error({ err }, "searchFactsSemantic failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -298,6 +306,7 @@ export function registerMemoryRoutes(app: HubHono): void {
       query: z.object({ userId: z.string() }),
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Deleted",
         content: {
@@ -343,8 +352,8 @@ export function registerMemoryRoutes(app: HubHono): void {
       logger.error({ err, id }, "deleteFact failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -363,6 +372,7 @@ export function registerMemoryRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Batch result",
         content: { "application/json": { schema: MemoryBatchResponseSchema } },
@@ -451,8 +461,8 @@ export function registerMemoryRoutes(app: HubHono): void {
       logger.error({ err }, "saveTurns failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -470,6 +480,7 @@ export function registerMemoryRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Session metadata stored",
         content: { "application/json": { schema: MemoryBatchResponseSchema } },
@@ -520,8 +531,8 @@ export function registerMemoryRoutes(app: HubHono): void {
       logger.error({ err }, "saveSession failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 
@@ -539,6 +550,7 @@ export function registerMemoryRoutes(app: HubHono): void {
       },
     },
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Batch result",
         content: { "application/json": { schema: MemoryBatchResponseSchema } },
@@ -602,8 +614,8 @@ export function registerMemoryRoutes(app: HubHono): void {
       logger.error({ err }, "batchWrite failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 }

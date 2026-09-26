@@ -46,6 +46,9 @@ import {
   playbooks,
   workspaces,
   workspaceMembers,
+  podMembers,
+  users,
+  projectMembers,
 } from "@synap/database/schema";
 
 const { registerPlaybooksRoutes } = await import("./playbooks.js");
@@ -107,7 +110,14 @@ async function seedPlaybook(
 }
 
 beforeAll(async () => {
-  for (const t of [playbooks, workspaces, workspaceMembers] as PgTable[]) {
+  for (const t of [
+    playbooks,
+    workspaces,
+    workspaceMembers,
+    podMembers,
+    users,
+    projectMembers,
+  ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }
   await h.client!.query(

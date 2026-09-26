@@ -439,6 +439,47 @@ export interface ExpectedOutput {
    * matching the label.
    */
   criterionKey?: string;
+  /**
+   * The PERSON'S ANSWER to what the agent asked about this slot — written ONLY
+   * by `answerExpectedOutput` (api `services/focus-sessions/answer-slot.ts`),
+   * from the needs-you tray or from the session owner's reply to an agent's
+   * `kind: 'question'` room post. See {@link SlotAnswer}.
+   *
+   * AN ANSWER IS NOT A DELIVERY. It never touches `status`, and it closes
+   * nothing: the answer is INPUT the agent needed, and the agent still owes the
+   * deliverable. On a human-owned slot the answer hands the slot BACK to the
+   * agent through the same clearing `unblockExpectedOutput` does (`owner`,
+   * `blockedReason`, `why`, `owedSince` removed together) — so the owed read
+   * drops it and the agent's open-slot read (`isOpenAgentSlot`) picks it up
+   * with the answer attached. The question it answered survives on
+   * `answer.question`.
+   */
+  answer?: SlotAnswer;
+}
+
+/**
+ * A person's answer to an agent's question about one slot. Server-stamped as a
+ * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
+ */
+export interface SlotAnswer {
+  /** What the person said. */
+  text: string;
+  /**
+   * The room message that carries it — the owner's reply, or the message the
+   * direct answer door posted into the room. `null` when the session has no
+   * room, so there was nowhere to post it.
+   */
+  messageId: string | null;
+  /** The session owner who answered. */
+  answeredBy: string;
+  /** ISO timestamp, server clock. */
+  answeredAt: string;
+  /**
+   * What was asked: the slot's `why` at the moment of answering (it is cleared
+   * with the hand-back), else the agent's question post. Absent when neither
+   * existed.
+   */
+  question?: string;
 }
 
 /**
@@ -525,6 +566,14 @@ export interface PlaybookStage {
    * appended to. Read via `readStageLessons`.
    */
   lessons?: string[];
+  /**
+   * The DOMAIN this stage is worked in — a workspace TEMPLATE slug
+   * (`workspaces.package_slug`, e.g. "crm"), never a workspace id, so a method
+   * stays portable across pods. A TRACK's stage session starts in a live
+   * workspace installed from that template (tracks-service `startStageSession`);
+   * absent ⇒ the project's home workspace.
+   */
+  domain?: string;
 }
 
 /**

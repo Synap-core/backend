@@ -24,6 +24,10 @@ import {
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
 import {
+  missingStageDomainsNote,
+  stageDomainFallbackNote,
+} from "../../../services/tracks/stage-domain.js";
+import {
   ok,
   requireScope,
   type McpToolContext,
@@ -104,10 +108,15 @@ export const trackHandlers: McpHandlerMap = {
         ...(isParams(ctx.args.params) ? { params: ctx.args.params } : {}),
         actor: actorOf(ctx),
       });
-      if (result.status === "proposed") return result;
+      const domainsNote = missingStageDomainsNote(result.missingDomains);
+      if (result.status === "proposed") {
+        return { ...result, ...(domainsNote ? { domainsNote } : {}) };
+      }
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),
+        missingDomains: result.missingDomains,
+        ...(domainsNote ? { domainsNote } : {}),
       };
     });
   },
@@ -192,14 +201,16 @@ export const trackHandlers: McpHandlerMap = {
           "trackId (uuid) is required — synap_list_tracks lists each track and its stages.",
       });
     }
-    return run(() =>
-      startStageSession({
+    return run(async () => {
+      const result = await startStageSession({
         trackId,
         stageKey: str(ctx.args.stageKey) ?? null,
         title: str(ctx.args.title) ?? null,
         goal: str(ctx.args.goal) ?? null,
         actor: actorOf(ctx),
-      })
-    );
+      });
+      const domainNote = stageDomainFallbackNote(result.domainFallback);
+      return domainNote ? { ...result, domainNote } : result;
+    });
   },
 };

@@ -124,6 +124,8 @@ import {
   users,
   links,
   sessionEvaluations,
+  podMembers,
+  projectMembers,
 } from "@synap/database";
 import {
   advanceTrackStage,
@@ -269,9 +271,17 @@ beforeAll(async () => {
     playbooks,
     projects,
     sessionEvaluations,
+    podMembers,
+    projectMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
+  // A KNOWN principal (Sites W2 S2): an id with no `users` row is an unknown
+  // principal and reads no pod-level row (pod-wide globals, pod-visible
+  // workspaces) — `podReaderWhere`. This fixture models provisioned users.
+  await h.client!.exec(
+    `insert into users (id, email) values ('${USER}', '${USER}@example.test')`
+  );
   // The REAL 0272 + 0274 shape — defaults are what the repo relies on.
   await h.client!.exec(`
     create table project_tracks (

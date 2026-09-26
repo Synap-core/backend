@@ -61,6 +61,7 @@ export type ObjectCategory =
   | "agent"
   | "proposal"
   | "notification"
+  | "package"
   | "run"
   | "source"
   | "participant";
@@ -328,6 +329,18 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     label: "Track",
     labelPlural: "Tracks",
   },
+  // One stretch of a track (`project_tracks.stages[]`, the `stage` key on a
+  // track-filed session). The USER word is "Step" — `skills/synap/concepts.md`
+  // is the glossary, and a drift tripwire holds the two together. Same hue and
+  // icon family as its track: a step is read as a segment OF the track.
+  stage: {
+    kind: "stage",
+    category: "project",
+    icon: "Route",
+    color: ID(5),
+    label: "Step",
+    labelPlural: "Steps",
+  },
   session: {
     kind: "session",
     category: "session",
@@ -346,38 +359,48 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
   },
 
   // ── System capabilities (the `/` universe) — spread across the wider palette ──
+  // Concept glossary (`skills/synap/concepts.md` → Tools, founder D2): skill,
+  // capability and tool are three DB kinds but ONE user word, "Tool". A detail
+  // page still names the kind — through `resolveToolKindLabel`, never here.
   skill: {
     kind: "skill",
     category: "skill",
     icon: "GraduationCap",
     color: ID(9),
-    label: "Skill",
-    labelPlural: "Skills",
+    label: "Tool",
+    labelPlural: "Tools",
   },
+  // The user word is "Rule" (concepts.md, founder D1): something that runs by
+  // itself, on a schedule or an event. NOT the governance "Approvals" rules.
   automation: {
     kind: "automation",
     category: "automation",
     icon: "Zap",
     color: ID(7),
-    label: "Automation",
-    labelPlural: "Automations",
+    label: "Rule",
+    labelPlural: "Rules",
     glyph: "⚡",
   },
+  // The user word is "Template" (concepts.md). Scoped surfaces say WHICH
+  // template through `resolveTemplateNoun(scope)` ("Work"/"Track template").
   playbook: {
     kind: "playbook",
     category: "playbook",
     icon: "BookOpen",
     color: ID(8),
-    label: "Playbook",
-    labelPlural: "Playbooks",
+    label: "Template",
+    labelPlural: "Templates",
   },
+  // Concept glossary (`skills/synap/concepts.md` → Tools, founder D2): skill,
+  // capability and tool are three DB kinds but ONE user word, "Tool". A detail
+  // page still names the kind — through `resolveToolKindLabel`, never here.
   capability: {
     kind: "capability",
     category: "capability",
     icon: "Boxes",
     color: ID(10),
-    label: "Capability",
-    labelPlural: "Capabilities",
+    label: "Tool",
+    labelPlural: "Tools",
   },
   command: {
     kind: "command",
@@ -425,6 +448,19 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     color: ID(6),
     label: "Participant",
     labelPlural: "Participants",
+  },
+
+  // A bundle of templates installed together. Internally a `suite` package
+  // (see the alias below); the user word is "Pack" (`skills/synap/concepts.md`).
+  // A pack depends on the workspace templates it needs — it never creates a
+  // workspace of its own — so it is NOT `category: "workspace"`.
+  pack: {
+    kind: "pack",
+    category: "package",
+    icon: "Boxes",
+    color: ID(10),
+    label: "Pack",
+    labelPlural: "Packs",
   },
 
   // ── AI / governance (agent is ALWAYS --synap-ai) ──
@@ -656,6 +692,12 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   // The table name (`project_tracks`) reaches titles as a target type.
   project_track: "track",
   project_tracks: "track",
+  // The user word for a track stage is "Step"; both spellings reach one kind.
+  step: "stage",
+  track_stage: "stage",
+  // The package layer's tag for a bundle (`workspace` package tagged `suite`).
+  suite: "pack",
+  suites: "pack",
   /**
    * Operational EVENT domains are table names, not object kinds — they arrive
    * pluralized/underscored (`entities`, `api_keys`, `focus_sessions`) straight
@@ -688,6 +730,14 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
    */
   workflow: "automation",
   workflows: "automation",
+  // Table names reach titles/event domains pluralized. Unaliased they humanized
+  // to the RETIRED words ("Playbooks", "Automations", "Capabilities") after
+  // the glossary renamed the kinds — and `playbooks` pluralized to "Playbookss".
+  playbooks: "playbook",
+  automations: "automation",
+  capabilities: "capability",
+  skills: "skill",
+  tools: "tool",
   pod: "pod",
   "data-pod": "pod",
   desktop: "desktop",
@@ -736,3 +786,25 @@ export const resolveObjectLabel = (
   kind?: string | null,
   profile?: ProfileIdentityInput | null
 ): string => resolveObjectIdentity(kind, profile).label;
+
+// ─── Template nouns (derived, never declared) ────────────────────────────────
+
+/**
+ * The user noun for a template, DERIVED from what it is — never a field the
+ * author declares (`skills/synap/concepts.md` → Template).
+ *
+ * A playbook's `scope` decides it: `"project"` is a method a project runs over
+ * weeks as a track → "Track template"; `"session"` (the playbook default) is
+ * one sitting of work → "Work template". A missing scope reads as a work
+ * template because the schema says so (`playbooks.scope`: "NULL reads as
+ * session"), not as a guess about the row.
+ */
+export type TemplateScope = "session" | "project";
+
+export function resolveTemplateNoun(
+  scope: TemplateScope | string | null | undefined,
+  opts: { plural?: boolean } = {}
+): string {
+  const noun = scope === "project" ? "Track template" : "Work template";
+  return opts.plural ? `${noun}s` : noun;
+}

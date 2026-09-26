@@ -32,6 +32,7 @@ import {
   workspaces,
   eq,
   getActingAgentUserId,
+  resolveProfileForApply,
 } from "@synap/database";
 import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -443,6 +444,123 @@ export const profilesRouter = router({
           }
         }
         return { profile: existing, existing: true };
+      }
+
+      /**
+       * W2b ROLE PRINCIPLE — one role per name, pod-wide; never a twin.
+       *
+       * A ROLE whose slug exists elsewhere on the pod (invisible from this
+       * workspace) is REUSED AND SHARED into this workspace — for every caller:
+       * human, template-driven, and agent, `forceCreate` included. A role is a
+       * hat, and two `partner` hats are exactly how CRM's twin was born: facets
+       * split across two profile ids and every lens saw half of them.
+       *
+       * The decision is the SAME one the template-apply door already makes
+       * (`resolveProfileForApply`): a shared/system row is granted here; the
+       * actor's own workspace-private row is promoted to shared; a same-slug
+       * KIND, or a row that cannot be shared from here (another user's private
+       * role, a held pod-wide seat), is refused with CONFLICT — never a twin.
+       * Planned dry first so governance sees the share before anything is
+       * written; the approve executor re-enters this door as the approver.
+       * applicableKinds merge widen-only; fields then land as this workspace's
+       * OVERLAY (define-profile.ts), never as base defs on the shared role.
+       */
+      if (input.profileKind === "role") {
+        const shareOpts = {
+          slug: input.slug,
+          declaredScope: "shared",
+          declaredKind: "role" as const,
+          workspaceId: ctx.workspaceId,
+          actorUserId: ctx.userId,
+        };
+        const plan = await resolveProfileForApply(profileRepo, {
+          ...shareOpts,
+          dryRun: true,
+        });
+        const refuseTwin = (why: string): never => {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              `A role named "${input.slug}" cannot be created: ${why}. ` +
+              `A role is one per name, pod-wide — reuse the existing one ` +
+              `(attach it as a facet) or pick a distinct slug. forceCreate ` +
+              `does not apply to roles.`,
+          });
+        };
+        if (plan.conflict) {
+          refuseTwin(
+            plan.conflict.retired
+              ? "that slug belongs to a retired profile"
+              : `a ${plan.conflict.existingKind} with that slug already exists on this pod`
+          );
+        }
+        if (plan.promotionDeferred) {
+          refuseTwin(
+            "a role with that slug exists in a workspace it cannot be shared from here"
+          );
+        }
+        if (plan.profile) {
+          const planned = plan.profile;
+          const { next: nextKinds, widened } = mergeApplicableKinds(
+            planned.applicableKinds,
+            input.applicableKinds
+          );
+          const perm = await checkPermissionOrPropose({
+            userId: ctx.userId,
+            agentUserId: input.agentUserId,
+            workspaceId: ctx.workspaceId,
+            subjectType: "profile",
+            action: "create",
+            source: input.source,
+            reasoning: input.reasoning,
+            data: {
+              id: planned.id,
+              slug: planned.slug,
+              displayName: planned.displayName,
+              profileKind: "role",
+              scope: "shared",
+              ...(widened && nextKinds ? { applicableKinds: nextKinds } : {}),
+              shareExistingRole: true,
+            },
+          });
+          if ("denied" in perm && perm.denied) {
+            throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+          }
+          if ("proposalId" in perm) {
+            return {
+              profile: planned,
+              existing: true,
+              shared: true,
+              status: "proposed" as const,
+              message: proposedMessageFor(
+                perm.proposalType,
+                `Sharing the existing role "${planned.slug}" into this workspace proposed for review`
+              ),
+              proposalId: perm.proposalId,
+            };
+          }
+          const applied = await resolveProfileForApply(profileRepo, shareOpts);
+          if (!applied.profile) {
+            refuseTwin(
+              "the existing role could not be shared into this workspace"
+            );
+          }
+          let sharedRole = applied.profile!;
+          if (widened && nextKinds) {
+            sharedRole = await profileRepo.update(sharedRole.id, {
+              applicableKinds: nextKinds,
+            });
+          }
+          ProfileResolutionService.invalidateEntityScopeCache(input.slug);
+          return {
+            profile: sharedRole,
+            existing: true,
+            shared: true,
+            promoted: applied.promoted,
+            widened,
+          };
+        }
+        // Nothing with this slug anywhere → fall through and create it.
       }
 
       /**

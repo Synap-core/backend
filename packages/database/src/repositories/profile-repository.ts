@@ -380,7 +380,7 @@ export class ProfileRepository {
       const visibleWorkspaceIds = unionAll(
         memberWorkspaceIdsQuery(userId),
         ownedWorkspaceIdsQuery(userId),
-        podVisibleWorkspaceIdsQuery()
+        podVisibleWorkspaceIdsQuery(userId)
       );
       scopeBranches.push(
         and(
@@ -651,7 +651,7 @@ export class ProfileRepository {
     const visibleWorkspaceIds = unionAll(
       memberWorkspaceIdsQuery(userId),
       ownedWorkspaceIdsQuery(userId),
-      podVisibleWorkspaceIdsQuery()
+      podVisibleWorkspaceIdsQuery(userId)
     );
 
     const scopeBranches = [

@@ -43,6 +43,7 @@ import {
   type PlaybookCandidate,
 } from "./match-session-template.js";
 import { isOwedSlot } from "./owed-outputs.js";
+import { isOpenAgentSlot } from "./continuation-packet.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
 import { openLink } from "../../utils/deep-links.js";
@@ -83,6 +84,11 @@ export interface SessionNudges {
   };
   /** Outputs handed to the person (`owner: 'human'`) still pending. */
   owedByPerson?: number;
+  /**
+   * Labels of outputs the PERSON ANSWERED (`answer-slot.ts`) that are still
+   * open on the agent — the answer is waiting to be acted on.
+   */
+  answered?: string[];
   /** Ranked playbooks for a session born without one — offered once. */
   playbookCandidates?: PlaybookCandidate[];
   /** One imperative line per nudge above, in the same order. */
@@ -169,6 +175,18 @@ export function computeSessionNudges(input: {
         `Closed at stage "${cur}", not the last ("${stages[stages.length - 1]}") — advance currentStage as the work moves.`
       );
     }
+  }
+
+  // Answered and back with the agent, not yet delivered or claimed — the same
+  // open-agent-slot rule the continuation packet's `aiCanDo` uses.
+  const answered = readSlots(session.expectedOutputs)
+    .filter((s) => !!s?.answer && isOpenAgentSlot(s))
+    .map((s) => s.label);
+  if (answered.length > 0) {
+    out.answered = answered;
+    out.hints.push(
+      `The person answered ${answered.length === 1 ? `"${answered[0]}"` : `${answered.length} outputs`} — read the answer (get_session aiCanDo) and continue.`
+    );
   }
 
   const owed = readSlots(session.expectedOutputs).filter(isOwedSlot).length;

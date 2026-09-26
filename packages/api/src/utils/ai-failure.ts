@@ -28,6 +28,9 @@
  * What the evidence actually showed.
  *
  *   quota            — 402 / insufficient balance / credit or billing exhausted
+ *   plan_quota       — an allowance (provider quota, spend guard) is used up
+ *   account_quota    — THIS account's monthly plan quota (IS quota middleware)
+ *   not_entitled     — the account's plan does not include AI (IS entitlement middleware)
  *   auth             — 401/403, credentials rejected by the AI service
  *   rate_limit       — 429
  *   timeout          — the call was aborted on our deadline
@@ -42,6 +45,8 @@ import type { IsFailureEnvelope } from "@synap-core/types";
 export type AiFailureClass =
   | "quota"
   | "plan_quota"
+  | "account_quota"
+  | "not_entitled"
   | "context_length"
   | "content_filter"
   | "cancelled"
@@ -69,6 +74,8 @@ export type AiFailureClass =
 export type AiFailureCode =
   | "provider_no_credit"
   | "quota_exhausted"
+  | "account_quota_exceeded"
+  | "not_entitled"
   | "context_length_exceeded"
   | "content_filter"
   | "cancelled"
@@ -177,6 +184,12 @@ function extractCode(error: unknown): string {
 const IS_CODE_TO_CLASS: Record<string, AiFailureClass> = {
   insufficient_credit: "quota",
   quota_exhausted: "plan_quota",
+  // The IS's own REFUSALS (quota / entitlement middleware), not provider
+  // failures. Before they carried a code, the pod read the bare status: a
+  // monthly-quota 429 became "rate-limited, try again shortly" and a
+  // not-entitled 403 became "credentials rejected" — both false.
+  account_quota_exceeded: "account_quota",
+  not_entitled: "not_entitled",
   context_length_exceeded: "context_length",
   content_filter: "content_filter",
   auth: "auth",
@@ -296,6 +309,23 @@ const COPY: Record<
     needsOperator: true,
     message:
       "The AI provider says this account's quota is used up. Retrying will not help — an operator has to raise the quota or wait for it to reset.",
+  },
+  // The account holder can act on both of the next two (wait for the reset,
+  // change the plan) — no operator fix exists, so `needsOperator: false`; the
+  // same request cannot succeed until the account changes, so not retryable.
+  account_quota: {
+    code: "account_quota_exceeded",
+    retryable: false,
+    needsOperator: false,
+    message:
+      "This account has used up its monthly AI quota. Retrying will not help \u2014 it resets at the start of the next billing period, or a plan upgrade raises it.",
+  },
+  not_entitled: {
+    code: "not_entitled",
+    retryable: false,
+    needsOperator: false,
+    message:
+      "This account's plan does not include AI features right now (the subscription may have lapsed). Retrying will not help \u2014 renew or change the plan to use them.",
   },
   // Neither of the next two is an operator problem: the OPERATOR cannot make a
   // prompt shorter or make a safety filter accept it. `needsOperator: false`

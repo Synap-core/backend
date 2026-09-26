@@ -13,6 +13,7 @@
 import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
 import { z } from "@hono/zod-openapi";
 import { projectKnowledgeProperties } from "@synap/database";
+import { uuidQueryParam } from "./_openapi.js";
 
 // Canonical wire shape for entities returned by Hub Protocol after passing
 // through `entityToWire(...)`. Routes that return raw DB rows directly should
@@ -63,8 +64,7 @@ export const CreateEntityRequestSchema = z
       .describe(
         "Agent user that performed the write. Used for proposal authorship."
       ),
-    workspaceId: z
-      .string()
+    workspaceId: uuidQueryParam
       .optional()
       .describe(
         "Target workspace. Falls back to profile.entityScope and the user's first accessible workspace."
@@ -202,7 +202,7 @@ export const UpdateEntityRequestSchema = z
      */
     userId: z.string().optional(),
     agentUserId: z.string().optional(),
-    workspaceId: z.string().nullable().optional(),
+    workspaceId: uuidQueryParam.nullable().optional(),
     title: z.string().optional(),
     preview: z.string().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),

@@ -175,7 +175,7 @@ export function registerProposalsRoutes(app: HubHono): void {
     tags: ["Proposals"],
     summary: "Revert an approved proposal",
     description:
-      "Undoes the effect of an approved/auto-approved proposal: deletes the entities/relations/documents the approval created. Update and delete proposals cannot be reverted (no before-snapshot) and return 501.",
+      "Undoes the effect of an approved/auto-approved proposal. A create: deletes the entities/relations/documents the approval created. An entity update: restores each field and property from the record stamped when it applied, compare-and-set — a key edited since is kept and reported in `skipped`. An entity delete: restores the soft-deleted entity. An update with no apply-time record (applied before undo existed, or a non-entity update), and a delete of anything but an entity (a hard delete), cannot be reverted and return 501.",
     request: {
       params: z.object({ id: z.string() }),
       body: z.object({ reason: z.string().optional() }),

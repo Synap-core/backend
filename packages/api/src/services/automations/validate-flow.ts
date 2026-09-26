@@ -690,7 +690,7 @@ function collectLoopBindingRefs(data: unknown): string[] {
       // never evaluates (`_filterNote` and friends explain what DOWNSTREAM
       // nodes do, and so legitimately quote `{{loop.item...}}` in prose).
       // Reading them as live references made a correct flow fail validation:
-      // `stellar-grant-client` was reported as "references {{loop.item}} but is
+      // a (since-removed) grant capability was reported as "references {{loop.item}} but is
       // not inside a loop body" purely because its note DESCRIBED the nodes
       // that do. Kept identical in all three copies of this walker.
       for (const [k, x] of Object.entries(v)) {

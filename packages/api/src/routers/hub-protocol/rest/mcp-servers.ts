@@ -16,6 +16,7 @@ import {
   logger,
   getUserAccessibleWorkspaceIds,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 export function registerMcpServersRoutes(app: HubHono): void {
@@ -85,7 +86,7 @@ export function registerMcpServersRoutes(app: HubHono): void {
       logger.error({ err, workspaceId }, "listMcpServers failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

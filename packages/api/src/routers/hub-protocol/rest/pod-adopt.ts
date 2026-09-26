@@ -42,7 +42,12 @@ import { resolveWorkspaceTemplate } from "../../../services/capabilities/resolve
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
 const PodAdoptSchema = z.object({
@@ -230,7 +235,7 @@ export function registerPodAdoptRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

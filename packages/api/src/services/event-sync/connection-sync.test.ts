@@ -41,6 +41,10 @@ const h = vi.hoisted(() => ({
 }));
 
 // The broker seam: the pod's report of a failed sync to its operator (the CP).
+// The facts join has its own suite (sync-status-facts.test.ts).
+vi.mock("./sync-status-facts.js", () => ({
+  withConnectionFacts: async (rows: unknown[]) => rows,
+}));
 vi.mock("../../connectors/index.js", () => ({
   resolveBroker: vi.fn(async () => ({
     ok: true,

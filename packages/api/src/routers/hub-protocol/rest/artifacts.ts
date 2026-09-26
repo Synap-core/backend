@@ -21,13 +21,14 @@ import {
   proposedMessageFor,
 } from "../../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   hasScope,
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -60,7 +61,7 @@ const ArtifactWireSchema = z.object({
 });
 
 const CreateBodySchema = z.object({
-  workspaceId: z.string().min(1),
+  workspaceId: uuidQueryParam.min(1),
   userId: z.string().min(1),
   // DERIVED from the ledger column (`SESSION_ARTIFACT_KINDS` = artifacts.kind
   // .enumValues), never re-typed here. This hand-mirrored list had already
@@ -106,7 +107,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
       "Workspace rows follow membership; NULL-workspace (pod-personal) rows keep the caller's owner floor. `workspaceId` NARROWS the lens — omit it to list every artifact the caller can see, which is the only way to reach a pod-personal session's outputs.",
     request: {
       query: z.object({
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         state: z.enum(["working", "kept", "swept", "all"]).optional(),
         placement: z
           .enum(["desk", "home", "sidebar", "library", "all"])
@@ -248,7 +249,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
       logger.error({ err }, "artifacts.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -399,7 +400,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
       logger.error({ err }, "artifacts.create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -536,7 +537,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
       logger.error({ err, id }, "artifacts.update failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

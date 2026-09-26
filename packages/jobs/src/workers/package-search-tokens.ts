@@ -115,12 +115,22 @@ function dedupeStable(tokens: string[]): string[] {
   return out;
 }
 
+/** `track-template` | `work-template` — derived from a playbook's `scope`. */
+export function templateKindToken(scope: unknown): string {
+  return scope === "project" ? "track-template" : "work-template";
+}
+
 function collectPlaybooks(out: string[], playbooks: unknown): void {
   for (const item of asArray(playbooks)) {
     const pb = asRecord(item);
     if (!pb) continue;
     pushPhrase(out, str(pb.name));
     pushGoalWords(out, str(pb.goal) ?? str(pb.goalTemplate));
+    // The DERIVED template kind (W3b): `scope: "project"` is a track template,
+    // anything else a work template — never declared by the author. Lets
+    // `market.search "track template"` find a package that ships a method.
+    // Same rule as the CP list projection `packageItemsSql`.
+    pushToken(out, templateKindToken(pb.scope));
   }
 }
 

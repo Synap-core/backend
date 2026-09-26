@@ -2,7 +2,8 @@
  * composeSuitePackageDefinition — two fake workspaces → suite shape.
  *
  * Pins the Wave F contract: tags include `suite`, dependencies `require`
- * both slugs (NOT compose), playbooks from the constituents are embedded.
+ * both slugs (NOT compose); under D8 the suite carries no profile shell and
+ * harvests no constituent playbooks.
  */
 
 import { describe, it, expect } from "vitest";
@@ -78,12 +79,11 @@ describe("composeSuitePackageDefinition", () => {
       expect(d.relation).not.toBe("compose");
     }
 
-    expect(def.playbooks?.map((p) => p.name)).toEqual([
-      "Qualify lead",
-      "Draft post",
-    ]);
-    // Thin command-tower profile so CP workspace publish accepts the suite.
-    expect(def.profiles?.length).toBeGreaterThanOrEqual(1);
+    // D8: a pack harvests NO playbooks (each constituent's export carries
+    // its own; a harvested copy would install twice into the primary domain)
+    // and authors NO profile shell (it is never a workspace of its own).
+    expect(def.playbooks).toBeUndefined();
+    expect(def.profiles).toEqual([]);
   });
 
   it("caller must publish workspaceDefs as constituents separately (suite stays thin)", () => {
@@ -95,7 +95,7 @@ describe("composeSuitePackageDefinition", () => {
       projectName: "Acme",
       workspaceDefs: [crm, content],
     });
-    expect(def.profiles?.[0]?.slug).toBe("suite-home");
+    expect(def.profiles).toEqual([]);
     expect(def.views).toBeUndefined();
     expect(def.cells).toBeUndefined();
     // Constituents are the full defs the CLI publishes first.
@@ -105,24 +105,17 @@ describe("composeSuitePackageDefinition", () => {
     ]);
   });
 
-  it("dedupes duplicate workspace slugs and playbook names", () => {
+  it("dedupes duplicate workspace slugs", () => {
     const def = composeSuitePackageDefinition({
       projectName: "Dupes",
       workspaceDefs: [
         fakeWorkspace("crm", [{ name: "Qualify lead", goalTemplate: "A" }]),
-        fakeWorkspace("crm", [
-          { name: "Qualify lead", goalTemplate: "B" },
-          { name: "Other", goalTemplate: "C" },
-        ]),
+        fakeWorkspace("crm", [{ name: "Other", goalTemplate: "C" }]),
       ],
     });
     expect(def.dependencies).toHaveLength(1);
     expect(def.dependencies?.[0]?.slug).toBe("crm");
-    expect(def.playbooks?.map((p) => p.name)).toEqual([
-      "Qualify lead",
-      "Other",
-    ]);
-    expect(def.playbooks?.[0]?.goalTemplate).toBe("A");
+    expect(def.playbooks).toBeUndefined();
   });
 
   it("refuses an empty workspace list", () => {

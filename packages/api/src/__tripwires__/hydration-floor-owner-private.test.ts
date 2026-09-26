@@ -54,6 +54,9 @@ const OWNER_AWARE_PREDICATES = [
   "ownerPrivateVisibleWhere",
   "accessScopeWhere",
   "channelVisibilityWhere",
+  // The session read rule (decision D1) — owner, or a human seat on the
+  // session's own room; it has no NULL-workspace branch at all.
+  "sessionReadableWhere",
 ];
 
 /**

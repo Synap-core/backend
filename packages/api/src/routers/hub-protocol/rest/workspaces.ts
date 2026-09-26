@@ -32,7 +32,7 @@ import {
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import {
   EveProviderRoutingResponseSchema,
   EveProviderRoutingSchema,
@@ -197,7 +197,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     description:
       "Persists the workspace's AI provider routing policy. Owner/admin role required.",
     request: {
-      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+      params: zOpenapi.object({ workspaceId: uuidQueryParam }),
       body: EveProviderRoutingSchema,
     },
     responses: {
@@ -229,7 +229,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       "gets `{ status: 'proposed', proposalId }` (applied on approval); an " +
       "operator-authority caller applies immediately (`{ status: 'updated' }`).",
     request: {
-      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+      params: zOpenapi.object({ workspaceId: uuidQueryParam }),
       body: zOpenapi.object({
         sourceRoles: zOpenapi
           .record(
@@ -241,7 +241,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           .record(
             zOpenapi.string(),
             zOpenapi.object({
-              workspaceId: zOpenapi.string(),
+              workspaceId: uuidQueryParam,
               capability: zOpenapi.string().optional(),
               profileSlug: zOpenapi.string().optional(),
               label: zOpenapi.string().optional(),
@@ -279,7 +279,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       "gets `{ status: 'proposed', proposalId }` (applied on approval); an " +
       "operator-authority caller applies immediately (`{ status: 'updated' }`).",
     request: {
-      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+      params: zOpenapi.object({ workspaceId: uuidQueryParam }),
       body: zOpenapi.object({
         enabled: zOpenapi.boolean(),
         roles: zOpenapi.array(zOpenapi.string()),
@@ -308,7 +308,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     description:
       "Returns the effective RBAC + auto-approve list for the workspace. Membership required.",
     request: {
-      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+      params: zOpenapi.object({ workspaceId: uuidQueryParam }),
     },
     responses: {
       200: {
@@ -331,7 +331,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       "understand it before acting: entity counts per profileSlug, the most " +
       "recently-updated entities, and a one-line prose summary (no LLM).",
     request: {
-      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+      params: zOpenapi.object({ workspaceId: uuidQueryParam }),
     },
     responses: {
       200: {
@@ -351,7 +351,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     tags: ["Workspaces"],
     summary: "Read Eve provider routing policy",
     request: {
-      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+      params: zOpenapi.object({ workspaceId: uuidQueryParam }),
     },
     responses: {
       200: {
@@ -652,7 +652,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       return c.json({ workspaces: list, podEntityCount });
     } catch (err) {
       logger.error({ err }, "GET /workspaces failed");
-      return c.json({ error: "Failed to list workspaces" }, 500);
+      return c.json(
+        { error: "Failed to list workspaces" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -748,7 +751,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, callerId, agentUserId },
         "POST /workspaces/enroll-agent failed"
       );
-      return c.json({ error: `Enroll failed: ${message}` }, 500);
+      return c.json(
+        { error: `Enroll failed: ${message}` },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -912,7 +918,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, callerId, agentUserId, proposalId },
         "POST /workspaces/provision-agent failed"
       );
-      return c.json({ error: `Provision failed: ${message}` }, 500);
+      return c.json(
+        { error: `Provision failed: ${message}` },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1260,7 +1269,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "POST /workspaces/:workspaceId/purge failed"
       );
-      return c.json({ error: "Failed to purge workspace" }, 500);
+      return c.json(
+        { error: "Failed to purge workspace" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1336,7 +1348,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "PATCH /workspaces/:workspaceId/eve-provider-routing failed"
       );
-      return c.json({ error: "Failed to sync provider routing" }, 500);
+      return c.json(
+        { error: "Failed to sync provider routing" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1446,7 +1461,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "PATCH /workspaces/:workspaceId/delivery-preferences failed"
       );
-      return c.json({ error: "Failed to set delivery preferences" }, 500);
+      return c.json(
+        { error: "Failed to set delivery preferences" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1551,7 +1569,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "PATCH /workspaces/:workspaceId/source-edges failed"
       );
-      return c.json({ error: "Failed to declare workspace edges" }, 500);
+      return c.json(
+        { error: "Failed to declare workspace edges" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1656,7 +1677,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "PATCH /workspaces/:workspaceId/public-projection failed"
       );
-      return c.json({ error: "Failed to set public-projection config" }, 500);
+      return c.json(
+        { error: "Failed to set public-projection config" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1727,7 +1751,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, workspaceId }, "GET /workspaces/:workspaceId failed");
-      return c.json({ error: "Failed to get workspace" }, 500);
+      return c.json(
+        { error: "Failed to get workspace" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1804,7 +1831,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "GET /workspaces/:workspaceId/governance failed"
       );
-      return c.json({ error: "Failed to read governance policy" }, 500);
+      return c.json(
+        { error: "Failed to read governance policy" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1851,7 +1881,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "GET /workspaces/:workspaceId/eve-provider-routing failed"
       );
-      return c.json({ error: "Failed to read provider routing" }, 500);
+      return c.json(
+        { error: "Failed to read provider routing" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1943,7 +1976,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "GET /workspaces/:workspaceId/home failed"
       );
-      return c.json({ error: "Failed to read home layout" }, 500);
+      return c.json(
+        { error: "Failed to read home layout" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -1999,7 +2035,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           error: "Failed to serialize workspace to template",
           detail: (err as Error).message,
         },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -2101,7 +2137,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         { err, userId, workspaceId },
         "GET /workspaces/:workspaceId/digest failed"
       );
-      return c.json({ error: "Failed to build workspace digest" }, 500);
+      return c.json(
+        { error: "Failed to build workspace digest" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 

@@ -10,6 +10,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -32,7 +33,7 @@ export function registerRelationDefsRoutes(app: HubHono): void {
       logger.error({ err }, "relationDefs.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -103,7 +104,7 @@ export function registerRelationDefsRoutes(app: HubHono): void {
       logger.error({ err }, "relationDefs.create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

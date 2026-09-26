@@ -3658,7 +3658,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
  * or when the entity can't be loaded (best-effort — never blocks proposal
  * creation). The shape mirrors `RequestShapedProposalData["previousData"]`.
  */
-async function captureEntityPreviousData(
+export async function captureEntityPreviousData(
   subjectType: string,
   action: string,
   targetId: string,
@@ -3712,9 +3712,15 @@ async function captureEntityPreviousData(
         entity.properties && typeof entity.properties === "object"
           ? (entity.properties as Record<string, unknown>)
           : {};
+      // A key ABSENT at propose time is recorded as `null` ("was empty"):
+      // `undefined` would vanish in JSON, and an unrecorded key reads as
+      // UNKNOWN downstream (drift `unknown`, no before) — the newly-set field,
+      // the commonest update, could then never be measured.
       const beforeProps: Record<string, unknown> = {};
       for (const key of touchedKeys) {
-        beforeProps[key] = currentProps[key];
+        beforeProps[key] = Object.hasOwn(currentProps, key)
+          ? currentProps[key]
+          : null;
       }
       snapshot.properties = beforeProps;
     }

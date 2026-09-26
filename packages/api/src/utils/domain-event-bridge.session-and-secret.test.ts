@@ -1,15 +1,14 @@
 /**
  * domain-event-bridge — two wire contracts the realtime security lane fixed:
  *
- *  - `focus_session:updated` is ID-ONLY and goes to the `user:` rooms of the
- *    session's owner + its room's human roster — never `workspace:<id>` (every
- *    member's socket) and never the goal. The emitter passes the goal in
- *    `data` (four call sites do); the bridge must not forward it.
+ *  - `focus_session.*` is NOT bridged: `focus_session:updated` has ONE
+ *    producer, the DB-trigger listener (`session-changed-listener.ts`, whose
+ *    pglite test owns the id-only / owner + roster contract).
  *  - Every bridge POST carries `X-Bridge-Secret` when `BRIDGE_SECRET` is set —
  *    `bridgeSecretOk` 401s it otherwise, and the old fetch sent no header.
  *
- * The DB is a fake returning the session row / roster rows; the audience QUERY
- * shape is not exercised here (the owner + roster lookup is two plain selects).
+ * The DB is a fake that WOULD return a session row, so a regression that
+ * re-routes focus_session events through the bridge has an audience to post to.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -41,8 +40,6 @@ import {
 
 type Call = [string, { headers: Record<string, string>; body: string }];
 let fetchMock: ReturnType<typeof vi.fn>;
-const bodies = () =>
-  (fetchMock.mock.calls as Call[]).map((c) => JSON.parse(c[1].body));
 
 beforeEach(() => {
   fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
@@ -55,59 +52,16 @@ afterEach(() => {
   delete process.env.BRIDGE_SECRET;
 });
 
-describe("focus_session:updated — id-only, owner + roster user rooms", () => {
-  it("never targets the workspace room and never carries the goal", async () => {
-    rows.session = [{ userId: "owner_1", channelId: "room_1" }];
-    rows.roster = [{ memberId: "owner_1" }, { memberId: "roster_2" }];
-
-    // The shape the proposal executor emits: approver ≠ owner, goal in data.
+describe("focus_session.* — NOT bridged (one producer)", () => {
+  it("a focus_session event through the bridge posts nothing", async () => {
+    rows.session = [{ userId: "owner_1", channelId: null }];
+    // The live push is the 0277 row trigger → session-changed-listener.ts; a
+    // bridge emit here would be a second producer (and a double push).
     emitHubRealtimeEvent({
       eventType: "focus_session.update.completed",
       subjectId: "sess_1",
-      userId: "approver_9",
-      data: {
-        id: "sess_1",
-        workspaceId: "ws_1",
-        goal: "SECRET GOAL",
-        progress: 3,
-      },
-    });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-
-    const sent = bodies();
-    expect(sent.map((b) => b.event)).toEqual([
-      "focus_session:updated",
-      "focus_session:updated",
-    ]);
-    expect(sent.map((b) => b.userId).sort()).toEqual(["owner_1", "roster_2"]);
-    for (const b of sent) {
-      expect(b.workspaceId).toBeUndefined();
-      expect(b.data).toEqual({ id: "sess_1", sessionId: "sess_1" });
-    }
-    expect(JSON.stringify(sent)).not.toContain("SECRET GOAL");
-  });
-
-  it("a pod-scoped (NULL-workspace) session still pushes to its owner", async () => {
-    rows.session = [{ userId: "owner_1", channelId: null }];
-    emitHubRealtimeEvent({
-      eventType: "focus_session.create.completed",
-      subjectId: "sess_2",
       userId: "owner_1",
-      data: { id: "sess_2", workspaceId: null },
-    });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(bodies()[0]).toMatchObject({
-      event: "focus_session:updated",
-      userId: "owner_1",
-    });
-  });
-
-  it("an unknown session pushes nothing", async () => {
-    emitHubRealtimeEvent({
-      eventType: "focus_session.update.completed",
-      subjectId: "gone",
-      userId: "u",
-      data: {},
+      data: { id: "sess_1", workspaceId: "ws_1", goal: "SECRET GOAL" },
     });
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchMock).not.toHaveBeenCalled();

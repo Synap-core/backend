@@ -60,4 +60,35 @@ describe("catalog cache — derived tags are what rankByTerms reads", () => {
     expect(ranked[0]!.item.name).toBe("Enterprise OS");
     expect(ranked[0]!.score).toBeGreaterThan(0);
   });
+  it("market.search 'track template' finds a package by its DERIVED template kind (W3b)", () => {
+    // Neither name nor description says "track" — only the playbook's scope
+    // does, and the author never declared a kind.
+    const shipsMethod = {
+      name: "Grants",
+      description: "Run grant programs.",
+      tags: mergePackageSearchTags([], {
+        playbooks: [{ name: "Grant Process", scope: "project" }],
+      }),
+    };
+    const shipsSession = {
+      name: "Reading list",
+      description: "Save articles.",
+      tags: mergePackageSearchTags([], {
+        playbooks: [{ name: "Weekly Digest", scope: "session" }],
+      }),
+    };
+    const ranked = rankByTerms(
+      "track template",
+      [shipsSession, shipsMethod],
+      (entry) => ({
+        primary: entry.name,
+        secondary: entry.tags,
+        tertiary: entry.description,
+      })
+    );
+    expect(ranked[0]!.item.name).toBe("Grants");
+    expect(
+      ranked.find((r) => r.item.name === "Reading list")?.score ?? 0
+    ).toBeLessThan(ranked[0]!.score);
+  });
 });

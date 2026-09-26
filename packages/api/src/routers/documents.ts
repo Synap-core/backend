@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod";
+import { archiveObjectChannels } from "../services/comments/object-channel.js";
 import {
   podAdminProcedure,
   podProcedure,
@@ -48,6 +49,7 @@ import {
   loadEditableDocument,
   loadReadableDocument,
 } from "../utils/document-edit-access.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 import { recordSessionArtifact } from "../services/focus-sessions/record-session-artifact.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
@@ -400,7 +402,12 @@ export const documentsRouter = router({
       // Edit rights by the document's own floor — the SAME gate every write
       // uses — so the surface never offers an edit the pod would refuse.
       // Only FORBIDDEN reads as false; a failed membership read fails the get.
-      const canEdit = await canEditDocument(userId, document);
+      // `editReason` is the gate's own machine code (null iff `canEdit`), so
+      // the surface can say WHY the document is read-only.
+      const { allowed: canEdit, reason: editReason } = await canEditDocument(
+        userId,
+        document
+      );
 
       if (input.format === "readable") {
         if (document.type === "pdf" || document.type === "docx") {
@@ -412,7 +419,13 @@ export const documentsRouter = router({
         content = readableMarkdown(content);
       }
 
-      return { document, content, canEdit, format: input.format };
+      return {
+        document,
+        content,
+        canEdit,
+        editReason,
+        format: input.format,
+      };
     }),
 
   /**
@@ -526,6 +539,8 @@ export const documentsRouter = router({
 
       // 1. Delete from DB
       await db.delete(documents).where(eq(documents.id, input.documentId));
+      // Its conversation outlives it, archived (Documents v2).
+      await archiveObjectChannels("document", [input.documentId]);
 
       // 2. Delete from storage
       if (document.storageKey) {
@@ -832,8 +847,9 @@ export const documentsRouter = router({
           ownerColumn: documents.userId,
           userId,
           // Same floor as the registered `documents` rule: a document follows
-          // its pod-shared entity.
+          // its pod-shared entity, and a session's document its session.
           documentFollowsEntity: true,
+          sessionRoster: rosterReadFor(ctx),
         }),
       ];
       if (input.type) {

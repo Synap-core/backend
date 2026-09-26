@@ -32,7 +32,7 @@ import {
 } from "@synap/database";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { logger, type HubHono } from "./_shared.js";
+import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 import { verifyIssuerJwt } from "../../../utils/jwks-client.js";
 
 const RequestSchema = z.object({ assertion: z.string().min(1) });
@@ -175,7 +175,7 @@ export function registerFederationRoutes(app: HubHono): void {
       logger.error({ err }, "POST /federation/oidc-config failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

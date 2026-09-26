@@ -137,7 +137,6 @@ const UN_UNIFIED_ALLOWLIST = new Set<string>([
   "templates.ts", // TODO
   "skills.ts", // TODO
   "tools.ts", // TODO
-  "sharing.ts", // TODO
   "proposals.ts", // TODO
   // Wave 1 router-decomposition split approve-executors.ts by domain; only
   // project/archive's raw completed-audit + emitSideEffects pair still lands

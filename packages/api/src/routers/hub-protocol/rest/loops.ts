@@ -36,7 +36,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
-import { playbookStagesSchema } from "../../../schemas/playbook-stage.js";
+import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
 
@@ -68,23 +68,16 @@ const ScheduleSchema = z.object({
   enabled: z.boolean(),
 });
 
-const LoopPlaybookDefSchema = z.object({
+// The ONE playbook definition schema (schemas/playbook-definition.ts), extended
+// only with the loop's own shape: a `ref` triggers point at, grants as resolved
+// `{kind, id}` pairs, and the loop applier's `{cron, enabled}` schedule. The
+// local copy it replaces had no `scope` / `criteria` / `metadata`.
+export const LoopPlaybookDefSchema = playbookDefinitionSchema.extend({
   ref: z.string().min(1),
-  name: z.string().min(1),
-  goalTemplate: z.string().min(1),
-  description: z.string().optional(),
+  // The loop contract (`LoopPlaybookDef.params`) is typed; keep it strict here.
   params: z.array(PlaybookParamSchema).optional(),
-  executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
-  inputStrategy: z.record(z.string(), z.unknown()).optional(),
-  channelSpec: z.record(z.string(), z.unknown()).optional(),
-  expectedOutputs: z.array(z.record(z.string(), z.unknown())).optional(),
   grants: z.array(GrantSchema).optional(),
   schedule: ScheduleSchema.optional(),
-  // First-class stages + subject profile — threaded into playbooks.create so the
-  // authored (.loop.json) path no longer drops them (root-cause fix). Validated
-  // by the ONE runtime schema (@synap/playbooks): `category` required, keys unique.
-  stages: playbookStagesSchema.optional(),
-  subjectProfile: z.record(z.string(), z.unknown()).optional(),
   // Kind + Facets: subject-FACET selector (the facet twin of subjectProfile).
   // Type-level / forward-compat — validated here, not yet persisted.
   subjectFacet: z.record(z.string(), z.unknown()).optional(),

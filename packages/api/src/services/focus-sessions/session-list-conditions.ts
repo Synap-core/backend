@@ -47,6 +47,7 @@ import {
   type SessionKind,
 } from "./session-kind.js";
 import type { SessionStatus } from "./session-statuses.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 
 /** Triage lens: `default` hides undecided agent drafts, `triage` shows only them. */
 export type SessionLens = "default" | "triage" | "all";
@@ -78,6 +79,13 @@ export interface SessionListQuery {
    * `kind: "work"`; the tRPC door refuses it with any other kind.
    */
   includeTrackedRuns?: boolean;
+  /**
+   * Also list sessions the caller reads through the HUMAN ROSTER of the
+   * session's room (`sessionReadableWhere`, founder decision C). Default false:
+   * a door that does not opt in keeps the owner-only population — which is
+   * what every owner-directed count (needs-you, owed) must read.
+   */
+  roster?: boolean;
 }
 
 /**
@@ -111,10 +119,13 @@ export function sessionListConditions({
   q,
   unfiled,
   includeTrackedRuns,
+  roster,
 }: SessionListQuery): SQL[] {
-  const conditions: SQL[] = [eq(focusSessions.userId, requireUserId(userId))];
+  const conditions: SQL[] = [
+    sessionReadableWhere({ userId: requireUserId(userId), roster }),
+  ];
 
-  // Both lenses narrow within the user's own rows (the floor is userId above).
+  // Both lenses narrow within the readable rows (the floor above).
   // The APPLICATION lives in `sessionScopeConditions`, shared with the owed-slot
   // read, so the doors cannot drift into two answers about what a lens means.
   conditions.push(...sessionScopeConditions({ workspaceLens, projectLens }));

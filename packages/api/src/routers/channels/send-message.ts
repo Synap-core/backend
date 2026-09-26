@@ -34,6 +34,8 @@ import {
   resolveMentionedMember,
 } from "../../utils/agent-handles.js";
 import { notifyHumanMentions } from "../../services/messaging/notify-room-post.js";
+import { recordOwnerRoomReply } from "../../services/focus-sessions/session-answer.js";
+import { resolveSummonedAgentUserId } from "../../services/messaging/turn-principal.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -844,6 +846,24 @@ export const sendMessageProcedure = protectedProcedure
     // routing decision ⇒ silence). For single-responder channels, the
     // isAiChannel gate does.
     const staysSilent = isMultiplayerRoom ? !routingDecision : !isAiChannel;
+
+    // THE ANSWER LOOP (`services/focus-sessions/session-answer.ts`): the
+    // session OWNER's reply to an agent's open question in its room is recorded
+    // as the answer (on the named slot, when the question named one) and wakes
+    // the agent that asked — unless this send already starts a turn (a
+    // resolved mention, an anchored comment), which would double-answer. A
+    // non-owner's reply does nothing here (v1 — open AI-principal decision).
+    // Human door only; ephemeral messages vanish on reload, so they answer
+    // nothing. Never throws.
+    if (!input.ephemeral && !ctx.agentUserId) {
+      await recordOwnerRoomReply({
+        channelId,
+        messageId: userMessageId,
+        content,
+        userId,
+        wake: staysSilent && !anchoredComment?.decision.trigger,
+      });
+    }
     if (staysSilent) {
       // An anchored HUMAN comment on an intake run (or on a pending proposal of
       // this session) wakes the run's agent even with none assigned — through
@@ -911,8 +931,16 @@ export const sendMessageProcedure = protectedProcedure
     //   3. Broadcast presence so the UI can show the typing indicator.
     if (routingDecision) {
       // Override agentUserId with the routed teammate (server-resolved — not
-      // from request body).
-      agentUserId = routingDecision.teammateId;
+      // from request body) — but only an agent the SUMMONER holds. This turn
+      // already runs as the sender (`userId` is the IS operator: floor +
+      // governance); a non-owner summoning the owner's @ai keeps THEIR own
+      // agent as the acting principal (founder decision D, `turn-principal.ts`).
+      agentUserId = await resolveSummonedAgentUserId({
+        roomOwnerId: channel.userId,
+        summonerId: userId,
+        teammateId: routingDecision.teammateId,
+        summonerAgentUserId: agentUserId,
+      });
 
       // Resolve the routed teammate's agentType for effectiveAgentType override.
       try {

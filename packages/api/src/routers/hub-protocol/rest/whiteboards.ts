@@ -208,7 +208,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       logger.error({ err, viewId }, "whiteboard placement proposal failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -269,7 +269,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       logger.error({ err, viewId }, "whiteboard direct placement failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

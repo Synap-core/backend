@@ -616,7 +616,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     expect(node!.data).toEqual({
       // `PlaybookRunNodeDef.data.label` is declared REQUIRED, so the grammar
       // must emit it. Composed through the vocabulary door, never hand-written.
-      label: "Run playbook",
+      label: "Run template",
       playbookId: "11111111-1111-4111-8111-111111111111",
       paramsMapping: { subject: "{{trigger.entityId}}" },
     });
@@ -682,7 +682,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     [
       "id only",
       { playbookId: "11111111-1111-4111-8111-111111111111", paramsMapping: {} },
-      "Run playbook",
+      "Run template",
     ],
     [
       "name only",
@@ -696,7 +696,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
         agentType: "researcher",
         paramsMapping: { topic: "{{trigger.data.title}}" },
       },
-      "Run playbook",
+      "Run template",
     ],
     [
       "id + goalOverride",
@@ -705,7 +705,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
         goalOverride: "Qualify {{trigger.payload.data.title}}",
         paramsMapping: {},
       },
-      "Run playbook",
+      "Run template",
     ],
   ])(
     "a stored node survives read → write on every semantic field (%s)",
@@ -759,7 +759,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     };
     const rebuilt = toFlowDefinition(flowToSentenceActions(original));
     const node = rebuilt.nodes.find((n) => n.type === "playbook_run");
-    expect(node!.data.label).toBe("Run playbook");
+    expect(node!.data.label).toBe("Run template");
     expect(node!.data.playbookId).toBe("11111111-1111-4111-8111-111111111111");
   });
 

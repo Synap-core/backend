@@ -72,6 +72,10 @@ import {
   focusSessions,
   proposals,
   users,
+  channels,
+  channelMembers,
+  podMembers,
+  projectMembers,
   chatTurns,
   workspaces,
   workspaceMembers,
@@ -177,6 +181,11 @@ describe("focusSessions.get returns the continuation packet", () => {
       playbooks,
       messages,
       projects,
+      // The session read predicate's roster branch joins these (decision C).
+      channels,
+      channelMembers,
+      podMembers,
+      projectMembers,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -850,7 +859,12 @@ describe("focusSessions.get returns the continuation packet", () => {
 
   it("a failed decision read is unavailable, never 'no decision'", async () => {
     const session = await seed({ owed: false });
-    await h.client!.exec(`drop table "users";`);
+    // Break ONLY the decision read (its reviewer join). Dropping `users` would
+    // also break the session read itself: the read predicate's roster branch
+    // joins `users` (decision C).
+    await h.client!.exec(
+      `alter table "proposals" rename column "reviewed_by" to "reviewed_by_off";`
+    );
     try {
       const c = (await get(session)).continuation;
       expect(c.lastDecision).toEqual({
@@ -858,7 +872,9 @@ describe("focusSessions.get returns the continuation packet", () => {
         reason: "This session's last decision could not be read.",
       });
     } finally {
-      await h.client!.exec(ddlFor(users as unknown as PgTable));
+      await h.client!.exec(
+        `alter table "proposals" rename column "reviewed_by_off" to "reviewed_by";`
+      );
     }
   });
 

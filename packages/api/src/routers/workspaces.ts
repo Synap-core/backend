@@ -60,6 +60,7 @@ import { inviteProcedures } from "./workspaces/invites.js";
 import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
 import { mcpServersProcedures } from "./workspaces/mcp-servers.js";
 import { listProjectsUsingWorkspace } from "../utils/project-workspace.js";
+import { podVisibleWorkspaceWhere } from "../utils/user-visible-where.js";
 
 export { isPodReadableWorkspace } from "./workspaces/helpers.js";
 
@@ -252,7 +253,9 @@ const coreProcedures = {
       }
 
       const podReadable = await db.query.workspaces.findMany({
-        where: drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
+        // The ONE pod-visible door: a guest (Sites W2) lists no pod-visible
+        // workspace it is not a member of.
+        where: podVisibleWorkspaceWhere(ctx.userId),
       });
 
       for (const workspace of podReadable) {
@@ -323,7 +326,18 @@ const coreProcedures = {
         ),
       });
 
-      const podReadable = isPodReadableWorkspace(workspace.settings);
+      // Pod-visible read access through the ONE door (Sites W2): the setting
+      // alone is not enough — a guest or an unknown principal is not a pod
+      // reader. Only probed for a non-member.
+      const podReadable =
+        !membership &&
+        !!(await db.query.workspaces.findFirst({
+          where: and(
+            eq(workspaces.id, input.id),
+            podVisibleWorkspaceWhere(ctx.userId)
+          ),
+          columns: { id: true },
+        }));
 
       if (!membership && !podReadable) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });

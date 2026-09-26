@@ -53,6 +53,8 @@ import {
   projects,
   projectTracks,
   eq,
+  podMembers,
+  projectMembers,
 } from "@synap/database";
 import { getProjectPath } from "./project-path.js";
 import { attachNextMove } from "../focus-sessions/session-path-sections.js";
@@ -162,6 +164,8 @@ beforeAll(async () => {
     playbooks,
     projects,
     projectTracks,
+    podMembers,
+    projectMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

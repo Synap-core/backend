@@ -132,6 +132,63 @@ export async function linkProjectToWorkspace(
   return { linked: true };
 }
 
+export type UnlinkProjectFromWorkspaceResult =
+  | { unlinked: true; rows: number }
+  | { unlinked: false; reason: "project_not_found" };
+
+/**
+ * Remove `project --uses--> workspace` — the inverse of
+ * `linkProjectToWorkspace`, and the ONE door for it. Callers govern first
+ * (MCP `synap_project_use_workspace {remove:true}` files `link/delete` through
+ * `checkPermissionOrPropose`; the `link/delete` approval executor replays here).
+ *
+ * Same floor as the add: the project must exist and be visible to `userId`
+ * (`ownerPrivateVisibleWhere`). The workspace is NOT looked up — an edge to an
+ * archived or deleted workspace must stay removable, that is the main reason
+ * this door exists. Deletes ONLY the `uses` edge of that exact pair; `rows` is
+ * the DELETE's own RETURNING count (`0` = there was no such edge).
+ */
+export async function unlinkProjectFromWorkspace(
+  db: Awaited<ReturnType<typeof getDb>>,
+  args: {
+    projectId: string;
+    workspaceId: string;
+    userId: string;
+  }
+): Promise<UnlinkProjectFromWorkspaceResult> {
+  const [visible] = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(
+      and(
+        eq(projects.id, args.projectId),
+        ownerPrivateVisibleWhere(
+          projects.workspaceId,
+          projects.userId,
+          args.userId
+        )
+      )
+    )
+    .limit(1);
+  if (!visible) {
+    return { unlinked: false, reason: "project_not_found" };
+  }
+
+  const removed = await db
+    .delete(links)
+    .where(
+      and(
+        eq(links.fromType, "project"),
+        eq(links.fromId, args.projectId),
+        eq(links.toType, "workspace"),
+        eq(links.toId, args.workspaceId),
+        eq(links.linkType, "uses")
+      )
+    )
+    .returning({ id: links.id });
+  return { unlinked: true, rows: removed.length };
+}
+
 /**
  * Workspace ids a project uses. Same unscoped INDEX query as the batch door —
  * membership is NOT applied here (INDEX ≠ ACL). `userId` is kept so callers

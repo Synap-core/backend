@@ -29,15 +29,17 @@ import {
   drizzleSql,
   DocumentRepository,
   eventRepository,
+  type SQL,
 } from "@synap/database";
 import { storage } from "@synap/storage";
 import { createLogger } from "@synap-core/core";
 import { recordSessionArtifact } from "../focus-sessions/record-session-artifact.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 
 const logger = createLogger({ module: "session-document" });
 
-/** The reserved `artifacts.props.expectedLabel` that marks THE session document. */
-export const SESSION_DOCUMENT_LABEL = "session-document";
+import { SESSION_DOCUMENT_LABEL } from "./label.js";
+export { SESSION_DOCUMENT_LABEL };
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -52,10 +54,36 @@ export interface OwnedSession {
   currentStage: string | null;
 }
 
-/** Load a session the caller owns. Anything else — including a malformed id — is NOT_FOUND. */
+/**
+ * Load a session the caller owns. Anything else — including a malformed id — is
+ * NOT_FOUND. The WRITE floor: section writes go through this, never through
+ * {@link loadReadableSession}.
+ */
 export async function loadOwnedSession(
   sessionId: string,
   userId: string
+): Promise<OwnedSession> {
+  return loadSessionWhere(sessionId, eq(focusSessions.userId, userId));
+}
+
+/**
+ * Load a session the caller may READ (`sessionReadableWhere`: owner, or a human
+ * roster member when `roster` is set). Same NOT_FOUND contract. Reads only.
+ */
+export async function loadReadableSession(
+  sessionId: string,
+  userId: string,
+  opts: { roster?: boolean } = {}
+): Promise<OwnedSession> {
+  return loadSessionWhere(
+    sessionId,
+    sessionReadableWhere({ userId, roster: opts.roster })
+  );
+}
+
+async function loadSessionWhere(
+  sessionId: string,
+  floor: SQL
 ): Promise<OwnedSession> {
   const row = UUID_RE.test(sessionId)
     ? (
@@ -70,12 +98,7 @@ export async function loadOwnedSession(
             currentStage: focusSessions.currentStage,
           })
           .from(focusSessions)
-          .where(
-            and(
-              eq(focusSessions.id, sessionId),
-              eq(focusSessions.userId, userId)
-            )
-          )
+          .where(and(eq(focusSessions.id, sessionId), floor))
           .limit(1)
       )[0]
     : undefined;

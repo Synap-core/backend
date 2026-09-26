@@ -40,8 +40,8 @@ import { shortenKeyId } from "../../../utils/auth-error.js";
 import { normalizeIssuerUrl } from "../../../utils/issuer-url-safety.js";
 import { verifyTrustedIssuerJwt } from "../../../utils/jwks-client.js";
 import { AuthStatusSchema } from "./_codecs/auth.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
-import { logger, type HubHono } from "./_shared.js";
+import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
+import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
 export function registerAuthRoutes(app: HubHono): void {
   const authStatusRoute = createRoute({
@@ -56,6 +56,7 @@ export function registerAuthRoutes(app: HubHono): void {
       "privileged calls. Returns 401 if no valid bearer was supplied.",
     security: [{ bearerAuth: [] }],
     responses: {
+      ...trpcErrorResponses,
       200: {
         description: "Bearer credential introspection.",
         content: { "application/json": { schema: AuthStatusSchema } },
@@ -160,8 +161,8 @@ export function registerAuthRoutes(app: HubHono): void {
       logger.error({ err, apiKeyId }, "/auth/status lookup failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 }

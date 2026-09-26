@@ -83,13 +83,19 @@ import {
   type Settled,
 } from "../focus-sessions/session-path-sections.js";
 import { buildPaginatedResponse } from "../../utils/pagination.js";
+import {
+  withViewerRole,
+  type SessionViewerRole,
+} from "../focus-sessions/viewer-role.js";
 
 export type { PathCount };
 
 export interface ProjectPathQuery {
   database?: typeof db;
-  /** Owner floor. Sessions are owner-private. */
+  /** The viewer: owner floor, plus the human-roster branch when `roster`. */
   userId: string;
+  /** Honour the human-roster read branch (`sessionReadableWhere`). Default false. */
+  roster?: boolean;
   projectId: string;
   /** Narrow to these workspaces. Absent / empty ⇒ every workspace. */
   workspaceIds?: string[];
@@ -122,6 +128,8 @@ export interface ProjectPathRow {
    * review/close, whether it is an agent draft. Same reads as `nextMove`.
    */
   unitFacts: SessionUnitCounts;
+  /** `owner` | `member` — a member reads, never writes (decision C). */
+  viewerRole: SessionViewerRole;
   /**
    * `null` for a session filed in no workspace. `name` is `null` when the
    * caller cannot see that workspace.
@@ -201,8 +209,15 @@ export function projectPathConditions(q: {
   /** Narrow to these workspaces. Absent / empty ⇒ every workspace. */
   workspaceIds?: string[];
   lens: SessionLens;
+  /**
+   * Include sessions the caller reads through their room's HUMAN roster
+   * (decision C). Default false — the needs-you count and the track reads
+   * stay owner-only.
+   */
+  roster?: boolean;
 }) {
   return sessionListConditions({
+    roster: q.roster,
     userId: q.userId,
     scope: {
       workspaceLens: q.workspaceIds?.length ? q.workspaceIds : undefined,
@@ -250,6 +265,7 @@ export async function getProjectPath(
       projectId,
       workspaceIds: query.workspaceIds,
       lens: query.lens,
+      roster: query.roster,
     })
   );
 
@@ -324,6 +340,9 @@ export async function getProjectPath(
     s.status === "ok" ? { status: "ok", total: s.value } : s;
 
   const items = sectioned.map((row): ProjectPathRow => ({
+    // `owner` | `member`; on a member row `unitFacts` is neutralised so a shared
+    // session never counts toward the member's needs-you (`viewer-role.ts`).
+    ...withViewerRole({ userId: row.userId, unitFacts: row.unitFacts }, userId),
     id: row.id,
     title: row.title ?? null,
     displayTitle: resolveSessionTitle(row),
@@ -334,7 +353,6 @@ export async function getProjectPath(
     trackId: row.trackId ?? null,
     trackStage: row.trackStage ?? null,
     triage: row.triage,
-    unitFacts: row.unitFacts,
     workspace: row.workspaceId
       ? { id: row.workspaceId, name: wsNames.get(row.workspaceId) ?? null }
       : null,

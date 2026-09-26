@@ -25,10 +25,13 @@ import { markProposalNotificationsActioned } from "../../notifications/mark-prop
 import {
   db,
   proposals,
+  users,
   ProposalStatus,
   eq,
   and,
   inArray,
+  isNotNull,
+  like,
   lt,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -160,6 +163,55 @@ async function discardExpiredSourceBlobs(
   }
 }
 
+/**
+ * GUEST PROPOSALS carry their own clock (Sites W4). A public form's guest
+ * submission is stamped `expires_at = filed + retentionDays` by the guest door
+ * (`services/forms/guest-submit.ts`), and it is the ONLY proposal population
+ * whose `expires_at` this sweeper honours: the actor must be a form actor
+ * (`users.agent_type LIKE 'form:%'`, written only by the forms door). Every
+ * other row keeps the class-lifetime rule above — the legacy `expires_at`
+ * values of the removed default TTL stay inert, as the C2 note requires.
+ *
+ * Pure half: a row lapses when its `expiresAt` is strictly in the past.
+ */
+export function selectLapsedGuestIds(
+  rows: ReadonlyArray<{ id: string; expiresAt: Date | null }>,
+  now: Date
+): string[] {
+  return rows
+    .filter(
+      (r) =>
+        r.expiresAt instanceof Date && r.expiresAt.getTime() < now.getTime()
+    )
+    .map((r) => r.id);
+}
+
+/** Pending guest proposals whose own expiry passed (query half). */
+async function findLapsedGuestProposals(
+  now: Date
+): Promise<Array<{ id: string; expiresAt: Date | null; data: unknown }>> {
+  const formActors = db
+    .select({ id: users.id })
+    .from(users)
+    .where(like(users.agentType, "form:%"));
+  const rows = (await db
+    .select({
+      id: proposals.id,
+      expiresAt: proposals.expiresAt,
+      data: proposals.data,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.status, ProposalStatus.PENDING),
+        isNotNull(proposals.expiresAt),
+        lt(proposals.expiresAt, now),
+        inArray(proposals.agentUserId, formActors)
+      )
+    )) as Array<{ id: string; expiresAt: Date | null; data: unknown }>;
+  return rows;
+}
+
 export interface ExpireLapsedResult {
   scanned: number;
   expired: number;
@@ -204,6 +256,25 @@ export async function expireLapsedProposals(
 
   const lapsed = selectLapsedIds(pending, now);
 
+  // Guest-form proposals past their OWN expiry (see selectLapsedGuestIds). A
+  // failure here must not cost the class sweep above its pass: logged, and the
+  // guest rows simply wait for the next 6-hourly run.
+  let guestRows: Array<{ id: string; expiresAt: Date | null; data: unknown }> =
+    [];
+  try {
+    guestRows = await findLapsedGuestProposals(now);
+  } catch (err) {
+    logger.warn(
+      { err },
+      "expiry: guest-proposal scan failed (retried next run)"
+    );
+  }
+  for (const id of selectLapsedGuestIds(guestRows, now)) {
+    if (!lapsed.includes(id)) lapsed.push(id);
+  }
+  const seen = new Set(pending.map((p) => p.id));
+  const candidates = [...pending, ...guestRows.filter((g) => !seen.has(g.id))];
+
   if (lapsed.length === 0) return { scanned: pending.length, expired: 0 };
 
   // Chunked, and re-asserting PENDING in the WHERE: a human may have approved
@@ -229,7 +300,7 @@ export async function expireLapsedProposals(
     expired += rows.length;
   }
 
-  await discardExpiredSourceBlobs(actionedIds, pending);
+  await discardExpiredSourceBlobs(actionedIds, candidates);
 
   // Expired = no longer decidable: its bell rows leave with it (one door with
   // approve/reject). ONE write for the whole scan rather than one per chunk —

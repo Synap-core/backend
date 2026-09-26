@@ -45,6 +45,7 @@
 
 import { createHash } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
+import { isPublicDoorPath } from "../../../public-doors.js";
 
 const IDEMPOTENT_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const TTL_MS = 24 * 60 * 60 * 1000; // 24h
@@ -235,6 +236,19 @@ export function idempotencyMiddleware(
       return next();
     }
 
+    // NO PRINCIPAL ⇒ NEVER CACHE (Sites W3). The cache key is partitioned by
+    // `userId`; without one every caller would share the `"anonymous"`
+    // partition, so two strangers sending the same Idempotency-Key + body would
+    // be served each other's 2xx. That covers the credentialless public doors
+    // (also skipped by the ONE predicate, explicitly) AND every other
+    // unauthenticated door — including the `/setup/agent/pending/*` review
+    // POSTs, which used to be cached under "anonymous". Safe direction: a skip
+    // only ever re-runs a handler, it never serves a stale body.
+    const principal = c.get("userId") as string | undefined;
+    if (!principal || isPublicDoorPath(reqPath)) {
+      return next();
+    }
+
     // Reject obvious garbage early. UUIDs (36) + ULIDs (26) + short opaque
     // tokens fit in [8, 256].
     if (key.length < 8 || key.length > 256) {
@@ -252,8 +266,7 @@ export function idempotencyMiddleware(
     }
     const bodyHash = createHash("sha256").update(bodyText).digest("hex");
 
-    const userId = (c.get("userId") as string | undefined) ?? "anonymous";
-    const cacheKey = `idem:${userId}:${key}:${bodyHash}`;
+    const cacheKey = `idem:${principal}:${key}:${bodyHash}`;
 
     // Cache lookup — fail OPEN on any error.
     let cached: CachedResponse | null = null;

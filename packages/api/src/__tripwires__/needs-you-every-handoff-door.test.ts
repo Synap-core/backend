@@ -65,8 +65,6 @@ const EXEMPT: Record<string, string> = {
     "that knows who is in front of the run (`run-playbook.ts` notifies).",
   "services/focus-sessions/schedule-session.ts":
     "An APPOINTMENT the person booked themselves (origin 'human').",
-  "routers/playbooks.ts":
-    "tRPC `playbooks.run` — the person clicking Run with a form in front of them.",
   "services/import/session.ts":
     "The person's own import of a session; nothing is handed over by an agent.",
 };

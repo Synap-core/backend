@@ -16,6 +16,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 export function registerNotificationsRoutes(app: HubHono): void {
@@ -109,7 +110,7 @@ export function registerNotificationsRoutes(app: HubHono): void {
       logger.error({ err }, "notifications.create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

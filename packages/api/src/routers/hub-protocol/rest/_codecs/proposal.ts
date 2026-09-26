@@ -12,6 +12,7 @@ import {
   proposalClassFields,
 } from "../../../../services/proposals/proposal-class.js";
 import { projectProposalRowForViewer } from "../../../proposals/failure-projection.js";
+import { uuidQueryParam } from "./_openapi.js";
 
 /**
  * The selectable `status` filters for a proposal listing — the SSOT every
@@ -430,7 +431,7 @@ export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
 export const ListProposalsQuerySchema = z
   .object({
     userId: z.string().optional(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     status: ProposalStatusSchema.optional().describe(
       "Defaults to `pending`. Use `all` to return every status. " +
         "`auto_approved` returns the audit receipts of agent writes that were " +
@@ -481,7 +482,7 @@ export const UpdateProposalRequestSchema = z
 /** POST /proposals request body. */
 export const CreateProposalRequestSchema = z
   .object({
-    workspaceId: z.string().nullable().optional(),
+    workspaceId: uuidQueryParam.nullable().optional(),
     agentUserId: z.string().optional(),
     channelId: z
       .string()

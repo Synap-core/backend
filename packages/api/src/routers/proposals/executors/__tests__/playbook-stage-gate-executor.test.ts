@@ -58,13 +58,6 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-const realtimeEvents: Array<Record<string, unknown>> = [];
-vi.mock("../../../../utils/domain-event-bridge.js", () => ({
-  emitHubRealtimeEvent: (e: Record<string, unknown>) => {
-    realtimeEvents.push(e);
-  },
-}));
-
 import { proposalExecRegistry } from "../../execution-registry.js";
 import type { ProposalExecutorArgs } from "../../execution-registry.js";
 import { registerPlaybookStageGateExecutors } from "../playbook-stage-gate.js";
@@ -116,7 +109,6 @@ function sessionUpdate(): Record<string, unknown> {
 beforeEach(() => {
   registerPlaybookStageGateExecutors();
   updates.length = 0;
-  realtimeEvents.length = 0;
   updateReturns = [{ id: SESSION_ID, status: "active" }];
   sessionRow = {
     id: SESSION_ID,
@@ -148,7 +140,7 @@ describe("focus_session/playbook.stage_gate — approval resumes the run", () =>
 
     // The proposal row is marked approved by this executor, not left pending.
     expect(updates.some((u) => u.table === "proposals")).toBe(true);
-    expect(realtimeEvents).toHaveLength(1);
+    // No hand emit: the live push is the focus_sessions row trigger (0277).
   });
 
   it("never touches currentStage — the stage already stands", async () => {
@@ -169,8 +161,6 @@ describe("focus_session/playbook.stage_gate — approval resumes the run", () =>
     const effect = result.effect as Record<string, unknown>;
     expect(effect.applied).toBe("none");
     expect(String(effect.reason)).toContain("not paused");
-    // No realtime "it is active now" event for a session that is not.
-    expect(realtimeEvents).toHaveLength(0);
     // The gate is still answered — the proposal is still marked approved.
     expect(updates.some((u) => u.table === "proposals")).toBe(true);
   });

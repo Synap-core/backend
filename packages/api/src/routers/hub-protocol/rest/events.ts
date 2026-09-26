@@ -23,7 +23,7 @@ import {
 import { eventStreamManager } from "../../../event-stream-manager.js";
 import { NotificationService } from "../../../notifications/NotificationService.js";
 import { emitChatEvent } from "../../../utils/chat-realtime-broadcast.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { ListEventsQuerySchema, WireEventSchema } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -33,6 +33,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 /**
@@ -57,7 +58,7 @@ const AGENT_FAILURE_RENOTIFY_COOLDOWN_MS = 60 * 60 * 1000; // 1h
  * only thing that needed a decision was the failure notification — see below.
  */
 const AgentRunBodySchema = z.object({
-  workspaceId: z.string().nullable().optional(),
+  workspaceId: uuidQueryParam.nullable().optional(),
   agentUserId: z.string(),
   agentType: z.string(),
   threadId: z.string().optional(),
@@ -174,7 +175,7 @@ export function registerEventsRoutes(app: HubHono): void {
       logger.error({ err, userId }, "listEvents failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -633,7 +634,7 @@ export function registerEventsRoutes(app: HubHono): void {
       logger.error({ err, userId, runId }, "POST /agent-runs failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -702,7 +703,7 @@ export function registerEventsRoutes(app: HubHono): void {
       logger.error({ err, userId }, "listAgentRuns failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

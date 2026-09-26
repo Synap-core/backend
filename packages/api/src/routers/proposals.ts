@@ -28,6 +28,9 @@ import {
   isNull,
   isNotNull,
   lt,
+  ne,
+  or,
+  notInArray,
   entities,
   channels,
   users,
@@ -46,6 +49,12 @@ import {
   buildFallbackTitle,
   PROPOSAL_REJECTION_REASONS,
 } from "@synap-core/types/proposals";
+import {
+  PROPOSAL_STATUSES,
+  SESSION_BOOKKEEPING_PROPOSAL_TYPES,
+  SESSION_BOOKKEEPING_TARGET_TYPE,
+  resolveProposalAttention,
+} from "@synap-core/types/proposals/attention";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
@@ -102,6 +111,11 @@ import {
   displayNameForUser,
   findFlowNode,
 } from "./proposals/display.js";
+import {
+  rosterReadFor,
+  sessionReadableWhere,
+} from "../access/session-visibility.js";
+import { redactUnreadableSessionTargets } from "../services/proposals/session-content-redaction.js";
 export { buildProposalChanges } from "./proposals/changes.js";
 import {
   planProposalRevert,
@@ -282,6 +296,24 @@ function itemDoorRaceConflict(): TRPCError {
   });
 }
 
+/**
+ * SQL twin of `isSessionBookkeeping` (+ the attention rule that bookkeeping
+ * never demotes a decision): keeps a row unless it targets a session with a
+ * bookkeeping verb AND its status is not a decision. Built from the SAME
+ * constants the types leaf reads, never restated. The columns are NOT NULL,
+ * so the `or` has no NULL arm to fall through.
+ */
+const DECIDE_STATUSES = PROPOSAL_STATUSES.filter(
+  (status) => resolveProposalAttention({ status }) === "decide"
+);
+function notSessionBookkeepingWhere() {
+  return or(
+    ne(proposals.targetType, SESSION_BOOKKEEPING_TARGET_TYPE),
+    notInArray(proposals.proposalType, [...SESSION_BOOKKEEPING_PROPOSAL_TYPES]),
+    inArray(proposals.status, DECIDE_STATUSES)
+  )!;
+}
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -335,6 +367,14 @@ export const proposalsRouter = router({
         /** When true, only return proposals where agentUserId is not null */
         agentOnly: z.boolean().optional(),
         /**
+         * Leave out session BOOKKEEPING receipts — an agent keeping its own
+         * session record current (`isSessionBookkeeping`), which is never work
+         * done for the person. Filtered in SQL, so a page is never a full page
+         * of receipts a notice surface then throws away. A PENDING session
+         * create is a decision and is always kept.
+         */
+        excludeBookkeeping: z.boolean().optional(),
+        /**
          * Filter to proposals produced by a specific automation's runs.
          * Resolved through `automation_step_runs`/`automation_runs`
          * (`proposals.stepRunId` → `runId` → `automationId`) — `proposals`
@@ -375,6 +415,10 @@ export const proposalsRouter = router({
 
       if (input.proposalIds && input.proposalIds.length > 0) {
         conditions.push(inArray(proposals.id, input.proposalIds));
+      }
+
+      if (input.excludeBookkeeping) {
+        conditions.push(notSessionBookkeepingWhere());
       }
 
       /** Filter to proposals with a specific correlationId (used to link back to focus sessions) */
@@ -471,7 +515,9 @@ export const proposalsRouter = router({
       // display metadata. Eve/Studio can render useful labels without leaking
       // raw UUIDs into the main review surface.
       const reviewerId = requireUserId(ctx.userId);
-      const enriched = await enrichProposalsForDisplay(rows, reviewerId);
+      const enriched = await enrichProposalsForDisplay(rows, reviewerId, {
+        roster: rosterReadFor(ctx),
+      });
 
       const { items, pagination } = buildPaginatedResponse(enriched, input);
 
@@ -751,7 +797,13 @@ export const proposalsRouter = router({
         for (const u of urows) agentLabelById.set(u.id, displayNameForUser(u));
       }
 
-      const clusterRows: ClusterInputRow[] = rows.map((r) => ({
+      // A cluster's label is read off `data` — withhold session content the
+      // viewer may not read (decision D1) before it is fingerprinted/labelled.
+      const readableRows = await redactUnreadableSessionTargets(rows, {
+        userId,
+        roster: rosterReadFor(ctx),
+      });
+      const clusterRows: ClusterInputRow[] = readableRows.map((r) => ({
         id: r.id,
         proposalType: r.proposalType,
         targetType: r.targetType,
@@ -977,7 +1029,11 @@ export const proposalsRouter = router({
       });
 
       return {
-        ...(await enrichProposalsForDisplay([proposal], userId))[0],
+        ...(
+          await enrichProposalsForDisplay([proposal], userId, {
+            roster: rosterReadFor(ctx),
+          })
+        )[0],
         revertable,
       };
     }),
@@ -1052,16 +1108,25 @@ export const proposalsRouter = router({
       }
 
       if (proposal.sessionId) {
+        // The ONE session read rule (decision D1): a session the viewer may
+        // not read is OMITTED — seeing the proposal never names its session.
         const [s] = await db
           .select({ title: focusSessions.title, goal: focusSessions.goal })
           .from(focusSessions)
-          .where(eq(focusSessions.id, proposal.sessionId))
+          .where(
+            and(
+              eq(focusSessions.id, proposal.sessionId),
+              sessionReadableWhere({ userId, roster: rosterReadFor(ctx) })
+            )
+          )
           .limit(1);
-        targets.push({
-          kind: "session",
-          id: proposal.sessionId,
-          label: (s && resolveSessionTitle(s)) || "Session",
-        });
+        if (s) {
+          targets.push({
+            kind: "session",
+            id: proposal.sessionId,
+            label: resolveSessionTitle(s) || "Session",
+          });
+        }
       }
 
       if (proposal.threadId) {
@@ -2045,6 +2110,11 @@ export const proposalsRouter = router({
             status: ProposalStatus.PENDING,
             reviewedBy: null,
             reviewedAt: null,
+            // Same rule as the approved→reopen tail below: the entity-update
+            // stamps left on the record (kept keys) are dropped, so a
+            // re-approval stamps fresh. In SQL, so a concurrent write to
+            // `data` is never overwritten by this row's stale copy.
+            data: drizzleSql`case when jsonb_typeof(${proposals.data} #> '{materialized,propertyDiffs}') = 'array' then jsonb_set(${proposals.data}, '{materialized,propertyDiffs}', '[]'::jsonb) else ${proposals.data} end`,
             updatedAt: reopenedAt,
           })
           .where(
@@ -2552,6 +2622,20 @@ export const proposalsRouter = router({
             }
           : {}),
       } as StoredProposalData;
+      // `reopen` returns the proposal to review: its entity-update stamps
+      // (kept keys included) describe a write that is no longer this
+      // proposal's to undo. Drop them, so a re-approval stamps FRESH from the
+      // entity as it then stands — merged onto a stale stamp, the older
+      // "before" would win and a later undo would overwrite a value the
+      // person deliberately kept.
+      const reopenedRecord = revertedPayload.materialized as
+        CompleteMaterializedRecord | undefined;
+      if (input.reopen && reopenedRecord?.propertyDiffs) {
+        revertedPayload.materialized = {
+          ...reopenedRecord,
+          propertyDiffs: [],
+        } as CompleteMaterializedRecord;
+      }
 
       // Flip status, but only from an applied state — guards the double-revert
       // race: two concurrent calls both pass the precheck, but the loser's

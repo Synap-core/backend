@@ -7,7 +7,7 @@ import type { StepContext } from "../automation-executor.js";
 // assert WHICH resolver each config shape drives — the context-derived routing
 // precedence is the load-bearing behavior of this wave.
 const mocks = vi.hoisted(() => ({
-  ensureEntityChannel: vi.fn(),
+  ensureObjectChannel: vi.fn(),
   ensureAutomationRunChannel: vi.fn(),
   ensureUserPersonalChannel: vi.fn(),
   ensureProactiveFeedChannel: vi.fn(),
@@ -27,7 +27,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   class ChannelRepository {
     constructor(_db: unknown) {}
-    ensureEntityChannel = mocks.ensureEntityChannel;
+    ensureObjectChannel = mocks.ensureObjectChannel;
     ensureAutomationRunChannel = mocks.ensureAutomationRunChannel;
     ensureUserPersonalChannel = mocks.ensureUserPersonalChannel;
     ensureProactiveFeedChannel = mocks.ensureProactiveFeedChannel;
@@ -98,7 +98,10 @@ const runChannelMessage = (
 describe("channel_message output — context-derived channel routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.ensureEntityChannel.mockResolvedValue({ id: "ch-entity" });
+    mocks.ensureObjectChannel.mockResolvedValue({
+      channel: { id: "ch-entity" },
+      created: false,
+    });
     mocks.ensureAutomationRunChannel.mockResolvedValue({ id: "ch-run" });
     mocks.ensureUserPersonalChannel.mockResolvedValue({ id: "ch-personal" });
     mocks.ensureProactiveFeedChannel.mockResolvedValue({ id: "ch-proactive" });
@@ -114,7 +117,7 @@ describe("channel_message output — context-derived channel routing", () => {
       channelId: "ch-explicit",
       content: "hi",
     });
-    expect(mocks.ensureEntityChannel).not.toHaveBeenCalled();
+    expect(mocks.ensureObjectChannel).not.toHaveBeenCalled();
     expect(mocks.ensureAutomationRunChannel).not.toHaveBeenCalled();
     expect(mocks.insertChannelMessage).toHaveBeenCalledWith(
       expect.objectContaining({ channelId: "ch-explicit", content: "hi" })
@@ -137,30 +140,28 @@ describe("channel_message output — context-derived channel routing", () => {
     expect(mocks.ensureAutomationRunChannel).not.toHaveBeenCalled();
   });
 
-  it("(b) channelEntityRef (exact {{...}} → entity id) resolves via ensureEntityChannel", async () => {
+  it("(b) channelEntityRef (exact {{...}} → entity id) resolves via ensureObjectChannel", async () => {
     const result = await runChannelMessage(
       { channelEntityRef: "{{steps.q.output.clientId}}", content: "recap" },
       { steps: { q: { output: { clientId: "entity-42" } } } }
     );
-    expect(mocks.ensureEntityChannel).toHaveBeenCalledWith(
-      "entity-42",
-      OWNER,
-      WORKSPACE
-    );
+    expect(mocks.ensureObjectChannel).toHaveBeenCalledWith({
+      type: "entity",
+      id: "entity-42",
+    });
     expect(mocks.ensureAutomationRunChannel).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "sent", channelId: "ch-entity" });
   });
 
-  it("(c) channelType:'subjectEntity' routes the run's subject via ensureEntityChannel", async () => {
+  it("(c) channelType:'subjectEntity' routes the run's subject via ensureObjectChannel", async () => {
     const result = await runChannelMessage(
       { channelType: "subjectEntity", content: "recap" },
       { subjectEntityId: "entity-subject" }
     );
-    expect(mocks.ensureEntityChannel).toHaveBeenCalledWith(
-      "entity-subject",
-      OWNER,
-      WORKSPACE
-    );
+    expect(mocks.ensureObjectChannel).toHaveBeenCalledWith({
+      type: "entity",
+      id: "entity-subject",
+    });
     expect(result).toMatchObject({ status: "sent", channelId: "ch-entity" });
   });
 
@@ -177,7 +178,7 @@ describe("channel_message output — context-derived channel routing", () => {
       OWNER,
       WORKSPACE
     );
-    expect(mocks.ensureEntityChannel).not.toHaveBeenCalled();
+    expect(mocks.ensureObjectChannel).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "sent", channelId: "ch-run" });
   });
 
@@ -186,7 +187,7 @@ describe("channel_message output — context-derived channel routing", () => {
       { channelEntityRef: "{{steps.q.output.clientId}}", content: "x" },
       { steps: { q: { output: { clientId: "" } } } }
     );
-    expect(mocks.ensureEntityChannel).not.toHaveBeenCalled();
+    expect(mocks.ensureObjectChannel).not.toHaveBeenCalled();
     expect(mocks.ensureAutomationRunChannel).toHaveBeenCalledWith(
       "auto-1",
       OWNER,
@@ -201,7 +202,7 @@ describe("channel_message output — context-derived channel routing", () => {
       { channelEntityRef: "{{steps.q.output.clientId}}", content: "x" },
       { steps: { q: { output: { clientId: "ghost-entity" } } } }
     );
-    expect(mocks.ensureEntityChannel).not.toHaveBeenCalled();
+    expect(mocks.ensureObjectChannel).not.toHaveBeenCalled();
     expect(mocks.ensureAutomationRunChannel).toHaveBeenCalledWith(
       "auto-1",
       OWNER,

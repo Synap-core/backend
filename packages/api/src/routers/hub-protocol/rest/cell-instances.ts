@@ -133,7 +133,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       logger.error({ err }, "cellInstances.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -283,7 +283,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       logger.error({ err }, "cellInstances.create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -451,7 +451,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       logger.error({ err }, "cellInstances.createHtmlCell failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -566,7 +566,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       logger.error({ err }, "cellInstances.updateConfig failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

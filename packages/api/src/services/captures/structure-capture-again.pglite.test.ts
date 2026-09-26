@@ -105,6 +105,7 @@ import {
   relations,
   workspaceMembers,
   workspaces,
+  users,
 } from "@synap/database";
 import { capturesRouter } from "../../routers/captures.js";
 import { structureCaptureAgain } from "./structure-capture-again.js";
@@ -269,6 +270,7 @@ describe("captures.structureAgain", () => {
       profiles,
       proposals,
       chatTurns,
+      users,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

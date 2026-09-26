@@ -39,7 +39,14 @@ vi.mock("../utils/split-brain-service.js", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { skills, workspaces, workspaceMembers } from "@synap/database/schema";
+import {
+  skills,
+  workspaces,
+  workspaceMembers,
+  podMembers,
+  users,
+  projectMembers,
+} from "@synap/database/schema";
 import { capabilitiesRouter } from "./capabilities.js";
 
 type ColumnLike = {
@@ -99,7 +106,14 @@ async function seedVerb(
 }
 
 beforeAll(async () => {
-  for (const t of [skills, workspaces, workspaceMembers] as PgTable[]) {
+  for (const t of [
+    skills,
+    workspaces,
+    workspaceMembers,
+    podMembers,
+    users,
+    projectMembers,
+  ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }
   await h.client!.query(

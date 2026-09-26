@@ -11,6 +11,18 @@
  *      pre-change baseline (captured from the tree at 84c4f368, before the
  *      param existed). Every existing caller passes no option, so this is the
  *      proof they are all behavior-preserving.
+ *
+ *      BASELINES RE-CAPTURED for Sites W2 S2 (the guest floor). Exactly three
+ *      fragments moved, every other byte unchanged (token diff OLD vs NEW,
+ *      params normalised, recorded in the W2-S2 report):
+ *        (a) the pod-personal branch gained an appended `and not (<guest>)`
+ *            conjunct (`podGuestWhere`: a guest role AND no participation);
+ *        (b) the workspace union's two POD-LEVEL branches (`workspace_id is
+ *            null`, pod-visible workspaces) moved under ONE reader gate
+ *            (`podReaderWhere`: participant, or known non-guest user);
+ *        (c) the exposure anchors split by role: member anchors carry
+ *            `role IS DISTINCT FROM 'guest'`, and a third branch admits
+ *            `visible_to` edges on `role = 'guest'` anchors.
  *   2. RESTRICTION — a floor restricted to `["visible_to"]` admits exposure
  *      ONLY through visible_to edges: `belongs_to_project` is absent from the
  *      bound params, so a row whose only path is a belongs_to_project edge
@@ -49,28 +61,66 @@ const entityArgs = {
 // Representative calls: bare floor, and the fully-lensed shape (workspace +
 // project lens) that entities.list / the registry produce.
 const BASELINE_BARE_SQL =
-  '(("entities"."workspace_id" is null and "entities"."user_id" = $1) or ("entities"."workspace_id" is not null and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $2) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $3) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))) or ("entities"."id" in (select "project_id" from "project_members" where "project_members"."user_id" = $4) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($5, $6) and "relations"."target_entity_id" in (select "project_id" from "project_members" where "project_members"."user_id" = $7)))))';
+  '((("entities"."workspace_id" is null and "entities"."user_id" = $1) and not (exists (select 1 from "project_members" where ("project_members"."user_id" = $2 and "project_members"."role" = $3)) and not (exists (select 1 from "pod_members" where "pod_members"."user_id" = $4) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $5) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $6)))) or ("entities"."workspace_id" is not null and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $7) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $8) or (((exists (select 1 from "pod_members" where "pod_members"."user_id" = $9) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $10) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $11)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $12 and "project_members"."role" = $13)) and exists (select 1 from "users" where "users"."id" = $14))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) or ("entities"."id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $15 and "project_members"."role" IS DISTINCT FROM $16)) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($17, $18) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $19 and "project_members"."role" IS DISTINCT FROM $20)))) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($21) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $22 and "project_members"."role" = $23))))))';
 const BASELINE_BARE_PARAMS = [
   "user-A",
   "user-A",
+  "guest",
   "user-A",
   "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "guest",
+  "user-A",
+  "user-A",
+  "guest",
   "belongs_to_project",
   "visible_to",
   "user-A",
+  "guest",
+  "visible_to",
+  "user-A",
+  "guest",
 ];
 const BASELINE_LENSED_SQL =
-  '((("entities"."workspace_id" is null and "entities"."user_id" = $1) or ("entities"."workspace_id" is not null and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $2) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $3) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))) or ("entities"."id" in (select "project_id" from "project_members" where "project_members"."user_id" = $4) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($5, $6) and "relations"."target_entity_id" in (select "project_id" from "project_members" where "project_members"."user_id" = $7))))) and ("entities"."workspace_id" = $8 and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $9) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $10) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))) and ("entities"."id" in ($11) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($12, $13) and "relations"."target_entity_id" in ($14)))))';
+  '(((("entities"."workspace_id" is null and "entities"."user_id" = $1) and not (exists (select 1 from "project_members" where ("project_members"."user_id" = $2 and "project_members"."role" = $3)) and not (exists (select 1 from "pod_members" where "pod_members"."user_id" = $4) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $5) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $6)))) or ("entities"."workspace_id" is not null and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $7) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $8) or (((exists (select 1 from "pod_members" where "pod_members"."user_id" = $9) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $10) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $11)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $12 and "project_members"."role" = $13)) and exists (select 1 from "users" where "users"."id" = $14))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) or ("entities"."id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $15 and "project_members"."role" IS DISTINCT FROM $16)) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($17, $18) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $19 and "project_members"."role" IS DISTINCT FROM $20)))) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($21) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $22 and "project_members"."role" = $23)))))) and ("entities"."workspace_id" = $24 and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $25) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $26) or (((exists (select 1 from "pod_members" where "pod_members"."user_id" = $27) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $28) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $29)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $30 and "project_members"."role" = $31)) and exists (select 1 from "users" where "users"."id" = $32))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) and ("entities"."id" in ($33) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($34, $35) and "relations"."target_entity_id" in ($36)))))';
 const BASELINE_LENSED_PARAMS = [
   "user-A",
   "user-A",
+  "guest",
   "user-A",
   "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "guest",
+  "user-A",
+  "user-A",
+  "guest",
   "belongs_to_project",
   "visible_to",
   "user-A",
+  "guest",
+  "visible_to",
+  "user-A",
+  "guest",
   "ws-1",
   "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "user-A",
+  "guest",
   "user-A",
   "proj-1",
   "belongs_to_project",
@@ -123,17 +173,34 @@ describe("restriction — a visible_to-only floor does NOT admit belongs_to_proj
     const q = compile(
       accessScopeWhere({ ...entityArgs, exposureRelationTypes: [VISIBLE_TO] })
     );
-    // Exact bound-param set: the baseline's (belongs_to_project, visible_to)
-    // pair collapses to visible_to alone — nothing else about the floor moves.
+    // Exact bound-param set: the member branch's (belongs_to_project,
+    // visible_to) pair collapses to visible_to alone — nothing else about the
+    // floor moves (the guest branch was visible_to-only already).
     expect(q.params).toEqual([
       "user-A",
       "user-A",
+      "guest",
       "user-A",
       "user-A",
-      VISIBLE_TO,
       "user-A",
+      "user-A",
+      "user-A",
+      "user-A",
+      "user-A",
+      "user-A",
+      "user-A",
+      "guest",
+      "user-A",
+      "user-A",
+      "guest",
+      "visible_to",
+      "user-A",
+      "guest",
+      "visible_to",
+      "user-A",
+      "guest",
     ]);
-    expect(q.sql).toContain('"relations"."type" in ($5)');
+    expect(q.sql).toContain('"relations"."type" in ($17)');
     expect(q.params).not.toContain(BELONGS_TO_PROJECT);
   });
 
@@ -180,7 +247,9 @@ describe("AccessContext threading — a constructed context pins the restriction
     // the copy methods, the FLOOR occurrence is gone; only the LENS arm keeps
     // it — and a lens only narrows (ANDed with the restricted floor), so it
     // can never re-admit a row whose sole path is a belongs_to_project edge.
+    // visible_to is bound THREE times since Sites W2: the member-anchor floor
+    // branch, the guest-anchor floor branch, and the lens arm.
     expect(count(BELONGS_TO_PROJECT)).toBe(1);
-    expect(count(VISIBLE_TO)).toBe(2);
+    expect(count(VISIBLE_TO)).toBe(3);
   });
 });

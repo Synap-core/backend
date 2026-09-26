@@ -9,6 +9,12 @@
  * `readCommentAnchor` in `@synap-core/intake-room` (model.ts), which parses the
  * same shape strictly; keep the two in step.
  *
+ * OBJECT ANCHORS (document / entity, Documents v2) are written by ONE door
+ * only, the comments service (`services/comments`), which mints them into the
+ * object's room after the object's read floor — see `ObjectCommentAnchorSchema`
+ * below. `sendMessage` and the Hub REST doors keep the proposal shape and
+ * refuse the others (`.strict()`), so there is no second write path.
+ *
  * Two rules, enforced for every human-send door that accepts an anchor
  * (`channels.sendMessage` tRPC + the Hub REST message-append doors):
  *
@@ -42,6 +48,81 @@ export const MessageAnchorSchema = z
   })
   .strict();
 export type MessageAnchor = z.infer<typeof MessageAnchorSchema>;
+
+/** Longest `quote` / heading text a document anchor may carry. */
+export const DOCUMENT_ANCHOR_QUOTE_MAX = 500;
+
+/**
+ * A comment on a DOCUMENT (Documents v2, 2026-09-26) — the D19 contract
+ * extended to every object: the comment is a message in the document's ONE
+ * object room, and this anchor says which part of the document it is about.
+ *
+ *   - `blockRef` — the heading the comment sits under, by TEXT + occurrence
+ *     (the n-th heading with that text). Survives edits above it, unlike a
+ *     character offset. Future block ids join as another `kind`.
+ *   - `quote`    — the selected passage, bounded; shown when the anchor no
+ *     longer resolves (an orphaned comment still says what it was about).
+ *   - `offset`   — the markdown range at comment time, a hint only.
+ *   - `revision` — the document revision the commenter saw (the stale mark,
+ *     mirroring the proposal anchor's `contentVersion`).
+ *
+ * WHOLE DOCUMENT = none of blockRef / quote / offset. It is never inferred
+ * from `offset.start === 0`: a heading at offset 0 (most documents open with
+ * `# Title`) is a section, not the whole document.
+ */
+export const DocumentAnchorSchema = z
+  .object({
+    kind: z.literal("document"),
+    documentId: z.string().uuid(),
+    blockRef: z
+      .object({
+        kind: z.literal("heading"),
+        text: z.string().trim().min(1).max(DOCUMENT_ANCHOR_QUOTE_MAX),
+        occurrence: z.number().int().min(0).max(10_000),
+      })
+      .strict()
+      .optional(),
+    quote: z.string().trim().min(1).max(DOCUMENT_ANCHOR_QUOTE_MAX).optional(),
+    offset: z
+      .object({
+        start: z.number().int().min(0),
+        end: z.number().int().min(0),
+      })
+      .strict()
+      .optional(),
+    revision: z.number().int().min(0).optional(),
+  })
+  .strict();
+export type DocumentAnchor = z.infer<typeof DocumentAnchorSchema>;
+
+/**
+ * A comment on an ENTITY: the entity's object room, optionally one field.
+ */
+export const EntityAnchorSchema = z
+  .object({
+    kind: z.literal("entity"),
+    entityId: z.string().uuid(),
+    field: z.string().trim().min(1).max(MESSAGE_ANCHOR_TOKEN_MAX).optional(),
+  })
+  .strict();
+export type EntityAnchor = z.infer<typeof EntityAnchorSchema>;
+
+/** Every anchor a comment in an OBJECT ROOM may carry (the comments door). */
+export const ObjectCommentAnchorSchema = z.discriminatedUnion("kind", [
+  DocumentAnchorSchema,
+  EntityAnchorSchema,
+]);
+export type ObjectCommentAnchor = z.infer<typeof ObjectCommentAnchorSchema>;
+
+/** The object an object-room anchor names. */
+export function anchorObjectRef(anchor: ObjectCommentAnchor): {
+  type: "document" | "entity";
+  id: string;
+} {
+  return anchor.kind === "document"
+    ? { type: "document", id: anchor.documentId }
+    : { type: "entity", id: anchor.entityId };
+}
 
 /**
  * The client-writable part of a message's `metadata`. ONLY `anchor` — every

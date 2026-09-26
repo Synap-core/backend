@@ -20,6 +20,7 @@ import {
   resolveActingContext,
   resolveActorId,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -80,7 +81,7 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
       logger.error({ err }, "widgetDefinitions.listWidgetDefs failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -153,7 +154,7 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
       logger.error({ err }, "widgetDefinitions.upsertWidgetDef failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

@@ -49,6 +49,10 @@ import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 import {
+  sessionDocumentReadableWhere,
+  sessionReadableWhere,
+} from "../../../access/session-visibility.js";
+import {
   ownerPrivateVisibleWhere,
   userVisibleWhere,
 } from "../../../utils/user-visible-where.js";
@@ -175,18 +179,17 @@ async function endpointVisible(
         access.predicate(secrets),
         isNull(secrets.deletedAt)
       );
-    // ownerPrivate tables the display floor reads with the owner-aware floor.
+    // The ONE session read rule (decision D1). Both callers of this gate are
+    // agent doors (Hub `POST /links`, MCP), so no roster branch: an agent can
+    // only file an edge onto a session its principal OWNS.
     case "session":
       return rowVisible(
         focusSessions,
         focusSessions.id,
         id,
-        ownerPrivateVisibleWhere(
-          focusSessions.workspaceId,
-          focusSessions.userId,
-          userId
-        )
+        sessionReadableWhere({ userId })
       );
+    // ownerPrivate tables the display floor reads with the owner-aware floor.
     case "document":
       return rowVisible(
         documents,
@@ -196,7 +199,9 @@ async function endpointVisible(
           documents.workspaceId,
           documents.userId,
           userId
-        )
+        ),
+        // A session's document follows its session (D1), owner-only here.
+        sessionDocumentReadableWhere(documents.id, { userId })
       );
     // Skills have no registry entry; `visibleSkillsWhere` is their canonical
     // read predicate. Pod + own-user tiers, plus the acting workspace's tier.

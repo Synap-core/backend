@@ -489,6 +489,8 @@ describe("resolvePackageDependencies", () => {
         composeTargetWorkspaceId: "ws-operations",
         userId: USER,
         definition: { slug: "grants" },
+        // W3a: the transitive overlay is recorded in the base's installedPacks.
+        overlay: { slug: "grants", version: undefined },
       });
 
       // The ONLY workspace created is the BASE (operations) — never grants.
@@ -530,7 +532,7 @@ describe("resolvePackageDependencies", () => {
       mockToPackageDefinition.mockImplementation((slug: string) =>
         slug === "grants"
           ? {
-              capabilities: [{ templateKey: "stellar-grant-client" }],
+              capabilities: [{ templateKey: "grant-ops-capability" }],
               playbooks: [],
             }
           : { capabilities: [], playbooks: [] }
@@ -557,7 +559,7 @@ describe("resolvePackageDependencies", () => {
           userId: USER,
           agentUserId: "agent-9",
           body: expect.objectContaining({
-            capabilities: [{ templateKey: "stellar-grant-client" }],
+            capabilities: [{ templateKey: "grant-ops-capability" }],
           }),
         })
       );
@@ -973,6 +975,105 @@ describe("resolvePackageDependencies", () => {
           action: "required-absent",
         }),
       ]);
+    });
+  });
+  describe("D8 — a pack never becomes a workspace of its own", () => {
+    /** enterprise-os = a PACK (suite) requiring foundation + crm. */
+    function arrangePack() {
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
+        if (slug === "enterprise-os") {
+          return {
+            dependencies: [
+              { slug: "foundation", kind: "workspace", relation: "require" },
+              { slug: "crm", kind: "workspace", relation: "require" },
+            ],
+          };
+        }
+        if (slug === "foundation" || slug === "crm")
+          return { dependencies: [] };
+        return undefined;
+      });
+      mockToWorkspaceDefinition.mockImplementation((slug: string) => ({
+        definition: { slug },
+      }));
+      mockToPackageDefinition.mockImplementation((slug: string) => ({
+        _meta: { slug, tags: slug === "enterprise-os" ? ["suite"] : [] },
+        capabilities: [],
+        playbooks:
+          slug === "enterprise-os"
+            ? [{ name: "Run the OS", goalTemplate: "g", scope: "project" }]
+            : [],
+      }));
+      mockCreateWorkspace.mockImplementation(
+        async (input: { templateId: string }) => ({
+          workspaceId: `ws-${input.templateId}`,
+          created: true,
+        })
+      );
+    }
+
+    it("P1. require:<pack> installs its domains and layers the pack onto the FIRST one — no suite workspace", async () => {
+      arrangePack();
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "enterprise-os", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+        selfSlug: "the-arch",
+      });
+
+      const createdSlugs = mockCreateWorkspace.mock.calls.map(
+        (c) => (c[0] as { templateId: string }).templateId
+      );
+      expect(createdSlugs.sort()).toEqual(["crm", "foundation"]);
+      expect(createdSlugs).not.toContain("enterprise-os");
+      expect(mockComposeOntoBase).toHaveBeenCalledWith({
+        composeTargetWorkspaceId: "ws-foundation",
+        userId: USER,
+        definition: { slug: "enterprise-os" },
+        overlay: { slug: "enterprise-os", version: undefined },
+      });
+      // Its playbooks are seeded into the primary domain.
+      expect(mockApplyPostWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceId: "ws-foundation" })
+      );
+      const packRow = result.installed.find((d) => d.slug === "enterprise-os");
+      expect(packRow).toMatchObject({
+        action: "composed",
+        workspaceId: "ws-foundation",
+      });
+    });
+
+    it("P2. a pack whose domains cannot resolve is surfaced, never created", async () => {
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) =>
+        slug === "enterprise-os"
+          ? {
+              dependencies: [
+                { slug: "nowhere", kind: "workspace", relation: "require" },
+              ],
+            }
+          : undefined
+      );
+      mockToPackageDefinition.mockImplementation((slug: string) => ({
+        _meta: { slug, tags: ["suite"] },
+        capabilities: [],
+        playbooks: [],
+      }));
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "enterprise-os", kind: "workspace", relation: "require" },
+          ],
+        },
+        userId: USER,
+        selfSlug: "the-arch",
+      });
+      expect(mockCreateWorkspace).not.toHaveBeenCalled();
+      expect(
+        result.installed.find((d) => d.slug === "enterprise-os")?.action
+      ).toBe("required-absent");
     });
   });
 });

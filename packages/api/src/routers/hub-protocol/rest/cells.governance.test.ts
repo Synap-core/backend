@@ -65,6 +65,12 @@ vi.mock("../../../services/cells/define-cell.js", async () => {
 });
 
 vi.mock("./_shared.js", () => ({
+  // Considered fallback (total-mock-missing-export ratchet): `importOriginal`
+  // cannot load the real `_shared.js` here — this file's TOTAL
+  // `@synap/database` mock lacks exports its module graph reads. The route's
+  // catch imports the status mapper; these tests never exercise a mapped
+  // error, so it answers the old blanket 500.
+  httpStatusForTrpcError: () => 500,
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
   verifyWorkspaceAccess: async () => h.workspaceAccess,

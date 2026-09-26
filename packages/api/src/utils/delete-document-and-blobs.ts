@@ -28,6 +28,7 @@
 
 import { db, eq, documents, documentVersions } from "@synap/database";
 import { storage } from "@synap/storage";
+import { archiveObjectChannels } from "../services/comments/object-channel.js";
 
 export async function deleteDocumentAndBlobs(
   documentId: string
@@ -45,6 +46,8 @@ export async function deleteDocumentAndBlobs(
   });
 
   await db.delete(documents).where(eq(documents.id, documentId));
+  // The document's conversation outlives it, archived (Documents v2).
+  await archiveObjectChannels("document", [documentId]);
 
   const keys = [doc.storageKey, ...versions.map((v) => v.storageKey)].filter(
     (k): k is string => !!k

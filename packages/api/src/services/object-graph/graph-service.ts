@@ -64,6 +64,10 @@ import {
   ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
+import {
+  sessionDocumentReadableWhere,
+  sessionReadableWhere,
+} from "../../access/session-visibility.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import type { EntityConnection } from "./entity-connections.js";
@@ -327,15 +331,18 @@ function hydrationScopeWhere(
           (t as typeof documents).userId,
           userId
         ),
+        // A session's document is titled with the session (D1): owner-only,
+        // for the same reason as the `session` case below.
+        sessionDocumentReadableWhere((t as typeof documents).id, { userId }),
         lensNarrowing((t as typeof documents).workspaceId, workspaceId)
       );
+    // A session's goal is its node label, and a session is CONTENT (decision
+    // D1): the ONE session read rule. Owner-only here — the graph is reached by
+    // agent doors (MCP `get_graph`) and hydration carries no door, so no roster
+    // branch: a roster member's graph under-reads a shared session, never leaks.
     case "session":
       return and(
-        ownerPrivateVisibleWhere(
-          (t as typeof focusSessions).workspaceId,
-          (t as typeof focusSessions).userId,
-          userId
-        ),
+        sessionReadableWhere({ userId }),
         lensNarrowing((t as typeof focusSessions).workspaceId, workspaceId)
       );
     // `projects` and `views` were ownerPrivate BY BEHAVIOUR long before they were

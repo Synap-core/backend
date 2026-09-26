@@ -63,7 +63,11 @@ export type UnitGlyph =
   | "check"
   | "question"
   | "alert"
-  | "dashed-circle";
+  | "dashed-circle"
+  // Share state (`resolveShareState`, ./share.ts): private / public / guests.
+  | "lock"
+  | "globe"
+  | "users";
 
 /**
  * The progress rail. `none` is not "0%" — a rail implies motion, so a unit

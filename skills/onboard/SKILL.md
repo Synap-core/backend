@@ -30,9 +30,11 @@ forms. The same process works anywhere because the **domain-specific part is
 data on the workspace** (`settings.onboarding`) and this skill is the
 **reusable interview intelligence** that reads it and adapts.
 
-Onboarding is keyed to the **active lens**, not to a workspace. A workspace is
-just a lens; a project is a cross-cutting lens; they compose. You onboard when
-**the active lens has little/no data** — whatever that lens is.
+Onboarding is keyed to the **active lens**, not to a workspace. A workspace is a
+domain (it owns kinds and tools); a project is a commitment that spans several
+domains; both are lenses you focus through, and they compose (words: `concepts`
+in the `synap` skill). You onboard when **the active lens has little/no data** —
+whatever that lens is.
 
 ## 1. Detect emptiness THROUGH THE ACTIVE LENS
 

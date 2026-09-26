@@ -24,11 +24,18 @@ standalone **view / skill / automation stamp no source-link**, so they don't sel
 via reconcile the way workspace/capability do. (Subscription-`tier` gating is a
 separate axis — see `governance-and-catalog.md`.)
 
-**A project pack is not a seventh kind.** It is a **suite**: a `workspace`
+**Words** (template, pack, workspace/work/track/rule template) are defined once
+in the `synap` skill's `concepts` topic. In short: a template's kind is DERIVED
+from its content (a playbook with `scope: "project"` is a track template, the
+default `scope: "session"` a work template), never declared.
+
+**A pack is not a seventh kind.** Today it ships as a **suite**: a `workspace`
 package tagged `suite` that `require`s its constituent workspaces, built from a
 live project with `synap market publish --from-project <id>`, and installed
 with `--project <id>` to link every workspace to that project. See
-`install.md` → "Project packs".
+`install.md` → "Project packs". The model it is moving to: a pack lists the
+workspace templates it depends on and installs the missing ones, and never
+creates a workspace of its own.
 
 It lives in the Control Plane (CP) catalog and is discoverable and installable from
 any door: the `synap` CLI, MCP (`market_search` / `run_capability`), or the Hub REST
@@ -69,7 +76,7 @@ profiles/views, renderers (cells), capabilities, skills, automations.
 The CLI's browse filter (`market --type`) uses
 `workspace|capability|skill|workflow|view|cell`; the pod-native install verb
 (`market.install`) and its catalog use the narrower
-`capability|automation|template|cell` (workspace ≡ template there). Match
+`capability|automation|template|cell` (`template` there means a workspace template). Match
 whichever surface you're calling.
 
 ## Visibility

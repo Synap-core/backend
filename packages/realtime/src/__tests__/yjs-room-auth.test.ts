@@ -1,364 +1,392 @@
 /**
- * W0 — Yjs room authorization tests + the `initialize()` tripwire.
+ * The `/yjs` gates (S0, Documents v2) + the `initialize()` tripwire.
  *
- * Two things are covered here, and they are covered separately on purpose:
+ * What is covered, each separately:
  *
- *  1. `authorizeRoomAccess()` — the security floor for every Yjs room. It
- *     derives the owning workspace FROM THE DOCUMENT, so a client can no longer
- *     claim membership of workspace A in the handshake and then open a document
- *     of workspace B. All three resolution branches are exercised.
+ *  1. WHO — the handshake gate (y-socket.io's `authenticate`). Identity is
+ *     server-proven: the Kratos session in `auth.token` must resolve to
+ *     `auth.userId` (`verifyHandshakeUser`, shared with `/presence`). A forged
+ *     `userId`, or no session at all, is refused. The old gate took `userId`
+ *     at its word.
  *
- *  2. The `initialize()` tripwire. `YSocketIO@1.1.3`'s constructor leaves `nsp`
- *     null — only `initialize()` registers the `/yjs|*` dynamic namespace, the
- *     `authenticate` gate and the `connection` handler. That call was missing
- *     for months and nothing noticed, because nothing asserted it: socket.io
- *     silently answered every `/yjs|{room}` connection with "Invalid namespace"
- *     (`Server._checkNamespace` returns `fn(false)` when `parentNsps` is empty).
- *     The test below asserts the namespace really resolves, not that a line of
- *     source exists.
+ *  2. WHAT — the room gate. `authorizeRoomAccess` asks the api's ONE document
+ *     floor (`resolveDocumentRoomAccess`, `@synap/api/document-access`) and the
+ *     socket is admitted `edit`, `read`, or refused. The predicate itself —
+ *     including "a no-workspace document does NOT admit a member of another
+ *     workspace" — is driven for real on PGlite in
+ *     `packages/api/src/utils/document-edit-access.pglite.test.ts`; here it is
+ *     mocked as a table, and these tests pin that the gate FOLLOWS it (no
+ *     fallback of its own).
  *
- * The DB layer is mocked with a small membership table so that "member of a
- * DIFFERENT workspace is denied" is a real assertion and not a tautology.
+ *  3. READ-ONLY — a `read` socket is served the room but every update it sends
+ *     is dropped. Driven through the REAL y-socket.io hooks on a real Y.Doc.
+ *
+ *  4. The `initialize()` tripwire (unchanged): YSocketIO@1.1.3's constructor
+ *     leaves `nsp` null; without `initialize()` every `/yjs|{room}` connection
+ *     is answered "Invalid namespace", silently.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as Y from "yjs";
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
-const DOC_WS = "11111111-1111-4111-8111-111111111111"; // doc with its own workspace
-const DOC_VIEW = "22222222-2222-4222-8222-222222222222"; // doc scoped via its view
-const DOC_POD = "33333333-3333-4333-8333-333333333333"; // genuinely pod-wide doc
+const DOC = "11111111-1111-4111-8111-111111111111";
+const DOC_POD = "33333333-3333-4333-8333-333333333333"; // no workspace
 
-const WS_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const EDITOR = "user-editor";
+const READER = "user-reader";
+const STRANGER = "user-stranger"; // e.g. a member of some OTHER workspace
 
-const USER_A = "user-a"; // member of WS_A only
-const USER_B = "user-b"; // member of WS_B only
-const USER_NONE = "user-none"; // member of nothing
+/** The api floor, as a table: [user][doc] → access. */
+const FLOOR: Record<string, Record<string, "edit" | "read">> = {
+  [EDITOR]: { [DOC]: "edit", [DOC_POD]: "edit" },
+  [READER]: { [DOC]: "read" },
+};
 
-const MEMBERSHIPS = [
-  { workspaceId: WS_A, userId: USER_A },
-  { workspaceId: WS_B, userId: USER_B },
-];
-
-// ─── Mock the DB layer ──────────────────────────────────────────────────────
-// `eq`/`and` are mocked into inspectable structures so the membership mock can
-// read the predicate it was handed and answer like a real table would.
+/** Kratos, as a table: session token → identity id. */
+const SESSIONS: Record<string, string> = {
+  "tok-editor": EDITOR,
+  "tok-reader": READER,
+  "tok-stranger": STRANGER,
+};
 
 const mocks = vi.hoisted(() => ({
-  findDocument: vi.fn(),
-  findView: vi.fn(),
-  findMembership: vi.fn(),
+  resolveAccess: vi.fn(),
+  byToken: vi.fn(),
+  byCookie: vi.fn(),
+}));
+
+vi.mock("@synap/api/document-access", () => ({
+  resolveDocumentRoomAccess: mocks.resolveAccess,
+}));
+
+vi.mock("@synap/auth", () => ({
+  getKratosSessionByToken: mocks.byToken,
+  getKratosSessionByCookie: mocks.byCookie,
 }));
 
 vi.mock("@synap/database", () => ({
-  db: {
-    query: {
-      documents: { findFirst: mocks.findDocument },
-      views: { findFirst: mocks.findView },
-      workspaceMembers: { findFirst: mocks.findMembership },
-    },
-  },
-  eq: (col: string, val: unknown) => ({ col, val }),
-  and: (...parts: unknown[]) => ({ parts }),
-  readDocumentVersionContent: vi.fn(),
-  storedVersionValues: vi.fn(() => ({})),
-  uploadDocumentVersionSnapshot: vi.fn(),
+  db: { query: {} },
+  eq: vi.fn(),
+  and: vi.fn(),
+  claimDocumentRevision: vi.fn(),
+  INHERIT_LAST_AUTHOR: Symbol("inherit"),
 }));
 
 vi.mock("@synap/database/schema", () => ({
-  documents: { id: "documents.id", workspaceId: "documents.workspace_id" },
-  documentVersions: { id: "document_versions.id" },
-  documentSessions: {
-    documentId: "document_sessions.document_id",
-    isActive: "document_sessions.is_active",
-  },
-  views: { documentId: "views.document_id", workspaceId: "views.workspace_id" },
-  workspaceMembers: {
-    workspaceId: "workspace_members.workspace_id",
-    userId: "workspace_members.user_id",
-  },
+  documents: { id: "documents.id" },
+  documentSessions: {},
 }));
 
 vi.mock("@synap/storage", () => ({ storage: {} }));
 
 import { Server as SocketIOServer } from "socket.io";
-import { authorizeRoomAccess, setupYjsServer } from "../yjs-server.js";
-
-/** Read a mocked `eq`/`and` predicate back into { column: value }. */
-function readWhere(where: any): Record<string, unknown> {
-  const parts = where?.parts ?? [where];
-  const out: Record<string, unknown> = {};
-  for (const p of parts) if (p?.col) out[p.col] = p.val;
-  return out;
-}
+import {
+  authorizeRoomAccess,
+  insecureYjsAllowed,
+  installReadOnlySync,
+  setupYjsServer,
+} from "../yjs-server.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
-
-  // Behaves like the workspace_members table: match on whichever of
-  // (workspace_id, user_id) the caller actually constrained.
-  mocks.findMembership.mockImplementation(async ({ where }: any) => {
-    const w = readWhere(where);
-    const wsId = w["workspace_members.workspace_id"] as string | undefined;
-    const userId = w["workspace_members.user_id"] as string | undefined;
-    const row = MEMBERSHIPS.find(
-      (m) =>
-        (wsId === undefined || m.workspaceId === wsId) &&
-        (userId === undefined || m.userId === userId)
-    );
-    return row ? { id: `${row.workspaceId}:${row.userId}` } : undefined;
-  });
-
-  mocks.findDocument.mockImplementation(async ({ where }: any) => {
-    const id = readWhere(where)["documents.id"];
-    if (id === DOC_WS) return { id: DOC_WS, workspaceId: WS_A };
-    if (id === DOC_VIEW) return { id: DOC_VIEW, workspaceId: null };
-    if (id === DOC_POD) return { id: DOC_POD, workspaceId: null };
-    return undefined;
-  });
-
-  mocks.findView.mockImplementation(async ({ where }: any) => {
-    const id = readWhere(where)["views.document_id"];
-    if (id === DOC_VIEW) return { workspaceId: WS_B };
-    if (id === DOC_POD) return { workspaceId: null };
-    return undefined;
-  });
+  mocks.resolveAccess.mockImplementation(
+    async (userId: string, documentId: string) =>
+      FLOOR[userId]?.[documentId] ?? "none"
+  );
+  mocks.byToken.mockImplementation(async (token: string) =>
+    SESSIONS[token] ? { active: true, identity: { id: SESSIONS[token] } } : null
+  );
+  mocks.byCookie.mockResolvedValue(null);
 });
 
-// ────────────────────────────────────────────────────────────────────────────
-
-describe("authorizeRoomAccess — branch 1: document carries its own workspace", () => {
-  it("allows a member of the document's workspace", async () => {
-    await expect(
-      authorizeRoomAccess(`whiteboard-${DOC_WS}`, USER_A)
-    ).resolves.toBe(true);
-    // The workspace came from the document, so the view is never consulted.
-    expect(mocks.findView).not.toHaveBeenCalled();
-  });
-
-  it("denies a member of a DIFFERENT workspace (the pod-wide hole this closes)", async () => {
-    await expect(
-      authorizeRoomAccess(`whiteboard-${DOC_WS}`, USER_B)
-    ).resolves.toBe(false);
-  });
-
-  it("authorizes against the document's workspace, never a claimed one", async () => {
-    await authorizeRoomAccess(`whiteboard-${DOC_WS}`, USER_A);
-    const w = readWhere(mocks.findMembership.mock.calls[0][0].where);
-    expect(w["workspace_members.workspace_id"]).toBe(WS_A);
-  });
-
-  it("works for a bare-UUID document room (TipTap), not just whiteboard-", async () => {
-    await expect(authorizeRoomAccess(DOC_WS, USER_A)).resolves.toBe(true);
-    await expect(authorizeRoomAccess(DOC_WS, USER_B)).resolves.toBe(false);
-  });
+afterEach(() => {
+  delete process.env.ALLOW_INSECURE_YJS;
+  vi.unstubAllEnvs();
 });
 
-describe("authorizeRoomAccess — branch 2: workspace resolved via the owning view", () => {
-  it("allows a member of the VIEW's workspace when documents.workspace_id is NULL", async () => {
-    await expect(
-      authorizeRoomAccess(`whiteboard-${DOC_VIEW}`, USER_B)
-    ).resolves.toBe(true);
-    expect(mocks.findView).toHaveBeenCalledTimes(1);
+// ─── The room floor ─────────────────────────────────────────────────────────
+
+describe("authorizeRoomAccess follows the document's own floor", () => {
+  it("an editor gets edit, a reader gets read, anyone else none", async () => {
+    await expect(authorizeRoomAccess(DOC, EDITOR)).resolves.toBe("edit");
+    await expect(authorizeRoomAccess(DOC, READER)).resolves.toBe("read");
+    await expect(authorizeRoomAccess(DOC, STRANGER)).resolves.toBe("none");
   });
 
-  it("denies a member of a different workspace than the view's", async () => {
-    await expect(
-      authorizeRoomAccess(`whiteboard-${DOC_VIEW}`, USER_A)
-    ).resolves.toBe(false);
-  });
-});
-
-describe("authorizeRoomAccess — branch 3: genuinely pod-wide surface", () => {
-  it("allows any member of any workspace on this pod", async () => {
-    await expect(
-      authorizeRoomAccess(`whiteboard-${DOC_POD}`, USER_A)
-    ).resolves.toBe(true);
-    await expect(
-      authorizeRoomAccess(`whiteboard-${DOC_POD}`, USER_B)
-    ).resolves.toBe(true);
+  it("a no-workspace document admits only who its floor admits (no any-member fallback)", async () => {
+    await expect(authorizeRoomAccess(DOC_POD, EDITOR)).resolves.toBe("edit");
+    await expect(authorizeRoomAccess(DOC_POD, STRANGER)).resolves.toBe("none");
   });
 
-  it("still denies someone who is a member of nothing", async () => {
-    await expect(
-      authorizeRoomAccess(`whiteboard-${DOC_POD}`, USER_NONE)
-    ).resolves.toBe(false);
+  it("asks the api floor with the room's document id, for whiteboard rooms too", async () => {
+    await authorizeRoomAccess(`whiteboard-${DOC}`, READER);
+    expect(mocks.resolveAccess).toHaveBeenCalledWith(READER, DOC);
   });
 
-  it("constrains the pod-wide lookup on the user, not on a workspace", async () => {
-    await authorizeRoomAccess(`whiteboard-${DOC_POD}`, USER_A);
-    const w = readWhere(mocks.findMembership.mock.calls[0][0].where);
-    expect(w["workspace_members.user_id"]).toBe(USER_A);
-    expect(w["workspace_members.workspace_id"]).toBeUndefined();
-  });
-});
-
-describe("authorizeRoomAccess — rejection cases", () => {
   it.each([
     ["a non-UUID room name", "not-a-uuid"],
     ["a whiteboard- prefix with a non-UUID id", "whiteboard-abc"],
     ["an empty room name", ""],
-    ["a UUID-ish string with the wrong shape", "1111-2222-3333"],
-  ])("denies %s without touching the database", async (_label, roomName) => {
-    await expect(authorizeRoomAccess(roomName, USER_A)).resolves.toBe(false);
-    expect(mocks.findDocument).not.toHaveBeenCalled();
+  ])("refuses %s without asking the floor", async (_label, roomName) => {
+    await expect(authorizeRoomAccess(roomName, EDITOR)).resolves.toBe("none");
+    expect(mocks.resolveAccess).not.toHaveBeenCalled();
   });
 
-  it("denies a well-formed room whose document does not exist", async () => {
-    await expect(
-      authorizeRoomAccess(
-        "whiteboard-99999999-9999-4999-8999-999999999999",
-        USER_A
-      )
-    ).resolves.toBe(false);
-  });
-
-  it("propagates a DB error rather than swallowing it into an allow", async () => {
-    mocks.findDocument.mockRejectedValueOnce(new Error("connection refused"));
-    await expect(
-      authorizeRoomAccess(`whiteboard-${DOC_WS}`, USER_A)
-    ).rejects.toThrow("connection refused");
-  });
-});
-
-// ─── The room gate middleware (fail-closed + the escape hatch) ───────────────
-
-type NextResult = Error | undefined;
-
-/** Pull the room-gate middleware off the parent namespace `setupYjsServer` built. */
-function roomGateOf(io: SocketIOServer, server: unknown) {
-  const nsp = (server as any).nsp;
-  expect(nsp, "yServer.nsp is null — initialize() was not called").toBeTruthy();
-  const fns = nsp._fns as Array<(socket: any, next: any) => void>;
-  // [0] is y-socket.io's own `authenticate` wrapper, [1] is our room gate.
-  expect(fns).toHaveLength(2);
-  return fns[1];
-}
-
-function runGate(
-  gate: (socket: any, next: any) => void,
-  roomName: string,
-  auth: Record<string, unknown>
-): Promise<NextResult> {
-  return new Promise((resolve) => {
-    gate(
-      { nsp: { name: `/yjs|${roomName}` }, handshake: { auth } },
-      (err?: Error) => resolve(err)
+  it("propagates a floor error rather than swallowing it into an allow", async () => {
+    mocks.resolveAccess.mockRejectedValueOnce(new Error("connection refused"));
+    await expect(authorizeRoomAccess(DOC, EDITOR)).rejects.toThrow(
+      "connection refused"
     );
   });
+});
+
+// ─── Both gates, as socket.io runs them ─────────────────────────────────────
+
+type Gate = (socket: any, next: (err?: Error) => void) => unknown;
+
+/** [0] = y-socket.io's `authenticate` wrapper, [1] = our room gate. */
+function gatesOf(server: unknown): Gate[] {
+  const nsp = (server as any).nsp;
+  expect(nsp, "yServer.nsp is null — initialize() was not called").toBeTruthy();
+  const fns = nsp._fns as Gate[];
+  expect(fns).toHaveLength(2);
+  return fns;
 }
 
-describe("room gate middleware", () => {
-  let io: SocketIOServer;
+/** Run a fake socket through both gates; resolves with the error or the socket. */
+async function connect(
+  roomName: string,
+  auth: Record<string, unknown>
+): Promise<{ err?: Error; data: Record<string, unknown> }> {
+  const io = new SocketIOServer();
+  const gates = gatesOf(setupYjsServer({ io }));
+  const socket = {
+    nsp: { name: `/yjs|${roomName}` },
+    handshake: { auth },
+    data: {} as Record<string, unknown>,
+  };
+  for (const gate of gates) {
+    const err = await new Promise<Error | undefined>((resolve) => {
+      void gate(socket, resolve);
+    });
+    if (err) return { err, data: socket.data };
+  }
+  return { data: socket.data };
+}
 
-  // No io.close(): these Servers are never attached to an http server, and
-  // socket.io 4.8.3's close() dereferences the (absent) httpServer.
-  afterEach(() => {
-    delete process.env.ALLOW_INSECURE_YJS;
+describe("the /yjs handshake: identity is server-proven", () => {
+  it("admits an editor with a valid session, as edit", async () => {
+    const r = await connect(DOC, { userId: EDITOR, token: "tok-editor" });
+    expect(r.err).toBeUndefined();
+    expect(r.data.yjsAccess).toBe("edit");
   });
 
-  it("lets an authorized member through", async () => {
-    io = new SocketIOServer();
-    const gate = roomGateOf(io, setupYjsServer({ io }));
-    await expect(
-      runGate(gate, `whiteboard-${DOC_WS}`, { userId: USER_A })
-    ).resolves.toBeUndefined();
+  it("admits a reader READ-ONLY", async () => {
+    const r = await connect(DOC, { userId: READER, token: "tok-reader" });
+    expect(r.err).toBeUndefined();
+    expect(r.data.yjsAccess).toBe("read");
   });
 
-  it("rejects a member of another workspace", async () => {
-    io = new SocketIOServer();
-    const gate = roomGateOf(io, setupYjsServer({ io }));
-    await expect(
-      runGate(gate, `whiteboard-${DOC_WS}`, { userId: USER_B })
-    ).resolves.toBeInstanceOf(Error);
+  it("refuses a FORGED userId (a real session, someone else's id)", async () => {
+    const r = await connect(DOC, { userId: EDITOR, token: "tok-stranger" });
+    expect(r.err).toBeInstanceOf(Error);
+    expect(mocks.resolveAccess).not.toHaveBeenCalled();
   });
 
-  it("rejects a handshake with no userId", async () => {
-    io = new SocketIOServer();
-    const gate = roomGateOf(io, setupYjsServer({ io }));
-    await expect(
-      runGate(gate, `whiteboard-${DOC_WS}`, {})
-    ).resolves.toBeInstanceOf(Error);
+  it("refuses a userId with no session token (the old contract)", async () => {
+    const r = await connect(DOC, { userId: EDITOR });
+    expect(r.err).toBeInstanceOf(Error);
   });
 
-  it("fails CLOSED on a DB error", async () => {
-    mocks.findDocument.mockRejectedValueOnce(new Error("connection refused"));
-    io = new SocketIOServer();
-    const gate = roomGateOf(io, setupYjsServer({ io }));
-    await expect(
-      runGate(gate, `whiteboard-${DOC_WS}`, { userId: USER_A })
-    ).resolves.toBeInstanceOf(Error);
+  it("refuses an invalid or inactive session", async () => {
+    expect(
+      (await connect(DOC, { userId: EDITOR, token: "tok-unknown" })).err
+    ).toBeInstanceOf(Error);
+    mocks.byToken.mockResolvedValueOnce({
+      active: false,
+      identity: { id: EDITOR },
+    });
+    expect(
+      (await connect(DOC, { userId: EDITOR, token: "tok-editor" })).err
+    ).toBeInstanceOf(Error);
   });
 
-  it("ALLOW_INSECURE_YJS=true opts IN to the old permissive behaviour", async () => {
-    process.env.ALLOW_INSECURE_YJS = "true";
-    mocks.findDocument.mockRejectedValueOnce(new Error("connection refused"));
-    io = new SocketIOServer();
-    const gate = roomGateOf(io, setupYjsServer({ io }));
-    // DB error and a missing userId both pass only under the explicit opt-in.
-    await expect(
-      runGate(gate, `whiteboard-${DOC_WS}`, { userId: USER_A })
-    ).resolves.toBeUndefined();
-    await expect(
-      runGate(gate, `whiteboard-${DOC_WS}`, {})
-    ).resolves.toBeUndefined();
+  it("refuses a proven user the document's floor does not admit", async () => {
+    const r = await connect(DOC, { userId: STRANGER, token: "tok-stranger" });
+    expect(r.err).toBeInstanceOf(Error);
+    expect(mocks.resolveAccess).toHaveBeenCalledWith(STRANGER, DOC);
   });
 
-  it("still denies a cross-workspace room even under ALLOW_INSECURE_YJS", async () => {
-    // The escape hatch covers *missing/unavailable* auth, not a positive denial.
-    process.env.ALLOW_INSECURE_YJS = "true";
-    io = new SocketIOServer();
-    const gate = roomGateOf(io, setupYjsServer({ io }));
-    await expect(
-      runGate(gate, `whiteboard-${DOC_WS}`, { userId: USER_B })
-    ).resolves.toBeInstanceOf(Error);
+  it("ignores a claimed workspaceId entirely", async () => {
+    const r = await connect(DOC, {
+      userId: STRANGER,
+      token: "tok-stranger",
+      workspaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+    expect(r.err).toBeInstanceOf(Error);
+  });
+
+  it("fails CLOSED when Kratos is unreachable", async () => {
+    mocks.byToken.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    const r = await connect(DOC, { userId: EDITOR, token: "tok-editor" });
+    expect(r.err).toBeInstanceOf(Error);
+  });
+
+  it("fails CLOSED on a floor (DB) error", async () => {
+    mocks.resolveAccess.mockRejectedValueOnce(new Error("connection refused"));
+    const r = await connect(DOC, { userId: EDITOR, token: "tok-editor" });
+    expect(r.err).toBeInstanceOf(Error);
   });
 });
 
-// ─── TRIPWIRE ───────────────────────────────────────────────────────────────
+describe("ALLOW_INSECURE_YJS is dev-only", () => {
+  it("opts IN outside production: a missing session passes", async () => {
+    process.env.ALLOW_INSECURE_YJS = "true";
+    const r = await connect(DOC, {});
+    expect(r.err).toBeUndefined();
+  });
+
+  it("still refuses a positive denial of a proven user", async () => {
+    process.env.ALLOW_INSECURE_YJS = "true";
+    const r = await connect(DOC, { userId: STRANGER, token: "tok-stranger" });
+    expect(r.err).toBeInstanceOf(Error);
+  });
+
+  it("is IGNORED in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.ALLOW_INSECURE_YJS = "true";
+    expect(insecureYjsAllowed()).toBe(false);
+    const r = await connect(DOC, {});
+    expect(r.err).toBeInstanceOf(Error);
+  });
+});
+
+// ─── Read-only rooms, through the real y-socket.io hooks ────────────────────
+
+/** A socket double: records emits, lets the test fire client events. */
+function fakeSocket(access: "edit" | "read") {
+  const handlers = new Map<string, (...args: any[]) => void>();
+  const emits: Array<[string, ...any[]]> = [];
+  return {
+    data: { yjsAccess: access },
+    handlers,
+    emits,
+    on(event: string, fn: (...args: any[]) => void) {
+      handlers.set(event, fn);
+      return this;
+    },
+    emit(event: string, ...args: any[]) {
+      emits.push([event, ...args]);
+      return true;
+    },
+  };
+}
+
+/** A client-side update that inserts `text` into the shared "t" type. */
+function clientUpdate(text: string): Uint8Array {
+  const d = new Y.Doc();
+  d.getText("t").insert(0, text);
+  return Y.encodeStateAsUpdate(d);
+}
+
+describe("a read socket is served, but its updates are dropped", () => {
+  function hooks() {
+    const io = new SocketIOServer();
+    return setupYjsServer({ io }) as unknown as {
+      initSyncListeners: (s: any, d: Y.Doc) => void;
+      startSynchronization: (s: any, d: Y.Doc) => void;
+    };
+  }
+
+  it.each([
+    ["edit", "hello"],
+    ["read", ""],
+  ] as const)(
+    "sync-update from a %s socket → doc reads %j",
+    (access, expected) => {
+      const server = hooks();
+      const doc = new Y.Doc();
+      const socket = fakeSocket(access);
+      server.initSyncListeners(socket, doc);
+      socket.handlers.get("sync-update")!(clientUpdate("hello"));
+      expect(doc.getText("t").toString()).toBe(expected);
+    }
+  );
+
+  it.each([
+    ["edit", "hello"],
+    ["read", ""],
+  ] as const)(
+    "the answer to sync-step-1 from a %s socket → doc reads %j",
+    (access, expected) => {
+      const server = hooks();
+      // y-socket.io's Document carries an awareness; an empty one suffices.
+      const doc = Object.assign(new Y.Doc(), {
+        awareness: {
+          getStates: () => new Map(),
+          states: new Map(),
+          meta: new Map(),
+        },
+      });
+      const socket = fakeSocket(access);
+      server.startSynchronization(socket, doc);
+      const step1 = socket.emits.find(([e]) => e === "sync-step-1")!;
+      const ack = step1[2] as (u: Uint8Array) => void;
+      ack(clientUpdate("hello"));
+      expect(doc.getText("t").toString()).toBe(expected);
+    }
+  );
+
+  it("a reader is still SERVED the document (sync-step-1 answer)", () => {
+    const server = hooks();
+    const doc = new Y.Doc();
+    doc.getText("t").insert(0, "server text");
+    const socket = fakeSocket("read");
+    server.initSyncListeners(socket, doc);
+    let reply: Uint8Array | undefined;
+    socket.handlers.get("sync-step-1")!(
+      Y.encodeStateVector(new Y.Doc()),
+      (u: Uint8Array) => (reply = u)
+    );
+    const mirror = new Y.Doc();
+    Y.applyUpdate(mirror, reply!);
+    expect(mirror.getText("t").toString()).toBe("server text");
+  });
+
+  it("tells every socket its access", () => {
+    const server = hooks();
+    for (const access of ["edit", "read"] as const) {
+      const socket = fakeSocket(access);
+      server.initSyncListeners(socket, new Y.Doc());
+      expect(socket.emits).toContainEqual(["yjs-access", { access }]);
+    }
+  });
+
+  it("TRIPWIRE: refuses to boot when y-socket.io's hooks are gone", () => {
+    expect(() => installReadOnlySync({})).toThrow(/cannot enforce read-only/);
+  });
+});
+
+// ─── TRIPWIRE: initialize() ─────────────────────────────────────────────────
 
 describe("TRIPWIRE: setupYjsServer must register the /yjs|* namespace", () => {
-  let io: SocketIOServer;
-
   it("registers a parent namespace (y-socket.io's initialize() was called)", () => {
-    io = new SocketIOServer();
+    const io = new SocketIOServer();
     expect((io as any).parentNsps.size).toBe(0);
-
     setupYjsServer({ io });
-
-    // Without initialize(), parentNsps stays empty and socket.io answers every
-    // /yjs|{room} connection with "Invalid namespace" — silently, forever.
     expect((io as any).parentNsps.size).toBeGreaterThan(0);
   });
 
-  it("resolves a concrete /yjs|{room} child namespace", async () => {
-    io = new SocketIOServer();
+  it("copies BOTH gates into a concrete /yjs|{room} child namespace", async () => {
+    const io = new SocketIOServer();
     setupYjsServer({ io });
-
-    const resolved = await new Promise<any>((resolve) =>
-      (io as any)._checkNamespace(
-        `/yjs|whiteboard-${DOC_WS}`,
-        {},
-        (nspOrFalse: any) => resolve(nspOrFalse)
-      )
-    );
-
-    expect(resolved, "no child namespace for /yjs|{room}").toBeTruthy();
-    expect(resolved.name).toBe(`/yjs|whiteboard-${DOC_WS}`);
-  });
-
-  it("copies BOTH gates into the child namespace", async () => {
-    io = new SocketIOServer();
-    setupYjsServer({ io });
-
     const child = await new Promise<any>((resolve) =>
-      (io as any)._checkNamespace(`/yjs|whiteboard-${DOC_WS}`, {}, resolve)
+      (io as any)._checkNamespace(`/yjs|whiteboard-${DOC}`, {}, resolve)
     );
-
-    // ParentNamespace.createChild copies the parent's _fns — if the room gate
-    // were registered before initialize(), or on a second parent namespace,
-    // this would be 1 (authenticate only) instead of 2.
+    expect(child, "no child namespace for /yjs|{room}").toBeTruthy();
+    expect(child.name).toBe(`/yjs|whiteboard-${DOC}`);
     expect(child._fns).toHaveLength(2);
   });
 });

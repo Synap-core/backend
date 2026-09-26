@@ -244,7 +244,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err }, "sessions.getOrCreate failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -268,7 +268,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err }, "sessions.getActive failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -314,7 +314,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err }, "sessions.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -406,7 +406,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err }, "compactedStates.create failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -432,7 +432,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err }, "compactedStates.getLatest failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -481,7 +481,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       logger.error({ err }, "compactedStates.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

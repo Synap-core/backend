@@ -15,7 +15,7 @@
  * SAME table `loadCapabilityTemplate` → `fetchCPCapabilityTemplate` reads
  * cache-first — see cp-template-client.ts), so resolution is fully
  * deterministic offline. The fixture mirrors the REAL "the-arch" grant
- * capability (`stellar-grant-client`: 4 automations / 1 skill / 1 playbook /
+ * capability (a grant-ops capability: 4 automations / 1 skill / 1 playbook /
  * 0 tools) that shipped with its automations/playbooks silently dropped this
  * session — this is the exact bug class these tests are a net for.
  *
@@ -55,13 +55,13 @@ const suf = randomUUID().slice(0, 8);
 const userId = `test-matcore-${suf}`;
 
 /** A CapabilityDefinition fixture shaped exactly like the real
- * `stellar-grant-client` template that shipped with 4 automations / 1 skill /
+ * grant-ops capability template that shipped with 4 automations / 1 skill /
  * 1 playbook silently dropped — the bug this net exists for. */
 function grantCapabilityFixture(key: string, tag: string) {
   return {
     key,
     name: `Contract Grant Capability ${tag}`,
-    description: "contract-test fixture mirroring stellar-grant-client",
+    description: "contract-test fixture mirroring a grant-ops capability",
     params: [],
     vault: [],
     tools: [],

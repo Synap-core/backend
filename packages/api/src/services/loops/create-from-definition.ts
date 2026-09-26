@@ -46,6 +46,9 @@ import { buildPlaybookRunFlowDefinition } from "../playbooks/cron-automation.js"
 import { interpolateDeep } from "../_shared/interpolate.js";
 import type { Context } from "../../types/context.js";
 import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
+import type { PlaybookDefinition } from "../../schemas/playbook-definition.js";
+
+type PlaybookCreateCriteria = PlaybookDefinition["criteria"];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -252,6 +255,11 @@ export async function createLoopFromDefinition(
         // frozen contract package) has no `scope` field yet; absent → undefined →
         // `playbooks.create` reads it as `session`, i.e. no behaviour change.
         scope: (pb as { scope?: "session" | "project" }).scope,
+        // Same off-contract read as `scope`: the ONE playbook definition schema
+        // (schemas/playbook-definition.ts) carries `criteria` + `metadata`, and a
+        // door that validated them must not drop them here.
+        criteria: (pb as { criteria?: PlaybookCreateCriteria }).criteria,
+        metadata: (pb as { metadata?: Record<string, unknown> }).metadata,
         subjectProfile: pb.subjectProfile,
         schedule: pb.schedule,
         executor: pb.executor ?? "is-agent",

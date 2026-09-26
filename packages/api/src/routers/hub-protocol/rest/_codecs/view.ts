@@ -7,6 +7,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 /** Canonical wire shape for a view row. */
 export const WireViewSchema = z
@@ -28,7 +29,7 @@ export const WireViewSchema = z
 export const ListViewsQuerySchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     type: z
       .string()
       .optional()
@@ -44,7 +45,7 @@ export const ListViewsQuerySchema = z
 export const CreateViewRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string().nullable().optional(),
+    workspaceId: uuidQueryParam.nullable().optional(),
     name: z.string(),
     type: z
       .string()
@@ -66,7 +67,7 @@ export const CreateViewRequestSchema = z
 export const UpdateViewRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     name: z.string().optional(),
     config: z.record(z.string(), z.unknown()).optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
@@ -94,7 +95,7 @@ export const BentoWidgetSchema = z
 export const ArrangeViewRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     widgets: z
       .array(BentoWidgetSchema)
       .describe("Replacement widget arrangement for a bento view."),

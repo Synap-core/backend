@@ -35,12 +35,20 @@ const compile = (sql: SQL) => dialect.sqlToQuery(sql);
 const A = "user-A";
 
 describe("pod-wide opt-in — the `null` lens returns pod-wide rows", () => {
-  it("workspaceLensWhere(col, user, null) is exactly `workspace_id IS NULL`", () => {
+  it("workspaceLensWhere(col, user, null) is `workspace_id IS NULL` AND the caller is a pod reader", () => {
     const q = compile(workspaceLensWhere(entities.workspaceId, A, null));
-    // The pod lens narrows to pod-wide rows only — no params, no workspace/user
-    // bindings that could admit a focused workspace's rows.
-    expect(q.sql).toBe('"entities"."workspace_id" is null');
-    expect(q.params).toEqual([]);
+    // The pod lens narrows to pod-wide rows only. Since Sites W2 S2 it is also
+    // gated on the caller being a pod READER (`podReaderWhere`: never a guest,
+    // never an unknown id) — pod-wide globals are pod-level data. The gate is
+    // an AND on the caller only: no workspace binding that could admit a
+    // focused workspace's rows.
+    expect(q.sql.startsWith('("entities"."workspace_id" is null and (')).toBe(
+      true
+    );
+    expect(q.sql).not.toContain('"entities"."workspace_id" =');
+    expect(q.sql).not.toContain('"entities"."workspace_id" in');
+    // Every bound value is the caller or the `guest` role literal.
+    expect(new Set(q.params)).toEqual(new Set([A, "guest"]));
   });
 
   it("the entities predicate under the `null` lens forces workspace_id IS NULL + owner", () => {

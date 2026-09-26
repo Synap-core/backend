@@ -129,6 +129,8 @@ export const hubViewsRouter = router({
          * `recordSessionArtifact` below, never guessed when absent.
          */
         expectedLabel: z.string().optional(),
+        /** Pin the view to a project (W2a) — see `views.create`. */
+        projectId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -152,6 +154,7 @@ export const hubViewsRouter = router({
         source: "intelligence",
         agentUserId: input.agentUserId,
         reasoning: input.reasoning,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
       });
 
       // OUTPUT LEDGER — a view an agent creates for a session never appeared

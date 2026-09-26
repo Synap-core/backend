@@ -25,7 +25,6 @@ export * from "./workspace-repository.js";
 export * from "./view-repository.js";
 export type { ViewType } from "./view-repository.js";
 export * from "./inbox-repository.js";
-export * from "./sharing-repository.js";
 export * from "./template-repository.js";
 export * from "./relation-repository.js";
 export * from "./relation-def-repository.js";

@@ -158,7 +158,15 @@ describe("profileSlugScopeCondition — polymorphic single-slug scope", () => {
     const { sql, params } = dialect.sqlToQuery(compiled);
     expect(sql).toContain('"entity_facets"."profile_id" in');
     // both twin ids must be OR'd into the same EXISTS, not two separate branches.
-    expect(sql.match(/exists/g)?.length).toBe(1);
+    // The pod-membership probe inside the facet lens (`podMemberWhere`) is a
+    // query-builder `exists (select 1 from "pod_members" …)` since Sites W2 S2
+    // (it was an upper-case raw template this regex never counted) — it is
+    // not a facet branch, so it is subtracted, and asserted present.
+    const allExists = sql.match(/exists/g)?.length ?? 0;
+    const podProbes =
+      sql.match(/exists \(select 1 from "pod_members"/g)?.length ?? 0;
+    expect(podProbes).toBe(1);
+    expect(allExists - podProbes).toBe(1);
     expect(params).toContain("r1");
     expect(params).toContain("r2");
   });

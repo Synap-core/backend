@@ -77,6 +77,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 
 /**
@@ -432,7 +433,7 @@ export function registerDiscordRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1063,7 +1064,7 @@ export function registerDiscordRoutes(app: HubHono): void {
           error: err instanceof Error ? err.message : "Unknown error",
           ...(durableTurn ? { turnId: durableTurn.id } : {}),
         },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1102,7 +1103,7 @@ export function registerDiscordRoutes(app: HubHono): void {
       logger.error({ err }, "POST /discord/mail-feed/run failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1194,7 +1195,7 @@ export function registerDiscordRoutes(app: HubHono): void {
       logger.error({ err }, "POST /discord/reconcile-podwide failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -1237,7 +1238,7 @@ export function registerDiscordRoutes(app: HubHono): void {
       logger.error({ err }, "POST /discord/event-sync/run failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

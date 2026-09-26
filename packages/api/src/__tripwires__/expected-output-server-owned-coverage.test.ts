@@ -62,6 +62,13 @@ const SAMPLE: Required<
   attestedAt: "2026-09-08T12:00:00.000Z",
   retiredAt: "2026-09-08T13:00:00.000Z",
   retiredReason: "session_cancelled",
+  answer: {
+    text: "Use the EU account",
+    messageId: "55555555-5555-5555-5555-555555555555",
+    answeredBy: "22222222-2222-2222-2222-222222222222",
+    answeredAt: "2026-09-08T14:00:00.000Z",
+    question: "Which Stripe account?",
+  },
 };
 
 describe("ExpectedOutput server-owned coverage", () => {

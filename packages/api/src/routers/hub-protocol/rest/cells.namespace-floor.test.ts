@@ -60,7 +60,9 @@ vi.mock("../../../services/cells/define-cell.js", async () => {
   };
 });
 
-vi.mock("./_shared.js", () => ({
+vi.mock("./_shared.js", async (importOriginal) => ({
+  // Partial: the routes also import the real `httpStatusForTrpcError`.
+  ...(await importOriginal<typeof import("./_shared.js")>()),
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
   verifyWorkspaceAccess: async () => true,

@@ -16,6 +16,7 @@ import { db, and, eq, focusSessions } from "@synap/database";
 import { readSessionRunManifest } from "../intake/record-session-run-manifest.js";
 import type { IntakeSourceKind } from "../intake/stage-intake-source.js";
 import { loadSourceRows, RERUN_MAX_SOURCES } from "./rerun-session.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 
 /** A run lists at most this many sources (a manifest can hold more). */
 export const RUN_SOURCES_LIST_MAX = 200;
@@ -47,6 +48,8 @@ export async function listRunSources(args: {
   sessionId: string;
   userId: string;
   database?: typeof db;
+  /** Honour the human-roster read branch (`sessionReadableWhere`). Default false. */
+  roster?: boolean;
 }): Promise<RunSources | null> {
   const database = args.database ?? db;
   const [row] = await database
@@ -55,7 +58,7 @@ export async function listRunSources(args: {
     .where(
       and(
         eq(focusSessions.id, args.sessionId),
-        eq(focusSessions.userId, args.userId)
+        sessionReadableWhere({ userId: args.userId, roster: args.roster })
       )
     )
     .limit(1);

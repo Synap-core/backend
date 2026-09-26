@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { uuidQueryParam } from "./_openapi.js";
 
 export const SkillStatusSchema = z
   .enum(["active", "inactive", "error", "all"])
@@ -35,7 +36,7 @@ export const WireSkillSchema = z
 export const GetSkillsQuerySchema = z
   .object({
     userId: z.string().optional(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     status: SkillStatusSchema.optional(),
     /** When "true", return only approved skills (agent-tool loader filter). */
     approved: z.enum(["true", "false"]).optional(),
@@ -59,6 +60,6 @@ export const CreateSkillRequestSchema = z
     code: z.string(),
     parameters: z.record(z.string(), z.unknown()).optional(),
     category: SkillCategorySchema.optional(),
-    workspaceId: z.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
   })
   .openapi("CreateSkillRequest");

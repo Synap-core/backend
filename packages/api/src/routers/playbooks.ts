@@ -65,14 +65,18 @@ import type {
   Automation,
 } from "@synap/database/schema";
 import {
-  readPlaybookParams,
   resolveStageCategory,
-  validatePlaybookParams,
   type PlaybookStageCategory,
 } from "@synap/playbooks";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
 import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
 import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
+import {
+  playbookDefinitionSchema,
+  playbookExecutorSchema,
+  playbookStatusSchema,
+  playbookScopeSchema,
+} from "../schemas/playbook-definition.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -92,14 +96,8 @@ import {
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
-  instantiateSession,
   PlaybookParamsError,
-  describeParamFailure,
-  buildRunSessionTitle,
-  buildRunSessionName,
-  RUN_PROMPT_METADATA_KEY,
   promoteSessionToPlaybook,
-  resolveGoal,
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
@@ -207,8 +205,7 @@ async function resolveVisibleSubjectId(
 
 // ── Shared input schemas ─────────────────────────────────────────────────────
 
-const executorRefSchema = z.enum(["is-agent", "external-agent", "hybrid"]);
-const playbookStatusSchema = z.enum(["draft", "active", "paused", "archived"]);
+const executorRefSchema = playbookExecutorSchema;
 
 const linkEndpointTypeSchema = z.enum([
   "playbook",
@@ -228,61 +225,26 @@ const linkEndpointTypeSchema = z.enum([
 // are the exceptions — validated by their own schemas (../schemas/).
 const jsonRecord = z.record(z.string(), z.unknown());
 
-export const createInputSchema = z.object({
+/**
+ * The definition fields are the ONE wire schema (`playbookDefinitionSchema`,
+ * schemas/playbook-definition.ts) every package / capability / loop door also
+ * extends — so a field added to a playbook definition reaches EVERY door, and
+ * no door can silently strip `scope` / `stages` again. Only the caller-side
+ * fields live here.
+ */
+export const createInputSchema = playbookDefinitionSchema.extend({
   /** AI attribution — set by AI callers so the governance gate runs the agent ladder. */
   agentUserId: z.string().uuid().optional(),
   source: z.string().optional(),
   reasoning: z.string().optional(),
-  name: z.string().min(1).max(500),
-  description: z.string().optional(),
-  goalTemplate: z.string().min(1).max(5000),
-  params: z.array(jsonRecord).optional(),
-  inputStrategy: jsonRecord.optional(),
-  channelSpec: jsonRecord.optional(),
-  expectedOutputs: z.array(jsonRecord).optional(),
-  /**
-   * First-class stages — the ONE runtime schema (@synap/playbooks). Unlike the
-   * neighbouring jsonb bags these are VALIDATED: `category` is required so a
-   * cross-playbook board can roll up on it, and `key` must be unique (it is what
-   * `focus_sessions.currentStage` stores).
-   */
-  stages: playbookStagesSchema.optional(),
-  /**
-   * Binary acceptance criteria every session instantiated from this playbook
-   * is graded against (with each stage's own — `collectPlaybookCriteria`).
-   * Validated like `stages`: a criterion is a control, not a loose bag.
-   */
-  criteria: sessionCriteriaSchema.optional(),
   /**
    * Bypass the near-duplicate refusal below. Same name and same meaning as
    * `entities.create.forceCreate`: the caller has SEEN the candidates and
    * judged this genuinely distinct.
    */
   forceCreate: z.boolean().optional(),
-  subjectProfile: jsonRecord.optional(),
-  /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
-  schedule: playbookScheduleInputSchema.optional(),
-  /**
-   * Free-form playbook metadata (persisted to `playbooks.metadata`). Carries the
-   * propose-only governance marker for unattended maintenance playbooks:
-   * `{ governance: { forceProposeWrites: true } }`. `executePlaybookRun` copies
-   * this onto the run's focus session so every agent write in the session routes
-   * to a reviewable proposal (see permission-check deriveSessionForceProposeGovernance).
-   */
-  metadata: jsonRecord.optional(),
   executor: executorRefSchema.default("is-agent"),
   status: playbookStatusSchema.default("draft"),
-  /**
-   * What this template instantiates (0240). `session` = today's meaning, a
-   * template of ONE focus session. `project` = a blueprint for a long-running
-   * container, whose ordered `stages` coordinate rather than execute.
-   *
-   * ONE object with two scopes, deliberately, rather than a second template
-   * table to drift out of sync: the coordinating playbooks that already exist
-   * are exactly the ones stuck in `draft` because they did not fit the session
-   * runtime. Omitted reads as `session` — nothing reclassifies itself.
-   */
-  scope: z.enum(["session", "project"]).optional(),
   /**
    * Layer-2 "context skill" — an AI-generated HOW-to-run-this-playbook
    * instruction (Markdown). Persisted as a non-runnable `instruction` skill and
@@ -320,7 +282,14 @@ export const updateInputSchema = z.object({
   executor: executorRefSchema.optional(),
   status: playbookStatusSchema.optional(),
   /** See `createInputSchema.scope`. */
-  scope: z.enum(["session", "project"]).optional(),
+  scope: playbookScopeSchema.optional(),
+  /**
+   * A PATCH shallow-merged onto the row's `metadata` bag (keys not named are
+   * kept) — the same contract views/skills/automations `.update` honour. It is
+   * how the template reconcile advances a playbook's `metadata.marketSource`
+   * baseline through this governed door instead of a raw UPDATE.
+   */
+  metadata: jsonRecord.optional(),
 });
 
 // ── Links sub-router (read-only) ─────────────────────────────────────────────
@@ -1960,6 +1929,7 @@ export const playbooksRouter = router({
           ...(input.executor !== undefined ? { executor: input.executor } : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
           ...(input.scope !== undefined ? { scope: input.scope } : {}),
+          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
         },
       });
 
@@ -2000,6 +1970,11 @@ export const playbooksRouter = router({
       if (input.executor !== undefined) set.executor = input.executor;
       if (input.status !== undefined) set.status = input.status;
       if (input.scope !== undefined) set.scope = input.scope;
+      if (input.metadata !== undefined)
+        set.metadata = {
+          ...((existing.metadata as Record<string, unknown> | null) ?? {}),
+          ...input.metadata,
+        };
 
       // D3c: bump the monotonic definition version when a definition-affecting
       // field actually changes (compared against the loaded row, so a no-op
@@ -2143,165 +2118,6 @@ export const playbooksRouter = router({
         playbook: archived as Playbook,
         status: "archived" as const,
         message: "Playbook archived",
-        proposalId: null as string | null,
-      };
-    }),
-
-  /**
-   * Instantiate a runtime session from a playbook (config → runtime).
-   * Governance-gated (focus_session create): AI callers route through a proposal;
-   * a human member creates directly. On "proposed" no session is written.
-   */
-  instantiate: workspaceProcedure
-    .input(
-      z.object({
-        playbookId: z.string().uuid(),
-        params: z.record(z.string(), z.unknown()).optional(),
-        agentIds: z.array(z.string()).optional(),
-        channelId: z.string().uuid().optional(),
-        agentUserId: z.string().uuid().optional(),
-        /** Subject entity to bind this session to (polymorphic — any entity). */
-        subjectId: z.string().uuid().optional(),
-        source: z.string().optional(),
-        reasoning: z.string().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      // The playbook must be visible in this workspace (pod-wide or a member ws).
-      const playbook = await scopedDb(
-        AccessContext.from(ctx)
-      ).findFirst<Playbook>(playbooks, {
-        where: eq(playbooks.id, input.playbookId),
-      });
-      if (!playbook) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Playbook ${input.playbookId} not found`,
-        });
-      }
-
-      // Editor+ write floor — workspaceProcedure only verifies membership of ANY
-      // role; instantiating a session is a write, so require editor+ like the
-      // rest of this router's mutations.
-      const database = await getDb();
-      await assertWorkspaceWrite(database, ctx.userId, {
-        workspaceId: ctx.workspaceId,
-      });
-
-      // Validate the subject (if any) is visible here before binding (IDOR guard).
-      const subjectId = await resolveVisibleSubjectId(
-        database,
-        input.subjectId,
-        ctx.workspaceId
-      );
-
-      // PARAMS — validated at PROPOSE time as well as at write time, with the
-      // same pure function the funnel uses. Two reasons it cannot wait for
-      // `instantiateSession` below: the proposal's `prompt` is rendered HERE
-      // (so a default that never reached it would make the reviewed payload
-      // differ from what gets written), and filing a proposal a human must
-      // read, approve and watch fail is a worse refusal than refusing now.
-      const instantiateParams = validatePlaybookParams(
-        readPlaybookParams(playbook.params),
-        input.params
-      );
-      if (
-        instantiateParams.missingRequired.length > 0 ||
-        instantiateParams.typeErrors.length > 0
-      ) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: describeParamFailure(
-            instantiateParams.missingRequired,
-            instantiateParams.typeErrors
-          ),
-        });
-      }
-
-      // The subject's own title, for the run title on the PROPOSE path (the
-      // direct path resolves it inside instantiateSession).
-      let subjectTitle: string | null = null;
-      if (subjectId) {
-        const subject = await database.query.entities.findFirst({
-          columns: { title: true },
-          where: eq(entities.id, subjectId),
-        });
-        subjectTitle = subject?.title ?? null;
-      }
-
-      const perm = await checkPermissionOrPropose({
-        userId: ctx.userId,
-        agentUserId: input.agentUserId,
-        workspaceId: ctx.workspaceId,
-        subjectType: "focus_session",
-        action: "create",
-        source: input.source,
-        reasoning: input.reasoning,
-        // The focus_session/create executor requires `goal` — without it an
-        // approved instantiate proposal throws "Focus session proposal is
-        // missing goal". Build BOTH halves NOW (propose time), matching the
-        // direct instantiateSession path so the materialized session is
-        // identical whether approved or direct: `goal` is the TITLE
-        // (buildRunSessionTitle — the same pure builder the direct path uses),
-        // and the rendered goalTemplate rides `prompt`, which the executor
-        // stamps onto metadata. Resolving only the template here would have
-        // re-introduced the paragraph-as-title on the approved path alone.
-        // The executor materializes through the same `instantiateSession`
-        // body when `playbookId` is present, so the approved row carries the
-        // playbook, its first stage, the subject and this derived `title`
-        // exactly as the direct path below writes them.
-        data: {
-          playbookId: input.playbookId,
-          name: playbook.name,
-          goal: buildRunSessionTitle(playbook.name, subjectTitle),
-          title: buildRunSessionName(playbook.name, subjectTitle),
-          ...(subjectId ? { subjectEntityId: subjectId } : {}),
-          ...(input.channelId ? { channelId: input.channelId } : {}),
-          ...(input.agentIds?.length ? { agentIds: input.agentIds } : {}),
-          // The DECLARED answers, carried so the approved path stores the same
-          // `metadata.params` the direct path does. `declaredValues`, not
-          // `values`: the prompt was already rendered above (and rides as
-          // `prompt`), so an undeclared key has nothing left to substitute
-          // into — carrying it would only put unbounded caller JSON into a
-          // payload a human reads.
-          params: instantiateParams.declaredValues,
-          [RUN_PROMPT_METADATA_KEY]: resolveGoal(
-            playbook.goalTemplate,
-            // The RESOLVED values — defaults applied, types coerced — so the
-            // payload a reviewer reads is the one that gets written.
-            instantiateParams.values,
-            input.playbookId
-          ),
-        },
-      });
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return {
-          session: null as FocusSession | null,
-          status: "proposed" as const,
-          message: proposedMessageFor(
-            perm.proposalType,
-            "Session instantiation proposed for review"
-          ),
-          proposalId: perm.proposalId,
-        };
-      }
-
-      const session = await instantiateSession({
-        playbookId: input.playbookId,
-        workspaceId: ctx.workspaceId,
-        userId: input.agentUserId ?? ctx.userId,
-        params: input.params,
-        channelId: input.channelId ?? null,
-        agentIds: input.agentIds,
-        subjectId,
-      });
-      return {
-        session,
-        status: "created" as const,
-        message: "Session instantiated",
         proposalId: null as string | null,
       };
     }),

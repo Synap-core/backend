@@ -24,9 +24,11 @@ import {
   STAGE_GATE_PROPOSAL_TYPES,
   MAX_STAGE_LESSONS,
   STAGE_LESSON_MAX_CHARS,
+  type PlaybookStage,
   type PlaybookStageCategory,
   type StageGateProposalType,
 } from "@synap/playbooks";
+import type { TrackStageDeclaration } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "./session-criteria.js";
 
 /**
@@ -39,6 +41,9 @@ export const playbookStageCategorySchema = z.enum(
     ...PlaybookStageCategory[],
   ]
 );
+
+const STAGE_DOMAIN_MESSAGE =
+  'Stage domain must be a workspace template slug (lowercase, e.g. "crm"), not a workspace id or name';
 
 /**
  * One stage. `category` is REQUIRED here (the write boundary) while optional on
@@ -116,7 +121,83 @@ export const playbookStageSchema = z.looseObject({
     .array(z.string().trim().min(1).max(STAGE_LESSON_MAX_CHARS))
     .max(MAX_STAGE_LESSONS)
     .optional(),
+  /**
+   * The DOMAIN this stage is worked in — a workspace TEMPLATE slug
+   * (`workspaces.package_slug`), see `PlaybookStage.domain`. Slug-shaped so a
+   * workspace id or a display name is refused at the door rather than stored
+   * as a domain no workspace will ever carry.
+   */
+  domain: z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(/^@?[a-z0-9][a-z0-9._/-]*$/, { message: STAGE_DOMAIN_MESSAGE })
+    .refine(
+      (v) =>
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+          v
+        ),
+      { message: STAGE_DOMAIN_MESSAGE }
+    )
+    .optional(),
 });
+
+// ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
+//
+// A track reads its pinned stages through ONE whitelist, `readStage`
+// (@synap-core/types/units track.ts). A field added here (the write door) or on
+// `PlaybookStage` (the type) but not there is stored, pinned into every track
+// snapshot — and silently invisible to every track reader. That is how
+// `stage.domain` would have been lost (W2a). So every key of BOTH the type and
+// this schema must be classified: READ by the track (and therefore declared on
+// `TrackStageDeclaration`) or WITHHELD with a reason. A new unclassified key
+// makes `_stageFieldsClassified` `never` and the build stops here.
+//
+// What this does NOT prove: that `readStage` actually ASSIGNS a READ field —
+// only that its output type declares it. `track.test.ts` covers the values.
+
+/** Stage fields the track read (`readStage`) projects. */
+const _TRACK_READ_STAGE_FIELDS = [
+  "key",
+  "name",
+  "category",
+  "description",
+  "goal",
+  "expectedOutputs",
+  "suggestedTasks",
+  "criteria",
+  "gate",
+  "indefinite",
+  "domain",
+] as const satisfies ReadonlyArray<
+  keyof PlaybookStage & keyof TrackStageDeclaration
+>;
+
+/** Stage fields a track never reads — each with its reason. */
+const _TRACK_WITHHELD_STAGE_FIELDS = [
+  // Capability grants apply to a session RUN of the playbook (session tools);
+  // a track stage session is started without a template binding.
+  "grants",
+  // Order within a category group — the snapshot's array order is the track's.
+  "position",
+  // Agent guidance revised by the lessons scanner on the LIVE playbook; a
+  // pinned copy would go stale.
+  "lessons",
+] as const satisfies ReadonlyArray<keyof PlaybookStage>;
+
+type ClassifiedStageField =
+  | (typeof _TRACK_READ_STAGE_FIELDS)[number]
+  | (typeof _TRACK_WITHHELD_STAGE_FIELDS)[number];
+type _StageFieldsClassified =
+  Exclude<
+    keyof PlaybookStage | keyof typeof playbookStageSchema.shape,
+    ClassifiedStageField
+  > extends never
+    ? true
+    : never;
+const _stageFieldsClassified: _StageFieldsClassified = true;
+void _stageFieldsClassified;
 
 /**
  * A playbook's full ordered stage list. `key` must be UNIQUE within one

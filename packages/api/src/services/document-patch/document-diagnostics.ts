@@ -35,6 +35,7 @@ import {
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRenderables, type RenderableRow } from "../cells/renderables.js";
 import { locateEmbeds } from "@synap-core/markdown-core/readable";
+import { TEXT_TONES } from "@synap-core/markdown-core/inline-format";
 
 export const DOCUMENT_DIAGNOSTIC_CODES = [
   "unknown_key",
@@ -44,6 +45,8 @@ export const DOCUMENT_DIAGNOSTIC_CODES = [
   "bad_props",
   "legacy_props",
   "unterminated",
+  /** `:color[…]{tone}` / `==…=={tone}` names a tone that is not a Synap tone (it draws plain). */
+  "unknown_tone",
   /**
    * RUN-TIME, not grammar: a chart the report flow could not snapshot (its
    * read failed), so it was left live. Never derived from content — stamped
@@ -154,6 +157,7 @@ const GRAMMAR_CODE: Record<GrammarDiagnostic["code"], DocumentDiagnosticCode> =
     "malformed-props": "bad_props",
     "missing-ref": "missing_attr",
     "unknown-directive": "unknown_key",
+    "unknown-tone": "unknown_tone",
   };
 
 /** What to do about each code — one sentence per code, the ONE copy. */
@@ -163,6 +167,7 @@ export const GRAMMAR_FIX: Record<DocumentDiagnosticCode, string> = {
   legacy_props:
     "Move the props into a ```json block as the embed's first child (it is read as-is; rewrite on your next edit).",
   bad_props: "Make the ```json props block a single JSON object.",
+  unknown_tone: `Name one of the Synap tones: ${TEXT_TONES.join(", ")} (e.g. \`:color[text]{tone=info}\`).`,
   missing_attr:
     "Name what the embed shows: `id` (synap-entity), `viewId` (synap-view), `cellKey` or `instanceId` (synap-cell).",
   unknown_key:

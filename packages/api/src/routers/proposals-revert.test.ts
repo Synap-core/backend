@@ -620,7 +620,7 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
     });
   }
 
-  it("REVERTED + reopen:true → status PENDING, data intact, NO second inverse attempted", async () => {
+  it("REVERTED + reopen:true → status PENDING, operations intact (only undo stamps cleared), NO second inverse attempted", async () => {
     setUpAlreadyReverted();
     const setSpy = captureFlip();
     entityDeleteSpy.mockClear();
@@ -649,8 +649,17 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
     expect(flip.status).toBe("pending");
     expect(flip.reviewedAt).toBeNull();
     expect(flip.reviewedBy).toBeNull();
-    // `data` is NOT part of the flip payload → the stored operations are intact.
-    expect(flip.data).toBeUndefined();
+    // `data` is touched ONLY to clear the stale entity-update stamps
+    // (`materialized.propertyDiffs`), in SQL, so a re-approval stamps fresh;
+    // the stored operations are never rewritten from a JS copy.
+    expect(flip.data).toBeDefined();
+    const dataSql = (
+      flip.data as { queryChunks: Array<{ value?: string[] }> }
+    ).queryChunks
+      .flatMap((chunk) => chunk?.value ?? [])
+      .join("");
+    expect(dataSql).toContain("materialized,propertyDiffs");
+    expect(dataSql).toContain("jsonb_set");
   });
 
   it("REVERTED + plain revert({}) → still rejected (nothing left to invert)", async () => {

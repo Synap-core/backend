@@ -159,15 +159,26 @@ describe("exposure axis (VISIBLE_TO / generic edges)", () => {
     ]);
   });
 
-  it("exposureMemberWhere returns OR(inArray, inArray) keyed on entityIdColumn", () => {
+  it("exposureMemberWhere returns OR(inArray ×3) keyed on entityIdColumn", () => {
+    // Sites W2 S2: member anchors (any role but guest) → the anchor itself +
+    // its exposed rows; GUEST anchors → a third arm, `visible_to` only.
     const entityIdCol = col("entities.id");
     const result = exposureMemberWhere(entityIdCol, "user-1") as any;
     expect(result._tag).toBe("or");
+    expect(result.args).toHaveLength(3);
+    for (const arm of result.args) {
+      expect(arm._tag).toBe("inArray");
+      expect(arm.col).toBe(entityIdCol);
+    }
+  });
+
+  it("exposureMemberWhere drops the guest arm when narrowed to belongs_to_project only", () => {
+    const entityIdCol = col("entities.id");
+    const result = exposureMemberWhere(entityIdCol, "user-1", [
+      "belongs_to_project",
+    ]) as any;
+    expect(result._tag).toBe("or");
     expect(result.args).toHaveLength(2);
-    expect(result.args[0]._tag).toBe("inArray");
-    expect(result.args[1]._tag).toBe("inArray");
-    expect(result.args[0].col).toBe(entityIdCol);
-    expect(result.args[1].col).toBe(entityIdCol);
   });
 
   it("exposureLensWhere returns OR(inArray, inArray) with the anchor set as the first arm", () => {
@@ -318,12 +329,18 @@ describe("accessScopeWhere", () => {
     );
     expect(wsLens).toBeUndefined();
 
-    // The workspace narrow is the podPersonal AND(isNull, eq)
+    // The workspace narrow is the podPersonal AND(AND(isNull, eq), NOT guest)
+    // — Sites W2 S2 appended the guest gate as a second conjunct.
     const podPersonalArm = result.args.find(
       (a: any) =>
         a?._tag === "and" &&
         Array.isArray(a.args) &&
-        a.args.some((x: any) => x?._tag === "isNull")
+        a.args.some(
+          (x: any) =>
+            x?._tag === "and" &&
+            Array.isArray(x.args) &&
+            x.args.some((y: any) => y?._tag === "isNull")
+        )
     );
     expect(podPersonalArm).toBeDefined();
   });

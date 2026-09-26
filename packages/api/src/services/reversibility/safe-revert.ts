@@ -58,7 +58,10 @@ import {
   projects,
   links,
 } from "@synap/database";
-import type { EntityDiffField } from "../../utils/entity-property-diff.js";
+import {
+  entityFieldApiName,
+  type EntityDiffField,
+} from "../../utils/entity-property-diff.js";
 
 export type RevertTarget =
   | { kind: "entity"; id: string }
@@ -601,7 +604,7 @@ async function inspectEntityField(
     : skip(
         target,
         "edited_since",
-        `the ${target.field === "preview" ? "description" : target.field} was edited since`
+        `the ${entityFieldApiName(target.field)} was edited since`
       );
 }
 

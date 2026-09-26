@@ -7,6 +7,7 @@
 import { config, createLogger } from "@synap-core/core";
 import type { PackagePostWorkspaceBody } from "../../services/package-apply-post-workspace.js";
 import type { LoopDefinition, LoopPlaybookDef } from "@synap/playbooks";
+import type { PlaybookDefinition } from "../../schemas/playbook-definition.js";
 
 export const logger: ReturnType<typeof createLogger> = createLogger({
   module: "workspaces",
@@ -25,23 +26,23 @@ export const logger: ReturnType<typeof createLogger> = createLogger({
  * the same way the normal-create branch does, is the one door both use.
  */
 export interface CreateDefinitionPostWorkspaceSlice {
-  playbooks?: Array<{
-    name: string;
-    goalTemplate?: string;
-    description?: string;
-    params?: unknown;
-    executor?: LoopPlaybookDef["executor"];
-    expectedOutputs?: unknown;
-    subjectProfile?: LoopPlaybookDef["subjectProfile"];
-    /** Scheduled cadence (e.g. a radar's weekly scan) — forwarded to the loop applier. */
-    schedule?: LoopPlaybookDef["schedule"];
-    /**
-     * Authored either as bare NAMES (the Hub door's form, what templates write)
-     * or as `{kind, ref}` objects. Only the object form carries a resolvable id
-     * for the loop applier — see the narrowing in the body builder.
-     */
-    grants?: Array<string | { kind: string; ref: string }>;
-  }>;
+  /**
+   * The parsed ONE playbook definition (schemas/playbook-definition.ts) plus
+   * this door's grant shape. Typed off the schema, never a hand-listed field
+   * set — the hand list is what dropped `scope` / `stages` / `criteria` /
+   * `metadata` before the body builder could forward them.
+   */
+  playbooks?: Array<
+    Omit<Partial<PlaybookDefinition>, "grants"> & {
+      name: string;
+      /**
+       * Authored either as bare NAMES (the Hub door's form, what templates write)
+       * or as `{kind, ref}` objects. Only the object form carries a resolvable id
+       * for the loop applier — see the narrowing in the body builder.
+       */
+      grants?: Array<string | { kind: string; ref: string }>;
+    }
+  >;
   automations?: Array<{
     name: string;
     description?: string;
@@ -90,21 +91,13 @@ export function buildPostWorkspaceBodyFromDefinition(
         // Loop playbook defs are "stored loosely, validated at the boundary"
         // (see LoopPlaybookDef) — cast the mapped array once rather than field
         // by field. Mirrors the pre-extraction inline literal's contextual typing.
+        // SPREAD the whole parsed definition, then override only what the loop
+        // shape needs. A fixed field list here is what silently dropped
+        // `scope` / `stages` / `criteria` / `metadata` (grants.yaml's 6-step
+        // project method reached the loop applier as a stageless session).
         playbooks: (playbookDefs ?? []).map((pb) => ({
+          ...pb,
           ref: pb.name,
-          name: pb.name,
-          goalTemplate: pb.goalTemplate,
-          description: pb.description,
-          params: pb.params,
-          executor: pb.executor,
-          expectedOutputs: pb.expectedOutputs,
-          // Carry the subject kind → `createLoopFromDefinition` forwards it to
-          // `playbooksRouter.create`, landing on `subject_profile`.
-          subjectProfile: pb.subjectProfile,
-          // Carry the schedule through — `LoopPlaybookDef` and the loop applier
-          // both support it, and without it a template-authored radar cadence
-          // (`schedule: {cron, enabled:false}`) is silently dropped on this door.
-          schedule: pb.schedule,
           // Grants may be authored as bare NAMES (the Hub door's form) or as
           // `{kind, ref}`. The loop applier writes `toId: g.id` straight into a
           // link row, so it needs a real row id — a NAME cannot be resolved

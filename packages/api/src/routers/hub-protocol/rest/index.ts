@@ -50,6 +50,8 @@ export { registerViewsRoutes } from "./views.js";
 export { registerProfilesRoutes } from "./profiles.js";
 export { registerProjectsRoutes } from "./projects.js";
 export { registerTracksRoutes } from "./tracks.js";
+export { registerSharesRoutes } from "./shares.js";
+export { registerFormsRoutes } from "./forms.js";
 export { registerPackagesRoutes } from "./packages.js";
 export { registerRelationsRoutes } from "./relations.js";
 export { registerLinksRoutes } from "./links.js";
@@ -100,6 +102,8 @@ export { registerGraphRoutes } from "./graph.js";
 export { registerCentralityRoutes } from "./centrality.js";
 export { registerObservabilityRoutes } from "./observability.js";
 export { registerPublicProjectionRoutes } from "./public-projection.js";
+export { registerPublicSharesRoutes } from "./public-shares.js";
+export { registerPublicFormsRoutes } from "./public-forms.js";
 // Kept as its OWN export statement: check-orphan-routes.mjs recognises a
 // route file only via an `export { register*Routes }` block containing nothing
 // else.
