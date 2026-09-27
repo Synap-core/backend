@@ -459,7 +459,7 @@ export async function answerSessionSlot(p: {
   // PROVIDE — the pod's half of the rule: the reference must name a row the
   // person owns (or, for a file, can see). The shape already refused a
   // plaintext credential; this refuses someone else's secret.
-  if (false && value?.type === "provide") {
+  if (value?.type === "provide") {
     const check = await checkProvideRef({ userId: p.userId, ref: value.ref });
     if (!check.ok) {
       return {

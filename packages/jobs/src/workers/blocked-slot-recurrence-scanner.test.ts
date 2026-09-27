@@ -53,6 +53,23 @@ describe("computeBlockedSlotFingerprint", () => {
     );
   });
 
+  it("IGNORES the slot's typed `ask` — the same missing thing asked two ways is ONE pattern", () => {
+    // The ask is HOW the person answers (confirm / choose / form / provide);
+    // the pattern is WHAT keeps going missing. A stored row carries the ask
+    // beside `why`, so it must not split a cluster.
+    const asked = {
+      ...slot(),
+      ask: { mode: "provide", provide: { kind: "secret", name: "Stripe key" } },
+    };
+    const confirm = { ...slot(), ask: { mode: "confirm" } };
+    expect(computeBlockedSlotFingerprint(asked as BlockedSlotRow)).toBe(
+      computeBlockedSlotFingerprint(slot())
+    );
+    expect(computeBlockedSlotFingerprint(confirm as BlockedSlotRow)).toBe(
+      computeBlockedSlotFingerprint(slot())
+    );
+  });
+
   it("falls back to the label when `why` is absent, PREFIXED so the two namespaces cannot collide", () => {
     const noWhy = computeBlockedSlotFingerprint(
       slot({ why: undefined, label: "xyz" })

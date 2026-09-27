@@ -3985,7 +3985,227 @@
           "slotLabel": {
             "type": "string",
             "maxLength": 500,
-            "description": "With kind 'question': the label of the session output the question is about. The person's reply is recorded on that output as its `answer` and hands it back to you."
+            "description": "With kind 'question': the label of the session output the question is about. The question is filed ON that output (it becomes the person's, with your question as its why), so it shows as a card they can answer; their answer is recorded as its `answer` and hands it back to you."
+          },
+          "ask": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "confirm"
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                },
+                "required": ["mode"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "choose"
+                  },
+                  "options": {
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "value": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "icon": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "recommended": {
+                          "type": "boolean"
+                        },
+                        "description": {
+                          "type": "string",
+                          "maxLength": 140
+                        }
+                      },
+                      "required": ["label"]
+                    }
+                  },
+                  "allowOther": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["mode", "options"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "form"
+                  },
+                  "form": {
+                    "type": "object",
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "fields": {
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "label": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "type": {
+                              "type": "string",
+                              "maxLength": 64
+                            },
+                            "constraints": {
+                              "type": "object",
+                              "properties": {
+                                "enum": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "min": {
+                                  "type": "number"
+                                },
+                                "max": {
+                                  "type": "number"
+                                },
+                                "pattern": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "help": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["key", "label", "type"]
+                        }
+                      }
+                    },
+                    "required": ["fields"]
+                  }
+                },
+                "required": ["mode", "form"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "act"
+                  },
+                  "url": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "steps": {
+                    "maxItems": 7,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
+                },
+                "required": ["mode"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "provide"
+                  },
+                  "provide": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "connection"
+                          },
+                          "service": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          }
+                        },
+                        "required": ["kind", "service"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "file"
+                          },
+                          "accept": {
+                            "maxItems": 10,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            }
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "secret"
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          }
+                        },
+                        "required": ["kind", "name"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["mode", "provide"]
+              }
+            ],
+            "description": "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended), 'form' (small flat form; never a secret), 'act' (something to do; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Omit for a free-text answer."
           },
           "comment": {
             "type": "object",

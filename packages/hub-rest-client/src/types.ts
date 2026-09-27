@@ -964,6 +964,12 @@ export interface FocusSessionExpectedOutput {
    */
   criterionKey?: string;
   /**
+   * For a MISSING-PARAM slot (`kind: 'playbook_param'`), the param's machine
+   * name. Read-only here: stamped by the pod where it files the slot; the
+   * person's answer is written into the run's `metadata.params[paramName]`.
+   */
+  paramName?: string;
+  /**
    * The PERSON'S ANSWER to what an agent asked about this slot. Read-only here:
    * the pod stamps it (needs-you tray, or the owner's reply to a `kind:
    * 'question'` room post). Not a delivery — `status` is untouched; a
