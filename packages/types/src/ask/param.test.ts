@@ -130,3 +130,13 @@ describe("provide references are row ids — a plaintext credential cannot parse
     expect(summarizeAnswer(ask, value)).toBe("Attached a file");
   });
 });
+
+describe("a credential-named param is owed with NO ask", () => {
+  it("returns null for a secret name or label, an ask for an ordinary one", () => {
+    expect(playbookParamAsk({ name: "api_token", type: "text" })).toBeNull();
+    expect(
+      playbookParamAsk({ name: "k", label: "Stripe secret key", type: "text" })
+    ).toBeNull();
+    expect(playbookParamAsk({ name: "topic", type: "text" })).not.toBeNull();
+  });
+});

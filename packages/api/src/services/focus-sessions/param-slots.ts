@@ -23,7 +23,7 @@ import {
   describeParamTypeError,
 } from "@synap/playbooks";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
-import { playbookParamAsk } from "@synap-core/types/ask";
+import { isCredentialFieldName, playbookParamAsk } from "@synap-core/types/ask";
 
 /** How the run came to be without the value — the `why`'s last sentence. */
 export const PARAM_SLOT_CIRCUMSTANCE = {
@@ -39,23 +39,26 @@ export function paramOwedSlots(
   owedAt: string,
   circumstance: string = PARAM_SLOT_CIRCUMSTANCE.started
 ): ExpectedOutput[] {
-  return missing.map((p) => ({
-    kind: PARAM_SLOT_KIND,
-    label: `Answer: ${p.label?.trim() || p.name}`,
-    owner: "human" as const,
-    // `decision` is the honest blocker: there is nothing to BUILD to remove
-    // it (no credential to mint, no rule to write, no tool to install) — a
-    // person has to choose a value. See BLOCKED_REASONS.
-    blockedReason: "decision" as const,
-    why: `"${sourceName}" needs a value for "${p.label?.trim() || p.name}"${
-      p.options?.length
-        ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
-        : ` (${p.type})`
-    }. ${circumstance}`,
-    owedSince: owedAt,
-    paramName: p.name,
-    ask: playbookParamAsk(p),
-  }));
+  return missing.map((p) => {
+    const ask = playbookParamAsk(p);
+    return {
+      kind: PARAM_SLOT_KIND,
+      label: `Answer: ${p.label?.trim() || p.name}`,
+      owner: "human" as const,
+      // `decision` is the honest blocker: there is nothing to BUILD to remove
+      // it (no credential to mint, no rule to write, no tool to install) — a
+      // person has to choose a value. See BLOCKED_REASONS.
+      blockedReason: "decision" as const,
+      why: `"${sourceName}" needs a value for "${p.label?.trim() || p.name}"${
+        p.options?.length
+          ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
+          : ` (${p.type})`
+      }. ${circumstance}`,
+      owedSince: owedAt,
+      paramName: p.name,
+      ...(ask ? { ask } : {}),
+    };
+  });
 }
 
 /**
@@ -111,6 +114,14 @@ export function paramValueFromAnswer(
   if (slot.kind !== PARAM_SLOT_KIND || !slot.paramName)
     return { status: "none" };
   const name = slot.paramName;
+  // A credential param has no ask (`playbookParamAsk` → null): typing the
+  // secret here would store it as words in the slot, the room and the params.
+  if (isCredentialFieldName(name)) {
+    return {
+      status: "invalid",
+      message: `"${name}" is a secret. Set it on the run, not in an answer.`,
+    };
+  }
   let raw: unknown;
   if (!value || value.type === "text") raw = text;
   else if (value.type === "confirm") raw = value.confirmed;

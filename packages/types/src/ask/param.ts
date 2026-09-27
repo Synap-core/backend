@@ -18,7 +18,12 @@
  */
 
 import { humanizeToken } from "../vocabulary/index.js";
-import { ASK_LIMITS, type Ask, type DynamicFormField } from "./index.js";
+import {
+  ASK_LIMITS,
+  isCredentialFieldName,
+  type Ask,
+  type DynamicFormField,
+} from "./index.js";
 
 /** Mirrors `PlaybookParamType` (`@synap/playbooks`). */
 export const PLAYBOOK_PARAM_TYPES = [
@@ -70,8 +75,14 @@ export function playbookParamFieldType(type: string | undefined): string {
  *                           param's NAME, of the mapped field kind (a choice
  *                           with > 8 options becomes an enum field; a choice
  *                           with none accepts any text, as the run does)
+ *   credential-named      → `null`: NO ask. The form's secret floor would drop
+ *                           its only field, and a `provide` ask would store a
+ *                           vault ref the run's params never resolve. The slot
+ *                           stays a plain blocker; the value is set on the run.
  */
-export function playbookParamAsk(param: PlaybookParamLike): Ask {
+export function playbookParamAsk(param: PlaybookParamLike): Ask | null {
+  if (isCredentialFieldName(param.name) || isCredentialFieldName(param.label))
+    return null;
   const label = param.label?.trim() || humanizeToken(param.name);
   const options = (param.options ?? []).filter(
     (o) => typeof o === "string" && o.length > 0
