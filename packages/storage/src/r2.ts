@@ -13,7 +13,7 @@ import {
   HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createHash } from "crypto";
+import { fileChecksum } from "./checksum.js";
 
 // ============================================================================
 // TYPES
@@ -87,7 +87,6 @@ export class R2Storage {
   ): Promise<FileMetadata> {
     const body =
       typeof content === "string" ? Buffer.from(content, "utf-8") : content;
-    const checksum = this.calculateChecksum(body);
 
     await this.client.send(
       new PutObjectCommand({
@@ -103,7 +102,7 @@ export class R2Storage {
       url: `${this.publicUrl}/${key}`,
       path: key,
       size: body.length,
-      checksum: `sha256:${checksum}`,
+      checksum: fileChecksum(body),
       uploadedAt: new Date(),
     };
   }
@@ -245,13 +244,6 @@ export class R2Storage {
   // ==========================================================================
   // HELPERS
   // ==========================================================================
-
-  /**
-   * Calculate SHA256 checksum
-   */
-  private calculateChecksum(data: Buffer): string {
-    return createHash("sha256").update(data).digest("base64");
-  }
 
   /**
    * Build file path for user entity

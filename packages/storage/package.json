@@ -11,6 +11,11 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./checksum": {
+      "types": "./dist/checksum.d.ts",
+      "import": "./dist/checksum.js",
+      "default": "./dist/checksum.js"
+    },
     "./r2": {
       "types": "./dist/r2.d.ts",
       "import": "./dist/r2.js",

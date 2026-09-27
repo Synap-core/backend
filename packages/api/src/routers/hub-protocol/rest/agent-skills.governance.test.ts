@@ -70,9 +70,25 @@ vi.mock("drizzle-orm", () => ({
   sql: Object.assign(() => ({ op: "sql" }), { raw: () => ({ op: "raw" }) }),
 }));
 
+const PG_UUID_RE_FOR_TEST =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 vi.mock("./_shared.js", () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
+  requireUuidParam: (
+    c: {
+      req: { param: (n: string) => string | undefined };
+      json: (b: unknown, s: number) => unknown;
+    },
+    name: string
+  ) => {
+    const raw = c.req.param(name) ?? "";
+    if (!PG_UUID_RE_FOR_TEST.test(raw)) {
+      return c.json({ error: `${name} is not a valid id: ${raw}` }, 400);
+    }
+    return raw;
+  },
   getCaller: async () => ({
     documents: { createDocument: async () => ({ documentId: "doc-1" }) },
   }),

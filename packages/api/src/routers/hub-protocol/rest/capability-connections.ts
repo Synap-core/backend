@@ -29,6 +29,7 @@ import {
   resolveActingContext,
   type HubHono,
   readJsonBody,
+  requireUuidParam,
 } from "./_shared.js";
 
 // ── OpenAPI schemas ────────────────────────────────────────────────────────────
@@ -120,7 +121,8 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
         403
       );
     }
-    const capabilityId = c.req.param("capabilityId");
+    const capabilityId = requireUuidParam(c, "capabilityId");
+    if (capabilityId instanceof Response) return capabilityId;
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
@@ -164,7 +166,8 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
         403
       );
     }
-    const capabilityId = c.req.param("capabilityId");
+    const capabilityId = requireUuidParam(c, "capabilityId");
+    if (capabilityId instanceof Response) return capabilityId;
     const jsonRead = await readJsonBody(c);
     if (!jsonRead.ok) return jsonRead.res;
     const parsed = AddConnectionRequestSchema.safeParse(jsonRead.body);
@@ -230,8 +233,10 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
         403
       );
     }
-    const capabilityId = c.req.param("capabilityId");
-    const id = c.req.param("id");
+    const capabilityId = requireUuidParam(c, "capabilityId");
+    if (capabilityId instanceof Response) return capabilityId;
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const jsonRead = await readJsonBody(c);
     if (!jsonRead.ok) return jsonRead.res;
     const parsed = UpdateConnectionRequestSchema.safeParse(jsonRead.body);
@@ -302,8 +307,10 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
         403
       );
     }
-    const capabilityId = c.req.param("capabilityId");
-    const id = c.req.param("id");
+    const capabilityId = requireUuidParam(c, "capabilityId");
+    if (capabilityId instanceof Response) return capabilityId;
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);

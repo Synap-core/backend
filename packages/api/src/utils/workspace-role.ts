@@ -89,10 +89,12 @@ export async function isPodAdmin(userId: string): Promise<boolean> {
  * shared workspace's entities inline.
  *
  * SECURITY — callers MUST only invoke this for pod_visible/pod_joinable
- * workspaces. Adding a member row does NOT widen the pod-member READ floor
- * (`facetVisibilityConditions` / `podSharedFacetWhere` key on `pod_members`, not
- * `workspace_members`), but a pod-visible workspace is ALREADY pod-readable, so
- * this grants no new reads. Materializing into a PRIVATE workspace, by contrast,
+ * workspaces. A pod-visible workspace is ALREADY pod-readable, so its own rows
+ * gain no new readers. ONE widening remains, by design (decision B,
+ * 2026-09-27): a member row in a space a SHARED ROLE is granted to admits that
+ * role's pod-shared entities (`podSharedFacetGrantWhere` keys on
+ * `workspace_members` ∪ owned spaces, AND `pod_members`) — an admin
+ * administering the space sees what the space was granted. Materializing into a PRIVATE workspace, by contrast,
  * WOULD widen its reads (a member row makes its entities visible) — never do it.
  *
  * Idempotent: a direct insert with `onConflictDoNothing()` on the

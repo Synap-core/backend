@@ -1,5 +1,8 @@
 /**
- * POD-SHARED FLOOR — Wave 2 (Membership → Visibility) tripwire.
+ * POD-SHARED FLOOR — Wave 2 (Membership → Visibility) tripwire, narrowed by
+ * founder decision B (2026-09-27): a pod-wide facet shares its entity only with
+ * a pod member in a space the facet's ROLE is granted to — row-level proof in
+ * `shared-role-visibility.pglite.test.ts`.
  *
  * Wave 1 created `pod_members` + a DORMANT `podMemberWhere`. Wave 2 wires it into
  * a NEW `podShared` floor branch so that under the POD lens (`workspaceLens:
@@ -63,8 +66,11 @@ describe("podShared floor — pod members see pod-wide SHARED entities (Wave 2)"
     // column with the OUTER alias (`"entities"."user_id" = <caller>`). Anchor on
     // the pod-SHARED branch itself (the pod-wide facet subquery it gates) and
     // resolve its bound value — it must be the caller.
+    // Decision B (2026-09-27): the facet must ALSO wear a role granted to a
+    // space the caller belongs to — `profile_workspace_access` is in the arm.
+    expect(sql).toContain("profile_workspace_access");
     const podSharedArm = q.sql.match(
-      /"entity_facets"\."workspace_id" is null and "entity_facets"\."deleted_at" is null\)\) and exists \(select 1 from "pod_members" where "pod_members"\."user_id" = \$(\d+)\)/
+      /"entity_facets"\."profile_id" in \(select "id" from "profiles" where .*?\) and exists \(select 1 from "pod_members" where "pod_members"\."user_id" = \$(\d+)\)\) and "entity_facets"\."deleted_at" is null/
     );
     expect(podSharedArm).not.toBeNull();
     expect(q.params[Number(podSharedArm![1]) - 1]).toBe(B);

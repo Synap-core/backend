@@ -23,6 +23,7 @@ import {
   resolveActingContext,
   type HubHono,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 import {
   getObjectGraph,
@@ -105,7 +106,8 @@ export function registerGraphRoutes(app: HubHono): void {
       );
     }
     const type = c.req.param("type");
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     if (!type || !id) return c.json({ error: "type and id are required" }, 400);
     if (!(GRAPH_KINDS as readonly string[]).includes(type)) {
       return c.json(

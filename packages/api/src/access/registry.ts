@@ -8,7 +8,11 @@
  * when one is missing.
  */
 
-import { db, activeRendererBindingWhere } from "@synap/database";
+import {
+  db,
+  activeRendererBindingWhere,
+  podSharedFacetGrantWhere,
+} from "@synap/database";
 import {
   automations,
   automationRuns,
@@ -60,10 +64,7 @@ import {
 import { eventVisibleWhere } from "./event-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { viewReadableWhere } from "../utils/view-visibility.js";
-import {
-  workspaceLensWhere,
-  podMemberWhere,
-} from "../utils/user-visible-where.js";
+import { workspaceLensWhere } from "../utils/user-visible-where.js";
 
 // ── Workspace-scoped: visible = pod-wide (NULL) OR a workspace the user is in ──
 registerVisibility({
@@ -427,10 +428,10 @@ registerVisibility({
   // `workspaceOwned` (owner-only on ALL rows) — that would hide a member's
   // facets from teammates on shared entities.
   //
-  // Wave 2 (Membership → Visibility): the pod-wide branch ALSO admits any caller
-  // who is a `pod_members` row — a pod-wide facet is the pod-level share signal,
-  // the twin of the workspace branch above. Widening-only, pod-wide rows only; a
-  // non-pod-member still sees just their own (the EXISTS is false → fail closed).
+  // Decision B (2026-09-27): the pod-wide branch ALSO admits a pod member in a
+  // SPACE THE FACET'S ROLE IS GRANTED TO (`podSharedFacetGrantWhere`, the ONE
+  // predicate shared with facetVisibilityConditions + podSharedFacetWhere) —
+  // never every pod member. Widening-only, pod-wide rows only; fail closed.
   rule: {
     kind: "custom",
     predicate: (access) =>
@@ -448,7 +449,7 @@ registerVisibility({
           isNull(entityFacets.workspaceId),
           or(
             eq(entityFacets.userId, access.userId),
-            podMemberWhere(access.userId)
+            podSharedFacetGrantWhere(access.userId)
           )
         )
       ),

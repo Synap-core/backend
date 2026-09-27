@@ -4,10 +4,8 @@ import {
   eq,
   isNull,
   inArray,
-  db,
   entities,
-  entityFacets,
-  podMemberWhere,
+  podSharedEntityIdsFor,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 
@@ -66,26 +64,15 @@ export function entityQueryVisibilityWhere(args: {
   const { workspaceId, ownerId, podOnly = false } = args;
 
   // Pod-wide rows the run owner may see: their OWN (owner floor), plus the
-  // POD-SHARED ones — a pod-wide entity carrying a LIVE pod-wide facet, when the
-  // owner is a `pod_members` row. Mirrors `podSharedFacetWhere` in the SSOT
-  // (packages/api utils/project-scope.ts); keep the two in lockstep.
+  // SHARED ones — a pod-wide entity carrying a LIVE pod-wide facet whose role is
+  // granted to a space the owner belongs to, the owner being a pod member
+  // (decision B). The SAME builder `podSharedFacetWhere` uses
+  // (`podSharedEntityIdsFor`, @synap/database) — never a local copy.
   const podShared =
     ownerId !== undefined
       ? and(
           isNull(entities.workspaceId),
-          inArray(
-            entities.id,
-            db
-              .select({ id: entityFacets.entityId })
-              .from(entityFacets)
-              .where(
-                and(
-                  isNull(entityFacets.workspaceId),
-                  isNull(entityFacets.deletedAt)
-                )
-              )
-          ),
-          podMemberWhere(ownerId)
+          inArray(entities.id, podSharedEntityIdsFor(ownerId))
         )
       : undefined;
   const podWide =

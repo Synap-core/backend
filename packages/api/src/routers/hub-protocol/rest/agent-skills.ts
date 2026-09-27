@@ -37,6 +37,7 @@ import {
   httpStatusForTrpcError,
   logger,
   type HubHono,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { insertSkillGoverned, skillsRouter } from "../../skills.js";
@@ -314,7 +315,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json({ error: "Insufficient scope" }, 403);
     }
     const userId = c.get("userId");
-    const skillId = c.req.param("id");
+    const skillId = requireUuidParam(c, "id");
+    if (skillId instanceof Response) return skillId;
     const workspaceId = c.req.query("workspaceId");
     if (
       workspaceId !== undefined &&
@@ -494,7 +496,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Insufficient scope" }, 403);
     }
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const workspaceId = c.req.query("workspaceId");
     if (
       workspaceId !== undefined &&
@@ -670,7 +673,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Insufficient scope" }, 403);
     }
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);

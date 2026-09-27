@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "../proposals/intent.js";
 import {
   resolveStatusLabel,
   STATUS_LABELS,
@@ -1041,5 +1042,60 @@ describe("track — a method running inside a project (0272)", () => {
         objectName: "Content",
       })
     ).toBe('Create Track "Content"');
+  });
+});
+
+describe("document-edit proposal types — verbs, not humanized nouns", () => {
+  // Every type the pod's document patch door files, plus the legacy `ai_edit`.
+  // Derived from the SSOT list, so a new patch type joins this check by existing.
+  const DOCUMENT_EDIT_TYPES = [...DOCUMENT_PATCH_PROPOSAL_TYPES, "ai_edit"];
+
+  it.each(DOCUMENT_EDIT_TYPES)(
+    "`%s` resolves through ACTION_VERBS in both moods",
+    (t) => {
+      expect(ACTION_VERBS[t]).toBeDefined();
+      expect(resolveActionLabel(t, "imperative")).not.toBe(
+        resolveActionLabel(t, "past")
+      );
+    }
+  );
+
+  it("a pending section edit titles as an imperative edit IN the document", () => {
+    // Discriminating: without the row this was `Section update Document "Plan"`.
+    expect(
+      buildObjectActionTitle({
+        action: "section_update",
+        fallbackAction: "update",
+        objectKind: "document",
+        objectName: "Plan",
+      })
+    ).toBe('Edit section in Document "Plan"');
+  });
+
+  it("history reads the same title in the past mood", () => {
+    expect(
+      buildObjectActionTitle({
+        action: "section_update",
+        objectKind: "document",
+        objectName: "Plan",
+        mood: "past",
+      })
+    ).toBe('Edited section in Document "Plan"');
+  });
+
+  it("the preposition needs a noun to join — no dangling 'in'", () => {
+    expect(buildObjectActionTitle({ action: "section_update" })).toBe(
+      "Edit section"
+    );
+  });
+
+  it("verbs without a preposition row compose unchanged", () => {
+    expect(
+      buildObjectActionTitle({
+        action: "update",
+        objectKind: "document",
+        objectName: "Plan",
+      })
+    ).toBe('Update Document "Plan"');
   });
 });

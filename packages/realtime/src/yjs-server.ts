@@ -18,6 +18,7 @@ import {
   and,
   claimDocumentRevision,
   INHERIT_LAST_AUTHOR,
+  ROOM_CLOSE_CHECKPOINT,
 } from "@synap/database";
 import { documents, documentSessions } from "@synap/database/schema";
 import { resolveDocumentRoomAccess } from "./vendor/document-access.js";
@@ -541,10 +542,7 @@ class DatabasePersistence {
               documentId,
               undefined,
               INHERIT_LAST_AUTHOR,
-              {
-                checkpoint: { message: "Saved when editing ended" },
-                skipIfUnchanged: true,
-              }
+              ROOM_CLOSE_CHECKPOINT
             )
           );
           console.log(

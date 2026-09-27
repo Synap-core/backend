@@ -21,6 +21,7 @@ import {
   logger,
   type HubHono,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 
 export function registerAgentUsersRoutes(app: HubHono): void {
@@ -254,7 +255,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         403
       );
     }
-    const agentUserId = c.req.param("agentUserId");
+    const agentUserId = requireUuidParam(c, "agentUserId");
+    if (agentUserId instanceof Response) return agentUserId;
     if (!agentUserId) return c.json({ error: "agentUserId is required" }, 400);
 
     const body = (await c.req.json().catch(() => null)) as Record<

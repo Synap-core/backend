@@ -781,6 +781,15 @@ async function loadLink(database: Db, shareId: string) {
  * different link, keeps their place. It also runs on an already-revoked link,
  * so an old revoke that kept people can be finished later. Pass
  * `removeGuests: false` to keep the people and only kill the link.
+ *
+ * Revoking the LINK ROW itself is direct for anyone who administers the
+ * anchor, agents included: it only stops future redemptions and can never
+ * widen access, so it needs no review. Removing an EXISTING member is a
+ * different, more consequential action — it can end someone's access to
+ * everything the project exposes — so an agent actor never triggers it here:
+ * `removeGuests` is forced to `false` for an agent regardless of what was
+ * asked. A human reaches the same outcome directly, or an agent proposes it
+ * through `removeGuest` for one person at a time.
  */
 export async function revokeLink(
   actor: ShareActor,
@@ -796,7 +805,7 @@ export async function revokeLink(
   const anchor = await loadAnchor(database, link.anchorProjectId);
   await assertAnchorAdmin(database, actor.userId, anchor);
   const removedGuests =
-    (options.removeGuests ?? true)
+    (options.removeGuests ?? true) && !agentOf(actor)
       ? await removeGuestsGrantedBy(database, actor, anchor, shareId)
       : 0;
   if (link.revokedAt) {

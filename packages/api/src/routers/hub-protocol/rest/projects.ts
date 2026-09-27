@@ -34,6 +34,7 @@ import {
   httpStatusForTrpcError,
   errCode,
   logger,
+  requireUuidParam,
   type HubHono,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -417,7 +418,8 @@ export function registerProjectsRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
 
     let body: unknown;
     try {
@@ -661,7 +663,8 @@ export function registerProjectsRoutes(app: HubHono): void {
   // Get a single project
   app.get("/projects/:id", async (c) => {
     const userId = c.get("userId");
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
 
     const row = await db.query.projects.findFirst({
       where: and(
@@ -708,8 +711,8 @@ export function registerProjectsRoutes(app: HubHono): void {
       );
     }
     const userId = c.get("userId") as string;
-    const projectId = c.req.param("id");
-    if (!projectId) return c.json({ error: "projectId is required" }, 400);
+    const projectId = requireUuidParam(c, "id");
+    if (projectId instanceof Response) return projectId;
 
     try {
       const { projectToSuitePackageDefinition } =
@@ -841,7 +844,8 @@ export function registerProjectsRoutes(app: HubHono): void {
   // Update a project
   app.patch("/projects/:id", async (c) => {
     const userId = c.get("userId");
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const parsed = UpdateProjectSchema.safeParse(
       await c.req.json().catch(() => null)
     );
@@ -876,7 +880,8 @@ export function registerProjectsRoutes(app: HubHono): void {
   // Delete a project
   app.delete("/projects/:id", async (c) => {
     const userId = c.get("userId");
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
 
     const perm = await checkPermissionOrPropose({
       userId,

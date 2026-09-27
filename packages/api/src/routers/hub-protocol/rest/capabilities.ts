@@ -51,6 +51,7 @@ import {
   type HubHono,
   readJsonBody,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 
@@ -1182,7 +1183,8 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         403
       );
     }
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     if (!z.string().uuid().safeParse(id).success) {
       return c.json({ error: "id path param (UUID) is required" }, 400);
     }

@@ -23,7 +23,8 @@ import type {
   UploadOptions,
   FileInfo,
 } from "./interface.js";
-import { calculateFileChecksum, buildEntityPath } from "./utils.js";
+import { buildEntityPath } from "./utils.js";
+import { fileChecksum } from "./checksum.js";
 
 export interface R2Config {
   /** Cloudflare account ID */
@@ -69,7 +70,6 @@ export class R2StorageProvider implements IFileStorage {
   ): Promise<FileMetadata> {
     const body =
       typeof content === "string" ? Buffer.from(content, "utf-8") : content;
-    const checksum = calculateFileChecksum(body);
 
     await this.client.send(
       new PutObjectCommand({
@@ -85,7 +85,7 @@ export class R2StorageProvider implements IFileStorage {
       url: `${this.publicUrl}/${path}`,
       path,
       size: body.length,
-      checksum: `sha256:${checksum}`,
+      checksum: fileChecksum(body),
       uploadedAt: new Date(),
     };
   }

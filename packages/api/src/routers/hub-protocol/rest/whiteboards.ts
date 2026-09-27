@@ -18,6 +18,7 @@ import {
   verifyWorkspaceAccess,
   type HubHono,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -128,7 +129,8 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
 
-    const viewId = c.req.param("viewId");
+    const viewId = requireUuidParam(c, "viewId");
+    if (viewId instanceof Response) return viewId;
     const raw = (await c.req.json().catch(() => null)) as Record<
       string,
       unknown
@@ -225,7 +227,8 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
 
-    const viewId = c.req.param("viewId");
+    const viewId = requireUuidParam(c, "viewId");
+    if (viewId instanceof Response) return viewId;
     const raw = (await c.req.json().catch(() => null)) as Record<
       string,
       unknown
@@ -286,7 +289,8 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
 
-    const viewId = c.req.param("viewId");
+    const viewId = requireUuidParam(c, "viewId");
+    if (viewId instanceof Response) return viewId;
     // Floor the read to the caller's visibility — the SAME predicate views.list
     // uses (isNull-personal-owned OR member/pod-visible workspace). Without it, a
     // valid hub-protocol.read key could fetch ANY view's row by id, leaking its

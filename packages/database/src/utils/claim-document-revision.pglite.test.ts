@@ -14,9 +14,17 @@
  *     row when changed;
  *   - only a collaborative write-back marks the Yjs cache current.
  *
+ *   - an UNCHANGED document never gains a row nor moves `current_version`: room
+ *     close and autosave ticks skip, an edit that changes nothing reuses the row
+ *     holding its content — including against the legacy `sha256:<base64>`
+ *     checksums MinIO/R2 stamped on the rows a live pod already holds.
+ *
  * ENGINE: one PGlite per file; `documents` / `document_versions` are created from
- * their drizzle definitions. Storage is an in-memory map (the door's upload is
- * what is under test, not MinIO).
+ * their drizzle definitions. Storage is the REAL MinIO provider with its S3
+ * client stubbed to an in-memory map, so every checksum the door compares is the
+ * one a production provider stamps. (The previous in-memory mock computed the
+ * door's own hex format and hid that MinIO/R2 stamped base64: skip-if-unchanged
+ * never matched on a pod, and an unedited document gained a row every 30 min.)
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
@@ -27,39 +35,56 @@ import { dirname, resolve } from "node:path";
 
 const blobs = vi.hoisted(() => new Map<string, Buffer>());
 
-vi.mock("@synap/storage", () => ({
-  storage: {
-    upload: vi.fn(async (key: string, content: string | Buffer) => {
-      const buf = Buffer.isBuffer(content) ? content : Buffer.from(content);
-      blobs.set(key, buf);
-      const { createHash } = await import("node:crypto");
-      return {
-        url: `mem://${key}`,
-        path: key,
-        size: buf.byteLength,
-        checksum: `sha256:${createHash("sha256").update(buf).digest("hex")}`,
-      };
-    }),
-    downloadBuffer: vi.fn(async (key: string) => {
-      const b = blobs.get(key);
-      if (!b) throw new Error(`no blob ${key}`);
-      return b;
-    }),
-    buildPath: (u: string, k: string, id: string, ext: string) =>
-      `${u}/${k}/${id}.${ext}`,
-  },
-}));
+vi.mock("@synap/storage", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/storage")>();
+  const minio = new actual.MinIOStorageProvider({
+    endpoint: "http://minio.test",
+    accessKeyId: "k",
+    secretAccessKey: "s",
+    bucketName: "b",
+  });
+  (minio as unknown as { client: unknown }).client = {
+    send: async (cmd: { input: { Key?: string; Body?: Buffer } }) => {
+      if (cmd.input.Key && cmd.input.Body !== undefined) {
+        blobs.set(cmd.input.Key, Buffer.from(cmd.input.Body));
+      }
+      return {};
+    },
+  };
+  return {
+    ...actual,
+    storage: {
+      upload: vi.fn(
+        (
+          key: string,
+          content: string | Buffer,
+          opts?: { contentType?: string }
+        ) => minio.upload(key, content, opts)
+      ),
+      downloadBuffer: vi.fn(async (key: string) => {
+        const b = blobs.get(key);
+        if (!b) throw new Error(`no blob ${key}`);
+        return b;
+      }),
+      buildPath: (u: string, k: string, id: string, ext: string) =>
+        `${u}/${k}/${id}.${ext}`,
+    },
+  };
+});
 
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { createHash } from "node:crypto";
+import { storage } from "@synap/storage";
 import { documents, documentVersions } from "../schema/documents.js";
 import {
+  AUTOSAVE_CHECKPOINT,
   claimDocumentRevision,
   DocumentRevisionConflictError,
-  documentContentChecksum,
   INHERIT_LAST_AUTHOR,
+  ROOM_CLOSE_CHECKPOINT,
 } from "./claim-document-revision.js";
 
 function ddlFor(table: PgTable): string {
@@ -105,10 +130,18 @@ beforeAll(async () => {
 
 beforeEach(() => blobs.clear());
 
-async function seedDoc(content: string, v1Author = AGENT) {
+/**
+ * `legacyChecksum`: stamp v1 the way MinIO/R2 did before one format existed
+ * (`sha256:<base64>`) — what the rows on a live pod carry today.
+ */
+async function seedDoc(
+  content: string,
+  v1Author = AGENT,
+  opts: { legacyChecksum?: boolean } = {}
+) {
   const id = randomUUID();
   const key = `u/doc/${id}.md`;
-  blobs.set(key, Buffer.from(content));
+  const stamped = await storage.upload(key, content);
   await db.insert(documents).values({
     id,
     userId: "user-1",
@@ -121,7 +154,9 @@ async function seedDoc(content: string, v1Author = AGENT) {
     documentId: id,
     version: 1,
     content,
-    checksum: documentContentChecksum(content),
+    checksum: opts.legacyChecksum
+      ? `sha256:${createHash("sha256").update(content).digest("base64")}`
+      : stamped.checksum,
     author: v1Author.authorKind,
     authorId: v1Author.authorId,
     message: "Initial",
@@ -299,6 +334,63 @@ describe("claimDocumentRevision", () => {
     expect(await docRow(id)).toMatchObject({
       content_revision: 3,
       working_state_revision: 2,
+    });
+  });
+
+  describe.each([
+    ["provider-stamped", false],
+    ["legacy base64 (a live pod's rows)", true],
+  ])("an unchanged document, v1 checksum %s", (_label, legacyChecksum) => {
+    it("room close + autosave ticks cut no row and never move current_version", async () => {
+      const { id } = await seedDoc("probe body", AGENT, { legacyChecksum });
+      // A day of an editor left open: the room closes twice, the cron ticks.
+      for (const opts of [
+        ROOM_CLOSE_CHECKPOINT,
+        AUTOSAVE_CHECKPOINT,
+        AUTOSAVE_CHECKPOINT,
+        ROOM_CLOSE_CHECKPOINT,
+        AUTOSAVE_CHECKPOINT,
+      ]) {
+        const out = await claim(id, undefined, INHERIT_LAST_AUTHOR, opts);
+        expect(out.skipped).toBe(true);
+      }
+      expect(await rows(id)).toHaveLength(1);
+      expect(await docRow(id)).toMatchObject({
+        current_version: 1,
+        content_revision: 1,
+      });
+    });
+
+    it("an AI edit reuses the untouched last checkpoint as its undo — one new row, not two", async () => {
+      const { id } = await seedDoc("probe body", HUMAN, { legacyChecksum });
+      const [v1] = await pg
+        .query<{ id: string }>(
+          `select id from document_versions where document_id = $1`,
+          [id]
+        )
+        .then((r) => r.rows);
+      const out = await claim(id, 1, AGENT, {
+        content: "probe body\n\nAI section",
+        checkpoint: { message: "AI edit accepted" },
+      });
+      expect(out.undoVersionId).toBe(v1!.id);
+      expect(await rows(id)).toEqual([
+        { version: 1, author: "user", content: "probe body" },
+        { version: 2, author: "ai", content: "probe body\n\nAI section" },
+      ]);
+      expect((await docRow(id)).current_version).toBe(2);
+    });
+
+    it("a write that changes nothing cuts no row, even as another author with a named checkpoint", async () => {
+      const { id } = await seedDoc("probe body", HUMAN, { legacyChecksum });
+      const out = await claim(id, 1, AGENT, {
+        content: "probe body",
+        checkpoint: { message: "AI edit accepted" },
+      });
+      expect(out.checkpointVersionId).not.toBeNull();
+      expect(out.checkpointVersionId).toBe(out.undoVersionId);
+      expect(await rows(id)).toHaveLength(1);
+      expect((await docRow(id)).current_version).toBe(1);
     });
   });
 });

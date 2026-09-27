@@ -64,8 +64,12 @@ const logger = createLogger({ module: "entities-router" });
  * could point a shared entity at ANY document id they learned and read it
  * through the share. So the target must be:
  *   1. a document the caller may EDIT (NOT_FOUND when they cannot even see it);
- *   2. in the entity's own scope: the same workspace, or the caller's own
- *      pod-personal document;
+ *   2. in the entity's own scope (same workspace), or one the caller
+ *      themselves authored — never merely a document some OTHER author's
+ *      workspace membership lets them edit. A caller's own upload is
+ *      authored in their ambient workspace even when the entity it becomes
+ *      the body of is pod-wide (e.g. the `file` kind), so "authored by the
+ *      caller" is the real invariant, not "workspace-less";
  *   3. unowned: not the body of another live entity, nor a view's canvas.
  */
 export async function assertDocumentAttachable(
@@ -75,8 +79,7 @@ export async function assertDocumentAttachable(
 ): Promise<void> {
   const doc = await loadEditableDocument(userId, documentId);
   const sameScope =
-    doc.workspaceId === entity.workspaceId ||
-    (doc.workspaceId === null && doc.userId === userId);
+    doc.workspaceId === entity.workspaceId || doc.userId === userId;
   if (!sameScope) {
     throw new TRPCError({
       code: "FORBIDDEN",

@@ -12,6 +12,7 @@ import {
   eq,
   claimDocumentRevision,
   INHERIT_LAST_AUTHOR,
+  AUTOSAVE_CHECKPOINT,
   emitDocumentContentReplaced,
   readDocumentVersionBuffer,
   storedVersionValues,
@@ -179,10 +180,13 @@ export async function handleDocumentAutoSave(): Promise<void> {
   const results = await Promise.allSettled(
     documentIds.map((documentId) =>
       db.transaction((tx) =>
-        claimDocumentRevision(tx, documentId, undefined, INHERIT_LAST_AUTHOR, {
-          checkpoint: { message: "Auto-save checkpoint" },
-          skipIfUnchanged: true,
-        })
+        claimDocumentRevision(
+          tx,
+          documentId,
+          undefined,
+          INHERIT_LAST_AUTHOR,
+          AUTOSAVE_CHECKPOINT
+        )
       )
     )
   );

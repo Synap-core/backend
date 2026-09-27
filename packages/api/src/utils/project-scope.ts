@@ -45,7 +45,7 @@
 import { and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
 import { not, sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import { db } from "@synap/database";
+import { db, podSharedEntityIdsFor } from "@synap/database";
 import { sessionDocumentReadableWhere } from "../access/session-visibility.js";
 import {
   projectMembers,
@@ -57,7 +57,6 @@ import {
 import {
   userVisibleWhere,
   workspaceLensWhere,
-  podMemberWhere,
   podGuestWhere,
   GUEST_PROJECT_ROLE,
   type WorkspaceLens,
@@ -312,11 +311,12 @@ export function facetLensMemberWhere(
  * branch it granted nobody anything and a pod-wide role (a `client` facet on a
  * pod-scoped company, say) was visible only to the run owner.
  *
- * SHARED-TO-POD is defined as: the ENTITY is itself pod-wide
- * (`workspace_id IS NULL`) AND it carries a LIVE pod-wide facet. There is no
- * per-facet private flag, so the pod-wide facet IS the share signal — exactly as
- * a workspace facet is the workspace share signal. The caller must additionally
- * be a `pod_members` row (`podMemberWhere`).
+ * SHARED is defined as (founder decision B, 2026-09-27): the ENTITY is itself
+ * pod-wide (`workspace_id IS NULL`) AND it carries a LIVE pod-wide facet whose
+ * ROLE is granted to a space the caller belongs to, AND the caller is a
+ * `pod_members` row — the ONE predicate `podSharedEntityIdsFor`
+ * (@synap/database utils/facet-visibility.ts). Never "every pod member": a
+ * role's facet shares its entity only with the spaces the role is granted to.
  *
  * WIDENING-ONLY and NARROW BY CONSTRUCTION:
  *   - it is ORed into the floor — it never removes a row;
@@ -332,20 +332,11 @@ export function podSharedFacetWhere(
   entityIdColumn: AnyPgColumn,
   userId: string
 ): SQL {
-  const podWideFacetedEntityIds = db
-    .select({ id: entityFacets.entityId })
-    .from(entityFacets)
-    .where(
-      and(
-        isNull(entityFacets.workspaceId),
-        // Soft-delete gate — a DETACHED role must stop sharing the entity.
-        isNull(entityFacets.deletedAt)
-      )
-    );
   return and(
     isNull(workspaceIdColumn),
-    inArray(entityIdColumn, podWideFacetedEntityIds),
-    podMemberWhere(userId)
+    // Live pod-wide facet + role granted to a caller's space + pod member
+    // (decision B) — the shared builder, never a local copy.
+    inArray(entityIdColumn, podSharedEntityIdsFor(userId))
   )!;
 }
 

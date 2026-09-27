@@ -36,7 +36,7 @@ import {
   type getDb,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
-import { deriveTrackStages } from "@synap-core/types/units";
+import { deriveTrackStages, pickStageSpace } from "@synap-core/types/units";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { listWorkspacesUsedByProjects } from "../../utils/project-workspace.js";
 
@@ -139,12 +139,14 @@ export async function resolveStageDomainWorkspace(
       projectId
     ) ?? []
   );
-  const preferred = writable.find((id) => used.has(id));
+  // The precedence (a used space wins, else the earliest) is the ONE shared
+  // rule every reader applies — `pickStageSpace` (`@synap-core/types/units`).
+  const pick = pickStageSpace(writable, used)!;
   return {
     resolved: true,
     slug,
-    workspaceId: preferred ?? writable[0]!,
-    alreadyUsed: preferred !== undefined,
+    workspaceId: pick.id,
+    alreadyUsed: pick.alreadyUsed,
   };
 }
 

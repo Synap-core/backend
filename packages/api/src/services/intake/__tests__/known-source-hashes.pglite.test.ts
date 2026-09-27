@@ -89,6 +89,8 @@ import {
   findRunStagedSource,
   runFullMessage,
 } from "../known-source-hashes.js";
+import { documents, documentVersions } from "@synap/database/schema";
+import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
 
 const ME = "user-me";
 const OTHER = "user-other";
@@ -100,29 +102,9 @@ const DDL = `
     workspace_id text, origin text, playbook_id uuid,
     metadata jsonb not null default '{}'::jsonb
   );
-  create table documents (
-    id uuid primary key default gen_random_uuid(), user_id text not null,
-    workspace_id uuid, title text not null, type text not null, language text,
-    storage_url text, storage_key text, size integer not null default 0,
-    mime_type text, current_version integer not null default 1,
-    last_saved_version integer not null default 0, working_state text,
-    working_state_updated_at timestamptz, metadata jsonb,
-    created_by_kind text, created_by_user_id text, agent_user_id text,
-    source_proposal_id uuid, correlation_id uuid,
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now(), deleted_at timestamptz
-  );
   create table proposals (
     id uuid primary key default gen_random_uuid(), session_id uuid,
     status text not null default 'pending'
-  );
-  create table document_versions (
-    id uuid primary key default gen_random_uuid(),
-    document_id uuid not null references documents(id) on delete cascade,
-    version integer not null, content text not null, storage_url text,
-    storage_key text, size integer not null default 0, mime_type text,
-    checksum text, author text not null, author_id text not null,
-    message text, created_at timestamptz not null default now()
   );
 `;
 
@@ -169,6 +151,8 @@ async function sourceDoc(id: string) {
 
 beforeAll(async () => {
   await h.client!.exec(DDL);
+  // documents + versions DERIVED from the real schema (never hand-typed).
+  await h.client!.exec(pgliteSchemaDdl([documents, documentVersions]));
 });
 beforeEach(async () => {
   await h.client!.exec(

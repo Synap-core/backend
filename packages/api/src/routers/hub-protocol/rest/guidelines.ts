@@ -45,6 +45,7 @@ import {
   resolveActingContext,
   type HubHono,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 
 const GuidelinesQuerySchema = z
@@ -219,7 +220,8 @@ export function registerGuidelinesRoutes(app: HubHono) {
     }
     const acting = await resolveActingContext(c, {});
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     if (!z.string().uuid().safeParse(id).success) {
       return c.json({ error: "Guideline not found" }, 404);
     }

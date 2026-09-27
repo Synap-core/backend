@@ -25,6 +25,7 @@ const BODY_AGENT_ID = "0e0403a8-0000-4000-8000-000000000003";
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const SOURCE_ID = "22222222-2222-4222-8222-222222222222";
 const TARGET_ID = "33333333-3333-4333-8333-333333333333";
+const RELATION_ID = "44444444-4444-4444-8444-444444444444";
 
 const resolveActorIdMock = vi.fn();
 const getCallerMock = vi.fn();
@@ -156,7 +157,7 @@ describe("POST /relations — agent attribution", () => {
 describe("DELETE /relations/:id — agent attribution", () => {
   it("falls back to the key's agent and validates it through resolveActorId", async () => {
     const res = await buildApp(AGENT_ID).request(
-      "/relations/rel-1",
+      `/relations/${RELATION_ID}`,
       json("DELETE", { workspaceId: WORKSPACE_ID })
     );
     expect(res.status).toBe(200);
@@ -169,7 +170,7 @@ describe("DELETE /relations/:id — agent attribution", () => {
   it("an agent the caller cannot act as is refused before any delete", async () => {
     resolveActorIdMock.mockResolvedValueOnce({ error: "not authorized" });
     const res = await buildApp().request(
-      "/relations/rel-1",
+      `/relations/${RELATION_ID}`,
       json("DELETE", { workspaceId: WORKSPACE_ID, agentUserId: BODY_AGENT_ID })
     );
     expect(res.status).toBe(400);
@@ -201,7 +202,7 @@ describe("/relations — TRPCError codes map to HTTP status", () => {
   it.each(cases)("DELETE %s", async (_label, err, status) => {
     deleteRelationMock.mockRejectedValueOnce(err);
     const res = await buildApp(AGENT_ID).request(
-      "/relations/rel-1",
+      `/relations/${RELATION_ID}`,
       json("DELETE", { workspaceId: WORKSPACE_ID })
     );
     expect(res.status).toBe(status);

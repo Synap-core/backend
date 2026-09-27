@@ -6,11 +6,16 @@
  * inline (`verifyPermission` → `getWorkspaceMembership` → grant on
  * `entities.update`). Three properties must hold and never regress:
  *
- *   1. The pod-member READ floor is INDEPENDENT of `workspace_members`.
- *      Materializing member rows must NOT widen who can READ a workspace's
- *      pod-wide facets — that floor keys on `pod_members`. Proven DB-free by
- *      compiling the two floor predicates and asserting they reference
- *      `pod_members` and never `workspace_members`.
+ *   1. The pod-shared READ floor is GRANT-GATED. Before decision B
+ *      (2026-09-27) it keyed on `pod_members` alone and was independent of
+ *      `workspace_members`. Decision B made it deliberately depend on space
+ *      membership: a pod-wide facet shares only with a pod member in a space
+ *      its ROLE is granted to (`profile_workspace_access` / the role's owning
+ *      workspace). So a materialized member row DOES admit the roles granted
+ *      to that space — accepted: an admin administering the space sees what the
+ *      space was granted. What must never regress is that the share needs BOTH
+ *      `pod_members` AND a role grant — never pod membership alone. Proven
+ *      DB-free by compiling the two floor predicates.
  *
  *   2. The visibility GATE the triggers use admits ONLY pod_visible /
  *      pod_joinable — a private workspace is never materialized into (that WOULD
@@ -44,24 +49,22 @@ import { isPodReadableWorkspace } from "../routers/workspaces.js";
 const dialect = new PgDialect();
 const compile = (sql: SQL) => dialect.sqlToQuery(sql).sql.toLowerCase();
 
-// ── 1. READ FLOOR is pod_members-based, NOT workspace_members-based ──────────
-describe("pod-member read floor is independent of workspace_members", () => {
-  it("podSharedFacetWhere references pod_members + entity_facets, never workspace_members", () => {
+// ── 1. READ FLOOR needs pod_members AND a role grant (decision B) ──────────
+describe("pod-shared read floor is grant-gated, never pod-membership alone", () => {
+  it("podSharedFacetWhere requires pod_members AND profile_workspace_access", () => {
     const sql = compile(
       podSharedFacetWhere(entities.workspaceId, entities.id, "user-x")
     );
     expect(sql).toContain("pod_members");
     expect(sql).toContain("entity_facets");
-    // The load-bearing negative: adding workspace_members rows cannot alter this
-    // floor because the floor never mentions that table.
-    expect(sql).not.toContain("workspace_members");
+    expect(sql).toContain("profile_workspace_access");
   });
 
-  it("facetVisibilityConditions references pod_members, never workspace_members", () => {
+  it("facetVisibilityConditions requires pod_members AND profile_workspace_access", () => {
     const conditions = facetVisibilityConditions({ userId: "user-x" });
     const sql = conditions.map(compile).join(" ");
     expect(sql).toContain("pod_members");
-    expect(sql).not.toContain("workspace_members");
+    expect(sql).toContain("profile_workspace_access");
   });
 });
 

@@ -30,9 +30,10 @@
  * when this door cuts a row.
  */
 
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { storage } from "@synap/storage";
+import { checksumMatchesContent, fileChecksum } from "@synap/storage/checksum";
 import type { db } from "../client-pg.js";
 import {
   documents,
@@ -141,13 +142,26 @@ export interface ClaimedDocumentRevision {
   skipped: boolean;
 }
 
-/** The storage checksum format (`sha256:<hex>`), so rows and content compare directly. */
+/** The storage checksum format (`sha256:<hex>`) — the one every provider stamps. */
 export function documentContentChecksum(content: string | Buffer): string {
-  const buf = Buffer.isBuffer(content)
-    ? content
-    : Buffer.from(content, "utf-8");
-  return `sha256:${createHash("sha256").update(buf).digest("hex")}`;
+  return fileChecksum(content);
 }
+
+/**
+ * The two pod-cut checkpoints — the ONE place their options live, so the
+ * callers (realtime room close, the autosave cron) and the door's test run the
+ * same claim. Both are skip-if-unchanged: a document nobody edited never gets
+ * a row, whatever the cadence.
+ */
+export const ROOM_CLOSE_CHECKPOINT = {
+  checkpoint: { message: "Saved when editing ended" },
+  skipIfUnchanged: true,
+} as const satisfies ClaimDocumentRevisionOptions;
+
+export const AUTOSAVE_CHECKPOINT = {
+  checkpoint: { message: "Auto-save checkpoint" },
+  skipIfUnchanged: true,
+} as const satisfies ClaimDocumentRevisionOptions;
 
 function toBuffer(content: string | Buffer): Buffer {
   return Buffer.isBuffer(content) ? content : Buffer.from(content, "utf-8");
@@ -313,7 +327,7 @@ export async function claimDocumentRevision(
     // the autosave cron passes the last checkpoint's author).
     const current = await readPre();
     const unchanged =
-      !!lastRow && lastRow.checksum === documentContentChecksum(current);
+      !!lastRow && checksumMatchesContent(lastRow.checksum, current);
     if (unchanged && options.skipIfUnchanged) {
       skipped = true;
     } else {
@@ -325,11 +339,17 @@ export async function claimDocumentRevision(
     }
   } else {
     const next = toBuffer(options.content!);
+    // A write that leaves the body byte-identical to what is stored adds no
+    // history: the row that already holds this content (the last checkpoint, or
+    // the drift captured just below) stands for it, so `current_version` moves
+    // only for a real change.
+    let unchangedWrite = false;
     if (authorSwitched || options.checkpoint) {
       // Capture the content as it stands, under the author who wrote it, when
       // it drifted from their last checkpoint (their same-author saves since).
       const pre = await readPre();
-      if (lastRow && lastRow.checksum === documentContentChecksum(pre)) {
+      unchangedWrite = pre.equals(next);
+      if (lastRow && checksumMatchesContent(lastRow.checksum, pre)) {
         undoVersionId = lastRow.id;
       } else {
         // `current_version` names a checkpoint no row holds (a document created
@@ -354,7 +374,9 @@ export async function claimDocumentRevision(
     // `document-content-one-door`, which keys on this `.storageKey` shape).
     await storage.upload(claimed.storageKey, next, { contentType: mimeType });
 
-    if (authorSwitched || options.checkpoint) {
+    if (unchangedWrite) {
+      checkpointVersionId = undoVersionId;
+    } else if (authorSwitched || options.checkpoint) {
       checkpointVersionId = await insertRow(
         next,
         author,
@@ -397,6 +419,15 @@ export interface DocumentCreateProvenance {
   sourceProposalId?: string;
   correlationId?: string;
 }
+
+/**
+ * What a creator gets back — only what callers read. The row's other columns
+ * are not part of the door's contract (the row itself is the repo's).
+ */
+export type CreatedDocument = Pick<
+  Document,
+  "id" | "title" | "contentRevision" | "metadata"
+>;
 
 export interface CreateDocumentWithContentInput {
   /** A pre-chosen id (idempotent callers); a fresh uuid otherwise. */
@@ -453,7 +484,7 @@ export async function createDocumentWithContent(
   dbOrTx: any,
   eventRepo: EventRepository,
   input: CreateDocumentWithContentInput
-): Promise<Document> {
+): Promise<CreatedDocument> {
   const id = input.id ?? randomUUID();
   const key = storage.buildPath(
     input.ownerUserId,
@@ -464,7 +495,7 @@ export async function createDocumentWithContent(
   const stored = await storage.upload(key, input.content, {
     contentType: input.mimeType,
   });
-  return new DocumentRepository(dbOrTx, eventRepo).create(
+  const doc = await new DocumentRepository(dbOrTx, eventRepo).create(
     {
       id,
       title: input.title,
@@ -487,4 +518,10 @@ export async function createDocumentWithContent(
     },
     input.ownerUserId
   );
+  return {
+    id: doc.id,
+    title: doc.title,
+    contentRevision: doc.contentRevision,
+    metadata: doc.metadata,
+  };
 }

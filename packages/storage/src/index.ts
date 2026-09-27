@@ -21,6 +21,7 @@
 // Export interface and factory (recommended)
 export * from "./interface.js";
 export { createFileStorageProvider, storage } from "./factory.js";
+export { fileChecksum, checksumMatchesContent } from "./checksum.js";
 
 // Export providers (for advanced usage)
 export { R2StorageProvider, type R2Config } from "./r2-provider.js";

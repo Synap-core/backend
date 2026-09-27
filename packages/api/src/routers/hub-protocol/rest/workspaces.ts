@@ -53,6 +53,7 @@ import {
   hasScope,
   httpStatusForTrpcError,
   logger,
+  requireUuidParam,
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
@@ -1133,8 +1134,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     let body: unknown;
     try {
@@ -1279,8 +1280,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     const membership = await db.query.workspaceMembers.findFirst({
       where: and(
@@ -1365,8 +1366,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     const membership = await db.query.workspaceMembers.findFirst({
       where: and(
@@ -1482,8 +1483,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     let body: unknown;
     try {
@@ -1591,8 +1592,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     let body: unknown;
     try {
@@ -1691,8 +1692,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       );
     }
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     const allowed = await verifyWorkspaceReadAccess(userId, workspaceId);
     if (!allowed) return c.json({ error: "Access denied" }, 403);
@@ -1761,8 +1762,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     const membership = await db.query.workspaceMembers.findFirst({
       where: and(
@@ -1841,8 +1842,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     const membership = await db.query.workspaceMembers.findFirst({
       where: and(
@@ -1898,8 +1899,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     const membership = await db.query.workspaceMembers.findFirst({
       where: and(
@@ -1996,8 +1997,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       );
     }
     const userId = c.get("userId") as string;
-    const workspaceId = c.req.param("workspaceId");
-    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceId = requireUuidParam(c, "workspaceId");
+    if (workspaceId instanceof Response) return workspaceId;
 
     const membership = await db.query.workspaceMembers.findFirst({
       where: and(

@@ -30,6 +30,7 @@ vi.mock("./_shared.js", async () => {
     hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
     errCode: actual.errCode,
     httpStatusForTrpcError: actual.httpStatusForTrpcError,
+    requireUuidParam: actual.requireUuidParam,
     resolveActorId: async () => ({ ok: true }),
     resolveActingContext: async (c: { get: (k: string) => unknown }) => ({
       ok: true as const,

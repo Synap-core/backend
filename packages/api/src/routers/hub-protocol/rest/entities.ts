@@ -79,6 +79,7 @@ import {
   verifyWorkspaceReadAccess,
   verifyWorkspaceAccess,
   type HubHono,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -1628,7 +1629,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const entityId = c.req.param("entityId");
+    const entityId = requireUuidParam(c, "entityId");
+    if (entityId instanceof Response) return entityId;
     if (!entityId) {
       return c.json({ error: "entityId is required" }, 400);
     }

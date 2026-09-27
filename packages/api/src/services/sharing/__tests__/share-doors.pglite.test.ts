@@ -464,6 +464,40 @@ describe("removing guests: one guest, or everyone one link admitted", () => {
     expect((await seenEntities(R2)).has(E)).toBe(false);
   });
 
+  it("an agent's revokeLink kills the link but never removes the guests it admitted, even when removeGuests defaults true", async () => {
+    const live = await human(A).share({
+      resourceType: "entity",
+      resourceId: E,
+      anchorProjectId: P,
+      audience: "link",
+    });
+    if (live.status === "proposed") throw new Error("unreachable");
+    const { token } = await human(A).rotateLink({ shareId: live.shareId! });
+    await human(R2).redeemLink({ token });
+    expect((await seenEntities(R2)).has(E)).toBe(true);
+
+    // Default `removeGuests` (true) is what a human gets; an agent must not
+    // silently take it, however it asks.
+    const res = await agent.revokeLink({ shareId: live.shareId! });
+    expect(res).toMatchObject({ status: "revoked", removedGuests: 0 });
+    const members = await membersOfP();
+    expect(members).toContainEqual({ user_id: R2, role: "guest" });
+    expect((await seenEntities(R2)).has(E)).toBe(true);
+
+    // The link itself is still dead: no new redemption works.
+    expect(await errOf(human(R).redeemLink({ token }))).toMatchObject({
+      code: "NOT_FOUND",
+    });
+
+    // This test's whole point was leaving R2 a guest; undo it so later tests
+    // in this file see R2 fresh again, the same as they would if this test
+    // did not exist.
+    await q(`delete from project_members where project_id=$1 and user_id=$2`, [
+      P,
+      R2,
+    ]);
+  });
+
   // Mint a live link on E into P and have `userId` redeem it.
   async function linkRedeemedBy(userId: string): Promise<string> {
     const live = await human(A).share({

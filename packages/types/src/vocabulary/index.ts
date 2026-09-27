@@ -211,6 +211,21 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // matter — the button asks, the session receipt reports.
   plan_approval: { imperative: "Approve plan", past: "Approved plan" },
   deploy_approval: { imperative: "Approve deploy", past: "Approved deploy" },
+  // Document-edit proposal types (`DOCUMENT_PATCH_PROPOSAL_TYPES` + the legacy
+  // `ai_edit`), filed against an EXISTING document by the pod's patch door.
+  // Without rows they humanized to "Section update" / "Ai edit" and composed
+  // `Section update Document "…"` — a noun where the verb belongs. Like the
+  // dev gates above, a verb that names the PART it acts on carries that noun,
+  // and `ACTION_OBJECT_PREPOSITIONS` joins it to the document it lives in.
+  section_update: { imperative: "Edit section", past: "Edited section" },
+  session_narrative_update: {
+    imperative: "Update narrative",
+    past: "Updated narrative",
+  },
+  ai_edit: { imperative: "Edit", past: "Edited" },
+  // `user_edit` is a PERSON's suggested change to a document, reviewed like
+  // any other proposal — so it reads as a suggestion, not as an edit made.
+  user_edit: { imperative: "Suggest edit", past: "Suggested edit" },
 
   // Account setup / landing page verbs
   provision: { imperative: "Provision", past: "Provisioned" },
@@ -222,6 +237,26 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   see: { imperative: "See", past: "Seen" },
   open: { imperative: "Open", past: "Opened" },
 };
+
+/**
+ * Verbs that already name the PART they act on ("Edit section") take a
+ * preposition before the object they act WITHIN, so a title reads
+ * `Edit section in Document "Plan"` rather than `Edit section Document "Plan"`.
+ * Keyed like {@link ACTION_VERBS} (whole token, then last dotted segment).
+ */
+export const ACTION_OBJECT_PREPOSITIONS: Readonly<Record<string, string>> = {
+  section_update: "in",
+  session_narrative_update: "of",
+};
+
+function resolveActionPreposition(action: string | null | undefined): string {
+  if (!action) return "";
+  const key = action.toLowerCase();
+  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
+  return (
+    ACTION_OBJECT_PREPOSITIONS[key] ?? ACTION_OBJECT_PREPOSITIONS[tail] ?? ""
+  );
+}
 
 /**
  * The human verb for an action token, in the requested mood.
@@ -394,17 +429,18 @@ export function buildObjectActionTitle(params: {
   mood?: VerbMood;
 }): string {
   const { action, fallbackAction, objectKind, objectName, mood } = params;
-  const verb = resolveActionLabel(
-    action ?? fallbackAction,
-    mood ?? "imperative"
-  );
+  const actionToken = action ?? fallbackAction;
+  const verb = resolveActionLabel(actionToken, mood ?? "imperative");
   // `entity` is the generic base kind — naming it adds nothing ("Create
   // Entity"), so it is suppressed in favour of the concrete profile slug.
   const noun =
     objectKind && objectKind.toLowerCase() !== "entity"
       ? resolveObjectNoun(objectKind)
       : "";
-  const head = [verb || "Proposal", noun].filter(Boolean).join(" ");
+  const preposition = noun ? resolveActionPreposition(actionToken) : "";
+  const head = [verb || "Proposal", preposition, noun]
+    .filter(Boolean)
+    .join(" ");
   return objectName ? `${head} "${objectName}"` : head;
 }
 

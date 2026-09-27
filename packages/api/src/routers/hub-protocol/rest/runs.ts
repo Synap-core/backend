@@ -30,6 +30,7 @@ import {
   resolveActingContext,
   type HubHono,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 
 // ── Unified-run read schemas (the cross-flow diagnose door) ──────────────────
@@ -200,10 +201,12 @@ export function registerRunsRoutes(app: HubHono): void {
     if (!parsedFt.success) {
       return c.json({ error: "flowType query param is required" }, 400);
     }
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const detail = await getRun({
       userId,
       flowType: parsedFt.data,
-      id: c.req.param("id"),
+      id,
     });
     if (!detail) return c.json({ error: "Run not found" }, 404);
     return c.json(detail);
@@ -237,7 +240,8 @@ export function registerRunsRoutes(app: HubHono): void {
       );
     }
 
-    const runId = c.req.param("runId");
+    const runId = requireUuidParam(c, "runId");
+    if (runId instanceof Response) return runId;
     const raw = await c.req.json().catch(() => null);
     const parsed = CaptureRequestSchema.safeParse(raw);
     if (!parsed.success) {

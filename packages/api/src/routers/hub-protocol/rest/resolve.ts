@@ -30,6 +30,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  requireUuidParam,
 } from "./_shared.js";
 import { resolveByName } from "../../../services/object-graph/graph-service.js";
 import { resolveObjectKind } from "../../../services/diagnose/resolve-object-kind.js";
@@ -163,7 +164,8 @@ export function registerResolveRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     if (!id) {
       return c.json({ error: "id is required" }, 400);
     }

@@ -9,13 +9,30 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ACTING_USER_ID = "user-authenticated";
 const ACTING_WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const BODY_WORKSPACE_ID = "22222222-2222-4222-8222-222222222222";
+const VIEW_ID = "33333333-3333-4333-8333-333333333333";
 
 const arrangeBento = vi.fn();
+
+const PG_UUID_RE_FOR_TEST =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 vi.mock("./_shared.js", () => ({
   getCaller: vi.fn(),
   hasScope: vi.fn(() => true),
   logger: { error: vi.fn() },
+  requireUuidParam: (
+    c: {
+      req: { param: (n: string) => string | undefined };
+      json: (b: unknown, s: number) => unknown;
+    },
+    name: string
+  ) => {
+    const raw = c.req.param(name) ?? "";
+    if (!PG_UUID_RE_FOR_TEST.test(raw)) {
+      return c.json({ error: `${name} is not a valid id: ${raw}` }, 400);
+    }
+    return raw;
+  },
   resolveActorId: vi.fn(async (_agentUserId: unknown, userId: string) => ({
     actorId: userId,
   })),
@@ -75,7 +92,7 @@ describe("POST /views/:viewId/arrange identity binding", () => {
   });
 
   it("uses the resolved principal and workspace, never payload impersonation", async () => {
-    const response = await buildApp().request("/views/view-1/arrange", {
+    const response = await buildApp().request(`/views/${VIEW_ID}/arrange`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -117,7 +134,7 @@ describe("POST /views/:viewId/arrange identity binding", () => {
         { code: "BAD_REQUEST" }
       )
     );
-    const response = await buildApp().request("/views/view-1/arrange", {
+    const response = await buildApp().request(`/views/${VIEW_ID}/arrange`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

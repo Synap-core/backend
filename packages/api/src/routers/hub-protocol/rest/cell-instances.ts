@@ -33,6 +33,7 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -141,7 +142,8 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     try {
       const [row] = await db
         .select()
@@ -424,7 +426,8 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const raw = (await c.req.json().catch(() => null)) as Record<
       string,
       unknown

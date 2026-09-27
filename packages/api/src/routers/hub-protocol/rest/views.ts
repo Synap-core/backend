@@ -22,6 +22,7 @@ import {
   resolveActorId,
   resolveActingContext,
   type HubHono,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -229,7 +230,8 @@ export function registerViewsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const viewId = c.req.param("viewId");
+    const viewId = requireUuidParam(c, "viewId");
+    if (viewId instanceof Response) return viewId;
     const body = (await c.req.json()) as {
       userId: string;
       workspaceId?: string;
@@ -295,7 +297,8 @@ export function registerViewsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const viewId = c.req.param("viewId");
+    const viewId = requireUuidParam(c, "viewId");
+    if (viewId instanceof Response) return viewId;
     let body: any;
     try {
       body = await c.req.json();

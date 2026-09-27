@@ -26,7 +26,8 @@ import type {
   UploadOptions,
   FileInfo,
 } from "./interface.js";
-import { calculateFileChecksum, buildEntityPath } from "./utils.js";
+import { buildEntityPath } from "./utils.js";
+import { fileChecksum } from "./checksum.js";
 
 export interface MinIOConfig {
   /** MinIO endpoint URL (e.g., "http://localhost:9000") */
@@ -126,7 +127,6 @@ export class MinIOStorageProvider implements IFileStorage {
 
     const body =
       typeof content === "string" ? Buffer.from(content, "utf-8") : content;
-    const checksum = calculateFileChecksum(body);
 
     await this.client.send(
       new PutObjectCommand({
@@ -146,7 +146,7 @@ export class MinIOStorageProvider implements IFileStorage {
       url,
       path,
       size: body.length,
-      checksum: `sha256:${checksum}`,
+      checksum: fileChecksum(body),
       uploadedAt: new Date(),
     };
   }

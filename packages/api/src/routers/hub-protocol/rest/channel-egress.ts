@@ -30,6 +30,7 @@ import {
   logger,
   type HubHono,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
@@ -138,7 +139,8 @@ export function registerChannelEgressRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const raw = await c.req.json().catch(() => null);
     const parsed = AckBodySchema.safeParse(raw);
     if (!parsed.success) {

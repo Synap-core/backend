@@ -15,7 +15,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { createHash } from "node:crypto";
 import type {
   IFileStorage,
   FileMetadata,
@@ -23,6 +22,7 @@ import type {
   FileInfo,
 } from "./interface.js";
 import { buildEntityPath } from "./utils.js";
+import { fileChecksum } from "./checksum.js";
 
 export interface LocalStorageConfig {
   /**
@@ -69,13 +69,11 @@ export class LocalStorageProvider implements IFileStorage {
 
     await fs.writeFile(absPath, buf);
 
-    const checksum = createHash("sha256").update(buf).digest("hex");
-
     return {
       url: `file://${absPath}`,
       path: storagePath,
       size: buf.length,
-      checksum: `sha256:${checksum}`,
+      checksum: fileChecksum(buf),
       uploadedAt: new Date(),
     };
   }

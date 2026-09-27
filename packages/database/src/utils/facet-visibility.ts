@@ -8,18 +8,132 @@
  * entityFacets in packages/api access/registry.ts — keep the two in sync):
  * workspace-scoped facets are shared with the workspace's members (the caller
  * has already verified membership on the lens it passes here); pod-wide
- * (null-workspace) facets carry an OWNER floor, WIDENED in Wave 2 (Membership →
- * Visibility) to also admit any caller who is a POD MEMBER — a pod-wide facet is
- * the pod-level share signal, the twin of "a facet in workspace W is shared with
- * W's members". A non-pod-member still sees only their own (fail closed).
+ * (null-workspace) facets carry an OWNER floor, widened (decision B) to a pod
+ * member in a SPACE THE FACET'S ROLE IS GRANTED TO (`podSharedFacetGrantWhere`)
+ * — never to every pod member. A non-pod-member still sees only their own
+ * (fail closed).
  * - lens `undefined` → all lenses, optionally bounded by allowedWorkspaceIds
  * - lens `null`      → base-only (facets with no workspace)
  * - lens `string`    → that workspace's facets + pod-wide (null-workspace) ones
  */
 
-import { type SQL, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { type SQL, and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { db } from "../client-pg.js";
 import { entityFacets } from "../schema/entity-facets.js";
+import { profiles, profileWorkspaceAccess } from "../schema/profiles.js";
 import { podMemberWhere } from "./pod-membership.js";
+import { memberWorkspaceIds, ownedWorkspaceIds } from "./user-visible-where.js";
+
+// ─── SHARED-ROLE VISIBILITY (founder decision B, 2026-09-27) ──────────────────
+//
+// A shared/system role's facet is STORED pod-wide (NULL — `storedFacetWorkspaceId`
+// below), so the facet row itself names no workspace. Until decision B a live
+// pod-wide facet was read as "shared with EVERY pod member", which meant
+// attaching `client` to a private person published that person (and its
+// document) to the whole team pod.
+//
+// DECISION B: a pod-wide facet shares its row — and the pod-wide entity wearing
+// it, and that entity's document — ONLY with a pod member who belongs to (is a
+// member of, or owns) a SPACE THE ROLE IS GRANTED TO. "Granted to" is the role's
+// own workspace grants: a `profile_workspace_access` row, or the role's owning
+// workspace (`profiles.workspace_id`). There is NO implicit all-spaces grant for
+// a `system` role — a system role shares only where it is explicitly granted
+// (the one seeded system role, `team-member`, keeps its per-workspace lens and
+// never reaches this rule). The owner floor is separate and unchanged, so a
+// solo pod (owner only) sees exactly what it saw before.
+//
+// These three builders are THE predicate. Every reader that asks "is this
+// pod-wide facet / entity / document shared with the caller?" composes them:
+//   - `facetVisibilityConditions` (below) and its in-memory twin
+//     `isFacetVisibleForLens` (via `resolveViewerSharedRoleIds`);
+//   - the `entityFacets` VisibilityRule (packages/api access/registry.ts);
+//   - `podSharedFacetWhere` / `podSharedDocumentWhere`
+//     (packages/api utils/project-scope.ts — entity + document floors);
+//   - `entityQueryVisibilityWhere` (packages/jobs workers/entity-query-scope.ts).
+// All three are UNCORRELATED subqueries bound to the caller's id, so they render
+// identically under `db.select()` and relational (`db.query`) reads.
+
+/**
+ * Role (profile) ids granted to a space `userId` belongs to (member or owner):
+ * a `profile_workspace_access` grant, or the role's own owning workspace.
+ */
+export function grantedRoleIdsFor(userId: string) {
+  const mySpaces = or(
+    inArray(profileWorkspaceAccess.workspaceId, memberWorkspaceIds(userId)),
+    inArray(profileWorkspaceAccess.workspaceId, ownedWorkspaceIds(userId))
+  );
+  return db
+    .select({ id: profiles.id })
+    .from(profiles)
+    .where(
+      or(
+        inArray(
+          profiles.id,
+          db
+            .select({ id: profileWorkspaceAccess.profileId })
+            .from(profileWorkspaceAccess)
+            .where(mySpaces)
+        ),
+        inArray(profiles.workspaceId, memberWorkspaceIds(userId)),
+        inArray(profiles.workspaceId, ownedWorkspaceIds(userId))
+      )
+    );
+}
+
+/**
+ * THE row predicate over `entity_facets`: this POD-WIDE facet is shared with
+ * `userId` — a pod member in a space its role is granted to (decision B).
+ * Does not include the owner floor (callers OR it with `eq(userId)`), nor the
+ * soft-delete gate (a facet READ may show a detached row to its owner; the
+ * entity/document SHARE subquery adds `deletedAt IS NULL`).
+ */
+export function podSharedFacetGrantWhere(userId: string): SQL {
+  return and(
+    isNull(entityFacets.workspaceId),
+    inArray(entityFacets.profileId, grantedRoleIdsFor(userId)),
+    podMemberWhere(userId)
+  )!;
+}
+
+/**
+ * Entity ids SHARED with `userId` by a LIVE pod-wide facet (decision B). The
+ * entity floor still requires the entity itself be pod-wide.
+ */
+export function podSharedEntityIdsFor(userId: string) {
+  return db
+    .select({ id: entityFacets.entityId })
+    .from(entityFacets)
+    .where(
+      and(
+        podSharedFacetGrantWhere(userId),
+        // Soft-delete gate — a DETACHED role must stop sharing the entity.
+        isNull(entityFacets.deletedAt)
+      )
+    );
+}
+
+/**
+ * JS form of the grant half of {@link podSharedFacetGrantWhere} for code that
+ * holds already-loaded facet rows (`isFacetVisibleForLens`). Runs the SAME
+ * builders, so the two cannot disagree. Empty when the caller is not a pod
+ * member (the EXISTS is false) — fail closed. `database` is the caller's
+ * executor (the request's `db`), so the read runs where the caller's reads run.
+ */
+export async function resolveViewerSharedRoleIds(
+  database: typeof db,
+  userId: string
+): Promise<Set<string>> {
+  const rows = await database
+    .select({ id: profiles.id })
+    .from(profiles)
+    .where(
+      and(
+        inArray(profiles.id, grantedRoleIdsFor(userId)),
+        podMemberWhere(userId)
+      )
+    );
+  return new Set(rows.map((r) => r.id));
+}
 
 /**
  * In-memory twin of {@link facetVisibilityConditions} for the string / null lens
@@ -29,28 +143,32 @@ import { podMemberWhere } from "./pod-membership.js";
  * IS the boolean form of the same two SQL clauses.
  *
  *   - lens `null`   → facet.workspaceId IS NULL
- *                       AND (userId === viewer OR viewerIsPodMember)
+ *                       AND (userId === viewer OR role ∈ viewerSharedRoleIds)
  *   - lens `string` → (facet.workspaceId === lens OR NULL)
  *                       AND (facet.workspaceId NOT NULL OR userId === viewer
- *                            OR viewerIsPodMember)
+ *                            OR role ∈ viewerSharedRoleIds)
  *
  * The workspace clause mirrors the `workspaceId === null` / `!== undefined`
  * branches; the AND'd owner-floor clause mirrors the always-appended
- * `or(isNotNull(workspaceId), eq(userId, viewer), podMemberWhere(viewer))`. (The
+ * `or(isNotNull(workspaceId), eq(userId, viewer), podSharedFacetGrantWhere(viewer))`. (The
  * identity-wide `workspaceId === undefined` + `allowedWorkspaceIds` branch is
  * SQL-only — this in-memory helper is used where the lens is a concrete
  * workspace or pod-wide.)
  *
- * `viewerIsPodMember` is the JS form of the SQL `EXISTS (pod_members)` term —
- * resolve it via `AccessContext.podMembership()`. It DEFAULTS TO FALSE so a
- * caller that has not resolved membership fails CLOSED to the owner floor (the
- * pre-Wave-2 behaviour), never open.
+ * `viewerSharedRoleIds` is the JS form of the SQL grant term — resolve it ONCE
+ * via `resolveViewerSharedRoleIds(db, viewer)` (same builders). It DEFAULTS TO EMPTY
+ * so a caller that has not resolved it fails CLOSED to the owner floor, never
+ * open. A facet row without `profileId` can only pass the owner floor.
  */
 export function isFacetVisibleForLens(
-  facet: { workspaceId: string | null; userId?: string | null },
+  facet: {
+    workspaceId: string | null;
+    userId?: string | null;
+    profileId?: string | null;
+  },
   lensWorkspaceId: string | null,
   viewerUserId: string,
-  viewerIsPodMember = false
+  viewerSharedRoleIds: ReadonlySet<string> = new Set()
 ): boolean {
   const workspaceMatch =
     lensWorkspaceId === null
@@ -59,7 +177,7 @@ export function isFacetVisibleForLens(
   const ownerFloor =
     facet.workspaceId !== null ||
     facet.userId === viewerUserId ||
-    viewerIsPodMember;
+    (!!facet.profileId && viewerSharedRoleIds.has(facet.profileId));
   return workspaceMatch && ownerFloor;
 }
 
@@ -117,17 +235,17 @@ export function facetVisibilityConditions(opts: {
     );
   }
 
-  // Owner floor on the pod-wide (null-workspace) rows, WIDENED to pod members
-  // (Wave 2). The three branches: workspace-scoped rows are already lensed
-  // above; pod-wide rows are admitted for their owner, or for any caller with a
-  // `pod_members` row. Keep in lockstep with the `entityFacets` VisibilityRule
+  // Owner floor on the pod-wide (null-workspace) rows, widened (decision B) to
+  // a pod member in a space the facet's role is granted to. The three branches:
+  // workspace-scoped rows are already lensed above; pod-wide rows are admitted
+  // for their owner, or via `podSharedFacetGrantWhere`. Keep in lockstep with the `entityFacets` VisibilityRule
   // (packages/api access/registry.ts) and `podSharedFacetWhere`
   // (packages/api utils/project-scope.ts).
   conditions.push(
     or(
       isNotNull(entityFacets.workspaceId),
       eq(entityFacets.userId, opts.userId),
-      podMemberWhere(opts.userId)
+      podSharedFacetGrantWhere(opts.userId)
     ) as SQL
   );
 

@@ -20,7 +20,7 @@ import {
 } from "../../../services/workflow-place/index.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, type HubHono } from "./_shared.js";
+import { hasScope, requireUuidParam, type HubHono } from "./_shared.js";
 
 const WorkflowKindSchema = z.enum(["automation", "playbook"]);
 
@@ -59,9 +59,11 @@ export function registerWorkflowsRoutes(app: HubHono): void {
     if (!parsedKind.success) {
       return c.json({ error: "kind must be 'automation' or 'playbook'" }, 400);
     }
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const place = await getWorkflowPlace({
       kind: parsedKind.data,
-      id: c.req.param("id"),
+      id,
       userId,
     });
     if (!place) return c.json({ error: "Workflow not found" }, 404);
@@ -105,10 +107,12 @@ export function registerWorkflowsRoutes(app: HubHono): void {
     if (!parsedKind.success) {
       return c.json({ error: "kind must be 'automation' or 'playbook'" }, 400);
     }
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const limitRaw = Number(c.req.query("limit"));
     const feed = await getWorkflowPlaceFeed({
       kind: parsedKind.data,
-      id: c.req.param("id"),
+      id,
       userId,
       cursor: c.req.query("cursor") || undefined,
       limit: Number.isFinite(limitRaw) ? limitRaw : undefined,

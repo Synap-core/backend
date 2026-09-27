@@ -144,12 +144,12 @@ export function podReaderWhere(userId: string): SQL {
 }
 
 /**
- * SHARED-TO-POD, defined once: a facet row whose `workspace_id IS NULL` is
- * pod-wide, and pod-wide IS the share grant — the pod-level twin of "a facet in
- * workspace W is shared with W's members". There is no per-facet private flag
- * (see entity-facets.ts), so NULL-workspace is the only available signal. An
- * ENTITY is shared-to-pod when it is itself pod-wide AND carries such a facet;
- * an un-faceted pod-wide entity stays owner-private.
+ * "Is the caller a pod member?" — one CONJUNCT of the shared-role rule, never
+ * the whole of it. Since decision B (2026-09-27) a pod-wide facet is NOT shared
+ * with every pod member: it shares only with a pod member in a space the
+ * facet's role is granted to (`podSharedFacetGrantWhere` /
+ * `podSharedEntityIdsFor`, utils/facet-visibility.ts — the ONE predicate). An
+ * un-faceted pod-wide entity stays owner-private.
  */
 export function podMemberWhere(userId: string): SQL {
   // A BUILDER subquery, not a raw template (Sites W2 S2 fix). The raw form

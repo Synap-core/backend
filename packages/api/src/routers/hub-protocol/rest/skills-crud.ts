@@ -44,6 +44,7 @@ import {
   resolveActingContext,
   type HubHono,
   readJsonBody,
+  requireUuidParam,
 } from "./_shared.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
@@ -442,7 +443,8 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -493,7 +495,8 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -671,7 +674,8 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);

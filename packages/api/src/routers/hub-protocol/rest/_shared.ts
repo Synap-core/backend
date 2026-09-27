@@ -193,6 +193,46 @@ export function isUuid(raw: string): boolean {
 }
 
 /**
+ * Guard a required PATH param that names a row bound to a Postgres `uuid`
+ * column. Returns the id string when valid, or a 400 `Response` to return
+ * immediately from the handler.
+ *
+ * WHY (root cause, not a per-route patch): most Hub REST resource files wire
+ * their handler with a plain `app.get/post/patch/delete(path, handler)` and
+ * register OpenAPI *documentation* separately via `registerOpenApi()`
+ * (`_codecs/_register.ts`) — that registration only feeds `/openapi.json`,
+ * it does NOT validate the request (only the ~9 files wired with the real
+ * `app.openapi(routeDef, handler)` get schema enforcement for free). So a
+ * doc-only `params: zOpenapi.object({ id: uuidParam })` can sit right next
+ * to a handler that reads `c.req.param("id")` raw and feeds it straight into
+ * a `uuid` column comparison — Postgres throws `invalid input syntax for
+ * type uuid` (22P02), the route's catch maps it through
+ * `httpStatusForTrpcError`, and a client typo surfaces as a 500. Reproduced
+ * live 2026-09-27 on `GET /projects/:id` and `GET /workspaces/:workspaceId`.
+ *
+ * Call this as the FIRST thing in a handler that reads an id-shaped path
+ * param and uses it in a raw query (not one already covered by a route
+ * delegating entirely to a tRPC procedure with `z.string().uuid()` input, or
+ * one already guarded with `isUuid`/a `Uuid.safeParse` codec — those already
+ * 400 before reaching Postgres).
+ *
+ * Usage: `const id = requireUuidParam(c, "id"); if (id instanceof Response) return id;`
+ */
+export function requireUuidParam(
+  c: Context<{ Variables: HubVariables }>,
+  name: string
+): string | Response {
+  const raw = c.req.param(name) ?? "";
+  if (!isUuid(raw)) {
+    return c.json(
+      { error: `${name} is not a valid id: ${raw}` },
+      400
+    ) as unknown as Response;
+  }
+  return raw;
+}
+
+/**
  * Read an OPTIONAL JSON request body — an absent/blank body is `{}`, a
  * MALFORMED one is a 400.
  *

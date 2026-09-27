@@ -22,6 +22,7 @@ import {
   resolveActingContext,
   resolveActorId,
   type HubHono,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
@@ -223,7 +224,8 @@ export function registerRelationsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const relationId = c.req.param("relationId");
+    const relationId = requireUuidParam(c, "relationId");
+    if (relationId instanceof Response) return relationId;
     const body = (await c.req.json().catch(() => null)) as {
       userId?: string;
       workspaceId?: string;

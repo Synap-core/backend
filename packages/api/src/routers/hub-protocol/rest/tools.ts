@@ -41,6 +41,7 @@ import {
   resolveActingContext,
   type HubHono,
   readJsonBody,
+  requireUuidParam,
 } from "./_shared.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
@@ -500,7 +501,8 @@ export function registerToolsRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -535,7 +537,8 @@ export function registerToolsRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -580,7 +583,8 @@ export function registerToolsRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -617,7 +621,8 @@ export function registerToolsRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -680,7 +685,8 @@ export function registerToolsRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -724,7 +730,8 @@ export function registerToolsRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -758,7 +765,8 @@ export function registerToolsRoutes(app: HubHono): void {
       );
     }
 
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const idCheck = z.string().uuid().safeParse(id);
     if (!idCheck.success) {
       return c.json({ error: "id must be a UUID" }, 400);
@@ -809,7 +817,8 @@ export function registerToolsRoutes(app: HubHono): void {
       );
     }
 
-    const linkId = c.req.param("linkId");
+    const linkId = requireUuidParam(c, "linkId");
+    if (linkId instanceof Response) return linkId;
     const linkIdCheck = z.string().uuid().safeParse(linkId);
     if (!linkIdCheck.success) {
       return c.json({ error: "linkId must be a UUID" }, 400);

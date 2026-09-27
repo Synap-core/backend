@@ -15,7 +15,7 @@ import { randomBytes } from "crypto";
 import { z } from "zod";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { httpStatusForTrpcError } from "./_shared.js";
+import { httpStatusForTrpcError, requireUuidParam } from "./_shared.js";
 
 const CreateWebhookSchema = z.object({
   url: z.string().url(),
@@ -187,8 +187,8 @@ export function registerWebhooksRoutes(app: HubHono) {
 
   app.delete("/webhooks/:id", async (c) => {
     const userId = c.get("userId");
-    const id = c.req.param("id");
-
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     try {
       const result = await db
         .delete(webhookSubscriptions)

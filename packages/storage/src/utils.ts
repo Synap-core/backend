@@ -4,24 +4,6 @@
  * Common utilities used by all storage providers to avoid code duplication.
  */
 
-import { createHash } from "crypto";
-
-/**
- * Calculate SHA256 checksum for file integrity verification
- *
- * @param data - File content as Buffer
- * @returns Base64-encoded SHA256 hash
- *
- * @example
- * ```typescript
- * const checksum = calculateFileChecksum(Buffer.from('content'));
- * // Returns: "base64-encoded-hash"
- * ```
- */
-export function calculateFileChecksum(data: Buffer): string {
-  return createHash("sha256").update(data).digest("base64");
-}
-
 /**
  * Build standardized file path for user entities
  *

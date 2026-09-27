@@ -15,10 +15,10 @@ import {
   sql,
   entities,
   users,
-  podMembers,
   focusSessions,
   EventRepository,
   isFacetVisibleForLens,
+  resolveViewerSharedRoleIds,
   playbooks,
   projects,
   automations,
@@ -571,7 +571,7 @@ export async function enrichProposalsForDisplay(
     traceEntries,
     facetRows,
     roleFacetRows,
-    viewerIsPodMember,
+    viewerSharedRoleIds,
     sessionRows,
     documentRows,
     playbookRows,
@@ -657,6 +657,7 @@ export async function enrichProposalsForDisplay(
             properties: entityFacets.properties,
             workspaceId: entityFacets.workspaceId,
             userId: entityFacets.userId,
+            profileId: entityFacets.profileId,
           })
           .from(entityFacets)
           .where(inArray(entityFacets.id, uniqueFacetIds))
@@ -667,6 +668,7 @@ export async function enrichProposalsForDisplay(
             properties: unknown;
             workspaceId: string | null;
             userId: string;
+            profileId: string;
           }>
         ),
     // Roles v2: CURRENT live role-facets of every pre-existing entity a composite
@@ -681,6 +683,7 @@ export async function enrichProposalsForDisplay(
             status: entityFacets.status,
             workspaceId: entityFacets.workspaceId,
             userId: entityFacets.userId,
+            profileId: entityFacets.profileId,
           })
           .from(entityFacets)
           .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
@@ -697,21 +700,18 @@ export async function enrichProposalsForDisplay(
             status: string | null;
             workspaceId: string | null;
             userId: string;
+            profileId: string;
           }>
         ),
-    // B4/Roles v2: resolve the viewer's pod membership ONCE for the whole page
-    // (mirrors AccessContext.podMembership()'s single indexed lookup) so the
-    // `isFacetVisibleForLens` calls below can admit a legitimately pod-shared
-    // facet/role to a pod-member reviewer, not just its own owner — only run
-    // when a facet/role is actually being visibility-checked below.
+    // B4/Roles v2 + decision B: resolve ONCE for the whole page the roles whose
+    // pod-wide facets are shared with the viewer (a pod member in a space the
+    // role is granted to) — the SAME builders as the SQL facet floor — so the
+    // `isFacetVisibleForLens` calls below admit a legitimately shared
+    // facet/role, never one shared merely by pod membership. Only run when a
+    // facet/role is actually being visibility-checked below.
     uniqueFacetIds.length > 0 || uniqueRoleEntityIds.length > 0
-      ? db
-          .select({ userId: podMembers.userId })
-          .from(podMembers)
-          .where(eq(podMembers.userId, userId))
-          .limit(1)
-          .then((rows) => rows.length > 0)
-      : Promise.resolve(false),
+      ? resolveViewerSharedRoleIds(db, userId)
+      : Promise.resolve(new Set<string>()),
     // Session titles through the ONE session read rule (decision D1): a
     // session's title/goal is content — its owner and (human door) its room's
     // human roster read it; a workspace colleague does not. A session the
@@ -1121,6 +1121,7 @@ export async function enrichProposalsForDisplay(
       status: string | null;
       workspaceId: string | null;
       userId: string;
+      profileId: string;
     }>
   >();
   for (const rf of roleFacetRows) {
@@ -1455,7 +1456,7 @@ export async function enrichProposalsForDisplay(
           facetRow,
           row.workspaceId,
           userId,
-          viewerIsPodMember
+          viewerSharedRoleIds
         )
       ) {
         reviewCurrent = { properties: facetRow.properties };
@@ -1482,7 +1483,7 @@ export async function enrichProposalsForDisplay(
       >();
       for (const [eid, facets] of roleFacetsByEntityId) {
         const visible = facets.filter((f) =>
-          isFacetVisibleForLens(f, lensWorkspaceId, userId, viewerIsPodMember)
+          isFacetVisibleForLens(f, lensWorkspaceId, userId, viewerSharedRoleIds)
         );
         if (visible.length > 0) {
           scoped.set(
@@ -1603,7 +1604,7 @@ export async function enrichProposalsForDisplay(
                           f,
                           row.workspaceId,
                           userId,
-                          viewerIsPodMember
+                          viewerSharedRoleIds
                         )
                       )
                       .map((f) => f.profileSlug)

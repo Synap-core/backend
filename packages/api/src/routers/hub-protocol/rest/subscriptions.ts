@@ -24,6 +24,7 @@ import {
   logger,
   type HubHono,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { subscriptionsRouter } from "../../subscriptions.js";
@@ -154,7 +155,8 @@ export function registerSubscriptionsRoutes(app: HubHono): void {
       );
     }
     const userId = c.get("userId") as string;
-    const eventId = c.req.param("eventId");
+    const eventId = requireUuidParam(c, "eventId");
+    if (eventId instanceof Response) return eventId;
     const lens = c.req.query("lens");
 
     try {
@@ -186,7 +188,8 @@ export function registerSubscriptionsRoutes(app: HubHono): void {
       );
     }
     const userId = c.get("userId") as string;
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const limitParam = c.req.query("limit");
 
     try {

@@ -55,6 +55,7 @@ import {
   resolveActorId,
   type HubHono,
   readJsonBody,
+  requireUuidParam,
 } from "./_shared.js";
 
 // ── Local OpenAPI schemas (not in user-WIP _codecs/misc.ts) ────────────────
@@ -279,7 +280,8 @@ export function registerVaultRoutes(app: HubHono): void {
       );
     }
 
-    const proposalId = c.req.param("proposalId");
+    const proposalId = requireUuidParam(c, "proposalId");
+    if (proposalId instanceof Response) return proposalId;
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
@@ -447,7 +449,8 @@ export function registerVaultRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const secretId = c.req.param("id");
+    const secretId = requireUuidParam(c, "id");
+    if (secretId instanceof Response) return secretId;
     const jsonRead = await readJsonBody(c);
     if (!jsonRead.ok) return jsonRead.res;
     const parsed = GrantRequestSchema.safeParse(jsonRead.body);

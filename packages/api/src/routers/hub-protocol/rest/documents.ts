@@ -22,6 +22,7 @@ import {
   resolveActorId,
   resolveActingContext,
   type HubHono,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -210,7 +211,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const documentId = c.req.param("documentId");
+    const documentId = requireUuidParam(c, "documentId");
+    if (documentId instanceof Response) return documentId;
     const userId = c.get("userId") as string | undefined;
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
     try {
@@ -269,7 +271,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const documentId = c.req.param("documentId");
+    const documentId = requireUuidParam(c, "documentId");
+    if (documentId instanceof Response) return documentId;
     const userId = c.get("userId") as string | undefined;
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
 
@@ -332,7 +335,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const documentId = c.req.param("documentId");
+    const documentId = requireUuidParam(c, "documentId");
+    if (documentId instanceof Response) return documentId;
     const body = UpdateDocumentBodySchema.safeParse(await c.req.json());
     if (!body.success) {
       return c.json({ error: body.error.message }, 400);
@@ -491,7 +495,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const documentId = c.req.param("documentId");
+    const documentId = requireUuidParam(c, "documentId");
+    if (documentId instanceof Response) return documentId;
     const parsed = PatchDocumentRequestSchema.safeParse(await c.req.json());
     if (!parsed.success) {
       return c.json({ error: parsed.error.message }, 400);
@@ -547,7 +552,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const sessionId = c.req.param("sessionId");
+    const sessionId = requireUuidParam(c, "sessionId");
+    if (sessionId instanceof Response) return sessionId;
     try {
       const caller = await getCaller(c);
       return c.json(await caller.documents.getSessionDocument({ sessionId }));
@@ -571,7 +577,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
       if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
         return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
       }
-      const sessionId = c.req.param("sessionId");
+      const sessionId = requireUuidParam(c, "sessionId");
+      if (sessionId instanceof Response) return sessionId;
       const sectionId = c.req.param("sectionId");
       const body = UpsertSessionSectionBodySchema.safeParse(await c.req.json());
       if (!body.success) {

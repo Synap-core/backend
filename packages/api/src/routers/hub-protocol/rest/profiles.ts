@@ -32,6 +32,7 @@ import {
   resolveActingContext,
   resolveActorId,
   type HubHono,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -548,7 +549,8 @@ export function registerProfilesRoutes(app: HubHono): void {
    * procedure, which is the ONE governed door (this is only its HTTP edge).
    */
   app.patch("/property-defs/:id", async (c) => {
-    const propertyDefId = c.req.param("id");
+    const propertyDefId = requireUuidParam(c, "id");
+    if (propertyDefId instanceof Response) return propertyDefId;
     const body = (await c.req.json()) as {
       userId: string;
       workspaceId: string;

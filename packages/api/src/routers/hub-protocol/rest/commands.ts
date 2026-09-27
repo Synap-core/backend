@@ -27,6 +27,7 @@ import {
   type HubHono,
   httpStatusForTrpcError,
   readJsonBody,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 // THE scrubber for free text about to be stored or shown. Lifted out of this
@@ -306,7 +307,8 @@ export function registerCommandsRoutes(app: HubHono): void {
         403
       );
     }
-    const id = c.req.param("id");
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     const userId = c.get("userId") as string;
     try {
       // Floor through the sharedScope-aware rule: a workspace-shared command is

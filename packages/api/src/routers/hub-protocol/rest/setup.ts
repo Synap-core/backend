@@ -75,6 +75,7 @@ import {
   type HubHono,
   type HubVariables,
   httpStatusForTrpcError,
+  requireUuidParam,
 } from "./_shared.js";
 
 /** Escape a user-derived value before interpolating it into an HTML string. */
@@ -2058,7 +2059,8 @@ export function registerSetupRoutes(app: HubHono): void {
 
   /** Poll for approval status — authenticated with the human hub-protocol key. */
   app.get("/setup/agent/pending/:keyId", async (c) => {
-    const keyId = c.req.param("keyId");
+    const keyId = requireUuidParam(c, "keyId");
+    if (keyId instanceof Response) return keyId;
     const authHeader = c.req.header("authorization") ?? "";
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.slice(7).trim()
@@ -2084,7 +2086,8 @@ export function registerSetupRoutes(app: HubHono): void {
 
   /** HTML review page opened by the CLI in the user's browser. */
   app.get("/setup/agent/pending/:keyId/review", async (c) => {
-    const keyId = c.req.param("keyId");
+    const keyId = requireUuidParam(c, "keyId");
+    if (keyId instanceof Response) return keyId;
     const agentType = escapeHtml(c.req.query("agentType") ?? "agent");
     const keyShort = escapeHtml(keyId.slice(0, 8));
 
@@ -2139,7 +2142,8 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
 
   /** Approve a pending key — only the connection's linked human, or a pod admin. */
   app.post("/setup/agent/pending/:keyId/approve", async (c) => {
-    const keyId = c.req.param("keyId");
+    const keyId = requireUuidParam(c, "keyId");
+    if (keyId instanceof Response) return keyId;
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
 
@@ -2168,7 +2172,8 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
 
   /** Reject a pending key — only the connection's linked human, or a pod admin. */
   app.post("/setup/agent/pending/:keyId/reject", async (c) => {
-    const keyId = c.req.param("keyId");
+    const keyId = requireUuidParam(c, "keyId");
+    if (keyId instanceof Response) return keyId;
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
 

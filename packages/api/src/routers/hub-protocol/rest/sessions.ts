@@ -23,6 +23,7 @@ import {
   httpStatusForTrpcError,
   logger,
   type HubHono,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -280,7 +281,8 @@ export function registerSessionsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const sessionId = c.req.param("sessionId");
+    const sessionId = requireUuidParam(c, "sessionId");
+    if (sessionId instanceof Response) return sessionId;
     try {
       const caller = await getCaller(c);
       const result = await caller.sessions.get({ sessionId });
@@ -326,7 +328,8 @@ export function registerSessionsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const sessionId = c.req.param("sessionId");
+    const sessionId = requireUuidParam(c, "sessionId");
+    if (sessionId instanceof Response) return sessionId;
     const body = (await c.req.json().catch(() => null)) as Record<
       string,
       unknown
@@ -356,7 +359,8 @@ export function registerSessionsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const sessionId = c.req.param("sessionId");
+    const sessionId = requireUuidParam(c, "sessionId");
+    if (sessionId instanceof Response) return sessionId;
     const body = (await c.req.json().catch(() => null)) as {
       producedStateId?: string;
     } | null;
@@ -444,7 +448,8 @@ export function registerSessionsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const stateId = c.req.param("stateId");
+    const stateId = requireUuidParam(c, "stateId");
+    if (stateId instanceof Response) return stateId;
     try {
       const caller = await getCaller(c);
       const result = await caller.compactedStates.get({ stateId });
