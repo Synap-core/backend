@@ -92,7 +92,7 @@ describe("buildProposalSummary — renderer.set says what changes", () => {
         scope: "workspace",
         pages: ["home"],
       })
-    ).toBe("Set Capability");
+    ).toBe("Set Tool");
   });
 });
 
@@ -108,7 +108,7 @@ describe("buildProposalSummary — the generic path is unchanged", () => {
       { name: "Task detail card" },
       'Define Card "Task detail card"',
     ],
-    ["workspace", "adopt", { workspaceId: "ws_1" }, "Adopt Workspace"],
+    ["workspace", "adopt", { workspaceId: "ws_1" }, "Adopt Space"],
   ])("%s · %s", (subjectType, action, data, expected) => {
     expect(buildProposalSummary(subjectType, action, data)).toBe(expected);
   });

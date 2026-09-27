@@ -368,7 +368,7 @@ describe("buildProposalSummary", () => {
 
   it("falls back to plain action + noun when no label fields are present", () => {
     const summary = buildProposalSummary("workspace", "delete", {});
-    expect(summary).toBe("Delete Workspace");
+    expect(summary).toBe("Delete Space");
   });
 
   // A rule carries none of the generic label fields, so without its own case it
