@@ -31,22 +31,11 @@ import ts from "typescript";
  *     branch) — out of scope on purpose.
  */
 
-// Peer-held files on 2026-09-25 (uncommitted edits by another live session) —
-// left unconverted rather than editing under a peer. A RATCHET on the exact
-// count: the test fails when a file's count drops (lower/delete the line — the
-// work landed) or rises (a new blanket 500 was added).
-const KNOWN_PEER_HELD: Record<string, number> = {
-  "capabilities.ts": 7,
-  "entity-share.ts": 1,
-  "focus-sessions.ts": 14,
-  "loops.ts": 1,
-  "packages.ts": 2,
-  "projects.ts": 1,
-  "proposals.ts": 3,
-  "setup.ts": 7,
-  "threads.ts": 7,
-  "views.ts": 3,
-};
+// Peer-held files on 2026-09-25 (then uncommitted under another session) were
+// converted on 2026-09-27 (FX-B2): the ratchet is EMPTY. A RATCHET on the exact
+// count: if a file ever has to be parked here again, the test fails when its
+// count drops (lower/delete the line — the work landed) or rises.
+const KNOWN_PEER_HELD: Record<string, number> = {};
 
 const REST_DIR = join(__dirname, "../routers/hub-protocol/rest");
 

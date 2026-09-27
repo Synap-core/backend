@@ -9,6 +9,7 @@
  *     system workspace (the gate for pod-wide / null-workspace rows).
  */
 
+import { isSpaceManageRole } from "@synap-core/types/workspaces";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, inArray } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
@@ -27,7 +28,7 @@ export async function getWorkspaceRole(userId: string, workspaceId: string) {
 
 /** Require owner or admin role — throws FORBIDDEN otherwise. */
 export function requireAdminRole(role: string | undefined | null) {
-  if (!["owner", "admin"].includes(role ?? "")) {
+  if (!isSpaceManageRole(role)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Only workspace owners and admins can perform this action.",

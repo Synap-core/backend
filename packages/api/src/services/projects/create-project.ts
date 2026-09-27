@@ -239,10 +239,73 @@ export async function createProjectGoverned(
   }
 
   // 4. Write.
+  const written = await writeGovernedProject(db, {
+    userId,
+    agentUserId,
+    workspaceId,
+    door: input.door,
+    name,
+    description: input.description,
+    status: input.status,
+    phase: input.phase,
+    targetDate: input.targetDate,
+    settings: input.settings,
+    metadata: input.metadata,
+    evidenceEntityIds: input.evidenceEntityIds,
+    subjectEntityId: input.subjectEntityId,
+  });
+  if (written.status === "deduped") {
+    return {
+      status: "deduped",
+      projectId: written.projectId,
+      reusedProjectId: written.projectId,
+    };
+  }
+  return written;
+}
+
+export interface WriteGovernedProjectInput {
+  userId: string;
+  agentUserId?: string;
+  workspaceId: string | null;
+  door: CreateProjectGovernedInput["door"];
+  name: string;
+  description?: string;
+  status?: ProjectStatus;
+  phase?: string;
+  targetDate?: Date | null;
+  settings?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  evidenceEntityIds?: string[];
+  subjectEntityId?: string;
+}
+
+/**
+ * Step 4 of `createProjectGoverned` on its own: insert → subject bind → audit →
+ * `project.create` side effects. The ONE project write.
+ *
+ * ONLY for a caller that has ALREADY cleared governance for this create — the
+ * `project.spawn_from_session` door gates on its own verb and replays through
+ * its own executor, so running the `project.create` gate again would
+ * re-propose an approved spawn. Every other caller uses `createProjectGoverned`.
+ */
+export async function writeGovernedProject(
+  db: Db,
+  input: WriteGovernedProjectInput
+): Promise<
+  | { status: "deduped"; projectId: string; row: CreatedRow }
+  | {
+      status: "created";
+      projectId: string;
+      row: CreatedRow;
+      subjectBound?: boolean;
+    }
+> {
+  const { userId, workspaceId } = input;
   const repo = new ProjectRepository(db, new EventRepository(sql));
   const row = await repo.create(
     {
-      name,
+      name: input.name,
       description: input.description,
       status: input.status,
       phase: input.phase ?? null,
@@ -253,7 +316,7 @@ export async function createProjectGoverned(
       workspaceId,
       provenance: buildProjectProvenance({
         door: input.door,
-        agentUserId,
+        agentUserId: input.agentUserId,
         evidenceEntityIds: input.evidenceEntityIds,
       }),
     },
@@ -263,7 +326,7 @@ export async function createProjectGoverned(
   // Idempotent reuse (exact-name match inside the repo) emits no create
   // side effects.
   if (row.deduped) {
-    return { status: "deduped", projectId: row.id, reusedProjectId: row.id };
+    return { status: "deduped", projectId: row.id, row };
   }
 
   // Bind the subject only on a REAL create — a deduped create is somebody's

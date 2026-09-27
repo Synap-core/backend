@@ -242,6 +242,12 @@ export {
   type WorkspacePreflightReport,
   type ResumeState,
 } from "./utils/create-workspace-from-definition.js";
+export { findUserDefaultWorkspaceId } from "./utils/user-default-workspace.js";
+export {
+  seedRefAliasIndex,
+  seedKindTitleKey,
+  type SeedRefShape,
+} from "./utils/seed-refs.js";
 export {
   reconcileWorkspaceFromDefinition,
   type ReconcileOptions,

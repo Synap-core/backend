@@ -22,6 +22,7 @@ import { runConversions } from "./engine.js";
 import type { RunOptions } from "./engine.js";
 import { CONVERSION_MANIFEST } from "./manifest.js";
 import { selectManifestOps } from "./select.js";
+import { WORKSPACE_MEMBERSHIP_ROLE_CATEGORY } from "../utils/facet-visibility.js";
 
 // ─── postgres.js-shaped `Sql` shim over PGlite ───────────────────────────────
 // Same contract as engine.integration.test.ts / dedupe-field-plan.pglite.test.ts.
@@ -87,6 +88,7 @@ CREATE TABLE profiles (
   slug text NOT NULL,
   profile_kind text DEFAULT 'kind',
   scope text DEFAULT 'system',
+  role_category text,
   workspace_id uuid
 );
 CREATE TABLE entity_facets (
@@ -143,10 +145,14 @@ afterAll(async () => {
   await db?.close();
 });
 
-async function role(slug: string, scope: string): Promise<string> {
+async function role(
+  slug: string,
+  scope: string,
+  roleCategory: string | null = null
+): Promise<string> {
   const [r] = await q(
-    `INSERT INTO profiles (slug, profile_kind, scope) VALUES ($1, 'role', $2) RETURNING id`,
-    [slug, scope]
+    `INSERT INTO profiles (slug, profile_kind, scope, role_category) VALUES ($1, 'role', $2, $3) RETURNING id`,
+    [slug, scope, roleCategory]
   );
   return r.id;
 }
@@ -226,6 +232,23 @@ describe("w2b.reconcile-facet-scope.shared-roles", () => {
     expect(await wsOf(fShared)).toBeNull();
     expect(await wsOf(fSystem)).toBeNull();
     expect(await wsOf(fPrivate)).toBe(CRM);
+  });
+
+  it("never collapses a per-workspace membership role (team-member): one facet per workspace stays", async () => {
+    const member = await role(
+      "team-member",
+      "system",
+      WORKSPACE_MEMBERSHIP_ROLE_CATEGORY
+    );
+    const inCrm = await facet(E1, member, CRM, "2026-08-01");
+    const inOps = await facet(E1, member, OPS, "2026-09-01");
+    const dry = await runConversions(sql, w2b(), DRY);
+    expect(dry.results[0].counts ?? {}).not.toHaveProperty("facetsRescoped");
+    expect(dry.results[0].counts ?? {}).not.toHaveProperty("facetsParked");
+    const run = await runConversions(sql, w2b(), OPERATOR);
+    expect(run.hadError).toBe(false);
+    expect(await wsOf(inCrm)).toBe(CRM);
+    expect(await wsOf(inOps)).toBe(OPS);
   });
 
   it("collision-safe: one survivor per group (earliest), parked rows counted, pod-wide twin blocks the move", async () => {

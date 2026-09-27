@@ -5,7 +5,7 @@
 import { z } from "@hono/zod-openapi";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import {
   CreateProposalRequestSchema,
   CreateProposalResponseSchema,
@@ -29,6 +29,7 @@ import {
   rejectAgentReviewer,
   resolveProposalId,
   type HubHono,
+  readJsonBody,
 } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import {
@@ -59,7 +60,7 @@ const DevApprovalRequestSchema = z
     type: z
       .enum([DEV_PLAN_APPROVAL_TYPE, DEV_DEPLOY_APPROVAL_TYPE])
       .describe("Which dev-loop gate is being filed."),
-    workspaceId: z.string().nullable().optional(),
+    workspaceId: uuidQueryParam.nullable().optional(),
     projectId: z.string().nullable().optional(),
     channelId: z.string().optional(),
     sourceMessageId: z.string().optional(),
@@ -425,7 +426,7 @@ export function registerProposalsRoutes(app: HubHono): void {
       logger.error({ err }, "listProposals failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -526,15 +527,11 @@ export function registerProposalsRoutes(app: HubHono): void {
     const blocked = rejectAgentReviewer(c, "revert");
     if (blocked) return blocked;
     const proposalId = c.req.param("id");
-    let reason: string | undefined;
-    try {
-      const body = (await c.req.json().catch(() => ({}))) as {
-        reason?: string;
-      };
-      reason = typeof body.reason === "string" ? body.reason : undefined;
-    } catch {
-      reason = undefined;
-    }
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const revertBody = (jsonRead.body ?? {}) as { reason?: unknown };
+    const reason =
+      typeof revertBody.reason === "string" ? revertBody.reason : undefined;
     try {
       const userId = c.get("userId") as string;
       const scopes = c.get("scopes") as string[];
@@ -638,20 +635,18 @@ export function registerProposalsRoutes(app: HubHono): void {
       );
     }
     const proposalId = c.req.param("id");
-    let reason: string | undefined;
-    let reasonCode: string | undefined;
-    try {
-      const body = (await c.req.json().catch(() => ({}))) as {
-        reason?: string;
-        reasonCode?: string;
-      };
-      reason = typeof body.reason === "string" ? body.reason : undefined;
-      reasonCode =
-        typeof body.reasonCode === "string" ? body.reasonCode : undefined;
-    } catch {
-      reason = undefined;
-      reasonCode = undefined;
-    }
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const rejectBody = (jsonRead.body ?? {}) as {
+      reason?: unknown;
+      reasonCode?: unknown;
+    };
+    const reason =
+      typeof rejectBody.reason === "string" ? rejectBody.reason : undefined;
+    const reasonCode =
+      typeof rejectBody.reasonCode === "string"
+        ? rejectBody.reasonCode
+        : undefined;
     try {
       const userId = c.get("userId") as string;
       const scopes = c.get("scopes") as string[];
@@ -792,7 +787,7 @@ export function registerProposalsRoutes(app: HubHono): void {
       logger.error({ err }, "createDevApprovalProposal failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -889,7 +884,7 @@ export function registerProposalsRoutes(app: HubHono): void {
       logger.error({ err }, "createProposal failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });

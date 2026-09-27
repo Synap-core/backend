@@ -61,6 +61,7 @@ import {
   orderWorkspacesByTemplateDependencies,
   resolveWorkspaceTemplate,
   reconcileWorkspacePlaybooksToTemplate,
+  playbookReportConverged,
   reconcileInstalledPacks,
   type ResolvedWorkspaceTemplate,
 } from "@synap/api";
@@ -248,11 +249,19 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         packageVersion: resolved.version ?? null,
         installedAt: new Date().toISOString(),
       });
-      const playbooksConverged = playbookReport.failed.length === 0;
+      // A PROPOSED change is queued, not applied — it withholds the stamp too.
+      const playbooksConverged = playbookReportConverged(playbookReport);
       if (!playbooksConverged) {
         logger.warn(
-          { workspaceId: ws.id, templateKey, failed: playbookReport.failed },
-          "Template playbooks did not converge — packageVersion stamp withheld"
+          {
+            workspaceId: ws.id,
+            templateKey,
+            failed: playbookReport.failed,
+            proposed: playbookReport.results
+              .filter((r) => r.kind === "proposed")
+              .map((r) => r.name),
+          },
+          "Template playbooks did not converge (failed or only proposed) — packageVersion stamp withheld"
         );
       }
 

@@ -93,6 +93,11 @@ import {
   attestExpectedOutput,
   type AttestExpectedOutputResult,
 } from "./satisfy-expected-output.js";
+import { readCriteria } from "@synap/playbooks";
+import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import { checkProvideRef } from "./provide-ref.js";
+import { paramValueFromAnswer } from "./param-slots.js";
+import { criterionVerdictOf } from "./evaluations/record.js";
 import {
   answerExpectedOutput,
   selectSlotToAnswer,
@@ -380,6 +385,17 @@ export type AnswerSessionSlotResult =
       /** The agent type woken, or `null` when none the pod can run. */
       wokeAgentType: string | null;
       triggered: boolean;
+      /**
+       * A CRITERION slot's answer is a grade: present when the pass/fail went
+       * through the grade door (`gradeCriterionAsOwner`), which discharged
+       * the slot. `recorded` false ⇒ the answer stands but the grade did not
+       * land (the criterion was removed in between) — said, never hidden.
+       */
+      graded?: {
+        verdict: "pass" | "fail";
+        recorded: boolean;
+        resumed: boolean;
+      };
     };
 
 /**
@@ -412,7 +428,12 @@ export async function answerSessionSlot(p: {
       eq(focusSessions.id, p.sessionId),
       eq(focusSessions.userId, p.userId)
     ),
-    columns: { id: true, channelId: true, expectedOutputs: true },
+    columns: {
+      id: true,
+      channelId: true,
+      expectedOutputs: true,
+      criteria: true,
+    },
   });
   if (!session) return { status: "not_found" };
 
@@ -432,9 +453,60 @@ export async function answerSessionSlot(p: {
 
   const resolved = resolveAnswer(ask, p.value, p.text);
   if ("refused" in resolved) return resolved.refused;
-  const text = resolved.text.trim().slice(0, SLOT_ANSWER_TEXT_MAX);
-  if (!text) return { status: "empty_answer" };
+  let summary = resolved.text;
   const value = resolved.value;
+
+  // PROVIDE — the pod's half of the rule: the reference must name a row the
+  // person owns (or, for a file, can see). The shape already refused a
+  // plaintext credential; this refuses someone else's secret.
+  if (false && value?.type === "provide") {
+    const check = await checkProvideRef({ userId: p.userId, ref: value.ref });
+    if (!check.ok) {
+      return {
+        status: "ask_invalid",
+        code: "provide_unreachable",
+        message: check.message,
+      };
+    }
+    if (check.refName) {
+      summary = summarizeAnswer(ask, value, p.text, {
+        refName: check.refName,
+      });
+    }
+  }
+
+  const text = summary.trim().slice(0, SLOT_ANSWER_TEXT_MAX);
+  if (!text) return { status: "empty_answer" };
+
+  // PARAM — the answer becomes the run's param value (`answer-slot.ts`); a
+  // value that cannot be read as the param's type is refused HERE, before
+  // anything is posted.
+  const param = paramValueFromAnswer(slot, value, text);
+  if (param.status === "invalid") {
+    return {
+      status: "ask_invalid",
+      code: "invalid_field",
+      message: param.message,
+    };
+  }
+
+  // CRITERION — the answer is a GRADE, and it goes through the grade door.
+  // The criterion must still be declared, checked BEFORE posting so a stale
+  // slot leaves no "Pass" in the room.
+  const verdict =
+    slot.kind === CRITERION_SLOT_KIND && slot.criterionKey
+      ? criterionVerdictOf(value)
+      : null;
+  if (
+    verdict &&
+    !readCriteria(session.criteria).some((c) => c.key === slot.criterionKey)
+  ) {
+    return {
+      status: "ask_invalid",
+      code: "invalid_field",
+      message: "This check is no longer one of the session's criteria.",
+    };
+  }
 
   // The answer is said IN the room, as the person, so the conversation the
   // agent reads is whole. Posted BEFORE the stamp (the delegate door's order):
@@ -466,8 +538,33 @@ export async function answerSessionSlot(p: {
     ...(value ? { value } : {}),
     // The ask THIS answer was validated against — re-checked under the lock.
     askFingerprint: seenAsk,
+    // A grade keeps the slot the person's: the grade door discharges it.
+    ...(verdict ? { handBack: false } : {}),
   });
   if (answered.status !== "answered") return answered;
+
+  let graded:
+    | { verdict: "pass" | "fail"; recorded: boolean; resumed: boolean }
+    | undefined;
+  if (verdict && slot.criterionKey) {
+    const { gradeCriterionAsOwner } = await import("./evaluations/evaluate.js");
+    // The typed note (if any) is the rationale — never the summary line.
+    const note = p.text?.trim() || null;
+    const { out, resumed } = await gradeCriterionAsOwner({
+      sessionId: session.id,
+      userId: p.userId,
+      criterionKey: slot.criterionKey,
+      verdict,
+      rationale: note,
+    });
+    graded = { verdict, recorded: out.status === "recorded", resumed };
+    if (out.status !== "recorded") {
+      logger.warn(
+        { sessionId: session.id, status: out.status },
+        "criterion answer: the grade did not land — the answer stands"
+      );
+    }
+  }
 
   let questionId: string | null = null;
   if (question && messageId) {
@@ -508,6 +605,7 @@ export async function answerSessionSlot(p: {
     questionId,
     wokeAgentType,
     triggered,
+    ...(graded ? { graded } : {}),
   };
 }
 

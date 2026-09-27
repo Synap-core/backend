@@ -23,15 +23,16 @@
  * can see).
  */
 
-/** The authored pack signal. Mirrors `SUITE_TAG` / `isSuite` (@synap-core/marketplace). */
-export const PACK_TAG = "suite";
+// The authored pack signal is `SUITE_TAG` (mirrored by `isSuite` in
+// @synap-core/marketplace) — ONE constant, never a twin.
+import { SUITE_TAG } from "./compose-suite-package-definition.js";
 
 /** Is this package definition a pack (never its own workspace)? */
 export function isPackDefinition(def: unknown): boolean {
   if (!def || typeof def !== "object") return false;
   const d = def as { _meta?: { tags?: unknown }; tags?: unknown };
   const tags = d._meta?.tags ?? d.tags;
-  return Array.isArray(tags) && tags.includes(PACK_TAG);
+  return Array.isArray(tags) && tags.includes(SUITE_TAG);
 }
 
 /**

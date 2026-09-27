@@ -6785,6 +6785,585 @@ export interface PartialTurnFailure {
 	readonly needsOperator: boolean;
 }
 /**
+ * @synap/playbooks — Playbooks & Capability Substrate contracts
+ *
+ * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
+ * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
+ *
+ * Contains NO database / event / proposal side effects — ONLY types + the
+ * Executor interface. Persistence ROW types live in @synap/database/schema
+ * (tools / playbooks / links); the interfaces here describe the behavioral
+ * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
+ * boundary. Small string-unions are intentionally re-declared here (rather than
+ * imported from @synap/database) so this package stays dependency-free — they
+ * must stay in lock-step with the `.$type<>()` unions in the schema files.
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx
+ */
+/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
+export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/**
+ * The verb axis of a Tool — the structured, enumerable capability matrix. A
+ * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
+ * verb is one concrete operation the AI can invoke. This is the catalog the
+ * connector-capability-matrix is built over: one row per (connection × verb).
+ *
+ * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
+ * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
+ * the catalog can never drift from the skills actually created. Persisted as the
+ * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
+ * the schema's `capabilities` column).
+ */
+export type ToolVerbKind = "read" | "write" | "action";
+type AbstractVerb$1 = "search_external" | "find_people" | "enrich_entity" | "fetch_record" | "list_records" | "send_message" | "request_connection" | "schedule_event" | "manage_file" | "generate_media" | "capture_into_pod" | "run_external_job" | "connect_account";
+export interface ToolVerb {
+	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
+	id: string;
+	/** Human-facing label. */
+	label: string;
+	/**
+	 * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
+	 * mutation/send). Maps the verb onto the read/push capability matrix axis.
+	 */
+	kind: ToolVerbKind;
+	/** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
+	argsSchema?: Record<string, unknown>;
+	/**
+	 * The governance default for this verb — aligns to the exec-mode the seeded
+	 * `vault_grants` row carries (so a verb never bypasses the approved+grant
+	 * model). `auto` runs directly, `propose` routes through review, `dry-run`
+	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
+	 */
+	govDefault: ExecMode;
+	/**
+	 * ROUTING axis: what this verb MEANS, independent of its vendor — so an agent
+	 * can ask for "send a message" without knowing whether the pod has Gmail or
+	 * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
+	 * `capability_run_receipts.verb_id` and inside stored automation flows), and a
+	 * legacy catalog entry with no `intent` reads exactly as before. A verb that
+	 * fits none of the closed values leaves this unset rather than inventing one.
+	 */
+	intent?: AbstractVerb$1;
+}
+/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
+export interface CredentialRequirement {
+	/** Logical name the tool/skill references (e.g. "apiKey"). */
+	name: string;
+	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
+	/** Human-facing reason, surfaced in the vault approval proposal. */
+	purpose?: string;
+}
+/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
+export type GrantableKind = "tool" | "skill" | "command";
+/**
+ * What happens when a grant is exercised — the governance / execMode axis. The
+ * same axis as `Capability.governance`; kept in lock-step with the
+ * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
+ *   - `auto`    — run the capability directly.
+ *   - `propose` — route the exercise through a reviewable proposal.
+ *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
+ */
+export type ExecMode = "auto" | "propose" | "dry-run";
+declare const BLOCKED_REASONS: readonly [
+	"credential",
+	"permission",
+	"capability",
+	"policy",
+	"decision",
+	"physical"
+];
+export type BlockedReason = (typeof BLOCKED_REASONS)[number];
+declare const OUTPUT_RETIRED_REASONS: readonly [
+	"session_cancelled"
+];
+export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
+declare const OUTPUT_REF_KINDS: readonly [
+	"view",
+	"cell",
+	"document",
+	"entity",
+	"automation",
+	"playbook"
+];
+export type OutputRefKind = (typeof OUTPUT_REF_KINDS)[number];
+/**
+ * WHERE the person should go for this deliverable — ONE union, two arms.
+ *
+ * An in-pod object (`{kind, id}`) or an external link (`{url}`). Nothing else:
+ * free text already has a home in `why`, and a third arm would be a second
+ * answer to "what does this card open".
+ *
+ * AUTHORED by the agent or the human, never stamped by the server — it is a
+ * pointer the declarer supplies, not a receipt of anything that happened. It
+ * therefore lives in `CLIENT_DECLARABLE_OUTPUT_FIELDS` (api `update-session.ts`)
+ * and survives a wholesale patch that is silent about it.
+ *
+ * `{kind, id}` is floored: the door refuses a ref the caller cannot already see,
+ * through the SAME `isOutputRefVisible` a produced artifact goes through. `{url}`
+ * is scheme-gated by `isHttpUrl` (http/https) — display-only, so loopback is
+ * legitimate; the pod never fetches it.
+ */
+export type OutputRef = {
+	kind: OutputRefKind;
+	id: string;
+} | {
+	url: string;
+};
+export interface ExpectedOutput {
+	kind: string;
+	label: string;
+	icon?: string;
+	/**
+	 * WHO owns this slot. ABSENT MEANS `agent` — every slot stored before this
+	 * field existed is semantically unchanged, so there is no backfill and no DB
+	 * default. Do not add one: a stored `agent` and an absent value must stay
+	 * indistinguishable, or "the agent never said" becomes unreadable.
+	 *
+	 * `human` is the agent DECLARING a slot it cannot take — not a delegation
+	 * (`delegatedTo` is agent→agent) and not a claim of delivery. The slot stays
+	 * `pending` either way; ownership says who the board is waiting on, and
+	 * `status: 'done'` is still stamped by the one door on approval.
+	 */
+	owner?: "human" | "agent";
+	/**
+	 * WHY the agent could not take it — one of {@link BLOCKED_REASONS}. Only
+	 * meaningful alongside `owner: 'human'`; CONVENTIONAL, not enforced at the
+	 * parse (see `expectedOutputWireSchema`'s note — a cross-field refinement
+	 * would reject the partial patches `mergeExpectedOutputs` exists to tolerate).
+	 */
+	blockedReason?: BlockedReason;
+	/**
+	 * One line of prose: the resumption cue a human reads to know what to do.
+	 * The taxonomy above says what class of thing is missing; this says WHICH —
+	 * "the Stripe restricted key for the live account", not "a credential".
+	 * Only meaningful alongside `owner: 'human'`.
+	 */
+	why?: string;
+	/**
+	 * WHEN the slot became the human's — stamped the moment `owner` becomes
+	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
+	 * `delegatedTo` and `returnedAt` accompanying `returnedReason`: the server
+	 * writes the timestamp, never the declaring agent.
+	 *
+	 * It exists because a "needs you" feed has to order and age its rows, and
+	 * `focus_sessions.updatedAt` cannot serve: any unrelated write to the session
+	 * — a progress bump, a sibling slot's rename — would resurface an owed slot
+	 * to the top of the list forever. The invariant is exact: `owedSince` is
+	 * present IFF `owner === 'human'`.
+	 */
+	owedSince?: string;
+	/**
+	 * Whether the deliverable actually landed. `done` is stamped by ONE door —
+	 * `satisfyExpectedOutputs` (api `services/focus-sessions/satisfy-expected-output.ts`),
+	 * called after a session-scoped proposal is APPROVED. Nothing else may write it:
+	 * the agent grading its own homework is exactly the failure this field exists
+	 * to stop. Absent ⇒ treat as `pending`.
+	 */
+	status?: "pending" | "done";
+	/**
+	 * The AGENT's claim that it produced this output. Free for the agent to set
+	 * (via `focusSessions.update`'s `completeOutput`), and deliberately NOT the
+	 * same field as `status` — a claim is evidence to show the human, never proof.
+	 */
+	claimedDone?: boolean;
+	/** Lineage: the approved proposal whose apply satisfied this output. */
+	satisfiedByProposalId?: string;
+	/**
+	 * The agent TYPE this slot was handed to (`focusSessions.delegateOutput` /
+	 * `POST /focus-sessions/:id/outputs/delegate`). A DELEGATION, never a claim of
+	 * delivery: it says who was asked, and the slot stays `pending` until an
+	 * approval stamps it through `satisfyExpectedOutputs`.
+	 *
+	 * It is also the SLOT CLAIM key for the delegate's own writes: governance
+	 * (`resolveSessionSlotClaim`) matches a session write by an agent of this type
+	 * to this slot even when the change's name does not match the label — the
+	 * delegation IS the naming, made ahead of time by a human.
+	 */
+	delegatedTo?: string;
+	/** ISO timestamp of the delegation above. */
+	delegatedAt?: string;
+	/**
+	 * Set when a proposal CLAIMING this slot was REJECTED: the slot comes back to
+	 * the board with the reviewer's reason, and `delegatedTo`/`delegatedAt` are
+	 * cleared (the ask is over — a returned slot is un-delegated, and re-asking is
+	 * an explicit new delegation). No new status value: the slot was, and remains,
+	 * `pending`.
+	 */
+	returnedReason?: string;
+	/** ISO timestamp of the return above. */
+	returnedAt?: string;
+	/**
+	 * ATTESTATION receipt — the human who owned this slot saying "I did this".
+	 *
+	 * The other half of `satisfiedByProposalId`, and deliberately a SEPARATE
+	 * field rather than a fake proposal id: the two stamps are different KINDS of
+	 * evidence and a reader must be able to tell them apart. An approval is a
+	 * human accepting an artefact an agent produced; an attestation is a human
+	 * reporting work only they could do (minting the key, signing the contract),
+	 * for which no artefact and no proposal exists.
+	 *
+	 * Written ONLY by `attestExpectedOutput` (the one `done` door,
+	 * api `services/focus-sessions/satisfy-expected-output.ts`), and only on a
+	 * slot whose `owner` is `human`, by that owner. `owner`/`owedSince` are
+	 * deliberately KEPT alongside it: the record of who owed the slot and since
+	 * when is the receipt's point, and the owed read drops the slot on `status`.
+	 */
+	attestedBy?: string;
+	/** ISO timestamp of the attestation above. */
+	attestedAt?: string;
+	/**
+	 * RETIREMENT receipt — this slot stopped being owed because the session that
+	 * declared it was CANCELLED. NEVER a deletion: the slot, its blocker, its
+	 * `why` and its `owedSince` all stay readable, exactly like `delegatedAt` and
+	 * `returnedAt`. Clearing these two fields puts the slot back on the board, so
+	 * the stamp is reversible in the way a delete never is.
+	 *
+	 * Only `cancelled` retires slots. A session that is `closed`, `failed` or
+	 * `stale` leaves them owed — the work was declared, the session ended, and
+	 * somebody still has to do it.
+	 */
+	retiredAt?: string;
+	/** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
+	retiredReason?: OutputRetiredReason;
+	/**
+	 * WHERE to go for this deliverable — see {@link OutputRef}.
+	 *
+	 * The reason it exists: an agent that declares an owed slot, or blocks one on
+	 * the person, could previously only hand over PROSE. "The Stripe restricted
+	 * key for the live account" tells you what is missing and leaves you to find
+	 * the page yourself. A `ref` makes the card's title a DOOR.
+	 *
+	 * `null` IS A WIRE VALUE ONLY, and it means CLEAR. Silence on a wholesale
+	 * patch means KEEP (the field is server-owned for erasure purposes), so
+	 * "remove this pointer" needs a way to say itself — that is the explicit
+	 * `null`. `mergeExpectedOutputs` deletes the key rather than storing the null,
+	 * so a STORED slot never carries `ref: null` and every reader may test it for
+	 * truthiness alone.
+	 */
+	ref?: OutputRef | null;
+	/**
+	 * The `SessionCriterion.key` this slot STANDS FOR. Set only on a slot whose
+	 * `kind` is the criterion-slot kind (`CRITERION_SLOT_KIND`, `@synap-core/types`),
+	 * written once at the escalation that files the slot
+	 * (api `services/focus-sessions/evaluations/record.ts`) and never by a client.
+	 *
+	 * It exists because the slot's own `label` is PROSE (`Check: <statement>`,
+	 * clipped at 120 chars) and a surface asked to open the scorecard on the right
+	 * criterion could otherwise only match that string back — which forks the
+	 * backend's label format into every UI and breaks the moment a statement is
+	 * reworded or the clip lands differently. The key is the machine identity the
+	 * evaluation rows are already keyed by, so the pointer is exact.
+	 *
+	 * ABSENT on every slot filed before this field existed, and on every
+	 * non-criterion slot. A reader MUST treat absence as "no criterion to
+	 * highlight" — never as an error, and never as a reason to fall back to
+	 * matching the label.
+	 */
+	criterionKey?: string;
+	/**
+	 * The `PlaybookParam.name` this slot STANDS FOR. Set only on a slot whose
+	 * `kind` is the param-slot kind (`PARAM_SLOT_KIND`, `@synap-core/types`),
+	 * written once by the door that files the slot (api
+	 * `services/focus-sessions/param-slots.ts`) and never by a client — the
+	 * `criterionKey` precedent, for the same reason: the label is PROSE
+	 * (`Answer: <label>`), and answering the slot has to write the value under
+	 * the param's machine name (`metadata.params[paramName]`).
+	 *
+	 * ABSENT on every param slot filed before this field existed; such a slot is
+	 * answered as words and writes no param.
+	 */
+	paramName?: string;
+	/**
+	 * The PERSON'S ANSWER to what the agent asked about this slot — written ONLY
+	 * by `answerExpectedOutput` (api `services/focus-sessions/answer-slot.ts`),
+	 * from the needs-you tray or from the session owner's reply to an agent's
+	 * `kind: 'question'` room post. See {@link SlotAnswer}.
+	 *
+	 * AN ANSWER IS NOT A DELIVERY. It never touches `status`, and it closes
+	 * nothing: the answer is INPUT the agent needed, and the agent still owes the
+	 * deliverable. On a human-owned slot the answer hands the slot BACK to the
+	 * agent through the same clearing `unblockExpectedOutput` does (`owner`,
+	 * `blockedReason`, `why`, `owedSince` removed together) — so the owed read
+	 * drops it and the agent's open-slot read (`isOpenAgentSlot`) picks it up
+	 * with the answer attached. The question it answered survives on
+	 * `answer.question`.
+	 */
+	answer?: SlotAnswer;
+	/**
+	 * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
+	 * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
+	 * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
+	 * `ask` HOW to resolve it (confirm / choose / form / act / provide).
+	 *
+	 * ABSENT MEANS TODAY'S BEHAVIOUR — free-text answer, "I did this", "Not
+	 * mine" — so every slot stored before this field is unchanged.
+	 *
+	 * `null` IS A WIRE VALUE ONLY and means CLEAR, exactly like `ref`: silence on
+	 * a wholesale patch keeps it, and `mergeExpectedOutputs` deletes the key
+	 * rather than storing the null. Cleared with the other ownership fields when
+	 * the slot is handed back (`stampUnblocked`) — the ask was the person's to
+	 * answer; the answer's `question` keeps what was asked.
+	 */
+	ask?: SlotAsk | null;
+}
+/**
+ * The ASK on a human-owned slot — HOW to answer it.
+ *
+ * STRUCTURAL MIRROR of `Ask` in `@synap-core/types/ask` (the zod schema, its
+ * limits, and the validation rule live there). Duplicated as a TYPE because
+ * this package is dependency-free by design — the `OUTPUT_REF_KINDS`
+ * precedent. The duplication is not left to trust: api's
+ * `expectedOutputWireSchema` parses `ask` with the types-leaf schema and is
+ * `satisfies z.ZodType<ExpectedOutput, ExpectedOutput>`, and
+ * `services/focus-sessions/update-session.ts` asserts the two types are
+ * MUTUALLY assignable at compile time — a drift on either side stops the build.
+ */
+export type SlotAsk = {
+	mode: "confirm";
+	prompt?: string;
+} | {
+	mode: "choose";
+	options: SlotAskOption[];
+	allowOther?: boolean;
+} | {
+	mode: "form";
+	form: SlotAskFormSpec;
+} | {
+	mode: "act";
+	url?: string;
+	steps?: string[];
+} | {
+	mode: "provide";
+	provide: SlotAskProvide;
+};
+/** One offered answer (capture's chip minus its apply fields). */
+export interface SlotAskOption {
+	label: string;
+	/** Absent ⇒ the label IS the value. */
+	value?: string;
+	icon?: string;
+	/** At most ONE option per ask. */
+	recommended?: boolean;
+	/** One-line imperative consequence of choosing it. */
+	description?: string;
+}
+/** A FLAT form (no nested fields). */
+export interface SlotAskFormSpec {
+	title?: string;
+	note?: string;
+	fields: Array<{
+		key: string;
+		label: string;
+		type: string;
+		constraints?: {
+			enum?: string[];
+			min?: number;
+			max?: number;
+			pattern?: string;
+		};
+		required?: boolean;
+		help?: string;
+	}>;
+}
+/** What a `provide` ask hands over — vault-first, through its own door. */
+export type SlotAskProvide = {
+	kind: "connection";
+	service: string;
+} | {
+	kind: "file";
+	accept?: string[];
+} | {
+	kind: "secret";
+	name: string;
+};
+/** A `provide` answer stores a REFERENCE, never the value. */
+export type SlotProvideRef = {
+	kind: "secret";
+	vaultRef: string;
+} | {
+	kind: "connection";
+	connectionId: string;
+} | {
+	kind: "file";
+	fileId: string;
+};
+/**
+ * The TYPED half of an answer. The human-readable line stays on
+ * `SlotAnswer.text`; a `text` answer's words live there.
+ */
+export type SlotAnswerValue = {
+	type: "text";
+} | {
+	type: "confirm";
+	confirmed: boolean;
+} | {
+	type: "chip";
+	chip: SlotAskOption;
+} | {
+	type: "form";
+	values: Record<string, unknown>;
+} | {
+	type: "provide";
+	ref: SlotProvideRef;
+};
+/**
+ * A person's answer to an agent's question about one slot. Server-stamped as a
+ * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
+ */
+export interface SlotAnswer {
+	/** What the person said. */
+	text: string;
+	/**
+	 * The room message that carries it — the owner's reply, or the message the
+	 * direct answer door posted into the room. `null` when the session has no
+	 * room, so there was nowhere to post it.
+	 */
+	messageId: string | null;
+	/** The session owner who answered. */
+	answeredBy: string;
+	/** ISO timestamp, server clock. */
+	answeredAt: string;
+	/**
+	 * What was asked: the slot's `why` at the moment of answering (it is cleared
+	 * with the hand-back), else the agent's question post. Absent when neither
+	 * existed.
+	 */
+	question?: string;
+	/**
+	 * The TYPED answer, when the slot carried an `ask` — see
+	 * {@link SlotAnswerValue}. Stamped with the rest of the answer by the one
+	 * answer door, validated against the slot's ask. ABSENT on every answer given
+	 * before typed asks existed and on a plain free-text answer to a slot with no
+	 * ask; `text` is ALWAYS present either way, so a reader that only knows text
+	 * keeps working.
+	 */
+	value?: SlotAnswerValue;
+}
+/**
+ * The CLOSED rollup category a stage declares membership in. Copied verbatim
+ * from Linear's `ProjectStatusType` — the convergent answer across eight
+ * independent implementations (Jira, Linear, Digital.ai, Accelo, Kantata,
+ * Productive.io, Odoo, ERPNext).
+ *
+ * A cross-playbook board groups on THIS, never on `key`: two playbooks' key
+ * sets are disjoint by construction, and no product has ever shipped a
+ * vocabulary-reconciliation UI. Accelo — whose architecture is per-type stage
+ * vocabularies exactly like ours — makes the category a MANDATORY field.
+ */
+export type PlaybookStageCategory = "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
+declare const CRITERION_CHECK_KINDS: readonly [
+	"evidence",
+	"capability",
+	"judge",
+	"human"
+];
+export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
+/**
+ * One BINARY, observable acceptance criterion ("Typecheck passes with 0
+ * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
+ * `focus_sessions.criteria`; graded by rows in `session_evaluations`.
+ */
+export interface SessionCriterion {
+	/** Stable slug, unique within the session. */
+	key: string;
+	statement: string;
+	/** Absent = true. */
+	required?: boolean;
+	check: {
+		kind: CriterionCheckKind;
+		/** kind=capability: the capability verb run via executeCapability. */
+		capability?: string;
+		/** kind=evidence: the key the agent posts evidence under (e.g. "typecheck"). */
+		evidenceKey?: string;
+		/** kind=judge: what the judge should look at. */
+		hint?: string;
+	};
+	/** Set when copied from a stage. */
+	stageKey?: string;
+}
+/**
+ * The normalized shape the Phase-1 adapters produce from builtin IS tools,
+ * code/instruction skills, intelligence_commands, and source providers — so a
+ * Playbook can grant capabilities uniformly and the AI can discover them.
+ */
+/** The full read-model kind set: grantables + the discoverable source systems. */
+export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool"
+/** A `skills` row with `kind='instruction'` — teaching prose, not an executable
+ *  capability. Kept OUT of the "skill" (runnable) bucket so flat-list consumers
+ *  don't have to special-case it to avoid offering it as an action. */
+ | "teaching-doc";
+export interface Capability {
+	kind: CapabilityKind;
+	id: string;
+	name: string;
+	description?: string | null;
+	inputSchema: Record<string, unknown>;
+	credentials?: CredentialRequirement[];
+	executor: ExecutorRef;
+	/** Whether AI use is auto-approved or routed through a proposal. "none" = not
+	 *  executable (e.g. a `teaching-doc` — governance doesn't apply to reading prose). */
+	governance: "auto" | "propose" | "none";
+	/**
+	 * The connection's structured verb catalog WITH each verb's resolved
+	 * grant-state — the capability-matrix axis. Present for tools that carry a
+	 * `tools.capabilities` catalog; the grant-state is joined from the active
+	 * `vault_grants` row for the tool (one connection × verb × grant row each).
+	 * Empty/undefined for capabilities with no verb catalog (skills, commands,
+	 * verb-less provider tools).
+	 */
+	verbs?: CapabilityVerbState[];
+	/**
+	 * True for a capability that is discoverable but NOT invokable through the
+	 * capability-execution door (e.g. an IS-native tool with no run_capability
+	 * bridge yet). Consumers building a "runnable" projection must exclude these.
+	 */
+	catalogOnly?: boolean;
+	/**
+	 * For a provider-backed capability (a Nango `source-provider` tool): whether an
+	 * external connection is required and whether one is currently known for the
+	 * caller. This exists so an AGENT can tell "connected" from "needs connection"
+	 * — a distinction the read-model previously omitted, leaving agents to infer it
+	 * from `governance`, which is an approval fact, not a connection fact.
+	 *
+	 * `connected` is the LAST-KNOWN state from the connection registry (kept fresh
+	 * by the disconnect self-heal + lazy reconciler), NOT a live Nango probe — the
+	 * authoritative live state and the connect/disconnect actions live behind the
+	 * connectors door. Absent for capabilities that need no external connection
+	 * (builtins, skills, commands, verb-less non-provider tools).
+	 */
+	connection?: {
+		required: boolean;
+		connected: boolean;
+		provider: string;
+	};
+}
+/**
+ * One row of the connection × verb × grant matrix: a Tool's verb annotated with
+ * the live grant-state derived from `vault_grants`. The read-model joins each
+ * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
+ * the AI can see, per verb, whether it is granted and at what exec-mode.
+ */
+export interface CapabilityVerbState extends ToolVerb {
+	/** True when an active (non-revoked, non-expired) grant exists for the tool. */
+	granted: boolean;
+	/**
+	 * The effective exec-mode for this verb: the active grant's exec-mode when
+	 * granted, else the verb's `govDefault`. This is what the gate would apply.
+	 */
+	effectiveExecMode: ExecMode;
+	/**
+	 * Honest, derivable parameter requirements for this verb — builtin verbs from
+	 * their Zod validator (`BUILTIN_VERB_PARAM_SCHEMAS`), provider verbs from the
+	 * declarative skill's `providerSpec` template params. Undefined when nothing
+	 * is derivable (e.g. a verb-less/legacy tool). Distinct from `argsSchema`
+	 * (a hand-authored JSON-schema-ish doc): this is read off the real contract.
+	 */
+	paramsSchema?: Record<string, {
+		required: boolean;
+		description?: string;
+	}>;
+}
+/**
  * Acknowledgment integrity for the single-write MCP doors (C1).
  *
  * THE BUG CLASS THIS CLOSES: a write LANDS on the server, but the CLIENT perceives
@@ -6837,6 +7416,15 @@ export interface PostChannelMessageResult {
 	ackState: WriteAckState;
 	/** Present on a duplicate hit — the prior message id (same as `messageId`). */
 	priorMessageId?: string;
+	/**
+	 * An agent's `question` naming a `slotLabel`: what filing it ON the slot did
+	 * (`fileRoomQuestionOnSlot`) — `blocked` when the slot now carries the
+	 * question as its ask; otherwise why not (`unknown_label`, `already_done`,
+	 * `no_session`, `not_found`, `failed`). Absent for every other post.
+	 */
+	slot?: {
+		status: string;
+	};
 }
 export interface PersonalConversationTransition {
 	channel: Channel;
@@ -7192,572 +7780,6 @@ export interface RunAgent {
 	name: string | null;
 	/** Where the actor was observed. */
 	source: "proposal" | "message" | "both";
-}
-/**
- * @synap/playbooks — Playbooks & Capability Substrate contracts
- *
- * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
- * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
- *
- * Contains NO database / event / proposal side effects — ONLY types + the
- * Executor interface. Persistence ROW types live in @synap/database/schema
- * (tools / playbooks / links); the interfaces here describe the behavioral
- * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
- * boundary. Small string-unions are intentionally re-declared here (rather than
- * imported from @synap/database) so this package stays dependency-free — they
- * must stay in lock-step with the `.$type<>()` unions in the schema files.
- *
- * Design doc: team/platform/playbooks-capability-substrate.mdx
- */
-/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
-/**
- * The verb axis of a Tool — the structured, enumerable capability matrix. A
- * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
- * verb is one concrete operation the AI can invoke. This is the catalog the
- * connector-capability-matrix is built over: one row per (connection × verb).
- *
- * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
- * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
- * the catalog can never drift from the skills actually created. Persisted as the
- * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
- * the schema's `capabilities` column).
- */
-export type ToolVerbKind = "read" | "write" | "action";
-type AbstractVerb$1 = "search_external" | "find_people" | "enrich_entity" | "fetch_record" | "list_records" | "send_message" | "request_connection" | "schedule_event" | "manage_file" | "generate_media" | "capture_into_pod" | "run_external_job" | "connect_account";
-export interface ToolVerb {
-	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
-	id: string;
-	/** Human-facing label. */
-	label: string;
-	/**
-	 * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
-	 * mutation/send). Maps the verb onto the read/push capability matrix axis.
-	 */
-	kind: ToolVerbKind;
-	/** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
-	argsSchema?: Record<string, unknown>;
-	/**
-	 * The governance default for this verb — aligns to the exec-mode the seeded
-	 * `vault_grants` row carries (so a verb never bypasses the approved+grant
-	 * model). `auto` runs directly, `propose` routes through review, `dry-run`
-	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
-	 */
-	govDefault: ExecMode;
-	/**
-	 * ROUTING axis: what this verb MEANS, independent of its vendor — so an agent
-	 * can ask for "send a message" without knowing whether the pod has Gmail or
-	 * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
-	 * `capability_run_receipts.verb_id` and inside stored automation flows), and a
-	 * legacy catalog entry with no `intent` reads exactly as before. A verb that
-	 * fits none of the closed values leaves this unset rather than inventing one.
-	 */
-	intent?: AbstractVerb$1;
-}
-/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
-export interface CredentialRequirement {
-	/** Logical name the tool/skill references (e.g. "apiKey"). */
-	name: string;
-	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
-	/** Human-facing reason, surfaced in the vault approval proposal. */
-	purpose?: string;
-}
-/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
-export type GrantableKind = "tool" | "skill" | "command";
-/**
- * What happens when a grant is exercised — the governance / execMode axis. The
- * same axis as `Capability.governance`; kept in lock-step with the
- * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
- *   - `auto`    — run the capability directly.
- *   - `propose` — route the exercise through a reviewable proposal.
- *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
- */
-export type ExecMode = "auto" | "propose" | "dry-run";
-declare const BLOCKED_REASONS: readonly [
-	"credential",
-	"permission",
-	"capability",
-	"policy",
-	"decision",
-	"physical"
-];
-export type BlockedReason = (typeof BLOCKED_REASONS)[number];
-declare const OUTPUT_RETIRED_REASONS: readonly [
-	"session_cancelled"
-];
-export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
-declare const OUTPUT_REF_KINDS: readonly [
-	"view",
-	"cell",
-	"document",
-	"entity",
-	"automation",
-	"playbook"
-];
-export type OutputRefKind = (typeof OUTPUT_REF_KINDS)[number];
-/**
- * WHERE the person should go for this deliverable — ONE union, two arms.
- *
- * An in-pod object (`{kind, id}`) or an external link (`{url}`). Nothing else:
- * free text already has a home in `why`, and a third arm would be a second
- * answer to "what does this card open".
- *
- * AUTHORED by the agent or the human, never stamped by the server — it is a
- * pointer the declarer supplies, not a receipt of anything that happened. It
- * therefore lives in `CLIENT_DECLARABLE_OUTPUT_FIELDS` (api `update-session.ts`)
- * and survives a wholesale patch that is silent about it.
- *
- * `{kind, id}` is floored: the door refuses a ref the caller cannot already see,
- * through the SAME `isOutputRefVisible` a produced artifact goes through. `{url}`
- * is scheme-gated by `isHttpUrl` (http/https) — display-only, so loopback is
- * legitimate; the pod never fetches it.
- */
-export type OutputRef = {
-	kind: OutputRefKind;
-	id: string;
-} | {
-	url: string;
-};
-export interface ExpectedOutput {
-	kind: string;
-	label: string;
-	icon?: string;
-	/**
-	 * WHO owns this slot. ABSENT MEANS `agent` — every slot stored before this
-	 * field existed is semantically unchanged, so there is no backfill and no DB
-	 * default. Do not add one: a stored `agent` and an absent value must stay
-	 * indistinguishable, or "the agent never said" becomes unreadable.
-	 *
-	 * `human` is the agent DECLARING a slot it cannot take — not a delegation
-	 * (`delegatedTo` is agent→agent) and not a claim of delivery. The slot stays
-	 * `pending` either way; ownership says who the board is waiting on, and
-	 * `status: 'done'` is still stamped by the one door on approval.
-	 */
-	owner?: "human" | "agent";
-	/**
-	 * WHY the agent could not take it — one of {@link BLOCKED_REASONS}. Only
-	 * meaningful alongside `owner: 'human'`; CONVENTIONAL, not enforced at the
-	 * parse (see `expectedOutputWireSchema`'s note — a cross-field refinement
-	 * would reject the partial patches `mergeExpectedOutputs` exists to tolerate).
-	 */
-	blockedReason?: BlockedReason;
-	/**
-	 * One line of prose: the resumption cue a human reads to know what to do.
-	 * The taxonomy above says what class of thing is missing; this says WHICH —
-	 * "the Stripe restricted key for the live account", not "a credential".
-	 * Only meaningful alongside `owner: 'human'`.
-	 */
-	why?: string;
-	/**
-	 * WHEN the slot became the human's — stamped the moment `owner` becomes
-	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
-	 * `delegatedTo` and `returnedAt` accompanying `returnedReason`: the server
-	 * writes the timestamp, never the declaring agent.
-	 *
-	 * It exists because a "needs you" feed has to order and age its rows, and
-	 * `focus_sessions.updatedAt` cannot serve: any unrelated write to the session
-	 * — a progress bump, a sibling slot's rename — would resurface an owed slot
-	 * to the top of the list forever. The invariant is exact: `owedSince` is
-	 * present IFF `owner === 'human'`.
-	 */
-	owedSince?: string;
-	/**
-	 * Whether the deliverable actually landed. `done` is stamped by ONE door —
-	 * `satisfyExpectedOutputs` (api `services/focus-sessions/satisfy-expected-output.ts`),
-	 * called after a session-scoped proposal is APPROVED. Nothing else may write it:
-	 * the agent grading its own homework is exactly the failure this field exists
-	 * to stop. Absent ⇒ treat as `pending`.
-	 */
-	status?: "pending" | "done";
-	/**
-	 * The AGENT's claim that it produced this output. Free for the agent to set
-	 * (via `focusSessions.update`'s `completeOutput`), and deliberately NOT the
-	 * same field as `status` — a claim is evidence to show the human, never proof.
-	 */
-	claimedDone?: boolean;
-	/** Lineage: the approved proposal whose apply satisfied this output. */
-	satisfiedByProposalId?: string;
-	/**
-	 * The agent TYPE this slot was handed to (`focusSessions.delegateOutput` /
-	 * `POST /focus-sessions/:id/outputs/delegate`). A DELEGATION, never a claim of
-	 * delivery: it says who was asked, and the slot stays `pending` until an
-	 * approval stamps it through `satisfyExpectedOutputs`.
-	 *
-	 * It is also the SLOT CLAIM key for the delegate's own writes: governance
-	 * (`resolveSessionSlotClaim`) matches a session write by an agent of this type
-	 * to this slot even when the change's name does not match the label — the
-	 * delegation IS the naming, made ahead of time by a human.
-	 */
-	delegatedTo?: string;
-	/** ISO timestamp of the delegation above. */
-	delegatedAt?: string;
-	/**
-	 * Set when a proposal CLAIMING this slot was REJECTED: the slot comes back to
-	 * the board with the reviewer's reason, and `delegatedTo`/`delegatedAt` are
-	 * cleared (the ask is over — a returned slot is un-delegated, and re-asking is
-	 * an explicit new delegation). No new status value: the slot was, and remains,
-	 * `pending`.
-	 */
-	returnedReason?: string;
-	/** ISO timestamp of the return above. */
-	returnedAt?: string;
-	/**
-	 * ATTESTATION receipt — the human who owned this slot saying "I did this".
-	 *
-	 * The other half of `satisfiedByProposalId`, and deliberately a SEPARATE
-	 * field rather than a fake proposal id: the two stamps are different KINDS of
-	 * evidence and a reader must be able to tell them apart. An approval is a
-	 * human accepting an artefact an agent produced; an attestation is a human
-	 * reporting work only they could do (minting the key, signing the contract),
-	 * for which no artefact and no proposal exists.
-	 *
-	 * Written ONLY by `attestExpectedOutput` (the one `done` door,
-	 * api `services/focus-sessions/satisfy-expected-output.ts`), and only on a
-	 * slot whose `owner` is `human`, by that owner. `owner`/`owedSince` are
-	 * deliberately KEPT alongside it: the record of who owed the slot and since
-	 * when is the receipt's point, and the owed read drops the slot on `status`.
-	 */
-	attestedBy?: string;
-	/** ISO timestamp of the attestation above. */
-	attestedAt?: string;
-	/**
-	 * RETIREMENT receipt — this slot stopped being owed because the session that
-	 * declared it was CANCELLED. NEVER a deletion: the slot, its blocker, its
-	 * `why` and its `owedSince` all stay readable, exactly like `delegatedAt` and
-	 * `returnedAt`. Clearing these two fields puts the slot back on the board, so
-	 * the stamp is reversible in the way a delete never is.
-	 *
-	 * Only `cancelled` retires slots. A session that is `closed`, `failed` or
-	 * `stale` leaves them owed — the work was declared, the session ended, and
-	 * somebody still has to do it.
-	 */
-	retiredAt?: string;
-	/** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
-	retiredReason?: OutputRetiredReason;
-	/**
-	 * WHERE to go for this deliverable — see {@link OutputRef}.
-	 *
-	 * The reason it exists: an agent that declares an owed slot, or blocks one on
-	 * the person, could previously only hand over PROSE. "The Stripe restricted
-	 * key for the live account" tells you what is missing and leaves you to find
-	 * the page yourself. A `ref` makes the card's title a DOOR.
-	 *
-	 * `null` IS A WIRE VALUE ONLY, and it means CLEAR. Silence on a wholesale
-	 * patch means KEEP (the field is server-owned for erasure purposes), so
-	 * "remove this pointer" needs a way to say itself — that is the explicit
-	 * `null`. `mergeExpectedOutputs` deletes the key rather than storing the null,
-	 * so a STORED slot never carries `ref: null` and every reader may test it for
-	 * truthiness alone.
-	 */
-	ref?: OutputRef | null;
-	/**
-	 * The `SessionCriterion.key` this slot STANDS FOR. Set only on a slot whose
-	 * `kind` is the criterion-slot kind (`CRITERION_SLOT_KIND`, `@synap-core/types`),
-	 * written once at the escalation that files the slot
-	 * (api `services/focus-sessions/evaluations/record.ts`) and never by a client.
-	 *
-	 * It exists because the slot's own `label` is PROSE (`Check: <statement>`,
-	 * clipped at 120 chars) and a surface asked to open the scorecard on the right
-	 * criterion could otherwise only match that string back — which forks the
-	 * backend's label format into every UI and breaks the moment a statement is
-	 * reworded or the clip lands differently. The key is the machine identity the
-	 * evaluation rows are already keyed by, so the pointer is exact.
-	 *
-	 * ABSENT on every slot filed before this field existed, and on every
-	 * non-criterion slot. A reader MUST treat absence as "no criterion to
-	 * highlight" — never as an error, and never as a reason to fall back to
-	 * matching the label.
-	 */
-	criterionKey?: string;
-	/**
-	 * The PERSON'S ANSWER to what the agent asked about this slot — written ONLY
-	 * by `answerExpectedOutput` (api `services/focus-sessions/answer-slot.ts`),
-	 * from the needs-you tray or from the session owner's reply to an agent's
-	 * `kind: 'question'` room post. See {@link SlotAnswer}.
-	 *
-	 * AN ANSWER IS NOT A DELIVERY. It never touches `status`, and it closes
-	 * nothing: the answer is INPUT the agent needed, and the agent still owes the
-	 * deliverable. On a human-owned slot the answer hands the slot BACK to the
-	 * agent through the same clearing `unblockExpectedOutput` does (`owner`,
-	 * `blockedReason`, `why`, `owedSince` removed together) — so the owed read
-	 * drops it and the agent's open-slot read (`isOpenAgentSlot`) picks it up
-	 * with the answer attached. The question it answered survives on
-	 * `answer.question`.
-	 */
-	answer?: SlotAnswer;
-	/**
-	 * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
-	 * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
-	 * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
-	 * `ask` HOW to resolve it (confirm / choose / form / act / provide).
-	 *
-	 * ABSENT MEANS TODAY'S BEHAVIOUR — free-text answer, "I did this", "Not
-	 * mine" — so every slot stored before this field is unchanged.
-	 *
-	 * `null` IS A WIRE VALUE ONLY and means CLEAR, exactly like `ref`: silence on
-	 * a wholesale patch keeps it, and `mergeExpectedOutputs` deletes the key
-	 * rather than storing the null. Cleared with the other ownership fields when
-	 * the slot is handed back (`stampUnblocked`) — the ask was the person's to
-	 * answer; the answer's `question` keeps what was asked.
-	 */
-	ask?: SlotAsk | null;
-}
-/**
- * The ASK on a human-owned slot — HOW to answer it.
- *
- * STRUCTURAL MIRROR of `Ask` in `@synap-core/types/ask` (the zod schema, its
- * limits, and the validation rule live there). Duplicated as a TYPE because
- * this package is dependency-free by design — the `OUTPUT_REF_KINDS`
- * precedent. The duplication is not left to trust: api's
- * `expectedOutputWireSchema` parses `ask` with the types-leaf schema and is
- * `satisfies z.ZodType<ExpectedOutput, ExpectedOutput>`, and
- * `services/focus-sessions/update-session.ts` asserts the two types are
- * MUTUALLY assignable at compile time — a drift on either side stops the build.
- */
-export type SlotAsk = {
-	mode: "confirm";
-	prompt?: string;
-} | {
-	mode: "choose";
-	options: SlotAskOption[];
-	allowOther?: boolean;
-} | {
-	mode: "form";
-	form: SlotAskFormSpec;
-} | {
-	mode: "act";
-	url?: string;
-	steps?: string[];
-} | {
-	mode: "provide";
-	provide: SlotAskProvide;
-};
-/** One offered answer (capture's chip minus its apply fields). */
-export interface SlotAskOption {
-	label: string;
-	/** Absent ⇒ the label IS the value. */
-	value?: string;
-	icon?: string;
-	/** At most ONE option per ask. */
-	recommended?: boolean;
-	/** One-line imperative consequence of choosing it. */
-	description?: string;
-}
-/** A FLAT form (no nested fields). */
-export interface SlotAskFormSpec {
-	title?: string;
-	note?: string;
-	fields: Array<{
-		key: string;
-		label: string;
-		type: string;
-		constraints?: {
-			enum?: string[];
-			min?: number;
-			max?: number;
-			pattern?: string;
-		};
-		required?: boolean;
-		help?: string;
-	}>;
-}
-/** What a `provide` ask hands over — vault-first, through its own door. */
-export type SlotAskProvide = {
-	kind: "connection";
-	service: string;
-} | {
-	kind: "file";
-	accept?: string[];
-} | {
-	kind: "secret";
-	name: string;
-};
-/** A `provide` answer stores a REFERENCE, never the value. */
-export type SlotProvideRef = {
-	kind: "secret";
-	vaultRef: string;
-} | {
-	kind: "connection";
-	connectionId: string;
-} | {
-	kind: "file";
-	fileId: string;
-};
-/**
- * The TYPED half of an answer. The human-readable line stays on
- * `SlotAnswer.text`; a `text` answer's words live there.
- */
-export type SlotAnswerValue = {
-	type: "text";
-} | {
-	type: "confirm";
-	confirmed: boolean;
-} | {
-	type: "chip";
-	chip: SlotAskOption;
-} | {
-	type: "form";
-	values: Record<string, unknown>;
-} | {
-	type: "provide";
-	ref: SlotProvideRef;
-};
-/**
- * A person's answer to an agent's question about one slot. Server-stamped as a
- * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
- */
-export interface SlotAnswer {
-	/** What the person said. */
-	text: string;
-	/**
-	 * The room message that carries it — the owner's reply, or the message the
-	 * direct answer door posted into the room. `null` when the session has no
-	 * room, so there was nowhere to post it.
-	 */
-	messageId: string | null;
-	/** The session owner who answered. */
-	answeredBy: string;
-	/** ISO timestamp, server clock. */
-	answeredAt: string;
-	/**
-	 * What was asked: the slot's `why` at the moment of answering (it is cleared
-	 * with the hand-back), else the agent's question post. Absent when neither
-	 * existed.
-	 */
-	question?: string;
-	/**
-	 * The TYPED answer, when the slot carried an `ask` — see
-	 * {@link SlotAnswerValue}. Stamped with the rest of the answer by the one
-	 * answer door, validated against the slot's ask. ABSENT on every answer given
-	 * before typed asks existed and on a plain free-text answer to a slot with no
-	 * ask; `text` is ALWAYS present either way, so a reader that only knows text
-	 * keeps working.
-	 */
-	value?: SlotAnswerValue;
-}
-/**
- * The CLOSED rollup category a stage declares membership in. Copied verbatim
- * from Linear's `ProjectStatusType` — the convergent answer across eight
- * independent implementations (Jira, Linear, Digital.ai, Accelo, Kantata,
- * Productive.io, Odoo, ERPNext).
- *
- * A cross-playbook board groups on THIS, never on `key`: two playbooks' key
- * sets are disjoint by construction, and no product has ever shipped a
- * vocabulary-reconciliation UI. Accelo — whose architecture is per-type stage
- * vocabularies exactly like ours — makes the category a MANDATORY field.
- */
-export type PlaybookStageCategory = "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
-declare const CRITERION_CHECK_KINDS: readonly [
-	"evidence",
-	"capability",
-	"judge",
-	"human"
-];
-export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
-/**
- * One BINARY, observable acceptance criterion ("Typecheck passes with 0
- * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
- * `focus_sessions.criteria`; graded by rows in `session_evaluations`.
- */
-export interface SessionCriterion {
-	/** Stable slug, unique within the session. */
-	key: string;
-	statement: string;
-	/** Absent = true. */
-	required?: boolean;
-	check: {
-		kind: CriterionCheckKind;
-		/** kind=capability: the capability verb run via executeCapability. */
-		capability?: string;
-		/** kind=evidence: the key the agent posts evidence under (e.g. "typecheck"). */
-		evidenceKey?: string;
-		/** kind=judge: what the judge should look at. */
-		hint?: string;
-	};
-	/** Set when copied from a stage. */
-	stageKey?: string;
-}
-/**
- * The normalized shape the Phase-1 adapters produce from builtin IS tools,
- * code/instruction skills, intelligence_commands, and source providers — so a
- * Playbook can grant capabilities uniformly and the AI can discover them.
- */
-/** The full read-model kind set: grantables + the discoverable source systems. */
-export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool"
-/** A `skills` row with `kind='instruction'` — teaching prose, not an executable
- *  capability. Kept OUT of the "skill" (runnable) bucket so flat-list consumers
- *  don't have to special-case it to avoid offering it as an action. */
- | "teaching-doc";
-export interface Capability {
-	kind: CapabilityKind;
-	id: string;
-	name: string;
-	description?: string | null;
-	inputSchema: Record<string, unknown>;
-	credentials?: CredentialRequirement[];
-	executor: ExecutorRef;
-	/** Whether AI use is auto-approved or routed through a proposal. "none" = not
-	 *  executable (e.g. a `teaching-doc` — governance doesn't apply to reading prose). */
-	governance: "auto" | "propose" | "none";
-	/**
-	 * The connection's structured verb catalog WITH each verb's resolved
-	 * grant-state — the capability-matrix axis. Present for tools that carry a
-	 * `tools.capabilities` catalog; the grant-state is joined from the active
-	 * `vault_grants` row for the tool (one connection × verb × grant row each).
-	 * Empty/undefined for capabilities with no verb catalog (skills, commands,
-	 * verb-less provider tools).
-	 */
-	verbs?: CapabilityVerbState[];
-	/**
-	 * True for a capability that is discoverable but NOT invokable through the
-	 * capability-execution door (e.g. an IS-native tool with no run_capability
-	 * bridge yet). Consumers building a "runnable" projection must exclude these.
-	 */
-	catalogOnly?: boolean;
-	/**
-	 * For a provider-backed capability (a Nango `source-provider` tool): whether an
-	 * external connection is required and whether one is currently known for the
-	 * caller. This exists so an AGENT can tell "connected" from "needs connection"
-	 * — a distinction the read-model previously omitted, leaving agents to infer it
-	 * from `governance`, which is an approval fact, not a connection fact.
-	 *
-	 * `connected` is the LAST-KNOWN state from the connection registry (kept fresh
-	 * by the disconnect self-heal + lazy reconciler), NOT a live Nango probe — the
-	 * authoritative live state and the connect/disconnect actions live behind the
-	 * connectors door. Absent for capabilities that need no external connection
-	 * (builtins, skills, commands, verb-less non-provider tools).
-	 */
-	connection?: {
-		required: boolean;
-		connected: boolean;
-		provider: string;
-	};
-}
-/**
- * One row of the connection × verb × grant matrix: a Tool's verb annotated with
- * the live grant-state derived from `vault_grants`. The read-model joins each
- * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
- * the AI can see, per verb, whether it is granted and at what exec-mode.
- */
-export interface CapabilityVerbState extends ToolVerb {
-	/** True when an active (non-revoked, non-expired) grant exists for the tool. */
-	granted: boolean;
-	/**
-	 * The effective exec-mode for this verb: the active grant's exec-mode when
-	 * granted, else the verb's `govDefault`. This is what the gate would apply.
-	 */
-	effectiveExecMode: ExecMode;
-	/**
-	 * Honest, derivable parameter requirements for this verb — builtin verbs from
-	 * their Zod validator (`BUILTIN_VERB_PARAM_SCHEMAS`), provider verbs from the
-	 * declarative skill's `providerSpec` template params. Undefined when nothing
-	 * is derivable (e.g. a verb-less/legacy tool). Distinct from `argsSchema`
-	 * (a hand-authored JSON-schema-ish doc): this is read off the real contract.
-	 */
-	paramsSchema?: Record<string, {
-		required: boolean;
-		description?: string;
-	}>;
 }
 /**
  * Where the link opens. Only `"desktop"` today, and it is not decoration: the
@@ -10552,11 +10574,11 @@ declare const FormConfigSchema: z.ZodObject<{
 			boolean: "boolean";
 			date: "date";
 			email: "email";
+			enum: "enum";
 			url: "url";
 			phone: "phone";
 			richtext: "richtext";
 			text: "text";
-			enum: "enum";
 		}>;
 		required: z.ZodOptional<z.ZodBoolean>;
 		help: z.ZodOptional<z.ZodString>;
@@ -11913,6 +11935,10 @@ export type AnswerExpectedOutputResult = {
 	status: "retired";
 } | {
 	status: "empty_answer";
+}
+/** The slot's ask is no longer the one the answer was given against. */
+ | {
+	status: "ask_changed";
 } | {
 	status: "answered";
 	/** The DECLARED label (the slot's own casing). */
@@ -11933,8 +11959,13 @@ export type AnswerExpectedOutputResult = {
 export interface SessionAnswerItem {
 	/** Stable id — dedupe on it across polls. */
 	id: string;
-	/** What the person said. */
+	/** What the person said — for a typed answer, its readable summary. */
 	text: string;
+	/**
+	 * The TYPED answer (`SlotAnswer.value`), read from the slot — the answer's
+	 * one store; `null` for a free-text answer or a slotless room reply.
+	 */
+	value: SlotAnswerValue | null;
 	answeredAt: string;
 	answeredBy: string;
 	/** The room message carrying the answer; `null` when the session has no room. */
@@ -13370,7 +13401,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		log: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				subjectId: string;
-				subjectType: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "member" | "message" | "apiKey" | "chat" | "task";
+				subjectType: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "member" | "apiKey" | "chat" | "task";
 				eventType: string;
 				data: Record<string, unknown>;
 				version: number;
@@ -13387,7 +13418,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				since?: unknown;
 				until?: unknown;
 				type?: string | undefined;
-				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "member" | "message" | "apiKey" | "chat" | "task" | undefined;
+				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "member" | "apiKey" | "chat" | "task" | undefined;
 				workspaceId?: string | undefined;
 				sessionId?: string | undefined;
 				limit?: number | undefined;
@@ -13417,7 +13448,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				userId?: string | undefined;
 				eventType?: string | undefined;
-				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "member" | "message" | "apiKey" | "chat" | "task" | undefined;
+				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "member" | "apiKey" | "chat" | "task" | undefined;
 				subjectId?: string | undefined;
 				subjectIds?: string[] | undefined;
 				correlationId?: string | undefined;
@@ -13483,7 +13514,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				subjectId?: string | undefined;
-				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "member" | "message" | "apiKey" | "chat" | "task" | undefined;
+				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "member" | "apiKey" | "chat" | "task" | undefined;
 				profileSlug?: string | undefined;
 				eventTypes?: string[] | undefined;
 				period?: "day" | "week" | "month" | undefined;
@@ -13504,7 +13535,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				userId?: string | undefined;
 				eventType?: string | undefined;
-				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "member" | "message" | "apiKey" | "chat" | "task" | undefined;
+				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "member" | "apiKey" | "chat" | "task" | undefined;
 				fromDate?: Date | undefined;
 				toDate?: Date | undefined;
 				workspaceId?: string | undefined;
@@ -15714,7 +15745,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		resolveOrCreateChannel: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab";
+				channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab";
 				workspaceId?: string | undefined;
 				contextObjectType?: "entity" | "project" | "user" | "workspace" | "document" | "external" | "view" | "proposal" | "task" | undefined;
 				contextObjectId?: string | undefined;
@@ -15758,7 +15789,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "archived" | "merged";
 					scope: "pod" | "user" | "workspace";
 					projectId: string | null;
-					channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -15908,7 +15939,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "archived" | "merged";
 					scope: "pod" | "user" | "workspace";
 					projectId: string | null;
-					channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -16020,10 +16051,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null;
 					sessionId: string | null;
 					channelId: string;
+					content: string;
 					role: "system" | "user" | "assistant";
 					externalSource: string | null;
 					timestamp: Date;
-					content: string;
 					parentId: string | null;
 					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
@@ -16081,7 +16112,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 				search?: string | undefined;
 				projectId?: string | undefined;
-				channelType?: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run" | undefined;
+				channelType?: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 				contextObjectId?: string | undefined;
@@ -16306,7 +16337,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "archived" | "merged";
 					scope: "pod" | "user" | "workspace";
 					projectId: string | null;
-					channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -16373,7 +16404,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "archived" | "merged";
 					scope: "pod" | "user" | "workspace";
 					projectId: string | null;
-					channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -16488,7 +16519,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "archived" | "merged";
 					scope: "pod" | "user" | "workspace";
 					projectId: string | null;
-					channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -16519,7 +16550,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "archived" | "merged";
 					scope: "pod" | "user" | "workspace";
 					projectId: string | null;
-					channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -16550,7 +16581,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "archived" | "merged";
 					scope: "pod" | "user" | "workspace";
 					projectId: string | null;
-					channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -16874,10 +16905,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null;
 					sessionId: string | null;
 					channelId: string;
+					content: string;
 					role: "system" | "user" | "assistant";
 					externalSource: string | null;
 					timestamp: Date;
-					content: string;
 					parentId: string | null;
 					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
@@ -17046,7 +17077,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "active" | "archived" | "merged";
 					scope: "pod" | "user" | "workspace";
 					projectId: string | null;
-					channelType: "thread" | "personal" | "sub_thread" | "feed" | "external" | "agent_collab" | "group" | "run";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group" | "run";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -21069,7 +21100,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposalId: string;
 				} | {
 					capability: CapabilityRow;
-					status: "created" | "reused";
+					status: "reused" | "created";
 					proposalId: string | null;
 				};
 				meta: object;
@@ -25154,11 +25185,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					author: "system" | "user" | "ai";
 					message: string | null;
+					content: string;
 					storageUrl: string | null;
 					storageKey: string | null;
 					size: number;
 					mimeType: string | null;
-					content: string;
 					checksum: string | null;
 					authorId: string;
 				}[];
@@ -25192,11 +25223,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					author: "system" | "user" | "ai";
 					message: string | null;
+					content: string;
 					storageUrl: string | null;
 					storageKey: string | null;
 					size: number;
 					mimeType: string | null;
-					content: string;
 					checksum: string | null;
 					authorId: string;
 				};
@@ -26111,7 +26142,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				}[];
 			};
@@ -26155,7 +26186,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				effectiveProperties: EffectiveProperty[];
@@ -26209,7 +26240,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				existing: boolean;
@@ -26248,7 +26279,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				existing: boolean;
@@ -26287,7 +26318,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				existing: boolean;
@@ -26326,7 +26357,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				existing: boolean;
@@ -26365,7 +26396,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				existing: boolean;
@@ -26413,7 +26444,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				existing?: undefined;
@@ -26587,7 +26618,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 			};
@@ -26652,7 +26683,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				}[];
 			};
@@ -26710,7 +26741,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				}[];
 			};
@@ -26750,7 +26781,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					applicableKinds: string[] | null;
 					roleCategory: string | null;
 					aiPosture: AiPosture | null;
-					lifecycle: "active" | "experimental" | "deprecated";
+					lifecycle: "active" | "deprecated" | "experimental";
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				}[];
 			};
@@ -27071,8 +27102,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				link: {
 					profileId: string;
-					propertyDefId: string;
 					required: boolean;
+					propertyDefId: string;
 					defaultValue: unknown;
 					displayOrder: number;
 				};
@@ -27100,8 +27131,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				link: {
 					profileId: string;
-					propertyDefId: string;
 					required: boolean;
+					propertyDefId: string;
 					defaultValue: unknown;
 					displayOrder: number;
 				};
@@ -27742,7 +27773,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "sourceKind" | "channel" | "channelType" | "shape" | "default" | "bridge" | "workKind" | "entityKind";
+					scopeKind: "sourceKind" | "channel" | "default" | "channelType" | "shape" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
 					scopeRef: string | null;
@@ -27754,7 +27785,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				text: string;
-				scopeKind: "sourceKind" | "channel" | "channelType" | "shape" | "default" | "bridge" | "workKind" | "entityKind";
+				scopeKind: "sourceKind" | "channel" | "default" | "channelType" | "shape" | "bridge" | "workKind" | "entityKind";
 				posture?: "auto" | "propose" | undefined;
 				scopeRef?: string | undefined;
 				shape?: {
@@ -27775,7 +27806,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "sourceKind" | "channel" | "channelType" | "shape" | "default" | "bridge" | "workKind" | "entityKind";
+					scopeKind: "sourceKind" | "channel" | "default" | "channelType" | "shape" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
 					scopeRef: string | null;
@@ -27799,7 +27830,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "sourceKind" | "channel" | "channelType" | "shape" | "default" | "bridge" | "workKind" | "entityKind";
+					scopeKind: "sourceKind" | "channel" | "default" | "channelType" | "shape" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
 					scopeRef: string | null;
@@ -27825,7 +27856,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "sourceKind" | "channel" | "channelType" | "shape" | "default" | "bridge" | "workKind" | "entityKind";
+					scopeKind: "sourceKind" | "channel" | "default" | "channelType" | "shape" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
 					scopeRef: string | null;
@@ -27841,7 +27872,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "sourceKind" | "channel" | "channelType" | "shape" | "default" | "bridge" | "workKind" | "entityKind";
+					scopeKind: "sourceKind" | "channel" | "default" | "channelType" | "shape" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
 					scopeRef: string | null;
@@ -27865,7 +27896,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "sourceKind" | "channel" | "channelType" | "shape" | "default" | "bridge" | "workKind" | "entityKind";
+					scopeKind: "sourceKind" | "channel" | "default" | "channelType" | "shape" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
 					scopeRef: string | null;
@@ -27898,7 +27929,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "sourceKind" | "channel" | "channelType" | "shape" | "default" | "bridge" | "workKind" | "entityKind";
+					scopeKind: "sourceKind" | "channel" | "default" | "channelType" | "shape" | "bridge" | "workKind" | "entityKind";
 					revokedAt: Date | null;
 					capabilityId: string | null;
 					scopeRef: string | null;
@@ -28915,7 +28946,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				quality: ImportQualityReport;
 				intake?: RecordImportIntakeResult | undefined;
 				sessionError?: string | undefined;
-				sessionSource?: "playbook" | "failed" | "none" | "prior" | "provided" | "minted" | undefined;
+				sessionSource?: "playbook" | "failed" | "none" | "provided" | "minted" | "prior" | undefined;
 				requestedSessionIgnored?: boolean | undefined;
 				workspaceId: string | null;
 				source: ImportRevealSource;
@@ -29003,7 +29034,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				quality: ImportQualityReport;
 				intake?: RecordImportIntakeResult | undefined;
 				sessionError?: string | undefined;
-				sessionSource?: "playbook" | "failed" | "none" | "prior" | "provided" | "minted" | undefined;
+				sessionSource?: "playbook" | "failed" | "none" | "provided" | "minted" | "prior" | undefined;
 				requestedSessionIgnored?: boolean | undefined;
 				workspaceId: string | null;
 				source: ImportRevealSource;
@@ -29035,7 +29066,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				queued: true;
 				jobId: string | null;
 				sessionId: string | null;
-				sessionSource: "playbook" | "failed" | "none" | "prior" | "provided" | "minted";
+				sessionSource: "playbook" | "failed" | "none" | "provided" | "minted" | "prior";
 				requestedSessionIgnored: boolean;
 			};
 			meta: object;
@@ -32494,6 +32525,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						url: string;
 					} | null | undefined;
 					criterionKey?: string | undefined;
+					paramName?: string | undefined;
 					answer?: {
 						text: string;
 						messageId: string | null;
@@ -32702,6 +32734,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						url: string;
 					} | null | undefined;
 					criterionKey?: string | undefined;
+					paramName?: string | undefined;
 					answer?: {
 						text: string;
 						messageId: string | null;
@@ -33076,7 +33109,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				sessionId: string;
 				expectedLabel: string;
-				text: string;
+				text?: string | undefined;
+				value?: {
+					type: "text";
+				} | {
+					type: "confirm";
+					confirmed: boolean;
+				} | {
+					type: "chip";
+					chip: {
+						label: string;
+						value?: string | undefined;
+						icon?: string | undefined;
+						recommended?: boolean | undefined;
+						description?: string | undefined;
+					};
+				} | {
+					type: "form";
+					values: Record<string, unknown>;
+				} | {
+					type: "provide";
+					ref: {
+						kind: "secret";
+						vaultRef: string;
+					} | {
+						kind: "connection";
+						connectionId: string;
+					} | {
+						kind: "file";
+						fileId: string;
+					};
+				} | undefined;
+				askFingerprint?: string | undefined;
 			};
 			output: {
 				status: "answered";
@@ -33090,7 +33154,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				questionId: string | null;
 				wokeAgentType: string | null;
 				triggered: boolean;
+				graded?: {
+					verdict: "pass" | "fail";
+					recorded: boolean;
+					resumed: boolean;
+				};
 				ok: true;
+			};
+			meta: object;
+		}>;
+		askAboutSlot: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				expectedLabel: string;
+				note?: string | undefined;
+			};
+			output: {
+				seeded: boolean;
+				triggered: boolean;
+				threadId?: string | undefined;
+				channelId: string;
+				messageId: string;
 			};
 			meta: object;
 		}>;
@@ -34509,8 +34593,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: string;
 				proposalId: string;
-				reviewPath: string;
-				reviewUrl: string;
+				reviewPath: string | undefined;
+				reviewUrl: string | undefined;
 			} | {
 				status: string;
 				proposalId?: undefined;

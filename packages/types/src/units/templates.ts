@@ -59,6 +59,21 @@ export function workTemplatesOf<T extends TemplateRowLike>(
 }
 
 /**
+ * Does a template match what was typed in a picker? The picker's ONE input
+ * both filters the templates and is the goal for "Just start", on every
+ * surface, so the match is one rule: a case-insensitive substring of the name
+ * or the description. An empty query matches everything.
+ */
+export function matchesTemplateQuery(
+  row: { name: string; description?: string | null },
+  query: string
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return `${row.name} ${row.description ?? ""}`.toLowerCase().includes(q);
+}
+
+/**
  * "Used by N projects" — only when the pod SENT a positive count. An absent
  * count is not a zero (an older pod), so it says nothing rather than
  * "Used by 0".

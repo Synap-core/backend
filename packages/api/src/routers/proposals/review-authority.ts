@@ -18,7 +18,10 @@ import {
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { isPodAdmin } from "../../utils/workspace-role.js";
-import { unreadableTargetSessionIds } from "../../services/proposals/session-content-redaction.js";
+import {
+  proposalSessionIds,
+  unreadableProposalSessionIds,
+} from "../../services/proposals/session-content-redaction.js";
 
 export type ProposalApprovalPolicy =
   "admins_only" | "any_editor" | "owner_and_admins";
@@ -168,9 +171,10 @@ export type ReviewAuthorityFacts = {
    */
   agentCreatedByUserId: string | null | undefined;
   /**
-   * The proposal's SUBJECT is a session that exists and the viewer may not
-   * read (`unreadableTargetSessionIds` — the SAME test the read-side redaction
-   * applies, so a row is never redacted-but-decidable). Resolved with the
+   * A session this proposal belongs to — its subject (a session target) or the
+   * run it was filed in (`session_id`) — exists and the viewer may not read it
+   * (`unreadableProposalSessionIds`). Covers every row the read-side redaction
+   * withholds, so a row is never redacted-but-decidable. Resolved with the
    * door's roster semantics: human doors honour the room roster, agent doors
    * are owner-only.
    */
@@ -188,14 +192,16 @@ type ReviewedProposal = {
    */
   targetType: string;
   targetId: string | null;
+  /** The run the proposal was filed in — also keyed by the session rung. */
+  sessionId: string | null;
 };
 
-/** Does `reader` fail to read the session this proposal is about? */
+/** Does `reader` fail to read a session this proposal belongs to? */
 async function subjectSessionUnreadableFor(
-  proposal: Pick<ReviewedProposal, "targetType" | "targetId">,
+  proposal: Pick<ReviewedProposal, "targetType" | "targetId" | "sessionId">,
   reader: { userId: string; roster: boolean }
 ): Promise<boolean> {
-  return (await unreadableTargetSessionIds([proposal], reader)).size > 0;
+  return (await unreadableProposalSessionIds([proposal], reader)).size > 0;
 }
 
 /**
@@ -210,7 +216,8 @@ async function subjectSessionUnreadableFor(
  * Rungs, in order:
  *   1. agent-class floor (`purpose: "approve"` only) — an agent principal is
  *      refused before anything else.
- *   1b. session rung — the subject is a session the viewer may not read.
+ *   1b. session rung — the proposal's session (subject or `session_id`) is
+ *       one the viewer may not read.
  *   2. ownership — `data.sourceId === viewer`, or the viewer owns the acting
  *      agent (`agentCreatedByUserId`), itself floored by the agent class.
  *   3a. pod-wide (no workspace) — owner, else pod-admin, else refuse.
@@ -239,7 +246,7 @@ export function computeCanReviewApprovalFromFacts(args: {
   }
 
   // SESSION RUNG (founder decision 2026-09-27): nobody decides what they cannot
-  // read. A proposal about a session the viewer may not read is refused for
+  // read. A proposal about (or filed in) a session the viewer may not read is refused for
   // every purpose, whatever their workspace role — the review right is
   // necessary, never sufficient. It only ever NARROWS.
   if (facts.subjectSessionUnreadable) {
@@ -420,20 +427,20 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
   rows: ReadonlyArray<
     Pick<
       ReviewedProposal,
-      "workspaceId" | "agentUserId" | "targetType" | "targetId"
+      "workspaceId" | "agentUserId" | "targetType" | "targetId" | "sessionId"
     >
   >;
 }): Promise<
   (
     row: Pick<
       ReviewedProposal,
-      "workspaceId" | "agentUserId" | "targetType" | "targetId"
+      "workspaceId" | "agentUserId" | "targetType" | "targetId" | "sessionId"
     >
   ) => ReviewAuthorityFacts
 > {
   const { userId, rows, roster } = args;
   // One batched pair of selects for the whole page (see the redaction module).
-  const unreadableSessions = await unreadableTargetSessionIds(rows, {
+  const unreadableSessions = await unreadableProposalSessionIds(rows, {
     userId,
     roster,
   });
@@ -498,9 +505,60 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
     agentCreatedByUserId: row.agentUserId
       ? (creatorByAgentId.get(row.agentUserId) ?? null)
       : undefined,
-    subjectSessionUnreadable:
-      !!row.targetId && unreadableSessions.has(row.targetId),
+    subjectSessionUnreadable: proposalSessionIds(row).some((id) =>
+      unreadableSessions.has(id)
+    ),
   });
+}
+
+/**
+ * The per-row `viewerCanReview` / `viewerCanReviewReason` pair that
+ * `proposals.list` AND `proposals.get` stamp — ONE derivation for both doors,
+ * so the detail page and the feed can never disagree about whether Approve is
+ * on offer. The APPROVE bar (the narrower purpose), batched facts (fixed query
+ * budget per page), and the reason formatted from the SAME evaluation:
+ * `not-authorized: requires <role>` or a bare code such as `session-only`.
+ */
+export async function resolveViewerReviewVerdicts(args: {
+  userId: string;
+  roster: boolean;
+  rows: ReadonlyArray<ReviewedProposal & { id: string }>;
+}): Promise<
+  Map<string, { viewerCanReview: boolean; viewerCanReviewReason: string }>
+> {
+  const { userId, roster, rows } = args;
+  const factsFor = await resolveBatchedReviewAuthorityFacts({
+    userId,
+    roster,
+    rows,
+  });
+  const out = new Map<
+    string,
+    { viewerCanReview: boolean; viewerCanReviewReason: string }
+  >();
+  for (const r of rows) {
+    const facts = factsFor(r);
+    const { allowed, reason } = computeCanReviewApprovalFromFacts({
+      proposal: {
+        workspaceId: r.workspaceId,
+        data: r.data,
+        agentUserId: r.agentUserId,
+      },
+      userId,
+      purpose: "approve",
+      facts,
+    });
+    out.set(r.id, {
+      viewerCanReview: allowed,
+      // "not-authorized: requires admin" — the code plus which authority would
+      // satisfy this workspace's policy, so a display string needs no lookup.
+      viewerCanReviewReason:
+        reason === "not-authorized"
+          ? `not-authorized: requires ${reviewAuthorityRequirement(facts.policy)}`
+          : reason,
+    });
+  }
+  return out;
 }
 
 /**
@@ -578,7 +636,7 @@ export async function computeCanReviewApproval(args: {
 export async function assertCanRetargetProposalDestination(args: {
   proposal: Pick<
     ReviewedProposal,
-    "data" | "agentUserId" | "targetType" | "targetId"
+    "data" | "agentUserId" | "targetType" | "targetId" | "sessionId"
   >;
   destWorkspaceId: string | null;
   userId: string;
@@ -610,6 +668,7 @@ export async function assertCanRetargetProposalDestination(args: {
       agentUserId: proposal.agentUserId,
       targetType: proposal.targetType,
       targetId: proposal.targetId,
+      sessionId: proposal.sessionId,
     },
     userId,
     roster,

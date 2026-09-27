@@ -99,6 +99,8 @@ CREATE TABLE profiles (
   workspace_id uuid,
   is_active boolean DEFAULT true,
   applicable_kinds text[],
+  -- 0222 role_category (read by the W2b facet-scope reconcile, FX-B1).
+  role_category text,
   ui_hints jsonb DEFAULT '{}',
   origin text NOT NULL DEFAULT 'unknown',
   lifecycle text NOT NULL DEFAULT 'active',

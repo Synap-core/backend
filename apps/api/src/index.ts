@@ -88,7 +88,6 @@ import {
   podAdminTarget,
 } from "./open-dispatch.js";
 import {
-  eventStreamManager,
   setupEventBroadcasting,
   startSessionChangedListener,
 } from "@synap/api";
@@ -243,6 +242,7 @@ const app = new Hono();
 // credentialless public doors get their own policy, mounted OUTSIDE it
 // (`public-door-transport.ts`).
 import { hasConfiguredOrigins, isAllowedOrigin } from "./cors-origin.js";
+import { mountAdminEventStream } from "./admin-event-stream.js";
 import {
   httpCacheHeadersMiddleware,
   podEdgeCorsMiddleware,
@@ -912,48 +912,9 @@ apiLogger.info(
   "Federated issuer exchange endpoint enabled at /api/federation/exchange"
 );
 
-// SSE endpoint for real-time event streaming (admin dashboard)
-// Server-Sent Events endpoint for event broadcasting
-app.get("/api/events/stream", (c) => {
-  const clientId = crypto.randomUUID();
-
-  const stream = new ReadableStream({
-    start(controller) {
-      // Register the client
-      eventStreamManager.registerClient(clientId, controller);
-
-      // Send initial connection message
-      const encoder = new TextEncoder();
-      const initialMessage = `data: ${JSON.stringify({ type: "connected", clientId })}\n\n`;
-      controller.enqueue(encoder.encode(initialMessage));
-
-      apiLogger.info({ clientId }, "SSE client stream started");
-    },
-    cancel() {
-      // Cleanup when client disconnects
-      eventStreamManager.unregisterClient(clientId);
-      apiLogger.info({ clientId }, "SSE client stream cancelled");
-    },
-  });
-
-  // Echo the caller's origin only when it's a trusted first party (same policy
-  // as the global CORS middleware) — never `*`-with-credentials.
-  const sseOrigin = c.req.header("origin");
-  const sseHeaders: Record<string, string> = {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  };
-  if (sseOrigin && isAllowedOrigin(sseOrigin)) {
-    sseHeaders["Access-Control-Allow-Origin"] = sseOrigin;
-    sseHeaders["Access-Control-Allow-Credentials"] = "true";
-    sseHeaders["Vary"] = "Origin";
-  }
-
-  // Return SSE stream using Hono's newResponse
-  // c.newResponse(body, status, headers) signature
-  return c.newResponse(stream, 200, sseHeaders);
-});
+// Raw pod-wide event fanout (admin dashboard) — pod-admin only; see
+// admin-event-stream.ts.
+mountAdminEventStream(app);
 
 // tRPC routes — apply session auth for all routes except health.* and setup.*
 // system.* procedures enforce their own auth level (protectedProcedure / podAdminProcedure)

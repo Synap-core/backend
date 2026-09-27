@@ -17,9 +17,16 @@ vi.mock("@synap/database", async (importOriginal) => ({
     mergeSettings = mergeSettingsMock;
   },
 }));
-vi.mock("./playbooks/reconcile-installed-playbooks.js", () => ({
-  reconcileWorkspacePlaybooksToTemplate: playbooksMock,
-}));
+vi.mock(
+  "./playbooks/reconcile-installed-playbooks.js",
+  async (importOriginal) => ({
+    // The REAL convergence predicate; only the effectful reconcile is stubbed.
+    ...(await importOriginal<
+      typeof import("./playbooks/reconcile-installed-playbooks.js")
+    >()),
+    reconcileWorkspacePlaybooksToTemplate: playbooksMock,
+  })
+);
 
 import { reconcileInstalledPacks } from "./reconcile-installed-packs.js";
 
@@ -95,5 +102,33 @@ describe("reconcileInstalledPacks", () => {
     expect(out.find((o) => o.slug === "business-model")?.status).toBe(
       "partial"
     );
+  });
+
+  // The discriminating row: no failure, but the change was only PROPOSED
+  // (queued for review). A failed-only check advances the stamp here.
+  it("WITHHOLDS the version when a playbook change was only proposed", async () => {
+    playbooksMock.mockResolvedValue({
+      results: [
+        {
+          playbookId: "pb-1",
+          name: "Business Model (GRP)",
+          kind: "proposed",
+          applied: ["stages"],
+          ownerOwned: [],
+        },
+      ],
+      missing: [],
+      failed: [],
+    });
+    const out = await reconcileInstalledPacks({
+      workspaceId: "ws-f",
+      ownerId: "u",
+      settings: SETTINGS,
+      resolve,
+    });
+    expect(mergeSettingsMock).not.toHaveBeenCalled();
+    const bm = out.find((o) => o.slug === "business-model");
+    expect(bm?.status).toBe("partial");
+    expect(bm?.playbooks?.proposed).toBe(1);
   });
 });

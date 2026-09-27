@@ -11,6 +11,7 @@
  */
 
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
   db,
   proposals,
@@ -62,6 +63,7 @@ import {
   buildObjectActionTitle,
   resolveActionLabel,
   resolveObjectNoun,
+  resolveObjectNounPlural,
   humanizeToken,
 } from "@synap-core/types/vocabulary";
 import {
@@ -2348,17 +2350,6 @@ function spacePhrase(name: unknown): string {
   return resolved ? `${noun} "${resolved}"` : `another ${noun.toLowerCase()}`;
 }
 
-/** True for a `workspace.update` payload that changes the NAME and nothing else. */
-function isSpaceRenamePayload(data: Record<string, unknown>): boolean {
-  return (
-    payloadName(data.name) !== null &&
-    data.description === undefined &&
-    data.settings === undefined &&
-    data.definition === undefined &&
-    data.operation === undefined
-  );
-}
-
 /**
  * The sentence for a governed space operation, or `null` when this is not one.
  * Every WORD goes through the vocabulary door (`buildObjectActionTitle`,
@@ -2370,8 +2361,12 @@ function buildSpaceOpSummary(
   action: string,
   data: Record<string, unknown>
 ): string | null {
+  // ONE rule for "is this a space op" — shared with the review-card presenter
+  // (`@synap-core/types/workspaces`, FX-F3).
+  const op = classifySpaceOperation(subjectType, action, data);
+  if (op === null) return null;
   // profiles.grantAccess → "Share Kind "Client" with Space "Operations"".
-  if (subjectType === "profile" && action === "grant_access") {
+  if (op === "share") {
     const head = buildObjectActionTitle({
       action,
       objectKind: "kind",
@@ -2382,11 +2377,7 @@ function buildSpaceOpSummary(
   }
   // entities.moveToWorkspace files `entity/update {id, toWorkspaceId}` →
   // "Move "Foo" to Space "CRM"".
-  if (
-    subjectType === "entity" &&
-    action === "update" &&
-    typeof data.toWorkspaceId === "string"
-  ) {
+  if (op === "move") {
     const head = buildObjectActionTitle({
       action: "move",
       objectKind:
@@ -2398,12 +2389,42 @@ function buildSpaceOpSummary(
     });
     return `${head} to ${spacePhrase(data.toWorkspaceName)}`;
   }
+  // workspaces.archive → "Archive Space "Radar": pauses 1 rule". The reviewer
+  // must learn the consequence the direct path's confirm states (UX1 MUST 7.1):
+  // archiving pauses the space's active rules. `rulesAffected` is counted
+  // server-side at proposal time (`resolveSpaceOpNames`, the SAME predicate the
+  // write uses); when that count is missing the sentence still says rules
+  // pause, never a guessed number. Zero ⇒ nothing pauses ⇒ nothing to say.
+  if (op === "archive" || op === "restore") {
+    const head = buildObjectActionTitle({
+      action,
+      objectKind: "workspace",
+      objectName:
+        payloadName(data.targetName) ?? payloadName(data.name) ?? undefined,
+    });
+    const n =
+      typeof data.rulesAffected === "number" &&
+      Number.isInteger(data.rulesAffected) &&
+      data.rulesAffected >= 0
+        ? data.rulesAffected
+        : null;
+    if (n === 0) return head;
+    const rules = (count: number) =>
+      (count === 1
+        ? resolveObjectNoun("automation")
+        : resolveObjectNounPlural("automation")
+      ).toLowerCase();
+    if (action === "archive") {
+      return n === null
+        ? `${head}: its active ${rules(2)} pause`
+        : `${head}: pauses ${n} ${rules(n)}`;
+    }
+    return n === null
+      ? `${head}: ${rules(2)} it paused stay paused`
+      : `${head}: ${n} paused ${rules(n)} stay${n === 1 ? "s" : ""} paused`;
+  }
   // workspaces.update with only a name → "Rename Space "Old" to "New"".
-  if (
-    subjectType === "workspace" &&
-    action === "update" &&
-    isSpaceRenamePayload(data)
-  ) {
+  if (op === "rename") {
     const head = buildObjectActionTitle({
       action: "rename",
       objectKind: "workspace",
@@ -2436,24 +2457,56 @@ export async function resolveSpaceOpNames(
   targetWorkspaceName?: string;
   toWorkspaceName?: string;
   previousName?: string;
+  /** workspace archive/restore: rules the op pauses / leaves paused. */
+  rulesAffected?: number;
 }> {
+  // workspace archive/restore → count the rules it touches, for the summary
+  // ONLY (never written into the replayed `data`). Floored like the names: a
+  // space the proposer cannot see yields no count (the title then says rules
+  // pause, which is true). A failed count is logged, never guessed.
+  const op = classifySpaceOperation(subjectType, action, data);
+  if ((op === "archive" || op === "restore") && isLikelyUUID(targetId)) {
+    try {
+      // DYNAMIC for the same reason as below (total `vi.mock` suites).
+      const { userVisibleWhere } = await import("@synap/database");
+      const { countArchiveRules } = await import("./workspace-archive.js");
+      const [visible] = await db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(
+          and(
+            eq(workspaces.id, targetId),
+            userVisibleWhere(workspaces.id, userId)
+          )
+        )
+        .limit(1);
+      if (!visible) return {};
+      return {
+        rulesAffected: await countArchiveRules(db, {
+          workspaceId: targetId,
+          archive: action === "archive",
+        }),
+      };
+    } catch (err) {
+      logger.warn(
+        { err, subjectType, action },
+        "Space-op title: could not count the rules an archive touches (title says rules pause)"
+      );
+      return {};
+    }
+  }
+
   const wanted: Array<
     [
       key: "targetWorkspaceName" | "toWorkspaceName" | "previousName",
       id: unknown,
     ]
   > = [];
-  if (subjectType === "profile" && action === "grant_access") {
+  if (op === "share") {
     wanted.push(["targetWorkspaceName", data.targetWorkspaceId]);
-  } else if (subjectType === "entity" && action === "update") {
-    if (typeof data.toWorkspaceId === "string") {
-      wanted.push(["toWorkspaceName", data.toWorkspaceId]);
-    }
-  } else if (
-    subjectType === "workspace" &&
-    action === "update" &&
-    isSpaceRenamePayload(data)
-  ) {
+  } else if (op === "move") {
+    wanted.push(["toWorkspaceName", data.toWorkspaceId]);
+  } else if (op === "rename") {
     wanted.push(["previousName", targetId]);
   }
   const lookups = wanted.filter(
@@ -2614,7 +2667,7 @@ export function buildProposalSummary(
   // A share or a move names TWO things — the object and the space it goes to —
   // which "<verb> <noun> "<name>"" cannot carry; the generic composition read
   // "Grant access Profile "Task"" and "Update "Foo"" (the destination was only a
-  // raw id in the body). Archive/restore fit the generic shape and keep it.
+  // raw id in the body). Archive/restore add the rules they pause.
   const spaceSentence = buildSpaceOpSummary(subjectType, action, data);
   if (spaceSentence) return spaceSentence;
 

@@ -10,7 +10,9 @@
  *         or owner of that workspace, or it is pod-visible;
  *       - a NULL-workspace event is PERSONAL (`ownerPrivate`): only its own
  *         `user_id` sees it. `userVisibleWhere`'s NULL branch is owner-blind,
- *         so it is never reached here.
+ *         so it is never reached here;
+ *       - the reader's own events are always in, whatever their workspace
+ *         (a workspace since left, or a malformed JSONB value).
  *  2. SESSION floor (decision D1). An event whose subject is a focus session,
  *     or that was recorded inside one (`session_id`), is visible only when the
  *     reader may read that session — `sessionReadableWhere`, the one session
@@ -64,8 +66,11 @@ export function eventVisibleWhere(reader: EventReader): SQL {
     .select({ id: sql<string>`${workspaces.id}::text`.as("id") })
     .from(workspaces)
     .where(userVisibleWhere(workspaces.id, userId));
+  // The reader's OWN events are always in: `events.read` (user-scoped) has
+  // always shown them, and the two doors must agree. That also covers the
+  // personal (NULL-workspace) rows, which no workspace branch can admit.
   const workspaceFloor = or(
-    and(isNull(ws), eq(events.userId, userId)),
+    eq(events.userId, userId),
     inArray(ws, visibleWorkspaceIds)
   )!;
 

@@ -137,3 +137,58 @@ describe("GET /entities — errors keep their real status", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("GET /entities scope=all — partial lenses are SURFACED and offset is honoured (RV1 S12)", () => {
+  const WS2 = "0ccccccc-0000-4000-8000-000000000003";
+  const row = (id: string, ws: string) => ({
+    id,
+    workspaceId: ws,
+    title: id,
+    profileSlug: "note",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    createdAt: "2026-09-01T00:00:00.000Z",
+  });
+  beforeEach(() => {
+    getEntities.mockReset();
+    getUserAccessibleWorkspaceIds.mockResolvedValue([WS, WS2]);
+  });
+
+  it("one lens failing ⇒ 200 with what the others read AND an X-Synap-Partial header", async () => {
+    getEntities.mockImplementation(async (i: { workspaceId: string }) => {
+      if (i.workspaceId === WS2) throw new Error("lens down");
+      return [row("a", WS)];
+    });
+    const res = await makeApp().request(`/entities?scope=all`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Synap-Partial")).toBe("1/2");
+    expect((await res.json()).map((r: { id: string }) => r.id)).toEqual(["a"]);
+  });
+
+  it("no lens failing ⇒ no partial header", async () => {
+    getEntities.mockImplementation(async (i: { workspaceId: string }) => [
+      row(i.workspaceId === WS ? "a" : "b", i.workspaceId),
+    ]);
+    const res = await makeApp().request(`/entities?scope=all`);
+    expect(res.headers.get("X-Synap-Partial")).toBeNull();
+  });
+
+  it("offset pages the MERGE: page 2 is not page 1 again", async () => {
+    getEntities.mockImplementation(
+      async (i: { workspaceId: string; limit: number }) =>
+        (i.workspaceId === WS ? ["a1", "a2"] : ["b1", "b2"])
+          .slice(0, i.limit)
+          .map((id) => row(id, i.workspaceId))
+    );
+    const ids = async (qs: string) =>
+      (
+        (await (
+          await makeApp().request(`/entities?scope=all&${qs}`)
+        ).json()) as Array<{ id: string }>
+      ).map((r) => r.id);
+    const p1 = await ids("limit=2&offset=0");
+    const p2 = await ids("limit=2&offset=2");
+    expect(p1).toHaveLength(2);
+    expect(p2).toHaveLength(2);
+    expect(new Set([...p1, ...p2]).size).toBe(4);
+  });
+});

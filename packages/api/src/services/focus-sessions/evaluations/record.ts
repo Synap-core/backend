@@ -38,6 +38,8 @@ import {
   isCriterionRequired,
   readCriteria,
   type SessionCriterion,
+  type SlotAnswerValue,
+  type SlotAsk,
 } from "@synap/playbooks";
 import {
   CRITERION_SLOT_KIND,
@@ -284,6 +286,8 @@ export async function recordSessionEvaluation(
       sessionId,
       userId,
       expectedLabel: criterionSlotLabel(outcome.criterion),
+      // The verdict IS the answer the slot's pass/fail ask wanted.
+      criterionGraded: true,
     });
   }
 
@@ -302,6 +306,28 @@ export function criterionSlotWhy(criterion: SessionCriterion): string {
       ? `${criterion.statement.slice(0, CRITERION_WHY_STATEMENT_MAX - 1)}…`
       : criterion.statement;
   return `Checked ${MAX_NON_HUMAN_ATTEMPTS} times and still not passing — mark "${statement}" pass or fail.`;
+}
+
+/**
+ * The ask on an escalated criterion's slot. The option VALUES are the grade
+ * door's verdicts (`EvaluationVerdict` pass | fail), so an answer maps onto
+ * `recordSessionEvaluation` with no translation table.
+ */
+export const CRITERION_SLOT_ASK: SlotAsk = {
+  mode: "choose",
+  options: [
+    { label: "Pass", value: "pass" },
+    { label: "Fail", value: "fail" },
+  ],
+};
+
+/** A criterion slot answer's verdict, or `null` when it is not pass/fail. */
+export function criterionVerdictOf(
+  value: SlotAnswerValue | undefined
+): "pass" | "fail" | null {
+  if (value?.type !== "chip") return null;
+  const v = value.chip.value ?? value.chip.label;
+  return v === "pass" || v === "fail" ? v : null;
 }
 
 /** File the human-owned slot for an escalated criterion; idempotent by label. */
@@ -329,6 +355,10 @@ async function fileCriterionSlot(
         owner: "human",
         blockedReason: "decision",
         why: criterionSlotWhy(criterion),
+        // HOW the person answers it — pass or fail, rendered by every surface
+        // from the generic ask. Answering it reaches THIS module's grade door
+        // (`answerSessionSlot` → `gradeCriterionAsOwner`), never a second one.
+        ask: CRITERION_SLOT_ASK,
       }),
     ];
   });

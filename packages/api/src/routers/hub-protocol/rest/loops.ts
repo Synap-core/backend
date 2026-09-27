@@ -35,6 +35,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 
@@ -231,7 +232,7 @@ export function registerLoopsRoutes(app: HubHono): void {
       logger.error({ err }, "loops apply failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });

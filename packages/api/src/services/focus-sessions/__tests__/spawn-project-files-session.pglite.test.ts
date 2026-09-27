@@ -100,6 +100,9 @@ vi.mock("@synap/events", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   emitSideEffects: vi.fn(async () => undefined),
 }));
+vi.mock("../../../utils/audit-log.js", () => ({
+  auditLog: vi.fn(() => undefined),
+}));
 
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
@@ -189,6 +192,33 @@ beforeEach(async () => {
 });
 
 describe("spawn a project from a session", () => {
+  it("the spawned project announces itself like every project create (audit + project.create)", async () => {
+    // RV1 S4: spawn inserted through the bare repository — no audit row, no
+    // `project.create` side effects — so listeners never heard of the project.
+    const { emitSideEffects } = await import("@synap/events");
+    const { auditLog } = await import("../../../utils/audit-log.js");
+    vi.mocked(emitSideEffects).mockClear();
+    vi.mocked(auditLog).mockClear();
+    const sessionId = await seedSession();
+    const res = await spawnProjectFromSession({ sessionId, userId: USER });
+    expect(res.status).toBe("spawned");
+    if (res.status !== "spawned") return;
+    expect(emitSideEffects).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subjectType: "project",
+        action: "create",
+        subjectId: res.projectId,
+      })
+    );
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subjectType: "project",
+        action: "create",
+        subjectId: res.projectId,
+      })
+    );
+  });
+
   it("files the spawning session into the new project", async () => {
     const sessionId = await seedSession();
     const res = await spawnProjectFromSession({ sessionId, userId: USER });

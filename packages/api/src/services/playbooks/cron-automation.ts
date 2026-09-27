@@ -238,6 +238,15 @@ export function buildPlaybookRunFlowDefinition(
 export interface CronAutomationCtx {
   /** Acting principal — stamped as the automation's createdBy. */
   userId: string;
+  /**
+   * The write did NOT change the playbook's `schedule` or `status` (an
+   * adoption / metadata merge / text edit). Then this reconcile may refresh the
+   * backing row's definition but must never ARM anything: a backing automation
+   * the user paused stays paused, and no backing row is created. Only a
+   * schedule or status change arms. Teardown (pause) still applies — pausing
+   * never re-arms. Default false (create / schedule / status writes).
+   */
+  preserveArming?: boolean;
 }
 
 /**
@@ -336,6 +345,10 @@ export async function materializePlaybookCronAutomation(
       where: eq(automations.id, existingId),
     });
     if (existing) {
+      // preserveArming: keep the row's own paused/active state (and a paused
+      // row's null nextRunAt) — a user's pause outlives an adoption.
+      const keepState = ctx.preserveArming === true;
+      const armed = keepState ? existing.status === "active" : true;
       await db
         .update(automations)
         .set({
@@ -343,8 +356,8 @@ export async function materializePlaybookCronAutomation(
           triggerType: "cron",
           triggerConfig: { expression: schedule.cron },
           flowDefinition,
-          status: "active",
-          nextRunAt,
+          ...(keepState ? {} : { status: "active" as const }),
+          nextRunAt: armed ? nextRunAt : existing.nextRunAt,
           updatedAt: new Date(),
         })
         .where(eq(automations.id, existingId));
@@ -357,6 +370,9 @@ export async function materializePlaybookCronAutomation(
     // Dangling pointer (automation deleted out from under us) — fall through and
     // create a fresh one, re-stamping the playbook.
   }
+
+  // A write that did not touch schedule/status never creates (= arms) one.
+  if (ctx.preserveArming === true) return null;
 
   // ── No backing row yet → create one and stamp the playbook. ─────────────────
   // 23505 recovery against automations_workspace_name_active_uq (0230): teardown

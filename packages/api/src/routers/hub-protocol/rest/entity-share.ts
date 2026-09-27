@@ -12,7 +12,7 @@ import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { verifyCpJwt } from "../../../utils/jwks-client.js";
 
-import { logger, type HubHono } from "./_shared.js";
+import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 import { findUserDefaultWorkspaceId } from "../../../utils/user-default-workspace.js";
 
 export function registerEntityShareRoutes(app: HubHono): void {
@@ -129,7 +129,7 @@ export function registerEntityShareRoutes(app: HubHono): void {
         {
           error: err instanceof Error ? err.message : "Entity creation failed",
         },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });

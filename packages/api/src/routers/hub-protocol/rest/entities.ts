@@ -136,6 +136,11 @@ async function buildUpdateImpact(params: {
   }
 }
 
+/** Response header naming a scope=all read where some lenses failed. */
+export const PARTIAL_HEADER = "X-Synap-Partial";
+/** Deepest `offset + limit` a scope=all merge asks of each lens. */
+const SCOPE_ALL_MAX_WINDOW = 5000;
+
 export function registerEntitiesRoutes(app: HubHono): void {
   // ── GET /users/:userId/entities ─────────────────────────────────────────
   const listUserEntitiesRoute = createRoute({
@@ -467,13 +472,28 @@ export function registerEntitiesRoutes(app: HubHono): void {
       }
 
       if (scope === "all" && effectiveWsIds.length > 0) {
+        // PAGING over a merge: each lens returns its first `offset + limit`
+        // rows, the merge is deduped (+ sorted when asked) and THEN windowed.
+        // Forwarding `offset` to each lens would skip rows per lens, not per
+        // merged page; ignoring it (the old behaviour) made every page page 1,
+        // so a paging client looped forever. Bounded so a deep page cannot ask
+        // every lens for an unbounded read.
+        const pageDepth = offset + limit;
+        if (pageDepth > SCOPE_ALL_MAX_WINDOW) {
+          return c.json(
+            {
+              error: `scope=all pages at most ${SCOPE_ALL_MAX_WINDOW} rows deep (offset + limit). Narrow with workspaceId, profileSlug or a created* window.`,
+            },
+            400
+          ) as never;
+        }
         const settled = await Promise.allSettled(
           effectiveWsIds.map((wsId) =>
             caller.entities.getEntities({
               userId,
               workspaceId: wsId,
               profileSlug: profileSlug || undefined,
-              limit,
+              limit: pageDepth,
               includePodWide,
               ...(projectIdParam ? { projectId: projectIdParam } : {}),
               ...(facetSlug ? { facetSlug } : {}),
@@ -485,10 +505,27 @@ export function registerEntitiesRoutes(app: HubHono): void {
         );
         // Every lens failing is a FAILED read, not an empty one — rethrow so
         // the catch maps it (an undeclared facetSlug is a 404 here too, not a
-        // calm `[]`). A partial failure still returns what the other lenses read.
-        const firstRejection = settled.find((r) => r.status === "rejected");
-        if (firstRejection && settled.every((r) => r.status === "rejected")) {
-          throw (firstRejection as PromiseRejectedResult).reason;
+        // calm `[]`). A PARTIAL failure returns what the other lenses read, but
+        // SAYS so: each rejection is logged and the response carries
+        // `X-Synap-Partial: <failed>/<lenses>` — a partial read must never look
+        // complete (the body stays an array: the header is the non-breaking
+        // channel).
+        const rejected = settled.filter(
+          (r): r is PromiseRejectedResult => r.status === "rejected"
+        );
+        if (rejected.length > 0 && rejected.length === settled.length) {
+          throw rejected[0]!.reason;
+        }
+        if (rejected.length > 0) {
+          settled.forEach((r, i) => {
+            if (r.status === "rejected") {
+              logger.warn(
+                { err: r.reason, userId, workspaceId: effectiveWsIds[i] },
+                "GET /entities scope=all: a lens failed — partial result"
+              );
+            }
+          });
+          c.header(PARTIAL_HEADER, `${rejected.length}/${settled.length}`);
         }
         const fulfilled = settled.flatMap((r) =>
           r.status === "fulfilled" ? (r.value as unknown[]) : []
@@ -515,7 +552,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
             return tb - ta;
           });
         }
-        return c.json(rows.slice(0, limit), 200);
+        return c.json(rows.slice(offset, offset + limit), 200);
       }
 
       const listed = await caller.entities.getEntities({

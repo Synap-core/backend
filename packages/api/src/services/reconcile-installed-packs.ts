@@ -35,7 +35,10 @@ import {
   upsertInstalledPack,
   type InstalledPackEntry,
 } from "./compose-overlay.js";
-import { reconcileWorkspacePlaybooksToTemplate } from "./playbooks/reconcile-installed-playbooks.js";
+import {
+  playbookReportConverged,
+  reconcileWorkspacePlaybooksToTemplate,
+} from "./playbooks/reconcile-installed-playbooks.js";
 import type { ResolvedWorkspaceTemplate } from "./capabilities/resolve-workspace-template.js";
 
 export interface InstalledPackReconcileOutcome {
@@ -43,7 +46,13 @@ export interface InstalledPackReconcileOutcome {
   status: "reconciled" | "skipped" | "partial" | "failed";
   version?: string;
   reason?: string;
-  playbooks?: { missing: string[]; failed: number; ownerOwned: string[] };
+  playbooks?: {
+    missing: string[];
+    failed: number;
+    /** Changes queued for review, not applied — withhold the stamp. */
+    proposed: number;
+    ownerOwned: string[];
+  };
 }
 
 export async function reconcileInstalledPacks(opts: {
@@ -94,13 +103,14 @@ export async function reconcileInstalledPacks(opts: {
       const playbooks = {
         missing: pb.missing,
         failed: pb.failed.length,
+        proposed: pb.results.filter((r) => r.kind === "proposed").length,
         ownerOwned: pb.results.flatMap((r) =>
           r.ownerOwned.map((f) => `${r.name}.${f}`)
         ),
       };
-      if (pb.failed.length > 0) {
+      if (!playbookReportConverged(pb)) {
         out.push({ slug, status: "partial", playbooks });
-        continue; // stamp withheld — the playbook layer did not converge
+        continue; // stamp withheld — failed, or only PROPOSED (not applied)
       }
       if (resolved.version && resolved.version !== entry.version) {
         nextLedger = upsertInstalledPack(

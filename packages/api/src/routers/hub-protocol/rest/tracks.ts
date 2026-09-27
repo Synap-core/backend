@@ -23,6 +23,7 @@ import {
   logger,
   type HubHono,
   type HubVariables,
+  readJsonBody,
 } from "./_shared.js";
 import type { Context } from "hono";
 import { jsonGoverned } from "../proposal-response.js";
@@ -235,9 +236,9 @@ export function registerTracksRoutes(app: HubHono): void {
     const stageKey = StageKey.safeParse(c.req.param("stageKey"));
     if (!stageKey.success) return c.json({ error: "Invalid stage key" }, 400);
     // An empty body is fine — the stage's own goal is the default brief.
-    const body = StageSessionSchema.safeParse(
-      (await c.req.json().catch(() => null)) ?? {}
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const body = StageSessionSchema.safeParse(jsonRead.body);
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },

@@ -18,6 +18,7 @@ import {
 import type { CreatePropertyDefInput } from "../repositories/property-def-repository.js";
 import { ensureMachineWrittenPropertiesReadOnly } from "./machine-written-properties.js";
 import { foldPropertyKey } from "../services/did-you-mean.js";
+import { WORKSPACE_MEMBERSHIP_ROLE_CATEGORY } from "./facet-visibility.js";
 
 /**
  * Profile-property links this seeder must actively REMOVE from pods that were
@@ -2870,6 +2871,18 @@ export async function ensureTeamMemberRoleProfile(): Promise<EnsureSystemProfile
 
   try {
     const existing = await profileRepo.getBySlug("team-member");
+    let profilesUpdated = 0;
+    if (
+      existing &&
+      existing.roleCategory !== WORKSPACE_MEMBERSHIP_ROLE_CATEGORY
+    ) {
+      // Pods seeded before the category existed: stamp it, or the W2b role
+      // rule stores this hat pod-wide and a removed member keeps it.
+      await profileRepo.update(existing.id, {
+        roleCategory: WORKSPACE_MEMBERSHIP_ROLE_CATEGORY,
+      });
+      profilesUpdated = 1;
+    }
     if (!existing) {
       await profileRepo.create({
         slug: "team-member",
@@ -2877,6 +2890,9 @@ export async function ensureTeamMemberRoleProfile(): Promise<EnsureSystemProfile
         profileKind: "role",
         applicableKinds: ["person"],
         scope: ProfileScope.SYSTEM,
+        // Per-workspace meaning: the facet keeps its workspace lens even
+        // though the profile is system-wide (storedFacetWorkspaceId).
+        roleCategory: WORKSPACE_MEMBERSHIP_ROLE_CATEGORY,
         origin: "core",
         uiHints: {
           icon: "users",
@@ -2892,7 +2908,9 @@ export async function ensureTeamMemberRoleProfile(): Promise<EnsureSystemProfile
       message:
         profilesCreated > 0
           ? "Created team-member role profile"
-          : "team-member role profile already exists",
+          : profilesUpdated > 0
+            ? "team-member role profile stamped as per-workspace membership"
+            : "team-member role profile already exists",
       profilesCreated,
       propertiesCreated: 0,
       linksCreated: 0,

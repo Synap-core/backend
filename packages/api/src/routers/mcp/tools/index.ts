@@ -202,6 +202,16 @@ function buildAskJsonSchema(): Record<string, unknown> {
 const ASK_JSON_SCHEMA = buildAskJsonSchema();
 
 /**
+ * The same derived `ask` on `synap_post_message` — the question's typed ask,
+ * filed on the `slotLabel` output. Only the prose differs.
+ */
+const ROOM_QUESTION_ASK_JSON_SCHEMA = {
+  ...buildAskJsonSchema(),
+  description:
+    "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended), 'form' (small flat form; never a secret), 'act' (something to do; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Omit for a free-text answer.",
+};
+
+/**
  * JSON Schema for `synap_run_capability`, DERIVED from the ONE
  * capability-execute input contract (`contracts/capability-execute.ts`) — the
  * same schema the tRPC and Hub REST doors declare.
@@ -2203,7 +2213,7 @@ export const tools = {
       {
         name: "synap_promote_session_to_playbook",
         annotations: {
-          title: "Promote session to playbook",
+          title: "Save session as template",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -2235,7 +2245,7 @@ export const tools = {
       {
         name: "synap_list_playbooks",
         annotations: {
-          title: "List playbooks",
+          title: "List templates",
           readOnlyHint: true,
           openWorldHint: false,
         },
@@ -2265,7 +2275,7 @@ export const tools = {
       {
         name: "synap_match_playbooks",
         annotations: {
-          title: "Match playbooks",
+          title: "Match templates",
           readOnlyHint: true,
           openWorldHint: false,
         },
@@ -2301,7 +2311,7 @@ export const tools = {
       {
         name: "synap_create_playbook",
         annotations: {
-          title: "Create playbook",
+          title: "Create template",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -2413,7 +2423,7 @@ export const tools = {
       {
         name: "synap_set_workspace_focus",
         annotations: {
-          title: "Set workspace focus",
+          title: "Set space focus",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -2834,7 +2844,7 @@ export const tools = {
       {
         name: "synap_create_workspace",
         annotations: {
-          title: "Create workspace",
+          title: "Create space",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -2870,7 +2880,7 @@ export const tools = {
       {
         name: "synap_declare_workspace_source",
         annotations: {
-          title: "Declare workspace source edge",
+          title: "Declare space source edge",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -2926,7 +2936,7 @@ export const tools = {
       {
         name: "synap_list_workspaces",
         annotations: {
-          title: "List workspaces",
+          title: "List spaces",
           readOnlyHint: true,
           openWorldHint: false,
         },
@@ -3251,7 +3261,7 @@ export const tools = {
       {
         name: "synap_project_use_workspace",
         annotations: {
-          title: "Project uses workspace",
+          title: "Project uses space",
           readOnlyHint: false,
           // `remove: true` deletes the edge — MCP hints describe the tool's
           // worst case, so a client must treat it as destructive.
@@ -3282,13 +3292,13 @@ export const tools = {
       {
         name: "synap_archive_workspace",
         annotations: {
-          title: "Archive workspace",
+          title: "Archive space",
           readOnlyHint: false,
           destructiveHint: true,
           openWorldHint: false,
         },
         description:
-          "Archive a workspace (hide it everywhere and PAUSE its workspace-scoped automations; pod-wide automations are untouched), or restore it with restore:true — restore re-enables NOTHING and lists the automations still paused so the person can choose. Owner or pod admin only; system workspaces refused. Always a proposal for an agent — `proposed` is success, surface reviewUrl.",
+          "Archive a Space (the user's word for a workspace — ids and params keep `workspace`): hide it everywhere and PAUSE its space-scoped rules (automations); pod-wide rules are untouched. Or restore it with restore:true — restore re-enables NOTHING and lists the rules still paused so the person can choose. Owner or pod admin only; system spaces refused. Always a proposal for an agent — `proposed` is success, surface reviewUrl.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3312,13 +3322,13 @@ export const tools = {
       {
         name: "synap_update_workspace",
         annotations: {
-          title: "Rename workspace",
+          title: "Rename space",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "Rename or re-describe an existing workspace (settings are not editable here). Governed: always a proposal for an agent — `proposed` is success.",
+          "Rename or re-describe an existing Space (the user's word for a workspace; settings are not editable here). Governed: always a proposal for an agent — `proposed` is success.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3332,13 +3342,13 @@ export const tools = {
       {
         name: "synap_move_entities",
         annotations: {
-          title: "Move entities to workspace",
+          title: "Move entities to space",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "Move entities into another workspace (e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
+          "Move entities into another Space (workspace; e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3362,13 +3372,13 @@ export const tools = {
       {
         name: "synap_grant_profile_access",
         annotations: {
-          title: "Share kind with workspace",
+          title: "Share kind with space",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "Let another workspace see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+          "Let another Space (workspace) see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3606,8 +3616,9 @@ export const tools = {
               type: "string",
               maxLength: 500,
               description:
-                "With kind 'question': the label of the session output the question is about. The person's reply is recorded on that output as its `answer` and hands it back to you.",
+                "With kind 'question': the label of the session output the question is about. The question is filed ON that output (it becomes the person's, with your question as its why), so it shows as a card they can answer; their answer is recorded as its `answer` and hands it back to you.",
             },
+            ask: ROOM_QUESTION_ASK_JSON_SCHEMA,
             comment: {
               type: "object",
               description:
@@ -3775,7 +3786,7 @@ export const tools = {
       {
         name: "synap_list_capabilities",
         annotations: {
-          title: "List capabilities",
+          title: "List tools",
           readOnlyHint: true,
           openWorldHint: false,
         },
@@ -3837,7 +3848,7 @@ export const tools = {
       {
         name: "synap_run_capability",
         annotations: {
-          title: "Run capability",
+          title: "Run tool",
           readOnlyHint: false,
           destructiveHint: true,
           openWorldHint: true,
@@ -3919,7 +3930,7 @@ export const tools = {
       {
         name: "synap_list_automations",
         annotations: {
-          title: "List automations",
+          title: "List rules",
           readOnlyHint: true,
           openWorldHint: false,
         },
@@ -3954,7 +3965,7 @@ export const tools = {
       {
         name: "synap_trigger_automation",
         annotations: {
-          title: "Trigger automation",
+          title: "Run rule now",
           readOnlyHint: false,
           destructiveHint: true,
           openWorldHint: true,
@@ -3995,7 +4006,7 @@ export const tools = {
       {
         name: "synap_create_automation",
         annotations: {
-          title: "Create automation",
+          title: "Create rule flow (advanced)",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -4115,7 +4126,7 @@ export const tools = {
       {
         name: "synap_run_playbook",
         annotations: {
-          title: "Run playbook",
+          title: "Run template",
           readOnlyHint: false,
           destructiveHint: true,
           openWorldHint: true,
@@ -4181,7 +4192,7 @@ export const tools = {
       {
         name: "synap_create_skill",
         annotations: {
-          title: "Create skill",
+          title: "Create tool (skill)",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,

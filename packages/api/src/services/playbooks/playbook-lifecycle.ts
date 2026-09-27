@@ -76,7 +76,10 @@ import {
   type PlaybookStage,
   type SessionCriterion,
 } from "@synap/playbooks";
-import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import {
+  paramOwedSlots,
+  PARAM_SLOT_CIRCUMSTANCE,
+} from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
 import { parseCommandTemplate } from "../../utils/command-template.js";
 import { authoringMisses } from "../../utils/template-diagnostics.js";
@@ -532,21 +535,12 @@ export async function instantiateSessionRow(
   const owedAt = new Date().toISOString();
   const paramSlots: ExpectedOutput[] =
     onMissingRequired === "owe"
-      ? paramResolution.missingRequired.map((p) => ({
-          kind: PARAM_SLOT_KIND,
-          label: `Answer: ${p.label?.trim() || p.name}`,
-          owner: "human" as const,
-          // `decision` is the honest blocker: there is nothing to BUILD to
-          // remove it (no credential to mint, no rule to write, no tool to
-          // install) — a person has to choose a value. See BLOCKED_REASONS.
-          blockedReason: "decision" as const,
-          why: `"${playbook.name}" needs a value for "${p.label?.trim() || p.name}"${
-            p.options?.length
-              ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
-              : ` (${p.type})`
-          }. Nobody supplied it, so the run started without it.`,
-          owedSince: owedAt,
-        }))
+      ? paramOwedSlots(
+          paramResolution.missingRequired,
+          playbook.name,
+          owedAt,
+          PARAM_SLOT_CIRCUMSTANCE.run
+        )
       : [];
   const expectedOutputs = [...declaredOutputs, ...paramSlots];
   // Seed the active stage from the playbook's first stage (null when stageless,

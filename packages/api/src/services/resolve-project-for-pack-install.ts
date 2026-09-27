@@ -5,17 +5,9 @@
  * then stamp uses-edges onto shared domain workspaces. Reuse by exact name for
  * the same user; never clone CRM.
  */
-import {
-  getDb,
-  sql,
-  projects,
-  and,
-  eq,
-  ProjectRepository,
-  EventRepository,
-  buildProjectProvenance,
-} from "@synap/database";
+import { getDb, projects, and, eq } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
+import { createProjectGoverned } from "./projects/create-project.js";
 
 export type ResolveProjectForPackInstallResult =
   { projectId: string; created: boolean; reused: boolean } | { error: string };
@@ -88,31 +80,32 @@ export async function resolveProjectForPackInstall(opts: {
     };
   }
 
-  const eventRepo = new EventRepository(sql);
-  const repo = new ProjectRepository(db, eventRepo);
-  const created = await repo.create(
-    {
-      name,
-      description: packageSlug
-        ? `Engagement installed from package ${packageSlug}`
-        : undefined,
-      status: "active",
-      userId,
-      workspaceId: homeWorkspaceId ?? null,
-      metadata: packageSlug
-        ? { packageSlug, source: "packages.apply" }
-        : { source: "packages.apply" },
-      provenance: buildProjectProvenance({
-        door: "hub-rest",
-        agentUserId: undefined,
-      }),
-    },
-    userId
-  );
-
+  // The ONE governed create door: audit row + `project.create` side effects,
+  // same as every other project create (RV1 S4 — this used to insert through
+  // the bare repository and fire nothing).
+  const outcome = await createProjectGoverned({
+    userId,
+    workspaceId: homeWorkspaceId ?? null,
+    door: "hub-rest",
+    name,
+    description: packageSlug
+      ? `Engagement installed from package ${packageSlug}`
+      : undefined,
+    status: "active",
+    metadata: packageSlug
+      ? { packageSlug, source: "packages.apply" }
+      : { source: "packages.apply" },
+    source: "packages.apply",
+  });
+  if (outcome.status === "proposed") {
+    // Not created: say so, never report a project id that does not exist.
+    return {
+      error: `Creating project "${name}" needs review (proposal ${outcome.proposalId}). Approve it, then re-run the install with its projectId.`,
+    };
+  }
   return {
-    projectId: created.id,
-    created: !created.deduped,
-    reused: !!created.deduped,
+    projectId: outcome.projectId,
+    created: outcome.status === "created",
+    reused: outcome.status === "deduped",
   };
 }

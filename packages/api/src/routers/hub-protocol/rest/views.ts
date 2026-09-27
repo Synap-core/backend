@@ -137,7 +137,7 @@ export function registerViewsRoutes(app: HubHono): void {
       logger.error({ err }, "listViews failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -217,7 +217,7 @@ export function registerViewsRoutes(app: HubHono): void {
       logger.error({ err }, "createView failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -283,7 +283,7 @@ export function registerViewsRoutes(app: HubHono): void {
       logger.error({ err, viewId }, "updateView failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });

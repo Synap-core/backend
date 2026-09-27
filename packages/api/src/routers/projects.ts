@@ -6,7 +6,6 @@
  */
 
 import { z } from "zod";
-import { decodeHtmlEntities } from "@synap-core/types/text";
 import { router, podProcedure } from "../trpc.js";
 import {
   projects,
@@ -26,10 +25,6 @@ import {
 } from "@synap/playbooks";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
-import {
-  resolveProjectHomeChange,
-  stampProjectHomeUse,
-} from "../services/projects/project-home.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
@@ -37,14 +32,13 @@ import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { projectMemberBranch } from "../access/project-visibility.js";
 import { rosterReadFor } from "../access/session-visibility.js";
 import {
-  isSubjectEntityVisible,
   listProjectAutomations,
   loadProjectSubjects,
   setProjectAutomationMembership,
-  setProjectSubject,
 } from "../utils/project-subject.js";
 import { getProjectPath } from "../services/projects/project-path.js";
 import { createProjectGoverned } from "../services/projects/create-project.js";
+import { updateProjectGoverned } from "../services/projects/update-project.js";
 import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
@@ -528,141 +522,26 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      if (input.name) input.name = decodeHtmlEntities(input.name);
-      const db = await getDb();
-      // Load first: the project's OWN workspace is the gate's subject.
-      const target = await loadVisibleProject(db, input.id, ctx.userId);
-      if (!target) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Project not found",
-        });
-      }
-
-      // D6 — the TARGET home must be live and writable by the caller; a
-      // same-home "move" is dropped (no-op, never a proposal of nothing).
-      const homeWorkspaceId = await resolveProjectHomeChange(
-        db,
-        ctx.userId,
-        target.workspaceId,
-        input.homeWorkspaceId
-      );
-
-      const perm = await checkPermissionOrPropose({
+      // The ONE governed update (`services/projects/update-project.ts`),
+      // shared with Hub REST `PATCH /projects/:id`.
+      const { id, reasoning, ...patch } = input;
+      const outcome = await updateProjectGoverned({
+        id,
         userId: ctx.userId,
         // Parity with create: agents must be attributed or the gate treats
         // the write as human and can auto-apply ungoverned.
         agentUserId: ctx.agentUserId ?? undefined,
-        workspaceId: target.workspaceId ?? undefined,
-        subjectType: "project",
-        action: "update",
-        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
-        // The WHOLE patch, not just the id: an approver has to see what the
-        // change actually is, and the `project/update` executor replays these
-        // fields. A gate carrying only `{ id }` made an approved update a no-op.
-        data: {
-          id: input.id,
-          ...(input.name !== undefined ? { name: input.name } : {}),
-          ...(input.description !== undefined
-            ? { description: input.description }
-            : {}),
-          ...(input.status !== undefined ? { status: input.status } : {}),
-          ...(input.phase !== undefined ? { phase: input.phase } : {}),
-          ...(input.targetDate !== undefined
-            ? { targetDate: input.targetDate }
-            : {}),
-          ...(input.colorSlot !== undefined
-            ? { colorSlot: input.colorSlot }
-            : {}),
-          ...(input.subjectEntityId !== undefined
-            ? { subjectEntityId: input.subjectEntityId }
-            : {}),
-          ...(homeWorkspaceId !== undefined ? { homeWorkspaceId } : {}),
-          ...(input.settings !== undefined ? { settings: input.settings } : {}),
-          ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-        },
+        reasoning,
+        ...patch,
       });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
+      if (outcome.status === "proposed") {
         return {
           status: "proposed",
-          proposalId: perm.proposalId,
-          reviewPath: perm.reviewPath,
-          reviewUrl: perm.reviewUrl,
+          proposalId: outcome.proposalId,
+          reviewPath: outcome.reviewPath,
+          reviewUrl: outcome.reviewUrl,
         };
       }
-
-      const eventRepo = new EventRepository(sql);
-      const projectRepo = new ProjectRepository(db, eventRepo);
-
-      // Validate the subject BEFORE writing anything. These are two separate
-      // statements, not one transaction — so a subject that fails validation
-      // AFTER the field patch landed would report failure on a change that
-      // partly applied (the caller retries, and the phase is already set).
-      // `setProjectSubject` re-checks this itself (it owns its own floor); this
-      // is about ORDER, so the failing case writes nothing at all.
-      if (input.subjectEntityId) {
-        const visible = await isSubjectEntityVisible(
-          db,
-          input.subjectEntityId,
-          ctx.userId
-        );
-        if (!visible) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Subject entity not found",
-          });
-        }
-      }
-
-      await projectRepo.update(
-        input.id,
-        { ...input, workspaceId: homeWorkspaceId },
-        ctx.userId
-      );
-      if (homeWorkspaceId) {
-        await stampProjectHomeUse(db, {
-          projectId: input.id,
-          homeWorkspaceId,
-          userId: ctx.userId,
-        });
-      }
-
-      // `undefined` = untouched; `null` = unbind. Both are distinguishable here
-      // and neither is guessed at.
-      if (input.subjectEntityId !== undefined) {
-        const bound = await setProjectSubject({
-          db,
-          projectId: input.id,
-          workspaceId: target.workspaceId,
-          entityId: input.subjectEntityId,
-          userId: ctx.userId,
-        });
-        if (!bound.ok) {
-          throw new TRPCError({ code: "NOT_FOUND", message: bound.reason });
-        }
-      }
-
-      auditLog({
-        subjectType: "project",
-        action: "update",
-        phase: "completed",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: target.workspaceId ?? undefined,
-      });
-
-      emitSideEffects({
-        subjectType: "project",
-        action: "update",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: target.workspaceId ?? undefined,
-      });
-
       return { status: "updated" };
     }),
 

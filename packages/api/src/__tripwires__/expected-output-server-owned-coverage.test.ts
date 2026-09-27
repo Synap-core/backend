@@ -54,6 +54,7 @@ const SAMPLE: Required<
   returnedAt: "2026-09-08T11:00:00.000Z",
   owner: "human",
   criterionKey: "no-stale",
+  paramName: "channel",
   blockedReason: "credential",
   why: "The Stripe restricted key for the live account",
   ref: { kind: "entity", id: "33333333-3333-3333-3333-333333333333" },

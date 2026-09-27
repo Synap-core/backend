@@ -47,6 +47,7 @@ import {
   RelationRepository,
   ProfileRepository,
   ONBOARDING_SCAFFOLD_SYSTEM_DATA,
+  seedRefAliasIndex,
 } from "@synap/database";
 import { inheritRelationWorkspaceId } from "../lib/relation-workspace-inherit.js";
 
@@ -156,11 +157,10 @@ export async function applyDefinitionSeeds(opts: {
     if (!prev || rank(r) < rank(prev)) byKey.set(k, r);
   }
 
-  // Ref resolution: refKey, kind:title, and a title unique among the seeds.
+  // Ref resolution: the ONE ladder (refKey | kind:title | unique bare title),
+  // shared with the fresh-create door (`seedRefAliasIndex`, @synap/database).
   const refToId = new Map<string, string>();
-  const titleCount = new Map<string, number>();
-  for (const s of seeds)
-    titleCount.set(s.title, (titleCount.get(s.title) ?? 0) + 1);
+  const aliasesFor = seedRefAliasIndex(seeds);
   const endpointWs = new Map<string, string | null>();
   /** Refs naming a seed the user deleted — their edges are skipped, not errors. */
   const deletedRefs = new Set<string>();
@@ -175,7 +175,7 @@ export async function applyDefinitionSeeds(opts: {
       result.entitiesAdopted++;
       if (found.deletedAt) {
         // Deleted by the user: stays deleted, and so do its seeded edges.
-        deletedRefs.add(refKey).add(key).add(s.title);
+        for (const k of aliasesFor(s)) deletedRefs.add(k);
         continue;
       }
       id = found.id;
@@ -224,9 +224,7 @@ export async function applyDefinitionSeeds(opts: {
       }
     }
     result.entityIds[refKey] = id;
-    refToId.set(refKey, id);
-    refToId.set(key, id);
-    if (titleCount.get(s.title) === 1) refToId.set(s.title, id);
+    for (const k of aliasesFor(s)) refToId.set(k, id);
   }
 
   const rels = opts.relations ?? [];

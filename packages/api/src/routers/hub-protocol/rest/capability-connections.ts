@@ -28,6 +28,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  readJsonBody,
 } from "./_shared.js";
 
 // ── OpenAPI schemas ────────────────────────────────────────────────────────────
@@ -164,9 +165,9 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
       );
     }
     const capabilityId = c.req.param("capabilityId");
-    const parsed = AddConnectionRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = AddConnectionRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid body", details: parsed.error.issues },
@@ -231,9 +232,9 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     }
     const capabilityId = c.req.param("capabilityId");
     const id = c.req.param("id");
-    const parsed = UpdateConnectionRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = UpdateConnectionRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid body", details: parsed.error.issues },

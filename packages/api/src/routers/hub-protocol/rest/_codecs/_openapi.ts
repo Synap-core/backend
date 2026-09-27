@@ -35,7 +35,8 @@ export const IdempotencyKeyHeader = z
  * The text form Postgres accepts for a `uuid` column: 8-4-4-4-12 hex, any
  * version/variant nibble. Deliberately NOT zod's `.uuid()` (RFC 9562 — it
  * rejects version/variant nibbles Postgres happily stores, so a valid stored
- * id could be refused at the door). Same shape as `_shared.ts`'s `isUuid`.
+ * id could be refused at the door). The ONE copy: `_shared.ts`'s `isUuid` and
+ * `uuidPathParam` read this constant.
  */
 export const PG_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,6 +71,22 @@ export const uuidQueryParam = z
       "display-shortened or slug value will not resolve — re-fetch the full " +
       "id (e.g. GET /api/hub/workspaces) and retry.",
   });
+
+/**
+ * The NON-EMPTY sibling of `uuidQueryParam`: a required id (path params, a
+ * body field that must name a row). Same `PG_UUID_RE` shape — so a path, a
+ * query and a body carrying the same stored id validate identically.
+ * `_shared.ts`'s `uuidPathParam` IS this schema.
+ */
+export const uuidParam = z
+  .string()
+  .regex(PG_UUID_RE, {
+    message:
+      "must be a full 36-character UUID (8-4-4-4-12 hex). A truncated or " +
+      "display-shortened id will not resolve — re-fetch the full id from the " +
+      "corresponding list endpoint (e.g. GET /api/hub/entities) and retry.",
+  })
+  .openapi({ format: "uuid" });
 
 /** Canonical error envelope returned by every hub handler. */
 export const ErrorSchema = z

@@ -30,6 +30,7 @@
  */
 
 import { randomUUID } from "crypto";
+import type { SlotAsk } from "@synap/playbooks";
 import { TRPCError } from "@trpc/server";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import {
@@ -109,6 +110,12 @@ export interface PostChannelMessageParams {
    */
   slotLabel?: string;
   /**
+   * With a `question` + `slotLabel`: HOW the person answers it — already
+   * parsed (`AskSchema`). The question is filed ON the slot as its `why` +
+   * `ask` (`fileRoomQuestionOnSlot`); absent ⇒ a free-text answer.
+   */
+  ask?: SlotAsk;
+  /**
    * A COMMENT in an object room (Documents v2): the thread root it replies to
    * (`messages.parent_id`), and/or the object anchor a root carries
    * (`messages.metadata.anchor`, the D19 contract). Written ONLY by the
@@ -139,6 +146,13 @@ export interface PostChannelMessageResult {
   ackState: WriteAckState;
   /** Present on a duplicate hit — the prior message id (same as `messageId`). */
   priorMessageId?: string;
+  /**
+   * An agent's `question` naming a `slotLabel`: what filing it ON the slot did
+   * (`fileRoomQuestionOnSlot`) — `blocked` when the slot now carries the
+   * question as its ask; otherwise why not (`unknown_label`, `already_done`,
+   * `no_session`, `not_found`, `failed`). Absent for every other post.
+   */
+  slot?: { status: string };
 }
 
 /** Build a duplicate-ignored receipt for a prior message id (pure — no I/O). */
@@ -377,6 +391,32 @@ export async function postChannelMessage(
     workspaceId: channel.workspaceId,
   });
 
+  // An agent's question ABOUT A SLOT is filed on that slot as its ask
+  // (`room-question-slot.ts`). After the post: the question stands whatever
+  // the slot says, and the outcome is reported, never thrown.
+  let slot: PostChannelMessageResult["slot"];
+  if (agentUserId && params.kind === "question" && params.slotLabel?.trim()) {
+    const { fileRoomQuestionOnSlot } =
+      await import("../focus-sessions/room-question-slot.js");
+    try {
+      const filed = await fileRoomQuestionOnSlot({
+        channelId,
+        slotLabel: params.slotLabel,
+        question: content,
+        ...(params.ask ? { ask: params.ask } : {}),
+        agentUserId,
+        userId,
+      });
+      slot = { status: filed.status };
+    } catch (err) {
+      logger.warn(
+        { err, channelId, messageId: msgId },
+        "question post: filing the question on its slot failed — the post stands"
+      );
+      slot = { status: "failed" };
+    }
+  }
+
   if (triggerAI) {
     const { emitChatEvent } =
       await import("../../utils/chat-realtime-broadcast.js");
@@ -424,5 +464,11 @@ export async function postChannelMessage(
     }
   }
 
-  return { success: true, messageId: msgId, channelId, ackState: "applied" };
+  return {
+    success: true,
+    messageId: msgId,
+    channelId,
+    ackState: "applied",
+    ...(slot ? { slot } : {}),
+  };
 }

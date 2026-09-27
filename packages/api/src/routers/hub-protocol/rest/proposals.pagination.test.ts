@@ -81,7 +81,10 @@ const fakeCaller = {
   },
 };
 
-vi.mock("./_shared.js", () => ({
+// importOriginal, not a total replacement: a new `_shared` export the route
+// imports (e.g. `readJsonBody`) must not kill this file at collection.
+vi.mock("./_shared.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
   httpStatusForTrpcError: () => 500,

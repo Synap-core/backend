@@ -440,6 +440,19 @@ export interface ExpectedOutput {
    */
   criterionKey?: string;
   /**
+   * The `PlaybookParam.name` this slot STANDS FOR. Set only on a slot whose
+   * `kind` is the param-slot kind (`PARAM_SLOT_KIND`, `@synap-core/types`),
+   * written once by the door that files the slot (api
+   * `services/focus-sessions/param-slots.ts`) and never by a client — the
+   * `criterionKey` precedent, for the same reason: the label is PROSE
+   * (`Answer: <label>`), and answering the slot has to write the value under
+   * the param's machine name (`metadata.params[paramName]`).
+   *
+   * ABSENT on every param slot filed before this field existed; such a slot is
+   * answered as words and writes no param.
+   */
+  paramName?: string;
+  /**
    * The PERSON'S ANSWER to what the agent asked about this slot — written ONLY
    * by `answerExpectedOutput` (api `services/focus-sessions/answer-slot.ts`),
    * from the needs-you tray or from the session owner's reply to an agent's

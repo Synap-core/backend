@@ -76,6 +76,23 @@ export interface WorkspacePlaybooksReconcileReport {
 }
 
 /**
+ * Did this workspace's playbooks CONVERGE? The only question a version stamp may
+ * answer (backend-rules invariant 1: never stamp a marker you did not earn).
+ * A `proposed` row is a change QUEUED for review, not applied — counting it as
+ * converged advanced the stamp and re-filed the proposal every boot. Every
+ * stamping caller (the installed-packs ledger, the boot base-template pass)
+ * asks this one predicate.
+ */
+export function playbookReportConverged(
+  report: Pick<WorkspacePlaybooksReconcileReport, "results" | "failed">
+): boolean {
+  return (
+    report.failed.length === 0 &&
+    report.results.every((r) => r.kind !== "proposed")
+  );
+}
+
+/**
  * Reconcile every playbook a template declares into ONE workspace. `workspaceId`
  * null = the pod-wide rows (a pack's project-scope methods).
  */

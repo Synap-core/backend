@@ -19,6 +19,7 @@ import {
   logger,
   type HubHono,
   httpStatusForTrpcError,
+  readJsonBody,
 } from "./_shared.js";
 
 const DiagnoseRequestSchema = z.object({
@@ -82,7 +83,9 @@ export function registerDiagnoseRoutes(app: HubHono): void {
     const userId = c.get("userId") as string | undefined;
     if (!userId) return c.json({ error: "Unauthorized" }, 401);
 
-    const raw = await c.req.json().catch(() => ({}));
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const raw = jsonRead.body;
     const parsed = DiagnoseRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return c.json(

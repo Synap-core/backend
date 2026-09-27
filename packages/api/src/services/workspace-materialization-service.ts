@@ -39,6 +39,8 @@ import {
   and,
   eq,
   isNull,
+  or,
+  drizzleSql,
   workspaces,
   workspaceMembers,
   type WorkspaceDefinitionInput,
@@ -93,7 +95,14 @@ async function findLegacyPackWorkspace(
     )
     .where(
       and(
-        eq(workspaces.packageSlug, slug),
+        // Pre-0278 suite rows carry the stamp ONLY in `settings.packageSlug`
+        // (0278 backfills the column, but a pod that has not run it yet — or a
+        // row it skipped — must still match, or the pack composes onto the
+        // primary AND the legacy workspace survives: two copies).
+        or(
+          eq(workspaces.packageSlug, slug),
+          drizzleSql`${workspaces.settings}->>'packageSlug' = ${slug}`
+        ),
         eq(workspaceMembers.userId, userId),
         isNull(workspaces.archivedAt)
       )

@@ -231,7 +231,14 @@ export const readProcs = {
          * is migrated. Ignored for `globalOnly` and workspace-less callers (those
          * already return pod-wide-only / the full user floor).
          */
-        includePodWide: z.boolean().optional().default(false),
+        //
+        // POD-SCOPE KINDS (FX-B1): omitted is NOT false. A list filtered to a
+        // pod-scope kind (`profileSlug` naming a kind with entityScope 'pod',
+        // e.g. person/company/task) or to a role (`facetSlug`) includes that
+        // kind's pod-wide rows in a workspace lens — a pod-scope kind is by
+        // definition visible in every space. Pass `false` explicitly for
+        // stamped-only rows. Unfiltered lists keep the scoped default.
+        includePodWide: z.boolean().optional(),
         /**
          * Explicit list lens. `undefined` falls back to ctx.workspaceId for
          * backwards compatibility; `null` returns the caller's pod-wide rows.
@@ -305,10 +312,25 @@ export const readProcs = {
       // includePodWide=true so "list leads in CRM" returns pod-wide persons
       // wearing `lead`, not an empty page. Explicit includePodWide:false still
       // wins for callers that want workspace-only rows.
+      //
+      // Pod-scope kind (FX-B1): `profileSlug` naming a kind whose entityScope
+      // is 'pod' unions its pod-wide rows by default too — those rows ARE the
+      // kind's home, so a workspace-lensed People/contacts read must not drop
+      // them. Resolved once here and reused by the slug branch below.
+      const slugProfiles = input.profileSlug
+        ? await assertKnownProfileSlug(await getDb(), input.profileSlug)
+        : null;
+      // A slug naming a ROLE is a facet filter (routed to the facet EXISTS
+      // below), so it takes the facet default: widened, like facetSlug.
+      const podScopeKindFilter =
+        slugProfiles?.some(
+          (p) => p.profileKind === "role" || p.entityScope === "pod"
+        ) ?? false;
       const includePodWideEffective =
         input.includePodWide === true ||
-        (input.includePodWide !== false &&
-          Boolean(input.facetSlug || input.facetProfileId));
+        (input.includePodWide === undefined &&
+          (podScopeKindFilter ||
+            Boolean(input.facetSlug || input.facetProfileId)));
       const lensWorkspaceId =
         input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
       const facetVisibilityScope = await resolveFacetVisibilityScope(
@@ -371,18 +393,15 @@ export const readProcs = {
         // all would otherwise fall through to the row-blind `entities.type`
         // match, return `[]`, and be indistinguishable from a genuinely empty
         // list (the `crm-lead`-against-a-`lead`-workspace bug).
-        const slugProfiles = await assertKnownProfileSlug(
-          database,
-          input.profileSlug
-        );
-        const roleProfileIds = slugProfiles
+        // Resolved above (the pod-scope default needs it before the lens).
+        const roleProfileIds = slugProfiles!
           .filter((p) => p.profileKind === "role")
           .map((p) => p.id);
         // The old `slugProfiles.length === 0 ||` disjunct is gone: the assert
         // above guarantees at least one row, so the zero-row fallback here is
         // unreachable. A slug carrying ONLY role rows now correctly yields no
         // kind branch instead of an `entities.type` match that never hits.
-        const hasKindRow = slugProfiles.some((p) => p.profileKind !== "role");
+        const hasKindRow = slugProfiles!.some((p) => p.profileKind !== "role");
 
         const slugBranches: any[] = [];
         if (roleProfileIds.length > 0) {

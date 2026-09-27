@@ -23,6 +23,7 @@ import {
   resolveActingContext,
   resolveActorId,
   type HubHono,
+  readJsonBody,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { AUTOMATION_SCHEMA } from "./automation-schema-doc.js";
@@ -346,10 +347,9 @@ export function registerAutomationsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const body = (await c.req.json().catch(() => ({}))) as Record<
-      string,
-      unknown
-    >;
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const body = jsonRead.body as Record<string, unknown>;
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext, getCaller, OR the re-supplied
     // triggerAutomation input.
@@ -484,10 +484,9 @@ export function registerAutomationsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const body = (await c.req.json().catch(() => ({}))) as Record<
-      string,
-      unknown
-    >;
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const body = jsonRead.body as Record<string, unknown>;
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext, getCaller, OR the re-supplied
     // activateAutomation input.
@@ -537,10 +536,9 @@ export function registerAutomationsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const body = (await c.req.json().catch(() => ({}))) as Record<
-      string,
-      unknown
-    >;
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const body = jsonRead.body as Record<string, unknown>;
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext, getCaller, OR the re-supplied
     // pauseAutomation input.

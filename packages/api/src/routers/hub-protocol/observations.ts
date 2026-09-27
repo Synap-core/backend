@@ -69,6 +69,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
 import { getUserAccessibleWorkspaceIds } from "./rest/_shared.js";
+import { PG_UUID_RE } from "./rest/_codecs/_openapi.js";
 
 /**
  * Stable namespace for observation subject refs. Any fixed UUID works; this one
@@ -112,8 +113,7 @@ function deriveSubjectUuid(ref: string): string {
   ].join("-");
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = PG_UUID_RE; // the ONE Postgres-uuid shape (rest/_codecs/_openapi.ts)
 
 /**
  * Registered observation namespaces. A type MUST be `<namespace>.<rest>`.

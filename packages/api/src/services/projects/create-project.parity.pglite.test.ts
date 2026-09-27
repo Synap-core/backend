@@ -82,6 +82,8 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import * as schema from "@synap/database/schema";
 import { projectsRouter } from "../../routers/projects.js";
 import { registerProjectsRoutes } from "../../routers/hub-protocol/rest/projects.js";
+import { resolveProjectForPackInstall } from "../resolve-project-for-pack-install.js";
+import { ProjectRepository } from "@synap/database";
 import type {
   HubHono,
   HubVariables,
@@ -294,5 +296,134 @@ describe("createProjectGoverned — tRPC and Hub REST are one door", () => {
     const viaRest = await restCreate({ name: "Cygnus" }, true);
     expect(viaRest.status).toBe(400);
     expect(h.permCalls).toEqual([]);
+  });
+});
+
+describe("resolveProjectForPackInstall — a named install creates through the governed door", () => {
+  it("audits and announces the engagement project (RV1 S4)", async () => {
+    const res = await resolveProjectForPackInstall({
+      userId: U,
+      projectName: "Delta engagement",
+      packageSlug: "the-arch",
+      homeWorkspaceId: WA,
+    });
+    expect(res).toMatchObject({ created: true, reused: false });
+    expect(h.permCalls).toEqual([
+      expect.objectContaining({ subjectType: "project", action: "create" }),
+    ]);
+    expect(h.audits).toEqual([
+      expect.objectContaining({ subjectType: "project", action: "create" }),
+    ]);
+    expect(h.effects).toEqual([
+      expect.objectContaining({ subjectType: "project", action: "create" }),
+    ]);
+  });
+});
+
+async function restPatch(
+  id: string,
+  body: Record<string, unknown>,
+  agent = false
+) {
+  const res = await restApp(agent).request(`/projects/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return {
+    status: res.status,
+    body: (await res.json()) as Record<string, unknown>,
+  };
+}
+
+async function seedProject(): Promise<string> {
+  const created = await trpc().create({ name: "Orion", description: "d" });
+  if (created.status !== "created") throw new Error("seed failed");
+  clearRecorders();
+  return created.projectId as string;
+}
+function clearRecorders() {
+  h.permCalls.length = 0;
+  h.audits.length = 0;
+  h.effects.length = 0;
+}
+
+const PATCH = {
+  name: "Orion II",
+  description: "renamed",
+  phase: "build",
+  colorSlot: 4,
+  subjectEntityId: SUBJECT,
+  settings: { color: "teal" },
+  metadata: { origin: "patch" },
+};
+
+async function projectRow(id: string) {
+  const r = await q<Record<string, unknown>>(
+    `select name, description, status, phase, color_slot, settings, metadata from projects where id = $1`,
+    [id]
+  );
+  return r.rows[0];
+}
+
+describe("updateProjectGoverned — tRPC and Hub REST are one door (RV1 S5)", () => {
+  it("a human update leaves the SAME row, audit, side effects and gate payload through both doors", async () => {
+    const p1 = await seedProject();
+    await trpc().update({ id: p1, ...PATCH });
+    const a = {
+      row: await projectRow(p1),
+      audits: h.audits.map((x) => ({ ...x, subjectId: "<id>" })),
+      effects: h.effects.map((x) => ({ ...x, subjectId: "<id>" })),
+      gate: h.permCalls.map((x) => ({
+        ...x,
+        data: { ...(x.data as object), id: "<id>" },
+      })),
+    };
+
+    await reset();
+    const p2 = await seedProject();
+    const viaRest = await restPatch(p2, PATCH);
+    expect(viaRest.status).toBe(200);
+    expect(viaRest.body.id).toBe(p2); // wire shape kept: the updated row
+    const b = {
+      row: await projectRow(p2),
+      audits: h.audits.map((x) => ({ ...x, subjectId: "<id>" })),
+      effects: h.effects.map((x) => ({ ...x, subjectId: "<id>" })),
+      gate: h.permCalls.map((x) => ({
+        ...x,
+        data: { ...(x.data as object), id: "<id>" },
+      })),
+    };
+
+    // Non-vacuity on each axis.
+    expect(a.row).toMatchObject({ name: "Orion II", color_slot: 4 });
+    expect(a.audits).toEqual([
+      expect.objectContaining({ subjectType: "project", action: "update" }),
+    ]);
+    expect(a.effects).toEqual([
+      expect.objectContaining({ subjectType: "project", action: "update" }),
+    ]);
+    expect(a.gate[0]!.data).toMatchObject({
+      colorSlot: 4,
+      subjectEntityId: SUBJECT,
+    });
+    expect(b).toEqual(a);
+  });
+
+  it("REST maps errors by code: unknown id 404, a server fault 500 (never a blanket 404)", async () => {
+    const missing = await restPatch(randomUUID(), { name: "x" });
+    expect(missing.status).toBe(404);
+
+    const p = await seedProject();
+    const spy = vi
+      .spyOn(ProjectRepository.prototype, "update")
+      .mockRejectedValueOnce(new Error("connection reset"));
+    try {
+      const fault = await restPatch(p, { name: "y" });
+      expect(fault.status).toBe(500);
+      expect(fault.body.error).toBe("connection reset");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

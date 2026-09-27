@@ -9,6 +9,8 @@
  */
 
 import { z } from "zod";
+import { AskSchema } from "@synap-core/types/ask";
+import type { SlotAsk } from "@synap/playbooks";
 import { toolError } from "../tool-errors.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
@@ -514,6 +516,24 @@ export const buildHandlers: McpHandlerMap = {
         `Tool '${toolName}' needs channelId (or comment, to comment on a document or entity).`
       );
     }
+    // A question's typed ASK — parsed with the ONE ask schema BEFORE posting,
+    // so a malformed ask refuses the call instead of posting a question the
+    // slot cannot carry. Only meaningful on a question about a slot.
+    let ask: SlotAsk | undefined;
+    if (args.ask !== undefined && args.ask !== null) {
+      if (args.kind !== "question" || typeof args.slotLabel !== "string") {
+        return toolError(
+          `Tool '${toolName}': ask goes with kind 'question' and a slotLabel — it becomes that output's ask.`
+        );
+      }
+      const parsedAsk = AskSchema.safeParse(args.ask);
+      if (!parsedAsk.success) {
+        return toolError(
+          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.`
+        );
+      }
+      ask = parsedAsk.data as SlotAsk;
+    }
     const { postChannelMessage } =
       await import("../../../services/messaging/post-message.js");
     const result = await postChannelMessage({
@@ -530,6 +550,7 @@ export const buildHandlers: McpHandlerMap = {
       // The owed slot a question is about — the owner's reply is recorded on it.
       slotLabel:
         typeof args.slotLabel === "string" ? args.slotLabel : undefined,
+      ...(ask ? { ask } : {}),
       userId,
       // `userId` is the human OWNER even on an agent key. Pass the agent
       // principal so the row records WHICH agent posted — otherwise every agent

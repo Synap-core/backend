@@ -87,6 +87,9 @@ const devApprovalProposal = {
   workspaceId: WS,
   data: { sourceId: AGENT, changeType: "deploy_approval", source: "agent" },
   agentUserId: AGENT,
+  targetType: "entity",
+  targetId: null,
+  sessionId: null,
 };
 
 beforeEach(() => {
@@ -127,6 +130,7 @@ describe("(2) THE FLOOR — same proposal, same id, class decides", () => {
       proposal: devApprovalProposal,
       userId: AGENT, // the agent IS data.sourceId
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(false);
     expect(res.reason).toBe("not-authorized");
@@ -142,6 +146,7 @@ describe("(2) THE FLOOR — same proposal, same id, class decides", () => {
       proposal: devApprovalProposal,
       userId: AGENT,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(true);
     expect(res.reason).toBe("owner");
@@ -152,6 +157,7 @@ describe("(2) THE FLOOR — same proposal, same id, class decides", () => {
       proposal: { ...devApprovalProposal, workspaceId: null },
       userId: AGENT,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(false);
     expect(res.reason).toBe("not-authorized");
@@ -166,6 +172,7 @@ describe("(2) THE FLOOR — same proposal, same id, class decides", () => {
       proposal: devApprovalProposal,
       userId: "agent-2",
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(false);
   });
@@ -181,9 +188,13 @@ describe("(3) NO LOCKOUT — the floor never denies a legitimate human", () => {
         workspaceId: WS,
         data: { sourceId: HUMAN },
         agentUserId: null,
+        targetType: "entity",
+        targetId: null,
+        sessionId: null,
       },
       userId: HUMAN,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(true);
     expect(res.reason).toBe("owner");
@@ -196,6 +207,7 @@ describe("(3) NO LOCKOUT — the floor never denies a legitimate human", () => {
       proposal: devApprovalProposal,
       userId: HUMAN,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(true);
     expect(res.reason).toBe("agent-owner");
@@ -207,6 +219,7 @@ describe("(3) NO LOCKOUT — the floor never denies a legitimate human", () => {
       proposal: devApprovalProposal,
       userId: "some-other-human",
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(true);
     expect(res.reason).toBe("admin");
@@ -218,6 +231,7 @@ describe("(3) NO LOCKOUT — the floor never denies a legitimate human", () => {
       proposal: devApprovalProposal,
       userId: "stranger",
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(false);
   });
@@ -243,6 +257,7 @@ describe("(4) THE ROLE LADDER — an agent with membership must still not APPROV
       proposal: devApprovalProposal,
       userId: AGENT,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(false);
   });
@@ -256,6 +271,7 @@ describe("(4) THE ROLE LADDER — an agent with membership must still not APPROV
       proposal: devApprovalProposal,
       userId: AGENT,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(false);
   });
@@ -268,6 +284,7 @@ describe("(4) THE ROLE LADDER — an agent with membership must still not APPROV
       proposal: devApprovalProposal,
       userId: HUMAN,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(true);
   });
@@ -280,6 +297,7 @@ describe("(4) THE ROLE LADDER — an agent with membership must still not APPROV
       proposal: devApprovalProposal,
       userId: AGENT,
       purpose: "reject",
+      roster: true,
     });
     expect(res.allowed).toBe(true);
   });
@@ -307,6 +325,7 @@ describe("(5) REVERT is a decision — the same floor as approve", () => {
       proposal: devApprovalProposal,
       userId: AGENT,
       purpose: "approve", // revert is a decision, not an edit
+      roster: true,
     });
     expect(res.allowed).toBe(false);
   });
@@ -316,6 +335,7 @@ describe("(5) REVERT is a decision — the same floor as approve", () => {
       proposal: { ...devApprovalProposal, workspaceId: null },
       userId: AGENT,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(false);
   });
@@ -328,9 +348,13 @@ describe("(5) REVERT is a decision — the same floor as approve", () => {
         workspaceId: null,
         data: { sourceId: HUMAN },
         agentUserId: null,
+        targetType: "entity",
+        targetId: null,
+        sessionId: null,
       },
       userId: HUMAN,
       purpose: "approve",
+      roster: true,
     });
     expect(res.allowed).toBe(true);
   });

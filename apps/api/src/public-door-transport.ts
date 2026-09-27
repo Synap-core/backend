@@ -39,7 +39,19 @@ export const PUBLIC_DOOR_MAX_BODY_BYTES = 16 * 1024;
 export const PUBLIC_DOOR_ALLOW_METHODS = "GET, POST, OPTIONS";
 export const PUBLIC_DOOR_ALLOW_HEADERS = "Content-Type";
 
-function applyPublicDoorHeaders(headers: Headers, method: string): void {
+// `Headers` itself is not safe to name here. The api build pulls in more than
+// one `@types/node`, and their `Headers` / `Response` globals do not agree
+// (`bytes()` exists on the newer undici and not the older). A structural
+// writer keeps the policy on one type both call sites can satisfy.
+type PublicDoorHeaderWriter = {
+  delete(name: string): void;
+  set(name: string, value: string): void;
+};
+
+function applyPublicDoorHeaders(
+  headers: PublicDoorHeaderWriter,
+  method: string
+): void {
   headers.delete("Access-Control-Allow-Credentials");
   headers.set("Access-Control-Allow-Origin", "*");
   headers.set("Access-Control-Allow-Methods", PUBLIC_DOOR_ALLOW_METHODS);
@@ -63,9 +75,21 @@ export const publicDoorTransport: MiddlewareHandler = async (c, next) => {
 
   const method = c.req.method.toUpperCase();
   if (method === "OPTIONS") {
-    const preflight = new Response(null, { status: 204 });
-    applyPublicDoorHeaders(preflight.headers, method);
-    return preflight;
+    // Not `return new Response(...)`. That constructor is the older undici
+    // Response (no `bytes()`), which is not assignable to Hono's
+    // MiddlewareHandler Response — the deploy `tsc` fails on it.
+    applyPublicDoorHeaders(
+      {
+        delete: (name) => {
+          c.header(name, undefined);
+        },
+        set: (name, value) => {
+          c.header(name, value);
+        },
+      },
+      method
+    );
+    return c.body(null, 204);
   }
 
   if (method === "GET" || method === "HEAD") {

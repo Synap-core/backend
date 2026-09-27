@@ -34,6 +34,7 @@ import {
   resolveActorId,
   type HubHono,
   type HubVariables,
+  readJsonBody,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -467,9 +468,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     if (!isUuid(playbookId)) {
       return c.json({ error: `Not a playbook id: ${playbookId}` }, 400);
     }
-    const parsed = RunPlaybookBodySchema.safeParse(
-      (await c.req.json().catch(() => null)) ?? {}
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = RunPlaybookBodySchema.safeParse(jsonRead.body);
     if (!parsed.success) return c.json({ error: zodError(parsed.error) }, 400);
     const body = parsed.data;
     const confined = confineWorkspaceOrForbidden(c, body.workspaceId);

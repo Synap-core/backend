@@ -47,6 +47,7 @@ vi.mock("@synap/database", () => {
       preview: "e.preview",
       properties: "e.props",
       deletedAt: "e.deletedAt",
+      workspaceId: "e.ws",
     },
     entityFacets: {
       workspaceId: "f.ws",
@@ -55,7 +56,19 @@ vi.mock("@synap/database", () => {
       properties: "f.props",
       deletedAt: "f.deletedAt",
     },
-    profiles: { id: "p.id", slug: "p.slug" },
+    profiles: {
+      id: "p.id",
+      slug: "p.slug",
+      scope: "p.scope",
+      roleCategory: "p.roleCategory",
+      workspaceId: "p.ws",
+    },
+    drizzleSql: (strings: TemplateStringsArray, ...v: unknown[]) => ({
+      op: "sql",
+      strings,
+      v,
+    }),
+    WORKSPACE_MEMBERSHIP_ROLE_CATEGORY: "workspace-membership",
     workspaces: { id: "w.id" },
     eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
     and: (...c: unknown[]) => ({ op: "and", c }),

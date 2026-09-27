@@ -5,10 +5,10 @@
  * Mirror the original helpers from hub-protocol-rest.ts so behavior is preserved.
  */
 
-import { z } from "@hono/zod-openapi";
 import type { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { createLogger } from "@synap-core/core";
+import { PG_UUID_RE, uuidParam } from "./_codecs/_openapi.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -135,13 +135,13 @@ export function hasScope(scopes: string[], required: string): boolean {
  * (hub-protocol-rest.ts), which renders `"<field>: <message>"` — so the message
  * below reads as a full sentence after the field name and states both the
  * condition and the recovery action, matching the `key_revoked` envelope.
+ *
+ * It IS `uuidParam` (`_codecs/_openapi.ts`): the same `PG_UUID_RE` shape as
+ * `uuidQueryParam` / `isUuid`, NOT zod's RFC-strict `.uuid()` — that refused
+ * ids with version/variant nibbles Postgres stores, so a path and a query/body
+ * carrying the SAME stored id validated differently.
  */
-export const uuidPathParam = z.string().uuid({
-  message:
-    "must be a full 36-character UUID (8-4-4-4-12 hex). A truncated or " +
-    "display-shortened id will not resolve — re-fetch the full id from the " +
-    "corresponding list endpoint (e.g. GET /api/hub/entities) and retry.",
-});
+export const uuidPathParam = uuidParam;
 
 /**
  * SECURITY — reject a proposal REVIEW action (approve / revert) performed with
@@ -178,9 +178,6 @@ export function rejectAgentReviewer(
   );
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Is `raw` a syntactically valid uuid?
  *
@@ -192,7 +189,33 @@ const UUID_RE =
  * are forwarded, so callers get a 400 that names the bad value.
  */
 export function isUuid(raw: string): boolean {
-  return UUID_RE.test(raw);
+  return PG_UUID_RE.test(raw);
+}
+
+/**
+ * Read an OPTIONAL JSON request body — an absent/blank body is `{}`, a
+ * MALFORMED one is a 400.
+ *
+ * WHY: `c.req.json().catch(() => ({}))` folded a parse FAILURE into the empty
+ * default, so a truncated `{"restore":true` read as `{}` and the archive door
+ * ARCHIVED instead of restoring; a malformed revert/reject body silently lost
+ * its `reason`. An empty body and an unreadable one are different facts.
+ * Tripwire: `__tripwires__/hub-json-body-malformed-is-400.test.ts`.
+ */
+export async function readJsonBody(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  c: Context<any, any>
+): Promise<{ ok: true; body: unknown } | { ok: false; res: Response }> {
+  const text = await c.req.text();
+  if (!text.trim()) return { ok: true, body: {} };
+  try {
+    return { ok: true, body: JSON.parse(text) };
+  } catch {
+    return {
+      ok: false,
+      res: c.json({ error: "Invalid JSON body" }, 400),
+    };
+  }
 }
 /** A bare hex prefix (git-style short id) — the CLI shows `id.slice(0, 8)`. */
 const PROPOSAL_PREFIX_RE = /^[0-9a-f]{4,35}$/i;
@@ -215,7 +238,7 @@ export async function resolveProposalId(
   userId: string,
   raw: string
 ): Promise<string> {
-  if (UUID_RE.test(raw)) return raw;
+  if (PG_UUID_RE.test(raw)) return raw;
   if (!PROPOSAL_PREFIX_RE.test(raw)) {
     throw new TRPCError({
       code: "NOT_FOUND",

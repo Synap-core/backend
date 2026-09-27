@@ -192,6 +192,8 @@ describe("chat.sendMessage anchored comment", () => {
       anchor,
       channelId: CHANNEL,
       userId: "user-1",
+      // Human tRPC door: the session roster counts (decision 2026-09-27).
+      roster: true,
     });
     expect(
       vi.mocked(assertMessageAnchorAllowed).mock.invocationCallOrder[0]

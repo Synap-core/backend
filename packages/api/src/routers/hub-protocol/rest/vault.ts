@@ -54,6 +54,7 @@ import {
   resolveActingContext,
   resolveActorId,
   type HubHono,
+  readJsonBody,
 } from "./_shared.js";
 
 // ── Local OpenAPI schemas (not in user-WIP _codecs/misc.ts) ────────────────
@@ -447,9 +448,9 @@ export function registerVaultRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const secretId = c.req.param("id");
-    const parsed = GrantRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = GrantRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid grant body", details: parsed.error.issues },

@@ -72,10 +72,8 @@ import {
   type PlaybookStage,
   type SessionCriterion,
 } from "@synap/playbooks";
-import {
-  CHECK_GATE_METADATA_KEY,
-  PARAM_SLOT_KIND,
-} from "@synap-core/types/focus-sessions";
+import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
+import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
@@ -438,19 +436,11 @@ export async function followPlaybook(
       )
         ? (locked.expectedOutputs as ExpectedOutput[])
         : [];
-      const paramSlots: ExpectedOutput[] = paramResolution.missingRequired.map(
-        (p) => ({
-          kind: PARAM_SLOT_KIND,
-          label: `Answer: ${p.label?.trim() || p.name}`,
-          owner: "human" as const,
-          blockedReason: "decision" as const,
-          why: `"${playbook.name}" needs a value for "${p.label?.trim() || p.name}"${
-            p.options?.length
-              ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
-              : ` (${p.type})`
-          }. Nobody supplied it when this session began following it.`,
-          owedSince: followedAt,
-        })
+      const paramSlots: ExpectedOutput[] = paramOwedSlots(
+        paramResolution.missingRequired,
+        playbook.name,
+        followedAt,
+        PARAM_SLOT_CIRCUMSTANCE.followed
       );
       // Merged by label like the playbook's own slots, so following twice does
       // not file the same question again.

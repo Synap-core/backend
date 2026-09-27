@@ -44,10 +44,7 @@ import {
   ProjectNearDuplicateError,
   type CreateProjectGovernedOutcome,
 } from "../../../services/projects/create-project.js";
-import {
-  resolveProjectHomeChange,
-  stampProjectHomeUse,
-} from "../../../services/projects/project-home.js";
+import { updateProjectGoverned } from "../../../services/projects/update-project.js";
 import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
@@ -96,6 +93,10 @@ const UpdateProjectSchema = z.object({
   phase: z.string().max(120).nullable().optional(),
   /** Deadline. `null` clears it; omitted = untouched. */
   targetDate: z.coerce.date().nullable().optional(),
+  /** Identity-palette slot (1–12). `null` clears it (parity with tRPC). */
+  colorSlot: z.number().int().min(1).max(12).nullable().optional(),
+  /** Rebind the subject entity; `null` unbinds (parity with tRPC). */
+  subjectEntityId: z.string().uuid().nullable().optional(),
   /**
    * D6: move the project's HOME workspace. Governed with the rest of the
    * patch; the caller must also be able to write the target (checked before
@@ -650,7 +651,10 @@ export function registerProjectsRoutes(app: HubHono): void {
         { err, userId, projectId: id },
         "POST /projects/:id/purge failed"
       );
-      return c.json({ error: "Failed to purge project" }, 500);
+      return c.json(
+        { error: "Failed to purge project" },
+        httpStatusForTrpcError(err) as never
+      );
     }
   });
 
@@ -844,98 +848,28 @@ export function registerProjectsRoutes(app: HubHono): void {
     if (!parsed.success) {
       return c.json({ error: `Invalid body: ${parsed.error.message}` }, 400);
     }
-    const { reasoning, homeWorkspaceId: requestedHome, ...body } = parsed.data;
+    const { reasoning, ...patch } = parsed.data;
 
-    // Load first, on the same visibility floor as GET /projects/:id: a
-    // project the caller cannot see must 404 BEFORE governance — otherwise an
-    // agent files a proposal against a foreign id that approval cannot apply.
-    // Its OWN workspace is the gate's subject (parity with tRPC `update`).
-    const target = await db.query.projects.findFirst({
-      where: and(
-        eq(projects.id, id),
-        ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!
-      ),
-      columns: { id: true, workspaceId: true },
-    });
-    if (!target) return c.json({ error: "Project not found" }, 404);
-
-    // D6 — the target home must be live and writable by the caller.
-    let homeWorkspaceId: string | undefined;
+    // The ONE governed update (`services/projects/update-project.ts`), shared
+    // with tRPC `projects.update`: same floor, same gate payload, same audit +
+    // side effects. Errors map by code — a 500 is never re-labelled "not found".
     try {
-      homeWorkspaceId = await resolveProjectHomeChange(
-        db,
+      const outcome = await updateProjectGoverned({
+        id,
         userId,
-        target.workspaceId,
-        requestedHome
-      );
+        agentUserId: c.get("agentUserId") as string | undefined,
+        reasoning,
+        ...patch,
+      });
+      if (outcome.status === "proposed") {
+        return jsonGoverned(c, outcome);
+      }
+      return c.json(outcome.row);
     } catch (err) {
       return c.json(
-        { error: (err as Error).message },
-        httpStatusForTrpcError(err)
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
       );
-    }
-
-    const perm = await checkPermissionOrPropose({
-      userId,
-      agentUserId: c.get("agentUserId") as string | undefined,
-      workspaceId: target.workspaceId ?? undefined,
-      subjectType: "project",
-      action: "update",
-      ...(reasoning ? { reasoning } : {}),
-      // The WHOLE patch, matching the tRPC twin. This gate stored `{ id }`
-      // alone, which was survivable only while `project/update` had no approve
-      // executor and every such proposal failed loudly with NOT_IMPLEMENTED.
-      // Now that the executor exists it would replay `update({ id })` — setting
-      // nothing, marking the proposal APPROVED, and turning a visible failure
-      // into a silent one.
-      data: {
-        id,
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.description !== undefined
-          ? { description: body.description }
-          : {}),
-        ...(body.status !== undefined ? { status: body.status } : {}),
-        ...(body.phase !== undefined ? { phase: body.phase } : {}),
-        ...(body.targetDate !== undefined
-          ? { targetDate: body.targetDate }
-          : {}),
-        ...(homeWorkspaceId !== undefined ? { homeWorkspaceId } : {}),
-        ...(body.settings !== undefined ? { settings: body.settings } : {}),
-        ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
-      },
-    });
-
-    if ("denied" in perm && perm.denied) {
-      return c.json({ error: perm.reason }, 403);
-    }
-    if ("proposalId" in perm) {
-      return jsonGoverned(c, {
-        status: "proposed",
-        proposalId: perm.proposalId,
-        ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
-        ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
-      });
-    }
-
-    const eventRepo = new EventRepository(sql);
-    const repo = new ProjectRepository(db, eventRepo);
-
-    try {
-      const row = await repo.update(
-        id,
-        { ...body, workspaceId: homeWorkspaceId },
-        userId
-      );
-      if (homeWorkspaceId) {
-        await stampProjectHomeUse(db, {
-          projectId: id,
-          homeWorkspaceId,
-          userId,
-        });
-      }
-      return c.json(row);
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 404);
     }
   });
 

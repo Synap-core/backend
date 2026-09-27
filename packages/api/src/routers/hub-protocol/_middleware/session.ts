@@ -31,12 +31,12 @@
 import type { Context, Next } from "hono";
 import { createLogger } from "@synap-core/core";
 import { db, focusSessions, and, eq } from "@synap/database";
+import { PG_UUID_RE } from "../rest/_codecs/_openapi.js";
 
 const logger = createLogger({ module: "hub-protocol-session" });
 
 /** RFC-4122 shape check — cheap reject before paying for a DB round-trip. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = PG_UUID_RE; // the ONE Postgres-uuid shape (rest/_codecs/_openapi.ts)
 
 /**
  * Does this `focus_sessions` row belong to `userId`?

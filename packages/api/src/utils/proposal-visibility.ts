@@ -25,9 +25,9 @@ import {
   workspaceMembers,
   users,
 } from "@synap/database/schema";
-import { isLikelyUUID } from "@synap-core/types/proposals";
 import { isPodAdmin } from "./workspace-role.js";
 import { sessionReadableWhere } from "../access/session-visibility.js";
+import { proposalSessionIds } from "../services/proposals/session-content-redaction.js";
 
 type Database = typeof defaultDb;
 
@@ -109,9 +109,6 @@ export async function assertProposalVisibleTo(
   });
 }
 
-/** The target types a proposal uses for a focus session. */
-const SESSION_TARGET_TYPES = new Set(["focus_session", "session"]);
-
 /**
  * Throw unless `userId` may COMMENT on the proposal `proposalId` (founder
  * decision 2026-09-27): the visibility gate above (editor+), OR the caller can
@@ -140,12 +137,7 @@ export async function assertProposalCommentableBy(
       where: eq(proposals.id, proposalId),
       columns: { sessionId: true, targetType: true, targetId: true },
     });
-    const sessionIds = [
-      proposal?.sessionId,
-      proposal && SESSION_TARGET_TYPES.has(proposal.targetType)
-        ? proposal.targetId
-        : null,
-    ].filter((id): id is string => !!id && isLikelyUUID(id));
+    const sessionIds = proposal ? proposalSessionIds(proposal) : [];
     if (sessionIds.length > 0) {
       const [readable] = await database
         .select({ id: focusSessions.id })

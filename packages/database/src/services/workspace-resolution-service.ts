@@ -368,6 +368,33 @@ export function acceptDeterministicGraphWorkspace(
 }
 
 /**
+ * THE create-door home rule for ONE entity (FX-B1) — shared by single create
+ * (`entities.create`, which capture and the composite materializer also go
+ * through) and bulk create (`entities.batchCreate`), so the same kind lands the
+ * same way whichever door wrote it:
+ *   1. an EXPLICIT pin (targetWorkspaceId / global / workspaceScoped, or a
+ *      workspace-scope kind pinned to its process home) → the door's answer;
+ *   2. a POD-SCOPE kind → pod-wide (null). A pod-scope kind is by definition
+ *      visible in every space; no ontology/context rung may stamp it (the old
+ *      single-create order let a rung-2 facet signal stamp a person, bulk
+ *      create stamped it with the header, capture left it pod-wide);
+ *   3. otherwise a deterministic ontology/context/relational hit, else the
+ *      door's answer (ambient for a workspace-scope kind).
+ */
+export function acceptEntityCreatePlacement(input: {
+  entityScope: string | null | undefined;
+  explicitPin: boolean;
+  placement: Pick<WorkspacePlacement, "workspaceId" | "rung" | "candidates">;
+}): string | null {
+  if (input.explicitPin) return input.placement.workspaceId;
+  if (normalizeEntityScope(input.entityScope) === "pod") return null;
+  return (
+    acceptDeterministicGraphWorkspace(input.placement) ??
+    input.placement.workspaceId
+  );
+}
+
+/**
  * When a composite graph has no explicit workspace/lens, derive one from its
  * ontology slugs via the ONE placement door (`resolveWorkspacePlacement`).
  *

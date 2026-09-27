@@ -16,7 +16,10 @@ import {
   ProfileResolutionService,
   PropertyValidationService,
 } from "../services/index.js";
-import { storedFacetWorkspaceId } from "../utils/facet-visibility.js";
+import {
+  storedFacetWorkspaceId,
+  WORKSPACE_MEMBERSHIP_ROLE_CATEGORY,
+} from "../utils/facet-visibility.js";
 
 const USER = "99999999-9999-4999-8999-999999999999";
 const CRM = "11111111-1111-4111-8111-111111111111";
@@ -86,10 +89,21 @@ const repoFor = (db: any) => new FacetRepository(db, {} as any);
 
 describe("storedFacetWorkspaceId (write-side lens rule)", () => {
   it("shared and system roles are stored pod-wide; a workspace role keeps the lens", () => {
-    expect(storedFacetWorkspaceId("shared", CRM)).toBeNull();
-    expect(storedFacetWorkspaceId("system", CRM)).toBeNull();
-    expect(storedFacetWorkspaceId("workspace", CRM)).toBe(CRM);
+    expect(storedFacetWorkspaceId({ scope: "shared" }, CRM)).toBeNull();
+    expect(storedFacetWorkspaceId({ scope: "system" }, CRM)).toBeNull();
+    expect(storedFacetWorkspaceId({ scope: "workspace" }, CRM)).toBe(CRM);
     expect(storedFacetWorkspaceId(undefined, CRM)).toBe(CRM);
+  });
+
+  it("a per-workspace membership role keeps its lens even when system/shared", () => {
+    for (const scope of ["system", "shared"]) {
+      expect(
+        storedFacetWorkspaceId(
+          { scope, roleCategory: WORKSPACE_MEMBERSHIP_ROLE_CATEGORY },
+          CRM
+        )
+      ).toBe(CRM);
+    }
   });
 });
 

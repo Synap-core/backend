@@ -40,6 +40,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  readJsonBody,
 } from "./_shared.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
@@ -540,9 +541,9 @@ export function registerToolsRoutes(app: HubHono): void {
       return c.json({ error: "id must be a UUID" }, 400);
     }
 
-    const parsed = ApproveToolRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = ApproveToolRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json({ error: parsed.error.message }, 400);
     }

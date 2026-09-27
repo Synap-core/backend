@@ -43,6 +43,7 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  readJsonBody,
 } from "./_shared.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
@@ -447,9 +448,9 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       return c.json({ error: "id must be a UUID" }, 400);
     }
 
-    const parsed = ApproveSkillRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = ApproveSkillRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json({ error: parsed.error.message }, 400);
     }
@@ -498,9 +499,9 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       return c.json({ error: "id must be a UUID" }, 400);
     }
 
-    const parsed = DryRunSkillRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = DryRunSkillRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json({ error: parsed.error.message }, 400);
     }

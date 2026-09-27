@@ -2022,8 +2022,27 @@ export const playbooksRouter = router({
       // S1: re-reconcile the backing cron automation against the new schedule.
       // Idempotent — re-points/updates the SAME row via flow_automation_id, or
       // tears it down when the schedule was cleared/disabled.
+      //
+      // Only a schedule or status CHANGE may arm it. An adoption / metadata
+      // merge / text edit (the boot template reconcile, W7's edit in an
+      // archived space) must never flip a paused backing automation active.
+      // "Wants a live schedule" = enabled with a cron. A cron-only edit (or a
+      // template re-pointing the time) refreshes the trigger, never the state.
+      const wantsSchedule = (v: unknown): boolean => {
+        const sch = v as { enabled?: unknown; cron?: unknown } | null;
+        return (
+          sch?.enabled === true &&
+          typeof sch.cron === "string" &&
+          sch.cron.trim() !== ""
+        );
+      };
+      const armingChanged =
+        (input.schedule !== undefined &&
+          wantsSchedule(input.schedule) !== wantsSchedule(existing.schedule)) ||
+        (input.status !== undefined && input.status !== existing.status);
       await materializePlaybookCronAutomation(updated, {
         userId: input.agentUserId ?? ctx.userId,
+        preserveArming: !armingChanged,
       });
 
       return {

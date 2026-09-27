@@ -59,6 +59,7 @@ import {
   resolveActingContext,
   type HubHono,
   httpStatusForTrpcError,
+  readJsonBody,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import {
@@ -381,9 +382,9 @@ export function registerChannelsRoutes(app: HubHono): void {
     // Validate at the boundary (was a raw `as` cast). The schema rejects
     // contextObjectType "proposal" — an IDOR surface on this service-key door —
     // and any other unknown type, returning 400 instead of forwarding it.
-    const parsed = ChannelByContextRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = ChannelByContextRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json(
         {
@@ -882,7 +883,9 @@ export function registerChannelsRoutes(app: HubHono): void {
         403
       );
     }
-    const body = (await c.req.json().catch(() => ({}))) as {
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const body = jsonRead.body as {
       workspaceId?: string;
       externalSource?: string;
       externalChannelId?: string;

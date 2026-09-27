@@ -8,18 +8,25 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { resolveDepsMock, composeMock, createMock, legacyRows, resolveTplMock } =
-  vi.hoisted(() => ({
-    resolveDepsMock: vi.fn(),
-    composeMock: vi.fn(async () => ({ profiles: { added: [] } })),
-    createMock: vi.fn(async () => ({
-      workspaceId: "ws-legacy",
-      created: false,
-      outcome: "unchanged",
-    })),
-    legacyRows: { current: [] as Array<{ id: string }> },
-    resolveTplMock: vi.fn(async () => null),
-  }));
+const {
+  resolveDepsMock,
+  composeMock,
+  createMock,
+  legacyRows,
+  legacyWhere,
+  resolveTplMock,
+} = vi.hoisted(() => ({
+  resolveDepsMock: vi.fn(),
+  composeMock: vi.fn(async () => ({ profiles: { added: [] } })),
+  createMock: vi.fn(async () => ({
+    workspaceId: "ws-legacy",
+    created: false,
+    outcome: "unchanged",
+  })),
+  legacyRows: { current: [] as Array<{ id: string }> },
+  legacyWhere: { current: undefined as unknown },
+  resolveTplMock: vi.fn(async () => null),
+}));
 
 vi.mock("./package-dependency-resolver.js", () => ({
   resolvePackageDependencies: resolveDepsMock,
@@ -40,7 +47,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   const chain = {
     from: () => chain,
     innerJoin: () => chain,
-    where: () => chain,
+    where: (w: unknown) => {
+      legacyWhere.current = w;
+      return chain;
+    },
     limit: async () => legacyRows.current,
   };
   return { ...actual, db: { select: () => chain } };
@@ -117,6 +127,21 @@ describe("materializeWorkspaceCore — D8 packs", () => {
     expect(composeMock).not.toHaveBeenCalled();
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(core.status).toBe("created");
+  });
+
+  it("the legacy lookup ALSO matches a pre-0278 row stamped only in settings.packageSlug (RV1 S8)", async () => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    await materializeWorkspaceCore({
+      definition: PACK,
+      userId: "u",
+      selfSlug: "enterprise-os",
+      packageSlug: "enterprise-os",
+    });
+    const q = new PgDialect().sqlToQuery(legacyWhere.current as never);
+    expect(q.sql).toContain(`"package_slug" = $`);
+    expect(q.sql).toContain(`->>'packageSlug' = $`);
+    // Both stamps are compared to the pack's slug.
+    expect(q.params.filter((p) => p === "enterprise-os")).toHaveLength(2);
   });
 
   it("a non-pack template is created exactly as before", async () => {

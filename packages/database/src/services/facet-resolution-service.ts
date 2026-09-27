@@ -368,10 +368,16 @@ export function profileScopeConditions(
 export async function profileSlugRows(
   db: PostgresJsDatabase<typeof schema>,
   profileSlug: string
-): Promise<Array<{ id: string; profileKind: "kind" | "role" }>> {
+): Promise<
+  Array<{
+    id: string;
+    profileKind: "kind" | "role";
+    entityScope: "pod" | "workspace";
+  }>
+> {
   return db.query.profiles.findMany({
     where: eq(profiles.slug, profileSlug),
-    columns: { id: true, profileKind: true },
+    columns: { id: true, profileKind: true, entityScope: true },
   });
 }
 

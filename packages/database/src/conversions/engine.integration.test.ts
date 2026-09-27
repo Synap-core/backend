@@ -118,6 +118,8 @@ CREATE TABLE profiles (
   workspace_id uuid,
   is_active boolean DEFAULT true,
   applicable_kinds text[],
+  -- 0222 role_category (read by the W2b facet-scope reconcile, FX-B1).
+  role_category text,
   ui_hints jsonb DEFAULT '{}',
   -- Provenance + lifecycle, exactly as migration 0263 declares them
   -- (seedKindProfile writes origin = 'core').

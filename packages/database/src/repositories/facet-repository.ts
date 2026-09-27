@@ -139,7 +139,8 @@ export class FacetRepository extends BaseRepository<
     // A shared/system role is one hat pod-wide → stored pod-wide so every lens
     // that has the role sees it (storedFacetWorkspaceId). Only the ONE door
     // decides this, so capture, graph materialize and facets.attach inherit it.
-    const workspaceId = storedFacetWorkspaceId(profile.scope, lensWorkspaceId);
+    // A per-workspace membership role (team-member) keeps its lens.
+    const workspaceId = storedFacetWorkspaceId(profile, lensWorkspaceId);
 
     let validatedProperties: Record<string, unknown> = data.properties ?? {};
 
@@ -234,7 +235,12 @@ export class FacetRepository extends BaseRepository<
           // keys the existing facet does not have yet (widen-only, never
           // clobber a value another lens wrote).
           if (workspaceId !== lensWorkspaceId) {
-            return this.fillMissingProperties(existing, validatedProperties);
+            return this.fillMissingProperties(
+              existing,
+              validatedProperties,
+              userId,
+              data.skipEvent === true
+            );
           }
           return existing;
         }
@@ -243,10 +249,17 @@ export class FacetRepository extends BaseRepository<
     }
   }
 
-  /** Widen-only property fill for a lens-collapsed attach (see attach()). */
+  /**
+   * Widen-only property fill for a lens-collapsed attach (see attach()).
+   * A real write, so it announces itself like `update()` does — the widen was
+   * invisible to realtime and automations when it wrote the row directly. With
+   * `skipEvent` the caller owns the post-commit emit (never from inside a tx).
+   */
   private async fillMissingProperties(
     existing: EntityFacet,
-    incoming: Record<string, unknown>
+    incoming: Record<string, unknown>,
+    userId: string,
+    skipEvent: boolean
   ): Promise<EntityFacet> {
     const current = (existing.properties ?? {}) as Record<string, unknown>;
     const missing = Object.fromEntries(
@@ -261,7 +274,11 @@ export class FacetRepository extends BaseRepository<
       } as Partial<NewEntityFacet>)
       .where(eq(entityFacets.id, existing.id))
       .returning();
-    return facet ?? existing;
+    // The row vanished between the match and the write: say so, never hand
+    // back the stale pre-write copy as if the fill landed.
+    if (!facet) throw new Error("Facet not found");
+    if (!skipEvent) await this.emitCompleted("update", facet, userId);
+    return facet;
   }
 
   /**

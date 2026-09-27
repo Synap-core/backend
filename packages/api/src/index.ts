@@ -453,6 +453,7 @@ export {
 } from "./connectors/broker-trust-diagnostics.js";
 // W3a — playbook + overlay-pack convergence (boot pass consumers).
 export {
+  playbookReportConverged,
   reconcileWorkspacePlaybooksToTemplate,
   type WorkspacePlaybooksReconcileReport,
 } from "./services/playbooks/reconcile-installed-playbooks.js";

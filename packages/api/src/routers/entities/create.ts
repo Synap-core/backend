@@ -35,10 +35,10 @@ import {
   registerIdentitySignals,
   resolveIdentity,
   resolveWorkspacePlacement,
-  acceptDeterministicGraphWorkspace,
+  acceptEntityCreatePlacement,
+  resolveKindWritePin,
   resolveProjectPlacement,
   isDomainHomeWorkspace,
-  normalizeEntityScope,
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
   shouldRejectJunkTitle,
   buildJunkTitleMessage,
@@ -854,18 +854,16 @@ export const createProcs = {
           ambientWorkspaceId: governanceWorkspaceId,
           ...(ctx.sessionId ? { context: { sessionId: ctx.sessionId } } : {}),
         });
-        // Placement accept policy (shared pure helper with graph capture/import):
-        // - Explicit pin / global / workspaceScoped → trust door result as-is
-        // - Else deterministic ontology (rung ≤4, single candidate) → place
-        // - Else K1: pod-scope kinds → null; workspace-scope → ambient only
-        if (input.global || input.targetWorkspaceId || input.workspaceScoped) {
-          return entityPlacement.workspaceId;
-        }
-        const deterministic =
-          acceptDeterministicGraphWorkspace(entityPlacement);
-        if (deterministic) return deterministic;
-        if (normalizeEntityScope(profile.entityScope) === "pod") return null;
-        return entityPlacement.workspaceId;
+        // Placement accept policy — THE create-door rule shared with bulk
+        // create (acceptEntityCreatePlacement): explicit pin → door result;
+        // pod-scope kind → pod-wide; else deterministic hit, else ambient.
+        return acceptEntityCreatePlacement({
+          entityScope: profile.entityScope,
+          explicitPin: Boolean(
+            input.global || input.targetWorkspaceId || input.workspaceScoped
+          ),
+          placement: entityPlacement,
+        });
       };
 
       let resolvedEntityWorkspaceId =
@@ -1741,18 +1739,35 @@ export const createProcs = {
       // on the headerless path. Resolving this BEFORE the idempotency check
       // below (rather than lazily per-row during creation) lets that check key
       // on where each slug will actually land.
+      //
+      // FX-B1: the header pins a WORKSPACE-scope kind (its process home, the
+      // shared resolveKindWritePin rule), never a pod-scope kind — which lands
+      // pod-wide exactly as single create / capture file it
+      // (acceptEntityCreatePlacement).
       for (const entity of input.entities) {
         if (placementCache.has(entity.profileSlug)) continue;
+        const entityScope =
+          (entityScopeCache.get(entity.profileSlug) as
+            "pod" | "workspace" | null) ?? null;
+        const pin = resolveKindWritePin({
+          entityScope,
+          routedWorkspaceId: ctx.workspaceId,
+        });
         const placement = await resolveWorkspacePlacement(database, {
           userId: ctx.userId,
           kindSlug: entity.profileSlug,
-          entityScope:
-            (entityScopeCache.get(entity.profileSlug) as
-              "pod" | "workspace" | null) ?? null,
-          explicitWorkspaceId: ctx.workspaceId ?? undefined,
+          entityScope,
+          explicitWorkspaceId: pin.targetWorkspaceId,
           ambientWorkspaceId: ctx.workspaceId,
         });
-        placementCache.set(entity.profileSlug, placement.workspaceId);
+        placementCache.set(
+          entity.profileSlug,
+          acceptEntityCreatePlacement({
+            entityScope,
+            explicitPin: Boolean(pin.targetWorkspaceId),
+            placement,
+          })
+        );
       }
 
       // 3. Check for existing entities (idempotency by profileSlug + title),

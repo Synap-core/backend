@@ -23,8 +23,9 @@
 
 import { TRPCError } from "@trpc/server";
 import { getWorkspaceMembership } from "@synap/database";
-
-const WRITE_ROLES = new Set(["owner", "admin", "editor"]);
+// The write floor's role set is SHARED with the clients' space pickers
+// (`@synap-core/types/workspaces`) — one rule, never a mirror (FX-F3).
+import { isSpaceWriteRole } from "@synap-core/types/workspaces";
 
 export async function assertWorkspaceWrite(
   db: unknown,
@@ -44,7 +45,7 @@ export async function assertWorkspaceWrite(
       row.workspaceId,
       userId
     );
-    if (!membership || !WRITE_ROLES.has(membership.role)) {
+    if (!membership || !isSpaceWriteRole(membership.role)) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "You are not a member of this resource's workspace.",

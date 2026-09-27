@@ -438,6 +438,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     ask: { mode: "confirm", prompt: "Use the live account?" },
     owedSince: "2026-09-08T09:00:00.000Z",
     criterionKey: "no-stale",
+    paramName: "channel",
     status: "done",
     claimedDone: true,
     satisfiedByProposalId: PROPOSAL,

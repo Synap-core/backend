@@ -92,39 +92,84 @@ function redactHistory(history: unknown): unknown {
   );
 }
 
+/** The session ids a proposal names as its SUBJECT (a session target). */
+function targetSessionIds(
+  rows: readonly Pick<RedactableRow, "targetType" | "targetId">[]
+): string[] {
+  return rows
+    .filter((r) => SESSION_TARGET_TYPES.has(r.targetType))
+    .map((r) => r.targetId)
+    .filter((id): id is string => !!id && isLikelyUUID(id));
+}
+
 /**
- * The session ids these rows target that EXIST and `reader` may not read.
- *
- * Also THE definition of "a proposal whose subject is a session the viewer
- * cannot read" for the DECIDE gate (founder decision 2026-09-27: nobody decides
- * what they cannot read) — the review ladder refuses exactly the rows this
- * returns, so a row is never redacted-but-decidable or readable-but-refused.
+ * The sessions a proposal belongs to: the run it was filed in (`session_id`)
+ * and its subject when it targets a session. ONE definition for both gates
+ * that key on "the proposal's session" — the decide gate below and the
+ * comment gate (`assertProposalCommentableBy`).
  */
-export async function unreadableTargetSessionIds(
-  rows: readonly Pick<RedactableRow, "targetType" | "targetId">[],
+export function proposalSessionIds(row: {
+  targetType: string;
+  targetId: string | null;
+  sessionId: string | null;
+}): string[] {
+  const ids = targetSessionIds([row]);
+  if (row.sessionId && isLikelyUUID(row.sessionId)) ids.push(row.sessionId);
+  return [...new Set(ids)];
+}
+
+/** Of `ids`, those that EXIST and `reader` may not read. Two batched selects. */
+async function unreadableSessionIds(
+  ids: readonly string[],
   reader: SessionReader
 ): Promise<Set<string>> {
-  const ids = [
-    ...new Set(
-      rows
-        .filter((r) => SESSION_TARGET_TYPES.has(r.targetType))
-        .map((r) => r.targetId)
-        .filter((id): id is string => !!id && isLikelyUUID(id))
-    ),
-  ];
-  if (ids.length === 0) return new Set();
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Set();
   const [existing, readable] = await Promise.all([
     db
       .select({ id: focusSessions.id })
       .from(focusSessions)
-      .where(inArray(focusSessions.id, ids)),
+      .where(inArray(focusSessions.id, unique)),
     db
       .select({ id: focusSessions.id })
       .from(focusSessions)
-      .where(and(inArray(focusSessions.id, ids), sessionReadableWhere(reader))),
+      .where(
+        and(inArray(focusSessions.id, unique), sessionReadableWhere(reader))
+      ),
   ]);
   const ok = new Set(readable.map((r) => r.id));
   return new Set(existing.map((r) => r.id).filter((id) => !ok.has(id)));
+}
+
+/** The session ids these rows TARGET that exist and `reader` may not read. */
+export async function unreadableTargetSessionIds(
+  rows: readonly Pick<RedactableRow, "targetType" | "targetId">[],
+  reader: SessionReader
+): Promise<Set<string>> {
+  return unreadableSessionIds(targetSessionIds(rows), reader);
+}
+
+/**
+ * THE definition of "a proposal about a session the viewer cannot read" for
+ * the DECIDE gate (founder decision 2026-09-27: nobody decides what they cannot
+ * read): every existing session in `proposalSessionIds` of these rows that
+ * `reader` may not read. A row is undecidable when ANY of its sessions is in
+ * the returned set.
+ *
+ * Wider than redaction on purpose: redaction withholds only a session TARGET's
+ * copied content, because only that row carries session content. A proposal
+ * FILED in a private run (`session_id`) keeps its own content visible to its
+ * reviewers, but deciding it still needs a reader of that run.
+ */
+export async function unreadableProposalSessionIds(
+  rows: readonly {
+    targetType: string;
+    targetId: string | null;
+    sessionId: string | null;
+  }[],
+  reader: SessionReader
+): Promise<Set<string>> {
+  return unreadableSessionIds(rows.flatMap(proposalSessionIds), reader);
 }
 
 /**

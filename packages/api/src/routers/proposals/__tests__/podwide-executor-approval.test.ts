@@ -420,7 +420,9 @@ describe("the pod-wide authority gate runs BEFORE any executor dispatch", () => 
   );
 
   it("approve: computeCanReviewApproval precedes applyProposalApproval", () => {
-    const gate = ROUTER.indexOf("const { allowed: canApprove }");
+    const gate = ROUTER.indexOf(
+      "const { allowed: canApprove, reason: approveReason }"
+    );
     const apply = ROUTER.indexOf(
       "return await applyProposalApproval({ proposal, userId, input, ctx });"
     );

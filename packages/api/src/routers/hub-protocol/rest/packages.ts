@@ -7,7 +7,7 @@
  */
 
 import { z } from "zod";
-import type { HubHono } from "./_shared.js";
+import { type HubHono, httpStatusForTrpcError } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
   materializeWorkspaceCore,
@@ -698,13 +698,13 @@ export function registerPackagesRoutes(app: HubHono): void {
       ) {
         return c.json(
           { error: "Compose overlay failed", detail: (e as Error).message },
-          500
+          httpStatusForTrpcError(e) as never
         );
       }
       // The remaining case is an idempotent-create failure.
       return c.json(
         { error: "Workspace creation failed", detail: (e as Error).message },
-        500
+        httpStatusForTrpcError(e) as never
       );
     }
 

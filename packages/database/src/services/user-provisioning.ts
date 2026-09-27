@@ -11,6 +11,7 @@ import { db } from "../client-pg.js";
 import { users } from "../schema/users.js";
 import { workspaces, workspaceMembers } from "../schema/workspaces.js";
 import { projects } from "../schema/projects.js";
+import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import { projectMembers } from "../schema/project-members.js";
 import {
   federatedAccessReceipts,
@@ -962,20 +963,17 @@ export async function seedAdminUser(
         );
     }
 
-    // Query the user's own non-system workspace directly. A generic
-    // `findFirst` membership can return pod-admin, which made an otherwise
-    // idempotent bootstrap create another personal workspace on retry.
-    const existingPersonalWorkspace = await tx.query.workspaces.findFirst({
-      where: and(
-        eq(workspaces.ownerId, identityId),
-        isNull(workspaces.systemSlug),
-        isNull(workspaces.archivedAt)
-      ),
-      columns: { id: true },
-    });
-    if (existingPersonalWorkspace) {
+    // The ONE ordered default-workspace lookup (never a system workspace,
+    // never archived, earliest joined + id tie-break) — the same door every api
+    // caller uses. An unordered `findFirst` here could answer differently on
+    // each retry of an otherwise idempotent bootstrap (RV1 S7).
+    const existingPersonalWorkspaceId = await findUserDefaultWorkspaceId(
+      tx,
+      identityId
+    );
+    if (existingPersonalWorkspaceId) {
       return {
-        workspaceId: existingPersonalWorkspace.id,
+        workspaceId: existingPersonalWorkspaceId,
         alreadyExisted: !!existingUser,
       };
     }

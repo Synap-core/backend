@@ -19,6 +19,8 @@ import {
   resolveWorkspacePlacement,
   FacetProfileKindError,
   FacetKindMismatchError,
+  roleFacetIsPodWide,
+  WORKSPACE_MEMBERSHIP_ROLE_CATEGORY,
 } from "@synap/database";
 import { entities, profiles } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
@@ -128,6 +130,7 @@ export const facetProcs = {
           id: string;
           slug: string;
           scope: string;
+          roleCategory?: string | null;
           profileKind: string | null;
           isActive: boolean;
         } | null = null;
@@ -139,6 +142,7 @@ export const facetProcs = {
                 id: true,
                 slug: true,
                 scope: true,
+                roleCategory: true,
                 profileKind: true,
                 isActive: true,
               },
@@ -176,10 +180,17 @@ export const facetProcs = {
         // `FacetRepository.attach` enforces the same rule on the stored row
         // (storedFacetWorkspaceId); deciding it here too keeps the persisted
         // `resolvedWorkspaceId` and the governance lens honest.
-        const stayPodWide =
-          activeRole?.scope === "system" || activeRole?.scope === "shared";
+        // Same rule as the write door (roleFacetIsPodWide): a per-workspace
+        // membership role (team-member) follows its lens instead.
+        const stayPodWide = roleFacetIsPodWide(activeRole);
         if (stayPodWide) {
           facetWorkspaceId = null;
+        } else if (
+          activeRole?.roleCategory === WORKSPACE_MEMBERSHIP_ROLE_CATEGORY
+        ) {
+          // Membership of a workspace: the lens IS the meaning — the parent's
+          // workspace, else the caller's.
+          facetWorkspaceId = parent.workspaceId ?? ctx.workspaceId ?? null;
         } else if (parent.workspaceId != null) {
           // A workspace-private role (or a non-role row) follows its parent.
           facetWorkspaceId = parent.workspaceId;

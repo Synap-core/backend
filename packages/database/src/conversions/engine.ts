@@ -43,6 +43,7 @@ import {
 } from "./manifest.js";
 import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
 import { foldPropertyKey } from "../services/did-you-mean.js";
+import { WORKSPACE_MEMBERSHIP_ROLE_CATEGORY } from "../utils/facet-visibility.js";
 import type { ProfileRetirement } from "../utils/resolve-profile-for-apply.js";
 import {
   backfillConversionRetirements,
@@ -1743,6 +1744,7 @@ async function applyReconcileFacetScope(
         AND lf.workspace_id IS NOT NULL
         AND p.profile_kind = 'role'
         AND p.scope IN ('shared', 'system')
+        AND p.role_category IS DISTINCT FROM ${WORKSPACE_MEMBERSHIP_ROLE_CATEGORY}::text
         AND (${slug}::text IS NULL OR p.slug = ${slug}::text)
         AND NOT EXISTS (
           SELECT 1 FROM entity_facets pw
@@ -1777,6 +1779,7 @@ async function countLensedSharedRoleFacets(
     JOIN profiles p ON p.id = f.profile_id
     WHERE f.deleted_at IS NULL AND f.workspace_id IS NOT NULL
       AND p.profile_kind = 'role' AND p.scope IN ('shared', 'system')
+      AND p.role_category IS DISTINCT FROM ${WORKSPACE_MEMBERSHIP_ROLE_CATEGORY}::text
       AND (${slug}::text IS NULL OR p.slug = ${slug}::text)
   `;
   return r[0]?.n ?? 0;
@@ -2028,6 +2031,7 @@ export async function computeCounts(
           JOIN profiles p ON p.id = lf.profile_id
           WHERE lf.deleted_at IS NULL AND lf.workspace_id IS NOT NULL
             AND p.profile_kind = 'role' AND p.scope IN ('shared', 'system')
+            AND p.role_category IS DISTINCT FROM ${WORKSPACE_MEMBERSHIP_ROLE_CATEGORY}::text
             AND (${slug}::text IS NULL OR p.slug = ${slug}::text)
             AND NOT EXISTS (
               SELECT 1 FROM entity_facets pw

@@ -58,6 +58,7 @@ import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import { resolveAskResolution } from "@synap-core/types/ask";
+import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
@@ -367,6 +368,14 @@ export interface AttestExpectedOutputParams {
   /** Owner floor AND the attesting identity — they are the same person. */
   userId: string;
   expectedLabel: string;
+  /**
+   * `true` ONLY from the grade door (`recordSessionEvaluation`, a human
+   * verdict): the person's pass/fail IS the answer a criterion slot's
+   * `choose` ask asked for, so discharging it is not "closing a question
+   * unanswered". Honoured on a CRITERION slot only — any other slot with an
+   * answer-shaped ask is still refused. Never set from a wire input.
+   */
+  criterionGraded?: boolean;
 }
 
 export type AttestExpectedOutputResult =
@@ -428,7 +437,9 @@ export async function attestExpectedOutput(
     const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)
       ? (locked.expectedOutputs as ExpectedOutput[])
       : [];
-    const chosen = selectSlotToAttest(current, expectedLabel);
+    const chosen = selectSlotToAttest(current, expectedLabel, {
+      criterionGraded: params.criterionGraded === true,
+    });
     if ("refused" in chosen) return { status: chosen.refused };
     const { index } = chosen;
     const slot = current[index]!;
@@ -534,7 +545,8 @@ function slotAttestedEventData(
  */
 export function selectSlotToAttest(
   outputs: ExpectedOutput[],
-  expectedLabel: string | null | undefined
+  expectedLabel: string | null | undefined,
+  opts: { criterionGraded?: boolean } = {}
 ):
   | { index: number }
   | {
@@ -566,7 +578,11 @@ export function selectSlotToAttest(
   // answered, never attested: "I did this" on "Which region?" would close the
   // slot with the agent's question unanswered. `act` and an absent ask (the
   // legacy verbs) attest as before.
-  if (resolveAskResolution(slot.ask) === "answer") {
+  // The ONE exception: a criterion slot discharged BY its grade — the
+  // verdict is the answer its pass/fail ask wanted (see `criterionGraded`).
+  const gradedCriterion =
+    opts.criterionGraded === true && slot.kind === CRITERION_SLOT_KIND;
+  if (resolveAskResolution(slot.ask) === "answer" && !gradedCriterion) {
     return { refused: "answer_required" };
   }
   return { index };

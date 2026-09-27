@@ -24,18 +24,10 @@ import { describe, it, expect } from "vitest";
  *   - RESPONSE schemas, on purpose: they validate nothing the caller sends.
  */
 
-// Peer-held files on 2026-09-25 (uncommitted edits by another session) — left
-// unmigrated rather than editing under a peer. A RATCHET: the test fails if a
-// route here becomes closed (delete the line) or a NEW open route appears.
-const KNOWN_OPEN = new Set<string>([
-  "GET /focus-sessions [query]", // focus-sessions.ts
-  "GET /focus-sessions/:id [query]", // focus-sessions.ts
-  "PATCH /focus-sessions/:id [body]", // focus-sessions.ts
-  "POST /focus-sessions [body]", // focus-sessions.ts
-  "GET /threads [query]", // threads.ts
-  "POST /threads [body]", // _codecs/thread.ts CreateThreadRequestSchema
-  "POST /proposals/dev-approval [body]", // proposals.ts DevApprovalRequestSchema
-]);
+// Peer-held files on 2026-09-25 were migrated on 2026-09-27 (FX-B2): the
+// ratchet is EMPTY. A RATCHET: the test fails if a route listed here becomes
+// closed (delete the line) or a NEW open route appears.
+const KNOWN_OPEN = new Set<string>([]);
 
 type Probe = { key: string; open: boolean };
 
@@ -109,5 +101,28 @@ describe("tripwire: Hub workspaceId inputs are uuid-validated at the door", () =
     ).toBe(true);
     // `""` = absent by every handler's convention (`query.workspaceId || null`).
     expect(uuidQueryParam.safeParse("").success).toBe(true);
+  });
+
+  it("path, query and body validate the SAME stored id the same way (one PG_UUID_RE)", async () => {
+    const { uuidQueryParam, uuidParam } =
+      await import("../routers/hub-protocol/rest/_codecs/_openapi.js");
+    const { uuidPathParam, isUuid } =
+      await import("../routers/hub-protocol/rest/_shared.js");
+    // A version/variant nibble zod's RFC `.uuid()` refuses but Postgres stores
+    // — the input on which the old path validator DISAGREED with query/body.
+    const pgOnly = "11111111-1111-1111-1111-111111111111";
+    const rfc = "11111111-1111-4111-8111-111111111111";
+    for (const id of [pgOnly, rfc]) {
+      expect(uuidPathParam.safeParse(id).success).toBe(true);
+      expect(uuidParam.safeParse(id).success).toBe(true);
+      expect(uuidQueryParam.safeParse(id).success).toBe(true);
+      expect(isUuid(id)).toBe(true);
+    }
+    for (const junk of ["notauuid", "c074e8ac"]) {
+      expect(uuidPathParam.safeParse(junk).success).toBe(false);
+      expect(isUuid(junk)).toBe(false);
+    }
+    // Required id: empty is NOT absent on a path.
+    expect(uuidPathParam.safeParse("").success).toBe(false);
   });
 });

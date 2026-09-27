@@ -1302,16 +1302,15 @@ export const focusSessionsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { recordSessionEvaluation, loadSessionEvaluationSummary } =
+      const { loadSessionEvaluationSummary } =
         await import("../services/focus-sessions/evaluations/record.js");
-      const { resumeCheckGateIfMet } =
+      const { gradeCriterionAsOwner } =
         await import("../services/focus-sessions/evaluations/evaluate.js");
-      const out = await recordSessionEvaluation({
+      const { out, resumed } = await gradeCriterionAsOwner({
         sessionId: input.sessionId,
         userId,
         criterionKey: input.criterionKey,
         verdict: input.verdict,
-        evaluatorKind: "human",
         rationale: input.rationale ?? null,
       });
       if (out.status === "not_found" || out.status === "unknown_criterion") {
@@ -1329,10 +1328,6 @@ export const focusSessionsRouter = router({
           message: "reason" in out ? out.reason : out.status,
         });
       }
-      const resumed = await resumeCheckGateIfMet({
-        sessionId: input.sessionId,
-        userId,
-      });
       const row = await db.query.focusSessions.findFirst({
         where: eq(focusSessions.id, input.sessionId),
       });

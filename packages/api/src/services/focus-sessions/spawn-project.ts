@@ -39,22 +39,14 @@
  * `checkPermissionOrPropose` before invoking it.
  */
 
-import {
-  eq,
-  getDb,
-  sql,
-  focusSessions,
-  EventRepository,
-  ProjectRepository,
-  buildProjectProvenance,
-} from "@synap/database";
+import { eq, getDb, focusSessions } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { FocusSession } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { logEvent } from "../../lib/event-helpers.js";
 import { createLinks } from "../links/links-service.js";
-import { setProjectSubject } from "../../utils/project-subject.js";
+import { writeGovernedProject } from "../projects/create-project.js";
 import {
   recordConversion,
   type ConversionReceipt,
@@ -127,32 +119,33 @@ export async function spawnProjectFromSession(
     Record<string, unknown>
   >;
 
-  const eventRepo = new EventRepository(sql);
-  const projectRepo = new ProjectRepository(database, eventRepo);
-  const created = await projectRepo.create(
-    {
-      name,
-      // The FULL goal, so truncating the name never loses the sentence.
-      description: input.description ?? session.goal,
-      status: "active",
-      metadata: {
-        spawnedFrom: {
-          sessionId: session.id,
-          goal: session.goal,
-          // Deliberately parked here — `projects` has no outputs/tasks notion.
-          expectedOutputs,
-          at: new Date().toISOString(),
-        },
+  // The ONE project write (insert → subject bind → audit → `project.create`
+  // side effects), shared with `createProjectGoverned`. Not the full governed
+  // create: this door's caller already cleared the `project.spawn_from_session`
+  // gate, and a second `project.create` gate would re-propose an approved spawn.
+  // The subject binds only on a REAL create — a reused exact-name project is
+  // somebody's existing container and must not be retitled from this session.
+  const written = await writeGovernedProject(database, {
+    userId: input.userId,
+    agentUserId: input.agentUserId ?? undefined,
+    workspaceId: session.workspaceId ?? null,
+    door: input.door ?? "trpc",
+    name,
+    // The FULL goal, so truncating the name never loses the sentence.
+    description: input.description ?? session.goal,
+    status: "active",
+    metadata: {
+      spawnedFrom: {
+        sessionId: session.id,
+        goal: session.goal,
+        // Deliberately parked here — `projects` has no outputs/tasks notion.
+        expectedOutputs,
+        at: new Date().toISOString(),
       },
-      userId: input.userId,
-      workspaceId: session.workspaceId ?? null,
-      provenance: buildProjectProvenance({
-        door: input.door ?? "trpc",
-        agentUserId: input.agentUserId ?? undefined,
-      }),
     },
-    input.userId
-  );
+    subjectEntityId: session.subjectEntityId ?? undefined,
+  });
+  const created = { ...written.row, deduped: written.status === "deduped" };
 
   // FILE the session into the project it spawned: the session that started a
   // project is that project's first piece of work (founder decision, 2026-09-24).
@@ -177,25 +170,13 @@ export async function spawnProjectFromSession(
     },
   ]);
 
-  // Carry the session's subject through the ONE subject door. Checked, never
-  // thrown: the project exists at this point, so failing the call would report
-  // "failed" about a project that is already in the caller's list.
-  let subjectBound: boolean | undefined;
-  if (session.subjectEntityId) {
-    const bound = await setProjectSubject({
-      db: database,
-      projectId: created.id,
-      workspaceId: session.workspaceId ?? null,
-      entityId: session.subjectEntityId,
-      userId: input.userId,
-    });
-    subjectBound = bound.ok;
-    if (!bound.ok) {
-      logger.warn(
-        { projectId: created.id, sessionId: session.id, reason: bound.reason },
-        "spawnProjectFromSession: subject binding did not land"
-      );
-    }
+  const subjectBound =
+    written.status === "created" ? written.subjectBound : undefined;
+  if (subjectBound === false) {
+    logger.warn(
+      { projectId: created.id, sessionId: session.id },
+      "spawnProjectFromSession: subject binding did not land"
+    );
   }
 
   // Rename + receipt (the ONE conversion recorder, shared with promote).

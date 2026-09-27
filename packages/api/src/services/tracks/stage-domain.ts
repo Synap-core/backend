@@ -28,6 +28,8 @@ import {
   eq,
   inArray,
   isNull,
+  or,
+  drizzleSql,
   isDomainHomeWorkspace,
   userVisibleWhere,
   workspaces,
@@ -58,6 +60,16 @@ export type StageDomainResolution =
     }
   | { resolved: false; slug: string; reason: StageDomainFallbackReason };
 
+/**
+ * The workspace's template identity: the promoted `package_slug` column, else
+ * the older `settings.packageSlug` stamp (pods whose rows predate the column
+ * carry only the stamp — migration 0278 and the boot reconcile's
+ * `templateKeyOf` read both). ONE expression for every read in this file.
+ */
+const templateSlugExpr = drizzleSql<
+  string | null
+>`coalesce(${workspaces.packageSlug}, ${workspaces.settings}->>'packageSlug')`;
+
 /** Live, caller-visible workspaces installed from `slug`, earliest first. */
 async function visibleTemplateWorkspaces(
   db: Db,
@@ -68,7 +80,7 @@ async function visibleTemplateWorkspaces(
   return db
     .select({
       id: workspaces.id,
-      packageSlug: workspaces.packageSlug,
+      packageSlug: templateSlugExpr,
       workspaceType: workspaces.workspaceType,
       systemSlug: workspaces.systemSlug,
       settings: workspaces.settings,
@@ -76,7 +88,12 @@ async function visibleTemplateWorkspaces(
     .from(workspaces)
     .where(
       and(
-        inArray(workspaces.packageSlug, [...slugs]),
+        or(
+          inArray(workspaces.packageSlug, [...slugs]),
+          inArray(drizzleSql`${workspaces.settings}->>'packageSlug'`, [
+            ...slugs,
+          ])
+        ),
         isNull(workspaces.archivedAt),
         userVisibleWhere(workspaces.id, userId)
       )
@@ -168,7 +185,7 @@ export async function workspacePackageSlug(
   workspaceId: string
 ): Promise<string | null> {
   const [row] = await db
-    .select({ packageSlug: workspaces.packageSlug })
+    .select({ packageSlug: templateSlugExpr })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);

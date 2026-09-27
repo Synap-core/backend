@@ -49,6 +49,8 @@ import {
   logger,
   resolveActingContext,
   type HubHono,
+  readJsonBody,
+  httpStatusForTrpcError,
 } from "./_shared.js";
 import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 
@@ -556,7 +558,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       logger.error({ err }, "capabilities list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -786,7 +788,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       logger.error({ err }, "capabilities containers list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -911,7 +913,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       logger.error({ err }, "capabilities apply failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -952,9 +954,9 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         403
       );
     }
-    const parsed = ReconcileCapabilitiesRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = ReconcileCapabilitiesRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json({ error: parsed.error.message }, 400);
     }
@@ -993,7 +995,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       logger.error({ err }, "capabilities reconcile failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1034,9 +1036,9 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         403
       );
     }
-    const parsed = ReconcileConfigsRequestSchema.safeParse(
-      await c.req.json().catch(() => ({}))
-    );
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = ReconcileConfigsRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json({ error: parsed.error.message }, 400);
     }
@@ -1072,7 +1074,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       logger.error({ err }, "configs reconcile failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1147,7 +1149,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       logger.error({ err }, "config detach failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1202,7 +1204,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       logger.error({ err }, "capabilities container delete failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });

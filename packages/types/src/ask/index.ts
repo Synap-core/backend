@@ -325,8 +325,12 @@ export const AskProvideRefSchema = z.discriminatedUnion("kind", [
     kind: z.literal("secret"),
     vaultRef: z.string().refine(isVaultReference, "Must be a vault://<uuid>"),
   }),
-  z.object({ kind: z.literal("connection"), connectionId: z.string().min(1) }),
-  z.object({ kind: z.literal("file"), fileId: z.string().min(1) }),
+  // Both are ROW IDS (a `secrets` connection row, a file entity) — uuids. The
+  // shape is the first floor against a plaintext credential pasted where a
+  // reference belongs: it cannot parse, so it never reaches a row, an event or
+  // a message. The answer door then checks the row is the answerer's.
+  z.object({ kind: z.literal("connection"), connectionId: z.string().uuid() }),
+  z.object({ kind: z.literal("file"), fileId: z.string().uuid() }),
 ]);
 export type AskProvideRef = z.infer<typeof AskProvideRefSchema>;
 
@@ -372,7 +376,13 @@ export type AskAnswerRefusalCode =
   | "unknown_field"
   | "missing_field"
   | "invalid_field"
-  | "provide_mismatch";
+  | "provide_mismatch"
+  /**
+   * The pod's own check (not this pure rule): the reference names nothing the
+   * answerer owns or can see — an unknown / deleted / someone else's secret,
+   * connection or file. Never echoes the reference.
+   */
+  | "provide_unreachable";
 
 export type AskAnswerValidation =
   | {
@@ -539,7 +549,13 @@ function formatFormValue(v: unknown): string {
 export function summarizeAnswer(
   ask: Ask | null | undefined,
   value: AskAnswerValue,
-  text?: string | null
+  text?: string | null,
+  /**
+   * The provided thing's DISPLAY name, when the caller resolved it (the pod's
+   * answer door reads the file's title after checking it is visible). Never a
+   * reference, never a value.
+   */
+  opts?: { refName?: string | null }
 ): string {
   const note = typeof text === "string" ? text.trim() : "";
   const withNote = (head: string) => (note ? `${head} — ${note}` : head);
@@ -567,7 +583,9 @@ export function summarizeAnswer(
           ? `Stored the secret${ask?.mode === "provide" && ask.provide.kind === "secret" ? ` "${ask.provide.name}"` : ""} in the vault`
           : value.ref.kind === "connection"
             ? `Connected${ask?.mode === "provide" && ask.provide.kind === "connection" ? ` ${resolveServiceName(ask.provide.service)}` : " the account"}`
-            : "Shared a file";
+            : opts?.refName?.trim()
+              ? `Attached "${opts.refName.trim()}"`
+              : "Attached a file";
       return withNote(head);
     }
   }
@@ -669,3 +687,13 @@ export function askRefusalIsStale(message: string | null | undefined): boolean {
 
 /** Re-exported beside the form-values schema that applies it. */
 export { redactSecretValues } from "../vault/index.js";
+
+/** A playbook param as an ask — see `./param.ts`. */
+export {
+  PLAYBOOK_PARAM_TYPES,
+  PLAYBOOK_PARAM_FIELD_TYPE,
+  playbookParamFieldType,
+  playbookParamAsk,
+  type PlaybookParamTypeName,
+  type PlaybookParamLike,
+} from "./param.js";

@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, getDb, proposals, eq } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { unlinkProjectFromWorkspace } from "../../../utils/project-workspace.js";
 import { registerProposalExecutor } from "../execution-registry.js";
@@ -65,7 +65,10 @@ export function registerLinkExecutors(): void {
         );
       }
 
-      const result = await unlinkProjectFromWorkspace(db as never, {
+      // The typed handle the helper declares (same as executors/workspace.ts) —
+      // the module-level \`db\` proxy is not that type, and \`as never\` hid it.
+      const database = await getDb();
+      const result = await unlinkProjectFromWorkspace(database, {
         projectId: inner.fromId,
         workspaceId: inner.toId,
         userId: ownerUserId,

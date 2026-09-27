@@ -19,6 +19,7 @@ import { REDACTED_SECRET } from "../vault/index.js";
 import { isHttpUrl } from "../navigation/index.js";
 
 const VAULT_REF = "vault://123e4567-e89b-42d3-a456-426614174000";
+const FILE_ID = "0b7f5f7e-7c1a-4f59-9d35-3f1f3d2f8a01";
 
 const choose: Ask = AskSchema.parse({
   mode: "choose",
@@ -286,7 +287,7 @@ describe("validateAnswerAgainstAsk", () => {
         .ok
     ).toBe(true);
     expect(
-      ok(ask, { type: "provide", ref: { kind: "file", fileId: "f1" } })
+      ok(ask, { type: "provide", ref: { kind: "file", fileId: FILE_ID } })
     ).toMatchObject({
       ok: false,
       code: "provide_mismatch",

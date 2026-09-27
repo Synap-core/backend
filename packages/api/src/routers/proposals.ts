@@ -96,15 +96,11 @@ import {
 } from "@synap/database";
 
 import {
-  reviewAuthorityRequirement,
   computeCanReviewApproval,
-  computeCanReviewApprovalFromFacts,
-  resolveBatchedReviewAuthorityFacts,
+  resolveViewerReviewVerdicts,
   assertCanRetargetProposalDestination,
   assertCanReviewProposal,
   reviewRefusalMessage,
-  type ProposalApprovalPolicy,
-  type ReviewAuthorityReason,
 } from "./proposals/review-authority.js";
 export { type ReviewAuthorityReason } from "./proposals/review-authority.js";
 import {
@@ -548,41 +544,15 @@ export const proposalsRouter = router({
       // distinct workspaces), plus one `users` select for the viewer's agent
       // class, plus one `inArray` over the page's distinct `agentUserId`s, plus
       // `isPodAdmin` only when the page carries a pod-wide row.
-      const reviewFactsFor = await resolveBatchedReviewAuthorityFacts({
+      //
+      // The helper also carries the SESSION rung (founder decision 2026-09-27):
+      // a row about a session the viewer may not read is `false` with reason
+      // `session-only`, so browser and relay hide the verdict.
+      const reviewVerdicts = await resolveViewerReviewVerdicts({
         userId: reviewerId,
         roster: rosterReadFor(ctx),
         rows,
       });
-      // Compute over the typed `rows` (not the casted enriched items) so the
-      // workspaceId/data reads are compiler-checked and can't silently break if
-      // enrichment ever reshapes the display payload.
-      const viewerCanReviewById = new Map<string, boolean>();
-      // viewerCanReviewReason — WHY, alongside the boolean above: a short enum
-      // string (see `ReviewAuthorityReason`) an AuthorityRow can render as
-      // "You can approve because…" / "Requires a workspace admin". It comes out
-      // of the SAME single ladder evaluation as the boolean, so the two can
-      // never disagree.
-      const viewerCanReviewReasonById = new Map<
-        string,
-        ReviewAuthorityReason
-      >();
-      const reviewPolicyById = new Map<string, ProposalApprovalPolicy>();
-      for (const r of rows) {
-        const facts = reviewFactsFor(r);
-        const { allowed, reason } = computeCanReviewApprovalFromFacts({
-          proposal: {
-            workspaceId: r.workspaceId,
-            data: r.data,
-            agentUserId: r.agentUserId,
-          },
-          userId: reviewerId,
-          purpose: "approve",
-          facts,
-        });
-        viewerCanReviewById.set(r.id, allowed);
-        viewerCanReviewReasonById.set(r.id, reason);
-        reviewPolicyById.set(r.id, facts.policy);
-      }
       // revertable — per proposal, "is this proposal's effect undoable?" —
       // computed by `revertableForRow` from the SAME planner the revert mutation
       // uses (:1903), so the UI never hand-mirrors the backend's revert logic
@@ -604,19 +574,11 @@ export const proposalsRouter = router({
         );
       }
       const itemsWithPermission = items.map((it) => {
-        const viewerCanReview = viewerCanReviewById.get(it.id) ?? false;
-        const revertable = revertableById.get(it.id) ?? false;
-        const reasonCode =
-          viewerCanReviewReasonById.get(it.id) ?? "not-authorized";
-        // "not-authorized: requires admin" — the enum code plus which authority
-        // would satisfy this workspace's policy, spelled out for a display string
-        // that doesn't need its own lookup table on the frontend.
+        const verdict = reviewVerdicts.get(it.id);
+        const viewerCanReview = verdict?.viewerCanReview ?? false;
         const viewerCanReviewReason =
-          reasonCode === "not-authorized"
-            ? `not-authorized: requires ${reviewAuthorityRequirement(
-                reviewPolicyById.get(it.id) ?? "owner_and_admins"
-              )}`
-            : reasonCode;
+          verdict?.viewerCanReviewReason ?? "not-authorized";
+        const revertable = revertableById.get(it.id) ?? false;
         return { ...it, viewerCanReview, viewerCanReviewReason, revertable };
       });
 
@@ -1030,28 +992,20 @@ export const proposalsRouter = router({
         data: proposal.data,
       });
 
-      // viewerCanReview / viewerCanReviewReason — the SAME ladder, fact
-      // resolver and reason formatting `list` stamps, so the detail page hides
-      // the verdict exactly when the mutation would refuse it (including the
-      // session rung: nobody decides what they cannot read).
-      const reviewFacts = (
-        await resolveBatchedReviewAuthorityFacts({
+      // viewerCanReview / viewerCanReviewReason — the SAME helper `list`
+      // stamps, so the detail page hides the verdict exactly when the mutation
+      // would refuse it (including the session rung: nobody decides what they
+      // cannot read).
+      const verdict = (
+        await resolveViewerReviewVerdicts({
           userId,
           roster: rosterReadFor(ctx),
           rows: [proposal],
         })
-      )(proposal);
-      const { allowed: viewerCanReview, reason: reviewReason } =
-        computeCanReviewApprovalFromFacts({
-          proposal,
-          userId,
-          purpose: "approve",
-          facts: reviewFacts,
-        });
+      ).get(proposal.id);
+      const viewerCanReview = verdict?.viewerCanReview ?? false;
       const viewerCanReviewReason =
-        reviewReason === "not-authorized"
-          ? `not-authorized: requires ${reviewAuthorityRequirement(reviewFacts.policy)}`
-          : reviewReason;
+        verdict?.viewerCanReviewReason ?? "not-authorized";
 
       return {
         ...(
@@ -1493,6 +1447,7 @@ export const proposalsRouter = router({
             agentUserId: proposal.agentUserId,
             targetType: proposal.targetType,
             targetId: proposal.targetId,
+            sessionId: proposal.sessionId,
           },
           destWorkspaceId: input.workspaceId,
           userId,
@@ -1567,6 +1522,7 @@ export const proposalsRouter = router({
             agentUserId: proposal.agentUserId,
             targetType: proposal.targetType,
             targetId: proposal.targetId,
+            sessionId: proposal.sessionId,
           },
           userId,
           action: "reject",
@@ -1691,6 +1647,7 @@ export const proposalsRouter = router({
           agentUserId: true,
           targetType: true,
           targetId: true,
+          sessionId: true,
         },
       });
       if (!proposal)
@@ -1705,6 +1662,7 @@ export const proposalsRouter = router({
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
           targetId: proposal.targetId,
+          sessionId: proposal.sessionId,
         },
         userId,
         action: "reject",
@@ -1771,6 +1729,7 @@ export const proposalsRouter = router({
           agentUserId: true,
           targetType: true,
           targetId: true,
+          sessionId: true,
         },
       });
       if (!proposal)
@@ -1785,6 +1744,7 @@ export const proposalsRouter = router({
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
           targetId: proposal.targetId,
+          sessionId: proposal.sessionId,
         },
         userId,
         action: "reject",
@@ -1832,6 +1792,7 @@ export const proposalsRouter = router({
           agentUserId: true,
           targetType: true,
           targetId: true,
+          sessionId: true,
         },
       });
       if (!proposal) {
@@ -1860,6 +1821,7 @@ export const proposalsRouter = router({
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
           targetId: proposal.targetId,
+          sessionId: proposal.sessionId,
         },
         userId,
         action: "reopen",
@@ -3128,6 +3090,7 @@ export const proposalsRouter = router({
             agentUserId: target.agentUserId,
             targetType: target.targetType,
             targetId: target.targetId,
+            sessionId: target.sessionId,
           },
           userId,
           action: "reject",

@@ -28,6 +28,7 @@ import {
   httpStatusForTrpcError,
   isUuid,
   logger,
+  readJsonBody,
   resolveActingContext,
   type HubHono,
   type HubVariables,
@@ -37,14 +38,6 @@ import {
 type Ctx = Context<{ Variables: HubVariables }, any>;
 
 const reasoning = z.string().max(2000).optional();
-
-async function readJson(c: Ctx): Promise<unknown> {
-  try {
-    return await c.req.json();
-  } catch {
-    return {};
-  }
-}
 
 /** Scope + acting user, or the error response to return. */
 async function actorFor(
@@ -95,9 +88,11 @@ export function registerWorkspaceOpsRoutes(app: HubHono): void {
     if (!isUuid(workspaceId)) {
       return c.json({ error: "workspaceId must be a UUID" }, 400);
     }
+    const read = await readJsonBody(c);
+    if (!read.ok) return read.res;
     const parsed = z
       .object({ restore: z.boolean().optional(), reasoning })
-      .safeParse(await readJson(c));
+      .safeParse(read.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid body", details: parsed.error.issues },
@@ -126,12 +121,14 @@ export function registerWorkspaceOpsRoutes(app: HubHono): void {
     if (!isUuid(workspaceId)) {
       return c.json({ error: "workspaceId must be a UUID" }, 400);
     }
+    const read = await readJsonBody(c);
+    if (!read.ok) return read.res;
     const parsed = z
       .object({
         name: z.string().trim().min(1).max(100).optional(),
         description: z.string().max(2000).optional(),
       })
-      .safeParse(await readJson(c));
+      .safeParse(read.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid body", details: parsed.error.issues },
@@ -152,13 +149,15 @@ export function registerWorkspaceOpsRoutes(app: HubHono): void {
   app.post("/entities/move", async (c) => {
     const a = await actorFor(c);
     if (!a.ok) return a.res;
+    const read = await readJsonBody(c);
+    if (!read.ok) return read.res;
     const parsed = z
       .object({
         entityIds: z.array(z.string().uuid()).min(1).max(500),
         workspaceId: z.string().uuid(),
         reason: z.string().max(2000).optional(),
       })
-      .safeParse(await readJson(c));
+      .safeParse(read.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid body", details: parsed.error.issues },
@@ -176,6 +175,8 @@ export function registerWorkspaceOpsRoutes(app: HubHono): void {
   app.post("/profiles/grant-access", async (c) => {
     const a = await actorFor(c);
     if (!a.ok) return a.res;
+    const read = await readJsonBody(c);
+    if (!read.ok) return read.res;
     const parsed = z
       .object({
         profileId: z.string().uuid(),
@@ -183,7 +184,7 @@ export function registerWorkspaceOpsRoutes(app: HubHono): void {
         workspaceId: z.string().uuid().optional(),
         reasoning,
       })
-      .safeParse(await readJson(c));
+      .safeParse(read.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid body", details: parsed.error.issues },

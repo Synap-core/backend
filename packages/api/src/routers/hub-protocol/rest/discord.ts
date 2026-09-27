@@ -78,6 +78,7 @@ import {
   resolveActingContext,
   type HubHono,
   httpStatusForTrpcError,
+  readJsonBody,
 } from "./_shared.js";
 
 /**
@@ -1148,11 +1149,11 @@ export function registerDiscordRoutes(app: HubHono): void {
         403
       );
     }
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
     let body: z.infer<typeof ReconcilePodwideRequestSchema>;
     try {
-      body = ReconcilePodwideRequestSchema.parse(
-        await c.req.json().catch(() => ({}))
-      );
+      body = ReconcilePodwideRequestSchema.parse(jsonRead.body);
     } catch (err) {
       return c.json(
         { error: err instanceof Error ? err.message : "Invalid request body" },

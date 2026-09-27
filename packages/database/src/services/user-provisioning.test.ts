@@ -23,7 +23,18 @@ const mocks = vi.hoisted(() => {
       };
     }),
   }));
+  // `findUserDefaultWorkspaceId` (the ONE ordered default-workspace lookup)
+  // reads through `tx.select(...)…limit(1)`.
+  const defaultWorkspaceRows = vi.fn(
+    async (): Promise<Array<{ workspaceId: string }>> => []
+  );
+  const selectChain: Record<string, unknown> = {};
+  for (const k of ["from", "innerJoin", "where", "orderBy"]) {
+    selectChain[k] = vi.fn(() => selectChain);
+  }
+  selectChain.limit = defaultWorkspaceRows;
   const tx = {
+    select: vi.fn(() => selectChain),
     query: {
       federatedAccessReceipts: { findFirst: accessReceiptFind },
       federatedIdentityLinks: { findFirst: identityLinkFind },
@@ -40,6 +51,7 @@ const mocks = vi.hoisted(() => {
     })),
   };
   return {
+    defaultWorkspaceRows,
     accessReceiptFind,
     identityLinkFind,
     userFind,
@@ -86,6 +98,7 @@ beforeEach(() => {
   mocks.projectFind.mockResolvedValue(undefined);
   mocks.workspaceMemberFind.mockResolvedValue(undefined);
   mocks.projectMemberFind.mockResolvedValue(undefined);
+  mocks.defaultWorkspaceRows.mockResolvedValue([]);
 });
 
 describe("activateFederatedMember", () => {
@@ -233,9 +246,10 @@ describe("seedAdminUser", () => {
     // The local Pod-admin workspace is created once, while the owner already
     // has a regular workspace. This keeps the test focused on the issuer link
     // rather than exercising personal-workspace/twin provisioning.
-    mocks.workspaceFind
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ id: "workspace-1" });
+    mocks.workspaceFind.mockResolvedValueOnce(undefined);
+    mocks.defaultWorkspaceRows.mockResolvedValue([
+      { workspaceId: "workspace-1" },
+    ]);
     mocks.workspaceMemberFind
       .mockResolvedValueOnce(undefined)
       .mockResolvedValue({ role: "owner" });
@@ -277,9 +291,10 @@ describe("seedAdminUser", () => {
     mocks.userFind.mockResolvedValue({ id: "pod-user-1" });
     mocks.workspaceFind
       .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ id: "workspace-1" })
-      .mockResolvedValueOnce({ id: "pod-admin" })
-      .mockResolvedValueOnce({ id: "workspace-1" });
+      .mockResolvedValueOnce({ id: "pod-admin" });
+    mocks.defaultWorkspaceRows.mockResolvedValue([
+      { workspaceId: "workspace-1" },
+    ]);
     mocks.workspaceMemberFind
       .mockResolvedValueOnce(undefined)
       .mockResolvedValue({ role: "owner" });
@@ -312,6 +327,7 @@ describe("seedAdminUser — D7: no auto-created blank workspace", () => {
     mocks.userFind.mockResolvedValue(undefined);
     // pod-admin missing (created here), then no personal workspace exists.
     mocks.workspaceFind.mockResolvedValue(undefined);
+    mocks.defaultWorkspaceRows.mockResolvedValue([]);
     mocks.workspaceMemberFind.mockResolvedValue(undefined);
 
     const result = await seedAdminUser({
@@ -337,13 +353,14 @@ describe("seedAdminUser — D7: no auto-created blank workspace", () => {
 
   it("an EXISTING pod keeps its personal workspace (returned, untouched)", async () => {
     mocks.userFind.mockResolvedValue({ id: "pod-user-1" });
-    mocks.workspaceFind
-      .mockResolvedValueOnce({
-        id: "pod-admin",
-        workspaceType: "operational",
-        settings: { systemSlug: "pod-admin", surfaceClass: "admin" },
-      })
-      .mockResolvedValueOnce({ id: "workspace-legacy" });
+    mocks.workspaceFind.mockResolvedValueOnce({
+      id: "pod-admin",
+      workspaceType: "operational",
+      settings: { systemSlug: "pod-admin", surfaceClass: "admin" },
+    });
+    mocks.defaultWorkspaceRows.mockResolvedValue([
+      { workspaceId: "workspace-legacy" },
+    ]);
     mocks.workspaceMemberFind.mockResolvedValue({ role: "owner" });
 
     const result = await seedAdminUser({
@@ -354,6 +371,29 @@ describe("seedAdminUser — D7: no auto-created blank workspace", () => {
     expect(
       mocks.insertedValues.filter((v) => "workspaceType" in v)
     ).toHaveLength(0);
+  });
+});
+
+describe("seedAdminUser — the ONE ordered default-workspace lookup (RV1 S7)", () => {
+  it("resolves the existing workspace via findUserDefaultWorkspaceId, not an unordered findFirst", async () => {
+    mocks.userFind.mockResolvedValue({ id: "pod-user-1" });
+    mocks.workspaceFind.mockResolvedValueOnce({
+      id: "pod-admin",
+      workspaceType: "operational",
+      settings: { systemSlug: "pod-admin", surfaceClass: "admin" },
+    });
+    // An unordered findFirst would answer this; the ordered door must not.
+    mocks.workspaceFind.mockResolvedValue({ id: "unordered-pick" });
+    mocks.defaultWorkspaceRows.mockResolvedValue([
+      { workspaceId: "ordered-pick" },
+    ]);
+    mocks.workspaceMemberFind.mockResolvedValue({ role: "owner" });
+    const result = await seedAdminUser({
+      kratosIdentityId: "pod-user-1",
+      email: "person@example.com",
+    });
+    expect(result.workspaceId).toBe("ordered-pick");
+    expect(mocks.tx.select).toHaveBeenCalled();
   });
 });
 

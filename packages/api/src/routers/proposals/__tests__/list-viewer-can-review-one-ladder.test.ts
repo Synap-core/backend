@@ -154,10 +154,14 @@ async function listVerdicts(
     workspaceId: string | null;
     data: unknown;
     agentUserId: string | null;
+    targetType: string;
+    targetId: string | null;
+    sessionId: string | null;
   }>
 ) {
   const factsFor = await resolveBatchedReviewAuthorityFacts({
     userId: viewerId,
+    roster: true,
     rows,
   });
   return new Map(
@@ -202,6 +206,9 @@ const agentOwnedRow = {
   workspaceId: WS,
   data: { sourceId: AGENT, changeType: "deploy_approval" },
   agentUserId: AGENT,
+  targetType: "entity",
+  targetId: null,
+  sessionId: null,
 };
 
 describe("PRE-MERGE HOLE 1 — the list had no agent-class floor", () => {
@@ -250,9 +257,13 @@ describe("PRE-MERGE HOLE 1 — the list had no agent-class floor", () => {
         workspaceId: agentOwnedRow.workspaceId,
         data: agentOwnedRow.data,
         agentUserId: agentOwnedRow.agentUserId,
+        targetType: "entity",
+        targetId: null,
+        sessionId: null,
       },
       userId: AGENT,
       purpose: "approve",
+      roster: true,
     });
 
     expect(listed?.allowed).toBe(mutation.allowed);
@@ -272,6 +283,9 @@ describe("PRE-MERGE HOLE 1 — the list had no agent-class floor", () => {
       workspaceId: WS,
       data: { sourceId: HUMAN },
       agentUserId: null,
+      targetType: "entity",
+      targetId: null,
+      sessionId: null,
     };
     expect(
       (await listVerdicts(AGENT, [notMine])).get("p-someone-else")
@@ -289,6 +303,9 @@ describe("PRE-MERGE HOLE 2 — pod-wide rows were an unconditional allow", () =>
     workspaceId: null,
     data: { sourceId: HUMAN },
     agentUserId: null,
+    targetType: "entity",
+    targetId: null,
+    sessionId: null,
   };
 
   it("a stranger no longer gets a review affordance on someone else's pod-wide proposal", async () => {
@@ -327,6 +344,9 @@ describe("the batched resolution is O(1) in page size, not O(rows)", () => {
       workspaceId: i % 2 === 0 ? WS : "ws-2",
       data: { sourceId: HUMAN },
       agentUserId: null,
+      targetType: "entity",
+      targetId: null,
+      sessionId: null,
     }));
 
     await listVerdicts(HUMAN, rows);
@@ -345,6 +365,9 @@ describe("the batched resolution is O(1) in page size, not O(rows)", () => {
         workspaceId: WS,
         data: { sourceId: HUMAN },
         agentUserId: null,
+        targetType: "entity",
+        targetId: null,
+        sessionId: null,
       },
     ];
     await listVerdicts(HUMAN, wsOnly);
@@ -353,7 +376,15 @@ describe("the batched resolution is O(1) in page size, not O(rows)", () => {
     h.queryReads = [];
     await listVerdicts(HUMAN, [
       ...wsOnly,
-      { id: "p-pod", workspaceId: null, data: {}, agentUserId: null },
+      {
+        id: "p-pod",
+        workspaceId: null,
+        data: {},
+        agentUserId: null,
+        targetType: "entity",
+        targetId: null,
+        sessionId: null,
+      },
     ]);
     expect(h.queryReads).toContain("workspaces.findFirst");
   });
@@ -376,6 +407,9 @@ describe("PRE-MERGE HOLE 3 — the agent-owner rung was never resolved", () => {
     // and only the agent-owner rung can admit the human.
     data: { sourceId: AGENT },
     agentUserId: AGENT,
+    targetType: "entity",
+    targetId: null,
+    sessionId: null,
   };
 
   it("the human who OWNS the acting agent gets viewerCanReview:true as a plain member", async () => {
@@ -401,9 +435,13 @@ describe("PRE-MERGE HOLE 3 — the agent-owner rung was never resolved", () => {
         workspaceId: myAgentsProposal.workspaceId,
         data: myAgentsProposal.data,
         agentUserId: myAgentsProposal.agentUserId,
+        targetType: "entity",
+        targetId: null,
+        sessionId: null,
       },
       userId: HUMAN,
       purpose: "approve",
+      roster: true,
     });
     expect(listed?.allowed).toBe(mutation.allowed);
     expect(listed?.allowed).toBe(true);
@@ -449,9 +487,13 @@ describe("PRE-MERGE HOLE 3 — the agent-owner rung was never resolved", () => {
       workspaceId: WS,
       data: { sourceId: HUMAN },
       agentUserId: null,
+      targetType: "entity",
+      targetId: null,
+      sessionId: null,
     };
     const factsFor = await resolveBatchedReviewAuthorityFacts({
       userId: HUMAN,
+      roster: true,
       rows: [noAgentRow, myAgentsProposal],
     });
     expect(factsFor(noAgentRow).agentCreatedByUserId).toBeUndefined();
@@ -480,6 +522,9 @@ describe("the ORDER of the rungs is the guarantee", () => {
       // ownership rung — the only thing that can grant here is the role rung.
       data: { sourceId: "someone-entirely-else" },
       agentUserId: null,
+      targetType: "entity",
+      targetId: null,
+      sessionId: null,
     };
 
     // Proof the role rung WOULD grant on these exact inputs: same policy, same
@@ -515,13 +560,37 @@ describe("tripwire: the list must not rebuild the ladder", () => {
   it("proposals.ts calls no ladder rung directly", () => {
     // NON-VACUITY first: the file must still reach the shared ladder at all,
     // so a rename or a deleted call site fails loudly here instead of making
-    // the "no rungs" assertion below trivially true.
+    // the "no rungs" assertion below trivially true. `list` and `get` both
+    // stamp the verdict through ONE helper (2026-09-27, when `get` started
+    // exposing it), and that helper is the one place that reaches the ladder.
+    expect((ROUTER.match(/resolveViewerReviewVerdicts\(/g) ?? []).length).toBe(
+      2
+    );
     expect(
       (ROUTER.match(/computeCanReviewApprovalFromFacts\(/g) ?? []).length
-    ).toBe(1);
-    expect(
-      (ROUTER.match(/resolveBatchedReviewAuthorityFacts\(/g) ?? []).length
-    ).toBe(1);
+    ).toBe(0);
+    const HELPER = strip(
+      readFileSync(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../review-authority.ts"
+        ),
+        "utf-8"
+      )
+    );
+    const helperAt = HELPER.indexOf(
+      "export async function resolveViewerReviewVerdicts"
+    );
+    expect(helperAt, "the verdict helper vanished").toBeGreaterThan(-1);
+    // Bounded to THIS function: `computeCanReviewApproval` below it also
+    // calls the ladder and would satisfy an unbounded slice.
+    const nextExport = HELPER.indexOf("\nexport ", helperAt + 1);
+    const helperBody = HELPER.slice(helperAt, nextExport);
+    expect(helperBody).not.toMatch(
+      /export async function computeCanReviewApproval\(/
+    );
+    expect(helperBody).toMatch(/await resolveBatchedReviewAuthorityFacts\(/);
+    expect(helperBody).toMatch(/computeCanReviewApprovalFromFacts\(/);
 
     // The rungs themselves belong to `computeCanReviewApprovalFromFacts`. A
     // router that calls one directly is re-opening the fork this merge closed.

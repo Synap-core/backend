@@ -6,3 +6,4 @@ export * from "./session.js";
 export * from "./track.js";
 export * from "./needs-you.js";
 export * from "./templates.js";
+export * from "./work-from-template.js";

@@ -145,7 +145,10 @@ vi.mock("../../utils/proposal-visibility.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    assertProposalVisibleTo: (...args: unknown[]) => visibility(...args),
+    // The anchor gate's door (visibility OR a reader of the proposal's
+    // session, decision 2026-09-27) — pglite-tested in
+    // routers/proposals/__tests__/proposal-review-session-gate.
+    assertProposalCommentableBy: (...args: unknown[]) => visibility(...args),
   };
 });
 
@@ -199,7 +202,12 @@ describe("sendMessage — anchored comment", () => {
       },
       anchor: { proposalId: PROPOSAL, opRef: "$e1", contentVersion: 2 },
     });
-    expect(visibility).toHaveBeenCalledWith(PROPOSAL, USER, expect.anything());
+    // A human tRPC door honours the session roster (`rosterReadFor(ctx)`).
+    expect(visibility).toHaveBeenCalledWith(
+      PROPOSAL,
+      { userId: USER, roster: true },
+      expect.anything()
+    );
   });
 
   it("refuses an anchor naming a proposal the caller cannot see — no row", async () => {

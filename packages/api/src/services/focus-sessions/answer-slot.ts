@@ -52,6 +52,8 @@ import { askFingerprint } from "@synap-core/types/ask";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { stampUnblocked } from "./block-output.js";
+import { paramValueFromAnswer } from "./param-slots.js";
+import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_SLOT_ANSWER_ACTION,
@@ -88,6 +90,13 @@ export interface AnswerExpectedOutputParams {
    * (the room-reply entrance, which answers in words whatever the ask).
    */
   askFingerprint?: string;
+  /**
+   * `false` keeps a human-owned slot the PERSON'S after the answer — used
+   * only for a criterion slot, whose answer is a grade: the grade door then
+   * discharges the slot (`done`, attested), so handing it to an agent first
+   * would make that discharge impossible. Default `true`.
+   */
+  handBack?: boolean;
   now?: Date;
 }
 
@@ -152,11 +161,12 @@ export function selectSlotToAnswer(
 export function stampAnswered(
   outputs: ExpectedOutput[],
   index: number,
-  answer: SlotAnswer
+  answer: SlotAnswer,
+  handBack = true
 ): ExpectedOutput[] {
   const slot = outputs[index]!;
   const handedBack =
-    slot.owner === "human"
+    slot.owner === "human" && handBack
       ? stampUnblocked(outputs, slot.label)[index]!
       : { ...slot };
   return outputs.map((o, i) => (i === index ? { ...handedBack, answer } : o));
@@ -178,6 +188,7 @@ export async function answerExpectedOutput(
           workspaceId: focusSessions.workspaceId,
           channelId: focusSessions.channelId,
           agentIds: focusSessions.agentIds,
+          metadata: focusSessions.metadata,
         })
         .from(focusSessions)
         .where(
@@ -213,17 +224,38 @@ export async function answerExpectedOutput(
           : {}),
         ...(params.value ? { value: params.value } : {}),
       };
-      const next = stampAnswered(current, chosen.index, answer);
+      const handBack = params.handBack !== false;
+      const next = stampAnswered(current, chosen.index, answer, handBack);
+      // A PARAM slot's answer IS the param's value: it lands in the run's
+      // params (`RUN_PARAMS_METADATA_KEY`) in the same write, under the same
+      // lock, so the answer and the value can never disagree. A value that
+      // does not read as the param's type is refused by the direct door
+      // before this point; from a room reply (words, whatever the ask) it is
+      // recorded as the answer and writes no param.
+      const param = paramValueFromAnswer(before, params.value, text);
+      const metadata =
+        param.status === "value"
+          ? withRunParam(locked.metadata, param.name, param.value)
+          : undefined;
       await tx
         .update(focusSessions)
-        .set({ expectedOutputs: next, updatedAt: now })
+        .set({
+          expectedOutputs: next,
+          ...(metadata ? { metadata } : {}),
+          updatedAt: now,
+        })
         .where(eq(focusSessions.id, locked.id));
 
       // The history row commits iff the answer does.
       await logEvent(
         params.userId,
         FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
-        slotAnsweredEventData(locked.id, before, answer),
+        slotAnsweredEventData(
+          locked.id,
+          before,
+          answer,
+          before.owner === "human" && handBack
+        ),
         {
           subjectId: locked.id,
           subjectType: FOCUS_SESSION_SUBJECT_TYPE,
@@ -237,7 +269,7 @@ export async function answerExpectedOutput(
         expectedLabel: before.label,
         kind: before.kind,
         answer,
-        handedBack: before.owner === "human",
+        handedBack: before.owner === "human" && handBack,
         before,
         session: {
           id: locked.id,
@@ -263,7 +295,8 @@ export async function answerExpectedOutput(
         data: slotAnsweredEventData(
           result.session.id,
           result.before,
-          result.answer
+          result.answer,
+          result.handedBack
         ),
       });
     } catch (err) {
@@ -276,16 +309,38 @@ export async function answerExpectedOutput(
   return result;
 }
 
+/** The metadata bag with one run param set, every other key untouched. Pure. */
+export function withRunParam(
+  metadata: unknown,
+  name: string,
+  value: unknown
+): Record<string, unknown> {
+  const bag =
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>)
+      : {};
+  const stored = bag[RUN_PARAMS_METADATA_KEY];
+  const runParams =
+    stored && typeof stored === "object" && !Array.isArray(stored)
+      ? (stored as Record<string, unknown>)
+      : {};
+  return {
+    ...bag,
+    [RUN_PARAMS_METADATA_KEY]: { ...runParams, [name]: value },
+  };
+}
+
 function slotAnsweredEventData(
   sessionId: string,
   slot: ExpectedOutput,
-  answer: SlotAnswer
+  answer: SlotAnswer,
+  handedBack: boolean
 ): Record<string, unknown> {
   return {
     sessionId,
     expectedLabel: slot.label,
     kind: slot.kind,
-    handedBack: slot.owner === "human",
+    handedBack,
     messageId: answer.messageId,
     answeredBy: answer.answeredBy,
     answeredAt: answer.answeredAt,

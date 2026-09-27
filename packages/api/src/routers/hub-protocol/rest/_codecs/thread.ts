@@ -8,6 +8,8 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { AskSchema } from "@synap-core/types/ask";
+import { uuidQueryParam } from "./_openapi.js";
 import {
   ROOM_POST_KINDS,
   ROOM_POST_SLOT_LABEL_MAX,
@@ -45,7 +47,7 @@ export const MessageSchema = z
 export const CreateThreadRequestSchema = z
   .object({
     userId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: uuidQueryParam,
     title: z.string().optional(),
     parentChannelId: z.string().optional(),
     agentId: z.string().optional(),
@@ -92,8 +94,11 @@ export const PostMessageRequestSchema = z
       .max(ROOM_POST_SLOT_LABEL_MAX)
       .optional()
       .describe(
-        "With kind 'question' (agent posts only): the label of the session output the question is about. The session owner's reply is recorded on that output as its `answer` and hands it back to the agent."
+        "With kind 'question' (agent posts only): the label of the session output the question is about. The question is filed ON that output (the owner's, with the question as its why), and the owner's answer is recorded as its `answer` and hands it back to the agent."
       ),
+    ask: AskSchema.optional().describe(
+      "With kind 'question' + slotLabel (agent posts only): HOW the person answers — the output's typed ask (confirm | choose | form | act | provide). Omit for a free-text answer."
+    ),
   })
   .openapi("PostMessageRequest");
 
@@ -102,6 +107,12 @@ export const PostMessageResponseSchema = z
   .object({
     success: z.literal(true),
     messageId: z.string(),
+    slot: z
+      .object({ status: z.string() })
+      .optional()
+      .describe(
+        "An agent's question naming a slotLabel: 'blocked' when the question is now that output's ask; otherwise why not (unknown_label, already_done, no_session, not_found, failed)."
+      ),
   })
   .openapi("PostMessageResponse");
 

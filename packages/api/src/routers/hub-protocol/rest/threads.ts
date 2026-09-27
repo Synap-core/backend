@@ -26,6 +26,8 @@ import {
   withoutRoomPostMeta,
 } from "../../../services/messaging/room-post-kind.js";
 import { recordOwnerRoomReply } from "../../../services/focus-sessions/session-answer.js";
+import { fileRoomQuestionOnSlot } from "../../../services/focus-sessions/room-question-slot.js";
+import type { SlotAsk } from "@synap/playbooks";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
   db,
@@ -48,7 +50,7 @@ import {
   type MessageRole,
 } from "@synap/database/schema";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import {
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
@@ -193,7 +195,7 @@ export function registerThreadsRoutes(app: HubHono): void {
     request: {
       query: z.object({
         userId: z.string(),
-        workspaceId: z.string().optional(),
+        workspaceId: uuidQueryParam.optional(),
         limit: z.string().optional(),
       }),
     },
@@ -281,7 +283,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, userId }, "listThreads failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -395,7 +397,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, threadId }, "updateThreadContext failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -742,7 +744,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err }, "createThread failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -800,7 +802,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, threadId }, "getBranches failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -871,7 +873,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, threadId }, "getThreadMessages failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1079,7 +1081,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, threadId }, "postMessagesBatch failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1132,6 +1134,14 @@ export function registerThreadsRoutes(app: HubHono): void {
     }
     const { threadId } = c.req.valid("param");
     const body = c.req.valid("json");
+    // A typed ask only rides a question ABOUT A SLOT — it becomes that slot's
+    // ask (`fileRoomQuestionOnSlot`). Refused before anything is written.
+    if (body.ask && (body.kind !== "question" || !body.slotLabel?.trim())) {
+      return c.json(
+        { error: "ask goes with kind 'question' and a slotLabel" },
+        400
+      );
+    }
     try {
       // SECURITY — acting identity MUST come from the verified auth context,
       // never `body.userId` directly (governed-agent-write → ungoverned-
@@ -1272,6 +1282,34 @@ export function registerThreadsRoutes(app: HubHono): void {
         });
       }
 
+      // An AGENT's question about a slot is filed ON the slot as its ask —
+      // the same service the MCP post door reaches (`post-message.ts`). After
+      // the insert: the question stands whatever the slot says.
+      let slot: { status: string } | undefined;
+      if (
+        ctxAgentUserId &&
+        body.kind === "question" &&
+        body.slotLabel?.trim()
+      ) {
+        try {
+          const filed = await fileRoomQuestionOnSlot({
+            channelId: threadId,
+            slotLabel: body.slotLabel,
+            question: body.content,
+            ...(body.ask ? { ask: body.ask as SlotAsk } : {}),
+            agentUserId: ctxAgentUserId,
+            userId,
+          });
+          slot = { status: filed.status };
+        } catch (err) {
+          logger.warn(
+            { err, threadId, messageId: msgId },
+            "question post: filing the question on its slot failed — the post stands"
+          );
+          slot = { status: "failed" };
+        }
+      }
+
       if (body.autoRespond === true && body.role === "user") {
         // Parallel dispatch_agent stamps metadata.agentType so A2AI runs the
         // specialist — not always orchestrator/meta.
@@ -1287,12 +1325,15 @@ export function registerThreadsRoutes(app: HubHono): void {
         });
       }
 
-      return c.json({ success: true as const, messageId: msgId }, 200);
+      return c.json(
+        { success: true as const, messageId: msgId, ...(slot ? { slot } : {}) },
+        200
+      );
     } catch (err) {
       logger.error({ err, threadId }, "postMessage failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });

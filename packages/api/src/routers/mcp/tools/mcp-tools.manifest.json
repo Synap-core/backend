@@ -2568,7 +2568,7 @@
     {
       "name": "synap_promote_session_to_playbook",
       "annotations": {
-        "title": "Promote session to playbook",
+        "title": "Save session as template",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
@@ -2592,7 +2592,7 @@
     {
       "name": "synap_list_playbooks",
       "annotations": {
-        "title": "List playbooks",
+        "title": "List templates",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -2620,7 +2620,7 @@
     {
       "name": "synap_match_playbooks",
       "annotations": {
-        "title": "Match playbooks",
+        "title": "Match templates",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -2651,7 +2651,7 @@
     {
       "name": "synap_create_playbook",
       "annotations": {
-        "title": "Create playbook",
+        "title": "Create template",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
@@ -2768,7 +2768,7 @@
     {
       "name": "synap_set_workspace_focus",
       "annotations": {
-        "title": "Set workspace focus",
+        "title": "Set space focus",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
@@ -3208,7 +3208,7 @@
     {
       "name": "synap_create_workspace",
       "annotations": {
-        "title": "Create workspace",
+        "title": "Create space",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
@@ -3240,7 +3240,7 @@
     {
       "name": "synap_declare_workspace_source",
       "annotations": {
-        "title": "Declare workspace source edge",
+        "title": "Declare space source edge",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
@@ -3294,7 +3294,7 @@
     {
       "name": "synap_list_workspaces",
       "annotations": {
-        "title": "List workspaces",
+        "title": "List spaces",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -3627,7 +3627,7 @@
     {
       "name": "synap_project_use_workspace",
       "annotations": {
-        "title": "Project uses workspace",
+        "title": "Project uses space",
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": false
@@ -3657,12 +3657,12 @@
     {
       "name": "synap_archive_workspace",
       "annotations": {
-        "title": "Archive workspace",
+        "title": "Archive space",
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Archive a workspace (hide it everywhere and PAUSE its workspace-scoped automations; pod-wide automations are untouched), or restore it with restore:true — restore re-enables NOTHING and lists the automations still paused so the person can choose. Owner or pod admin only; system workspaces refused. Always a proposal for an agent — `proposed` is success, surface reviewUrl.",
+      "description": "Archive a Space (the user's word for a workspace — ids and params keep `workspace`): hide it everywhere and PAUSE its space-scoped rules (automations); pod-wide rules are untouched. Or restore it with restore:true — restore re-enables NOTHING and lists the rules still paused so the person can choose. Owner or pod admin only; system spaces refused. Always a proposal for an agent — `proposed` is success, surface reviewUrl.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3685,12 +3685,12 @@
     {
       "name": "synap_update_workspace",
       "annotations": {
-        "title": "Rename workspace",
+        "title": "Rename space",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Rename or re-describe an existing workspace (settings are not editable here). Governed: always a proposal for an agent — `proposed` is success.",
+      "description": "Rename or re-describe an existing Space (the user's word for a workspace; settings are not editable here). Governed: always a proposal for an agent — `proposed` is success.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3712,12 +3712,12 @@
     {
       "name": "synap_move_entities",
       "annotations": {
-        "title": "Move entities to workspace",
+        "title": "Move entities to space",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Move entities into another workspace (e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
+      "description": "Move entities into another Space (workspace; e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3743,12 +3743,12 @@
     {
       "name": "synap_grant_profile_access",
       "annotations": {
-        "title": "Share kind with workspace",
+        "title": "Share kind with space",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Let another workspace see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+      "description": "Let another Space (workspace) see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4125,7 +4125,7 @@
     {
       "name": "synap_list_capabilities",
       "annotations": {
-        "title": "List capabilities",
+        "title": "List tools",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -4179,7 +4179,7 @@
     {
       "name": "synap_run_capability",
       "annotations": {
-        "title": "Run capability",
+        "title": "Run tool",
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": true
@@ -4293,7 +4293,7 @@
     {
       "name": "synap_list_automations",
       "annotations": {
-        "title": "List automations",
+        "title": "List rules",
         "readOnlyHint": true,
         "openWorldHint": false
       },
@@ -4325,7 +4325,7 @@
     {
       "name": "synap_trigger_automation",
       "annotations": {
-        "title": "Trigger automation",
+        "title": "Run rule now",
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": true
@@ -4357,7 +4357,7 @@
     {
       "name": "synap_create_automation",
       "annotations": {
-        "title": "Create automation",
+        "title": "Create rule flow (advanced)",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
@@ -4801,7 +4801,7 @@
     {
       "name": "synap_run_playbook",
       "annotations": {
-        "title": "Run playbook",
+        "title": "Run template",
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": true
@@ -4860,7 +4860,7 @@
     {
       "name": "synap_create_skill",
       "annotations": {
-        "title": "Create skill",
+        "title": "Create tool (skill)",
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false

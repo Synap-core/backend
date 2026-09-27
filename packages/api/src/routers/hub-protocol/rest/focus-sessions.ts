@@ -98,7 +98,7 @@ import {
   outputRefWireSchema,
   mergeExpectedOutputs,
 } from "../../../services/focus-sessions/update-session.js";
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   hasScope,
@@ -108,6 +108,7 @@ import {
   rejectAgentReviewer,
   resolveActingContext,
   type HubHono,
+  readJsonBody,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -158,7 +159,7 @@ const FocusSessionWireSchema = z.object({
 const CreateBodySchema = z
   .object({
     // workspaceId OR projectId — a session may be scoped to either (or both).
-    workspaceId: z.string().min(1).optional(),
+    workspaceId: uuidParam.optional(),
     projectId: z.string().min(1).optional(),
     /**
      * The TRACK (a method running in a project) this session is born inside.
@@ -286,7 +287,7 @@ export function unsupportedUpdateFieldError(raw: unknown): string | null {
 // but the authoritative workspace comes from the LOADED ROW (write-gate rule:
 // never trust a caller-supplied workspaceId for scoping a mutation).
 const UpdateBodySchema = z.object({
-  workspaceId: z.string().min(1).optional(),
+  workspaceId: uuidParam.optional(),
   // ONE status vocabulary — the same list the tRPC `focus_sessions.update` door
   // takes, so the two write doors can never drift apart.
   status: z.enum(UPDATABLE_SESSION_STATUSES).optional(),
@@ -471,7 +472,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     summary: "List focus sessions for a workspace",
     request: {
       query: z.object({
-        workspaceId: z.string(),
+        workspaceId: uuidQueryParam,
         status: z.enum([...SESSION_STATUSES, "all"]).optional(),
         // Triage lens. Default here is `all` (agent-facing door); `default`
         // hides agent/automation-originated sessions not yet accepted by a
@@ -508,7 +509,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     request: {
       params: z.object({ id: z.string().uuid() }),
       // workspaceId optional: when omitted, floor on owner/user (project-scoped OK).
-      query: z.object({ workspaceId: z.string().optional() }),
+      query: z.object({ workspaceId: uuidQueryParam.optional() }),
     },
     responses: {
       200: { description: "Session", schema: FocusSessionWireSchema },
@@ -871,7 +872,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err }, "focus-sessions.list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1536,7 +1537,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.update failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1584,7 +1585,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.evaluations failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1612,7 +1613,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!isUuid(id)) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
-      const raw = (await c.req.json().catch(() => ({}))) as unknown;
+      const jsonRead = await readJsonBody(c);
+      if (!jsonRead.ok) return jsonRead.res;
+      const raw = jsonRead.body as unknown;
       const parsed = z
         .object({
           evidence: onlyEvidence
@@ -1650,7 +1653,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         logger.error({ err, id }, "focus-sessions.evaluate failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
+          httpStatusForTrpcError(err) as never
         );
       }
     });
@@ -1665,7 +1668,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
-    const raw = await c.req.json().catch(() => ({}));
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const raw = jsonRead.body;
     const parsed = CompleteBodySchema.safeParse(raw ?? {});
     if (!parsed.success) {
       const message = parsed.error.issues
@@ -1767,7 +1772,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.complete failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1787,7 +1792,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
-    const raw = (await c.req.json().catch(() => ({}))) as { reason?: unknown };
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const raw = jsonRead.body as { reason?: unknown };
     const reason = typeof raw?.reason === "string" ? raw.reason : undefined;
 
     try {
@@ -1865,7 +1872,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.cancel failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1891,7 +1898,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
-    const raw = (await c.req.json().catch(() => ({}))) as {
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const raw = jsonRead.body as {
       reason?: unknown;
       proposalIds?: unknown;
     };
@@ -2076,7 +2085,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.used failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -2133,7 +2142,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.ensureChannel failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -2251,7 +2260,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.delegateOutput failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -2346,7 +2355,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         logger.error({ err, id }, `focus-sessions.${path}Output failed`);
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
-          500
+          httpStatusForTrpcError(err) as never
         );
       }
     });
@@ -2444,7 +2453,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.answerOutput failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -2492,7 +2501,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.answers failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -2587,7 +2596,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, id }, "focus-sessions.outputs failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -2650,7 +2659,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       logger.error({ err, sessionId }, "focus-sessions.complete-run failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });

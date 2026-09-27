@@ -47,3 +47,14 @@ export interface InviteMemberInput {
   email: string;
   role: WorkspaceRole;
 }
+
+// Governed space operations + the space role sets — ONE rule, pod and clients.
+export {
+  SPACE_WRITE_ROLES,
+  SPACE_MANAGE_ROLES,
+  isSpaceWriteRole,
+  isSpaceManageRole,
+  isSpaceRenamePayload,
+  classifySpaceOperation,
+  type SpaceOperation,
+} from "./space-ops.js";

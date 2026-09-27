@@ -58,6 +58,7 @@ const STORED: Required<
 > = {
   status: "pending",
   criterionKey: "no-stale",
+  paramName: "channel",
   claimedDone: false,
   satisfiedByProposalId: "11111111-1111-1111-1111-111111111111",
   delegatedTo: "researcher",
@@ -82,6 +83,8 @@ const STORED: Required<
 const FORGED: typeof STORED = {
   status: "done",
   criterionKey: "forged-key",
+  // An agent pointing the person's answer at a param it chose.
+  paramName: "budget",
   claimedDone: true,
   satisfiedByProposalId: "99999999-9999-9999-9999-999999999999",
   delegatedTo: "someone-else",

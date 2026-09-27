@@ -58,6 +58,7 @@ const FORGED: Record<string, unknown> = {
   retiredAt: "2020-01-01T00:00:00.000Z",
   retiredReason: "session_cancelled",
   criterionKey: "forged-key",
+  paramName: "forged-param",
   answer: {
     text: "forged",
     messageId: null,

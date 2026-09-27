@@ -49,6 +49,7 @@ const OUTSIDER = randomUUID();
 const WS_RADAR = randomUUID();
 const WS_OPS = randomUUID();
 const WS_CRM = randomUUID();
+const WS_BEACON = randomUUID();
 const PROFILE = randomUUID();
 const ENTITY = randomUUID();
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
@@ -82,6 +83,38 @@ beforeAll(async () => {
   await h.client!.query(
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
     [randomUUID(), WS_RADAR, OUTSIDER]
+  );
+  // FX-F3: Beacon carries rules. Archive pauses ONLY its active ones — never a
+  // pod-wide rule, never one already paused by hand. Restore names ONLY the
+  // ones an archive paused (stamped), never a hand-paused one. The counts are
+  // chosen to DISAGREE across the candidate predicates (3 active vs 2 paused
+  // vs 4 active-including-pod-wide vs 1 stamped): an earlier 2-vs-2 fixture let
+  // an archive count of the PAUSED rules pass.
+  await h.client!.query(
+    `insert into workspaces (id, name, owner_id, settings) values ($1,'Beacon',$2,'{}'::jsonb)`,
+    [WS_BEACON, OWNER]
+  );
+  const stamped = JSON.stringify({
+    pausedByWorkspaceArchive: { workspaceId: WS_BEACON },
+  });
+  await h.client!.query(
+    `insert into automations (id, name, workspace_id, status, metadata) values
+      ($1,'Weekly digest',$5,'active','{}'::jsonb),
+      ($2,'Inbox triage',$5,'active','{}'::jsonb),
+      ($8,'Standup',$5,'active','{}'::jsonb),
+      ($3,'Hand paused',$5,'paused','{}'::jsonb),
+      ($4,'Pod-wide',null,'active','{}'::jsonb),
+      ($6,'Archive paused',$5,'paused',$7::jsonb)`,
+    [
+      randomUUID(),
+      randomUUID(),
+      randomUUID(),
+      randomUUID(),
+      WS_BEACON,
+      randomUUID(),
+      stamped,
+      randomUUID(),
+    ]
   );
 });
 
@@ -117,6 +150,41 @@ describe("space-op titles — the real payloads, names not ids", () => {
     expect(
       await titleFor("workspace", "restore", WS_RADAR, data, OWNER, "Radar")
     ).toBe('Restore Space "Radar"');
+  });
+
+  it("archive says how many rules pause — the SAME set the write pauses", async () => {
+    const data = { id: WS_BEACON, name: "Beacon" };
+    expect(
+      await titleFor("workspace", "archive", WS_BEACON, data, OWNER, "Beacon")
+    ).toBe('Archive Space "Beacon": pauses 3 rules');
+    expect(
+      await titleFor("workspace", "restore", WS_BEACON, data, OWNER, "Beacon")
+    ).toBe('Restore Space "Beacon": 1 paused rule stays paused');
+    // The count feeds the SUMMARY only; the replayed payload is untouched.
+    expect(data).toEqual({ id: WS_BEACON, name: "Beacon" });
+  });
+
+  it("a proposer who cannot see the space gets no count — the title still says rules pause", async () => {
+    expect(
+      await titleFor(
+        "workspace",
+        "archive",
+        WS_BEACON,
+        { id: WS_BEACON, name: "Beacon" },
+        OUTSIDER,
+        "Beacon"
+      )
+    ).toBe('Archive Space "Beacon": its active rules pause');
+    expect(
+      await titleFor(
+        "workspace",
+        "restore",
+        WS_BEACON,
+        { id: WS_BEACON, name: "Beacon" },
+        OUTSIDER,
+        "Beacon"
+      )
+    ).toBe('Restore Space "Beacon": rules it paused stay paused');
   });
 
   it("share names the kind AND the destination space", async () => {

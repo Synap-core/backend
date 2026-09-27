@@ -70,6 +70,9 @@ beforeEach(() => {
 const podWide = (data: Record<string, unknown>, agentUserId?: string) => ({
   workspaceId: null,
   data,
+  targetType: "entity",
+  targetId: null,
+  sessionId: null,
   ...(agentUserId ? { agentUserId } : {}),
 });
 
@@ -81,6 +84,7 @@ describe("pod-wide reject/reopen is gated (was an unconditional allow)", () => {
           proposal: podWide({ sourceId: OWNER }),
           userId: STRANGER,
           action,
+          roster: true,
         })
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
@@ -91,6 +95,7 @@ describe("pod-wide reject/reopen is gated (was an unconditional allow)", () => {
           proposal: podWide({ sourceId: OWNER }),
           userId: OWNER,
           action,
+          roster: true,
         })
       ).resolves.toBeUndefined();
     });
@@ -103,6 +108,7 @@ describe("pod-wide reject/reopen is gated (was an unconditional allow)", () => {
           proposal: podWide({ sourceId: AGENT }, AGENT),
           userId: OWNER,
           action,
+          roster: true,
         })
       ).resolves.toBeUndefined();
     });
@@ -114,6 +120,7 @@ describe("pod-wide reject/reopen is gated (was an unconditional allow)", () => {
           proposal: podWide({ sourceId: OWNER }),
           userId: STRANGER,
           action,
+          roster: true,
         })
       ).resolves.toBeUndefined();
     });
@@ -128,10 +135,16 @@ describe("pod-wide reject/reopen is gated (was an unconditional allow)", () => {
       proposal,
       userId: STRANGER,
       purpose: "approve",
+      roster: true,
     });
     expect(allowed).toBe(false);
     await expect(
-      assertCanReviewProposal({ proposal, userId: STRANGER, action: "reopen" })
+      assertCanReviewProposal({
+        proposal,
+        userId: STRANGER,
+        action: "reopen",
+        roster: true,
+      })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
@@ -142,9 +155,16 @@ describe("workspace-scoped review is unchanged (same ladder as approve)", () => 
     membership = { role: "admin" };
     await expect(
       assertCanReviewProposal({
-        proposal: { workspaceId: "ws-1", data: { sourceId: OWNER } },
+        proposal: {
+          workspaceId: "ws-1",
+          data: { sourceId: OWNER },
+          targetType: "entity",
+          targetId: null,
+          sessionId: null,
+        },
         userId: STRANGER,
         action: "reject",
+        roster: true,
       })
     ).resolves.toBeUndefined();
   });
@@ -154,9 +174,16 @@ describe("workspace-scoped review is unchanged (same ladder as approve)", () => 
     membership = { role: "viewer" };
     await expect(
       assertCanReviewProposal({
-        proposal: { workspaceId: "ws-1", data: { sourceId: OWNER } },
+        proposal: {
+          workspaceId: "ws-1",
+          data: { sourceId: OWNER },
+          targetType: "entity",
+          targetId: null,
+          sessionId: null,
+        },
         userId: STRANGER,
         action: "reject",
+        roster: true,
       })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });

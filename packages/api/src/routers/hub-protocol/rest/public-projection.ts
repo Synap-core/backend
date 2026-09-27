@@ -38,6 +38,8 @@ import {
   inArray,
   isNull,
   ilike,
+  drizzleSql,
+  WORKSPACE_MEMBERSHIP_ROLE_CATEGORY,
 } from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -185,6 +187,33 @@ export function projectRow(
 }
 
 /**
+ * The SHARED-role branch of the keystone (FX-B1). A shared/system role's facet
+ * is stored pod-wide (NULL — the W2b role principle), so "a facet planted in
+ * THIS workspace" can no longer be read off the facet. The record still
+ * qualifies ONLY when BOTH hold:
+ *   - the role is available in this workspace (system, owned by it, or shared
+ *     to it via `profile_workspace_access`) and is not a per-workspace
+ *     membership role (those keep their lens and match the branch above);
+ *   - the ENTITY itself is stamped in this workspace.
+ * A pod-wide entity wearing a pod-wide shared-role facet is NOT published: no
+ * stored fact says this workspace published it, and the keystone exists to
+ * keep the pod's private CRM (pod-wide persons/companies) off a public page.
+ */
+function sharedRoleFacetPublishedBy(workspaceId: string) {
+  return and(
+    isNull(entityFacets.workspaceId),
+    eq(entities.workspaceId, workspaceId),
+    drizzleSql`${profiles.scope} IN ('shared', 'system')`,
+    drizzleSql`${profiles.roleCategory} IS DISTINCT FROM ${WORKSPACE_MEMBERSHIP_ROLE_CATEGORY}`,
+    drizzleSql`(${profiles.scope} = 'system'
+      OR ${profiles.workspaceId} = ${workspaceId}
+      OR EXISTS (SELECT 1 FROM profile_workspace_access pwa
+                 WHERE pwa.profile_id = ${profiles.id}
+                   AND pwa.workspace_id = ${workspaceId}))`
+  );
+}
+
+/**
  * Execute the facet-scoped projection query. THIS is where the security keystone
  * lives: the WHERE binds `entity_facets.workspace_id = spec.facetWorkspaceId` and
  * `profiles.slug IN spec.roleSlugs`. It joins facet → profile (for the slug) and
@@ -196,7 +225,10 @@ async function runProjectionQuery(
 ): Promise<ProjectionRow[]> {
   const conditions = [
     // KEYSTONE — filter by the FACET's workspace, NOT the entity's.
-    eq(entityFacets.workspaceId, spec.facetWorkspaceId),
+    or(
+      eq(entityFacets.workspaceId, spec.facetWorkspaceId),
+      sharedRoleFacetPublishedBy(spec.facetWorkspaceId)
+    )!,
     inArray(profiles.slug, spec.roleSlugs),
     isNull(entityFacets.deletedAt),
     isNull(entities.deletedAt),

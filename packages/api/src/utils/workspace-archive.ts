@@ -25,6 +25,7 @@
 import {
   and,
   automations,
+  count,
   drizzleSql,
   eq,
   workspaces,
@@ -51,6 +52,41 @@ export interface SetWorkspaceArchivedResult {
 }
 
 type Db = Awaited<ReturnType<typeof getDb>>;
+
+/**
+ * The ONE predicate for "the rules an archive of this space touches" — shared
+ * by the write below and the review-card count (`countArchiveRules`), so the
+ * number a reviewer approves is the set the write will pause.
+ *   ARCHIVE: the space's own ACTIVE rules (pod-wide rules are never touched).
+ *   RESTORE: the space's rules still PAUSED BY an archive of it.
+ */
+function archiveRulesWhere(workspaceId: string, archive: boolean) {
+  return archive
+    ? and(
+        eq(automations.workspaceId, workspaceId),
+        eq(automations.status, "active")
+      )
+    : and(
+        eq(automations.workspaceId, workspaceId),
+        eq(automations.status, "paused"),
+        drizzleSql`(${automations.metadata} -> ${PAUSED_BY_WORKSPACE_ARCHIVE_KEY}::text) is not null`
+      );
+}
+
+/**
+ * How many rules an archive would pause (`archive: true`) or a restore would
+ * leave paused (`archive: false`) — read BEFORE the op, for the review card.
+ */
+export async function countArchiveRules(
+  database: Pick<Db, "select">,
+  args: { workspaceId: string; archive: boolean }
+): Promise<number> {
+  const [row] = await database
+    .select({ n: count() })
+    .from(automations)
+    .where(archiveRulesWhere(args.workspaceId, args.archive));
+  return Number(row?.n ?? 0);
+}
 
 export async function setWorkspaceArchived(
   database: Db,
@@ -79,12 +115,7 @@ export async function setWorkspaceArchived(
           metadata: drizzleSql`coalesce(${automations.metadata}, '{}'::jsonb) || ${stamp}::jsonb`,
           updatedAt: now,
         })
-        .where(
-          and(
-            eq(automations.workspaceId, args.workspaceId),
-            eq(automations.status, "active")
-          )
-        )
+        .where(archiveRulesWhere(args.workspaceId, true))
         .returning({ id: automations.id, name: automations.name });
       return {
         archivedAt,
@@ -96,13 +127,7 @@ export async function setWorkspaceArchived(
     const stillPaused = await tx
       .select({ id: automations.id, name: automations.name })
       .from(automations)
-      .where(
-        and(
-          eq(automations.workspaceId, args.workspaceId),
-          eq(automations.status, "paused"),
-          drizzleSql`(${automations.metadata} -> ${PAUSED_BY_WORKSPACE_ARCHIVE_KEY}::text) is not null`
-        )
-      );
+      .where(archiveRulesWhere(args.workspaceId, false));
     return { archivedAt, pausedAutomations: [], pausedByArchive: stillPaused };
   });
 }

@@ -46,6 +46,7 @@ import type {
 } from "../schema/workspaces.js";
 import { createLogger } from "@synap-core/core";
 import { resolveWorkspacePrimarySurface } from "./workspace-primary-surface.js";
+import { seedKindTitleKey, seedRefAliasIndex } from "./seed-refs.js";
 
 const logger = createLogger({ module: "create-workspace-from-definition" });
 
@@ -1803,11 +1804,19 @@ export async function createWorkspaceFromDefinition(
   // 9. Create seed entities
   const entityRepo = new EntityRepository(dbConn, eventRepo);
   const entityRefMap: Record<string, string> = {};
+  // The ONE ref ladder (refKey | kind:title | unique bare title) — shared with
+  // `applyDefinitionSeeds`, so a template's bare-title edges land on a fresh
+  // create exactly as they do on an overlay install.
+  const seedAliasesFor = seedRefAliasIndex(definition.suggestedEntities ?? []);
 
   if (stepDone("entities")) {
     const rebuilt = await rebuildStateFromDb();
     entityIds.push(...rebuilt.entityIds);
     Object.assign(entityRefMap, rebuilt.entityRefMap);
+    for (const seed of definition.suggestedEntities ?? []) {
+      const id = rebuilt.entityRefMap[seedKindTitleKey(seed)];
+      if (id) for (const k of seedAliasesFor(seed)) entityRefMap[k] = id;
+    }
     onProgress?.("entities", 85, "Seed data restored");
   } else {
     // Resume idempotency: "entities" is pushed to completedSteps only AFTER the
@@ -1882,6 +1891,7 @@ export async function createWorkspaceFromDefinition(
       }
       entityIds.push(entityId);
       entityRefMap[refKey] = entityId;
+      for (const k of seedAliasesFor(entity)) entityRefMap[k] = entityId;
     }
 
     // Resolve entity_id cross-references (ref:profileSlug:Title → real UUID)

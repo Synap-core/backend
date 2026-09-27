@@ -311,6 +311,40 @@ export async function evaluateSession(
 }
 
 /**
+ * The OWNER's verdict on one criterion — THE grade door, whichever surface it
+ * came through: the scorecard (tRPC `focusSessions.grade`) or the answer to a
+ * criterion slot's pass/fail ask (`answerSessionSlot`). A human row, final
+ * over every evidence / capability / judge row; it discharges the criterion's
+ * escalation slot (`recordSessionEvaluation`) and resumes a check-gated pause
+ * it clears. One function so the two entrances cannot grade two ways.
+ */
+export async function gradeCriterionAsOwner(params: {
+  sessionId: string;
+  userId: string;
+  criterionKey: string;
+  verdict: EvaluationVerdict;
+  rationale?: string | null;
+}): Promise<{
+  out: Awaited<ReturnType<typeof recordSessionEvaluation>>;
+  resumed: boolean;
+}> {
+  const out = await recordSessionEvaluation({
+    sessionId: params.sessionId,
+    userId: params.userId,
+    criterionKey: params.criterionKey,
+    verdict: params.verdict,
+    evaluatorKind: "human",
+    rationale: params.rationale ?? null,
+  });
+  if (out.status !== "recorded") return { out, resumed: false };
+  const resumed = await resumeCheckGateIfMet({
+    sessionId: params.sessionId,
+    userId: params.userId,
+  });
+  return { out, resumed };
+}
+
+/**
  * The RESUME half of a `check` stage gate (services/playbooks/stage-gate.ts):
  * a session paused by a check gate goes back to `active` once every required
  * criterion of the stage it left passes. Called after every evaluation and every

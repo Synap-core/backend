@@ -296,8 +296,11 @@ export interface ReconcileEntityScopeOp extends BaseOp {
  * of such a group is left exactly as-is and COUNTED (`facetsParked`) for a
  * human merge — never deleted, never property-merged by this op.
  *
- * A `workspace`-scoped role (one workspace's private hat) is never touched.
- * `slug` optional: omitted = every shared/system role; set = that role only.
+ * A `workspace`-scoped role (one workspace's private hat) is never touched,
+ * nor is a PER-WORKSPACE membership role (`role_category` =
+ * WORKSPACE_MEMBERSHIP_ROLE_CATEGORY, e.g. system `team-member`): one facet per
+ * workspace IS its data, and collapsing them would make a removed member keep
+ * the hat. `slug` optional: omitted = every shared/system role; set = that role only.
  * Idempotent: a re-run finds no group with lensed rows and no pod-wide row.
  */
 export interface ReconcileFacetScopeOp extends BaseOp {
@@ -1283,9 +1286,12 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       deferAtBoot: true,
     },
 
-    // W2b placement clean-up — PER KIND, never unscoped (Builder's knowledge,
-    // notes, tasks and decisions are pod-scope kinds deliberately homed in a
-    // lens and must NOT move). Identity kinds only: the w8 person/company
+    // W2b placement clean-up — PER KIND, never unscoped. Decided model
+    // (FX-B1): pod-scope kinds are pod-wide — every create door now files a
+    // NEW row of a pod-scope kind pod-wide (acceptEntityCreatePlacement). The
+    // EXISTING stamped knowledge/notes/tasks/decisions are not re-nulled by
+    // this manifest yet: that is a separate, per-kind founder call (volume:
+    // Builder knowledge ≥396), not an oversight. Identity kinds first: the w8 person/company
     // re-nulls are ledgered, but the session-stamp rung re-stamped them until
     // the W2b ladder fix (live GET 2026-09-25: person 22 stamped — CRM 13,
     // Builder 7, Pod Admin 2; company 13 — CRM 7, Builder 6). DEFERRED AT BOOT:

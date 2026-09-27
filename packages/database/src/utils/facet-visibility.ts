@@ -152,11 +152,44 @@ export function facetVisibilityConditions(opts: {
  *
  * A `workspace`-scoped role (one workspace's private hat) keeps the caller's
  * lens. Unknown scope → the caller's lens (never widen what we cannot classify).
+ *
+ * EXCEPTION — a PER-WORKSPACE role (`roleCategory` =
+ * WORKSPACE_MEMBERSHIP_ROLE_CATEGORY, e.g. the system role `team-member`): its
+ * profile is shared pod-wide, but the hat's MEANING is "member of THIS
+ * workspace". One facet per workspace is the data, and removing a member from
+ * one workspace must detach exactly that workspace's facet. It keeps the lens.
  */
 export function storedFacetWorkspaceId(
-  roleScope: string | null | undefined,
+  role: FacetRoleScope | null | undefined,
   requestedWorkspaceId: string | null
 ): string | null {
-  if (roleScope === "shared" || roleScope === "system") return null;
-  return requestedWorkspaceId;
+  return roleFacetIsPodWide(role) ? null : requestedWorkspaceId;
+}
+
+/**
+ * `profiles.role_category` value marking a role whose meaning is per-workspace
+ * (membership of the workspace the facet is stamped with). Such a role keeps
+ * its lens even when its PROFILE is shared/system — see storedFacetWorkspaceId.
+ * The facet-scope reconcile conversion excludes it for the same reason.
+ */
+export const WORKSPACE_MEMBERSHIP_ROLE_CATEGORY = "workspace-membership";
+
+/** The two profile attributes the stored-lens rule reads. */
+export interface FacetRoleScope {
+  scope?: string | null;
+  roleCategory?: string | null;
+}
+
+/**
+ * THE rule: is this role's facet one hat pod-wide (stored NULL)? Shared/system
+ * roles are, except a per-workspace membership role. Every writer that decides
+ * a facet's lens (FacetRepository.attach, the facets.attach governance lens)
+ * reads this, so they cannot disagree.
+ */
+export function roleFacetIsPodWide(
+  role: FacetRoleScope | null | undefined
+): boolean {
+  if (!role) return false;
+  if (role.roleCategory === WORKSPACE_MEMBERSHIP_ROLE_CATEGORY) return false;
+  return role.scope === "shared" || role.scope === "system";
 }

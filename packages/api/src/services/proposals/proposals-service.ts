@@ -528,6 +528,7 @@ export async function mergeProposalRevision(
         agentUserId: proposals.agentUserId,
         targetType: proposals.targetType,
         targetId: proposals.targetId,
+        sessionId: proposals.sessionId,
         revisionHistory: proposals.revisionHistory,
       })
       .from(proposals)
@@ -587,6 +588,7 @@ export async function mergeProposalRevision(
               agentUserId: existing.agentUserId,
               targetType: existing.targetType,
               targetId: existing.targetId,
+              sessionId: existing.sessionId,
             },
             roster: params.roster ?? false,
             userId: params.actorId,

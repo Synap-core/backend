@@ -70,7 +70,12 @@ import {
 
 import { kratosAdmin, safeTokenEqual } from "@synap/auth";
 import type { Context } from "hono";
-import { logger, type HubHono, type HubVariables } from "./_shared.js";
+import {
+  logger,
+  type HubHono,
+  type HubVariables,
+  httpStatusForTrpcError,
+} from "./_shared.js";
 
 /** Escape a user-derived value before interpolating it into an HTML string. */
 function escapeHtml(value: string): string {
@@ -1105,7 +1110,10 @@ export function registerSetupRoutes(app: HubHono): void {
         );
       }
       logger.error({ err, agentType, flowId }, "setup/agent: failed");
-      return c.json({ error: "Internal server error", flowId }, 500);
+      return c.json(
+        { error: "Internal server error", flowId },
+        httpStatusForTrpcError(err) as never
+      );
     }
   });
 
@@ -1337,7 +1345,10 @@ export function registerSetupRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, flowId }, "setup/service: failed");
-      return c.json({ error: "Internal server error", flowId }, 500);
+      return c.json(
+        { error: "Internal server error", flowId },
+        httpStatusForTrpcError(err) as never
+      );
     }
   });
 
@@ -1608,7 +1619,10 @@ export function registerSetupRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err }, "setup/status: failed");
-      return c.json({ error: "Internal server error" }, 500);
+      return c.json(
+        { error: "Internal server error" },
+        httpStatusForTrpcError(err) as never
+      );
     }
   });
 
@@ -1767,7 +1781,7 @@ export function registerSetupRoutes(app: HubHono): void {
       }
       return c.json(
         { error: "Failed to create admin user", detail: msg.slice(0, 200) },
-        500
+        httpStatusForTrpcError(err) as never
       );
     }
   });
@@ -1888,7 +1902,10 @@ export function registerSetupRoutes(app: HubHono): void {
               { cleanupErr, email },
               "accept-invite: stale identity cleanup failed"
             );
-            return c.json({ error: "Failed to clean up stale account" }, 500);
+            return c.json(
+              { error: "Failed to clean up stale account" },
+              httpStatusForTrpcError(cleanupErr) as never
+            );
           }
           // Retry identity creation with the new credentials.
           try {
@@ -1921,7 +1938,7 @@ export function registerSetupRoutes(app: HubHono): void {
             );
             return c.json(
               { error: "Failed to create account", detail: msg.slice(0, 200) },
-              500
+              httpStatusForTrpcError(retryErr) as never
             );
           }
         } else {
@@ -1938,7 +1955,7 @@ export function registerSetupRoutes(app: HubHono): void {
         logger.error({ err, email }, "accept-invite: createIdentity failed");
         return c.json(
           { error: "Failed to create account", detail: msg.slice(0, 200) },
-          500
+          httpStatusForTrpcError(err) as never
         );
       }
     }

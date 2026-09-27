@@ -26,6 +26,7 @@ import {
   resolveActorId,
   type HubHono,
   httpStatusForTrpcError,
+  readJsonBody,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 // THE scrubber for free text about to be stored or shown. Lifted out of this
@@ -337,10 +338,9 @@ export function registerCommandsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
 
-    const body = (await c.req.json().catch(() => ({}))) as Record<
-      string,
-      unknown
-    >;
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const body = jsonRead.body as Record<string, unknown>;
 
     // Rate limit: 10 commands per workspace per minute.
     // Item 3 Part 3: confine a bound service key to its workspace first, so the
