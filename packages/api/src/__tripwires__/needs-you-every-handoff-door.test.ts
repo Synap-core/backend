@@ -41,7 +41,7 @@ import { join, relative } from "node:path";
 const API_SRC = join(__dirname, "..");
 
 const HANDOFF =
-  /(?<!function\s)\b(stampBlocked|applyOutputMutations|mergeExpectedOutputs|sanitizeDeclaredOutputs|guidanceForBlockedSlots|paramOwedSlots|instantiateSession|instantiateSessionRow)\s*\(|^\s*owner:\s*"human"/m;
+  /(?<!function\s)\b(stampBlocked|applyOutputMutations|mergeExpectedOutputs|sanitizeDeclaredOutputs|guidanceForBlockedSlots|paramOwedSlots|instantiateSession|instantiateSessionRow)\s*\(|^\s*owner:\s*"human"(?!\s*\|)/m;
 const NOTIFY = /(?<!function\s)\bnotifySessionNeedsYou\s*\(/;
 
 /** Files that hand slots to the person but deliberately do NOT notify. */
@@ -110,6 +110,8 @@ describe("needs-you — every hand-off door tells the person", () => {
     expect(HANDOFF.test('message: `declared it owner: "human", so`')).toBe(
       false
     );
+    // A TYPE naming the union mints nothing (`anchored-comment-turn.ts`).
+    expect(HANDOFF.test('  owner: "human" | "agent";')).toBe(false);
     expect(NOTIFY.test("await notifySessionNeedsYou({")).toBe(true);
     expect(stripComments("a // notifySessionNeedsYou(")).not.toMatch(NOTIFY);
   });

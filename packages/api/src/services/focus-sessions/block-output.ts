@@ -301,6 +301,10 @@ export function stampBlocked(
     else if (ref !== undefined) withRef.ref = ref;
     if (ask === null) delete withRef.ask;
     else if (ask !== undefined) withRef.ask = ask;
+    // (Re)blocking ASKS anew: an answer to an earlier ask must not survive, or
+    // once this one comes back the agent reads the old answer as the new one
+    // (continuation packet `aiCanDo[].answer`, the `answered` nudge).
+    delete withRef.answer;
     return reconcileOwedSince(
       {
         ...withRef,

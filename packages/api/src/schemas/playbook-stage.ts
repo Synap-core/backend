@@ -30,6 +30,7 @@ import {
 } from "@synap/playbooks";
 import type { TrackStageDeclaration } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "./session-criteria.js";
+import { AskSchema } from "@synap-core/types/ask";
 
 /**
  * The six, as a zod enum. Derived from the contract package's list rather than
@@ -80,6 +81,8 @@ export const playbookStageSchema = z.looseObject({
         kind: z.string().min(1),
         label: z.string().min(1),
         icon: z.string().optional(),
+        // Parsed, not carried: a pinned stage's slots become a session's.
+        ask: AskSchema.nullable().optional(),
       })
     )
     .optional(),

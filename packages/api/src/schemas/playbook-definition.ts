@@ -26,6 +26,7 @@
  */
 
 import { z } from "zod";
+import { AskSchema } from "@synap-core/types/ask";
 import { playbookStagesSchema } from "./playbook-stage.js";
 import { sessionCriteriaSchema } from "./session-criteria.js";
 import { playbookScheduleInputSchema } from "./playbook-schedule.js";
@@ -54,6 +55,18 @@ export const playbookScopeSchema = z.enum(["session", "project"]);
 // own schemas.
 const jsonRecord = z.record(z.string(), z.unknown());
 
+/**
+ * One declared slot of a playbook. Stored loosely like its siblings, EXCEPT
+ * `ask`: a template's slots are instantiated straight into sessions, so an
+ * invalid ask written here would reach every run. It is parsed with the ONE
+ * ask schema at the write door — refused here, never silently stored.
+ * (`sanitizeDeclaredOutputs` also drops an invalid ask at instantiation, for
+ * rows stored before this door checked.)
+ */
+export const playbookExpectedOutputSchema = z.looseObject({
+  ask: AskSchema.nullable().optional(),
+});
+
 export const playbookDefinitionSchema = z.object({
   name: z.string().min(1).max(500),
   description: z.string().optional(),
@@ -61,7 +74,7 @@ export const playbookDefinitionSchema = z.object({
   params: z.array(jsonRecord).optional(),
   inputStrategy: jsonRecord.optional(),
   channelSpec: jsonRecord.optional(),
-  expectedOutputs: z.array(jsonRecord).optional(),
+  expectedOutputs: z.array(playbookExpectedOutputSchema).optional(),
   /**
    * First-class stages — the ONE runtime schema. `category` is required and
    * `key` unique (it is what `focus_sessions.currentStage` stores); a stage may

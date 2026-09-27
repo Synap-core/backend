@@ -45,6 +45,11 @@ const WITHHELD: Record<string, string> = {
   "routers/proposals/executors/focus-session.ts":
     "The approval executor re-applies a patch a HUMAN just approved; there is " +
     "no agent response to annotate at that moment.",
+  "services/playbooks/playbook-lifecycle.ts":
+    "DEFINES `instantiateSession(Row)`: it sanitizes a TEMPLATE's declared " +
+    "slots at birth (the author's own definition, not an agent's hand-off " +
+    "in this turn). It returns a row, not an agent response — there is " +
+    "nothing to annotate with a guideline here.",
 };
 
 function walk(dir: string, out: string[] = []): string[] {

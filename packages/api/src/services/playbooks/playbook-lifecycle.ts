@@ -81,6 +81,7 @@ import {
   PARAM_SLOT_CIRCUMSTANCE,
 } from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
+import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
 import { parseCommandTemplate } from "../../utils/command-template.js";
 import { authoringMisses } from "../../utils/template-diagnostics.js";
 import {
@@ -527,7 +528,14 @@ export async function instantiateSessionRow(
   // dedup/proposal key other doors compare on — and the short name is written
   // beside it, marked `derived` so the background titler may improve it.
   const title = buildRunSessionName(playbook.name, subjectTitle);
-  const declaredOutputs = (playbook.expectedOutputs as ExpectedOutput[]) ?? [];
+  // Through the ONE declaration sanitizer, like every other door that births
+  // slots: a template's stored JSON must not carry a server-stamped receipt
+  // or an unparsed `ask` into a live session.
+  const declaredOutputs = sanitizeDeclaredOutputs(
+    Array.isArray(playbook.expectedOutputs)
+      ? (playbook.expectedOutputs as ExpectedOutput[])
+      : []
+  );
   // On the `owe` path, every unanswered required param becomes an owed slot the
   // run carries from birth. `owedSince` is stamped here because the invariant
   // is exact — it is present IFF `owner === 'human'` — and the needs-you feed

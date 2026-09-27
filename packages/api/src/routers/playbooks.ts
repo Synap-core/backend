@@ -76,6 +76,7 @@ import {
   playbookExecutorSchema,
   playbookStatusSchema,
   playbookScopeSchema,
+  playbookExpectedOutputSchema,
 } from "../schemas/playbook-definition.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
@@ -271,7 +272,8 @@ export const updateInputSchema = z.object({
   params: z.array(jsonRecord).optional(),
   inputStrategy: jsonRecord.optional(),
   channelSpec: jsonRecord.optional(),
-  expectedOutputs: z.array(jsonRecord).optional(),
+  /** See `playbookExpectedOutputSchema` — `ask` is parsed, the rest loose. */
+  expectedOutputs: z.array(playbookExpectedOutputSchema).optional(),
   /** See `createInputSchema.stages` — validated, `category` required. */
   stages: playbookStagesSchema.optional(),
   /** See `createInputSchema.criteria`. */

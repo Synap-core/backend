@@ -158,6 +158,87 @@ describe("the wholesale merge — silence KEEPS, null CLEARS", () => {
   });
 });
 
+describe("a slot BORN from stored JSON gets its ask parsed", () => {
+  // Templates, pinned track stages and capture plans are cast straight into a
+  // session — the wire never saw their ask.
+  it("drops an ask that does not parse and KEEPS the slot", () => {
+    const [born] = sanitizeDeclaredOutputs(
+      [
+        {
+          kind: "k",
+          label: "Pick a plan",
+          owner: "human",
+          ask: { mode: "teleport" } as unknown as SlotAsk,
+        },
+      ],
+      AT
+    );
+    expect(born).not.toHaveProperty("ask");
+    expect(born!.label).toBe("Pick a plan");
+    expect(born!.owner).toBe("human");
+  });
+
+  it("normalizes a valid one through the schema (a non-http act url never lands)", () => {
+    const [bad] = sanitizeDeclaredOutputs(
+      [
+        {
+          kind: "k",
+          label: "Open the console",
+          owner: "human",
+          ask: { mode: "act", url: "javascript:alert(1)" } as SlotAsk,
+        },
+      ],
+      AT
+    );
+    expect(bad).not.toHaveProperty("ask");
+    const [ok] = sanitizeDeclaredOutputs(
+      [{ kind: "k", label: "l", owner: "human", ask: CHOOSE }],
+      AT
+    );
+    expect(ok!.ask).toEqual(CHOOSE);
+  });
+
+  it("strips an ask on an agent-owned slot — only the person answers an ask", () => {
+    const [born] = sanitizeDeclaredOutputs(
+      [{ kind: "k", label: "l", ask: CHOOSE }],
+      AT
+    );
+    expect(born).not.toHaveProperty("ask");
+  });
+});
+
+describe("re-blocking asks anew — an earlier answer does not ride along", () => {
+  const answered = (): ExpectedOutput => ({
+    kind: "entity",
+    label: "Stripe key",
+    answer: {
+      text: "EU account",
+      messageId: null,
+      answeredBy: "u",
+      answeredAt: AT.toISOString(),
+    },
+  });
+
+  it("stampBlocked clears the stored answer", () => {
+    const [blocked] = stampBlocked([answered()], "Stripe key", "decision");
+    expect(blocked).not.toHaveProperty("answer");
+  });
+
+  it("a wholesale patch handing the slot to the person clears it too", () => {
+    const [merged] = mergeExpectedOutputs(
+      [answered()],
+      [{ kind: "entity", label: "Stripe key", owner: "human" }]
+    );
+    expect(merged).not.toHaveProperty("answer");
+    // …while a patch SILENT about the owner keeps it (round-trip).
+    const [kept] = mergeExpectedOutputs(
+      [answered()],
+      [{ kind: "entity", label: "Stripe key" }]
+    );
+    expect(kept!.answer).toEqual(answered().answer);
+  });
+});
+
 describe("addOutput carries the ask", () => {
   it("appends a blocked slot with its ask in one call", () => {
     const { outputs } = applyOutputMutations([], {

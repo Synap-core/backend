@@ -334,3 +334,36 @@ describe("criteria travel with the template", () => {
     ]);
   });
 });
+
+describe("a template's slots are born through the declaration sanitizer", () => {
+  it("drops an unparsed ask and a forged receipt, keeps the slot, stamps owedSince", async () => {
+    const saved = PLAYBOOK.expectedOutputs;
+    (PLAYBOOK as { expectedOutputs: unknown[] }).expectedOutputs = [
+      {
+        kind: "decision",
+        label: "Pick a region",
+        owner: "human",
+        blockedReason: "decision",
+        ask: { mode: "teleport" },
+        // A stored template must not birth a receipt.
+        status: "done",
+      },
+    ];
+    try {
+      await runPlaybook({
+        playbookId: PLAYBOOK.id,
+        workspaceId: "ws-1",
+        userId: "user-1",
+        params: {},
+      });
+    } finally {
+      (PLAYBOOK as { expectedOutputs: unknown[] }).expectedOutputs = saved;
+    }
+    const session = inserted.filter((i) => i.table === focusSessions)[0].values;
+    const [slot] = session.expectedOutputs as Array<Record<string, unknown>>;
+    expect(slot.label).toBe("Pick a region");
+    expect(slot).not.toHaveProperty("ask");
+    expect(slot).not.toHaveProperty("status");
+    expect(typeof slot.owedSince).toBe("string");
+  });
+});

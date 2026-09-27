@@ -264,6 +264,33 @@ describe("reconcileOwedSince — one answer at every door", () => {
     ).not.toHaveProperty("owedSince");
   });
 
+  it("drops a stale ask when the owner is no longer the human (stampUnblocked's rule)", () => {
+    const back = reconcileOwedSince(
+      {
+        kind: "entity",
+        label: "NDA",
+        owner: "agent",
+        ask: { mode: "confirm" },
+        owedSince: "2026-09-01T00:00:00.000Z",
+      },
+      AT
+    );
+    expect(back).not.toHaveProperty("ask");
+    expect(back).not.toHaveProperty("owedSince");
+    // …and the human's own slot keeps it.
+    expect(
+      reconcileOwedSince(
+        {
+          kind: "entity",
+          label: "NDA",
+          owner: "human",
+          ask: { mode: "confirm" },
+        },
+        AT
+      ).ask
+    ).toEqual({ mode: "confirm" });
+  });
+
   it("strips a clock a caller invented for an agent-owned slot", () => {
     expect(
       reconcileOwedSince(

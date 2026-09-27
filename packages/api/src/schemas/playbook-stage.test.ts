@@ -204,3 +204,46 @@ describe("playbookStageSchema — stage.domain (W2a)", () => {
     }
   });
 });
+
+describe("a declared slot's `ask` is parsed at the playbook write doors", () => {
+  const slot = (ask: unknown) => ({ kind: "decision", label: "Region", ask });
+
+  it("the definition door refuses an invalid ask and keeps loose fields otherwise", async () => {
+    const { playbookDefinitionSchema } =
+      await import("./playbook-definition.js");
+    const base = { name: "Launch", goalTemplate: "Launch it" };
+    expect(
+      playbookDefinitionSchema.safeParse({
+        ...base,
+        expectedOutputs: [slot({ mode: "teleport" })],
+      }).success
+    ).toBe(false);
+    const ok = playbookDefinitionSchema.parse({
+      ...base,
+      expectedOutputs: [
+        { ...slot({ mode: "confirm" }), owner: "human", extra: 1 },
+      ],
+    });
+    expect(ok.expectedOutputs?.[0]).toMatchObject({
+      ask: { mode: "confirm" },
+      owner: "human",
+      extra: 1,
+    });
+  });
+
+  it("the update door and a pinned stage refuse it too", async () => {
+    const { updateInputSchema } = await import("../routers/playbooks.js");
+    expect(
+      updateInputSchema.safeParse({
+        id: "11111111-1111-4111-8111-111111111111",
+        expectedOutputs: [slot({ mode: "act", url: "javascript:alert(1)" })],
+      }).success
+    ).toBe(false);
+    expect(
+      playbookStageSchema.safeParse({
+        ...validStage,
+        expectedOutputs: [slot({ mode: "teleport" })],
+      }).success
+    ).toBe(false);
+  });
+});

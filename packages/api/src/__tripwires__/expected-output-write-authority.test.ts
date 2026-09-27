@@ -232,6 +232,17 @@ describe("tripwire: expected-output write authority", () => {
     expect(merged).toEqual(slot);
   });
 
+  it("ALLOWS a round-trip that went through JSON (an agent's echo)", () => {
+    // The echo an agent actually sends: it READ the slot over MCP/REST and sent
+    // it back, so every object-valued stamp (`answer`) arrives as a NEW object
+    // with equal content. A reference comparison refuses that as a forgery.
+    const slot = storedSlot();
+    const echoed = JSON.parse(JSON.stringify(slot)) as ExpectedOutput;
+    expect(detectServerStampedWrites([slot], [echoed])).toEqual([]);
+    const [merged] = mergeExpectedOutputs([slot], [echoed]);
+    expect(merged).toEqual(slot);
+  });
+
   it("carries every stamp forward when the patch is SILENT about it", () => {
     // The erasure guarantee the merge already made must survive the new floor.
     const [merged] = mergeExpectedOutputs(

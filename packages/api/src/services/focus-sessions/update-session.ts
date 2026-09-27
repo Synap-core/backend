@@ -14,8 +14,10 @@
  * output RMW lock — they are intentionally distinct doors, not unified here.
  */
 
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { createLogger } from "@synap-core/core";
 import { db, focusSessions, eq, and, drizzleSql } from "@synap/database";
 import {
   BLOCKED_REASONS,
@@ -566,6 +568,12 @@ export function mergeExpectedOutputs(
         Object.assign(carried, { [field]: value });
       }
     }
+    // A slot handed (back) to the person is being ASKED anew: the answer to
+    // the previous ask must not ride along, or the agent reads it as the
+    // answer to this one once the slot comes back (`stampBlocked`, same rule).
+    if (prior.owner !== "human" && item.owner === "human") {
+      delete carried.answer;
+    }
     // Stripped first so a server-stamped field the STORED slot does not carry
     // cannot survive as the incoming value — `carried` can only overwrite keys
     // it has, and an absent stored receipt has none.
@@ -599,6 +607,8 @@ export function dropClearedRef(item: OutputItem): OutputItem {
   }
   return out;
 }
+
+const logger = createLogger({ module: "update-session" });
 
 const SERVER_STAMPED_FIELD_SET: ReadonlySet<string> = new Set(
   SERVER_STAMPED_OUTPUT_FIELDS
@@ -645,8 +655,42 @@ export function sanitizeDeclaredOutputs(
   // `dropClearedRef` too: a `null` ref/ask at birth is the wire's CLEAR with
   // nothing to clear, and storing it would make the field tri-state.
   return outputs.map((o) =>
-    dropClearedRef(reconcileOwedSince(stripServerStamped(o), now))
+    dropClearedRef(
+      reconcileOwedSince(parseDeclaredAsk(stripServerStamped(o)), now)
+    )
   );
+}
+
+/**
+ * The declared `ask`, parsed with the ONE schema (`AskSchema`) — or dropped.
+ *
+ * The client doors parse `ask` at the wire, but not every declaration arrives
+ * through one: a playbook template's `expectedOutputs`, a pinned track stage,
+ * a capture plan's session op are stored JSON cast straight into a session.
+ * Parsing here is what makes the ask's floors (closed modes, ≤1 recommended,
+ * http(s) act urls, credential form fields dropped) hold for every slot that
+ * is BORN, whichever door declared it.
+ *
+ * An invalid ask is DROPPED and the slot KEPT, deliberately, rather than the
+ * whole declaration refused: these sources are stored definitions written
+ * before the ask existed or by an author who is not here to fix them, and a
+ * refusal would make an existing playbook un-runnable over one malformed
+ * field. A slot without an ask is exactly today's behaviour (free text /
+ * "I did this"), so the degradation is to the legacy contract, never to a
+ * broken card. It is logged, not silent. The authoring doors (the MCP /
+ * tRPC / Hub wire and the playbook write door) REFUSE an invalid ask, so this
+ * only ever catches stored data.
+ */
+function parseDeclaredAsk(item: OutputItem): OutputItem {
+  if (item.ask === undefined || item.ask === null) return item;
+  const parsed = AskSchema.safeParse(item.ask);
+  if (parsed.success) return { ...item, ask: parsed.data };
+  logger.warn(
+    { label: item.label, issue: parsed.error.issues[0]?.message },
+    "declared slot carried an invalid ask — dropped, the slot stands"
+  );
+  const { ask: _invalid, ...rest } = item;
+  return rest;
 }
 
 /** The slot with every receipt removed — what a client may actually author. */
@@ -693,7 +737,9 @@ export function detectServerStampedWrites(
     for (const field of SERVER_STAMPED_OUTPUT_FIELDS) {
       const value = item[field];
       if (value === undefined) continue;
-      if (value === prior[field]) continue;
+      // DEEP, not by reference: `answer` is an object, and an echo that went
+      // through JSON is a new object with equal content — a round-trip.
+      if (isDeepStrictEqual(value, prior[field])) continue;
       violations.push({ label: item.label, field });
     }
   }
@@ -748,6 +794,10 @@ export function serverStampedWriteError(
  * drops `owedSince` here while the stored `blockedReason`/`why` are carried
  * forward by the merge — those are client-declarable, and silence means KEEP.
  *
+ * (`ask` IS reconciled here, and is the one exception: it describes how the
+ * PERSON answers, so it cannot outlive the person owning the slot — see the
+ * body.)
+ *
  * That is deliberate, not an oversight: reconciling them here would mean
  * silently DELETING an agent's own declaration on a patch that never mentioned
  * it, which is the erasure the merge exists to prevent. The resulting state
@@ -763,8 +813,12 @@ export function reconcileOwedSince(
   if (item.owner === "human") {
     return item.owedSince ? item : { ...item, owedSince: now.toISOString() };
   }
-  if (item.owedSince === undefined) return item;
-  const { owedSince: _dropped, ...rest } = item;
+  // `ask` goes with `owedSince`: it says how the PERSON resolves the slot and
+  // means nothing on an agent-owned one — the same clearing `stampUnblocked`
+  // does. Kept, it would resurrect as a stale card the moment the slot is
+  // handed to the person again for a different reason.
+  if (item.owedSince === undefined && item.ask === undefined) return item;
+  const { owedSince: _dropped, ask: _staleAsk, ...rest } = item;
   return rest;
 }
 
