@@ -79,11 +79,18 @@ export function newlyOwedSlots(
   );
 }
 
-/** "Stripe key — the live account's restricted key (+1 more)". Pure. */
+/**
+ * "Stripe key — the live account's restricted key (+1 more)". Pure. The
+ * question is the slot's `why`, else its ask's own prompt (a `confirm` may
+ * carry its question there and nowhere else), so the push says what is asked.
+ */
 export function summarizeOwedSlots(slots: readonly ExpectedOutput[]): string {
   const [first, ...rest] = slots;
   if (!first) return "";
-  const head = first.why ? `${first.label} — ${first.why}` : first.label;
+  const question =
+    first.why?.trim() ||
+    (first.ask?.mode === "confirm" ? first.ask.prompt?.trim() : undefined);
+  const head = question ? `${first.label} — ${question}` : first.label;
   return `${clip(head)}${rest.length > 0 ? ` (+${rest.length} more)` : ""}`;
 }
 

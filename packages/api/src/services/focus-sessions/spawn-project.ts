@@ -42,6 +42,7 @@
 import { eq, getDb, focusSessions } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { FocusSession } from "@synap/database";
+import type { ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { logEvent } from "../../lib/event-helpers.js";
@@ -115,9 +116,20 @@ export async function spawnProjectFromSession(
     input.name ??
     (resolveSessionTitle(session, { maxLength: PROJECT_NAME_MAX }) || "Project")
   ).slice(0, PROJECT_NAME_MAX);
-  const expectedOutputs = (session.expectedOutputs ?? []) as Array<
-    Record<string, unknown>
-  >;
+  // What the session was producing, as NAMES only. A project has a wider
+  // audience than the owner-private session (members, shares), so the slot's
+  // private half — the person's answer, the agent's ask, refs, receipts —
+  // stays on the session and is never copied here.
+  const expectedOutputs = (
+    Array.isArray(session.expectedOutputs)
+      ? (session.expectedOutputs as ExpectedOutput[])
+      : []
+  ).map((o) => ({
+    kind: o.kind,
+    label: o.label,
+    ...(o.icon ? { icon: o.icon } : {}),
+    ...(o.status ? { status: o.status } : {}),
+  }));
 
   // The ONE project write (insert → subject bind → audit → `project.create`
   // side effects), shared with `createProjectGoverned`. Not the full governed

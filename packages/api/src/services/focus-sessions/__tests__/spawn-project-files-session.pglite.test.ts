@@ -219,6 +219,51 @@ describe("spawn a project from a session", () => {
     );
   });
 
+  it("parks the slots' NAMES on the project, never the answer, ask or ref", async () => {
+    const sessionId = await seedSession();
+    const SECRETISH = "Use account acct_EU_private";
+    await q(
+      `update focus_sessions set expected_outputs = $1::jsonb where id = $2`,
+      [
+        JSON.stringify([
+          {
+            kind: "decision",
+            label: "Stripe account",
+            icon: "key",
+            status: "pending",
+            ask: { mode: "confirm" },
+            ref: { url: "https://dashboard.stripe.com" },
+            answer: {
+              text: SECRETISH,
+              messageId: null,
+              answeredBy: USER,
+              answeredAt: "2026-09-27T10:00:00.000Z",
+              value: { type: "text" },
+            },
+          },
+        ]),
+        sessionId,
+      ]
+    );
+    const res = await spawnProjectFromSession({ sessionId, userId: USER });
+    if (res.status !== "spawned") throw new Error("spawn failed");
+    const [project] = (
+      await q<{ metadata: { spawnedFrom: { expectedOutputs: unknown[] } } }>(
+        `select metadata from projects where id = $1`,
+        [res.projectId]
+      )
+    ).rows;
+    expect(project!.metadata.spawnedFrom.expectedOutputs).toEqual([
+      {
+        kind: "decision",
+        label: "Stripe account",
+        icon: "key",
+        status: "pending",
+      },
+    ]);
+    expect(JSON.stringify(project!.metadata)).not.toContain(SECRETISH);
+  });
+
   it("files the spawning session into the new project", async () => {
     const sessionId = await seedSession();
     const res = await spawnProjectFromSession({ sessionId, userId: USER });
