@@ -72,6 +72,7 @@ import type { ExpectedOutput, SlotAnswerValue } from "@synap/playbooks";
 import {
   AskAnswerValueSchema,
   askFingerprint,
+  resolveAskResolution,
   summarizeAnswer,
   validateAnswerAgainstAsk,
   ASK_CHANGED_PREFIX,
@@ -86,7 +87,11 @@ import {
   type RoomPostMeta,
 } from "../messaging/room-post-kind.js";
 import { resolveRoomSession } from "../messaging/room-session.js";
-import { postChannelMessage } from "../messaging/post-message.js";
+import {
+  postChannelMessage,
+  postedMessageIdFor,
+} from "../messaging/post-message.js";
+import { findNewestSlotThreadSeed } from "./slot-thread.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import {
@@ -276,15 +281,103 @@ async function wake(p: {
 
 // ── Entrance 1: the owner's reply in the room ────────────────────────────────
 
+/**
+ * What a room reply did to the slot its question named. `kept_owed` ⇒ the
+ * reply answered the QUESTION only — the slot's typed ask does not take free
+ * words, or the reply was a follow-up in an "ask about it" thread.
+ */
+export type OwnerRoomReplySlotStatus =
+  AnswerExpectedOutputResult["status"] | "kept_owed";
+
 export type OwnerRoomReplyResult =
   | { status: "no_session" | "not_owner" | "no_open_question" | "failed" }
   | {
       status: "answered";
       questionId: string;
       /** The slot outcome when the question named one; absent otherwise. */
-      slot?: AnswerExpectedOutputResult["status"];
+      slot?: OwnerRoomReplySlotStatus;
       woke: boolean;
     };
+
+/**
+ * May the owner's plain room reply ANSWER the slot the agent's question named,
+ * and as what? Two cases say no, and both leave the slot owed:
+ *
+ *   - TYPED ASK: a slot whose ask is not legacy takes what the ask takes. A
+ *     reply in words is validated as `{type:'text'}` by the ONE rule
+ *     (`resolveAnswer`): a closed choose, a form, a confirm, a provide, an act
+ *     all refuse it — the person answers those from the card, never by typing
+ *     "the EU one" and having it handed to the agent as if it were the pick.
+ *     A choose with `allowOther` accepts it, as the typed text answer.
+ *   - "ASK ABOUT IT" THREAD: the person opened a thread about this step
+ *     (`askAboutSlot`) during the slot's current owed episode, before this
+ *     question — the question is the agent's reply in that conversation, and
+ *     the person's words are conversation too. The agent's slot-thread prompt
+ *     says the same: it never answers for them.
+ *
+ * A legacy slot outside a thread answers exactly as before.
+ */
+async function readRoomReplyAsAnswer(p: {
+  channelId: string;
+  sessionId: string;
+  userId: string;
+  slotLabel: string;
+  questionAt: Date;
+  text: string;
+}): Promise<
+  | { keepOwed: true }
+  | {
+      keepOwed: false;
+      text: string;
+      value?: SlotAnswerValue;
+      askFingerprint?: string;
+    }
+> {
+  const row = await db.query.focusSessions.findFirst({
+    where: eq(focusSessions.id, p.sessionId),
+    columns: { expectedOutputs: true },
+  });
+  const outputs: ExpectedOutput[] = Array.isArray(row?.expectedOutputs)
+    ? (row.expectedOutputs as ExpectedOutput[])
+    : [];
+  const chosen = selectSlotToAnswer(outputs, p.slotLabel);
+  // A refused slot (unknown / done / retired) is reported by the answer door
+  // itself, exactly as before.
+  if ("refused" in chosen) return { keepOwed: false, text: p.text };
+  const slot = outputs[chosen.index]!;
+
+  if (slot.owner === "human") {
+    const seed = await findNewestSlotThreadSeed({
+      channelId: p.channelId,
+      sessionId: p.sessionId,
+      label: slot.label,
+      userId: p.userId,
+    });
+    const episodeStart = slot.owedSince ? Date.parse(slot.owedSince) : NaN;
+    if (
+      seed &&
+      seed.timestamp.getTime() <= p.questionAt.getTime() &&
+      (Number.isNaN(episodeStart) || seed.timestamp.getTime() >= episodeStart)
+    ) {
+      return { keepOwed: true };
+    }
+  }
+
+  const ask = slot.ask ?? null;
+  if (resolveAskResolution(ask) === "legacy") {
+    return { keepOwed: false, text: p.text };
+  }
+  const resolved = resolveAnswer(ask, { type: "text" }, p.text);
+  if ("refused" in resolved) return { keepOwed: true };
+  return {
+    keepOwed: false,
+    text: resolved.text,
+    ...(resolved.value ? { value: resolved.value } : {}),
+    // Re-checked under the lock: the agent re-asking in between refuses the
+    // reply as an answer (`ask_changed`) instead of landing it on a new ask.
+    askFingerprint: askFingerprint(ask),
+  };
+}
 
 /**
  * Call AFTER a HUMAN's message landed in a room (never for an agent's post —
@@ -321,18 +414,39 @@ export async function recordOwnerRoomReply(p: {
     });
     if (!claimed) return { status: "no_open_question" };
 
-    let slot: AnswerExpectedOutputResult["status"] | undefined;
+    let slot: OwnerRoomReplySlotStatus | undefined;
     if (question.slotLabel) {
-      const answered = await answerExpectedOutput({
+      const reading = await readRoomReplyAsAnswer({
+        channelId: p.channelId,
         sessionId: session.id,
         userId: p.userId,
-        expectedLabel: question.slotLabel,
+        slotLabel: question.slotLabel,
+        questionAt: question.timestamp,
         text,
-        messageId: p.messageId,
-        question: question.content,
-        now: answeredAt,
       });
-      slot = answered.status;
+      if (reading.keepOwed) {
+        // The reply answered the agent's QUESTION (claimed above, and the
+        // asker is still woken below) — but it is not an answer the slot's
+        // ask accepts, or it is conversation inside an "ask about it"
+        // thread. The slot stays the person's; the step itself is where
+        // they answer it.
+        slot = "kept_owed";
+      } else {
+        const answered = await answerExpectedOutput({
+          sessionId: session.id,
+          userId: p.userId,
+          expectedLabel: question.slotLabel,
+          text: reading.text,
+          messageId: p.messageId,
+          question: question.content,
+          now: answeredAt,
+          ...(reading.value ? { value: reading.value } : {}),
+          ...(reading.askFingerprint !== undefined
+            ? { askFingerprint: reading.askFingerprint }
+            : {}),
+        });
+        slot = answered.status;
+      }
     }
 
     const woke = p.wake
@@ -509,23 +623,20 @@ export async function answerSessionSlot(p: {
   }
 
   // The answer is said IN the room, as the person, so the conversation the
-  // agent reads is whole. Posted BEFORE the stamp (the delegate door's order):
-  // a stamp pointing at a message that never landed would be a durable lie.
+  // agent reads is whole. The message id is MINTED here and the post lands
+  // only AFTER the answer commits: a refusal at the lock (`ask_changed`, an
+  // `already_done` race) must leave no answer sitting in the room, and the
+  // stamp still names the message it will be (`postedMessageIdFor` is the
+  // derivation `postChannelMessage` itself uses for this key).
   let messageId: string | null = null;
+  let postKey: string | null = null;
   let question: OpenQuestion | null = null;
   if (session.channelId) {
     question = await findOpenQuestion(session.channelId, { slotLabel: label });
-    const posted = await postChannelMessage({
-      channelId: session.channelId,
-      content: text,
-      role: "user",
-      triggerAI: false,
-      userId: p.userId,
-      // A fresh key: two identical answers ("yes") to two questions are two
-      // answers, never a content-dedup collapse.
-      idempotencyKey: `slot-answer:${randomUUID()}`,
-    });
-    messageId = posted.messageId;
+    // A fresh key: two identical answers ("yes") to two questions are two
+    // answers, never a content-dedup collapse.
+    postKey = `slot-answer:${randomUUID()}`;
+    messageId = postedMessageIdFor(session.channelId, postKey);
   }
 
   const answered = await answerExpectedOutput({
@@ -543,56 +654,95 @@ export async function answerSessionSlot(p: {
   });
   if (answered.status !== "answered") return answered;
 
+  // Everything below runs AFTER the answer committed, and is best-effort like
+  // attest's tail: a failure is logged and reported in the result, never
+  // thrown — a committed answer must not come back as a 500 that invites the
+  // person to answer twice.
+  let posted = false;
+  if (session.channelId && postKey) {
+    try {
+      await postChannelMessage({
+        channelId: session.channelId,
+        content: text,
+        role: "user",
+        triggerAI: false,
+        userId: p.userId,
+        idempotencyKey: postKey,
+      });
+      posted = true;
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: session.id, messageId },
+        "answer: the room post failed — the answer is recorded, its message id names no message"
+      );
+    }
+  }
+
   let graded:
     | { verdict: "pass" | "fail"; recorded: boolean; resumed: boolean }
     | undefined;
   if (verdict && slot.criterionKey) {
-    const { gradeCriterionAsOwner } = await import("./evaluations/evaluate.js");
-    // The typed note (if any) is the rationale — never the summary line.
-    const note = p.text?.trim() || null;
-    const { out, resumed } = await gradeCriterionAsOwner({
-      sessionId: session.id,
-      userId: p.userId,
-      criterionKey: slot.criterionKey,
-      verdict,
-      rationale: note,
-    });
-    graded = { verdict, recorded: out.status === "recorded", resumed };
-    if (out.status !== "recorded") {
+    try {
+      const { gradeCriterionAsOwner } =
+        await import("./evaluations/evaluate.js");
+      // The typed note (if any) is the rationale — never the summary line.
+      const note = p.text?.trim() || null;
+      const { out, resumed } = await gradeCriterionAsOwner({
+        sessionId: session.id,
+        userId: p.userId,
+        criterionKey: slot.criterionKey,
+        verdict,
+        rationale: note,
+      });
+      graded = { verdict, recorded: out.status === "recorded", resumed };
+      if (out.status !== "recorded") {
+        logger.warn(
+          { sessionId: session.id, status: out.status },
+          "criterion answer: the grade did not land — the answer stands"
+        );
+      }
+    } catch (err) {
+      graded = { verdict, recorded: false, resumed: false };
       logger.warn(
-        { sessionId: session.id, status: out.status },
-        "criterion answer: the grade did not land — the answer stands"
+        { err, sessionId: session.id },
+        "criterion answer: the grade threw — the answer stands"
       );
     }
   }
 
   let questionId: string | null = null;
-  if (question && messageId) {
-    const claimed = await claimQuestionAnswered(question.id, {
-      messageId,
-      answeredBy: p.userId,
-      answeredAt: answered.answer.answeredAt,
-      text,
-    });
-    if (claimed) questionId = question.id;
-  }
-
   let wokeAgentType: string | null = null;
   let triggered = false;
-  if (session.channelId && messageId) {
-    wokeAgentType = await resolveWakeAgentType({
-      askingAgentUserId: questionId ? question?.agentUserId : null,
-      slot: answered.before,
-      agentIds: answered.session.agentIds,
-    });
-    triggered = await wake({
-      channelId: session.channelId,
-      messageId,
-      content: text,
-      ownerId: p.userId,
-      sessionId: session.id,
-      agentType: wokeAgentType,
-    });
+  if (session.channelId && messageId && posted) {
+    try {
+      if (question) {
+        const claimed = await claimQuestionAnswered(question.id, {
+          messageId,
+          answeredBy: p.userId,
+          answeredAt: answered.answer.answeredAt,
+          text,
+        });
+        if (claimed) questionId = question.id;
+      }
+      wokeAgentType = await resolveWakeAgentType({
+        askingAgentUserId: questionId ? question?.agentUserId : null,
+        slot: answered.before,
+        agentIds: answered.session.agentIds,
+      });
+      triggered = await wake({
+        channelId: session.channelId,
+        messageId,
+        content: text,
+        ownerId: p.userId,
+        sessionId: session.id,
+        agentType: wokeAgentType,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: session.id },
+        "answer: closing the question / waking the agent failed — the answer is recorded"
+      );
+    }
   }
 
   return {
@@ -601,7 +751,7 @@ export async function answerSessionSlot(p: {
     kind: answered.kind,
     answer: answered.answer,
     handedBack: answered.handedBack,
-    messageId,
+    messageId: posted ? messageId : null,
     questionId,
     wokeAgentType,
     triggered,
@@ -639,9 +789,9 @@ export type AttestSessionSlotResult =
  * Before this, "I did this" wrote the row and nothing else: the agent that was
  * blocked on the person was never told, and sat until something else woke it.
  *
- * Ordered AFTER the stamp (unlike the answer door, which posts first because
- * its stamp points at the message): a refused attestation must leave no
- * "Done" in the room, and nothing points back at the receipt. An open agent
+ * Ordered AFTER the stamp (like the answer door, which pre-mints its message
+ * id because its stamp points at the message): a refused attestation must
+ * leave no "Done" in the room, and nothing points back at the receipt. An open agent
  * question about the slot is closed by the receipt, so an agent the pod cannot
  * wake still sees it on its poll door (`GET /focus-sessions/:id/answers`).
  * Side effects after the stamp are best-effort: the slot is done either way.
@@ -764,19 +914,28 @@ export function resolveAnswer(
 }
 
 /**
- * The ONE wording of an answer-door refusal, for both doors (tRPC and Hub),
- * so a client reads the same sentence — and the same machine prefix
- * (`ask_changed:` / `ask_invalid:`, `SLOT_MOVED_ON_PHRASES`) — whichever it
- * called. `null` for success.
+ * Every way a slot door (answer, ask-about) refuses — the answer door's
+ * refusals plus "this session has no room" (`askAboutSlot`).
+ */
+export type SlotDoorRefusal =
+  | Exclude<AnswerSessionSlotResult, { status: "answered" }>
+  | { status: "no_room" };
+
+/**
+ * The ONE wording of a slot-door refusal, for every door (tRPC answer +
+ * ask-about, Hub answer), so a client reads the same sentence — and the same
+ * machine prefix (`ask_changed:` / `ask_invalid:`, `SLOT_MOVED_ON_PHRASES`) —
+ * whichever it called. Takes a REFUSAL only: callers narrow success away
+ * first, so there is no "unknown" arm to invent.
  */
 export function describeAnswerRefusal(
-  result: AnswerSessionSlotResult,
+  result: SlotDoorRefusal,
   expectedLabel: string,
   sessionId: string
 ): {
   code: "NOT_FOUND" | "BAD_REQUEST" | "CONFLICT";
   message: string;
-} | null {
+} {
   switch (result.status) {
     case "not_found":
       return {
@@ -810,7 +969,10 @@ export function describeAnswerRefusal(
         code: "BAD_REQUEST",
         message: `${ASK_INVALID_PREFIX} ${result.message}`,
       };
-    case "answered":
-      return null;
+    case "no_room":
+      return {
+        code: "BAD_REQUEST",
+        message: "This session has no room to ask in.",
+      };
   }
 }

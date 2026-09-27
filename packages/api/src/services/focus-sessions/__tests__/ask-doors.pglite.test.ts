@@ -40,6 +40,9 @@ const h = vi.hoisted(() => ({
   events: [] as Array<{ type: string; data: Record<string, unknown> }>,
   effects: [] as Array<Record<string, unknown>>,
   triggers: [] as Array<Record<string, unknown>>,
+  /** Make the answer door's post-commit steps throw (best-effort tail). */
+  failPost: false,
+  failWake: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -100,10 +103,26 @@ vi.mock("../../../lib/event-helpers.js", () => ({
 }));
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
   triggerAutoRespond: async (p: Record<string, unknown>) => {
+    if (h.failWake) throw new Error("pg-boss is down");
     h.triggers.push(p);
     return true;
   },
 }));
+vi.mock("../../messaging/post-message.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../messaging/post-message.js")>();
+  return {
+    ...actual,
+    postChannelMessage: async (
+      p: Parameters<typeof actual.postChannelMessage>[0]
+    ) => {
+      if (h.failPost && p.idempotencyKey?.startsWith("slot-answer:")) {
+        throw new Error("room insert failed");
+      }
+      return actual.postChannelMessage(p);
+    },
+  };
+});
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
@@ -317,6 +336,8 @@ describe("W2 typed ask doors", () => {
     h.events.length = 0;
     h.effects.length = 0;
     h.triggers.length = 0;
+    h.failPost = false;
+    h.failWake = false;
   });
 
   // ── answer ────────────────────────────────────────────────────────────────
@@ -573,7 +594,13 @@ describe("W2 typed ask doors", () => {
       expectedLabel: LABEL,
       note: "Which one do we use today?",
     });
-    expect(result).toMatchObject({ channelId, seeded: true, triggered: true });
+    expect(result).toMatchObject({
+      status: "asked",
+      channelId,
+      seeded: true,
+      triggered: true,
+    });
+    if (result.status !== "asked") throw new Error("not asked");
     expect(result.threadId).toBe(result.messageId);
     const room = await roomMessages(channelId);
     expect(room).toHaveLength(1);
@@ -602,7 +629,7 @@ describe("W2 typed ask doors", () => {
     expect((await slot(sessionId)).owner).toBe("human");
   });
 
-  it("askAboutSlot is idempotent under double-tap — one seed, one turn", async () => {
+  it("askAboutSlot is idempotent under double-tap — one seed; a re-tap re-triggers THAT seed's turn", async () => {
     const { sessionId, channelId } = await seedAsk(CHOOSE);
     const a = await askAboutSlot({
       sessionId,
@@ -614,21 +641,249 @@ describe("W2 typed ask doors", () => {
       userId: OWNER,
       expectedLabel: LABEL,
     });
-    expect(b).toMatchObject({
-      seeded: false,
-      triggered: false,
-      messageId: a.messageId,
-    });
+    expect(b).toMatchObject({ status: "asked", seeded: false });
+    expect(b.status === "asked" && b.messageId).toBe(
+      a.status === "asked" && a.messageId
+    );
     expect(await roomMessages(channelId)).toHaveLength(1);
+    // Every turn is keyed on the ONE seed (`singletonKey` collapses a queued
+    // or running job; a dropped one is finally run).
+    expect(h.triggers.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(h.triggers.map((t) => t.userMessageId))).toEqual(
+      new Set([a.status === "asked" && a.messageId])
+    );
+  });
+
+  it("askAboutSlot keys idempotency on the ANCHOR — an unrelated message in between does not mint a second seed", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    const a = await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+    });
+    // The person says something else in the room (no open question: no answer).
+    await send(app(), "POST", `/threads/${channelId}/messages`, {
+      role: "user",
+      content: "also, the invoice template is in Drive",
+      userId: OWNER,
+    });
+    const b = await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+    });
+    expect(b).toMatchObject({ status: "asked", seeded: false });
+    expect(b.status === "asked" && b.messageId).toBe(
+      a.status === "asked" && a.messageId
+    );
+    const seeds = (await roomMessages(channelId)).filter(
+      (m) => m.metadata?.anchor
+    );
+    expect(seeds).toHaveLength(1);
+  });
+
+  it("askAboutSlot opens a NEW thread once the agent replied to the last one", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    const a = await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+    });
+    const reply = await send(
+      app({ agentUserId: IS_AGENT }),
+      "POST",
+      `/threads/${channelId}/messages`,
+      { role: "assistant", content: "EU bills in EUR.", userId: OWNER }
+    );
+    expect(reply.status).toBe(200);
+    const b = await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+    });
+    expect(b).toMatchObject({ status: "asked", seeded: true });
+    expect(b.status === "asked" && b.messageId).not.toBe(
+      a.status === "asked" && a.messageId
+    );
+  });
+
+  it("askAboutSlot under CONCURRENT taps posts one seed", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    const results = await Promise.all(
+      [0, 1, 2].map(() =>
+        askAboutSlot({ sessionId, userId: OWNER, expectedLabel: LABEL })
+      )
+    );
+    const ids = new Set(
+      results.map((r) => (r.status === "asked" ? r.messageId : null))
+    );
+    expect(ids.size).toBe(1);
+    expect(
+      results.filter((r) => r.status === "asked" && r.seeded)
+    ).toHaveLength(1);
+    expect(await roomMessages(channelId)).toHaveLength(1);
+    expect(new Set(h.triggers.map((t) => t.userMessageId))).toEqual(ids);
+  });
+
+  it("askAboutSlot stamps the RENDERED ask's fingerprint, so the turn sees CHANGED", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    const rendered = askFingerprint({ mode: "confirm" });
+    await askAboutSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+      askFingerprint: rendered,
+    });
+    const [seed] = await roomMessages(channelId);
+    expect(
+      (seed!.metadata?.anchor as { askFingerprint: string }).askFingerprint
+    ).toBe(rendered);
+    const anchor = (
+      h.triggers[0]!.turnContext as {
+        anchor: { slot: { askChanged: boolean } };
+      }
+    ).anchor;
+    expect(anchor.slot.askChanged).toBe(true);
+  });
+
+  it("askAboutSlot is OWNER-only — another person gets not_found and nothing is posted", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    expect(
+      await askAboutSlot({ sessionId, userId: OTHER, expectedLabel: LABEL })
+    ).toEqual({ status: "not_found" });
+    expect(await roomMessages(channelId)).toHaveLength(0);
+    expect(h.triggers).toHaveLength(0);
+  });
+
+  // ── the answer door's order + best-effort tail ───────────────────────────
+
+  it("a refusal AT THE LOCK leaves no answer in the room (race through answerSessionSlot)", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    const pick = () =>
+      answerSessionSlot({
+        sessionId,
+        userId: OWNER,
+        expectedLabel: LABEL,
+        value: { type: "chip", chip: { label: "EU account", value: "eu" } },
+        askFingerprint: askFingerprint(CHOOSE as never),
+      });
+    const results = await Promise.all([pick(), pick()]);
+    expect(results.map((r) => r.status).sort()).toEqual([
+      "answered",
+      "ask_changed",
+    ]);
+    const room = await roomMessages(channelId);
+    expect(room).toHaveLength(1);
+    expect((await slot(sessionId)).answer?.messageId).toBe(room[0]!.id);
+  });
+
+  it("a failed wake after commit still returns the answer (never a 500 on a committed answer)", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    h.failWake = true;
+    const result = await answerSessionSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+      value: { type: "chip", chip: { label: "EU account", value: "eu" } },
+    });
+    expect(result).toMatchObject({ status: "answered", triggered: false });
+    expect((await slot(sessionId)).answer).toBeDefined();
+    expect(await roomMessages(channelId)).toHaveLength(1);
+  });
+
+  it("a failed room post after commit still returns the answer, with no message id and no wake", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    h.failPost = true;
+    const result = await answerSessionSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: LABEL,
+      value: { type: "chip", chip: { label: "EU account", value: "eu" } },
+    });
+    expect(result).toMatchObject({
+      status: "answered",
+      messageId: null,
+      triggered: false,
+    });
+    expect((await slot(sessionId)).answer).toBeDefined();
+    expect(await roomMessages(channelId)).toHaveLength(0);
+    expect(h.triggers).toHaveLength(0);
+  });
+
+  // ── a room reply against a TYPED ask ─────────────────────────────────────
+
+  const agentQuestion = async (channelId: string) => {
+    const res = await send(
+      app({ agentUserId: IS_AGENT }),
+      "POST",
+      `/threads/${channelId}/messages`,
+      {
+        role: "assistant",
+        content: WHY,
+        userId: OWNER,
+        kind: "question",
+        slotLabel: LABEL,
+      }
+    );
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { messageId: string }).messageId;
+  };
+  const ownerReply = async (channelId: string, content: string) => {
+    const res = await send(app(), "POST", `/threads/${channelId}/messages`, {
+      role: "user",
+      content,
+      userId: OWNER,
+    });
+    expect(res.status).toBe(200);
+  };
+  const questionAnswer = async (id: string) =>
+    (
+      (
+        await q<{ metadata: Record<string, { answer?: unknown }> }>(
+          `select metadata from messages where id = $1`,
+          [id]
+        )
+      ).rows[0]!.metadata.roomPost as { answer?: unknown }
+    ).answer;
+
+  it("words in the room do NOT answer a closed choose — the question is answered, the slot stays owed", async () => {
+    const { sessionId, channelId } = await seedAsk(CHOOSE);
+    const qid = await agentQuestion(channelId);
+    await ownerReply(channelId, "the EU one I guess");
+    const s = await slot(sessionId);
+    expect(s.owner).toBe("human");
+    expect(s.answer).toBeUndefined();
+    expect(await questionAnswer(qid)).toBeDefined();
+    expect(
+      h.events.filter((e) => e.type === FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE)
+    ).toHaveLength(0);
+    // The asker still hears the reply to its question.
     expect(h.triggers).toHaveLength(1);
   });
 
-  it("askAboutSlot is OWNER-only — another person gets NOT_FOUND and nothing is posted", async () => {
-    const { sessionId, channelId } = await seedAsk(CHOOSE);
-    await expect(
-      askAboutSlot({ sessionId, userId: OTHER, expectedLabel: LABEL })
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    expect(await roomMessages(channelId)).toHaveLength(0);
-    expect(h.triggers).toHaveLength(0);
+  it("a choose WITH allowOther takes the words as its typed text answer", async () => {
+    const { sessionId, channelId } = await seedAsk({
+      ...CHOOSE,
+      allowOther: true,
+    });
+    await agentQuestion(channelId);
+    await ownerReply(channelId, "the APAC account");
+    const s = await slot(sessionId);
+    expect(s.owner).toBeUndefined();
+    expect(s.answer).toMatchObject({
+      text: "the APAC account",
+      value: { type: "text" },
+    });
+  });
+
+  it("a follow-up inside an 'ask about it' thread never hands the slot back (even a legacy slot)", async () => {
+    const { sessionId, channelId } = await seedAsk(null);
+    await askAboutSlot({ sessionId, userId: OWNER, expectedLabel: LABEL });
+    const qid = await agentQuestion(channelId);
+    await ownerReply(channelId, "ok so EU then?");
+    const s = await slot(sessionId);
+    expect(s.owner).toBe("human");
+    expect(s.answer).toBeUndefined();
+    expect(await questionAnswer(qid)).toBeDefined();
   });
 });

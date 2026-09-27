@@ -155,6 +155,21 @@ export interface PostChannelMessageResult {
   slot?: { status: string };
 }
 
+/**
+ * The id a post with this `idempotencyKey` lands under — known BEFORE the post,
+ * so a caller can stamp a record that names the message and post only once
+ * that record has committed (the answer door: a refusal then leaves no
+ * message behind). The ONE derivation; `postChannelMessage` uses it too.
+ */
+export function postedMessageIdFor(
+  channelId: string,
+  idempotencyKey: string
+): string {
+  return deterministicUuidFromKey(
+    `post_message:${channelId}:${idempotencyKey.trim()}`
+  );
+}
+
 /** Build a duplicate-ignored receipt for a prior message id (pure — no I/O). */
 function duplicateReceipt(
   msgId: string,
@@ -250,9 +265,7 @@ export async function postChannelMessage(
   // short-window content lookup. A lookup failure must never block a real insert.
   let msgId: string;
   if (explicitKey) {
-    msgId = deterministicUuidFromKey(
-      `post_message:${channelId}:${explicitKey}`
-    );
+    msgId = postedMessageIdFor(channelId, explicitKey);
   } else if (triggerAI) {
     // An AI-triggering post is a DELIBERATE invocation, not an accidental retry
     // — never suppress it as a content-duplicate (a same-text message that turns

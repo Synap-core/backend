@@ -19,15 +19,22 @@
  * it: there is nothing left to ask about. A session with no room is refused
  * (there is nowhere to hold the thread).
  *
- * IDEMPOTENT under double-tap: while the room's last message is this person's
- * unanswered seed about the SAME slot, the door returns it rather than posting
- * a second seed and starting a second turn.
+ * IDEMPOTENT by ANCHOR: while the person's newest seed about this slot has
+ * no agent reply after it (`slot-thread.ts`), the door returns THAT seed and
+ * re-triggers its turn rather than posting a second one — the re-trigger is
+ * safe because the ONE turn door keys its job on the seed's message id
+ * (`triggerAutoRespond` `singletonKey`), so a turn still queued or running is
+ * not duplicated, and a turn that was dropped is finally run. Concurrent taps
+ * collapse on the seed's deterministic id (`postSeedOnce`).
+ *
+ * The client may send the `askFingerprint` of the ask it RENDERED; that is
+ * what the anchor carries, so the agent's turn sees CHANGED when the person
+ * was looking at an older ask than the one now on the slot.
  */
 
-import { TRPCError } from "@trpc/server";
 import { db, focusSessions, and, eq } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { askFingerprint, SLOT_MOVED_ON_PHRASES } from "@synap-core/types/ask";
+import { askFingerprint, ASK_LIMITS } from "@synap-core/types/ask";
 import { postSeedOnce } from "../messaging/post-seed-once.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { planSlotAnchorTurn } from "../../utils/anchored-comment-turn.js";
@@ -38,6 +45,7 @@ import {
 import { selectSlotToAnswer } from "./answer-slot.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { resolveWakeAgentType } from "./session-answer.js";
+import { agentRepliedAfter, findNewestSlotThreadSeed } from "./slot-thread.js";
 
 /** The sentence the person is understood to be saying. Not a prompt — the
  *  agent's instructions for a slot thread live in the IS prompt. */
@@ -47,24 +55,28 @@ export function askAboutSlotSeed(label: string, note?: string): string {
   return extra ? `${head}\n\n${extra}` : head;
 }
 
-export const ASK_ABOUT_SLOT_NOTE_MAX = 2000;
+/**
+ * The note's bound: the person's own words about an ask, the same ceiling as
+ * their free-text answer to one.
+ */
+export const ASK_ABOUT_SLOT_NOTE_MAX = ASK_LIMITS.answerTextMaxChars;
 
-export interface AskAboutSlotResult {
-  channelId: string;
-  /** The thread's root: the seed (new, or the one already waiting). */
-  messageId: string;
-  /** The thread id — the root message's id. */
-  threadId?: string;
-  /** false ⇒ an unanswered seed about this slot was already waiting. */
-  seeded: boolean;
-  triggered: boolean;
-}
-
-function readSlotAnchor(metadata: unknown): SessionSlotAnchor | null {
-  const anchor = (metadata as { anchor?: unknown } | null)?.anchor;
-  const parsed = SessionSlotAnchorSchema.safeParse(anchor);
-  return parsed.success ? parsed.data : null;
-}
+export type AskAboutSlotResult =
+  /** The same refusals as the answer door — worded by `describeAnswerRefusal`. */
+  | { status: "not_found" | "unknown_label" | "already_done" | "retired" }
+  /** The session has no room to hold the thread. */
+  | { status: "no_room" }
+  | {
+      status: "asked";
+      channelId: string;
+      /** The thread's root: the seed (new, or the one already waiting). */
+      messageId: string;
+      /** The thread id — the root message's id. */
+      threadId: string;
+      /** false ⇒ an unanswered seed about this slot was already waiting. */
+      seeded: boolean;
+      triggered: boolean;
+    };
 
 export async function askAboutSlot(params: {
   sessionId: string;
@@ -72,6 +84,8 @@ export async function askAboutSlot(params: {
   userId: string;
   expectedLabel: string;
   note?: string;
+  /** `askFingerprint(ask)` of the ask the client rendered; default: the slot's. */
+  askFingerprint?: string;
 }): Promise<AskAboutSlotResult> {
   const session = await db.query.focusSessions.findFirst({
     where: and(
@@ -85,71 +99,89 @@ export async function askAboutSlot(params: {
       agentIds: true,
     },
   });
-  if (!session) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: `Focus session ${params.sessionId} not found`,
-    });
-  }
+  if (!session) return { status: "not_found" };
   const outputs: ExpectedOutput[] = Array.isArray(session.expectedOutputs)
     ? (session.expectedOutputs as ExpectedOutput[])
     : [];
   const chosen = selectSlotToAnswer(outputs, params.expectedLabel);
-  if ("refused" in chosen) {
-    const label = params.expectedLabel;
-    throw new TRPCError(
-      chosen.refused === "unknown_label"
-        ? {
-            code: "NOT_FOUND",
-            message: `This session ${SLOT_MOVED_ON_PHRASES.unknownLabel} "${label}"`,
-          }
-        : chosen.refused === "already_done"
-          ? {
-              code: "BAD_REQUEST",
-              message: `"${label}" ${SLOT_MOVED_ON_PHRASES.alreadyDone}`,
-            }
-          : {
-              code: "BAD_REQUEST",
-              message: `"${label}" ${SLOT_MOVED_ON_PHRASES.retired} with its cancelled session`,
-            }
-    );
-  }
-  if (!session.channelId) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "This session has no room to ask in.",
-    });
-  }
+  if ("refused" in chosen) return { status: chosen.refused };
+  if (!session.channelId) return { status: "no_room" };
+  const channelId = session.channelId;
   const slot = outputs[chosen.index]!;
   const anchor: SessionSlotAnchor = SessionSlotAnchorSchema.parse({
     kind: "session_slot",
     sessionId: session.id,
     label: slot.label,
-    askFingerprint: askFingerprint(slot.ask ?? null),
+    askFingerprint: params.askFingerprint ?? askFingerprint(slot.ask ?? null),
   });
   const note = params.note?.trim().slice(0, ASK_ABOUT_SLOT_NOTE_MAX);
   const content = askAboutSlotSeed(slot.label, note);
   const wanted = normalizeExpectedLabel(slot.label);
 
+  // A session room is a GROUP room: only a NAMED agent is woken. The agent
+  // that owns the work (delegatedTo), else the first pod-run agent staffed on
+  // the session, else the orchestrator.
+  const startTurn = async (
+    seedId: string,
+    seedContent: string,
+    seedAnchor: SessionSlotAnchor
+  ) => {
+    const agentType =
+      (await resolveWakeAgentType({
+        slot,
+        agentIds: Array.isArray(session.agentIds) ? session.agentIds : [],
+      })) ?? "meta";
+    const plan = await planSlotAnchorTurn({
+      anchor: seedAnchor,
+      comment: seedContent,
+    });
+    return triggerAutoRespond({
+      channelId,
+      userMessageId: seedId,
+      content: seedContent,
+      sourceUserId: params.userId,
+      focusSessionId: session.id,
+      agentType,
+      turnContext: { anchor: plan.context },
+    });
+  };
+
+  const waiting = await findNewestSlotThreadSeed({
+    channelId,
+    sessionId: session.id,
+    label: slot.label,
+    userId: params.userId,
+  });
+  if (waiting && !(await agentRepliedAfter(channelId, waiting.id))) {
+    return {
+      status: "asked",
+      channelId,
+      messageId: waiting.id,
+      threadId: waiting.id,
+      seeded: false,
+      // The WAITING seed's own words and anchor: its turn is about what the
+      // person asked then, not about this tap.
+      triggered: await startTurn(waiting.id, waiting.content, waiting.anchor),
+    };
+  }
+
   const seed = await postSeedOnce({
-    channelId: session.channelId,
+    channelId,
     userId: params.userId,
     content,
-    idempotencyScope: `ask-slot:${session.id}:${wanted}`,
-    isPendingSeed: (latest) => {
-      if (latest.role !== "user") return false;
-      const prior = readSlotAnchor(latest.metadata);
-      return (
-        !!prior &&
-        prior.sessionId === session.id &&
-        normalizeExpectedLabel(prior.label) === wanted
-      );
-    },
+    // Keyed on the seed this decision was made against (the answered one, or
+    // none): two concurrent taps derive the SAME id and one insert wins.
+    idempotencyScope: `ask-slot:${session.id}:${wanted}:${waiting?.id ?? "none"}`,
+    // The anchor lookup above already decided there is no waiting seed; the
+    // "last message" heuristic is exactly what it replaced.
+    isPendingSeed: () => false,
     comment: { anchor },
   });
   if (!seed.seeded) {
+    // A concurrent tap won the insert and starts the turn itself.
     return {
-      channelId: session.channelId,
+      status: "asked",
+      channelId,
       messageId: seed.messageId,
       threadId: seed.messageId,
       seeded: false,
@@ -157,30 +189,12 @@ export async function askAboutSlot(params: {
     };
   }
 
-  // A session room is a GROUP room: only a NAMED agent is woken. The agent
-  // that owns the work (delegatedTo), else the first pod-run agent staffed on
-  // the session, else the orchestrator.
-  const agentType =
-    (await resolveWakeAgentType({
-      slot,
-      agentIds: Array.isArray(session.agentIds) ? session.agentIds : [],
-    })) ?? "meta";
-  const plan = await planSlotAnchorTurn({ anchor, comment: content });
-  const triggered = await triggerAutoRespond({
-    channelId: session.channelId,
-    userMessageId: seed.messageId,
-    content,
-    sourceUserId: params.userId,
-    focusSessionId: session.id,
-    agentType,
-    turnContext: { anchor: plan.context },
-  });
-
   return {
-    channelId: session.channelId,
+    status: "asked",
+    channelId,
     messageId: seed.messageId,
     threadId: seed.messageId,
     seeded: true,
-    triggered,
+    triggered: await startTurn(seed.messageId, content, anchor),
   };
 }

@@ -168,12 +168,11 @@ export async function askAiAboutProposal(params: {
     );
     return { channelId: channel.id, seeded: false, triggered: false };
   }
-  const posted = seed;
 
   // (3) THE ONE DOOR.
   const triggered = await triggerAutoRespond({
     channelId: channel.id,
-    userMessageId: posted.messageId,
+    userMessageId: seed.messageId,
     content,
     sourceUserId: userId,
     focusSessionId: proposal.sessionId ?? null,

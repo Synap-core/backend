@@ -426,13 +426,12 @@ const SessionAnswersQuerySchema = z.object({
 
 /** The answer door's refusals, named — the `answered` arm is the only success. */
 function answerRefusal(
-  result: AnswerSessionSlotResult,
+  result: Exclude<AnswerSessionSlotResult, { status: "answered" }>,
   expectedLabel: string,
   sessionId: string
-): { status: 400 | 404 | 409; error: string } | null {
+): { status: 400 | 404 | 409; error: string } {
   // The ONE wording, shared with the tRPC door (`describeAnswerRefusal`).
   const refusal = describeAnswerRefusal(result, expectedLabel, sessionId);
-  if (!refusal) return null;
   return {
     status:
       refusal.code === "NOT_FOUND"
@@ -2433,10 +2432,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         value: parsed.data.value,
         askFingerprint: parsed.data.askFingerprint,
       });
-      const refusal = answerRefusal(result, parsed.data.expectedLabel, id);
-      if (refusal) return c.json({ error: refusal.error }, refusal.status);
       if (result.status !== "answered") {
-        return c.json({ error: "Unknown error" }, 500);
+        const refusal = answerRefusal(result, parsed.data.expectedLabel, id);
+        return c.json({ error: refusal.error }, refusal.status);
       }
       return c.json({
         ok: true as const,

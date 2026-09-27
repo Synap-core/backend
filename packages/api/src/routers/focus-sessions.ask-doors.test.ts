@@ -64,6 +64,8 @@ vi.mock(
 );
 
 const { focusSessionsRouter } = await import("./focus-sessions.js");
+const { describeAnswerRefusal } =
+  await import("../services/focus-sessions/session-answer.js");
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const person = () =>
@@ -192,6 +194,7 @@ describe("attestOutput contract", () => {
 describe("askAboutSlot contract", () => {
   it("returns { channelId, messageId, threadId }", async () => {
     m.ask.mockResolvedValue({
+      status: "asked",
       channelId: "c",
       messageId: "m",
       threadId: "m",
@@ -208,5 +211,39 @@ describe("askAboutSlot contract", () => {
     expect(m.ask).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1", note: "why?" })
     );
+  });
+
+  it("passes the RENDERED ask's fingerprint through to the anchor", async () => {
+    m.ask.mockResolvedValue({
+      status: "asked",
+      channelId: "c",
+      messageId: "m",
+      threadId: "m",
+      seeded: true,
+      triggered: true,
+    });
+    await person().askAboutSlot({
+      sessionId: SESSION,
+      expectedLabel: "K",
+      askFingerprint: "fp-rendered",
+    });
+    expect(m.ask).toHaveBeenCalledWith(
+      expect.objectContaining({ askFingerprint: "fp-rendered" })
+    );
+  });
+
+  it("words a refusal with the ANSWER door's sentence (one wording, not a third copy)", async () => {
+    m.ask.mockResolvedValue({ status: "already_done" });
+    await expect(
+      person().askAboutSlot({ sessionId: SESSION, expectedLabel: "K" })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: describeAnswerRefusal({ status: "already_done" }, "K", SESSION)
+        .message,
+    });
+    m.ask.mockResolvedValue({ status: "no_room" });
+    await expect(
+      person().askAboutSlot({ sessionId: SESSION, expectedLabel: "K" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });

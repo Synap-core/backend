@@ -2415,13 +2415,8 @@ export const focusSessionsRouter = router({
         askFingerprint: input.askFingerprint,
       });
       if (result.status === "answered") return { ok: true as const, ...result };
-      const refusal = describeAnswerRefusal(
-        result,
-        input.expectedLabel,
-        input.sessionId
-      );
       throw new TRPCError(
-        refusal ?? { code: "INTERNAL_SERVER_ERROR", message: "Unknown error" }
+        describeAnswerRefusal(result, input.expectedLabel, input.sessionId)
       );
     }),
 
@@ -2439,6 +2434,8 @@ export const focusSessionsRouter = router({
         sessionId: z.string().uuid(),
         expectedLabel: z.string().min(1).max(500),
         note: z.string().max(ASK_ABOUT_SLOT_NOTE_MAX).optional(),
+        /** `askFingerprint(ask)` of the ask the person was looking at. */
+        askFingerprint: z.string().min(1).max(64).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2454,11 +2451,17 @@ export const focusSessionsRouter = router({
         userId: requireUserId(ctx.userId),
         expectedLabel: input.expectedLabel,
         note: input.note,
+        askFingerprint: input.askFingerprint,
       });
+      if (result.status !== "asked") {
+        throw new TRPCError(
+          describeAnswerRefusal(result, input.expectedLabel, input.sessionId)
+        );
+      }
       return {
         channelId: result.channelId,
         messageId: result.messageId,
-        ...(result.threadId ? { threadId: result.threadId } : {}),
+        threadId: result.threadId,
         seeded: result.seeded,
         triggered: result.triggered,
       };
