@@ -50,7 +50,7 @@ import { agentRepliedAfter, findNewestSlotThreadSeed } from "./slot-thread.js";
 /** The sentence the person is understood to be saying. Not a prompt — the
  *  agent's instructions for a slot thread live in the IS prompt. */
 export function askAboutSlotSeed(label: string, note?: string): string {
-  const head = `Tell me more about "${label}" — what exactly do you need from me?`;
+  const head = `Tell me more about "${label}". What exactly do you need from me?`;
   const extra = note?.trim();
   return extra ? `${head}\n\n${extra}` : head;
 }

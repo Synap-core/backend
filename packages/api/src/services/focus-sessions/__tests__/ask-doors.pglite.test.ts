@@ -504,6 +504,23 @@ describe("W2 typed ask doors", () => {
     expect(typed.status).toBe(400);
   });
 
+  it("a confirm's PROMPT is stored as the question, not the slot's why", async () => {
+    const PROMPT = "Ship on Friday?";
+    const { sessionId } = await seedAsk({ mode: "confirm", prompt: PROMPT });
+    const res = await answer(sessionId, {
+      value: { type: "confirm", confirmed: true },
+    });
+    expect(res.status).toBe(200);
+    const stored = (await slot(sessionId)).answer as { question?: string };
+    expect(stored.question).toBe(PROMPT);
+    // Without a prompt the why stays the question (today's shape).
+    const { sessionId: bare } = await seedAsk({ mode: "confirm" });
+    await answer(bare, { value: { type: "confirm", confirmed: false } });
+    expect(((await slot(bare)).answer as { question?: string }).question).toBe(
+      WHY
+    );
+  });
+
   // ── attest ────────────────────────────────────────────────────────────────
 
   it("attest: done + receipt as the person + one event + ONE wake through triggerAutoRespond", async () => {
@@ -605,6 +622,9 @@ describe("W2 typed ask doors", () => {
     const room = await roomMessages(channelId);
     expect(room).toHaveLength(1);
     expect(room[0]!.id).toBe(result.messageId);
+    expect(room[0]!.content).toBe(
+      `Tell me more about "${LABEL}". What exactly do you need from me?\n\nWhich one do we use today?`
+    );
     expect(room[0]!.message_category).toBe("comment");
     expect(room[0]!.metadata?.anchor).toEqual({
       kind: "session_slot",

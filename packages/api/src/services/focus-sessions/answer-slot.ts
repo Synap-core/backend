@@ -213,7 +213,12 @@ export async function answerExpectedOutput(
         return { status: "ask_changed" };
       }
 
-      const question = before.why?.trim() || params.question?.trim();
+      // The question the person was SHOWN: a confirm's own prompt outranks the
+      // slot's `why` (the reason it is owed), which is only the fallback.
+      const prompt =
+        before.ask?.mode === "confirm" ? before.ask.prompt?.trim() : undefined;
+      const question =
+        prompt || before.why?.trim() || params.question?.trim();
       const answer: SlotAnswer = {
         text,
         messageId: params.messageId,
