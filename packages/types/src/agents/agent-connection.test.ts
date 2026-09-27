@@ -12,6 +12,15 @@ describe('resolveAgentConnection', () => {
     ).toEqual({ kind: 'never' });
   });
 
+  it('reads unmeasured, not never, when the pod does not serve the field', () => {
+    expect(
+      resolveAgentConnection([
+        { id: 'a', name: 'Claude Code' },
+        { id: 'b', name: 'Codex' },
+      ]),
+    ).toEqual({ kind: 'unmeasured' });
+  });
+
   it('picks the most recently seen agent, whatever the row order', () => {
     const rows = [
       { id: 'old', name: 'Codex', lastSeenAt: '2026-09-27T10:00:00.000Z' },

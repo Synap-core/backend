@@ -23,8 +23,13 @@ export interface AgentPresenceLike {
 }
 
 export type AgentConnection =
-  /** No agent has ever called the pod. */
+  /** No agent has ever called the pod (or the pod has no agents at all). */
   | { kind: 'never' }
+  /**
+   * The pod has agents but does not report when they were last seen (a pod
+   * older than the `lastSeenAt` field). NOT "never": nobody measured it.
+   */
+  | { kind: 'unmeasured' }
   /** At least one agent has; `agent` is the one seen most recently. */
   | {
       kind: 'seen';
@@ -43,7 +48,10 @@ function seenAt(value: AgentPresenceLike['lastSeenAt']): Date | null {
  * Resolve the connection state from the roster rows.
  *
  * A row whose timestamp cannot be parsed counts as not seen: it proves
- * nothing, and "seen" is the state that hides the invite.
+ * nothing, and "seen" is the state that hides the invite. Rows that do not
+ * carry the field at all are `unmeasured`, never `never`: an older pod cannot
+ * tell, and saying "no agent connected" to someone whose agent is working
+ * would be a calm, wrong screen.
  */
 export function resolveAgentConnection(
   rows: readonly AgentPresenceLike[],
@@ -56,7 +64,10 @@ export function resolveAgentConnection(
     seenCount += 1;
     if (!latest || at.getTime() > latest.at.getTime()) latest = { row, at };
   }
-  if (!latest) return { kind: 'never' };
+  if (!latest) {
+    const measured = rows.length === 0 || rows.some((row) => 'lastSeenAt' in row);
+    return measured ? { kind: 'never' } : { kind: 'unmeasured' };
+  }
   return {
     kind: 'seen',
     agent: { id: latest.row.id, name: latest.row.name, lastSeenAt: latest.at },
