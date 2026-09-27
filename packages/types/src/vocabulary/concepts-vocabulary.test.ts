@@ -108,3 +108,19 @@ describe("concept vocabulary — Template, Rule, Tools (W5)", () => {
     expect(resolveProposalKindLabel("automation_run")).toBe("Run rule");
   });
 });
+
+// ── N1 (founder, 2026-09-27): the user word for a workspace is "Space" ──
+
+describe("concept vocabulary — Space (N1)", () => {
+  it("a workspace is a Space to the user, through every spelling that reaches it", () => {
+    expect(resolveObjectNoun("workspace")).toBe("Space");
+    expect(resolveObjectLabel("workspace")).toBe("Space");
+    expect(resolveObjectNounPlural("workspace")).toBe("Spaces");
+    expect(resolveObjectNounPlural("workspaces")).toBe("Spaces");
+  });
+
+  it("the kind TOKEN is unchanged — only the word moved", () => {
+    expect(normalizeObjectKind("workspaces")).toBe("workspace");
+    expect(OBJECT_KINDS.workspace?.kind).toBe("workspace");
+  });
+});

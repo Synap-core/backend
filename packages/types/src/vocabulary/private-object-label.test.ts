@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { resolvePrivateObjectLabel, resolveObjectNoun } from "./index.js";
+import {
+  resolveMembersDecideLabel,
+  resolvePrivateObjectLabel,
+  resolveObjectNoun,
+} from "./index.js";
 
 describe("resolvePrivateObjectLabel (decision D1 placeholder)", () => {
   it("names a withheld session without its title", () => {
@@ -19,5 +23,17 @@ describe("resolvePrivateObjectLabel (decision D1 placeholder)", () => {
       `Private ${resolveObjectNoun("api_key")}`
     );
     expect(resolvePrivateObjectLabel(undefined)).toBe("Private item");
+  });
+});
+
+describe("resolveMembersDecideLabel (decision 2026-09-27 decide gate)", () => {
+  it("names who may decide, from the one noun door", () => {
+    expect(resolveMembersDecideLabel("focus_session")).toBe(
+      "Session members decide"
+    );
+    expect(resolveMembersDecideLabel("focus_session")).toBe(
+      `${resolveObjectNoun("focus_session")} members decide`
+    );
+    expect(resolveMembersDecideLabel(undefined)).toBe("Item members decide");
   });
 });

@@ -61,7 +61,11 @@ import {
 import type { SessionCriterion } from "@synap/playbooks";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import { readCapturePart } from "@synap-core/types/capture";
-import type { ExpectedOutput } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  SlotAnswerValue,
+  SlotAsk,
+} from "@synap/playbooks";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
 import { listSessionOutputs, type SessionOutput } from "./session-outputs.js";
 import {
@@ -116,7 +120,22 @@ export interface PacketSlotItem {
    * continue": the slot came back to the agent with it. Absent when nobody
    * answered.
    */
-  answer?: { text: string; answeredAt: string; messageId: string | null };
+  answer?: {
+    text: string;
+    answeredAt: string;
+    messageId: string | null;
+    /**
+     * The TYPED answer when the slot carried an `ask` (which option, the
+     * form's values, the vault ref …) — `text` stays the readable summary.
+     */
+    value?: SlotAnswerValue;
+  };
+  /**
+   * On an owed item: HOW the agent asked the person to answer (its declared
+   * `ask`), so a resuming agent sees what it is waiting for, not just that it
+   * is waiting.
+   */
+  ask?: SlotAsk;
 }
 
 export interface PacketProposalItem {
@@ -433,6 +452,7 @@ function owedItem(slot: OwedSlot): PacketSlotItem {
     ...(slot.criterionKey !== undefined
       ? { criterionKey: slot.criterionKey }
       : {}),
+    ...(slot.ask ? { ask: slot.ask } : {}),
   };
 }
 
@@ -1342,6 +1362,7 @@ export async function projectContinuationPacket(
                 text: s.answer.text,
                 answeredAt: s.answer.answeredAt,
                 messageId: s.answer.messageId,
+                ...(s.answer.value ? { value: s.answer.value } : {}),
               },
             }
           : {}),

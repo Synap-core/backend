@@ -1,6 +1,6 @@
 import { visit } from "unist-util-visit";
 import type { Node } from "unist";
-import { readEmbed } from "./embeds.js";
+import { COLUMN_DIRECTIVE, COLUMNS_DIRECTIVE, readEmbed } from "./embeds.js";
 
 /**
  * The directives the read path understands, and the attributes each one may
@@ -41,6 +41,11 @@ export const DIRECTIVE_ATTRIBUTES = {
     "writtenAt",
     "sessionState",
   ],
+  // Layout frames (columns.md): a row of columns, and one column. `width` is
+  // read leniently (`40%`, `40`, `0.4`) by `columnWeights`; `synap-columns`
+  // carries no attribute in v1.
+  [COLUMNS_DIRECTIVE]: [],
+  [COLUMN_DIRECTIVE]: ["width"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type SynapDirectiveName = keyof typeof DIRECTIVE_ATTRIBUTES;

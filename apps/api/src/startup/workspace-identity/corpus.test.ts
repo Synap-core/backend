@@ -141,8 +141,15 @@ describe("fixture: workspaces that must NOT be stamped", () => {
     const r = matchWorkspaceIdentity(
       // Exact name match + a corpus-unique profile, but almost none of the
       // template is present — corroboration lowers the distinctive bar, never
-      // the coverage floor.
-      ws({ name: "Builder", profileSlugs: ["devplane_app"] }),
+      // the coverage floor. The name is READ from the bundled template, not
+      // hard-coded: builder-workspace's display name moved Builder → "Dev"
+      // (R7, workspace-templates 0.13), and this test is about the coverage
+      // floor, not about any one name.
+      ws({
+        name: corpus.fingerprints.find((f) => f.slug === "builder-workspace")!
+          .names[0]!,
+        profileSlugs: ["devplane_app"],
+      }),
       corpus
     );
     const builder = r.candidates.find((c) => c.slug === "builder-workspace")!;

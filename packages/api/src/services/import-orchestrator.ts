@@ -1303,10 +1303,17 @@ export class ImportOrchestrator {
       (this.ctx.trpcCtx as { agentUserId?: string | null }).agentUserId ?? null;
     const { computeCanReviewApproval } =
       await import("../routers/proposals/review-authority.js");
+    const { rosterReadFor } = await import("../access/session-visibility.js");
     const { allowed } = await computeCanReviewApproval({
       proposal,
       userId: actingAgentUserId ?? userId,
       purpose: "approve",
+      roster: rosterReadFor(
+        this.ctx.trpcCtx as {
+          agentUserId?: string | null;
+          isHubProtocol?: boolean;
+        }
+      ),
     });
     if (!allowed) throw notFound();
 

@@ -33,6 +33,10 @@ import {
   resolveExternalUserMapping,
 } from "../../../services/external-user-mapping.js";
 import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
+import {
+  GUEST_REFUSED_BODY,
+  isGuestPrincipal,
+} from "../../../access/guest-containment.js";
 import type { HubVariables } from "../rest/_shared.js";
 import {
   isPublicDoorPath,
@@ -49,6 +53,21 @@ const logger = createLogger({ module: "hub-protocol-auth" });
  * packages/jobs intelligence-health-check) to surface a re-provision warning.
  */
 const KEY_EXPIRY_WARNING_DAYS = 14;
+
+/**
+ * Refuse a GUEST principal on every authenticated hub route, whatever the
+ * method. This door serves agents, the IS and tooling; a guest (a guest project
+ * role and no pod participation) only ever reads what was shared with them,
+ * through the app. See `access/guest-containment.ts`. `null` = not a guest.
+ */
+async function refuseGuestPrincipal(
+  c: Context<{ Variables: HubVariables }>
+): Promise<Response | null> {
+  const userId = c.get("userId") as string | undefined;
+  if (!userId) return null;
+  if (!(await isGuestPrincipal(userId, c.req.raw))) return null;
+  return c.json(GUEST_REFUSED_BODY, 403);
+}
 
 function extractBearerToken(authHeader: string | null): string | null {
   if (!authHeader) return null;
@@ -356,6 +375,9 @@ export const hubAuthMiddleware = async (
         c.set("linkedUserId", op);
       }
     }
+    // Guest containment: evaluated on the FINAL principal (after every remap).
+    const refusedKey = await refuseGuestPrincipal(c);
+    if (refusedKey) return refusedKey;
     // Request write facts for the floors below: D8 probe key, D6 agent principal
     // (read AFTER every remap above set it). A plain human key enters no scope.
     // C1: the calling client, so an agent write without `X-Session-Id` groups
@@ -378,6 +400,8 @@ export const hubAuthMiddleware = async (
         c.set("userId", session.identity.id as string);
         // Authenticated pod users get full hub-protocol scopes
         c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
+        const refusedSession = await refuseGuestPrincipal(c);
+        if (refusedSession) return refusedSession;
         return next();
       }
     } catch (err) {

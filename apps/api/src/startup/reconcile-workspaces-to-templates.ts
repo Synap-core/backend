@@ -70,14 +70,25 @@ const logger = createLogger({ module: "reconcile-workspaces-to-templates" });
 export async function reconcileWorkspacesToTemplates(): Promise<void> {
   const db = await getDb();
 
-  const rows = await db
+  const allRows = await db
     .select({
       id: workspaces.id,
       ownerId: workspaces.ownerId,
       settings: workspaces.settings,
       packageSlug: workspaces.packageSlug,
+      archivedAt: workspaces.archivedAt,
     })
     .from(workspaces);
+
+  // ARCHIVED workspaces are frozen: none of the passes below touch them. Before
+  // this, an archived workspace was re-grown every boot — the base pass
+  // re-created a deleted "Generate report" automation as ACTIVE, and the domain
+  // pass re-added template profiles/views/sidebar items to a workspace the user
+  // had retired (R7, 2026-09-27: Agent Fleet / Synap Dev). Nothing is lost: the
+  // pass is additive and runs every boot, so an UNARCHIVED workspace converges
+  // on the next boot exactly as if it had never been skipped.
+  const rows = allRows.filter((ws) => ws.archivedAt == null);
+  const archivedSkipped = allRows.length - rows.length;
 
   let reconciled = 0;
   let skipped = 0;
@@ -334,7 +345,7 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
   }
 
   logger.info(
-    { reconciled, skipped, failed, total: rows.length },
+    { reconciled, skipped, failed, archivedSkipped, total: rows.length },
     "Workspace→template reconcile pass complete"
   );
 }

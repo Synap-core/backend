@@ -51,7 +51,9 @@ const MONOREPO = resolve(HERE, "../../../../..");
 
 /** The registry label IS the user word. */
 const ALIGNED: Record<string, string> = {
-  Workspace: "workspace",
+  // N1 (founder, 2026-09-27): the user word is "Space"; `workspace` stays the
+  // kind token, the table and every tool stem.
+  Space: "workspace",
   Project: "project",
   Track: "track",
   Step: "stage",
@@ -77,9 +79,12 @@ const NO_ROW: Record<string, string> = {
 };
 
 function glossaryHeadings(): string[] {
-  // One table row per concept: `| **Word** | internal | … |`.
+  // One table row per concept: `| **Word** | internal | … |`. The cell is
+  // column-PADDED by the formatter (`| **Step**      |`), so allow any run of
+  // spaces before the pipe — the single-space form matched only the widest
+  // words and left this tripwire red on 3 of 12 headings.
   return [
-    ...readFileSync(CONCEPTS, "utf8").matchAll(/^\| \*\*(.+?)\*\* \|/gm),
+    ...readFileSync(CONCEPTS, "utf8").matchAll(/^\| \*\*(.+?)\*\* +\|/gm),
   ].map((m) => m[1]!.trim());
 }
 

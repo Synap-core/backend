@@ -33,7 +33,15 @@ const h = vi.hoisted(() => {
   const writes: Array<{ op: string; args: unknown[] }> = [];
   const profiles = new Map<string, Record<string, unknown>>();
   const links: Array<{ profileId: string; propertyDefId: string }> = [];
-  return { members, writes, profiles, links, db: null as unknown };
+  return {
+    members,
+    writes,
+    profiles,
+    links,
+    db: null as unknown,
+    // R8a: when set, replaces the governance gate (default = the real gate).
+    permOverride: null as null | ((opts: unknown) => Promise<unknown>),
+  };
 });
 
 // Built inside the (hoisted) module factory, which is why it is a function.
@@ -96,6 +104,17 @@ vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn(async () => false),
 }));
 vi.mock("../utils/audit-log.js", () => ({ auditLog: vi.fn(async () => null) }));
+vi.mock("../utils/permission-check.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../utils/permission-check.js")>();
+  return {
+    ...actual,
+    checkPermissionOrPropose: (opts: never) =>
+      h.permOverride
+        ? h.permOverride(opts)
+        : actual.checkPermissionOrPropose(opts),
+  };
+});
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
@@ -347,6 +366,32 @@ describe("shared profiles: grants belong to the home workspace", () => {
         .grantAccess({ profileId: P_SHARED, targetWorkspaceId: WS_A })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(writesOf("profile.grantAccess")).toHaveLength(0);
+  });
+
+  it("an AGENT's grant is a proposal: the gate is asked `profile` + `grant_access` and nothing is written (R8a)", async () => {
+    const seen: unknown[] = [];
+    h.permOverride = async (opts) => {
+      seen.push(opts);
+      return { granted: false, proposalId: "prop-grant" };
+    };
+    try {
+      const res = await profilesRouter
+        .createCaller(ctx("editor-b", WS_B))
+        .grantAccess({ profileId: P_SHARED, targetWorkspaceId: WS_A });
+      expect(res).toMatchObject({
+        status: "proposed",
+        proposalId: "prop-grant",
+      });
+      expect(seen[0]).toMatchObject({
+        subjectType: "profile",
+        action: "grant_access",
+        workspaceId: WS_B,
+        data: { profileId: P_SHARED, targetWorkspaceId: WS_A },
+      });
+      expect(writesOf("profile.grantAccess")).toHaveLength(0);
+    } finally {
+      h.permOverride = null;
+    }
   });
 
   it("an editor of the home workspace can grant and revoke", async () => {

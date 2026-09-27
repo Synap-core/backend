@@ -20,6 +20,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { authMiddleware } from "@synap/auth";
+import { refuseGuestSession } from "../access/guest-containment.js";
 import type { StructureProgressEvent } from "@synap-core/types/capture";
 import {
   STRUCTURE_PROGRESS_IDLE_TTL_MS,
@@ -39,6 +40,7 @@ export const captureProgressStreamApp = new Hono<{
 }>();
 
 captureProgressStreamApp.use("*", authMiddleware);
+captureProgressStreamApp.use("*", refuseGuestSession);
 
 export function encodeStructureProgressFrame(
   event: StructureProgressEvent

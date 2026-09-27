@@ -7,7 +7,8 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "vitest run"
   },
   "dependencies": {
     "@synap-core/markdown-core": "workspace:*",

@@ -41,6 +41,7 @@ import type {
   BlockedReason,
   ExpectedOutput,
   OutputRef,
+  SlotAsk,
 } from "@synap/playbooks";
 import {
   findUnreachableOutputRefs,
@@ -79,6 +80,19 @@ export interface BlockExpectedOutputParams {
    * go together, and a pointer stays true after the agent reclaims the slot.
    */
   ref?: OutputRef | null;
+  /**
+   * HOW the person can answer — see `ExpectedOutput.ask`. Same three states as
+   * `ref`: `undefined` leaves a stored ask alone, `null` clears it, a value
+   * replaces it. Already PARSED by the door (`AskSchema`); this service never
+   * sees raw wire input.
+   *
+   * UNLIKE `ref`, it IS cleared by `unblockExpectedOutput` (and so by the
+   * answer door's hand-back): the ask describes the BLOCKER — how the person
+   * resolves it — not the deliverable. Once the slot is the agent's again
+   * there is nothing left for the person to answer, and what was asked
+   * survives on `answer.question`.
+   */
+  ask?: SlotAsk | null;
   /**
    * The ACTING agent, from the door's verified auth context. Present ⇒ an
    * agent handed this to the person, who is then told (`session.needs_you`);
@@ -189,7 +203,8 @@ export async function blockExpectedOutput(
         params.blockedReason,
         params.why,
         undefined,
-        params.ref
+        params.ref,
+        params.ask
       )
   );
   if (!stamped) return { status: "not_found" };
@@ -271,7 +286,9 @@ export function stampBlocked(
    * three-state contract the wire uses, so the targeted door and the wholesale
    * patch cannot mean two different things by the same value.
    */
-  ref?: OutputRef | null
+  ref?: OutputRef | null,
+  /** Same three-state contract as `ref`. */
+  ask?: SlotAsk | null
 ): ExpectedOutput[] {
   const wanted = normalizeExpectedLabel(label);
   const trimmed = (why ?? "").trim();
@@ -282,6 +299,8 @@ export function stampBlocked(
     const withRef: ExpectedOutput = { ...o };
     if (ref === null) delete withRef.ref;
     else if (ref !== undefined) withRef.ref = ref;
+    if (ask === null) delete withRef.ask;
+    else if (ask !== undefined) withRef.ask = ask;
     return reconcileOwedSince(
       {
         ...withRef,
@@ -296,7 +315,10 @@ export function stampBlocked(
 
 /**
  * The agent reclaiming a slot it can now do: all four ownership fields go
- * together. Pure.
+ * together — and the `ask`, which describes how the PERSON resolves the
+ * blocker and means nothing on an agent-owned slot (see
+ * `BlockExpectedOutputParams.ask`). `ref` stays: it describes the deliverable.
+ * Pure.
  */
 export function stampUnblocked(
   outputs: ExpectedOutput[],
@@ -310,6 +332,7 @@ export function stampUnblocked(
       blockedReason: _blockedReason,
       why: _why,
       owedSince: _owedSince,
+      ask: _ask,
       ...rest
     } = o;
     return rest;

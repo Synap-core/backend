@@ -18,9 +18,16 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db as defaultDb, eq, and } from "@synap/database";
-import { proposals, workspaceMembers, users } from "@synap/database/schema";
+import { db as defaultDb, eq, and, inArray } from "@synap/database";
+import {
+  focusSessions,
+  proposals,
+  workspaceMembers,
+  users,
+} from "@synap/database/schema";
+import { isLikelyUUID } from "@synap-core/types/proposals";
 import { isPodAdmin } from "./workspace-role.js";
+import { sessionReadableWhere } from "../access/session-visibility.js";
 
 type Database = typeof defaultDb;
 
@@ -100,4 +107,58 @@ export async function assertProposalVisibleTo(
     code: "FORBIDDEN",
     message: "Not authorized to view this proposal",
   });
+}
+
+/** The target types a proposal uses for a focus session. */
+const SESSION_TARGET_TYPES = new Set(["focus_session", "session"]);
+
+/**
+ * Throw unless `userId` may COMMENT on the proposal `proposalId` (founder
+ * decision 2026-09-27): the visibility gate above (editor+), OR the caller can
+ * read the session the proposal belongs to — its `session_id` (the run it was
+ * filed in, e.g. an intake room) or its subject when it targets a session —
+ * through THE session read rule, with the door's roster semantics
+ * (`rosterReadFor(ctx)`; `false` on an agent door).
+ *
+ * COMMENT ONLY. Approve/reject stay on the review ladder, which this never
+ * widens; `proposals.get` / `source` / the channel-bind and AI-hydration paths
+ * keep `assertProposalVisibleTo` unchanged. Only a FORBIDDEN from the gate is
+ * re-checked: NOT_FOUND stays NOT_FOUND.
+ */
+export async function assertProposalCommentableBy(
+  proposalId: string,
+  reader: { userId: string; roster: boolean },
+  opts?: { db?: Database }
+): Promise<void> {
+  const database = opts?.db ?? defaultDb;
+  try {
+    await assertProposalVisibleTo(proposalId, reader.userId, opts);
+    return;
+  } catch (err) {
+    if (!(err instanceof TRPCError) || err.code !== "FORBIDDEN") throw err;
+    const proposal = await database.query.proposals.findFirst({
+      where: eq(proposals.id, proposalId),
+      columns: { sessionId: true, targetType: true, targetId: true },
+    });
+    const sessionIds = [
+      proposal?.sessionId,
+      proposal && SESSION_TARGET_TYPES.has(proposal.targetType)
+        ? proposal.targetId
+        : null,
+    ].filter((id): id is string => !!id && isLikelyUUID(id));
+    if (sessionIds.length > 0) {
+      const [readable] = await database
+        .select({ id: focusSessions.id })
+        .from(focusSessions)
+        .where(
+          and(
+            inArray(focusSessions.id, sessionIds),
+            sessionReadableWhere(reader)
+          )
+        )
+        .limit(1);
+      if (readable) return;
+    }
+    throw err;
+  }
 }

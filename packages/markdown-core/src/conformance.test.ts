@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createMarkdownProcessor, parseMarkdown } from "./processor.js";
 import { scanContainers } from "./scan.js";
-import { EMBED_DIRECTIVES } from "./embeds.js";
+import { EMBED_DIRECTIVES, isFrameDirective } from "./embeds.js";
 
 const CORPUS_DIR = fileURLToPath(
   new URL("./__fixtures__/corpus/", import.meta.url)
@@ -123,7 +123,7 @@ function scannerUnterminatedEmbeds(markdown: string): string[] {
       (c) =>
         !c.terminated &&
         (embeds.has(c.name) ||
-          (c.name.startsWith("synap-") && c.name !== "synap-section"))
+          (c.name.startsWith("synap-") && !isFrameDirective(c.name)))
     )
     .map((c) => `${c.name}@${c.startLine}`)
     .sort();
@@ -142,6 +142,10 @@ describe("conformance corpus", () => {
       "colon-nesting.md",
       "unterminated.md",
       "math-fences.md",
+      "columns.md",
+      "columns-in-section.md",
+      "columns-degenerate.md",
+      "columns-equal-colons.md",
     ]) {
       expect(names).toContain(required);
     }

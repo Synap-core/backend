@@ -1,5 +1,5 @@
 /**
- * TRANSPORT for the credentialless public doors (`/api/hub/public/*`, Sites W3).
+ * TRANSPORT for the credentialless public doors (`/api/hub/public/*`).
  *
  * Mounted FIRST in `index.ts` — outside the credentialed pod-edge CORS, which
  * skips these paths through the same predicate — so a public door's CORS can

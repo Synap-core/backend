@@ -53,7 +53,7 @@
 
 import { db, focusSessions, and, eq, drizzleSql } from "@synap/database";
 import type { SQL } from "@synap/database";
-import type { ExpectedOutput } from "@synap/playbooks";
+import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
 import { notTriagePendingWhere } from "./triage.js";
@@ -202,6 +202,18 @@ export interface OwedSlot {
    * the field existed; absence means "no criterion to highlight".
    */
   criterionKey?: string;
+  /**
+   * WHERE the agent pointed the person (`ExpectedOutput.ref`) — carried so a
+   * tray row can open the door without re-reading the whole session. Floored
+   * at write time (`isOutputRefVisible`) by the declaring door; this read is
+   * behind the same owner floor.
+   */
+  ref?: OutputRef;
+  /**
+   * HOW the person can answer (`ExpectedOutput.ask`) — carried so a tray can
+   * quick-answer a confirm / choose in place.
+   */
+  ask?: SlotAsk;
 }
 
 export interface ListOwedSlotsParams {
@@ -268,6 +280,11 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       ...(slot.criterionKey !== undefined
         ? { criterionKey: slot.criterionKey }
         : {}),
+      // Truthiness, not `!== undefined`: a STORED slot never carries `null`
+      // (the merge deletes it), and a legacy row that somehow does must read
+      // as "no pointer", not leak the wire's CLEAR into a read model.
+      ...(slot.ref ? { ref: slot.ref } : {}),
+      ...(slot.ask ? { ask: slot.ask } : {}),
     });
   }
   return owed;

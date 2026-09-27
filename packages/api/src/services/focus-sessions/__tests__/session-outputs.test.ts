@@ -435,6 +435,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     blockedReason: "credential",
     why: "The Stripe restricted key for the live account",
     ref: { kind: "document", id: "44444444-4444-4444-4444-444444444444" },
+    ask: { mode: "confirm", prompt: "Use the live account?" },
     owedSince: "2026-09-08T09:00:00.000Z",
     criterionKey: "no-stale",
     status: "done",
@@ -454,6 +455,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
       answeredBy: "44444444-4444-4444-4444-444444444444",
       answeredAt: "2026-09-08T14:00:00.000Z",
       question: "Which Stripe account?",
+      value: { type: "confirm", confirmed: true },
     },
   };
 

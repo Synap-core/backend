@@ -108,9 +108,10 @@ export interface ProposalIntentInput {
   revertable?: boolean | null;
   /**
    * The proposal's change type (`create` / `update` / `delete` / …). Read for
-   * `link` only: a link proposal CREATES or REMOVES a relation, and its mark
+   * `link`: a link proposal CREATES or REMOVES a relation, and its mark
    * must say which (`resolveLinkOperation`). Absent on a link is not "create"
-   * for the swipe gate — it fails closed.
+   * for the swipe gate — it fails closed. Also read for `archive`, which
+   * reads as `remove` on any kind (`REMOVING_CHANGE_TYPES`).
    */
   changeType?: string | null;
   /** kind === "facet": a detach removes a role, an attach does not. */
@@ -311,6 +312,16 @@ const LINK_INTENT: Readonly<Record<LinkOperation, ProposalIntent>> = {
   remove: "remove",
 };
 
+/**
+ * Change types that TAKE SOMETHING AWAY whatever kind the presenter gave the
+ * row. `archive` is not a `delete` kind — it is reversible (`restore`), and the
+ * delete body says "Will remove" — but approving it pulls the object out of
+ * every surface (an archived space also pauses its rules), and it sits on the
+ * governance DESTRUCTIVE floor. Reading it as the `change` of its update-shaped
+ * payload (or, before P1, the `create` fallback) painted it green.
+ */
+const REMOVING_CHANGE_TYPES: ReadonlySet<string> = new Set(["archive"]);
+
 /** Unknown kinds fall to `change`: the honest "it edits something" answer, and
  *  the one that carries no swipe privilege (see `SWIPE_SAFE_KINDS`). */
 export function resolveProposalIntentKind(
@@ -322,6 +333,9 @@ export function resolveProposalIntentKind(
   }
   if (input.kind === "link") {
     return LINK_INTENT[resolveLinkOperation(input.changeType)];
+  }
+  if (input.changeType && REMOVING_CHANGE_TYPES.has(input.changeType)) {
+    return "remove";
   }
   return KIND_INTENT[input.kind] ?? "change";
 }

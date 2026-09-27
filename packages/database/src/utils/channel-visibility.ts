@@ -93,6 +93,7 @@ import { channels, channelMembers, ChannelType } from "../schema/channels.js";
 import { workspaceMembers, workspaces } from "../schema/workspaces.js";
 import { users } from "../schema/users.js";
 import type { db as Db } from "../client-pg.js";
+import { podGuestWhere } from "./pod-membership.js";
 
 /** Shared-type channels that are visible to all members of their workspace. */
 const SHARED_CHANNEL_TYPES = [
@@ -109,7 +110,7 @@ const qb = new QueryBuilder();
 
 /**
  * The object kinds that own ONE linked channel (an "object room"). Mirrors the
- * partial unique index `channels_object_room_uniq` (migration 0279) — a type
+ * partial unique index `channels_object_room_lens_uniq` (migration 0279) — a type
  * added here needs the index widened in the same change.
  */
 export const OBJECT_ROOM_CONTEXT_TYPES = ["document", "entity"] as const;
@@ -145,6 +146,19 @@ export function hasObjectRoomFloor(type: ObjectRoomType): boolean {
   return objectRoomFloors.has(type);
 }
 
+/**
+ * The LENS of an object room (founder decision 2026-09-27): absent → the
+ * object's SHARED room (comments, pod-wide recaps); a workspace id → a
+ * workspace-scoped recap room, readable only through that workspace. Written
+ * only by `ChannelRepository.ensureObjectChannel`, part of its dedup key.
+ */
+export const OBJECT_ROOM_LENS_KEY = "lensWorkspaceId";
+
+/** The row's lens, as SQL text (NULL for the shared room). */
+function lensOf(): SQL {
+  return drizzleSql`(${channels.metadata} ->> ${OBJECT_ROOM_LENS_KEY})`;
+}
+
 /** The row IS an object room (GROUP + a bindable object stamp). */
 function objectRoomWhere(): SQL {
   return and(
@@ -175,7 +189,37 @@ function objectRoomBranch(userId: string | AnyColumn): SQL | undefined {
       floor(userId, channels.contextObjectId)
     )
   );
-  return and(eq(channels.channelType, ChannelType.GROUP), or(...arms));
+  // A lens room is read ONLY through its workspace: the object's floor AND
+  // membership (or ownership) of the lens workspace. The shared room has none.
+  const lensMember = or(
+    exists(
+      qb
+        .select({ one: drizzleSql`1` })
+        .from(workspaceMembers)
+        .where(
+          and(
+            drizzleSql`${workspaceMembers.workspaceId}::text = ${lensOf()}`,
+            eq(workspaceMembers.userId, userId)
+          )
+        )
+    ),
+    exists(
+      qb
+        .select({ one: drizzleSql`1` })
+        .from(workspaces)
+        .where(
+          and(
+            drizzleSql`${workspaces.id}::text = ${lensOf()}`,
+            eq(workspaces.ownerId, userId)
+          )
+        )
+    )
+  );
+  return and(
+    eq(channels.channelType, ChannelType.GROUP),
+    or(...arms),
+    or(drizzleSql`${lensOf()} IS NULL`, lensMember)
+  );
 }
 
 /**
@@ -210,7 +254,7 @@ export function channelVisibilityWhere(userId: string | AnyColumn): SQL {
       )
     );
 
-  return or(
+  const visible = or(
     // 1. Own it.
     eq(channels.userId, userId),
     // 2. Explicit member (recorded in channel_members).
@@ -249,7 +293,13 @@ export function channelVisibilityWhere(userId: string | AnyColumn): SQL {
     ),
     // 5. An object room whose OBJECT the caller may read (see the docblock).
     objectRoomBranch(userId)
-  )!;
+  );
+  // A GUEST (`podGuestWhere`: a guest project role, no pod participation) reads
+  // NO channel through any branch. Guests were let in to read what an owner
+  // shared; branch 4 alone would otherwise hand them every pod-wide Discord /
+  // bridge / group channel, and this one predicate also gates message reads,
+  // `sendMessage` and the realtime `channel:<id>` join.
+  return and(visible, not(podGuestWhere(userId)))!;
 }
 
 /** `db` from this package, or a test's PGlite drizzle handle (cast). */

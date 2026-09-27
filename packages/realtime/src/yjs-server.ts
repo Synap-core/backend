@@ -27,11 +27,14 @@ import { storage } from "@synap/storage";
 import { recordYjsPersist, recordYjsPersistFailure } from "./bridge.js";
 import {
   applyDocumentRoomPlan,
+  declaredEditorSchema,
   markDocumentRoomLoadFailed,
   planDocumentRoomLoad,
   roomMeta,
+  roomSchemaOutdates,
   ROOM_META_KEYS,
   trustedCacheRevision,
+  UNSTAMPED_EDITOR_SCHEMA,
 } from "./document-room.js";
 
 export interface YjsServerConfig {
@@ -115,6 +118,25 @@ function socketAccess(socket: Socket): RoomAccess {
   const access = (socket.data as { yjsAccess?: RoomAccess }).yjsAccess;
   return access ?? "none";
 }
+
+/** The editor schema version the socket declared at the room gate (see `declaredEditorSchema`). */
+function socketEditorSchema(socket: Socket): number {
+  const schema = (socket.data as { editorSchema?: number }).editorSchema;
+  return typeof schema === "number" ? schema : UNSTAMPED_EDITOR_SCHEMA;
+}
+
+/**
+ * The room has been stamped past this socket's editor schema: its editor
+ * lacks node types the room may hold, and y-tiptap would DELETE them from the
+ * shared document (columns.md R1). Such a socket is served read-only — at
+ * connection, and from the first update after the stamp rises mid-session.
+ */
+function editorOutdated(socket: Socket, doc: Y.Doc): boolean {
+  return roomSchemaOutdates(doc, socketEditorSchema(socket));
+}
+
+/** What an outdated editor is told (a client words it "Update Synap to edit"). */
+const OUTDATED_ACCESS = { access: "read", reason: "editor-outdated" } as const;
 
 /**
  * The verified user of a handshake, handed from the library's `authenticate`
@@ -567,6 +589,11 @@ interface YSocketIOSyncHooks {
  * everything that SENDS to the reader (sync-step-1 replies, awareness) is
  * unchanged. Throws at boot if the hooks are gone (a library upgrade), so the
  * server never runs with read-only silently disabled.
+ *
+ * An EDITOR is read-only too once the room's `schemaVersion` stamp is above
+ * the `editorSchema` it declared (`editorOutdated`): from connection when the
+ * stamp is already there, else from its first update after the stamp rises.
+ * It is told `yjs-access {access:"read", reason:"editor-outdated"}`.
  */
 export function installReadOnlySync(yServer: unknown): void {
   const hooks = yServer as Partial<YSocketIOSyncHooks>;
@@ -580,8 +607,29 @@ export function installReadOnlySync(yServer: unknown): void {
 
   hooks.initSyncListeners = (socket, doc) => {
     const access = socketAccess(socket);
-    socket.emit("yjs-access", { access });
-    if (access === "edit") return initSync(socket, doc);
+    const outdated = access === "edit" && editorOutdated(socket, doc);
+    socket.emit("yjs-access", outdated ? OUTDATED_ACCESS : { access });
+    if (access === "edit" && !outdated) {
+      // An editor — until a newer editor stamps the room past its schema.
+      let told = false;
+      const facade = Object.create(socket) as Socket;
+      facade.on = ((event: string, listener: (...args: unknown[]) => void) => {
+        if (event === "sync-update") {
+          return socket.on(event, (...args: unknown[]) => {
+            if (!editorOutdated(socket, doc)) return listener(...args);
+            if (!told) {
+              told = true;
+              socket.emit("yjs-access", OUTDATED_ACCESS);
+            }
+            console.warn(
+              `[Yjs] Dropped an update from an outdated editor (schema ${socketEditorSchema(socket)}) in ${String((doc as Y.Doc & { name?: string }).name)}`
+            );
+          });
+        }
+        return socket.on(event, listener);
+      }) as Socket["on"];
+      return initSync(facade, doc);
+    }
     const facade = Object.create(socket) as Socket;
     facade.on = ((event: string, listener: (...args: unknown[]) => void) => {
       if (event === "sync-update") {
@@ -597,12 +645,17 @@ export function installReadOnlySync(yServer: unknown): void {
   };
 
   hooks.startSynchronization = (socket, doc) => {
-    if (socketAccess(socket) === "edit") return startSync(socket, doc);
+    const editor = socketAccess(socket) === "edit";
     const facade = Object.create(socket) as Socket;
     facade.emit = ((event: string, ...args: unknown[]) => {
       if (event === "sync-step-1") {
-        // Answer the reader's state vector's diff with nothing.
-        return socket.emit(event, args[0], () => {});
+        // The client's answer carries its local state: applied only for an
+        // editor the room has not outgrown (checked when it ARRIVES).
+        const apply = args[1];
+        return socket.emit(event, args[0], (...reply: unknown[]) => {
+          if (!editor || editorOutdated(socket, doc)) return;
+          if (typeof apply === "function") apply(...reply);
+        });
       }
       return socket.emit(event, ...args);
     }) as Socket["emit"];
@@ -743,7 +796,11 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
   yjsNamespace.use((socket, next) => {
     const roomName = socket.nsp.name.replace(/^\/yjs\|/, "");
     const userId = verifiedHandshakes.get(socket.handshake);
-    const data = socket.data as { yjsAccess?: RoomAccess };
+    const data = socket.data as {
+      yjsAccess?: RoomAccess;
+      editorSchema?: number;
+    };
+    data.editorSchema = declaredEditorSchema(socket.handshake.auth);
 
     if (!userId) {
       if (allowInsecure) {

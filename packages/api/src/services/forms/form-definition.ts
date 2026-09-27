@@ -1,5 +1,5 @@
 /**
- * PUBLIC FORM DEFINITION (Sites W4) — the stored shape, and every PURE rule the
+ * PUBLIC FORM DEFINITION — the stored shape, and every PURE rule the
  * guest door applies to it. Zod + node:crypto only; no database, no router.
  *
  * A form is an inbound `tools` row (the Cal.com / Mailgun pattern) whose
@@ -10,8 +10,9 @@
  *
  * THE ANONYMOUS CALLER CONTROLS NOTHING BUT FIELD VALUES. Kind, facet,
  * workspace, actor, mode and title come from the stored row. A submitted key
- * the form does not declare is dropped; a value of the wrong type drops the
- * whole submission (strict, never coerced from an object/array).
+ * the form does not declare is dropped; a value that does not read as its type
+ * rejects the whole submission (a browser's string encodings of numbers and
+ * checkboxes are read; an object/array never is).
  *
  * Intake only: the door files exactly one `entity.create`. There is no update
  * or delete anywhere in this module, and the actor's capability list is
@@ -151,7 +152,11 @@ export const FormConfigSchema = z
     fields: z.array(FormFieldSchema).min(1).max(30),
     /** Which field becomes the entity title. Must be a text-like field. */
     titleField: KEY,
-    /** 'direct' needs this AND the per-form auto rule; anything else proposes. */
+    /**
+     * Kept in the stored shape so an existing row still parses, but the forms
+     * door refuses `direct` and the guest door files every submission as a
+     * proposal whatever this says: an anonymous create is always reviewed.
+     */
     mode: z.enum(["direct", "proposal"]).default("proposal"),
     captcha: z
       .object({ enabled: z.boolean() })
@@ -229,10 +234,14 @@ export function parseStoredForm(
 // ── Mode: fail closed ────────────────────────────────────────────────────────
 
 /**
- * Should the door ask the gate for DIRECT (no forced proposal)? Only when the
- * stored config says EXACTLY `"direct"` AND the rule store agrees AND nothing
- * degraded the request (captcha provider unreachable). Any other value —
- * absent, garbled, `"proposal"`, a revoked rule — proposes ("tighten on drift").
+ * The rule a direct mode would have to pass: the stored config says EXACTLY
+ * `"direct"` AND the rule store agrees AND nothing degraded the request
+ * (captcha provider unreachable). Any other value — absent, garbled,
+ * `"proposal"`, a revoked rule — proposes ("tighten on drift").
+ *
+ * The guest door does not call it: every anonymous submission is filed as a
+ * proposal until an owner-authorised direct mode is decided. It stays next to
+ * the stored `mode` it reads so that decision reuses one tested rule.
  */
 export function wantsDirect(input: {
   storedMode: unknown;
@@ -268,16 +277,24 @@ const URL_RE = /^https?:\/\/[^\s]{1,2000}$/i;
 const PHONE_RE = /^[+()0-9 .-]{3,40}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][0-9:.+Z-]{0,20})?$/;
 
+/** The outcome of reading a submission's answers against the form's fields. */
+export type BuiltProperties =
+  | { ok: true; properties: Record<string, string | number | boolean> }
+  | { ok: false; invalid: string[] };
+
 /**
  * Build the property bag from the stored allowlist ONLY. Unknown keys are
- * dropped; a declared key with a value of the wrong type, or a missing required
- * key, rejects the whole submission (`null`). Never coerces an object/array.
+ * dropped. A declared key with a value that does not read as its type, or a
+ * missing required key, rejects the whole submission and is named in
+ * `invalid` (every such key, in field order), so the submitter can fix it.
+ * Never coerces an object/array.
  */
 export function buildPropertiesFromFields(
   fields: readonly FormField[],
   submitted: Record<string, unknown>
-): Record<string, string | number | boolean> | null {
+): BuiltProperties {
   const out: Record<string, string | number | boolean> = {};
+  const invalid: string[] = [];
   for (const f of fields) {
     const raw = Object.prototype.hasOwnProperty.call(submitted, f.key)
       ? submitted[f.key]
@@ -287,14 +304,43 @@ export function buildPropertiesFromFields(
       raw === null ||
       (typeof raw === "string" && raw.trim() === "");
     if (empty) {
-      if (f.required) return null;
+      if (f.required) invalid.push(f.key);
       continue;
     }
     const v = coerceField(f, raw);
-    if (v === undefined) return null;
-    out[f.key] = v;
+    if (v === undefined) invalid.push(f.key);
+    else out[f.key] = v;
   }
-  return out;
+  return invalid.length > 0
+    ? { ok: false, invalid }
+    : { ok: true, properties: out };
+}
+
+/**
+ * An HTML form and the embed snippet post every value as a string, so a number
+ * or checkbox field must accept the plain encodings a browser produces. Only
+ * those: a decimal number (`3`, `-2`, `3.5`, `.5`), and for a checkbox the
+ * words a form control sends (`on` when ticked) plus the usual true/false
+ * spellings. Anything else stays invalid.
+ */
+const NUMBER_TEXT_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+const TRUE_WORDS = new Set(["true", "on", "1"]);
+const FALSE_WORDS = new Set(["false", "off", "0"]);
+
+function readNumber(raw: unknown): number | undefined {
+  if (typeof raw === "number") return raw;
+  if (typeof raw !== "string") return undefined;
+  const s = raw.trim();
+  return NUMBER_TEXT_RE.test(s) ? Number(s) : undefined;
+}
+
+function readBoolean(raw: unknown): boolean | undefined {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw !== "string") return undefined;
+  const s = raw.trim().toLowerCase();
+  if (TRUE_WORDS.has(s)) return true;
+  if (FALSE_WORDS.has(s)) return false;
+  return undefined;
 }
 
 function coerceField(
@@ -331,7 +377,7 @@ function coerceField(
       return DATE_RE.test(s) && !Number.isNaN(Date.parse(s)) ? s : undefined;
     }
     case "number": {
-      const n = typeof raw === "number" ? raw : undefined;
+      const n = readNumber(raw);
       if (n === undefined || !Number.isFinite(n)) return undefined;
       if (f.constraints?.min !== undefined && n < f.constraints.min)
         return undefined;
@@ -340,7 +386,7 @@ function coerceField(
       return n;
     }
     case "boolean":
-      return typeof raw === "boolean" ? raw : undefined;
+      return readBoolean(raw);
     case "enum":
       return typeof raw === "string" &&
         (f.constraints?.enum ?? []).includes(raw)
@@ -425,5 +471,10 @@ export function publicFormView(config: FormConfig) {
     })),
     successMessage: config.successMessage,
     honeypotField: HONEYPOT_FIELD,
+    /**
+     * The POST is refused with `retry` until this many ms have passed since the
+     * ticket was minted; a client holds its submit until then.
+     */
+    minSubmitMs: config.limits.minSubmitMs,
   };
 }

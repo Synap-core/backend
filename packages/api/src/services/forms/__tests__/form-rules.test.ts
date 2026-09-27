@@ -1,7 +1,8 @@
 /**
- * Pure rules of the public-form door (Sites W4): the fail-closed mode floor,
- * the strict field builder, the stored-row parser and the captcha verifier.
- * Each fixture row names the rule it would rule OUT.
+ * Pure rules of the public-form door: the fail-closed mode floor, the strict
+ * field builder (with the string encodings a browser posts), the stored-row
+ * parser, the reply contract and the captcha verifier. Each fixture row names
+ * the rule it would rule OUT.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -15,7 +16,12 @@ import {
 } from "../form-definition.js";
 import { verifyCaptcha, captchaConfigFromEnv } from "../captcha.js";
 import { guestProvenanceFor, proposalActorKind } from "../guest-provenance.js";
-import { planGuestWrite, planCarriesSignal } from "../guest-submit.js";
+import {
+  planGuestWrite,
+  planCarriesSignal,
+  guestFormReply,
+  type GuestOutcome,
+} from "../guest-submit.js";
 
 const CONFIG = FormConfigSchema.parse({
   name: "Contact",
@@ -35,6 +41,7 @@ const CONFIG = FormConfigSchema.parse({
       type: "enum",
       constraints: { enum: ["a", "b"] },
     },
+    { key: "subscribe", label: "Subscribe", type: "boolean" },
   ],
   titleField: "name",
 });
@@ -72,21 +79,54 @@ describe("buildPropertiesFromFields — allowlist only, strict types", () => {
         profileSlug: "workspace",
         __proto__: { polluted: true },
       })
-    ).toEqual({ name: "Ada" });
+    ).toEqual({ ok: true, properties: { name: "Ada" } });
   });
 
   it.each([
-    [{ name: { $ne: 1 } }, "object for text"],
-    [{ name: ["a"] }, "array for text"],
-    [{ name: "A", email: "nope" }, "bad email"],
-    [{ name: "A", age: "12" }, "string for number"],
-    [{ name: "A", age: 999 }, "number over max"],
-    [{ name: "A", plan: "c" }, "enum outside options"],
-    [{ email: "a@b.io" }, "required missing"],
-  ] as Array<[Record<string, unknown>, string]>)(
-    "rejects the whole submission: %j (%s)",
-    (fields) => {
-      expect(buildPropertiesFromFields(CONFIG.fields, fields)).toBeNull();
+    [{ name: { $ne: 1 } }, ["name"], "object for text"],
+    [{ name: ["a"] }, ["name"], "array for text"],
+    [{ name: "A", email: "nope" }, ["email"], "bad email"],
+    [{ name: "A", age: "twelve" }, ["age"], "a word for a number"],
+    [{ name: "A", age: "12abc" }, ["age"], "trailing junk after a number"],
+    [{ name: "A", age: "1e3" }, ["age"], "exponent notation"],
+    [{ name: "A", age: "999" }, ["age"], "a string number over max"],
+    [{ name: "A", age: 999 }, ["age"], "number over max"],
+    [{ name: "A", plan: "c" }, ["plan"], "enum outside options"],
+    [{ name: "A", subscribe: "maybe" }, ["subscribe"], "a word for a checkbox"],
+    [{ name: "A", subscribe: 1 }, ["subscribe"], "a number for a checkbox"],
+    [{ email: "a@b.io" }, ["name"], "required missing"],
+    [{ email: "no", age: "x" }, ["name", "email", "age"], "every failing key"],
+  ] as Array<[Record<string, unknown>, string[], string]>)(
+    "rejects the whole submission: %j ⇒ invalid %j (%s)",
+    (fields, invalid) => {
+      expect(buildPropertiesFromFields(CONFIG.fields, fields)).toEqual({
+        ok: false,
+        invalid,
+      });
+    }
+  );
+
+  it.each([
+    // [posted, read as] — the encodings an HTML form or the embed snippet send
+    [{ age: "3" }, { age: 3 }],
+    [{ age: " 3.5 " }, { age: 3.5 }],
+    [{ age: ".5" }, { age: 0.5 }],
+    [{ age: "0" }, { age: 0 }],
+    [{ age: 42 }, { age: 42 }],
+    [{ subscribe: "on" }, { subscribe: true }],
+    [{ subscribe: "true" }, { subscribe: true }],
+    [{ subscribe: "TRUE" }, { subscribe: true }],
+    [{ subscribe: "1" }, { subscribe: true }],
+    [{ subscribe: "off" }, { subscribe: false }],
+    [{ subscribe: "false" }, { subscribe: false }],
+    [{ subscribe: "0" }, { subscribe: false }],
+    [{ subscribe: false }, { subscribe: false }],
+  ] as Array<[Record<string, unknown>, Record<string, unknown>]>)(
+    "reads the browser encoding %j as %j (rules out: typeof-only)",
+    (posted, read) => {
+      expect(
+        buildPropertiesFromFields(CONFIG.fields, { name: "A", ...posted })
+      ).toEqual({ ok: true, properties: { name: "A", ...read } });
     }
   );
 
@@ -131,6 +171,45 @@ describe("stored row parsing fails closed", () => {
   it("the public view leaks no kind, secret or id", () => {
     const text = JSON.stringify(publicFormView(CONFIG));
     expect(text).not.toMatch(/person|tokenHash|ticketSecret|actor/);
+  });
+
+  it("the public view carries minSubmitMs so a client can hold its submit", () => {
+    expect(publicFormView(CONFIG).minSubmitMs).toBe(3_000);
+    const fast = FormConfigSchema.parse({
+      ...CONFIG,
+      limits: { pendingCap: 25, minSubmitMs: 0 },
+    });
+    expect(publicFormView(fast).minSubmitMs).toBe(0);
+  });
+});
+
+describe("guestFormReply — the public wire contract", () => {
+  const RECEIVED = { status: 202, body: { received: true } };
+  it.each([
+    // Outcomes a caller must not learn from: one constant reply.
+    ["proposed", RECEIVED],
+    ["honeypot", RECEIVED],
+    ["unknown_form", RECEIVED],
+    ["captcha_failed", RECEIVED],
+    ["denied", RECEIVED],
+    // The submitter's own payload: visible.
+    ["bad_envelope", { status: 422, body: { received: false, invalid: [] } }],
+    ["too_large", { status: 422, body: { received: false, invalid: [] } }],
+    ["ticket", { status: 422, body: { received: false, retry: true } }],
+    // Server faults: never the success reply.
+    ["error", { status: 503, body: { received: false } }],
+    ["actor_refused", { status: 503, body: { received: false } }],
+  ] as Array<[GuestOutcome, unknown]>)("%s ⇒ %j", (outcome, reply) => {
+    expect(guestFormReply({ outcome })).toEqual(reply);
+  });
+
+  it("invalid_fields names the keys", () => {
+    expect(
+      guestFormReply({ outcome: "invalid_fields", invalid: ["email", "age"] })
+    ).toEqual({
+      status: 422,
+      body: { received: false, invalid: ["email", "age"] },
+    });
   });
 });
 

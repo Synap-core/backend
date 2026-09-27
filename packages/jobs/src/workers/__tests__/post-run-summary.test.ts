@@ -114,8 +114,24 @@ describe("resolveRunChannel routing", () => {
       run({ subjectEntityId: "ent-9", workspaceId: "ws-1" })
     );
     expect(id).toBe("entity-ch");
-    expect(entitySpy).toHaveBeenCalledWith({ type: "entity", id: "ent-9" });
+    expect(entitySpy).toHaveBeenCalledWith({
+      type: "entity",
+      id: "ent-9",
+      workspaceId: "ws-1",
+    });
     expect(typeSpy).not.toHaveBeenCalled();
+  });
+
+  it("per_entity + a POD-WIDE run → the entity's SHARED room (no lens)", async () => {
+    await resolveRunChannel(
+      automationFor({ metadata: { resultRouting: "per_entity" } }),
+      run({ subjectEntityId: "ent-9", workspaceId: null })
+    );
+    expect(entitySpy).toHaveBeenCalledWith({
+      type: "entity",
+      id: "ent-9",
+      workspaceId: null,
+    });
   });
 
   it("per_entity + a DELETED subject (no room) → falls back to the per-type run channel", async () => {
@@ -187,7 +203,11 @@ describe("resolveRunChannel routing", () => {
     );
 
     expect(id).toBe("entity-ch");
-    expect(entitySpy).toHaveBeenCalledWith({ type: "entity", id: clientId });
+    expect(entitySpy).toHaveBeenCalledWith({
+      type: "entity",
+      id: clientId,
+      workspaceId: "ws-1",
+    });
     expect(typeSpy).not.toHaveBeenCalled();
   });
 });

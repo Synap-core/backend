@@ -216,4 +216,94 @@ export function registerProfileExecutors(): void {
       return { success: true };
     },
   });
+
+  // ── profile / grant_access ──────────────────────────────────────────────────
+  // Filed by `profilesRouter.grantAccess` (R8a) — ADMIN-floored
+  // (`profile.grant_access`), so an agent's grant always lands here. REPLAY
+  // through the same procedure as the APPROVER, acting in the proposal's
+  // workspace: `resolveProfile` + the shared-scope check + the home-workspace
+  // `assertProfileSchemaWrite` floor all re-run NOW (a proposal can sit for
+  // days). The re-entrant gate grants the human approver; `assertApplied`
+  // refuses a re-proposal instead of flipping APPROVED with nothing granted.
+  //
+  // PAYLOAD: `data: { profileId, targetWorkspaceId, slug, displayName }`
+  // (nested as `data.data`).
+  registerProposalExecutor({
+    key: "profile/grant_access",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? raw) as Record<string, unknown>;
+      const profileId = inner.profileId;
+      const targetWorkspaceId = inner.targetWorkspaceId;
+      const workspaceId = proposal.workspaceId ?? null;
+      if (
+        typeof profileId !== "string" ||
+        typeof targetWorkspaceId !== "string" ||
+        !workspaceId
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Profile access proposal is missing profileId, targetWorkspaceId or its workspace",
+        });
+      }
+
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const membership = await getWorkspaceMembership(db, workspaceId, userId);
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+      const profileCaller = profilesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId,
+        workspaceRole: membership.role,
+      } as unknown as Context);
+      const result = await profileCaller.grantAccess({
+        profileId,
+        targetWorkspaceId,
+      });
+      // The approver IS the authority — a nested proposal means the approver's
+      // role cannot execute the grant. Surface it rather than flipping APPROVED
+      // with nothing granted (same guard as `assertApplied`, inlined like
+      // profile/create above).
+      if (result.status === "proposed") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Approval could not be applied: your workspace role cannot execute this write, so re-running it only filed another proposal. Ask a workspace admin or owner to approve.",
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: profileId };
+    },
+  });
 }

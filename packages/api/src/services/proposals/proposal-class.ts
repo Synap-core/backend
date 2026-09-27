@@ -141,6 +141,9 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // to a project's guests, or mints a link that redeems into a guest
   // membership. An agent's share is always this proposal (ADMIN floor).
   "share/create",
+  // R8a — granting a workspace access to a SHARED kind (`profiles.grantAccess`)
+  // widens which workspaces may see and use it. ADMIN-floored for agents.
+  "profile/grant_access",
 ]);
 
 /**

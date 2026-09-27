@@ -29,6 +29,7 @@ import { dynamicToolRegistry } from "@synap/ai";
 import { createSynapEvent } from "@synap-core/core";
 import { eventRepository } from "@synap/database";
 import { eventStreamManager } from "../event-stream-manager.js";
+import { eventVisibleWhereFor } from "../access/event-visibility.js";
 import { db, eq, and, sqlDrizzle } from "@synap/database";
 import {
   users,
@@ -38,6 +39,7 @@ import {
   workspaceMembers,
   apiKeys,
   podSettings,
+  events as eventsTable,
 } from "@synap/database/schema";
 import { count, inArray } from "@synap/database";
 import crypto from "node:crypto";
@@ -307,8 +309,10 @@ export const systemRouter = router({
         since: z.string().datetime().optional(), // Get events since this time
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      // Floored on the `events` VisibilityRule — `userId` only narrows.
       const events = await eventRepository.searchEvents({
+        visibleWhere: eventVisibleWhereFor(ctx),
         eventType: input.eventType,
         userId: input.userId,
         fromDate: input.since ? new Date(input.since) : undefined,
@@ -388,9 +392,17 @@ export const systemRouter = router({
    */
   getEventTrace: protectedProcedure
     .input(z.object({ eventId: z.string().uuid() }))
-    .query(async ({ input }) => {
-      // 1. Get the main event
-      const event = await eventRepository.findById(input.eventId);
+    .query(async ({ ctx, input }) => {
+      // 1. Get the main event — only one the caller may see. An invisible
+      // event answers exactly like a missing one.
+      const visibleWhere = eventVisibleWhereFor(ctx);
+      const found = await db
+        .select({ id: eventsTable.id })
+        .from(eventsTable)
+        .where(and(eq(eventsTable.id, input.eventId), visibleWhere))
+        .limit(1);
+      const event =
+        found.length > 0 ? await eventRepository.findById(input.eventId) : null;
 
       if (!event) {
         throw new TRPCError({
@@ -402,12 +414,15 @@ export const systemRouter = router({
       // 2. Get related events if correlation ID exists
       let relatedEvents: (typeof event)[] = [];
       if (event.correlationId) {
-        // Scope correlated events to the source event's owner so the trace
-        // stays consistent and never leaks another tenant's events.
-        relatedEvents = await eventRepository.getCorrelatedEvents(
-          event.correlationId,
-          event.userId
-        );
+        // The trace is floored like the event itself: the correlated events
+        // the caller may see, never the source event owner's whole chain.
+        relatedEvents = (
+          await eventRepository.searchEvents({
+            visibleWhere,
+            correlationId: event.correlationId,
+            limit: 500,
+          })
+        ).reverse();
         // Exclude the main event from related list
         relatedEvents = relatedEvents.filter((e) => e.id !== event.id);
       }
@@ -454,8 +469,11 @@ export const systemRouter = router({
         offset: z.number().min(0).default(0),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      // Floored on the `events` VisibilityRule — every input only narrows.
+      const visibleWhere = eventVisibleWhereFor(ctx);
       const filters = {
+        visibleWhere,
         userId: input.userId,
         eventType: input.eventType,
         subjectType: input.subjectType,
@@ -470,6 +488,7 @@ export const systemRouter = router({
 
       const events = await eventRepository.searchEvents(filters);
       const totalCount = await eventRepository.countEvents({
+        visibleWhere,
         userId: input.userId,
         eventType: input.eventType,
         subjectType: input.subjectType,
@@ -588,10 +607,14 @@ export const systemRouter = router({
    * Returns aggregated real-time metrics optimized for the Dashboard view.
    * Includes health status, throughput, latency, and key system statistics.
    */
-  getDashboardMetrics: protectedProcedure.query(async () => {
+  getDashboardMetrics: protectedProcedure.query(async ({ ctx }) => {
+    // The event figures cover the events the caller may see — the `events`
+    // VisibilityRule — never the whole pod's log.
+    const visibleWhere = eventVisibleWhereFor(ctx);
     // Get recent events for rate calculation (last 5 minutes)
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
     const recentEvents = await eventRepository.searchEvents({
+      visibleWhere,
       fromDate: fiveMinutesAgo,
       limit: 1000,
     });
@@ -602,6 +625,7 @@ export const systemRouter = router({
 
     // Get latest events for live stream
     const latestEvents = await eventRepository.searchEvents({
+      visibleWhere,
       limit: 20,
     });
 

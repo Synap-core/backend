@@ -455,7 +455,96 @@ export interface ExpectedOutput {
    * `answer.question`.
    */
   answer?: SlotAnswer;
+  /**
+   * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
+   * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
+   * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
+   * `ask` HOW to resolve it (confirm / choose / form / act / provide).
+   *
+   * ABSENT MEANS TODAY'S BEHAVIOUR — free-text answer, "I did this", "Not
+   * mine" — so every slot stored before this field is unchanged.
+   *
+   * `null` IS A WIRE VALUE ONLY and means CLEAR, exactly like `ref`: silence on
+   * a wholesale patch keeps it, and `mergeExpectedOutputs` deletes the key
+   * rather than storing the null. Cleared with the other ownership fields when
+   * the slot is handed back (`stampUnblocked`) — the ask was the person's to
+   * answer; the answer's `question` keeps what was asked.
+   */
+  ask?: SlotAsk | null;
 }
+
+/**
+ * The ASK on a human-owned slot — HOW to answer it.
+ *
+ * STRUCTURAL MIRROR of `Ask` in `@synap-core/types/ask` (the zod schema, its
+ * limits, and the validation rule live there). Duplicated as a TYPE because
+ * this package is dependency-free by design — the `OUTPUT_REF_KINDS`
+ * precedent. The duplication is not left to trust: api's
+ * `expectedOutputWireSchema` parses `ask` with the types-leaf schema and is
+ * `satisfies z.ZodType<ExpectedOutput, ExpectedOutput>`, and
+ * `services/focus-sessions/update-session.ts` asserts the two types are
+ * MUTUALLY assignable at compile time — a drift on either side stops the build.
+ */
+export type SlotAsk =
+  | { mode: "confirm"; prompt?: string }
+  | { mode: "choose"; options: SlotAskOption[]; allowOther?: boolean }
+  | { mode: "form"; form: SlotAskFormSpec }
+  | { mode: "act"; url?: string; steps?: string[] }
+  | { mode: "provide"; provide: SlotAskProvide };
+
+/** One offered answer (capture's chip minus its apply fields). */
+export interface SlotAskOption {
+  label: string;
+  /** Absent ⇒ the label IS the value. */
+  value?: string;
+  icon?: string;
+  /** At most ONE option per ask. */
+  recommended?: boolean;
+  /** One-line imperative consequence of choosing it. */
+  description?: string;
+}
+
+/** A FLAT form (no nested fields). */
+export interface SlotAskFormSpec {
+  title?: string;
+  note?: string;
+  fields: Array<{
+    key: string;
+    label: string;
+    type: string;
+    constraints?: {
+      enum?: string[];
+      min?: number;
+      max?: number;
+      pattern?: string;
+    };
+    required?: boolean;
+    help?: string;
+  }>;
+}
+
+/** What a `provide` ask hands over — vault-first, through its own door. */
+export type SlotAskProvide =
+  | { kind: "connection"; service: string }
+  | { kind: "file"; accept?: string[] }
+  | { kind: "secret"; name: string };
+
+/** A `provide` answer stores a REFERENCE, never the value. */
+export type SlotProvideRef =
+  | { kind: "secret"; vaultRef: string }
+  | { kind: "connection"; connectionId: string }
+  | { kind: "file"; fileId: string };
+
+/**
+ * The TYPED half of an answer. The human-readable line stays on
+ * `SlotAnswer.text`; a `text` answer's words live there.
+ */
+export type SlotAnswerValue =
+  | { type: "text" }
+  | { type: "confirm"; confirmed: boolean }
+  | { type: "chip"; chip: SlotAskOption }
+  | { type: "form"; values: Record<string, unknown> }
+  | { type: "provide"; ref: SlotProvideRef };
 
 /**
  * A person's answer to an agent's question about one slot. Server-stamped as a
@@ -480,6 +569,15 @@ export interface SlotAnswer {
    * existed.
    */
   question?: string;
+  /**
+   * The TYPED answer, when the slot carried an `ask` — see
+   * {@link SlotAnswerValue}. Stamped with the rest of the answer by the one
+   * answer door, validated against the slot's ask. ABSENT on every answer given
+   * before typed asks existed and on a plain free-text answer to a slot with no
+   * ask; `text` is ALWAYS present either way, so a reader that only knows text
+   * keeps working.
+   */
+  value?: SlotAnswerValue;
 }
 
 /**

@@ -1,5 +1,5 @@
 /**
- * Forms Router — the owner's public-form doors (Sites W4).
+ * Forms Router — the owner's public-form doors.
  *
  * Every rule lives in `services/forms/form-service.ts` (the same core the Hub
  * REST `/forms` routes call). This router only maps the tRPC context to a

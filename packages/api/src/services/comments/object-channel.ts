@@ -23,6 +23,7 @@ import {
   eq,
   inArray,
   ChannelRepository,
+  objectRoomLensIs,
   resolveProjectPlacement,
 } from "@synap/database";
 import {
@@ -69,7 +70,10 @@ export async function assertObjectReadable(
   return { workspaceId: entity.workspaceId ?? null, ownerId: entity.userId };
 }
 
-/** The object's room for a caller who may read the object (minted if absent). */
+/**
+ * The object's SHARED room for a caller who may read the object (minted if
+ * absent). Human and agent doors never pass a lens: comments always go here.
+ */
 export async function ensureObjectChannelFor(
   userId: string,
   ref: ObjectRef
@@ -83,8 +87,9 @@ export async function ensureObjectChannelFor(
 }
 
 /**
- * The object's room if one exists — NEVER mints (a read must not write). The
- * caller floors on the object first.
+ * The object's SHARED room if one exists — NEVER mints (a read must not
+ * write). Comments live only there; a workspace recap room (a lens) is not
+ * it. The caller floors on the object first.
  */
 export async function findObjectChannel(
   ref: ObjectRef
@@ -94,7 +99,8 @@ export async function findObjectChannel(
       eq(channels.channelType, ChannelType.GROUP),
       eq(channels.status, ChannelStatus.ACTIVE),
       eq(channels.contextObjectType, ref.type),
-      eq(channels.contextObjectId, ref.id)
+      eq(channels.contextObjectId, ref.id),
+      objectRoomLensIs(null)
     ),
   });
   return row ?? null;

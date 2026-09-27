@@ -26,6 +26,13 @@ import {
 } from "@synap/playbooks";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
+import {
+  AskAnswerValueSchema,
+  AskSchema,
+  type Ask,
+  type AskAnswerValue,
+} from "@synap-core/types/ask";
+import type { SlotAnswerValue, SlotAsk } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
@@ -86,6 +93,12 @@ export interface UpdateFocusSessionParams {
      * AND point them at the page" would need a second, wholesale patch.
      */
     ref?: ExpectedOutput["ref"];
+    /**
+     * HOW the person can answer (confirm / choose / form / act / provide).
+     * Accepted here for the same one-call reason as `ref`: blocking on the
+     * person AND saying how to answer is one declaration.
+     */
+    ask?: ExpectedOutput["ask"];
   };
   completeOutput?: string;
   /**
@@ -295,9 +308,32 @@ export const expectedOutputWireSchema = z.object({
       answeredBy: z.string(),
       answeredAt: z.string(),
       question: z.string().optional(),
+      // The typed half (`@synap-core/types/ask`). Round-trip only, like the
+      // rest of `answer`: stamped by the answer door, never authored here.
+      value: AskAnswerValueSchema.optional(),
     })
     .optional(),
+  // HOW the person can answer — AGENT-declared, never stamped. Parsed with the
+  // ONE ask schema (`@synap-core/types/ask`): closed modes, ≤8 options with ≤1
+  // recommended, flat forms with AI-authored credential fields dropped, http(s)
+  // act urls. `.nullable()` for the same reason as `ref`: silence KEEPS it, so
+  // "clear the ask" needs an explicit `null`.
+  ask: AskSchema.nullable().optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
+
+/**
+ * COMPILE-TIME PARITY between the dependency-free structural mirror in
+ * `@synap/playbooks` (`SlotAsk`, `SlotAnswerValue`) and the zod-inferred types
+ * of the ONE schema in `@synap-core/types/ask`. MUTUAL assignability: a field
+ * added, removed or retyped on either side makes one direction fail, the alias
+ * resolves to `never`, and the build stops. (The wire's `satisfies` above only
+ * checks one direction per io.)
+ */
+type _Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const _askParity: _Mutual<SlotAsk, Ask> = true;
+const _answerValueParity: _Mutual<SlotAnswerValue, AskAnswerValue> = true;
+void _askParity;
+void _answerValueParity;
 
 /**
  * The slot fields the SERVER owns — written by governance, delegation and
@@ -369,6 +405,10 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   // The pointer the declarer supplies. Declaring WHERE something lives is not a
   // claim that it landed, so it closes nothing — same footing as `why`.
   "ref",
+  // HOW the person can answer. The agent's own declaration, like `why`: saying
+  // "this is a yes/no" or "pick one of these" closes nothing and receipts
+  // nothing — the ANSWER is the receipt, and it stays server-stamped.
+  "ask",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -394,6 +434,19 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
+ * `addOutput`'s wire shape — the declarable slice of the ONE wire schema,
+ * DERIVED from {@link CLIENT_DECLARABLE_OUTPUT_FIELDS}. A hand-written `pick`
+ * in the approval executor listed six fields and silently dropped `ref`, so a
+ * governed `addOutput` lost its pointer on approval; deriving the pick means a
+ * newly declarable field (`ask`) rides every addOutput door by existing.
+ */
+export const addOutputWireSchema = expectedOutputWireSchema.pick(
+  Object.fromEntries(
+    CLIENT_DECLARABLE_OUTPUT_FIELDS.map((f) => [f, true] as const)
+  ) as { [K in (typeof CLIENT_DECLARABLE_OUTPUT_FIELDS)[number]]: true }
+);
+
+/**
  * DERIVED, not hand-maintained — a third list is a third place to forget a
  * field. Everything the server stamps must survive a silent patch, and so must
  * the agent's own declaration, which the client authors but a client that has
@@ -408,6 +461,9 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // has never heard of `ref` reads the array, renames a sibling, sends it back —
   // and must not silently drop the door the agent put on the card.
   "ref",
+  // Same erasure reason: a client that predates typed asks must not turn a
+  // "pick one of these" back into a bare free-text slot by renaming a sibling.
+  "ask",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -524,9 +580,18 @@ export function mergeExpectedOutputs(
  * beside it, keeps the stored slot two-state: a `ref` or no key at all.
  */
 export function dropClearedRef(item: OutputItem): OutputItem {
-  if (item.ref !== null) return item;
-  const { ref: _cleared, ...rest } = item;
-  return rest;
+  let out = item;
+  if (out.ref === null) {
+    const { ref: _cleared, ...rest } = out;
+    out = rest;
+  }
+  // `ask` has the same wire contract as `ref` (null = CLEAR), so the same
+  // normalizer keeps a STORED slot two-state for it too.
+  if (out.ask === null) {
+    const { ask: _clearedAsk, ...rest } = out;
+    out = rest;
+  }
+  return out;
 }
 
 const SERVER_STAMPED_FIELD_SET: ReadonlySet<string> = new Set(
@@ -571,7 +636,11 @@ export function sanitizeDeclaredOutputs(
   outputs: readonly OutputItem[],
   now: Date = new Date()
 ): OutputItem[] {
-  return outputs.map((o) => reconcileOwedSince(stripServerStamped(o), now));
+  // `dropClearedRef` too: a `null` ref/ask at birth is the wire's CLEAR with
+  // nothing to clear, and storing it would make the field tri-state.
+  return outputs.map((o) =>
+    dropClearedRef(reconcileOwedSince(stripServerStamped(o), now))
+  );
 }
 
 /** The slot with every receipt removed — what a client may actually author. */
@@ -810,6 +879,8 @@ export function applyOutputMutations(
         // `null` here is the same CLEAR the wire uses; a brand-new slot has
         // nothing to clear, so it simply carries no key.
         ...(add.ref ? { ref: add.ref } : {}),
+        // Same: `null` clears nothing on a new slot.
+        ...(add.ask ? { ask: add.ask } : {}),
       }),
     ];
   }

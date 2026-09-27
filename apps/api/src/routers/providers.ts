@@ -15,6 +15,7 @@
 
 import { Hono } from "hono";
 import { authMiddleware } from "@synap/auth";
+import { refuseGuestSession } from "@synap/api";
 import { db, isEncryptedServiceKey, decryptServiceKey } from "@synap/database";
 import { aiProviders, workspaceMembers } from "@synap/database/schema";
 import { asc, eq, and } from "drizzle-orm";
@@ -29,72 +30,82 @@ function decrypt(encrypted: string): string {
     : encrypted;
 }
 
-providersRouter.get("/models", authMiddleware, async (c) => {
-  const rows = await db
-    .select({
-      providerId: aiProviders.providerId,
-      name: aiProviders.name,
-      baseUrl: aiProviders.baseUrl,
-      enabled: aiProviders.enabled,
-      priority: aiProviders.priority,
-      models: aiProviders.models,
-      tags: aiProviders.tags,
-    })
-    .from(aiProviders)
-    .where(eq(aiProviders.enabled, true))
-    .orderBy(asc(aiProviders.priority));
+providersRouter.get(
+  "/models",
+  authMiddleware,
+  refuseGuestSession,
+  async (c) => {
+    const rows = await db
+      .select({
+        providerId: aiProviders.providerId,
+        name: aiProviders.name,
+        baseUrl: aiProviders.baseUrl,
+        enabled: aiProviders.enabled,
+        priority: aiProviders.priority,
+        models: aiProviders.models,
+        tags: aiProviders.tags,
+      })
+      .from(aiProviders)
+      .where(eq(aiProviders.enabled, true))
+      .orderBy(asc(aiProviders.priority));
 
-  return c.json({ providers: rows });
-});
-
-providersRouter.get("/credentials", authMiddleware, async (c) => {
-  const userId = (c as unknown as { get(k: string): string | undefined }).get(
-    "userId"
-  );
-  const workspaceId = c.req.query("workspaceId");
-
-  // If a workspaceId is given, verify the caller is a member before returning
-  // workspace-scoped or user-scoped credentials for that workspace.
-  if (workspaceId && userId) {
-    const membership = await db.query.workspaceMembers.findFirst({
-      where: and(
-        eq(workspaceMembers.workspaceId, workspaceId as any),
-        eq(workspaceMembers.userId, userId)
-      ),
-    });
-    if (!membership) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
+    return c.json({ providers: rows });
   }
+);
 
-  const rows = await db
-    .select()
-    .from(aiProviders)
-    .where(eq(aiProviders.enabled, true))
-    .orderBy(asc(aiProviders.priority));
+providersRouter.get(
+  "/credentials",
+  authMiddleware,
+  refuseGuestSession,
+  async (c) => {
+    const userId = (c as unknown as { get(k: string): string | undefined }).get(
+      "userId"
+    );
+    const workspaceId = c.req.query("workspaceId");
 
-  const overrides = await resolveProviderCredentialsBatch(
-    rows.map((p) => p.providerId),
-    workspaceId ?? undefined,
-    userId ?? undefined
-  );
+    // If a workspaceId is given, verify the caller is a member before returning
+    // workspace-scoped or user-scoped credentials for that workspace.
+    if (workspaceId && userId) {
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, workspaceId as any),
+          eq(workspaceMembers.userId, userId)
+        ),
+      });
+      if (!membership) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
+    }
 
-  const result = rows.map((p) => {
-    const override = overrides.get(p.providerId) ?? null;
-    const apiKey =
-      override ?? (p.encryptedApiKey ? decrypt(p.encryptedApiKey) : null);
-    return {
-      providerId: p.providerId,
-      name: p.name,
-      baseUrl: p.baseUrl,
-      models: p.models,
-      tags: p.tags,
-      priority: p.priority,
-      apiKey,
-    };
-  });
+    const rows = await db
+      .select()
+      .from(aiProviders)
+      .where(eq(aiProviders.enabled, true))
+      .orderBy(asc(aiProviders.priority));
 
-  return c.json({ providers: result });
-});
+    const overrides = await resolveProviderCredentialsBatch(
+      rows.map((p) => p.providerId),
+      workspaceId ?? undefined,
+      userId ?? undefined
+    );
+
+    const result = rows.map((p) => {
+      const override = overrides.get(p.providerId) ?? null;
+      const apiKey =
+        override ?? (p.encryptedApiKey ? decrypt(p.encryptedApiKey) : null);
+      return {
+        providerId: p.providerId,
+        name: p.name,
+        baseUrl: p.baseUrl,
+        models: p.models,
+        tags: p.tags,
+        priority: p.priority,
+        apiKey,
+      };
+    });
+
+    return c.json({ providers: result });
+  }
+);
 
 export { providersRouter };

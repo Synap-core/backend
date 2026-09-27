@@ -36,6 +36,7 @@ import {
 } from "../../../services/focus-sessions/session-statuses.js";
 import {
   applyOutputMutations,
+  addOutputWireSchema,
   expectedOutputWireSchema,
   sanitizeDeclaredOutputs,
 } from "../../../services/focus-sessions/update-session.js";
@@ -1041,15 +1042,9 @@ async function applyProposedOutputMutations(
 }
 
 /**
- * `addOutput`'s wire shape. The three ownership fields ride the same schema the
- * MCP door advertises; everything else about the slot is server-owned and is
- * NOT accepted from a stored payload.
+ * `addOutput`'s wire shape — the ONE derived declarable slice
+ * (`addOutputWireSchema`, from `CLIENT_DECLARABLE_OUTPUT_FIELDS`). A hand
+ * `pick` here once listed six fields and dropped `ref`: a governed addOutput
+ * lost its pointer on approval. Everything server-owned stays refused.
  */
-const AddOutputSchema = expectedOutputWireSchema.pick({
-  kind: true,
-  label: true,
-  icon: true,
-  owner: true,
-  blockedReason: true,
-  why: true,
-});
+const AddOutputSchema = addOutputWireSchema;

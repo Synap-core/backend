@@ -82,7 +82,7 @@ describe("MCP instructions budget", () => {
     expect(bytes(live)).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET_BYTES);
     // …and the grounding actually made it in (a fitter that always returns ""
     // would pass the size check).
-    expect(live).toContain("Domains, busiest first:");
+    expect(live).toContain("Spaces (workspaceId), busiest first:");
     expect(live).toContain(worstCasePod[0]!.id);
   });
 
@@ -94,10 +94,10 @@ describe("MCP instructions budget", () => {
 
   it("most important first: the reflexes lead, grounding follows", () => {
     const composed = composeInstructions(
-      "Domains, busiest first: X (id, 1 entities)."
+      "Spaces (workspaceId), busiest first: X (id, 1 entities)."
     );
     expect(composed.indexOf("Recall first")).toBeLessThan(
-      composed.indexOf("Domains, busiest first")
+      composed.indexOf("Spaces (workspaceId), busiest first")
     );
   });
 

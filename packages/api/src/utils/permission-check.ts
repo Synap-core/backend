@@ -2329,6 +2329,164 @@ function buildRendererSetSummary(data: Record<string, unknown>): string | null {
   return null;
 }
 
+/** A display name off the payload, decoded, or null. */
+function payloadName(value: unknown): string | null {
+  return typeof value === "string" && value.trim()
+    ? decodeHtmlEntities(value.trim())
+    : null;
+}
+
+/**
+ * "Space "Operations"" — or "another space" when the destination's name was
+ * not resolved (not visible to the proposer, or the lookup failed). Never the
+ * raw id: an id tells a reviewer nothing, and a name the proposer cannot see
+ * must not leak through a title it can read back.
+ */
+function spacePhrase(name: unknown): string {
+  const noun = resolveObjectNoun("workspace");
+  const resolved = payloadName(name);
+  return resolved ? `${noun} "${resolved}"` : `another ${noun.toLowerCase()}`;
+}
+
+/** True for a `workspace.update` payload that changes the NAME and nothing else. */
+function isSpaceRenamePayload(data: Record<string, unknown>): boolean {
+  return (
+    payloadName(data.name) !== null &&
+    data.description === undefined &&
+    data.settings === undefined &&
+    data.definition === undefined &&
+    data.operation === undefined
+  );
+}
+
+/**
+ * The sentence for a governed space operation, or `null` when this is not one.
+ * Every WORD goes through the vocabulary door (`buildObjectActionTitle`,
+ * `resolveActionLabel`, `resolveObjectNoun`); the space names come from
+ * `resolveSpaceOpNames` (floored to the proposer's visibility).
+ */
+function buildSpaceOpSummary(
+  subjectType: string,
+  action: string,
+  data: Record<string, unknown>
+): string | null {
+  // profiles.grantAccess → "Share Kind "Client" with Space "Operations"".
+  if (subjectType === "profile" && action === "grant_access") {
+    const head = buildObjectActionTitle({
+      action,
+      objectKind: "kind",
+      objectName:
+        payloadName(data.displayName) ?? payloadName(data.slug) ?? undefined,
+    });
+    return `${head} with ${spacePhrase(data.targetWorkspaceName)}`;
+  }
+  // entities.moveToWorkspace files `entity/update {id, toWorkspaceId}` →
+  // "Move "Foo" to Space "CRM"".
+  if (
+    subjectType === "entity" &&
+    action === "update" &&
+    typeof data.toWorkspaceId === "string"
+  ) {
+    const head = buildObjectActionTitle({
+      action: "move",
+      objectKind:
+        typeof data.profileSlug === "string" && data.profileSlug
+          ? data.profileSlug
+          : "entity",
+      objectName:
+        payloadName(data.targetName) ?? payloadName(data.title) ?? undefined,
+    });
+    return `${head} to ${spacePhrase(data.toWorkspaceName)}`;
+  }
+  // workspaces.update with only a name → "Rename Space "Old" to "New"".
+  if (
+    subjectType === "workspace" &&
+    action === "update" &&
+    isSpaceRenamePayload(data)
+  ) {
+    const head = buildObjectActionTitle({
+      action: "rename",
+      objectKind: "workspace",
+      objectName: payloadName(data.previousName) ?? undefined,
+    });
+    return `${head} to "${payloadName(data.name)}"`;
+  }
+  return null;
+}
+
+/**
+ * The space NAMES a governed space-op title needs, resolved server-side and
+ * FLOORED to what the proposer can already see (`userVisibleWhere`) — the same
+ * floor the display oracle applies, so a title the proposer reads back can
+ * never name a space it could not otherwise read (the `/links` name-oracle
+ * defect, `display.name-floor.pglite.test.ts`). Feeds the SUMMARY only, beside
+ * `targetName`; the stored `data` the executor replays is untouched.
+ *
+ * `{}` for every other proposal, without a query. A failed lookup leaves the
+ * name out — the title then says "another space", which is true — and is
+ * logged, never swallowed silently.
+ */
+export async function resolveSpaceOpNames(
+  subjectType: string,
+  action: string,
+  targetId: string,
+  data: Record<string, unknown>,
+  userId: string
+): Promise<{
+  targetWorkspaceName?: string;
+  toWorkspaceName?: string;
+  previousName?: string;
+}> {
+  const wanted: Array<
+    [
+      key: "targetWorkspaceName" | "toWorkspaceName" | "previousName",
+      id: unknown,
+    ]
+  > = [];
+  if (subjectType === "profile" && action === "grant_access") {
+    wanted.push(["targetWorkspaceName", data.targetWorkspaceId]);
+  } else if (subjectType === "entity" && action === "update") {
+    if (typeof data.toWorkspaceId === "string") {
+      wanted.push(["toWorkspaceName", data.toWorkspaceId]);
+    }
+  } else if (
+    subjectType === "workspace" &&
+    action === "update" &&
+    isSpaceRenamePayload(data)
+  ) {
+    wanted.push(["previousName", targetId]);
+  }
+  const lookups = wanted.filter(
+    (w): w is [(typeof w)[0], string] =>
+      typeof w[1] === "string" && isLikelyUUID(w[1])
+  );
+  if (lookups.length === 0) return {};
+  try {
+    // DYNAMIC, like `ai-feedback-events` below: this module's suites replace
+    // `@synap/database` with a TOTAL `vi.mock`, and a static import of a new
+    // export would kill every one of them at load time.
+    const { userVisibleWhere } = await import("@synap/database");
+    const out: Record<string, string> = {};
+    for (const [key, id] of lookups) {
+      const [row] = await db
+        .select({ name: workspaces.name })
+        .from(workspaces)
+        .where(
+          and(eq(workspaces.id, id), userVisibleWhere(workspaces.id, userId))
+        )
+        .limit(1);
+      if (row?.name) out[key] = row.name;
+    }
+    return out;
+  } catch (err) {
+    logger.warn(
+      { err, subjectType, action },
+      "Space-op title: could not resolve space names (title says 'another space')"
+    );
+    return {};
+  }
+}
+
 /**
  * Build a short human-readable summary of what's being proposed.
  * Example: `Create task "Design new onboarding flow"`
@@ -2451,6 +2609,14 @@ export function buildProposalSummary(
     const rendererSentence = buildRendererSetSummary(data);
     if (rendererSentence) return rendererSentence;
   }
+
+  // ── Governed SPACE operations (R8a doors, P1 titles) ─────────────────────
+  // A share or a move names TWO things — the object and the space it goes to —
+  // which "<verb> <noun> "<name>"" cannot carry; the generic composition read
+  // "Grant access Profile "Task"" and "Update "Foo"" (the destination was only a
+  // raw id in the body). Archive/restore fit the generic shape and keep it.
+  const spaceSentence = buildSpaceOpSummary(subjectType, action, data);
+  if (spaceSentence) return spaceSentence;
 
   // Vocabulary SSOT — NOT a call-site capitalisation (`.claude/rules/vocabulary.md`
   // forbids `charAt(0).toUpperCase()` on a domain token by name), and NOT the
@@ -3139,9 +3305,17 @@ async function createProposal(args: {
     targetId,
     data
   );
+  const spaceNames = await resolveSpaceOpNames(
+    singularType,
+    action,
+    targetId,
+    data,
+    userId
+  );
   const summary = buildProposalSummary(singularType, action, {
     ...data,
     ...(targetName ? { targetName } : {}),
+    ...spaceNames,
   });
 
   // Event-spine linkage. The proposal must always be traceable to a

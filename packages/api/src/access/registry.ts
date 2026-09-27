@@ -47,6 +47,7 @@ import {
   projectTracks,
   views,
   resourceShares,
+  events,
 } from "@synap/database/schema";
 import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
@@ -56,6 +57,7 @@ import {
   sessionReadableWhere,
   sessionEvaluationReadableWhere,
 } from "./session-visibility.js";
+import { eventVisibleWhere } from "./event-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { viewReadableWhere } from "../utils/view-visibility.js";
 import {
@@ -680,6 +682,26 @@ registerVisibility({
           eq(resourceShares.createdBy, access.userId)
         )
       ),
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// The `events` log: a workspace event follows workspace visibility, a
+// NULL-workspace event is its owner's, and a session's events follow the
+// session (D1). One predicate, `eventVisibleWhere` (access/event-visibility.ts),
+// shared with the raw-SQL event doors, which pass it to
+// `EventRepository.searchEvents/countEvents` as `visibleWhere`. There is no
+// admin branch: owning a workspace grants that workspace's events only.
+registerVisibility({
+  table: events,
+  query: () => db.query.events,
+  rule: {
+    kind: "custom",
+    predicate: (access) =>
+      eventVisibleWhere({
+        userId: access.userId,
+        roster: access.actor === "operator",
+        lens: access.workspaceLens,
+      }),
     nullWorkspaceMeans: "ownerPrivate",
   },
 });

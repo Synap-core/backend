@@ -102,6 +102,7 @@ import {
   resolveBatchedReviewAuthorityFacts,
   assertCanRetargetProposalDestination,
   assertCanReviewProposal,
+  reviewRefusalMessage,
   type ProposalApprovalPolicy,
   type ReviewAuthorityReason,
 } from "./proposals/review-authority.js";
@@ -549,6 +550,7 @@ export const proposalsRouter = router({
       // `isPodAdmin` only when the page carries a pod-wide row.
       const reviewFactsFor = await resolveBatchedReviewAuthorityFacts({
         userId: reviewerId,
+        roster: rosterReadFor(ctx),
         rows,
       });
       // Compute over the typed `rows` (not the casted enriched items) so the
@@ -1028,6 +1030,29 @@ export const proposalsRouter = router({
         data: proposal.data,
       });
 
+      // viewerCanReview / viewerCanReviewReason — the SAME ladder, fact
+      // resolver and reason formatting `list` stamps, so the detail page hides
+      // the verdict exactly when the mutation would refuse it (including the
+      // session rung: nobody decides what they cannot read).
+      const reviewFacts = (
+        await resolveBatchedReviewAuthorityFacts({
+          userId,
+          roster: rosterReadFor(ctx),
+          rows: [proposal],
+        })
+      )(proposal);
+      const { allowed: viewerCanReview, reason: reviewReason } =
+        computeCanReviewApprovalFromFacts({
+          proposal,
+          userId,
+          purpose: "approve",
+          facts: reviewFacts,
+        });
+      const viewerCanReviewReason =
+        reviewReason === "not-authorized"
+          ? `not-authorized: requires ${reviewAuthorityRequirement(reviewFacts.policy)}`
+          : reviewReason;
+
       return {
         ...(
           await enrichProposalsForDisplay([proposal], userId, {
@@ -1035,6 +1060,8 @@ export const proposalsRouter = router({
           })
         )[0],
         revertable,
+        viewerCanReview,
+        viewerCanReviewReason,
       };
     }),
 
@@ -1369,16 +1396,18 @@ export const proposalsRouter = router({
 
       // Ownership check: who can approve this proposal? (Shared computation;
       // this door's failure behavior — throw FORBIDDEN — is unchanged.)
-      const { allowed: canApprove } = await computeCanReviewApproval({
-        proposal,
-        userId,
-        // This IS the approve door — the class floor applies.
-        purpose: "approve",
-      });
+      const { allowed: canApprove, reason: approveReason } =
+        await computeCanReviewApproval({
+          proposal,
+          userId,
+          roster: rosterReadFor(ctx),
+          // This IS the approve door — the class floor applies.
+          purpose: "approve",
+        });
       if (!canApprove) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Not authorized to approve this proposal",
+          message: reviewRefusalMessage(approveReason, "approve"),
         });
       }
 
@@ -1434,18 +1463,20 @@ export const proposalsRouter = router({
 
       // Authority — SAME ladder `approve` enforces (a revise is a pre-approval
       // edit, so it requires review authority). Pod-wide proposals skip the check.
-      const { allowed: canReview } = await computeCanReviewApproval({
-        proposal,
-        userId,
-        // `revise` is an EDIT, not a decision — today's behaviour preserved.
-        // An agent's own amendment is authorized by the separate author rung
-        // in `mergeProposalRevision`, never by this reviewer ladder.
-        purpose: "reject",
-      });
+      const { allowed: canReview, reason: reviseReason } =
+        await computeCanReviewApproval({
+          proposal,
+          userId,
+          roster: rosterReadFor(ctx),
+          // `revise` is an EDIT, not a decision — today's behaviour preserved.
+          // An agent's own amendment is authorized by the separate author rung
+          // in `mergeProposalRevision`, never by this reviewer ladder.
+          purpose: "reject",
+        });
       if (!canReview) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Not authorized to revise this proposal",
+          message: reviewRefusalMessage(reviseReason, "revise"),
         });
       }
 
@@ -1457,9 +1488,15 @@ export const proposalsRouter = router({
       // they cannot otherwise access. See `assertCanRetargetProposalDestination`.
       if (input.workspaceId !== undefined) {
         await assertCanRetargetProposalDestination({
-          proposal: { data: proposal.data, agentUserId: proposal.agentUserId },
+          proposal: {
+            data: proposal.data,
+            agentUserId: proposal.agentUserId,
+            targetType: proposal.targetType,
+            targetId: proposal.targetId,
+          },
           destWorkspaceId: input.workspaceId,
           userId,
+          roster: rosterReadFor(ctx),
         });
       }
 
@@ -1476,6 +1513,7 @@ export const proposalsRouter = router({
         patch: { kind: "envelope", fields: input.data },
         workspaceId: input.workspaceId,
         projectId: input.projectId,
+        roster: rosterReadFor(ctx),
       });
 
       return { success: true };
@@ -1503,6 +1541,8 @@ export const proposalsRouter = router({
           sourceMessageId: true,
           agentUserId: true,
           targetType: true,
+          // The session rung of the review ladder keys on the subject.
+          targetId: true,
           workspaceId: true,
           proposalType: true,
           correlationId: true,
@@ -1525,9 +1565,12 @@ export const proposalsRouter = router({
             workspaceId: proposal.workspaceId,
             data: proposal.data,
             agentUserId: proposal.agentUserId,
+            targetType: proposal.targetType,
+            targetId: proposal.targetId,
           },
           userId,
           action: "reject",
+          roster: rosterReadFor(ctx),
         });
       }
 
@@ -1646,6 +1689,8 @@ export const proposalsRouter = router({
           data: true,
           correlationId: true,
           agentUserId: true,
+          targetType: true,
+          targetId: true,
         },
       });
       if (!proposal)
@@ -1658,9 +1703,12 @@ export const proposalsRouter = router({
           workspaceId: proposal.workspaceId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
+          targetType: proposal.targetType,
+          targetId: proposal.targetId,
         },
         userId,
         action: "reject",
+        roster: rosterReadFor(ctx),
       });
       assertItemDoorWritable(proposal, input.itemRef);
 
@@ -1721,6 +1769,8 @@ export const proposalsRouter = router({
           workspaceId: true,
           data: true,
           agentUserId: true,
+          targetType: true,
+          targetId: true,
         },
       });
       if (!proposal)
@@ -1733,9 +1783,12 @@ export const proposalsRouter = router({
           workspaceId: proposal.workspaceId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
+          targetType: proposal.targetType,
+          targetId: proposal.targetId,
         },
         userId,
         action: "reject",
+        roster: rosterReadFor(ctx),
       });
       assertItemDoorWritable(proposal, input.itemRef);
 
@@ -1777,6 +1830,8 @@ export const proposalsRouter = router({
           workspaceId: true,
           data: true,
           agentUserId: true,
+          targetType: true,
+          targetId: true,
         },
       });
       if (!proposal) {
@@ -1803,9 +1858,12 @@ export const proposalsRouter = router({
           workspaceId: proposal.workspaceId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
+          targetType: proposal.targetType,
+          targetId: proposal.targetId,
         },
         userId,
         action: "reopen",
+        roster: rosterReadFor(ctx),
       });
 
       await db
@@ -2082,15 +2140,17 @@ export const proposalsRouter = router({
       //
       // `purpose: "approve"` because a revert IS a decision — it un-does an
       // approved write — not an edit.
-      const { allowed: canRevert } = await computeCanReviewApproval({
-        proposal,
-        userId,
-        purpose: "approve",
-      });
+      const { allowed: canRevert, reason: revertReason } =
+        await computeCanReviewApproval({
+          proposal,
+          userId,
+          roster: rosterReadFor(ctx),
+          purpose: "approve",
+        });
       if (!canRevert) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Not authorized to revert this proposal",
+          message: reviewRefusalMessage(revertReason, "revert"),
         });
       }
 
@@ -2916,16 +2976,21 @@ export const proposalsRouter = router({
 
           // Ownership check — SAME computation as single `approve`; this door's
           // failure behavior (record the item + continue the batch) is unchanged.
-          const { allowed: canApprove } = await computeCanReviewApproval({
-            proposal,
-            userId,
-            // batchApprove — same door as single approve, same floor.
-            purpose: "approve",
-          });
+          const { allowed: canApprove, reason: batchReason } =
+            await computeCanReviewApproval({
+              proposal,
+              userId,
+              roster: rosterReadFor(ctx),
+              // batchApprove — same door as single approve, same floor.
+              purpose: "approve",
+            });
           if (!canApprove) {
             throw new TRPCError({
               code: "FORBIDDEN",
-              message: "Not authorized",
+              message:
+                batchReason === "session-only"
+                  ? reviewRefusalMessage(batchReason, "approve")
+                  : "Not authorized",
             });
           }
 
@@ -3048,6 +3113,8 @@ export const proposalsRouter = router({
             // has the row in hand, and a second read per proposal would turn one
             // query into N.
             targetType: true,
+            // The session rung of the review ladder keys on the subject.
+            targetId: true,
             sourceMessageId: true,
             // Slot-return input — parity with the single `reject` door.
             sessionId: true,
@@ -3059,9 +3126,12 @@ export const proposalsRouter = router({
             workspaceId: target.workspaceId,
             data: target.data,
             agentUserId: target.agentUserId,
+            targetType: target.targetType,
+            targetId: target.targetId,
           },
           userId,
           action: "reject",
+          roster: rosterReadFor(ctx),
         });
 
         const [updated] = await db

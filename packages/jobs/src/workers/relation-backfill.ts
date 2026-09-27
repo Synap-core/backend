@@ -12,7 +12,7 @@
 
 import type PgBoss from "pg-boss";
 import { eq, and, isNotNull } from "drizzle-orm";
-import { getDb } from "@synap/database";
+import { getDb, EXPOSURE_GRANT_RELATION_TYPE } from "@synap/database";
 import {
   propertyDefs,
   entities,
@@ -75,6 +75,8 @@ export async function handleRelationBackfill(
   for (const propDef of syncableDefs) {
     const relTypeSlug = relDefSlugMap.get(propDef.relationDefId!);
     if (!relTypeSlug) continue;
+    // Never backfill the exposure edge: only the share door writes it.
+    if (relTypeSlug === EXPOSURE_GRANT_RELATION_TYPE) continue;
 
     // Find all entities with this profile that have a value for this property
     const matchingEntities = await db.query.entities.findMany({

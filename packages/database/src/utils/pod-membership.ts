@@ -29,6 +29,7 @@ import {
   notExists,
   or,
   sql as drizzleSql,
+  type AnyColumn,
   type SQL,
 } from "drizzle-orm";
 import { db } from "../client-pg.js";
@@ -51,7 +52,7 @@ export const GUEST_PROJECT_ROLE = "guest";
 // `"<t>"."user_id"` there. Builder subqueries keep their own qualification.
 const ONE = drizzleSql`1`;
 
-function hasGuestProjectRole(userId: string) {
+function hasGuestProjectRole(userId: string | AnyColumn) {
   return db
     .select({ one: ONE })
     .from(projectMembers)
@@ -70,7 +71,7 @@ function hasGuestProjectRole(userId: string) {
  * `idx_workspaces_owner_workspace_type`) and uncorrelated with the outer row,
  * so Postgres plans each EXISTS as a one-time InitPlan, never per row.
  */
-export function podParticipantWhere(userId: string): SQL {
+export function podParticipantWhere(userId: string | AnyColumn): SQL {
   return or(
     exists(
       db
@@ -104,8 +105,11 @@ export function podParticipantWhere(userId: string): SQL {
  * guest and keeps exactly the access it had before this predicate existed.
  *
  * Never NULL: EXISTS is two-valued, so `NOT (...)` over it is safe.
+ *
+ * `userId` may be a column (`users.id`) so a caller correlating a read rule
+ * against `users` (the channel audience) excludes guests by the same predicate.
  */
-export function podGuestWhere(userId: string): SQL {
+export function podGuestWhere(userId: string | AnyColumn): SQL {
   return and(
     exists(hasGuestProjectRole(userId)),
     not(podParticipantWhere(userId))

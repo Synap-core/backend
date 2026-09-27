@@ -10,7 +10,7 @@ import { getWorkspaceMembership } from "@synap/database";
  *
  * ONE definition, shared by `relations.grantAnchorMembership` and every share
  * door (`services/sharing/share-service.ts`, which `relations.exposeToAnchor`
- * now aliases). Moved here from `routers/relations.ts` (Sites W2 S3) so the two
+ * now aliases). It lives here, not in `routers/relations.ts`, so the two
  * doors cannot drift apart.
  */
 export async function assertAnchorAdmin(

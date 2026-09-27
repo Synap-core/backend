@@ -1,12 +1,17 @@
 /**
- * THE FORMS DOOR (Sites W4) — the owner's only way to create, edit, re-token,
+ * THE FORMS DOOR — the owner's only way to create, edit, re-token,
  * enable/disable and read a public form. The tRPC `forms` router and the Hub
  * REST `/forms` routes both call this module; nothing else writes a form row.
  *
  * WHO: the workspace OWNER, signed in as a person. An agent, an AI-sourced call
  * and any API key are refused — a form mints a public write surface and a
- * secret, and "agents only propose": this wave ships no agent proposal door for
- * forms (see the W4 report), so an agent has no form door at all.
+ * secret, and "agents only propose": there is no proposal door for forms, so
+ * an agent has no form door at all.
+ *
+ * MODE: every guest submission is filed as a proposal (`guest-submit.ts`), so
+ * this door refuses `mode: "direct"` rather than store a setting nothing
+ * honours. A row stored with `direct` before that keeps parsing, and still
+ * yields proposals.
  *
  * WHAT a create mints, in ONE transaction (nothing half-exists):
  *   1. the form's own agent user — `agentType: form:<formId>`, `createdVia:
@@ -18,7 +23,8 @@
  *   4. an explicit `pending_proposal_cap` ceiling for that actor;
  *   5. the `tools` row whose `metadata.form` carries the definition, the token
  *      HASH + 6-char prefix and the ticket secret. The plaintext token is
- *      returned ONCE and never stored (`utils/share-token.ts`, the S3 machinery).
+ *      returned ONCE and never stored (`utils/share-token.ts`, the same token
+ *      machinery as share links).
  *
  * This module never deletes the actor: `disable` flips the tool status, and the
  * guest door treats a missing/inactive row as a miss.
@@ -56,6 +62,7 @@ import {
   type FormConfig,
   type StoredFormDefinition,
 } from "./form-definition.js";
+import { FORM_STATS_KEY, droppedSinceReview } from "./form-drops.js";
 
 export interface FormActor {
   userId: string;
@@ -72,6 +79,12 @@ export interface FormSummary {
   tokenPrefix: string | null;
   hasToken: boolean;
   actorUserId: string;
+  /**
+   * Guest submissions refused at the pending cap since the owner last decided
+   * one of this form's proposals (or raised the cap). The guest was told
+   * "received", so this is the only place those leads surface.
+   */
+  droppedSinceReview: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -86,7 +99,7 @@ function forbidden(message: string) {
 const notFound = () =>
   new TRPCError({ code: "NOT_FOUND", message: "Form not found." });
 
-/** A signed-in person only. Same rule as the S3 secret-minting doors. */
+/** A signed-in person only. Same rule as the share doors that mint a secret. */
 export function assertFormOwnerSession(actor: FormActor): void {
   if (
     getActingAgentUserId() ||
@@ -126,7 +139,32 @@ function parseConfig(input: unknown): FormConfig {
       message: `Invalid form: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
     });
   }
+  if (parsed.data.mode === "direct") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        'Direct mode is not available: every public form submission is held for your review. Use mode "proposal".',
+    });
+  }
   return parsed.data;
+}
+
+/**
+ * The row's metadata with a new definition. Every other key is carried over,
+ * so an edit or a re-token never erases the drop counter; `resetDrops` clears
+ * it (the owner raised the cap).
+ */
+function metadataWith(
+  current: unknown,
+  form: StoredFormDefinition,
+  resetDrops = false
+): Record<string, unknown> {
+  const base =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : {};
+  if (resetDrops) delete base[FORM_STATS_KEY];
+  return { ...base, form };
 }
 
 /** The kind must be a live KIND on this pod (the code allowlist already ran). */
@@ -185,7 +223,8 @@ async function loadOwnedForm(
 
 function summarize(
   row: typeof tools.$inferSelect,
-  form: StoredFormDefinition
+  form: StoredFormDefinition,
+  dropped: number
 ): FormSummary {
   return {
     id: row.id,
@@ -195,9 +234,20 @@ function summarize(
     tokenPrefix: form.tokenPrefix,
     hasToken: form.tokenHash !== null,
     actorUserId: form.actorUserId,
+    droppedSinceReview: dropped,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+async function summarizeOne(
+  row: typeof tools.$inferSelect,
+  form: StoredFormDefinition
+): Promise<FormSummary> {
+  const [dropped] = await droppedSinceReview([
+    { actorUserId: form.actorUserId, metadata: row.metadata },
+  ]);
+  return summarize(row, form, dropped ?? 0);
 }
 
 function newTicketSecret(): string {
@@ -304,7 +354,7 @@ export async function createForm(
     // Never the token or its hash.
     data: { form: true, kind: config.kind, mode: config.mode, tokenPrefix },
   });
-  return { form: summarize(row!, stored), token, tokenPrefix };
+  return { form: summarize(row!, stored, 0), token, tokenPrefix };
 }
 
 // ── Update ───────────────────────────────────────────────────────────────────
@@ -320,14 +370,15 @@ export async function updateForm(
 ): Promise<FormSummary> {
   assertFormOwnerSession(actor);
   const database = await getDb();
-  const { form, workspaceId } = await loadOwnedForm(
-    database,
-    actor,
-    input.formId
-  );
+  const {
+    row: current,
+    form,
+    workspaceId,
+  } = await loadOwnedForm(database, actor, input.formId);
   const config = parseConfig(input.config);
   await assertKindExists(database, config.kind, workspaceId);
   const stored: StoredFormDefinition = { ...form, config };
+  const capRaised = config.limits.pendingCap > form.config.limits.pendingCap;
 
   const [row] = await database.transaction(async (tx) => {
     if (config.mode !== form.config.mode) {
@@ -376,7 +427,7 @@ export async function updateForm(
       .update(tools)
       .set({
         name: config.name,
-        metadata: { form: stored },
+        metadata: metadataWith(current.metadata, stored, capRaised),
         updatedAt: new Date(),
       })
       .where(eq(tools.id, input.formId))
@@ -391,7 +442,7 @@ export async function updateForm(
     workspaceId,
     data: { form: true, kind: config.kind, mode: config.mode },
   });
-  return summarize(row!, stored);
+  return summarizeOne(row!, stored);
 }
 
 // ── Rotate / enable ──────────────────────────────────────────────────────────
@@ -403,7 +454,11 @@ export async function rotateFormToken(
 ): Promise<{ formId: string; token: string; tokenPrefix: string }> {
   assertFormOwnerSession(actor);
   const database = await getDb();
-  const { form, workspaceId } = await loadOwnedForm(database, actor, formId);
+  const {
+    row: current,
+    form,
+    workspaceId,
+  } = await loadOwnedForm(database, actor, formId);
   const token = generateShareToken();
   const tokenPrefix = token.slice(0, 6);
   const stored: StoredFormDefinition = {
@@ -414,7 +469,10 @@ export async function rotateFormToken(
   };
   await database
     .update(tools)
-    .set({ metadata: { form: stored }, updatedAt: new Date() })
+    .set({
+      metadata: metadataWith(current.metadata, stored),
+      updatedAt: new Date(),
+    })
     .where(eq(tools.id, formId));
   auditLog({
     subjectType: "tool",
@@ -456,7 +514,7 @@ export async function setFormEnabled(
     workspaceId,
     data: { form: true, enabled: input.enabled },
   });
-  return summarize(row!, form);
+  return summarizeOne(row!, form);
 }
 
 // ── Reads (owner) ────────────────────────────────────────────────────────────
@@ -467,7 +525,7 @@ export async function getForm(
 ): Promise<FormSummary> {
   const database = await getDb();
   const { row, form } = await loadOwnedForm(database, actor, formId);
-  return summarize(row, form);
+  return summarizeOne(row, form);
 }
 
 export const LIST_FORMS_CAP = 100;
@@ -488,10 +546,15 @@ export async function listForms(
       )
     )
     .limit(LIST_FORMS_CAP);
-  const out: FormSummary[] = [];
-  for (const row of rows) {
+  const parsed = rows.flatMap((row) => {
     const form = parseStoredForm(row.metadata);
-    if (form) out.push(summarize(row, form));
-  }
-  return out;
+    return form ? [{ row, form }] : [];
+  });
+  const dropped = await droppedSinceReview(
+    parsed.map(({ row, form }) => ({
+      actorUserId: form.actorUserId,
+      metadata: row.metadata,
+    }))
+  );
+  return parsed.map(({ row, form }, i) => summarize(row, form, dropped[i]!));
 }

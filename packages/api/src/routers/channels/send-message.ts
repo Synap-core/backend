@@ -70,6 +70,7 @@ import {
   proposals,
 } from "@synap/database/schema";
 import { assertMessageAnchorAllowed } from "../../utils/message-anchor.js";
+import { rosterReadFor } from "../../access/session-visibility.js";
 import {
   planAnchoredCommentTurn,
   type AnchoredCommentPlan,
@@ -310,6 +311,7 @@ export const sendMessageProcedure = protectedProcedure
         anchor: input.metadata.anchor,
         channelId,
         userId,
+        roster: rosterReadFor(ctx),
       });
       anchoredComment = await planAnchoredCommentTurn({
         anchor: input.metadata.anchor,

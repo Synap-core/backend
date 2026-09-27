@@ -1343,6 +1343,8 @@ export const profilesRouter = router({
       z.object({
         profileId: z.string().uuid(),
         targetWorkspaceId: z.string().uuid(),
+        /** Why — shown to the reviewer when this becomes a proposal. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1375,6 +1377,39 @@ export const profilesRouter = router({
         actingWorkspaceId: ctx.workspaceId,
       });
 
+      // GOVERNED (R8a): a grant widens which workspaces may see and use this
+      // kind — ADMIN-floored (`profile.grant_access`), so an agent always
+      // proposes; a human editor of the home workspace is granted by the same
+      // call. Approval replays this procedure (`executors/profile.ts`).
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? undefined,
+        workspaceId: ctx.workspaceId,
+        subjectType: "profile",
+        action: "grant_access",
+        reasoning: input.reasoning,
+        data: {
+          profileId: input.profileId,
+          targetWorkspaceId: input.targetWorkspaceId,
+          slug: profile.slug,
+          displayName: profile.displayName,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          success: false as const,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Sharing this kind with another workspace requires approval."
+          ),
+        };
+      }
+
       await profileRepo.grantAccess(input.profileId, input.targetWorkspaceId);
 
       logger.info(
@@ -1385,7 +1420,7 @@ export const profilesRouter = router({
         "Profile access granted"
       );
 
-      return { success: true };
+      return { success: true as const, status: "granted" as const };
     }),
 
   /**

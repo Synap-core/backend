@@ -27,6 +27,12 @@
  *   loadError     the server could not load the room. Clients must surface it
  *                 and must neither seed nor write back: an empty room here is a
  *                 FAILED read, not an empty document.
+ *   schemaVersion the highest editor SCHEMA version that has joined the room
+ *                 (the client's `EDITOR_SCHEMA_VERSION`, stamped by the client).
+ *                 A socket whose declared `editorSchema` is lower is served
+ *                 READ-ONLY (`roomSchemaOutdates`): y-tiptap deletes, from the
+ *                 shared document, every element whose node type the client's
+ *                 schema lacks (columns.md R1), and that delete must never land.
  */
 
 import * as Y from "yjs";
@@ -37,6 +43,7 @@ export const ROOM_META_KEYS = {
   seedRevision: "seedRevision",
   seedClaim: "seedClaim",
   loadError: "loadError",
+  schemaVersion: "schemaVersion",
 } as const;
 
 export interface DocumentRoomRow {
@@ -89,6 +96,31 @@ export function applyDocumentRoomPlan(
     meta.set(ROOM_META_KEYS.seedRevision, plan.revision);
     meta.delete(ROOM_META_KEYS.loadError);
   });
+}
+
+/**
+ * An editor build that declares no schema version predates the stamp: it is
+ * version 1 (the client's `EDITOR_SCHEMA_VERSION` history starts there).
+ */
+export const UNSTAMPED_EDITOR_SCHEMA = 1;
+
+/** The editor schema version a handshake declares (`auth.editorSchema`). */
+export function declaredEditorSchema(auth: unknown): number {
+  const v = (auth as { editorSchema?: unknown } | null | undefined)
+    ?.editorSchema;
+  return typeof v === "number" && Number.isInteger(v) && v >= 1
+    ? v
+    : UNSTAMPED_EDITOR_SCHEMA;
+}
+
+/**
+ * Does this room hold content newer than an editor of `schema` can hold?
+ * True when a newer editor has stamped the room. An unstamped room (every
+ * whiteboard room, a room no stamping client has joined) outdates nobody.
+ */
+export function roomSchemaOutdates(ydoc: Y.Doc, schema: number): boolean {
+  const stamp = roomMeta(ydoc).get(ROOM_META_KEYS.schemaVersion);
+  return typeof stamp === "number" && Number.isFinite(stamp) && stamp > schema;
 }
 
 /** Mark the room as FAILED to load. Clients render the error; they do not seed. */

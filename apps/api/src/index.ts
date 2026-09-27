@@ -51,6 +51,7 @@ import {
   fetchFederationMetadata,
   normalizeIssuerUrl,
   sanitizeErrorEgress,
+  refuseGuestSession,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
   registerSessionCriteriaUnmetReactor,
@@ -981,7 +982,7 @@ import { issueWsTicket } from "./ws-auth.js";
 // The /api/ws-ticket mint endpoint reuses the global first-party origin policy
 // (cors-origin.ts): a cross-origin page cannot mint a ticket from an untrusted
 // origin, even though the request carries the session cookie.
-app.post("/api/ws-ticket", authMiddleware, async (c) => {
+app.post("/api/ws-ticket", authMiddleware, refuseGuestSession, async (c) => {
   const origin = c.req.header("origin");
   if (origin && !isAllowedOrigin(origin)) {
     return c.json({ error: "Forbidden" }, 403);

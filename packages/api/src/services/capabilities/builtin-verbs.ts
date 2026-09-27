@@ -3363,8 +3363,10 @@ const automationPauseHandler: BuiltinVerbHandler = async (params, ctx) => {
 //   view.delete / document.delete / property_def.delete / workspace.archive
 //     — DESTRUCTIVE by `DESTRUCTIVE_ACTIONS` (rung 2.5), but their doors carry
 //       NO `checkPermissionOrPropose` at all (`views.ts` gates only `create`;
-//       `documents.ts` and `property-defs.ts` have zero gate calls;
-//       `workspaces.archive` is owner/pod-admin RBAC only). The rung-2.5 floor
+//       `documents.ts` and `property-defs.ts` have zero gate calls).
+//       [2026-09-27 R8a: `workspaces.archive` IS now gated (DESTRUCTIVE) and
+//       has its own doors — MCP `synap_archive_workspace`, Hub
+//       `POST /workspaces/:id/archive` — so it needs no verb.] The rung-2.5 floor
 //       is invisible at the OUTER capability/run gate (see the tripwire
 //       `synap-core-risky-verbs-reenter-a-governed-door.test.ts`), so a verb
 //       over an ungated destructive door is an UNGOVERNED delete, not a

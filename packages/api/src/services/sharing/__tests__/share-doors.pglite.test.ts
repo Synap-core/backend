@@ -1,8 +1,8 @@
 /**
- * Sites W2 S3 — the owner share doors, end to end on PGlite.
+ * The owner share doors, end to end on PGlite.
  *
  * Driven through the REAL `shares` tRPC router (and the `relations.exposeToAnchor`
- * alias), the REAL share core, the REAL repositories, the REAL S2 access floor
+ * alias), the REAL share core, the REAL repositories, the REAL exposure access floor
  * (`scopedDb`), the REAL `share/create` approval executor and the REAL 0276
  * constraints + revoke-is-permanent trigger.
  *
@@ -97,6 +97,19 @@ import { sharesRouter } from "../../../routers/shares.js";
 import { relationsRouter } from "../../../routers/relations.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 import { resolveExposurePolicy } from "../exposure-policy.js";
+import { OpenAPIHono } from "@hono/zod-openapi";
+import { registerSharesRoutes } from "../../../routers/hub-protocol/rest/shares.js";
+
+// The REAL Hub REST share routes, behind a stand-in for the auth middleware.
+function hubApp(ctx: Record<string, unknown>) {
+  const app = new OpenAPIHono();
+  app.use("/*", async (c, next) => {
+    for (const [k, v] of Object.entries(ctx)) c.set(k as never, v as never);
+    await next();
+  });
+  registerSharesRoutes(app as never);
+  return app;
+}
 
 // ── Principals ──
 const A = randomUUID(); // owner of W; human
@@ -416,6 +429,69 @@ describe("the human owner shares DIRECTLY; a guest sees exactly what was shared"
   });
 });
 
+describe("removing guests: one guest, or everyone one link admitted", () => {
+  const membersOfP = async () =>
+    (
+      await q<{ user_id: string; role: string }>(
+        `select user_id, role from project_members where project_id=$1 order by user_id`,
+        [P]
+      )
+    ).rows;
+
+  it("revokeLink with removeGuests removes exactly the guests THAT link admitted", async () => {
+    const live = await human(A).share({
+      resourceType: "entity",
+      resourceId: E,
+      anchorProjectId: P,
+      audience: "link",
+    });
+    if (live.status === "proposed") throw new Error("unreachable");
+    const { token } = await human(A).rotateLink({ shareId: live.shareId! });
+    await human(R2).redeemLink({ token });
+    expect((await seenEntities(R2)).has(E)).toBe(true);
+
+    const res = await human(A).revokeLink({
+      shareId: live.shareId!,
+      removeGuests: true,
+    });
+    expect(res).toMatchObject({ status: "revoked", removedGuests: 1 });
+    const members = await membersOfP();
+    expect(members.some((m) => m.user_id === R2)).toBe(false);
+    // R joined through an EARLIER link: untouched.
+    expect(members).toContainEqual({ user_id: R, role: "guest" });
+    expect((await seenEntities(R2)).has(E)).toBe(false);
+  });
+
+  it("removeGuest: anchor admins only, guests only, and the guest loses the shared records", async () => {
+    // A guest is not an anchor admin.
+    expect(
+      (await errOf(human(R).removeGuest({ projectId: P, userId: R })))?.code
+    ).toBe("FORBIDDEN");
+
+    // A non-guest member is not removable here.
+    const EDITOR = randomUUID();
+    await q(
+      `insert into project_members (id, project_id, user_id, role) values ($1,$2,$3,'editor')`,
+      [randomUUID(), P, EDITOR]
+    );
+    expect(
+      await human(A).removeGuest({ projectId: P, userId: EDITOR })
+    ).toEqual({ status: "not_a_guest", projectId: P });
+    expect(await membersOfP()).toContainEqual({
+      user_id: EDITOR,
+      role: "editor",
+    });
+
+    expect((await seenEntities(R)).has(E)).toBe(true);
+    expect(await human(A).removeGuest({ projectId: P, userId: R })).toEqual({
+      status: "removed",
+      projectId: P,
+    });
+    expect((await membersOfP()).some((m) => m.user_id === R)).toBe(false);
+    expect((await seenEntities(R)).has(E)).toBe(false);
+  });
+});
+
 describe("an AGENT's share is ALWAYS a proposal — and no governance rule widens it", () => {
   it("control: the same agent + rules DO auto-approve an ordinary write (the rules are live)", async () => {
     const ask = () =>
@@ -663,7 +739,85 @@ describe("settings.exposurePolicy", () => {
     const p = await human(A).getPolicy({ workspaceId: W });
     expect(p.entity.guest).toEqual({ read: "direct", create: "proposal" });
     expect(p.view.link).toEqual({ read: "direct", create: "proposal" });
-    expect(p.project.public).toEqual({ read: "denied", create: "denied" });
+    expect(p.project.public).toEqual({
+      read: "denied",
+      create: "denied",
+      fields: [],
+    });
+  });
+
+  it("get → set round-trip is LOSSLESS, public.fields included (W5d data-loss trap)", async () => {
+    const withFields = await human(A).getPolicy({ workspaceId: W });
+    withFields.entity.public = {
+      read: "direct",
+      create: "proposal",
+      fields: ["title", "tagline"],
+    };
+    withFields.document.public.fields = ["title"];
+    await human(A).setPolicy({
+      workspaceId: W,
+      policy: { version: 1, kinds: withFields },
+    });
+    // The owner's read returns the allowlist…
+    const got = await human(A).getPolicy({ workspaceId: W });
+    expect(got.entity.public.fields).toEqual(["title", "tagline"]);
+    expect(got.document.public.fields).toEqual(["title"]);
+    // …and an UNRELATED edit sent back through set keeps it (get → edit → set).
+    got.view.guest = { read: "denied", create: "denied" };
+    const echoed = await human(A).setPolicy({
+      workspaceId: W,
+      policy: { version: 1, kinds: got },
+    });
+    const after = await human(A).getPolicy({ workspaceId: W });
+    expect(after).toEqual(got);
+    expect(echoed).toEqual(got);
+    expect(after.entity.public.fields).toEqual(["title", "tagline"]);
+    // The Hub REST twin reads the same complete policy.
+    const res = await hubApp({
+      userId: A,
+      scopes: ["hub-protocol.read"],
+    }).request(`/shares/policy?workspaceId=${W}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(JSON.parse(JSON.stringify(after)));
+  });
+
+  it("a PARTIAL payload cannot erase: missing fields / audience / kind is refused and nothing changes", async () => {
+    const stored = async () =>
+      (
+        await q<{ p: unknown }>(
+          `select settings->'exposurePolicy' as p from workspaces where id=$1`,
+          [W]
+        )
+      ).rows[0]!.p;
+    const before = await stored();
+    const full = await human(A).getPolicy({ workspaceId: W });
+    const { fields: _f, ...publicNoFields } = full.entity.public;
+    const partials: unknown[] = [
+      // public cell without its allowlist — the browser's old toPolicyInput shape
+      { ...full, entity: { ...full.entity, public: publicNoFields } },
+      // an audience left out
+      {
+        ...full,
+        entity: { guest: full.entity.guest, public: full.entity.public },
+      },
+      // a whole kind left out
+      { entity: full.entity, view: full.view, project: full.project },
+      // an action left out
+      { ...full, view: { ...full.view, link: { read: "direct" } } },
+    ];
+    for (const kinds of partials) {
+      const e = await errOf(
+        human(A).setPolicy({
+          workspaceId: W,
+          policy: { version: 1, kinds } as never,
+        })
+      );
+      expect(e?.code).toBe("BAD_REQUEST");
+    }
+    expect(await stored()).toEqual(before);
+    expect(
+      (await human(A).getPolicy({ workspaceId: W })).entity.public.fields
+    ).toEqual(["title", "tagline"]);
   });
 
   it("the ceiling: public update/delete are not representable; a planted public.create 'direct' reads as 'proposal'", async () => {
@@ -689,17 +843,21 @@ describe("settings.exposurePolicy", () => {
     expect(resolved.entity.public).toEqual({
       read: "direct",
       create: "proposal",
+      fields: [],
     });
     expect(Object.keys(resolved.entity.public).sort()).toEqual([
       "create",
+      "fields",
       "read",
     ]);
   });
 
   it("the owner's policy is enforced by the share door", async () => {
+    const current = await human(A).getPolicy({ workspaceId: W });
+    current.entity.guest = { read: "denied", create: "proposal" };
     await human(A).setPolicy({
       workspaceId: W,
-      policy: { version: 1, kinds: { entity: { guest: { read: "denied" } } } },
+      policy: { version: 1, kinds: current },
     });
     const e = await errOf(
       human(A).share({

@@ -1,6 +1,6 @@
 /**
  * The pod edge's credentialed CORS + default HTTP cache headers, EXTRACTED
- * VERBATIM from `index.ts` (Sites W3) so the transport guards can drive the
+ * VERBATIM from `index.ts` so the transport guards can drive the
  * REAL middleware chain (`index.ts` boots a server on import and cannot be
  * imported by a test). Mount order in `index.ts` is unchanged:
  *

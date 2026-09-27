@@ -1,5 +1,5 @@
 /**
- * Hub REST — Shares (Sites W2 S3): the owner's share doors for agents and
+ * Hub REST — Shares: the owner's share doors for agents and
  * other Hub callers.
  *
  *   GET  /shares?resourceType=…&resourceId=…   who a record is shared with
@@ -10,13 +10,19 @@
  *                                              expiresAt?, reasoning? }
  *   POST /shares/unshare                       { resourceType, resourceId,
  *                                              anchorProjectId? } — direct
- *   POST /shares/links/:id/revoke              revoke one link — direct
+ *   POST /shares/links/:id/revoke              revoke one link — direct;
+ *                                              { removeGuests?: boolean }
+ *                                              also removes the guests it
+ *                                              admitted (default false)
  *   POST /shares/publish                       { resourceType, resourceId,
  *                                              reasoning? } — put a record on
- *                                              the public web (W5a); an agent
+ *                                              the public web; an agent
  *                                              key gets 202 proposed
  *   POST /shares/unpublish                     { resourceType, resourceId } —
  *                                              back to draft, direct
+ *   POST /shares/publication/revoke            { resourceType, resourceId } —
+ *                                              kill the public url for good
+ *                                              direct
  *
  * Every rule lives in `services/sharing/share-service.ts` (the same core the
  * tRPC `shares` router calls). An agent key's share is ALWAYS `status:
@@ -52,6 +58,7 @@ import { SHARE_KINDS } from "../../../services/sharing/exposure-policy.js";
 import { registerShareExecutors } from "../../../services/sharing/share-executors.js";
 import {
   publishResource,
+  revokePublication,
   unpublishResource,
 } from "../../../services/sharing/publish-service.js";
 
@@ -79,6 +86,7 @@ const PublishSchema = z.object({
   reasoning: z.string().max(2000).optional(),
 });
 const UnpublishSchema = z.object({ resourceType: Kind, resourceId: Uuid });
+const RevokeLinkSchema = z.object({ removeGuests: z.boolean().optional() });
 
 type Ctx = Context<{ Variables: HubVariables }, any, any>;
 
@@ -174,8 +182,28 @@ export function registerSharesRoutes(app: HubHono): void {
     }
     const id = Uuid.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: "Invalid share id" }, 400);
+    const raw = await c.req.text().catch(() => "");
+    let parsedBody: unknown = {};
+    if (raw.trim()) {
+      try {
+        parsedBody = JSON.parse(raw);
+      } catch {
+        return c.json({ error: "Body must be JSON" }, 400);
+      }
+    }
+    const body = RevokeLinkSchema.safeParse(parsedBody);
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
     try {
-      return c.json(await revokeLink(actorOf(c), id.data));
+      return c.json(
+        await revokeLink(actorOf(c), id.data, {
+          removeGuests: body.data.removeGuests ?? false,
+        })
+      );
     } catch (err) {
       return fail(c, err, "POST /shares/links/:id/revoke");
     }
@@ -220,6 +248,26 @@ export function registerSharesRoutes(app: HubHono): void {
       return c.json(await unpublishResource(actorOf(c), body.data));
     } catch (err) {
       return fail(c, err, "POST /shares/unpublish");
+    }
+  });
+
+  app.post("/shares/publication/revoke", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const body = UnpublishSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      return c.json(await revokePublication(actorOf(c), body.data));
+    } catch (err) {
+      return fail(c, err, "POST /shares/publication/revoke");
     }
   });
 

@@ -74,6 +74,7 @@ const STORED: Required<
     messageId: "55555555-5555-5555-5555-555555555555",
     answeredBy: "22222222-2222-2222-2222-222222222222",
     answeredAt: "2026-09-01T14:00:00.000Z",
+    value: { type: "chip", chip: { label: "EU account", value: "eu" } },
   },
 };
 
@@ -98,6 +99,8 @@ const FORGED: typeof STORED = {
     messageId: null,
     answeredBy: "antoine",
     answeredAt: "2026-09-08T14:00:00.000Z",
+    // …and forging WHICH option the person picked, typed.
+    value: { type: "confirm", confirmed: true },
   },
 };
 

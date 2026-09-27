@@ -1,5 +1,5 @@
 /**
- * Hub REST — Forms (Sites W4): the owner's public-form doors.
+ * Hub REST — Forms: the owner's public-form doors.
  *
  *   GET  /forms?workspaceId=…        the workspace's forms (owner)
  *   GET  /forms/:id                  one form (owner)

@@ -414,3 +414,40 @@ describe("isSessionStartChange — which focus-session change starts one", () =>
     }
   });
 });
+
+describe("archive — a removal whatever kind the presenter gave it (P1)", () => {
+  it("an ARCHIVE reads as remove (error / trash) on the update kind a space archive renders as", () => {
+    const view = resolveProposalIntent({
+      kind: "update",
+      changeType: "archive",
+    });
+    expect(view.intent).toBe("remove");
+    expect(view.tone).toBe("error");
+    expect(
+      resolveProposalSeverity({ kind: "update", changeType: "archive" })
+    ).toBe("destructive");
+    expect(
+      resolveProposalImpact({ kind: "update", changeType: "archive" })
+    ).toBe("high");
+    expect(isSwipeSafe(safe({ changeType: "archive" }))).toBe(false);
+  });
+
+  it("a RESTORE is not a removal — it reads as the change of its kind", () => {
+    const view = resolveProposalIntent({
+      kind: "update",
+      changeType: "restore",
+    });
+    expect(view.intent).toBe("change");
+    expect(view.tone).toBe("info");
+  });
+
+  it("the access class still outranks it", () => {
+    expect(
+      resolveProposalIntent({
+        kind: "update",
+        changeType: "archive",
+        class: "access",
+      }).intent
+    ).toBe("access");
+  });
+});

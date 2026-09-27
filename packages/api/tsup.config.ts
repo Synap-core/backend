@@ -9,6 +9,9 @@ export default defineConfig({
     // The public-door namespace predicate (Sites W3) — zero imports, read by
     // `apps/api` (CORS, rate class) via `@synap/api/public-doors`.
     "public-doors": "src/public-doors.ts",
+    // The path-secret redactor — zero imports, shared by the 5xx error-egress
+    // sanitizer here and `apps/api`'s request logger / error handler.
+    "redact-secret-path": "src/middleware/redact-secret-path.ts",
   },
   format: ["esm"],
   sourcemap: true,

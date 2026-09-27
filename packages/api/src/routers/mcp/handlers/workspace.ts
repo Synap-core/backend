@@ -24,6 +24,7 @@ import {
   linkProjectToWorkspace,
   listProjectsUsingWorkspaces,
   unlinkProjectFromWorkspace,
+  archivedUsesTargetRemovable,
 } from "../../../utils/project-workspace.js";
 import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
@@ -37,6 +38,13 @@ import { workspacesRouter } from "../../workspaces.js";
 import { matchFocusTarget, isClearFocusArg } from "./focus-target-match.js";
 import { projectsRouter } from "../../projects.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import {
+  archiveWorkspaceDoor,
+  grantProfileAccessDoor,
+  moveEntitiesDoor,
+  renameWorkspaceDoor,
+  type WorkspaceOpsActor,
+} from "../../../services/workspace-ops-doors.js";
 import {
   ok,
   requireScope,
@@ -657,7 +665,7 @@ export const workspaceHandlers: McpHandlerMap = {
     // The SAME pre-governance endpoint floor as REST POST /links: the project
     // must be visible and the caller a member of the workspace — otherwise an
     // unreachable edge becomes a proposal approval would write.
-    const endpointRefusal = await checkLinkEndpointsVisible(
+    let endpointRefusal = await checkLinkEndpointsVisible(
       {
         fromType: "project",
         fromId: projectId,
@@ -667,11 +675,28 @@ export const workspaceHandlers: McpHandlerMap = {
       userId,
       workspaceId
     );
+    // REMOVAL ONLY: an edge to an ARCHIVED workspace stays removable by the
+    // project's owner (the floor above refuses any archived workspace). Still
+    // governed below — gated at pod scope, because the workspace lens is
+    // archived and the caller need not be its member.
+    let gateWorkspaceId: string | null = workspaceId;
+    if (
+      endpointRefusal &&
+      remove &&
+      (await archivedUsesTargetRemovable(await getDb(), {
+        projectId,
+        workspaceId,
+        userId,
+      }))
+    ) {
+      endpointRefusal = null;
+      gateWorkspaceId = null;
+    }
     if (endpointRefusal) return ok({ error: endpointRefusal.error });
     const perm = await checkPermissionOrPropose({
       userId,
       agentUserId,
-      workspaceId,
+      workspaceId: gateWorkspaceId,
       subjectType: "link",
       action: remove ? "delete" : "create",
       reasoning:
@@ -730,6 +755,91 @@ export const workspaceHandlers: McpHandlerMap = {
     }
     return ok({ status: "linked", projectId, workspaceId });
   },
+  // ── Governed workspace operations (R8a) — thin: `workspace-ops-doors.ts`
+  // forwards to the governed tRPC procedures; nothing is re-checked here.
+  synap_archive_workspace: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const workspaceId = args.workspaceId;
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      return ok({ error: "workspaceId is required" });
+    }
+    return ok(
+      await archiveWorkspaceDoor(opsActor(ctx), {
+        workspaceId,
+        restore: args.restore === true,
+        reasoning: readReasoning(args),
+      })
+    );
+  },
+  synap_update_workspace: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const workspaceId = args.workspaceId;
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      return ok({ error: "workspaceId is required" });
+    }
+    const name = typeof args.name === "string" ? args.name : undefined;
+    const description =
+      typeof args.description === "string" ? args.description : undefined;
+    if (name === undefined && description === undefined) {
+      return ok({ error: "Provide name and/or description" });
+    }
+    return ok(
+      await renameWorkspaceDoor(opsActor(ctx), {
+        workspaceId,
+        name,
+        description,
+      })
+    );
+  },
+  synap_move_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const entityIds = Array.isArray(args.entityIds)
+      ? args.entityIds.filter((v): v is string => typeof v === "string")
+      : [];
+    const workspaceId = args.workspaceId;
+    if (entityIds.length === 0 || typeof workspaceId !== "string") {
+      return ok({
+        error: "entityIds (non-empty) and workspaceId are required",
+      });
+    }
+    return ok(
+      await moveEntitiesDoor(opsActor(ctx), {
+        entityIds,
+        workspaceId,
+        reason: readReasoning(args),
+      })
+    );
+  },
+  synap_grant_profile_access: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const profileId = args.profileId;
+    const targetWorkspaceId = args.targetWorkspaceId;
+    if (
+      typeof profileId !== "string" ||
+      typeof targetWorkspaceId !== "string"
+    ) {
+      return ok({ error: "profileId and targetWorkspaceId are required" });
+    }
+    return ok(
+      await grantProfileAccessDoor(opsActor(ctx), {
+        profileId,
+        targetWorkspaceId,
+        workspaceId:
+          typeof args.workspaceId === "string" ? args.workspaceId : undefined,
+        reasoning: readReasoning(args),
+      })
+    );
+  },
   synap_export_project_pack: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
@@ -766,3 +876,15 @@ export const workspaceHandlers: McpHandlerMap = {
     }
   },
 };
+
+/** The acting principal for a workspace-ops door, from the MCP context. */
+function opsActor(ctx: McpToolContext): WorkspaceOpsActor {
+  return {
+    userId: ctx.userId,
+    scopes: ctx.apiKeyScopes,
+    agentUserId: ctx.agentUserId ?? null,
+    sessionId: ctx.sessionId ?? null,
+    keyType: ctx.keyType ?? null,
+    keyWorkspaceId: ctx.keyWorkspaceId ?? null,
+  };
+}

@@ -68,6 +68,7 @@ import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js";
 import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
+import { assertDocumentAttachable } from "./mutate.js";
 import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
 import { computeEntityPropertyDiff } from "../../utils/entity-property-diff.js";
@@ -1003,6 +1004,16 @@ export const createProcs = {
       // never runs. Ambient remains fallback when placement is pod-wide null.
       const permWorkspaceId =
         resolvedEntityWorkspaceId ?? governanceWorkspaceId;
+
+      // A body named by id is validated exactly as on update, BEFORE the
+      // permission check, so a proposal never carries an unchecked document.
+      if (input.documentId) {
+        await assertDocumentAttachable(
+          ctx.userId,
+          { id: entityId, workspaceId: resolvedEntityWorkspaceId ?? null },
+          input.documentId
+        );
+      }
 
       // 1. Emit .requested event — records intent regardless of outcome
       const requestedEvent = await auditLog({

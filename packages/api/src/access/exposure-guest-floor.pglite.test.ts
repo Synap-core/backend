@@ -1,5 +1,5 @@
 /**
- * Sites W2 S2 — THE GUEST FLOOR, end to end on PGlite, through the real doors.
+ * THE GUEST FLOOR, end to end on PGlite, through the real doors.
  *
  * Driven through: `relations.exposeToAnchor` + `relations.grantAnchorMembership`
  * (real router, real repositories), the real access registry (`scopedDb`), the
@@ -24,7 +24,7 @@
  * Drizzle definitions; only 0276's constraints are real), realtime rooms, the
  * IS / agent hub, keyword search (Typesense), and the workspace-lens default of
  * `accessFor()` (R1: a guest on a door that defaults the lens to `null` sees
- * nothing — NEEDS-DOGFOOD for the W6 viewer).
+ * nothing — NEEDS-DOGFOOD for a guest viewer surface).
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -334,7 +334,7 @@ describe("T2 — the guest floor is gated on participation, not removed", () => 
 
   it("a project-only VIEWER (not a guest) keeps today's access", async () => {
     // B (belongs_to_project) + E (visible_to) through its anchor, and the
-    // pod-visible workspace's F exactly as before this wave.
+    // pod-visible workspace's F exactly as before the guest floor.
     expect(await seen(PV_, entities)).toEqual(new Set([B, E, F]));
   });
 

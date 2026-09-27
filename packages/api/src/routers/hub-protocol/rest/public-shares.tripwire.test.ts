@@ -1,5 +1,5 @@
 /**
- * TRIPWIRE — the credentialless public read of a PUBLISHED share (Sites W3).
+ * TRIPWIRE — the credentialless public read of a PUBLISHED share.
  *
  * Driven on PGlite through the REAL hub auth middleware, the REAL idempotency
  * middleware and the REAL `GET /public/shares/:token` route, against the REAL

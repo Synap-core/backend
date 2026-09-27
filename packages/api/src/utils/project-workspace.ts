@@ -189,6 +189,44 @@ export async function unlinkProjectFromWorkspace(
   return { unlinked: true, rows: removed.length };
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The ONE relaxation of the remove door's endpoint floor (R8a).
+ *
+ * The add/remove endpoint floor (`checkLinkEndpointsVisible`) requires a LIVE
+ * workspace the caller is a member of — so a `uses` edge to an ARCHIVED
+ * workspace could never be removed, which is exactly the edge a project owner
+ * most needs to retire. Removal only (never the add): true iff the target
+ * workspace row exists AND is archived AND `userId` OWNS the project
+ * (`projects.user_id`). The removal itself stays governed — the caller still
+ * runs `checkPermissionOrPropose` (`link/delete`, DESTRUCTIVE ⇒ an agent always
+ * proposes); this only decides whether the endpoint floor is satisfied.
+ */
+export async function archivedUsesTargetRemovable(
+  database: Awaited<ReturnType<typeof getDb>>,
+  args: { projectId: string; workspaceId: string; userId: string }
+): Promise<boolean> {
+  if (!UUID_RE.test(args.projectId) || !UUID_RE.test(args.workspaceId)) {
+    return false;
+  }
+  const [ws] = await database
+    .select({ archivedAt: workspaces.archivedAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, args.workspaceId))
+    .limit(1);
+  if (!ws || ws.archivedAt == null) return false;
+  const [owned] = await database
+    .select({ id: projects.id })
+    .from(projects)
+    .where(
+      and(eq(projects.id, args.projectId), eq(projects.userId, args.userId))
+    )
+    .limit(1);
+  return !!owned;
+}
+
 /**
  * Workspace ids a project uses. Same unscoped INDEX query as the batch door —
  * membership is NOT applied here (INDEX ≠ ACL). `userId` is kept so callers

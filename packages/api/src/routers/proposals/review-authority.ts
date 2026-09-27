@@ -18,6 +18,7 @@ import {
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { isPodAdmin } from "../../utils/workspace-role.js";
+import { unreadableTargetSessionIds } from "../../services/proposals/session-content-redaction.js";
 
 export type ProposalApprovalPolicy =
   "admins_only" | "any_editor" | "owner_and_admins";
@@ -57,7 +58,14 @@ export function canReviewProposal(args: {
  * the UI can render "You can approve because…" instead of a bare checkmark.
  */
 export type ReviewAuthorityReason =
-  "pod-wide" | "owner" | "agent-owner" | "admin" | "editor" | "not-authorized";
+  | "pod-wide"
+  | "owner"
+  | "agent-owner"
+  | "admin"
+  | "editor"
+  | "not-authorized"
+  /** The subject is a session the viewer may not read — see the session rung. */
+  | "session-only";
 
 /**
  * Format the reviewer-authority reason from the EXACT inputs `canReviewProposal`
@@ -159,7 +167,36 @@ export type ReviewAuthorityFacts = {
    * (no button, no error, nothing to retry).
    */
   agentCreatedByUserId: string | null | undefined;
+  /**
+   * The proposal's SUBJECT is a session that exists and the viewer may not
+   * read (`unreadableTargetSessionIds` — the SAME test the read-side redaction
+   * applies, so a row is never redacted-but-decidable). Resolved with the
+   * door's roster semantics: human doors honour the room roster, agent doors
+   * are owner-only.
+   */
+  subjectSessionUnreadable: boolean;
 };
+
+/** The proposal fields the ladder and its resolvers read. */
+type ReviewedProposal = {
+  workspaceId: string | null;
+  data: unknown;
+  agentUserId?: string | null;
+  /**
+   * Required, never optional: the session rung keys on them, and an optional
+   * field would let a new call site skip that rung by omission.
+   */
+  targetType: string;
+  targetId: string | null;
+};
+
+/** Does `reader` fail to read the session this proposal is about? */
+async function subjectSessionUnreadableFor(
+  proposal: Pick<ReviewedProposal, "targetType" | "targetId">,
+  reader: { userId: string; roster: boolean }
+): Promise<boolean> {
+  return (await unreadableTargetSessionIds([proposal], reader)).size > 0;
+}
 
 /**
  * THE LADDER — the one and only copy, and the only place a review verdict is
@@ -173,6 +210,7 @@ export type ReviewAuthorityFacts = {
  * Rungs, in order:
  *   1. agent-class floor (`purpose: "approve"` only) — an agent principal is
  *      refused before anything else.
+ *   1b. session rung — the subject is a session the viewer may not read.
  *   2. ownership — `data.sourceId === viewer`, or the viewer owns the acting
  *      agent (`agentCreatedByUserId`), itself floored by the agent class.
  *   3a. pod-wide (no workspace) — owner, else pod-admin, else refuse.
@@ -198,6 +236,14 @@ export function computeCanReviewApprovalFromFacts(args: {
   // even when it holds an admin/editor membership of its own.
   if (purpose === "approve" && facts.viewerIsAgent) {
     return { allowed: false, reason: "not-authorized" };
+  }
+
+  // SESSION RUNG (founder decision 2026-09-27): nobody decides what they cannot
+  // read. A proposal about a session the viewer may not read is refused for
+  // every purpose, whatever their workspace role — the review right is
+  // necessary, never sufficient. It only ever NARROWS.
+  if (facts.subjectSessionUnreadable) {
+    return { allowed: false, reason: "session-only" };
   }
 
   const proposalData = proposal.data as Record<string, unknown> | null;
@@ -271,15 +317,16 @@ export function computeCanReviewApprovalFromFacts(args: {
  * that the `approve` floor requires).
  */
 async function resolveReviewAuthorityFacts(args: {
-  proposal: {
-    workspaceId: string | null;
-    data: unknown;
-    agentUserId?: string | null;
-  };
+  proposal: ReviewedProposal;
   userId: string;
   purpose: "approve" | "reject";
+  roster: boolean;
 }): Promise<ReviewAuthorityFacts> {
-  const { proposal, userId, purpose } = args;
+  const { proposal, userId, purpose, roster } = args;
+  const subjectSessionUnreadable = await subjectSessionUnreadableFor(proposal, {
+    userId,
+    roster,
+  });
   const proposalData = proposal.data as Record<string, unknown> | null;
   const sourceIdMatches = proposalData?.sourceId === userId;
 
@@ -313,6 +360,7 @@ async function resolveReviewAuthorityFacts(args: {
       viewerIsAgent,
       viewerIsPodAdmin: await isPodAdmin(userId),
       agentCreatedByUserId,
+      subjectSessionUnreadable,
     };
   }
 
@@ -338,6 +386,7 @@ async function resolveReviewAuthorityFacts(args: {
     viewerIsAgent,
     viewerIsPodAdmin: false,
     agentCreatedByUserId,
+    subjectSessionUnreadable,
   };
 }
 
@@ -366,17 +415,28 @@ async function resolveReviewAuthorityFacts(args: {
  */
 export async function resolveBatchedReviewAuthorityFacts(args: {
   userId: string;
-  rows: ReadonlyArray<{
-    workspaceId: string | null;
-    agentUserId?: string | null;
-  }>;
+  /** The door's roster semantics — `rosterReadFor(ctx)`. */
+  roster: boolean;
+  rows: ReadonlyArray<
+    Pick<
+      ReviewedProposal,
+      "workspaceId" | "agentUserId" | "targetType" | "targetId"
+    >
+  >;
 }): Promise<
-  (row: {
-    workspaceId: string | null;
-    agentUserId?: string | null;
-  }) => ReviewAuthorityFacts
+  (
+    row: Pick<
+      ReviewedProposal,
+      "workspaceId" | "agentUserId" | "targetType" | "targetId"
+    >
+  ) => ReviewAuthorityFacts
 > {
-  const { userId, rows } = args;
+  const { userId, rows, roster } = args;
+  // One batched pair of selects for the whole page (see the redaction module).
+  const unreadableSessions = await unreadableTargetSessionIds(rows, {
+    userId,
+    roster,
+  });
 
   const wsIds = [
     ...new Set(
@@ -438,6 +498,8 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
     agentCreatedByUserId: row.agentUserId
       ? (creatorByAgentId.get(row.agentUserId) ?? null)
       : undefined,
+    subjectSessionUnreadable:
+      !!row.targetId && unreadableSessions.has(row.targetId),
   });
 }
 
@@ -457,12 +519,15 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
  * reject/reopen path and throws with a different verb.
  */
 export async function computeCanReviewApproval(args: {
-  proposal: {
-    workspaceId: string | null;
-    data: unknown;
-    agentUserId?: string | null;
-  };
+  proposal: ReviewedProposal;
   userId: string;
+  /**
+   * The door's session-roster semantics (`rosterReadFor(ctx)` on tRPC; `false`
+   * on an agent door). **Required — no default**, for the same reason as
+   * `purpose`: the session rung reads the subject session with it, and a
+   * default would decide the door's semantics for a caller that never said.
+   */
+  roster: boolean;
   /**
    * WHICH authority is being asked for. **Required — deliberately no default.**
    *
@@ -511,11 +576,15 @@ export async function computeCanReviewApproval(args: {
  *   proposal's visibility to the whole pod.
  */
 export async function assertCanRetargetProposalDestination(args: {
-  proposal: { data: unknown; agentUserId?: string | null };
+  proposal: Pick<
+    ReviewedProposal,
+    "data" | "agentUserId" | "targetType" | "targetId"
+  >;
   destWorkspaceId: string | null;
   userId: string;
+  roster: boolean;
 }): Promise<void> {
-  const { proposal, destWorkspaceId, userId } = args;
+  const { proposal, destWorkspaceId, userId, roster } = args;
 
   if (destWorkspaceId === null) {
     if (!(await isPodAdmin(userId))) {
@@ -539,8 +608,11 @@ export async function assertCanRetargetProposalDestination(args: {
       workspaceId: destWorkspaceId,
       data: proposal.data,
       agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      targetId: proposal.targetId,
     },
     userId,
+    roster,
   });
   if (!canReviewDest) {
     throw new TRPCError({
@@ -585,28 +657,40 @@ export async function assertCanRetargetProposalDestination(args: {
  * agent's proposal — the common case — is admitted by the agent-owner rung.
  */
 export async function assertCanReviewProposal(args: {
-  proposal: {
-    workspaceId: string | null;
-    data: unknown;
-    agentUserId?: string | null;
-  };
+  proposal: ReviewedProposal;
   userId: string;
   action: "reject" | "reopen";
+  /** `rosterReadFor(ctx)` — see `computeCanReviewApproval`. */
+  roster: boolean;
 }): Promise<void> {
-  const { proposal, userId, action } = args;
+  const { proposal, userId, action, roster } = args;
 
   // reject / reopen — the documented agent capability ("can reject but never
   // approve"). EXACTLY today's behaviour; the class floor applies to approve only.
-  const { allowed } = await computeCanReviewApproval({
+  const { allowed, reason } = await computeCanReviewApproval({
     proposal,
     userId,
     purpose: "reject",
+    roster,
   });
 
   if (!allowed) {
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: `Not authorized to ${action} this proposal`,
+      message: reviewRefusalMessage(reason, action),
     });
   }
+}
+
+/**
+ * The FORBIDDEN message for a refused review. The session rung gets its own
+ * words so a caller learns WHY a role that usually suffices did not.
+ */
+export function reviewRefusalMessage(
+  reason: ReviewAuthorityReason,
+  action: string
+): string {
+  return reason === "session-only"
+    ? `Only people in this session can ${action} this proposal`
+    : `Not authorized to ${action} this proposal`;
 }

@@ -80,6 +80,7 @@ import {
   registerCellInstancesRoutes,
   registerWhiteboardsRoutes,
   registerWorkspacesRoutes,
+  registerWorkspaceOpsRoutes,
   registerInstalledRoutes,
   registerMessagingRoutes,
   registerDiscordRoutes,
@@ -272,6 +273,7 @@ registerAuthRoutes(app); // /auth/status — bearer introspection
 registerExchangeRoutes(app); // /auth/exchange — RFC 7523 JWT-Bearer Grant (no API-key auth)
 registerUsersRoutes(app); // /users/me
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
+registerWorkspaceOpsRoutes(app); // governed archive/restore/rename, /entities/move, /profiles/grant-access (R8a)
 registerInstalledRoutes(app); // /installed — the ONE read door over the install ledgers
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
 registerEventsRoutes(app); // /events

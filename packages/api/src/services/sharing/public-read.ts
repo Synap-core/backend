@@ -1,5 +1,5 @@
 /**
- * THE PUBLIC READ of a published share (Sites W3) — `GET /api/hub/public/shares/:token`.
+ * THE PUBLIC READ of a published share — `GET /api/hub/public/shares/:token`.
  *
  * Credentialless. The token in the path IS the capability; there is no caller
  * identity, and nothing here reads one. What a stranger holding the token may
@@ -37,6 +37,7 @@ import {
 } from "@synap/database";
 import { resourceShares } from "@synap/database/schema";
 import { hashToken } from "../../utils/share-token.js";
+import { isPublicationLive } from "./publication-live.js";
 
 /** The ONE body every miss is answered with. */
 export const PUBLIC_NOT_FOUND_BODY = { error: "Not found" } as const;
@@ -154,12 +155,10 @@ export async function readPublishedShare(
     typeof token !== "string" ||
     token.length === 0 ||
     token.length > MAX_TOKEN_LENGTH ||
-    row.audience !== "public" ||
-    row.state !== "published" ||
-    row.revokedAt ||
-    (row.expiresAt && row.expiresAt.getTime() <= Date.now()) ||
-    !row.publishedAt ||
-    row.resourceType !== "entity"
+    // Found by its token hash, so a url exists.
+    !isPublicationLive({ ...row, hasToken: true }) ||
+    // Implied by the rule above; repeated so the type narrows for the view.
+    !row.publishedAt
   ) {
     return null;
   }

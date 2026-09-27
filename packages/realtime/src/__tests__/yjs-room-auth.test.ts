@@ -88,6 +88,7 @@ import {
   installReadOnlySync,
   setupYjsServer,
 } from "../yjs-server.js";
+import { declaredEditorSchema } from "../document-room.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -388,5 +389,128 @@ describe("TRIPWIRE: setupYjsServer must register the /yjs|* namespace", () => {
     expect(child, "no child namespace for /yjs|{room}").toBeTruthy();
     expect(child.name).toBe(`/yjs|whiteboard-${DOC}`);
     expect(child._fns).toHaveLength(2);
+  });
+});
+
+// ─── The editor schema stamp (columns.md R1) ────────────────────────────────
+
+describe("an editor the room has outgrown is served read-only", () => {
+  function hooks() {
+    const io = new SocketIOServer();
+    return setupYjsServer({ io }) as unknown as {
+      initSyncListeners: (s: any, d: Y.Doc) => void;
+      startSynchronization: (s: any, d: Y.Doc) => void;
+    };
+  }
+  /** An edit socket that declared `editorSchema` at the room gate. */
+  function editor(schema?: number) {
+    const socket = fakeSocket("edit");
+    if (schema !== undefined) (socket.data as any).editorSchema = schema;
+    return socket;
+  }
+  function stamped(version: number | null): Y.Doc {
+    const doc = new Y.Doc();
+    if (version !== null)
+      doc.getMap("synap-room").set("schemaVersion", version);
+    return doc;
+  }
+
+  it("the handshake's editorSchema is read strictly; none = 1 (every build before the stamp)", () => {
+    expect(declaredEditorSchema({ editorSchema: 2 })).toBe(2);
+    expect(declaredEditorSchema({})).toBe(1);
+    expect(declaredEditorSchema({ editorSchema: "3" })).toBe(1);
+    expect(declaredEditorSchema({ editorSchema: 0 })).toBe(1);
+    expect(declaredEditorSchema(undefined)).toBe(1);
+  });
+
+  it.each([
+    [
+      "no stamp, no declared schema",
+      null,
+      undefined,
+      "hello",
+      { access: "edit" },
+    ],
+    ["stamp 2, editor 2", 2, 2, "hello", { access: "edit" }],
+    ["stamp 2, editor 3 (newer)", 2, 3, "hello", { access: "edit" }],
+    [
+      "stamp 2, editor 1",
+      2,
+      1,
+      "",
+      { access: "read", reason: "editor-outdated" },
+    ],
+    [
+      "stamp 2, a build that declares none",
+      2,
+      undefined,
+      "",
+      { access: "read", reason: "editor-outdated" },
+    ],
+  ] as const)("%s", (_label, stamp, schema, expected, told) => {
+    const server = hooks();
+    const doc = stamped(stamp);
+    const socket = editor(schema);
+    server.initSyncListeners(socket, doc);
+    expect(socket.emits).toContainEqual(["yjs-access", told]);
+    socket.handlers.get("sync-update")!(clientUpdate("hello"));
+    expect(doc.getText("t").toString()).toBe(expected);
+  });
+
+  it("the stamp rising MID-SESSION drops the old editor's next update, and tells it once", () => {
+    const server = hooks();
+    const doc = stamped(null);
+    const socket = editor(1);
+    server.initSyncListeners(socket, doc);
+    socket.handlers.get("sync-update")!(clientUpdate("before "));
+    expect(doc.getText("t").toString()).toBe("before ");
+    // A newer editor joins and stamps the room (its update, applied as any other).
+    doc.getMap("synap-room").set("schemaVersion", 2);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    socket.handlers.get("sync-update")!(clientUpdate("after"));
+    socket.handlers.get("sync-update")!(clientUpdate("again"));
+    warn.mockRestore();
+    expect(doc.getText("t").toString()).toBe("before ");
+    const told = socket.emits.filter(
+      ([e, p]) => e === "yjs-access" && p?.reason === "editor-outdated"
+    );
+    expect(told).toHaveLength(1);
+  });
+
+  it("an outgrown editor's sync-step-1 answer (its local state) is dropped; a current editor's is applied", () => {
+    for (const [schema, expected] of [
+      [1, ""],
+      [2, "hello"],
+    ] as const) {
+      const server = hooks();
+      const doc = Object.assign(stamped(2), {
+        awareness: {
+          getStates: () => new Map(),
+          states: new Map(),
+          meta: new Map(),
+        },
+      });
+      const socket = editor(schema);
+      server.startSynchronization(socket, doc);
+      const step1 = socket.emits.find(([e]) => e === "sync-step-1")!;
+      (step1[2] as (u: Uint8Array) => void)(clientUpdate("hello"));
+      expect(doc.getText("t").toString(), `schema ${schema}`).toBe(expected);
+    }
+  });
+
+  it("the room gate records the declared schema on the socket", async () => {
+    const io = new SocketIOServer();
+    setupYjsServer({ io });
+    const child = await new Promise<any>((resolve) =>
+      (io as any)._checkNamespace(`/yjs|${DOC}`, {}, resolve)
+    );
+    const gate = child._fns[1] as Gate;
+    const socket: any = {
+      nsp: { name: `/yjs|${DOC}` },
+      handshake: { auth: { editorSchema: 2 } },
+      data: {},
+    };
+    await new Promise<void>((resolve) => gate(socket, () => resolve()));
+    expect(socket.data.editorSchema).toBe(2);
   });
 });

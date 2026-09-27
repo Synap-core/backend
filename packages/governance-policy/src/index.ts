@@ -425,6 +425,19 @@ export const ADMIN_ACTIONS_LIVE: readonly GateEventKey[] = [
   "aiProvider.create",
   "aiProvider.update",
   "aiProvider.delete",
+  // Workspace RESTORE (R8a). Real gate: `routers/workspaces.ts` `archive`
+  // with `restore: true` passes the PLURAL `workspaces` + `restore`. Un-hiding
+  // a workspace is a lifecycle change in the same class as `workspace.update`
+  // (above), so an agent always proposes. ARCHIVE needs no entry here — it is
+  // the bare `archive` verb, already hard-floored at rung 2.5
+  // (DESTRUCTIVE_ACTIONS).
+  "workspace.restore",
+  "workspaces.restore",
+  // Shared-profile access grant (R8a). Real gate: `routers/profiles.ts`
+  // `grantAccess` passes `profile` + `grant_access`. It widens which
+  // workspaces may see and use a kind — a SCOPE CHANGE like `relation.expose`,
+  // so no rule / autoApproveFor entry may lift it to auto-execute.
+  "profile.grant_access",
 ];
 
 /**
@@ -659,6 +672,9 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "profile/create": "other-floor", // 2.08
   "workspace/delete": "other-floor", // 2 admin
   "workspace/update": "other-floor", // 2 admin (also package apply onto a workspace)
+  "workspace/archive": "other-floor", // 2.5 destructive
+  "workspace/restore": "other-floor", // 2 admin
+  "profile/grant_access": "other-floor", // 2 admin (scope change)
   // Widenable on purpose.
   "automation/execute": "widenable", // runs an automation a person activated
   "cell/update": "widenable", // config patch of an existing placement
@@ -1710,6 +1726,10 @@ export const GATE_WRITE_DOORS = {
   "playbook_run/update": "gate",
   "proactive/recap": "gate",
   "profile/create": "gate",
+  // Grant a workspace access to a SHARED profile (`profiles.grantAccess`).
+  // ADMIN-floored (`profile.grant_access`): it widens visibility. Replayed on
+  // approval by `routers/proposals/executors/profile.ts`.
+  "profile/grant_access": "gate",
   "profile/renderer.set": "gate",
   "project/create": "gate",
   "project/delete": "gate",
@@ -1783,6 +1803,12 @@ export const GATE_WRITE_DOORS = {
   "whiteboard/place": "gate",
   "widget/register": "gate",
   "workspace/adopt": "gate",
+  // Soft-archive (R8a, `workspaces.archive`). `archive` is a DESTRUCTIVE_ACTIONS
+  // verb, so an agent ALWAYS proposes; the direct path also pauses the
+  // workspace's scoped automations. Restore is its own verb (ADMIN-floored).
+  // Both replayed by `routers/proposals/executors/workspace.ts`.
+  "workspace/archive": "gate",
+  "workspace/restore": "gate",
   "workspace/configure_public_projection": "gate",
   "workspace/create": "gate",
   "workspace/declare_source": "gate",

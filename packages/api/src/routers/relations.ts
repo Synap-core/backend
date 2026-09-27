@@ -337,6 +337,21 @@ function rejectExposureEdge(type: string, refusedDoor: string): void {
   });
 }
 
+/**
+ * Refuse removing (deleting or retyping away) a `visible_to` edge through a
+ * generic relation door: that edge is the exposure a `resource_shares` row
+ * describes, and only the unshare door (`shares.unshare`) keeps the two in step.
+ * `belongs_to_project` is NOT refused here: unfiling an entity from a project is
+ * an ordinary relation delete.
+ */
+function rejectExposureEdgeRemoval(type: string, refusedDoor: string): void {
+  if (type !== VISIBLE_TO) return;
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: `${type} is an exposure edge — remove it with shares.unshare, not ${refusedDoor}.`,
+  });
+}
+
 export const relationsRouter = router({
   /**
    * List all semantic relations in the current workspace.
@@ -1420,7 +1435,7 @@ export const relationsRouter = router({
       // the request workspaceId, which doesn't pin the relation row.
       const relRow = await database.query.relations.findFirst({
         where: eq(relations.id, relationId),
-        columns: { workspaceId: true },
+        columns: { workspaceId: true, type: true },
       });
       if (!relRow) {
         throw new TRPCError({
@@ -1431,6 +1446,16 @@ export const relationsRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: relRow.workspaceId,
       });
+
+      // A retype can mint an exposure edge (e.g. `belongs_to_project` →
+      // `visible_to` hands the record to every guest of the project) or silently
+      // drop one. Both directions belong to the share/unshare doors, which run
+      // the anchor-admin check and the exposure policy; refuse BEFORE the
+      // permission check so no proposal is ever filed for either.
+      if (input.type !== undefined) {
+        rejectExposureEdge(input.type, "relations.update");
+        rejectExposureEdgeRemoval(relRow.type, "relations.update");
+      }
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -1536,6 +1561,7 @@ export const relationsRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: relationToDelete.workspaceId,
       });
+      rejectExposureEdgeRemoval(relationToDelete.type, "relations.delete");
 
       // 2. Permission check. `id` stays the executor's key
       // (`executors/entity.ts` `relation/delete`); the endpoints are display.

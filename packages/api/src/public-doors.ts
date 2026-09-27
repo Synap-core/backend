@@ -1,5 +1,5 @@
 /**
- * THE PUBLIC DOOR NAMESPACE — one predicate, zero imports (Sites W3).
+ * THE PUBLIC DOOR NAMESPACE — one predicate, zero imports.
  *
  * `/api/hub/public/*` (and the `/api/hub-protocol/public/*` alias) is the
  * credentialless surface a browser on ANY origin may call: a published share,

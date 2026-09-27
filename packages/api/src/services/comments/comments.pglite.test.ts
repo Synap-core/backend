@@ -85,6 +85,12 @@ const POD_DOC = randomUUID();
 const RACE_DOC = randomUUID();
 const LEGACY_DOC = randomUUID();
 const ENTITY = randomUUID();
+// A pod-wide entity faceted into TWO workspaces: readable by members of both.
+const SHARED_ENTITY = randomUUID();
+const WS_X = randomUUID();
+const WS_Y = randomUUID();
+const READER_X = "reader-x";
+const READER_Y = "reader-y";
 const PROJECT = randomUUID();
 
 const BASIC =
@@ -159,7 +165,7 @@ beforeAll(async () => {
     "utf8"
   );
   const index = migration.match(
-    /CREATE UNIQUE INDEX IF NOT EXISTS "channels_object_room_uniq"[\s\S]*?;/
+    /CREATE UNIQUE INDEX IF NOT EXISTS "channels_object_room_lens_uniq"[\s\S]*?;/
   );
   expect(index, "0279 declares the object-room index").not.toBeNull();
   await h.client!.exec(index![0]);
@@ -207,6 +213,31 @@ beforeAll(async () => {
   await q(
     `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type) values ($1,$2,$3,$4,$5,'belongs_to_project')`,
     [randomUUID(), OWNER, WS, ENTITY, PROJECT]
+  );
+  await q(
+    `insert into workspaces (id, name, owner_id) values ($1,'X',$3),($2,'Y',$3)`,
+    [WS_X, WS_Y, OWNER]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor'),($4,$5,$6,'editor')`,
+    [randomUUID(), WS_X, READER_X, randomUUID(), WS_Y, READER_Y]
+  );
+  for (const [id, name] of [
+    [READER_X, "Xena Reader"],
+    [READER_Y, "Yuri Reader"],
+  ]) {
+    await q(
+      `insert into users (id, email, name, user_type) values ($1,$2,$3,'human')`,
+      [id, `${id}@x.test`, name]
+    );
+  }
+  await q(
+    `insert into entities (id, user_id, workspace_id, title, type) values ($1,$2,null,'Globex','company')`,
+    [SHARED_ENTITY, OWNER]
+  );
+  await q(
+    `insert into entity_facets (id, entity_id, workspace_id, deleted_at) values ($1,$2,$3,null),($4,$2,$5,null)`,
+    [randomUUID(), SHARED_ENTITY, WS_X, randomUUID(), WS_Y]
   );
 }, 60_000);
 
@@ -518,5 +549,63 @@ describe("a comment is an anchored message in the object's ONE room", () => {
         })
       )
     ).toBe("NOT_FOUND");
+  });
+
+  it("RECAP LENS: a recap written in workspace Y is NOT visible to a reader in workspace X; a pod-wide recap IS visible to the entity's readers", async () => {
+    // Both readers can read the entity itself (the precondition).
+    for (const reader of [READER_X, READER_Y]) {
+      expect(
+        (
+          await listObjectComments({
+            userId: reader,
+            object: { type: "entity", id: SHARED_ENTITY },
+            state: "open",
+          })
+        ).channelId
+      ).toBeNull();
+    }
+    const repo = new ChannelRepository(db);
+    const recapY = await repo.ensureObjectChannel({
+      type: "entity",
+      id: SHARED_ENTITY,
+      workspaceId: WS_Y,
+    });
+    const shared = await repo.ensureObjectChannel({
+      type: "entity",
+      id: SHARED_ENTITY,
+    });
+    // ONE key rule, two shapes: two rooms, each deduped on its own key.
+    expect(recapY!.channel.id).not.toBe(shared!.channel.id);
+    expect(
+      (await repo.ensureObjectChannel({
+        type: "entity",
+        id: SHARED_ENTITY,
+        workspaceId: WS_Y,
+      }))!.channel.id
+    ).toBe(recapY!.channel.id);
+
+    expect(await canUserSeeChannel(db, recapY!.channel.id, READER_Y)).toBe(
+      true
+    );
+    expect(await canUserSeeChannel(db, recapY!.channel.id, READER_X)).toBe(
+      false
+    );
+    expect(await canUserSeeChannel(db, shared!.channel.id, READER_X)).toBe(
+      true
+    );
+    expect(await canUserSeeChannel(db, shared!.channel.id, READER_Y)).toBe(
+      true
+    );
+    expect(
+      await listChannelAudienceUserIds(db, recapY!.channel.id)
+    ).not.toContain(READER_X);
+
+    // Comments always land in the SHARED room, never the recap lens.
+    const posted = await postComment({
+      userId: READER_X,
+      anchor: { kind: "entity", entityId: SHARED_ENTITY },
+      content: "Renewal is in March",
+    });
+    expect(posted.channelId).toBe(shared!.channel.id);
   });
 });

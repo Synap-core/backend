@@ -10,12 +10,16 @@
  * Granularity:
  * - BLOCKS (paragraphs, headings, lists, fences, containers) are the unit of a
  *   change: markdown's own structure, so a diff never splits a table or an
- *   embed down the middle.
+ *   embed down the middle. Column rows are layout, not a unit: the diff walks
+ *   into them (`splitMarkdownBlocks`).
  * - WORDS only inside a changed PROSE block, which is what a reviewer reads:
  *   "we can slip by a week" struck, "a one-week slip moves…" added.
  *
  * Pure: no I/O, no DOM.
  */
+
+import { isLayoutDirective } from "./embeds.js";
+import { parseContainerOpener, scanContainers } from "./scan.js";
 
 /**
  * Past this many edit steps the matcher stops searching and reports "no
@@ -112,47 +116,93 @@ const CONTAINER_OPEN = /^\s{0,3}(:{3,})\s*[A-Za-z]/;
 const CONTAINER_CLOSE = /^\s{0,3}(:{3,})\s*$/;
 
 /**
+ * The line indexes of every column-row fence (opener, and its own closer) that
+ * sits in the document's own flow — at the root, or inside other rows — never
+ * inside an embed or a section block, which stay one unit.
+ */
+function layoutFenceLines(markdown: string): Set<number> {
+  const { containers } = scanContainers(markdown);
+  const inFlow = (index: number | null): boolean => {
+    for (let i = index; i !== null; i = containers[i]!.parent) {
+      if (!isLayoutDirective(containers[i]!.name)) return false;
+    }
+    return true;
+  };
+  const out = new Set<number>();
+  containers.forEach((c, i) => {
+    if (!inFlow(i)) return;
+    out.add(c.startLine);
+    if (c.terminated) out.add(c.endLine);
+  });
+  return out;
+}
+
+/**
  * Split markdown into blocks: runs of non-blank lines. A blank line inside a
  * code fence or a `:::` container does not end the block, so an embed and its
  * JSON body, or a code sample, stay one unit.
+ *
+ * Column rows are the exception: a row is LAYOUT, so the diff descends into
+ * it. Each fence line of a row is a block of its own (`isFrameFenceBlock`) and
+ * each column's content splits like the document's, so a one-word edit in a
+ * column changes one paragraph, not the whole row.
  */
 export function splitMarkdownBlocks(markdown: string): string[] {
   const blocks: string[] = [];
   let current: string[] = [];
   let fence: string | null = null;
   let depth = 0;
+  const layoutFences = layoutFenceLines(markdown);
   const flush = () => {
     if (current.length > 0) blocks.push(current.join("\n"));
     current = [];
   };
-  for (const line of markdown.split("\n")) {
+  markdown.split("\n").forEach((line, i) => {
+    if (layoutFences.has(i)) {
+      // A row's closer also ends a fence left open inside it (scan.ts rules).
+      fence = null;
+      flush();
+      blocks.push(line);
+      return;
+    }
     if (fence) {
       current.push(line);
       if (line.trim().startsWith(fence)) fence = null;
-      continue;
+      return;
     }
     const f = FENCE.exec(line);
     if (f) {
       current.push(line);
       fence = f[1]!;
-      continue;
+      return;
     }
     if (CONTAINER_OPEN.test(line)) {
       depth++;
       current.push(line);
-      continue;
+      return;
     }
     if (depth > 0 && CONTAINER_CLOSE.test(line)) {
       depth--;
       current.push(line);
       if (depth === 0) flush();
-      continue;
+      return;
     }
     if (line.trim() === "" && depth === 0) flush();
     else current.push(line);
-  }
+  });
   flush();
   return blocks;
+}
+
+/**
+ * A block that is one fence line of a column row (`splitMarkdownBlocks`).
+ * It carries structure, not content: a diff reader draws it as a row or column
+ * boundary (or nothing), never as markdown on its own.
+ */
+export function isFrameFenceBlock(block: string): boolean {
+  if (block.includes("\n")) return false;
+  if (CONTAINER_CLOSE.test(block)) return true;
+  return isLayoutDirective(parseContainerOpener(block)?.name);
 }
 
 // ─── Words ───────────────────────────────────────────────────────────────────

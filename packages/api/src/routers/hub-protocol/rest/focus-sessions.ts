@@ -378,6 +378,11 @@ const BlockOutputBodySchema = z.object({
    * Twin of the tRPC `blockOutput.ref` — same union, same one visibility floor.
    */
   ref: outputRefWireSchema.nullable().optional(),
+  /**
+   * HOW the person can answer (confirm / choose / form / act / provide) — the
+   * slot wire's own `ask` schema, not a copy. `null` clears; omitted leaves it.
+   */
+  ask: expectedOutputWireSchema.shape.ask,
 });
 
 const UnblockOutputBodySchema = z.object({

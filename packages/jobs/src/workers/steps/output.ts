@@ -847,6 +847,9 @@ export async function executeOutputStep(
               await new ChannelRepository(db).ensureObjectChannel({
                 type: "entity",
                 id: entityId,
+                // A workspace run → that workspace's recap room for the
+                // entity; a pod-wide run → the entity's shared room.
+                workspaceId,
               })
             )?.channel.id;
           }
@@ -883,6 +886,7 @@ export async function executeOutputStep(
           await new ChannelRepository(db).ensureObjectChannel({
             type: "entity",
             id: runSubjectEntityId,
+            workspaceId,
           })
         )?.channel.id;
       }

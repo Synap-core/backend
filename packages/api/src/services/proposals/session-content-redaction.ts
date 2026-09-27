@@ -92,9 +92,16 @@ function redactHistory(history: unknown): unknown {
   );
 }
 
-/** The session ids these rows target that EXIST and `reader` may not read. */
-async function unreadableTargetSessionIds(
-  rows: readonly RedactableRow[],
+/**
+ * The session ids these rows target that EXIST and `reader` may not read.
+ *
+ * Also THE definition of "a proposal whose subject is a session the viewer
+ * cannot read" for the DECIDE gate (founder decision 2026-09-27: nobody decides
+ * what they cannot read) — the review ladder refuses exactly the rows this
+ * returns, so a row is never redacted-but-decidable or readable-but-refused.
+ */
+export async function unreadableTargetSessionIds(
+  rows: readonly Pick<RedactableRow, "targetType" | "targetId">[],
   reader: SessionReader
 ): Promise<Set<string>> {
   const ids = [

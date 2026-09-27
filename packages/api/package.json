@@ -30,6 +30,11 @@
       "import": "./dist/public-doors.js",
       "default": "./dist/public-doors.js"
     },
+    "./redact-secret-path": {
+      "types": "./dist/middleware/redact-secret-path.d.ts",
+      "import": "./dist/redact-secret-path.js",
+      "default": "./dist/redact-secret-path.js"
+    },
     "./services/DeliveryService": {
       "types": "./dist/services/DeliveryService.d.ts",
       "import": "./dist/services/DeliveryService.js",

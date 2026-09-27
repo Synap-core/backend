@@ -1,5 +1,5 @@
 /**
- * Server-side captcha verification for public forms (Sites W4) — a Turnstile-
+ * Server-side captcha verification for public forms — a Turnstile-
  * style `siteverify` call. OFF unless configured:
  *
  *   FORMS_CAPTCHA_SECRET        the provider secret (required to turn it on)

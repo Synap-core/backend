@@ -354,8 +354,10 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     category: "workspace",
     icon: "LayoutDashboard",
     color: ID(6),
-    label: "Workspace",
-    labelPlural: "Workspaces",
+    // Founder N1 (2026-09-27): the user word is "Space"; `workspace` stays the
+    // kind token, table, API param and MCP tool stem.
+    label: "Space",
+    labelPlural: "Spaces",
   },
 
   // ── System capabilities (the `/` universe) — spread across the wider palette ──
@@ -738,6 +740,8 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   capabilities: "capability",
   skills: "skill",
   tools: "tool",
+  // Same trap for the N1 rename: `workspaces` pluralized to "Workspacess".
+  workspaces: "workspace",
   pod: "pod",
   "data-pod": "pod",
   desktop: "desktop",

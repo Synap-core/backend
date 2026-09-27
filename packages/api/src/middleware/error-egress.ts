@@ -45,6 +45,7 @@
 
 import { randomUUID } from "crypto";
 import type { MiddlewareHandler } from "hono";
+import { redactSecretPath } from "./redact-secret-path.js";
 
 /** Paths whose 5xx envelope is owned by another protocol (see EXEMPTIONS). */
 function ownsItsOwnErrorEnvelope(path: string): boolean {
@@ -90,10 +91,12 @@ export function sanitizeErrorEgress(opts: {
       typeof parsed?.errorId === "string" ? parsed.errorId : randomUUID();
 
     // The ONLY place the original body survives. Ops correlates by errorId.
+    // The path is redacted: a public share / form / calendar token IS the
+    // capability, and a 5xx on that door must not copy it into the log.
     opts.log.error(
       {
         errorId,
-        path: c.req.path,
+        path: redactSecretPath(c.req.path),
         method: c.req.method,
         statusCode: status,
         originalBody: raw,

@@ -17,3 +17,4 @@ export * from "./blame.js";
 export * from "./diff.js";
 export * from "./readable.js";
 export * from "./inline-format.js";
+export * from "./columns.js";

@@ -2260,6 +2260,11 @@ export const focusSessionsRouter = router({
          * caller cannot already see (`isOutputRefVisible`, the one floor).
          */
         ref: outputRefWireSchema.nullable().optional(),
+        /**
+         * HOW the person can answer — the slot wire's own `ask` schema (one
+         * definition). `null` clears a stored ask; omitted leaves it alone.
+         */
+        ask: expectedOutputWireSchema.shape.ask,
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2273,6 +2278,7 @@ export const focusSessionsRouter = router({
         blockedReason: input.blockedReason,
         why: input.why,
         ref: input.ref,
+        ask: input.ask,
       });
       return slotOwnershipResult(result, input);
     }),

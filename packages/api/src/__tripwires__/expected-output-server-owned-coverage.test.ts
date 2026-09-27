@@ -57,6 +57,10 @@ const SAMPLE: Required<
   blockedReason: "credential",
   why: "The Stripe restricted key for the live account",
   ref: { kind: "entity", id: "33333333-3333-3333-3333-333333333333" },
+  ask: {
+    mode: "choose",
+    options: [{ label: "EU account", value: "eu", recommended: true }],
+  },
   owedSince: "2026-09-08T09:00:00.000Z",
   attestedBy: "22222222-2222-2222-2222-222222222222",
   attestedAt: "2026-09-08T12:00:00.000Z",
@@ -68,6 +72,7 @@ const SAMPLE: Required<
     answeredBy: "22222222-2222-2222-2222-222222222222",
     answeredAt: "2026-09-08T14:00:00.000Z",
     question: "Which Stripe account?",
+    value: { type: "chip", chip: { label: "EU account", value: "eu" } },
   },
 };
 

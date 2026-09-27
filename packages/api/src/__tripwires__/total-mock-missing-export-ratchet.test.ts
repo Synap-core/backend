@@ -88,7 +88,7 @@ import { scanTotalMockGaps } from "../../scripts/scan-total-mock-gaps.mjs";
  * `…auto-approve-satisfies-outputs` converted to importOriginal+spread (both
  * lacked `resolveOriginTrust`); measured 35 → 33 across exactly those two.
  */
-const BASELINE = 33;
+const BASELINE = 32;
 
 describe("tripwire: total vi.mock factories vs the imports they must cover", () => {
   const { totalFactories, findings } = scanTotalMockGaps() as {

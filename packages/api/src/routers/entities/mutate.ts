@@ -11,6 +11,7 @@ import { workspaceProcedure, podProcedure } from "../../trpc.js";
 import {
   db,
   eq,
+  ne,
   and,
   isNull,
   getDb,
@@ -27,6 +28,7 @@ import {
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
+import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
@@ -53,6 +55,58 @@ import {
 } from "./helpers.js";
 
 const logger = createLogger({ module: "entities-router" });
+
+/**
+ * May `userId` make `documentId` the body of this entity? A document follows
+ * its entity on the read floors (`exposureDocumentWhere`,
+ * `podSharedDocumentWhere`), so pointing an entity at a document hands that
+ * document to everyone who can read the entity. Unchecked, an entity writer
+ * could point a shared entity at ANY document id they learned and read it
+ * through the share. So the target must be:
+ *   1. a document the caller may EDIT (NOT_FOUND when they cannot even see it);
+ *   2. in the entity's own scope: the same workspace, or the caller's own
+ *      pod-personal document;
+ *   3. unowned: not the body of another live entity, nor a view's canvas.
+ */
+export async function assertDocumentAttachable(
+  userId: string,
+  entity: { id: string; workspaceId: string | null },
+  documentId: string
+): Promise<void> {
+  const doc = await loadEditableDocument(userId, documentId);
+  const sameScope =
+    doc.workspaceId === entity.workspaceId ||
+    (doc.workspaceId === null && doc.userId === userId);
+  if (!sameScope) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "That document belongs to another workspace; an entity's body must live in the entity's own workspace.",
+    });
+  }
+  const [otherEntity] = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.documentId, documentId),
+        ne(entities.id, entity.id),
+        isNull(entities.deletedAt)
+      )
+    )
+    .limit(1);
+  const [owningView] = await db
+    .select({ id: views.id })
+    .from(views)
+    .where(eq(views.documentId, documentId))
+    .limit(1);
+  if (otherEntity || owningView) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "That document is already the body of another object.",
+    });
+  }
+}
 
 export const mutateProcs = {
   update: podProcedure
@@ -116,13 +170,18 @@ export const mutateProcs = {
           isNull(entities.deletedAt),
           entityWriteVisibleWhere(ctx.userId)
         ),
-        columns: { id: true, workspaceId: true, type: true },
+        columns: { id: true, workspaceId: true, type: true, documentId: true },
       });
       if (!existing) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Entity not found: ${input.id}`,
         });
+      }
+      // Repointing the body is validated BEFORE the permission check, so a
+      // proposal can never carry an unchecked document id either.
+      if (input.documentId && input.documentId !== existing.documentId) {
+        await assertDocumentAttachable(ctx.userId, existing, input.documentId);
       }
 
       if (input.targetWorkspaceId) {

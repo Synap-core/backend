@@ -1,5 +1,5 @@
 /**
- * GUEST PROVENANCE (Sites W4) — the one server-side rule that says a proposal
+ * GUEST PROVENANCE — the one server-side rule that says a proposal
  * was filed by a public form's guest, not by an AI.
  *
  * A guest proposal carries a real `agentUserId` (the form's own actor — that is
@@ -9,10 +9,9 @@
  * (`users.agent_type = 'form:<formId>'`, written only by the forms door), never
  * a field in `proposals.data` — the anonymous body cannot reach this.
  *
- * WIRING IS A HANDOFF: the presentation derivation lives in
- * `routers/proposals/display.ts`, which a peer is editing (W4 report,
- * GREENLIGHT BLOCKER). The intended call is `guestProvenanceFor(agentType)` on
- * the resolved author row, emitted as `actorKind: "guest"` + `formId`.
+ * WHERE IT IS READ: the presentation derivation (`routers/proposals/display.ts`)
+ * calls `guestProvenanceFor(agentType)` on the resolved author row and emits
+ * `actorKind: "guest"` + `formId`.
  */
 
 import { FORM_ACTOR_TYPE_PREFIX, isFormActorType } from "./form-definition.js";

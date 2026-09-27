@@ -71,16 +71,11 @@ export type ValidateUrlResult =
  *
  * Never use this to guard an outbound `fetch()` — that is what
  * `validateExternalUrl`/`safeExternalFetch` are for.
+ *
+ * DEFINED in `@synap-core/types/navigation` and re-exported here, so the rule
+ * the pod stores a link by is the rule relay and the browser open it by.
  */
-export function isHttpUrl(value: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  return url.protocol === "http:" || url.protocol === "https:";
-}
+export { isHttpUrl } from "@synap-core/types/navigation";
 
 /**
  * Validate that `raw` is a safe URL to fetch from server-side code.

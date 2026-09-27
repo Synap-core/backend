@@ -536,7 +536,7 @@ export const devplaneRouter = router({
         [
           "@synap-core/template-engine",
           "1.0.0",
-          "Workspace templates — 6 presets (second-brain, agent-fleet, startup-os…), mergePresetAndAddons",
+          "Workspace templates — presets (second-brain, startup-os…), mergePresetAndAddons",
         ],
         [
           "@synap-core/connectors",

@@ -33,6 +33,35 @@ export interface SearchResponse {
   facetCounts?: Record<string, Record<string, number>>;
 }
 
+/**
+ * Thrown when a caller-supplied value cannot be placed in a Typesense
+ * `filter_by` literal. Duck-types the api's SynapError (`code` + `statusCode`)
+ * so a tRPC door answers 400, not 500.
+ */
+export class InvalidSearchFilterError extends Error {
+  readonly code = "BAD_REQUEST";
+  readonly statusCode = 400;
+  constructor(field: string) {
+    super(`Invalid search filter value for ${field}`);
+    this.name = "InvalidSearchFilterError";
+  }
+}
+
+/**
+ * Quote one value as a Typesense backtick literal. A value containing a
+ * backtick could close the literal and append its own clauses (`x\` || userId:!=\`z`
+ * turns the per-user floor into "every row"), and a backslash is refused too so
+ * no escape sequence can do the same. Such values are never legitimate ids,
+ * types, tags or statuses, so they are REFUSED rather than stripped: a silently
+ * rewritten filter would answer a different question.
+ */
+export function filterLiteral(value: string, field: string): string {
+  if (typeof value !== "string" || /[`\\]/.test(value)) {
+    throw new InvalidSearchFilterError(field);
+  }
+  return `\`${value}\``;
+}
+
 export class SearchService {
   private queryFieldsMap: Record<string, string> = {
     entities: "title",
@@ -315,11 +344,11 @@ export class SearchService {
     collection?: string;
     visibleWorkspaceIds?: string[];
   }): string {
-    const owner = `userId:=\`${options.userId}\``;
+    const owner = `userId:=${filterLiteral(options.userId, "userId")}`;
     const wsIds = options.visibleWorkspaceIds ?? [];
     if (options.collection === "entities" && wsIds.length > 0) {
       const shared = `visibleInWorkspaces:=[${wsIds
-        .map((w) => `\`${w}\``)
+        .map((w) => filterLiteral(w, "visibleWorkspaceIds"))
         .join(",")}]`;
       return `(${owner} || ${shared})`;
     }
@@ -345,50 +374,48 @@ export class SearchService {
     // visibility via the DB channel-access gate, so we pin to the single channel
     // and do NOT add the generic `userId:=` clause (messages have many authors).
     if (options.channelId) {
-      return `channelId:=\`${options.channelId}\``;
+      return `channelId:=${filterLiteral(options.channelId, "channelId")}`;
     }
 
     const filters: string[] = [this.buildFloor(options)];
 
     if (options.workspaceId) {
       filters.push(
-        `(workspaceId:=\`${options.workspaceId}\` || workspaceId:=\`${POD_WIDE_WORKSPACE_SCOPE}\`)`
+        `(workspaceId:=${filterLiteral(options.workspaceId, "workspaceId")} || workspaceId:=${filterLiteral(POD_WIDE_WORKSPACE_SCOPE, "workspaceId")})`
       );
     }
 
     const collection = options.collection;
+    const anyOf = (values: string[], field: string) =>
+      `(${values.map((v) => filterLiteral(v, field)).join("|")})`;
 
     if (collection === "entities" && options.entityTypes?.length) {
-      filters.push(
-        `entityType:=(${options.entityTypes.map((t) => `\`${t}\``).join("|")})`
-      );
+      filters.push(`entityType:=${anyOf(options.entityTypes, "entityTypes")}`);
     }
 
     if (collection === "documents" && options.documentTypes?.length) {
       filters.push(
-        `documentType:=(${options.documentTypes.map((t) => `\`${t}\``).join("|")})`
+        `documentType:=${anyOf(options.documentTypes, "documentTypes")}`
       );
     }
 
     if (collection === "views" && options.viewTypes?.length) {
-      filters.push(
-        `viewType:=(${options.viewTypes.map((t) => `\`${t}\``).join("|")})`
-      );
+      filters.push(`viewType:=${anyOf(options.viewTypes, "viewTypes")}`);
     }
 
     if (options.tags?.length) {
       for (const tag of options.tags) {
-        filters.push(`tags:=\`${tag}\``);
+        filters.push(`tags:=${filterLiteral(tag, "tags")}`);
       }
     }
 
     if (options.status?.length) {
-      filters.push(
-        `status:=(${options.status.map((s) => `\`${s}\``).join("|")})`
-      );
+      filters.push(`status:=${anyOf(options.status, "status")}`);
     }
 
-    return filters.join(" && ");
+    // Every clause parenthesised, so no clause's operators can bind across the
+    // floor (the floor is always the first clause).
+    return filters.map((f) => `(${f})`).join(" && ");
   }
 }
 

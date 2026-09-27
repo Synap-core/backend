@@ -452,6 +452,47 @@ export function registerEntityExecutors(): void {
         entityCallerCtx as unknown as Context
       );
 
+      // A governed MOVE (`entities.moveToWorkspace`) files under this same
+      // `entity/update` key with `{ id, toWorkspaceId }` and no field patch.
+      // Replaying it through `update` changed nothing and flipped APPROVED — an
+      // approved move moved nothing. REPLAY the move door itself as the
+      // APPROVER: its target-side `assertWorkspaceWrite`, the source-side gate
+      // (re-entrant, grants the human), the audit pair and the routing
+      // feedback all run exactly as on the direct path.
+      if (typeof innerData.toWorkspaceId === "string") {
+        const moveResult = await entityCaller.moveToWorkspace({
+          entityIds: [entityId],
+          workspaceId: innerData.toWorkspaceId,
+        });
+        if (moveResult.proposed.length > 0) {
+          assertApplied({ status: "proposed" });
+        }
+        const failure = moveResult.errors.find((e) => e.entityId === entityId);
+        if (failure || !moveResult.moved.includes(entityId)) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Approval could not move the entity: ${failure?.error ?? "nothing was moved"}.`,
+          });
+        }
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId: entityId };
+      }
+
       // Property reconciliation (approve-side) — same contract as entity/create:
       // resolve the entity's kind, then match/remap/promote each proposed property
       // key against that kind's def slugs (honoring `propertyDecisions`). Best-effort;

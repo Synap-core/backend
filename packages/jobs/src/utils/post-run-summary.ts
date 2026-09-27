@@ -241,6 +241,9 @@ export async function resolveRunChannel(
       type: "entity",
       // Narrowed by `hasSubject` above — the branch is only returned when set.
       id: run.subjectEntityId!,
+      // A workspace run → that workspace's recap room (readable only through
+      // it); a pod-wide run → the entity's shared room (founder, 2026-09-27).
+      workspaceId: run.workspaceId ?? null,
     });
     // A deleted subject has no room: fall through to the run channel.
     if (room) return room.channel.id;

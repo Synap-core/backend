@@ -10,6 +10,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__advance_track",
     raycast: null,
   },
+  synap_archive_workspace: {
+    "pod-mcp": "synap_archive_workspace",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_ask: {
     "pod-mcp": "synap_ask",
     "cp-connector": "pod__ask",
@@ -180,6 +185,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__governance",
     raycast: null,
   },
+  synap_grant_profile_access: {
+    "pod-mcp": "synap_grant_profile_access",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_link_entities: {
     "pod-mcp": "synap_link_entities",
     "cp-connector": "pod__link_entities",
@@ -248,6 +258,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_match_playbooks: {
     "pod-mcp": "synap_match_playbooks",
     "cp-connector": "pod__match_playbooks",
+    raycast: null,
+  },
+  synap_move_entities: {
+    "pod-mcp": "synap_move_entities",
+    "cp-connector": null,
     raycast: null,
   },
   synap_orient: {
@@ -384,5 +399,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_update_session",
     "cp-connector": "pod__update_session",
     raycast: "update-session",
+  },
+  synap_update_workspace: {
+    "pod-mcp": "synap_update_workspace",
+    "cp-connector": null,
+    raycast: null,
   },
 };

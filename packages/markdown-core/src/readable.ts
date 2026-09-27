@@ -1,7 +1,9 @@
 /**
  * READABLE — the one rule that turns a stored document into what relay,
  * exports and other agents read: every `synap-*` embed replaced by its
- * markdown fallback, Synap-only inline formatting reduced to its text
+ * markdown fallback (embeds inside frames included: `locateEmbeds` walks into
+ * every frame), column rows unwrapped into their content, Synap-only inline
+ * formatting reduced to its text
  * (`:u[x]` → `x`, `:color[x]{tone=…}` → `x`, `==x=={tone=…}` → `==x==`),
  * everything else byte-for-byte.
  *
@@ -14,7 +16,8 @@
  */
 
 import { highlightToneSuffixRange, parseMarkdown } from "./processor.js";
-import { readEmbed, type Embed } from "./embeds.js";
+import { isLayoutDirective, readEmbed, type Embed } from "./embeds.js";
+import { scanContainers } from "./scan.js";
 import { readInlineFormatAt } from "./inline-format.js";
 
 /** An embed together with the character range of its source. */
@@ -64,23 +67,84 @@ export function locateEmbeds(markdown: string): LocatedEmbed[] {
 export type ReadableEmbedLabel = (embed: Embed) => string;
 
 /**
+ * The fence lines of every column row outside an embed, as character ranges
+ * (each line with its line break). The scanner reads the extents (bound to
+ * micromark by the conformance corpus); a row inside an embed's fallback is
+ * the fallback's business and is left alone.
+ */
+function layoutFenceRanges(
+  markdown: string,
+  embeds: readonly LocatedEmbed[]
+): Array<{ start: number; end: number }> {
+  const lines = markdown.split("\n");
+  const lineStart: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineStart.push(offset);
+    offset += line.length + 1;
+  }
+  const rangeOf = (line: number) => ({
+    start: lineStart[line]!,
+    end: Math.min(lineStart[line]! + lines[line]!.length + 1, markdown.length),
+  });
+  const out: Array<{ start: number; end: number }> = [];
+  for (const c of scanContainers(markdown).containers) {
+    if (!isLayoutDirective(c.name)) continue;
+    const opener = rangeOf(c.startLine);
+    if (embeds.some((e) => opener.start >= e.start && opener.start < e.end))
+      continue;
+    out.push(opener);
+    if (c.terminated) out.push(rangeOf(c.endLine));
+  }
+  return out;
+}
+
+/**
  * The readable form: each embed's source replaced by the markdown fallback its
  * author wrote; with none, `*<labelFor(embed)>*`. Never the raw directive.
+ * Column rows are UNWRAPPED: each column's content in order, separated by a
+ * blank line (GitHub, a Notion import and other agents read clean markdown).
  */
 export function readableMarkdown(
   markdown: string,
   labelFor: ReadableEmbedLabel
 ): string {
+  const embeds = locateEmbeds(markdown);
+  const edits: Array<{ start: number; end: number; text: string | null }> = [
+    ...embeds.map(({ embed, start, end, fallbackRange }) => ({
+      start,
+      end,
+      text: fallbackRange
+        ? markdown.slice(fallbackRange.start, fallbackRange.end)
+        : `*${labelFor(embed)}*`,
+    })),
+    // `null` = a removed fence line: the text around it becomes separate blocks.
+    ...layoutFenceRanges(markdown, embeds).map((r) => ({ ...r, text: null })),
+  ].sort((a, b) => a.start - b.start);
+
   let out = "";
+  let breakPending = false;
+  const emit = (piece: string) => {
+    if (breakPending) {
+      if (piece.trim() === "") return;
+      piece = piece.replace(/^\n+/, "");
+      if (out !== "") out = out.replace(/\n*$/, "\n\n");
+      breakPending = false;
+    }
+    out += piece;
+  };
   let cursor = 0;
-  for (const { embed, start, end, fallbackRange } of locateEmbeds(markdown)) {
-    out += markdown.slice(cursor, start);
-    out += fallbackRange
-      ? markdown.slice(fallbackRange.start, fallbackRange.end)
-      : `*${labelFor(embed)}*`;
-    cursor = end;
+  for (const edit of edits) {
+    emit(markdown.slice(cursor, edit.start));
+    if (edit.text === null) breakPending = true;
+    else emit(edit.text);
+    cursor = edit.end;
   }
-  return stripInlineFormatting(out + markdown.slice(cursor));
+  emit(markdown.slice(cursor));
+  // A row closing the document: end as the source ended.
+  if (breakPending)
+    out = out.replace(/\n+$/, "") + (/\n$/.test(markdown) ? "\n" : "");
+  return stripInlineFormatting(out);
 }
 
 type Walked = {

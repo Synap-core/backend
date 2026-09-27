@@ -62,6 +62,10 @@
     "./inline-format": {
       "types": "./dist/inline-format.d.ts",
       "import": "./dist/inline-format.js"
+    },
+    "./columns": {
+      "types": "./dist/columns.d.ts",
+      "import": "./dist/columns.js"
     }
   },
   "scripts": {

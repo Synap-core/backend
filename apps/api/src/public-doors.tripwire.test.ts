@@ -1,5 +1,5 @@
 /**
- * TRIPWIRE — the credentialless public doors (`/api/hub/public/*`, Sites W3).
+ * TRIPWIRE — the credentialless public doors (`/api/hub/public/*`).
  *
  * Drives the REAL pod-edge chain in `index.ts` order —
  *   publicDoorTransport → podEdgeCorsMiddleware → requestSizeLimit →

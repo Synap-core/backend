@@ -1,10 +1,10 @@
 /**
- * Sites W5a — the PUBLISH door, end to end on PGlite.
+ * The PUBLISH door, end to end on PGlite.
  *
  * Driven through the REAL `shares` tRPC router (publish / unpublish), the REAL
  * Hub REST `/shares/publish` route, the REAL publish core, the REAL
  * `share/create` approval executor, the REAL 0276 constraints +
- * revoke-is-permanent trigger — and read back through the REAL W3 public route
+ * revoke-is-permanent trigger — and read back through the REAL public read route
  * `GET /public/shares/:token`. Nothing between the owner's click and the served
  * bytes is hand-built.
  *
@@ -161,7 +161,7 @@ async function errOf(p: Promise<unknown>) {
   }
 }
 
-// The REAL W3 public read route.
+// The REAL public read route.
 const publicApp = new OpenAPIHono();
 registerPublicSharesRoutes(publicApp as never);
 async function readPublic(token: string) {
@@ -180,12 +180,25 @@ function hubApp(ctx: Record<string, unknown>) {
   return app;
 }
 
+// `setPolicy` takes a COMPLETE document: the code default for every
+// kind, with the entity public cell opened below.
+const DEFAULT_KIND = {
+  guest: { read: "direct" as const, create: "proposal" as const },
+  link: { read: "direct" as const, create: "proposal" as const },
+  public: { read: "denied" as const, create: "denied" as const, fields: [] },
+};
 const ALLOW_ENTITY_PUBLIC = {
   version: 1 as const,
   kinds: {
+    document: DEFAULT_KIND,
+    view: DEFAULT_KIND,
+    project: DEFAULT_KIND,
     entity: {
+      guest: DEFAULT_KIND.guest,
+      link: DEFAULT_KIND.link,
       public: {
         read: "direct" as const,
+        create: "denied" as const,
         // `secretNote` is deliberately NOT here; `ownerId` / `related` /
         // `nested` are, to prove the snapshot re-filters identity, ids and
         // non-scalars even when an owner allowlists them.
@@ -202,6 +215,10 @@ const ALLOW_ENTITY_PUBLIC = {
     },
   },
 };
+
+// Urls minted by earlier tests (a republish keeps the url and returns no token).
+let agToken = "";
+let restToken = "";
 
 async function publicRow(entityId: string) {
   const { rows } = await q<Record<string, any>>(
@@ -445,14 +462,112 @@ describe("the owner publishes DIRECTLY and the W3 read serves the SNAPSHOT", () 
     expect((await readPublic(token)).status).toBe(200);
   });
 
-  it("REVOKED stays 404: unpublish/publish never un-revoke; a new publication gets a NEW url", async () => {
-    // No revoke door for publications yet (W5a scope): revoke at the row, the
-    // way any future door will — the 0276 trigger then freezes it.
-    const [row] = await publicRow(EP);
-    await q(
-      `update resource_shares set revoked_at = now(), revoked_by=$2 where id=$1`,
-      [row!.id, A]
+  it("listShares reports the publication from ANY session: live, keys only, never a hash", async () => {
+    const list = await human(A).listShares({
+      resourceType: "entity",
+      resourceId: EP,
+    });
+    expect(list.publications).toHaveLength(1);
+    const pub = list.publications[0]!;
+    expect(pub).toMatchObject({
+      resourceType: "entity",
+      resourceId: EP,
+      state: "published",
+      revokedAt: null,
+      hasToken: true,
+      live: true,
+      tokenPrefix: token.slice(0, 6),
+    });
+    expect(pub.publishedAt).toBeTruthy();
+    expect(pub.publishedFields.sort()).toEqual([
+      "live",
+      "price",
+      "tagline",
+      "title",
+    ]);
+    // Never the token, its hash, or a snapshot VALUE.
+    const wire = JSON.stringify(list);
+    expect(wire).not.toContain(token);
+    expect(wire).not.toContain(
+      createHash("sha256").update(token, "utf8").digest("hex")
     );
+    expect(wire).not.toContain("Changed");
+    expect(Object.keys(pub)).not.toContain("tokenHash");
+    expect(Object.keys(pub)).not.toContain("publishedProperties");
+    // …and the document names the same publication (a document follows its entity).
+    const viaDoc = await human(A).listShares({
+      resourceType: "document",
+      resourceId: DP,
+    });
+    expect(viaDoc.publications.map((p) => p.id)).toEqual([pub.id]);
+    // A stranger cannot list it.
+    expect(
+      (
+        await errOf(
+          human(R).listShares({ resourceType: "entity", resourceId: EP })
+        )
+      )?.code
+    ).toBe("FORBIDDEN");
+  });
+
+  it("`live` is false for a revoked row even when its state still reads 'published' (legacy raw revoke)", async () => {
+    // The discriminating input for the revokedAt half of `live`: the door
+    // drafts on revoke, but a row revoked at the table keeps state='published'.
+    await q(
+      `insert into resource_shares (resource_type, resource_id, workspace_id, audience, state, published_at, published_properties, token_hash, token_prefix, revoked_at, revoked_by, created_by, permissions)
+       values ('entity',$1,$2,'public','published',now(),'{}'::jsonb,$3,'legacy',now(),$4,$4,'{"read":true}'::jsonb)`,
+      [U, W, "f".repeat(64), A]
+    );
+    const [pub] = (
+      await human(A).listShares({ resourceType: "entity", resourceId: U })
+    ).publications;
+    expect(pub).toMatchObject({
+      state: "published",
+      hasToken: true,
+      live: false,
+    });
+    expect(pub!.revokedAt).toBeTruthy();
+  });
+
+  it("REVOKED stays 404: revokePublication is permanent; unpublish/publish never un-revoke; a new publication gets a NEW url", async () => {
+    const [row] = await publicRow(EP);
+    const res = await human(A).revokePublication({
+      resourceType: "entity",
+      resourceId: EP,
+    });
+    expect(res).toEqual({ status: "revoked", shareId: row!.id });
+    const [frozen] = await publicRow(EP);
+    expect(frozen!.revoked_at).toBeTruthy();
+    expect(frozen!.revoked_by).toBe(A);
+    expect(frozen!.state).toBe("draft");
+    // The public read answers the UNIFORM 404 — identical to a never-minted token.
+    const miss = await readPublic(token);
+    expect(miss.status).toBe(404);
+    expect(miss).toEqual(
+      await readPublic("tok-never-minted-" + "q".repeat(30))
+    );
+    // Listed as revoked, not live.
+    const listed = (
+      await human(A).listShares({ resourceType: "entity", resourceId: EP })
+    ).publications.find((p) => p.id === row!.id)!;
+    expect(listed).toMatchObject({ live: false, state: "draft" });
+    expect(listed.revokedAt).toBeTruthy();
+    // Idempotent.
+    expect(
+      await human(A).revokePublication({
+        resourceType: "entity",
+        resourceId: EP,
+      })
+    ).toEqual({ status: "none" });
+    // Un-revoke is impossible, even at the row (0276 trigger).
+    const unrevoke = await q(
+      `update resource_shares set revoked_at = null, state='published' where id=$1`,
+      [row!.id]
+    ).then(
+      () => null,
+      (e: Error) => e.message
+    );
+    expect(unrevoke).toMatch(/revocation is permanent/);
     expect((await readPublic(token)).status).toBe(404);
     expect(
       (await human(A).unpublish({ resourceType: "entity", resourceId: EP }))
@@ -542,8 +657,11 @@ describe("an AGENT's publish is ALWAYS a proposal — even under widening rules"
       resourceId: E_AG,
     });
     if (minted.status === "proposed") throw new Error("unreachable");
-    expect(minted.status).toBe("republished");
+    // The approved row had no url, so it was not live: this is the first time
+    // the record is served (`isPublicationLive`), hence "published".
+    expect(minted.status).toBe("published");
     expect(typeof minted.token).toBe("string");
+    agToken = minted.token!;
     expect((await readPublic(minted.token!)).status).toBe(200);
   });
 
@@ -554,6 +672,42 @@ describe("an AGENT's publish is ALWAYS a proposal — even under widening rules"
     });
     expect(res.status).toBe("unpublished");
     expect((await publicRow(E_AG))[0]!.state).toBe("draft");
+  });
+});
+
+describe("an AGENT revokes a publication DIRECTLY (it only narrows)", () => {
+  it("agent revokePublication → revoked with no gate call; the url is dead for good", async () => {
+    const minted = await human(A).publish({
+      resourceType: "entity",
+      resourceId: E_AG,
+    });
+    if (minted.status === "proposed") throw new Error("unreachable");
+    // Same url as before the agent's unpublish (the token was kept).
+    expect("token" in minted).toBe(false);
+    expect((await readPublic(agToken)).status).toBe(200);
+    const gateBefore = h.gateCalls.length;
+    const res = await agent.revokePublication({
+      resourceType: "entity",
+      resourceId: E_AG,
+    });
+    expect(res).toEqual({ status: "revoked", shareId: minted.shareId });
+    expect(h.gateCalls.length).toBe(gateBefore);
+    const [row] = (await publicRow(E_AG)).filter(
+      (r) => r.id === minted.shareId
+    );
+    expect(row!.revoked_at).toBeTruthy();
+    expect(row!.revoked_by).toBe(A);
+    expect((await readPublic(agToken)).status).toBe(404);
+    // Publishing again is a NEW row / NEW url; the revoked one stays dead.
+    const again = await human(A).publish({
+      resourceType: "entity",
+      resourceId: E_AG,
+    });
+    if (again.status === "proposed") throw new Error("unreachable");
+    expect(again.shareId).not.toBe(minted.shareId);
+    expect(typeof again.token).toBe("string");
+    expect((await readPublic(again.token!)).status).toBe(200);
+    expect((await readPublic(agToken)).status).toBe(404);
   });
 });
 
@@ -583,6 +737,7 @@ describe("Hub REST doors", () => {
     expect(r2.status).toBe(200);
     const b2 = (await r2.json()) as any;
     expect(b2.status).toBe("published");
+    restToken = b2.token;
     expect((await readPublic(b2.token)).status).toBe(200);
 
     const r3 = await asOwner.request("/shares/unpublish", {
@@ -592,5 +747,33 @@ describe("Hub REST doors", () => {
     });
     expect(r3.status).toBe(200);
     expect((await readPublic(b2.token)).status).toBe(404);
+  });
+
+  it("POST /shares/publication/revoke: an agent key revokes directly (200), the row is frozen", async () => {
+    const asOwner = hubApp({ userId: A, scopes: ["hub-protocol.write"] });
+    const pub = await asOwner.request("/shares/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceType: "entity", resourceId: E_REST }),
+    });
+    const pb = (await pub.json()) as any;
+    expect(pb.status).toBe("published");
+    expect((await readPublic(restToken)).status).toBe(200);
+    const asAgent = hubApp({
+      userId: A,
+      agentUserId: AG,
+      keyType: "agent",
+      scopes: ["hub-protocol.write"],
+    });
+    const r = await asAgent.request("/shares/publication/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resourceType: "entity", resourceId: E_REST }),
+    });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ status: "revoked", shareId: pb.shareId });
+    expect((await readPublic(restToken)).status).toBe(404);
+    const [row] = (await publicRow(E_REST)).filter((x) => x.id === pb.shareId);
+    expect(row!.revoked_at).toBeTruthy();
   });
 });

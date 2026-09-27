@@ -1,5 +1,5 @@
 /**
- * Shares Router — the owner's sharing doors (Sites W2 S3).
+ * Shares Router — the owner's sharing doors.
  *
  * Every rule lives in `services/sharing/share-service.ts` (the same core the Hub
  * REST `/shares` routes, the `relations.exposeToAnchor` alias and the
@@ -13,18 +13,24 @@
  *   - unshare      stop sharing a record with a project (exposure removed, its
  *                  live links revoked). Direct for everyone.
  *   - revokeLink   revoke one link, permanently. Direct for everyone. Guests who
- *                  already joined through it stay members.
+ *                  already joined through it stay members unless
+ *                  `removeGuests` is true (default false).
+ *   - removeGuest  remove one GUEST from a project, directly and for good
+ *                  (anchor owner / workspace owner or admin).
  *   - listShares   exposures + links of a record, or of an anchor project. Capped.
  *   - rotateLink   mint a link's secret (human only), returned ONCE.
  *   - redeemLink   a signed-in person joins the link's project as a GUEST.
  *   - getPolicy / setPolicy   the workspace's exposure policy (owner only;
  *                  setPolicy is human only — agents have no policy door).
- *   - publish      put a record on the public web (W5a, `publish-service.ts`):
+ *   - publish      put a record on the public web (`publish-service.ts`):
  *                  snapshot of the policy's allowlisted fields + pinned
  *                  checkpoint, addressed by a token shown ONCE. Human owner:
  *                  direct. Agent: always a proposal (same ADMIN-floored door).
  *   - unpublish    take it off again (back to draft, same URL on republish).
  *                  Direct for everyone; never un-revokes.
+ *   - revokePublication  kill a record's public url for good: revoked
+ *                  + frozen by the 0276 trigger; publishing again mints a NEW
+ *                  url. Direct for everyone, agents included.
  */
 
 import { z } from "zod";
@@ -33,6 +39,7 @@ import {
   getExposurePolicy,
   listShares,
   redeemLink,
+  removeGuest,
   revokeLink,
   rotateLink,
   setExposurePolicy,
@@ -48,6 +55,7 @@ import {
 import { registerShareExecutors } from "../services/sharing/share-executors.js";
 import {
   publishResource,
+  revokePublication,
   unpublishResource,
 } from "../services/sharing/publish-service.js";
 
@@ -111,10 +119,16 @@ export const sharesRouter = router({
     ),
 
   revokeLink: protectedProcedure
-    .input(z.object({ shareId: Uuid }))
+    .input(z.object({ shareId: Uuid, removeGuests: z.boolean().optional() }))
     .mutation(({ input, ctx }) =>
-      revokeLink(shareActorFromCtx(ctx), input.shareId)
+      revokeLink(shareActorFromCtx(ctx), input.shareId, {
+        removeGuests: input.removeGuests ?? false,
+      })
     ),
+
+  removeGuest: protectedProcedure
+    .input(z.object({ projectId: Uuid, userId: z.string().min(1).max(200) }))
+    .mutation(({ input, ctx }) => removeGuest(shareActorFromCtx(ctx), input)),
 
   listShares: protectedProcedure
     .input(
@@ -159,6 +173,12 @@ export const sharesRouter = router({
       unpublishResource(shareActorFromCtx(ctx), input)
     ),
 
+  revokePublication: protectedProcedure
+    .input(z.object({ resourceType: Kind, resourceId: Uuid }))
+    .mutation(({ input, ctx }) =>
+      revokePublication(shareActorFromCtx(ctx), input)
+    ),
+
   getPolicy: protectedProcedure
     .input(z.object({ workspaceId: Uuid }))
     .query(({ input, ctx }) =>
@@ -169,8 +189,10 @@ export const sharesRouter = router({
     .input(
       z.object({
         workspaceId: Uuid,
-        // The strict policy schema (no `update` / `delete` anywhere); the
-        // service re-validates it. `null` resets to the code default.
+        // The strict, COMPLETE policy schema (no `update` / `delete`; every
+        // kind × audience × action + public `fields` required — a partial
+        // payload is refused, never erased). The service re-validates it.
+        // `null` resets to the code default.
         policy: ExposurePolicyInputSchema.nullable(),
       })
     )

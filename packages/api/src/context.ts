@@ -10,6 +10,7 @@ import { InternalServerError } from "@synap-core/types";
 import type { Context, KratosSession, User } from "./types/context.js";
 import { sessionCache } from "./utils/sessionCache.js";
 import { resolveHubSessionHeader } from "./routers/hub-protocol/_middleware/session.js";
+import { markServedRequest } from "./access/guest-containment.js";
 
 // Re-export types
 export type { Context, KratosSession, User };
@@ -38,6 +39,10 @@ export async function createContext(
   req: Request,
   honoCtx?: { get: (key: string) => unknown }
 ): Promise<Context> {
+  // Every request that reaches a tRPC procedure through here is judged by guest
+  // containment (a guest's mutations are refused; access/guest-containment.ts).
+  markServedRequest(req);
+
   // Initialize database
   const db = await getDbInstance();
 

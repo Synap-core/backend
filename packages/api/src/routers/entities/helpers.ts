@@ -28,7 +28,10 @@ import { type Entity } from "@synap-core/types";
 import { entityToWire } from "../hub-protocol/rest/_codecs/entity.js";
 import { emitSideEffects, type SideEffectPayload } from "@synap/events";
 import { resolveFanOutOrigin } from "../../utils/domain-mutation.js";
-import { accessScopeWhere } from "../../utils/project-scope.js";
+import {
+  accessScopeWhere,
+  BELONGS_TO_PROJECT,
+} from "../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 
 /**
@@ -96,17 +99,31 @@ export const EntityRendererRefSchema = z
 
 // The entity user floor = the canonical DATA-table resolver (`accessScopeWhere`,
 // no lens): pod-personal (NULL workspace, owner-gated) OR workspace-member access
-// OR exposure membership (a PROJECT member via belongs_to_project OR a CLIENT via
-// visible_to sees their anchor's exposed entities across workspaces). Delegating
-// here converges entities onto the SAME resolver documents/the registry use —
-// behaviour-identical to the prior hand-rolled union (proven equivalent: same
-// three branches, same default EXPOSURE_RELATION_TYPES whitelist).
+// OR exposure membership (a PROJECT member via belongs_to_project OR a CLIENT /
+// guest via visible_to sees their anchor's exposed entities across workspaces).
+// A READ floor: `countEntitiesByProfile` counts under it.
+export function entityFloorWhere(userId: string) {
+  return accessScopeWhere({
+    workspaceIdColumn: entities.workspaceId,
+    entityIdColumn: entities.id,
+    ownerColumn: entities.userId,
+    userId,
+  });
+}
+
+// The entity WRITE floor — what a caller may TARGET for a mutation. It is the
+// floor above minus `visible_to`: sharing a record with a project grants READ,
+// never write, to anyone who reaches it only through that share (a guest, or a
+// project member). Narrowing the exposure branch to `belongs_to_project` also
+// drops the guest-anchor branch entirely (guests only ever hold `visible_to`),
+// and a project editor keeps writing the project's own filed entities.
 export function entityWriteVisibleWhere(userId: string) {
   return accessScopeWhere({
     workspaceIdColumn: entities.workspaceId,
     entityIdColumn: entities.id,
     ownerColumn: entities.userId,
     userId,
+    exposureRelationTypes: [BELONGS_TO_PROJECT],
   });
 }
 
@@ -490,7 +507,7 @@ export function emitFacetSideEffects(opts: {
  * ONE implementation behind BOTH altitudes (`countByProfile`, workspace-scoped,
  * and `countByProfileAll`, pod-capable) so a badge can never tell two stories:
  *
- *  - FLOOR (always applied): the canonical entity floor `entityWriteVisibleWhere`
+ *  - FLOOR (always applied): the canonical entity floor `entityFloorWhere`
  *    (`accessScopeWhere`, no lens) — a NULL-workspace row is OWNER-private, a
  *    workspace row needs membership/exposure. Plain `userVisibleWhere` is
  *    owner-BLIND on the NULL branch and would leak other users' pod-personal
@@ -515,7 +532,7 @@ export async function countEntitiesByProfile(opts: {
 }): Promise<Record<string, number>> {
   const { userId, workspaceId } = opts;
 
-  const entityFloor = entityWriteVisibleWhere(userId);
+  const entityFloor = entityFloorWhere(userId);
   const entityScope = workspaceId
     ? and(
         entityFloor,

@@ -22,8 +22,9 @@
  *      capped, `contentVersion` is a non-negative integer (the proposal's
  *      revision-history length the commenter saw).
  *   2. AUTHORITY — an anchor naming a proposal must never let a caller pin a
- *      comment to a proposal they cannot see (`assertProposalVisibleTo`, the
- *      SSOT gate), and on a SESSION channel the proposal must belong to that
+ *      comment to a proposal they cannot see (`assertProposalCommentableBy`:
+ *      the SSOT visibility gate, or a reader of the proposal's own session —
+ *      decision 2026-09-27), and on a SESSION channel the proposal must belong to that
  *      session — a comment in run A's channel cannot claim a block of run B.
  */
 
@@ -31,7 +32,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db as defaultDb, eq } from "@synap/database";
 import { focusSessions, proposals } from "@synap/database/schema";
-import { assertProposalVisibleTo } from "./proposal-visibility.js";
+import { assertProposalCommentableBy } from "./proposal-visibility.js";
 
 type Database = typeof defaultDb;
 
@@ -145,13 +146,23 @@ export async function assertMessageAnchorAllowed(params: {
   anchor: MessageAnchor;
   channelId: string;
   userId: string;
+  /**
+   * The door's session-roster semantics (`rosterReadFor(ctx)`; `false` on an
+   * agent door). Required: a human seat on the proposal's session room may
+   * comment on it even as a workspace viewer.
+   */
+  roster: boolean;
   db?: Database;
 }): Promise<void> {
-  const { anchor, channelId, userId } = params;
+  const { anchor, channelId, userId, roster } = params;
   const database = params.db ?? defaultDb;
   if (!anchor.proposalId) return;
 
-  await assertProposalVisibleTo(anchor.proposalId, userId, { db: database });
+  await assertProposalCommentableBy(
+    anchor.proposalId,
+    { userId, roster },
+    { db: database }
+  );
 
   const channelSessions = await database.query.focusSessions.findMany({
     where: eq(focusSessions.channelId, channelId),

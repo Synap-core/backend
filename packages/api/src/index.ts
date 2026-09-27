@@ -136,6 +136,10 @@ export {
 // Export the 5xx error-egress sanitizer (the one door for what a server fault
 // may tell a client — see middleware/error-egress.ts).
 export { sanitizeErrorEgress } from "./middleware/error-egress.js";
+// The ONE redactor for secrets carried in a URL path (public share / form
+// tokens, calendar feeds, agent setup links) — every log sink uses it.
+export { redactSecretPath } from "./middleware/redact-secret-path.js";
+export { refuseGuestSession } from "./access/guest-containment.js";
 
 // Export event streaming utilities
 export { eventStreamManager } from "./event-stream-manager.js";

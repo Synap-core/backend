@@ -294,7 +294,7 @@ When you create views or entities for the user inside the AI Companion, **always
 "Created your tasks pipeline → [[view:abc123|Active Tasks]] · [[open:side|view:abc123]]"
 
 // After creating a workspace (home bento view ID "def456"):
-"Workspace ready — [[open:main|view:def456|Home Dashboard]]"
+"Space ready — [[open:main|view:def456|Home Dashboard]]"
 
 // After creating an entity (e.g. a new project):
 "Project created → [[entity:proj_789|Q3 Launch]]"

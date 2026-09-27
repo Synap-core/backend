@@ -46,6 +46,7 @@ import {
   resolveProjectPlacement,
   stampProvenance,
   storedSessionSource,
+  EXPOSURE_GRANT_RELATION_TYPE,
 } from "@synap/database";
 import {
   entities,
@@ -1139,6 +1140,15 @@ async function materializeRelation(
     logger.error(
       { id, sourceEntityId, targetEntityId, type, author },
       "Relation materialization missing required fields; skipping"
+    );
+    return;
+  }
+  // A generic relation proposal never mints the exposure edge (only the share
+  // door does). Skipped, not thrown, so it cannot poison-loop the queue.
+  if (type === EXPOSURE_GRANT_RELATION_TYPE) {
+    logger.error(
+      { id, sourceEntityId, targetEntityId, type },
+      "Relation materialization refused an exposure edge; skipping"
     );
     return;
   }

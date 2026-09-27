@@ -476,6 +476,13 @@ export interface MergeProposalRevisionParams {
   /** Re-target this pending proposal's destination project (top-level
    * `proposals.project_id` column). `undefined` = leave unchanged. */
   projectId?: string | null;
+  /**
+   * The door's session-roster semantics for the reviewer ladder's session rung
+   * (`rosterReadFor(ctx)` on the tRPC door). Absent = `false`: owner-only, the
+   * agent-door answer — the MCP and Hub doors never widen, and a door that
+   * says nothing can only ever be narrower, never wider.
+   */
+  roster?: boolean;
 }
 
 /**
@@ -519,6 +526,8 @@ export async function mergeProposalRevision(
         // Authority inputs — see the review-authority gate below.
         workspaceId: proposals.workspaceId,
         agentUserId: proposals.agentUserId,
+        targetType: proposals.targetType,
+        targetId: proposals.targetId,
         revisionHistory: proposals.revisionHistory,
       })
       .from(proposals)
@@ -576,7 +585,10 @@ export async function mergeProposalRevision(
               workspaceId: existing.workspaceId,
               data: existing.data,
               agentUserId: existing.agentUserId,
+              targetType: existing.targetType,
+              targetId: existing.targetId,
             },
+            roster: params.roster ?? false,
             userId: params.actorId,
           })
         : { allowed: false };

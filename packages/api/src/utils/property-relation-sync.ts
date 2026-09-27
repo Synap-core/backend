@@ -15,7 +15,14 @@
  *   - Neither path triggers the other's sync hook
  */
 
-import { getDb, drizzleSql, eq, and, isNotNull } from "@synap/database";
+import {
+  getDb,
+  drizzleSql,
+  eq,
+  and,
+  isNotNull,
+  EXPOSURE_GRANT_RELATION_TYPE,
+} from "@synap/database";
 import {
   propertyDefs,
   relations,
@@ -80,6 +87,9 @@ export async function syncPropertyToRelations(
   for (const propDef of syncableDefs) {
     const relTypeSlug = relDefSlugMap.get(propDef.relationDefId!);
     if (!relTypeSlug) continue;
+    // A property must never mint or drop the exposure edge: that would share a
+    // record with a project's guests (or unshare it) without the share door.
+    if (relTypeSlug === EXPOSURE_GRANT_RELATION_TYPE) continue;
 
     const oldValue = (oldProperties[propDef.slug] as string) ?? null;
     const newValue = (newProperties[propDef.slug] as string) ?? null;

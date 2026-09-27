@@ -1324,9 +1324,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS "channels_user_feed_uniq"
     AND "status" = 'active'
     AND "context_object_type" IS NULL;
 
--- 0279: ONE active object room per object (ensureObjectChannel's arbiter).
-CREATE UNIQUE INDEX IF NOT EXISTS "channels_object_room_uniq"
-  ON "channels" ("context_object_type", "context_object_id")
+-- 0279: ONE active object room per object per lens (ensureObjectChannel's
+-- arbiter; the lens is metadata.lensWorkspaceId, absent = the shared room).
+CREATE UNIQUE INDEX IF NOT EXISTS "channels_object_room_lens_uniq"
+  ON "channels" (
+    "context_object_type",
+    "context_object_id",
+    (COALESCE("metadata" ->> 'lensWorkspaceId', ''))
+  )
   WHERE "channel_type" = 'group'
     AND "status" = 'active'
     AND "context_object_type" IN ('document', 'entity');

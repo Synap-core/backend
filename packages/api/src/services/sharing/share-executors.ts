@@ -8,7 +8,7 @@ import { SHARE_KINDS } from "./exposure-policy.js";
 import { applyPublish, planPublish } from "./publish-service.js";
 
 /**
- * Approve-executor for `share/create` — an AGENT's share (Sites W2 S3).
+ * Approve-executor for `share/create` — an AGENT's share.
  *
  * REPLAY, never reconstruct: the stored payload is re-validated and re-planned
  * through the SAME `planShare` the direct door runs, re-floored NOW on the
@@ -52,7 +52,7 @@ export function registerShareExecutors(): void {
       const audience = inner.audience;
       const ownerUserId = proposal.subjectUserId;
 
-      // PUBLISH (W5a) files the same floored door with `audience: "public"`.
+      // PUBLISH files the same floored door with `audience: "public"`.
       // Replayed through the SAME `planPublish` the direct door runs, on the
       // proposal's SUBJECT, and published WITHOUT a token — the signed-in owner
       // publishes again to mint it (an agent never holds the public secret).

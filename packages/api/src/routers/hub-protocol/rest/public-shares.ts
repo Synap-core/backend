@@ -1,5 +1,5 @@
 /**
- * Hub Protocol REST — the PUBLIC READ of a published share (Sites W3).
+ * Hub Protocol REST — the PUBLIC READ of a published share.
  *
  * `GET /public/shares/:token` — credentialless, cross-origin readable. It lives
  * under the `/public/` namespace, so the ONE predicate (`public-doors.ts`) skips

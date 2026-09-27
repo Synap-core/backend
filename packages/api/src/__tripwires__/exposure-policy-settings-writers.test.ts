@@ -139,9 +139,11 @@ const CLASSIFIED: Record<string, { sites: number; why: string }> = {
     why: "{...stored, intelligenceServiceId} / stored minus intelligenceServiceId / stored minus controlPlane",
   },
   // Writes that do not touch settings at all.
-  "packages/api/src/routers/workspaces.ts": {
+  // R8a moved the archive column write out of routers/workspaces.ts into the
+  // archive helper (it now pauses automations in the same transaction).
+  "packages/api/src/utils/workspace-archive.ts": {
     sites: 1,
-    why: "no settings (archive/name column write); the settings door is WorkspaceRepository",
+    why: "no settings (archived_at/updated_at column write only); the settings door is WorkspaceRepository",
   },
   "packages/database/src/utils/create-workspace-from-definition.ts": {
     sites: 1,
@@ -159,13 +161,13 @@ const CLASSIFIED: Record<string, { sites: number; why: string }> = {
     sites: 1,
     why: "replica upsert of a synced row",
   },
-  // KNOWN DEFECT, recorded not fixed (Sites W2 S3 finding): the agent-preset
-  // re-provision REPLACES the whole blob with a 3-key literal, which erases
-  // every stored key — controlPlane and exposurePolicy included. It cannot
-  // PLANT a policy (the literal has no such key); it can only reset one.
-  "packages/api/src/routers/hub-protocol/rest/workspaces.ts": {
+  // Key-targeted SQL too: the agent-preset re-provision MERGES three fixed
+  // code keys into the stored blob (`settings || {…}`), so every other key,
+  // controlPlane and exposurePolicy included, survives it. It used to REPLACE
+  // the whole blob, which silently reset the owner's policy to the default.
+  "packages/api/src/utils/agent-workspace-preset.ts": {
     sites: 1,
-    why: "agent preset literal REPLACE (erases, cannot plant)",
+    why: "settings || {workspaceType, linkedAgentId, governanceMode}",
   },
 };
 

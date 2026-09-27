@@ -1,7 +1,10 @@
 /**
- * DIRECT mode's materialisation (Sites W4) — reached ONLY after the gate
- * auto-approved the form actor's `entity.create` (config says `direct` AND the
- * per-form rule says `auto`), with the receipt id the gate minted.
+ * DIRECT mode's materialisation. NOT CALLED today: every anonymous submission
+ * is filed as a proposal (`guest-submit.ts`) and the forms door refuses
+ * `direct`. It is kept, with `wantsDirect`, for an owner-authorised direct mode
+ * if one is decided; it must then be reached ONLY after the gate auto-approved
+ * the form actor's `entity.create` (config says `direct` AND the per-form rule
+ * says `auto`), with the receipt id the gate minted.
  *
  * It runs the SAME materialisation an approval runs (`entity/create` executor):
  * the ordinary `entities.create` door, called as the FORM OWNER — the human the

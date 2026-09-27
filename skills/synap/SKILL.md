@@ -49,7 +49,7 @@ You are connected to the user's Synap pod, the source of truth about their life,
 4. **Work in a session.** `start_session` or resume (playbook via `templateId`); 2–5 `criteria`; advance `currentStage`; person-only steps: `owner:'human'` outputs + `blockedReason`; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
 5. **Declare scope; never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe: filing shares entities with project members.
 6. **`proposed` is success**, queued for review. Keep working; never retry.
-7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet, overlay, parent); never a twin. New area: skill `from-intent`.
+7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or space. **Extend first** (facet, overlay, parent); never a twin. New area: skill `from-intent`.
 
 Depth via `load_skill`: `system/synap/concepts`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`.
 
@@ -59,20 +59,20 @@ Depth via `load_skill`: `system/synap/concepts`, `focus-sessions`, `from-intent`
 
 The ONE glossary; other skills point here. Word = what the user sees; internal = tools and tables.
 
-| Word | Internal | Answers | Test · e.g. · not |
-|---|---|---|---|
-| **Workspace** | workspace | which domain: kinds + tools? | owns kinds, never done · CRM · not a project or method; findable, not emphasised |
-| **Project** | project | what am I committed to, with whom? | ends with the commitment; spans workspaces · a launch · not a task, method, or the owner's company |
-| **Track** | project_tracks | how does one outcome move over time? | step progress inside ONE project · business model · owns no workspace: each step names its domain |
-| **Step** | stage | which stretch of the track? | holds work over many sittings · repeating work = open-ended step + a Rule starting work into it |
-| **Work** | focus_session | what am I doing this sitting? | one goal · no noun: "Start work" |
-| **Template** | playbook | how do I reuse it? | kind DERIVED, never declared: scope session = work template, project = track template; also workspace and rule templates |
-| **Pack** | suite | which templates come together? | a bundle; depends on workspace templates, never creates a workspace |
-| **Rule** | automation | what runs by itself, when? | standing · "every Monday…" · not Approvals |
-| **Approvals** | governance rules | which AI writes wait for me? | decides review vs auto, does no work |
-| **Tools** | capability, skill, tool | what can it act with? | one word; the detail shows the kind |
-| **To review** | proposal | what awaits my approval? | `proposed` is success |
-| **Role** | role profile + facet | which hat does it wear? | one role per name, pod-wide; workspaces add properties by overlay; its entities show in all · client · never a twin |
+| Word          | Internal                | Answers                              | Test · e.g. · not                                                                                                    |
+| ------------- | ----------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| **Space**     | workspace               | which domain: kinds + tools?         | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                     |
+| **Project**   | project                 | what am I committed to, with whom?   | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                       |
+| **Track**     | project_tracks          | how does one outcome move over time? | step progress inside ONE project · business model · owns no space: each step names its domain                        |
+| **Step**      | stage                   | which stretch of the track?          | holds work over many sittings · repeating work = open-ended step + a Rule starting work into it                      |
+| **Work**      | focus_session           | what am I doing this sitting?        | one goal · no noun: "Start work"                                                                                     |
+| **Template**  | playbook                | how do I reuse it?                   | kind DERIVED, never declared: scope session = work template, project = track template; also space and rule templates |
+| **Pack**      | suite                   | which templates come together?       | a bundle; depends on space templates, never creates a space                                                          |
+| **Rule**      | automation              | what runs by itself, when?           | standing · "every Monday…" · not Approvals                                                                           |
+| **Approvals** | governance rules        | which AI writes wait for me?         | decides review vs auto, does no work                                                                                 |
+| **Tools**     | capability, skill, tool | what can it act with?                | one word; the detail shows the kind                                                                                  |
+| **To review** | proposal                | what awaits my approval?             | `proposed` is success                                                                                                |
+| **Role**      | role profile + facet    | which hat does it wear?              | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin      |
 
 Doors: `start_track`, `start_stage_session`, `start_session`, `create_rule`, `attach_facet`.
 
@@ -428,11 +428,11 @@ Tool names below are stems; your door may prefix them.
 
 What each word means (workspace, project, track, step, work): `concepts` — the one glossary. This file is only about scoping.
 
-| Lens          | Scopes                                                   | Set it (MCP / CLI)                                                 |
-| ------------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
+| Lens          | Scopes                                                     | Set it (MCP / CLI)                                                 |
+| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
 | **Workspace** | a domain; a thing lives in exactly ONE; default write home | `set_workspace_focus` / `synap use <name-or-id>`                   |
-| **Project**   | a commitment across workspaces; a thing can be in several | `set_project_focus` or `projectId` / `synap project use <id>`      |
-| **Session**   | the work room for the current goal; pass its id on writes | `start_session` / `synap session start --goal "…"` / `attach <id>` |
+| **Project**   | a commitment across workspaces; a thing can be in several  | `set_project_focus` or `projectId` / `synap project use <id>`      |
+| **Session**   | the work room for the current goal; pass its id on writes  | `start_session` / `synap session start --goal "…"` / `attach <id>` |
 
 **The project rule (one rule, every door):** a project is set ONLY when the user names it — declare it with `set_project_focus`, or pass `projectId` on the write. Filing into a project shares entities and documents with its members (a session is shared only through its room, never by filing), so never infer one from content, and never let a session decide it: a write without a `sessionId` is grouped into YOUR session — the one you started, else one opened for you, never another client's — and that door-picked session never sets the project. When nobody named a project, leave it unset. Guessing a workspace is merely untidy; guessing a project is not.
 

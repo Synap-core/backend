@@ -46,6 +46,7 @@ import {
   agentProposalCap,
 } from "../../utils/permission-check.js";
 import { notifyProposalCreatedOrdered } from "../../notifications/notify-proposal-created-ordered.js";
+import { isFormActorType } from "../forms/form-definition.js";
 
 const logger = createLogger({
   module: "governance-recommend-raise-proposal-cap",
@@ -59,6 +60,7 @@ interface AgentRow {
   createdByUserId: string | null;
   /** `users.name` — carried so the REVIEW CARD can name the agent asking. */
   name: string | null;
+  agentType: string | null;
 }
 
 async function listAgentUsers(): Promise<AgentRow[]> {
@@ -67,6 +69,7 @@ async function listAgentUsers(): Promise<AgentRow[]> {
       id: users.id,
       createdByUserId: users.createdByUserId,
       name: users.name,
+      agentType: users.agentType,
     })
     .from(users)
     .where(eq(users.userType, "agent"));
@@ -155,6 +158,10 @@ async function requestRaiseProposalCapForAgentRow(
   known?: { pendingCount?: number; cap?: number }
 ): Promise<RaiseProposalCapRequest | null> {
   if (!agent.createdByUserId) return null;
+  // A public form's actor is at its cap because anonymous callers filled it.
+  // Asking the owner to raise the cap would invite widening a flood; the form
+  // counts what it refused on its own row instead (`services/forms/form-drops.ts`).
+  if (isFormActorType(agent.agentType)) return null;
 
   // The SAME predicate + limit the cap enforces: blocked iff
   // pendingCount >= cap. No lookback window — this is a concurrency signal.
@@ -267,6 +274,7 @@ export async function requestRaiseProposalCap(
       id: users.id,
       createdByUserId: users.createdByUserId,
       name: users.name,
+      agentType: users.agentType,
     })
     .from(users)
     .where(eq(users.id, agentUserId))

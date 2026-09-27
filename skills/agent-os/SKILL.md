@@ -101,9 +101,7 @@ governance.
 | `content-studio`     | Content Studio     | Posts, pillars, calendar + video/production            |
 | `marketing-campaign` | Marketing          | Campaigns, leads, channels                             |
 | `project-management` | Project Management | OKRs, projects, sprints, tasks                         |
-| `builder-workspace`  | Builder            | DevPlane + agents — building the product               |
-| `dev-dashboard`      | Dev Dashboard      | Services, repos, environments, infrastructure          |
-| `agent-fleet`        | Agent Fleet        | AI agents, skills, providers — the agent fleet         |
+| `builder-workspace`  | Dev                | DevPlane + agents — building the product               |
 | `finance`            | Finance            | Revenue, expenses, runway, invoices                    |
 | `legal`              | Legal              | Contracts, entities, compliance, IP                    |
 | `hr`                 | People (HR)        | People, roles, hiring, policies                        |
@@ -133,11 +131,11 @@ you need one.
 Ask: "Describe what you do in a sentence." From the answer, **infer** which
 workspaces fit. Examples:
 
-- "dev agency with clients" → Builder (dev-dashboard) + CRM + Project Management
+- "dev agency with clients" → Dev (`builder-workspace`) + CRM + Project Management
 - "I want to create content" → Content Studio (+ offer Brand Library)
-- "I want to build a product" → Builder + Dev Dashboard (+ offer CRM)
+- "I want to build a product" → Dev (`builder-workspace`) (+ offer CRM)
 - "I need a shopping/procurement domain" → market-search first; else propose
-- "SaaS startup" → Dev Dashboard + CRM + Project Management + Content Studio
+- "SaaS startup" → Dev + CRM + Project Management + Content Studio
 - "this work needs another workspace" → Loop 1 for that one domain only
 
 ### 3. Propose + confirm (NEVER auto-install everything)
@@ -256,7 +254,7 @@ skill for the exact sequence.)
 
 ### 8. Summarize
 
-"Your Company OS is ready: **CRM, Dev Dashboard, Project Management**" — under
+"Your Company OS is ready: **CRM, Dev, Project Management**" — under
 the **<project>** project when one exists, otherwise pod-wide. Then: "I've
 onboarded CRM (pipeline + 4 accounts). Want to onboard the others now, or later?"
 

@@ -36,6 +36,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
+import { scrubExpiredGuestPayloads } from "../forms/guest-retention.js";
 import {
   CLASS_LIFETIME_HOURS,
   proposalLifetimeHours,
@@ -164,8 +165,7 @@ async function discardExpiredSourceBlobs(
 }
 
 /**
- * GUEST PROPOSALS carry their own clock (Sites W4). A public form's guest
- * submission is stamped `expires_at = filed + retentionDays` by the guest door
+ * GUEST PROPOSALS carry their own clock. A public form's guest submission is stamped `expires_at = filed + retentionDays` by the guest door
  * (`services/forms/guest-submit.ts`), and it is the ONLY proposal population
  * whose `expires_at` this sweeper honours: the actor must be a form actor
  * (`users.agent_type LIKE 'form:%'`, written only by the forms door). Every
@@ -210,6 +210,19 @@ async function findLapsedGuestProposals(
       )
     )) as Array<{ id: string; expiresAt: Date | null; data: unknown }>;
   return rows;
+}
+
+/** The sweep's call: a scrub failure is logged and retried next run. */
+async function scrubExpiredGuestPayloadsSafely(): Promise<void> {
+  try {
+    const n = await scrubExpiredGuestPayloads();
+    if (n > 0) logger.info({ scrubbed: n }, "expiry: guest payloads scrubbed");
+  } catch (err) {
+    logger.warn(
+      { err },
+      "expiry: guest payload scrub failed (retried next run)"
+    );
+  }
 }
 
 export interface ExpireLapsedResult {
@@ -275,7 +288,10 @@ export async function expireLapsedProposals(
   const seen = new Set(pending.map((p) => p.id));
   const candidates = [...pending, ...guestRows.filter((g) => !seen.has(g.id))];
 
-  if (lapsed.length === 0) return { scanned: pending.length, expired: 0 };
+  if (lapsed.length === 0) {
+    await scrubExpiredGuestPayloadsSafely();
+    return { scanned: pending.length, expired: 0 };
+  }
 
   // Chunked, and re-asserting PENDING in the WHERE: a human may have approved
   // one of these between the read and the write, and an expiry must never
@@ -301,6 +317,7 @@ export async function expireLapsedProposals(
   }
 
   await discardExpiredSourceBlobs(actionedIds, candidates);
+  await scrubExpiredGuestPayloadsSafely();
 
   // Expired = no longer decidable: its bell rows leave with it (one door with
   // approve/reject). ONE write for the whole scan rather than one per chunk —

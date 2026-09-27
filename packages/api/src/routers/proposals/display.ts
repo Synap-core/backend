@@ -107,6 +107,7 @@ import {
   projectProposalRowForViewer,
 } from "./failure-projection.js";
 import { buildProposalChanges } from "./changes.js";
+import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
   createNameResolvers,
@@ -265,6 +266,14 @@ type DisplayEnrichedProposal = ProposalRow &
     authorName?: string;
     /** ACTOR — the agent that authored this proposal. Absent for human authors. */
     agentActorName?: string;
+    /**
+     * `"guest"` when the actor is a public form's (Sites W4): a stranger wrote
+     * it, not a model — render it as a guest (`resolveProvenanceLabel("guest")`),
+     * never as AI. Absent for every other proposal.
+     */
+    actorKind?: "guest";
+    /** The form (`tools.id`) a guest filed through — the provenance door. */
+    formId?: string;
     /**
      * @deprecated MIRROR ONLY — read `principal` instead.
      *
@@ -607,6 +616,9 @@ export async function enrichProposalsForDisplay(
             email: users.email,
             userType: users.userType,
             agentMetadata: users.agentMetadata,
+            // The actor's KIND column — `form:<id>` marks a public form's actor
+            // (Sites W4), whose proposals are a GUEST's, not an AI's.
+            agentType: users.agentType,
             // The agent's OWNER — the human it acts FOR (RFC 8693 `may_act`).
             // Read here so the three delegation roles can be projected without a
             // second shape: actor (this row, when userType='agent'), on-behalf-of
@@ -1166,6 +1178,8 @@ export async function enrichProposalsForDisplay(
             email: users.email,
             userType: users.userType,
             agentMetadata: users.agentMetadata,
+            // Same shape as the first user batch (it lands in `userById`).
+            agentType: users.agentType,
             createdByUserId: users.createdByUserId,
           })
           .from(users)
@@ -1245,6 +1259,12 @@ export async function enrichProposalsForDisplay(
     const agentActorName = agentActorRow
       ? displayNameForUser(agentActorRow)
       : undefined;
+    // GUEST PROVENANCE (Sites W4/W5a): a proposal filed through a public form
+    // carries the form's own actor as `agentUserId`, so everything keyed on
+    // "has an agent" rendered a stranger's submission as AI work. The ONE rule
+    // (`guestProvenanceFor`) reads the actor ROW's `agent_type`, never
+    // `proposals.data` — the anonymous body cannot reach it.
+    const guest = guestProvenanceFor(agentActorRow?.agentType);
     const onBehalfOfRow = agentActorRow?.createdByUserId
       ? userById.get(agentActorRow.createdByUserId)
       : undefined;
@@ -1501,6 +1521,7 @@ export async function enrichProposalsForDisplay(
       authorName,
       // The three roles, each absent when it does not apply (see above).
       ...(agentActorName ? { agentActorName } : {}),
+      ...(guest ? { actorKind: guest.actorKind, formId: guest.formId } : {}),
       ...(onBehalfOfName ? { onBehalfOfName } : {}),
       ...(principal ? { principal } : {}),
       ...(approverName ? { approverName } : {}),

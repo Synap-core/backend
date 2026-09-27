@@ -19,7 +19,17 @@ import {
 import { agents } from "../schema/agents.js";
 import { documents } from "../schema/documents.js";
 import { entities } from "../schema/entities.js";
-import type { ObjectRoomType } from "../utils/channel-visibility.js";
+import {
+  OBJECT_ROOM_LENS_KEY,
+  type ObjectRoomType,
+} from "../utils/channel-visibility.js";
+
+/** The ONE lens key rule: the shared room has no lens; a recap room has one. */
+export function objectRoomLensIs(lens: string | null) {
+  return lens
+    ? drizzleSql`${channels.metadata} ->> ${OBJECT_ROOM_LENS_KEY} = ${lens}`
+    : drizzleSql`(${channels.metadata} ->> ${OBJECT_ROOM_LENS_KEY}) IS NULL`;
+}
 import { EventRepository } from "./event-repository.js";
 import { sql } from "../client-pg.js";
 
@@ -497,7 +507,12 @@ export class ChannelRepository {
    *   object's, so its owner is the OBJECT's owner and its workspace the
    *   object's own. Who may read it is the object's read floor (branch 5 of
    *   `channelVisibilityWhere`), not the room's workspace.
-   * - Race-safe: the partial unique index `channels_object_room_uniq`
+   * - ONE key rule, two shapes (founder decision 2026-09-27): no
+   *   `workspaceId` → the object's SHARED room (every comment, pod-wide
+   *   recaps); a `workspaceId` → that workspace's RECAP room for the object,
+   *   readable only through that workspace (`metadata.lensWorkspaceId`, which
+   *   `channelVisibilityWhere` branch 5 floors on). Comments never pass one.
+   * - Race-safe: the partial unique index `channels_object_room_lens_uniq`
    *   (migration 0279) is the arbiter — insert ON CONFLICT DO NOTHING, then
    *   re-select, so two concurrent opens converge on one row.
    * - NO access check here: this package cannot see the access layer. A HUMAN
@@ -510,8 +525,11 @@ export class ChannelRepository {
   async ensureObjectChannel(ref: {
     type: ObjectRoomType;
     id: string;
+    /** The lens: a workspace-scoped recap room. Omit for the shared room. */
+    workspaceId?: string | null;
     title?: string;
   }): Promise<{ channel: Channel; created: boolean } | null> {
+    const lens = ref.workspaceId ?? null;
     const find = async () => {
       const [row] = await this.db
         .select()
@@ -521,7 +539,8 @@ export class ChannelRepository {
             eq(channels.channelType, ChannelType.GROUP),
             eq(channels.status, ChannelStatus.ACTIVE),
             eq(channels.contextObjectType, ref.type),
-            eq(channels.contextObjectId, ref.id)
+            eq(channels.contextObjectId, ref.id),
+            objectRoomLensIs(lens)
           )
         )
         .limit(1);
@@ -539,14 +558,22 @@ export class ChannelRepository {
       .values({
         id: crypto.randomUUID(),
         userId: owner.userId,
-        workspaceId: owner.workspaceId,
+        // A lens room lives in its lens workspace (lists, notifications); the
+        // shared room in the object's own.
+        workspaceId: lens ?? owner.workspaceId,
         title: ref.title ?? owner.title ?? undefined,
         channelType: ChannelType.GROUP,
-        scope: owner.workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
+        scope:
+          (lens ?? owner.workspaceId)
+            ? ChannelScope.WORKSPACE
+            : ChannelScope.POD,
         contextObjectType: ref.type,
         contextObjectId: ref.id,
         status: ChannelStatus.ACTIVE,
-        metadata: { origin: "object-room" },
+        metadata: {
+          origin: "object-room",
+          ...(lens ? { [OBJECT_ROOM_LENS_KEY]: lens } : {}),
+        },
       })
       .onConflictDoNothing()
       .returning();

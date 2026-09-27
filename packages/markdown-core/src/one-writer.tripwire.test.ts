@@ -1,7 +1,8 @@
 /**
  * TRIPWIRES — the markdown spine's WRITE rules hold in every repo (plan §5.2 W7).
  *
- *  1. No embed-directive writer outside `serializeEmbed`. Three hand-rolled
+ *  1. No embed-directive writer outside `embeds.ts` (`serializeEmbed`, and
+ *     `serializeColumns` for the layout frames). Three hand-rolled
  *     writers once each dropped `"`/`{`/`}` with a different rule (plan §1 #1).
  *     The only other directive writers allowed are the two SECTION writers
  *     (the backend splice and the editor node), and they must write through
@@ -195,6 +196,12 @@ describe("tripwire scan is looking (non-vacuity)", () => {
   it("finds the one embed writer and every allowed section writer (no stale entry)", () => {
     const writers = new Set(directiveHits.map((h) => h.file));
     expect(writers.has(EMBED_WRITER)).toBe(true);
+    // `serializeColumns` writes both layout fences from the same file.
+    const inCore = directiveHits
+      .filter((h) => h.file === EMBED_WRITER)
+      .map((h) => h.text);
+    expect(inCore.some((t) => t.includes("${COLUMNS_DIRECTIVE}"))).toBe(true);
+    expect(inCore.some((t) => t.includes("${COLUMN_DIRECTIVE}"))).toBe(true);
     for (const f of Object.keys(SECTION_WRITERS))
       if (existsSync(join(MONOREPO, f))) expect(writers.has(f), f).toBe(true);
   });

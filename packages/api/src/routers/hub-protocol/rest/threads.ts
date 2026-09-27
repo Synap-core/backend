@@ -152,6 +152,8 @@ async function gateMessageAnchor(
       anchor: parsed.data,
       channelId,
       userId,
+      // Agent door: owner-only session reads, as every Hub door.
+      roster: false,
     });
   } catch (err) {
     const status = threadsStatus(err);

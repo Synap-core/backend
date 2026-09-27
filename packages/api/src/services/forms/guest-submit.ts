@@ -1,6 +1,6 @@
 /**
- * THE GUEST CREATE DOOR (Sites W4) — an anonymous internet caller submits a
- * public form and ONE governed `entity.create` is filed in the owner's pod.
+ * THE GUEST CREATE DOOR — an anonymous internet caller submits a public form
+ * and ONE governed `entity.create` is filed in the owner's pod.
  *
  * Founder contract, each line enforced here (tests: `__tests__/guest-*.test.ts`):
  *   - Intake only: exactly one `entity.create` through the gate. No update, no
@@ -8,24 +8,37 @@
  *   - A NARROW door: it never calls `entities.create` for the guest write, never
  *     builds a hub caller context (`createHubProtocolCallerContext` trusts a
  *     caller-supplied userId), and reads nothing but field values from the body.
- *     Kind, facet, workspace, owner, actor and mode come from the stored row.
+ *     Kind, facet, workspace, owner and actor come from the stored row.
  *   - One actor per form, asserted HERE before the gate: the row must exist, be
  *     an agent, be this form's actor (`form:<id>`), belong to the form's owner,
  *     hold exactly `["entity.create"]` and be a member of the form's workspace.
  *     The gate itself grants a non-agent actor ("Permission granted" at the end
  *     of permission-check.ts) — so a dropped or retyped actor is REFUSED here,
  *     never handed to the gate.
- *   - Proposal unless the stored config says exactly `direct` AND the per-form
- *     rule says `auto` AND nothing degraded (captcha provider unreachable):
- *     `forcePropose` (rung 2.1) otherwise, above every rule.
+ *   - Always a proposal: `forcePropose` (rung 2.1, above every rule), whatever
+ *     the stored `mode` says. An anonymous create is always reviewed; a gate
+ *     that grants anyway is treated as a server fault and nothing is written.
  *   - A strong identity signal (email, phone, url…) that matches an existing
  *     entity NEVER reaches a person write: only a submission note is filed,
  *     with the email under a non-signal key. Both branches do the SAME awaited
- *     work (identity lookup, facet lookup, rule lookup, one gate call), and the
- *     route answers the same bytes whatever happened.
+ *     work (identity lookup, facet lookup, one gate call), and the route
+ *     answers the same bytes on both.
  *
- * `submitGuestForm` never throws. Its return value is for logs and tests ONLY —
- * the route discards it and always replies `202 {"received":true}`.
+ * `submitGuestForm` never throws. {@link guestFormReply} turns its result into
+ * the HTTP reply, and that mapping is the public contract:
+ *   - `202 {"received":true}`: filed for review, AND every outcome that must not
+ *     teach a caller anything (unknown token, honeypot, failed captcha, the
+ *     form's pending cap). Identical bytes on the identity-match branch.
+ *   - `422 {"received":false,"invalid":[<field keys>]}`: the submitter's own
+ *     answers do not satisfy the form (a required field is missing, or a value
+ *     does not read as its type or breaks a constraint). Decided on the payload
+ *     and the public field definition alone, so it reveals nothing stored. An
+ *     empty list means the body is not a submission envelope at all.
+ *   - `422 {"received":false,"retry":true}`: the time-to-submit ticket is
+ *     missing, too young (`minSubmitMs`, served by the GET), stale or not this
+ *     form's. The client fetches the form again and resubmits after the wait.
+ *   - `503 {"received":false}`: the pod failed to file it. Never the success
+ *     reply; the submission's idempotency key makes a retry safe.
  */
 
 import { createHash } from "node:crypto";
@@ -33,10 +46,8 @@ import {
   db,
   and,
   eq,
-  gt,
   isNull,
   or,
-  desc,
   drizzleSql,
   runWithActingAgent,
   resolveIdentity as resolveIdentityReal,
@@ -47,7 +58,6 @@ import {
   tools,
   users,
   workspaceMembers,
-  governanceRules,
   profiles,
   proposals,
   ProposalStatus,
@@ -62,13 +72,12 @@ import {
   SubmissionEnvelopeSchema,
   buildPropertiesFromFields,
   formActorType,
-  formRuleCreatedBy,
   parseStoredForm,
   verifyTicket,
-  wantsDirect,
   type FormConfig,
   type StoredFormDefinition,
 } from "./form-definition.js";
+import { recordFormDrop } from "./form-drops.js";
 import {
   captchaConfigFromEnv,
   verifyCaptcha as verifyCaptchaReal,
@@ -80,10 +89,10 @@ const logger = createLogger({ module: "guest-form-submit" });
 /** The public body cap (the transport also caps the stream at 16 KB). */
 export const GUEST_FORM_MAX_BODY_BYTES = 16 * 1024;
 
-/** THE reply. Every path, success or failure. */
+/** The success reply, also sent for every outcome a caller must not learn. */
 export const GUEST_FORM_RECEIVED = Object.freeze({ received: true as const });
 
-/** Internal outcome — logged and asserted by tests, never sent to the caller. */
+/** Internal outcome: logged and asserted by tests; the reply is derived from it. */
 export type GuestOutcome =
   | "too_large"
   | "bad_envelope"
@@ -95,9 +104,44 @@ export type GuestOutcome =
   | "actor_refused"
   | "denied"
   | "proposed"
-  | "direct"
-  | "direct_failed"
   | "error";
+
+export interface GuestResult {
+  outcome: GuestOutcome;
+  /** The field keys that failed, for `invalid_fields` only. */
+  invalid?: string[];
+}
+
+export type GuestReply =
+  | { status: 202; body: { received: true } }
+  | { status: 422; body: { received: false; invalid: string[] } }
+  | { status: 422; body: { received: false; retry: true } }
+  | { status: 503; body: { received: false } };
+
+/** The HTTP reply for a door result; see the module header for the contract. */
+export function guestFormReply(result: GuestResult): GuestReply {
+  switch (result.outcome) {
+    case "invalid_fields":
+      return {
+        status: 422,
+        body: { received: false, invalid: result.invalid ?? [] },
+      };
+    case "too_large":
+    case "bad_envelope":
+      return { status: 422, body: { received: false, invalid: [] } };
+    case "ticket":
+      return { status: 422, body: { received: false, retry: true } };
+    case "actor_refused":
+    case "error":
+      return { status: 503, body: { received: false } };
+    case "proposed":
+    case "honeypot":
+    case "unknown_form":
+    case "captcha_failed":
+    case "denied":
+      return { status: 202, body: GUEST_FORM_RECEIVED };
+  }
+}
 
 export interface LoadedForm {
   formId: string;
@@ -127,20 +171,14 @@ export interface GuestDeps {
     properties: Record<string, unknown>
   ) => Promise<{ matchedEntityId: string | null }>;
   resolveFacet: (loaded: LoadedForm) => Promise<string | null>;
-  resolveRuleVerdict: (
-    loaded: LoadedForm
-  ) => Promise<"auto" | "propose" | null>;
   gate: typeof checkPermissionOrPropose;
   stampExpiry: (
     loaded: LoadedForm,
     proposalId: string,
     nowMs: number
   ) => Promise<void>;
-  materializeDirect: (input: {
-    loaded: LoadedForm;
-    plan: GuestPlan;
-    receiptId: string | undefined;
-  }) => Promise<void>;
+  /** Count a submission the gate refused (the form's pending cap). */
+  recordDrop: (loaded: LoadedForm, nowMs: number) => Promise<void>;
 }
 
 // ── Pure planning ────────────────────────────────────────────────────────────
@@ -247,40 +285,52 @@ export function planCarriesSignal(plan: GuestPlan): boolean {
 export async function submitGuestForm(
   input: { token: string; rawBody: string },
   deps: GuestDeps = defaultGuestDeps()
-): Promise<GuestOutcome> {
+): Promise<GuestResult> {
   try {
     return await submitInner(input, deps);
   } catch (err) {
     // The token and the body are never logged.
     logger.error({ err }, "guest form submission failed");
-    return "error";
+    return { outcome: "error" };
   }
 }
 
 async function submitInner(
   input: { token: string; rawBody: string },
   deps: GuestDeps
-): Promise<GuestOutcome> {
+): Promise<GuestResult> {
   if (Buffer.byteLength(input.rawBody, "utf8") > GUEST_FORM_MAX_BODY_BYTES) {
-    return "too_large";
+    return { outcome: "too_large" };
   }
   let json: unknown;
   try {
     json = JSON.parse(input.rawBody);
   } catch {
-    return "bad_envelope";
+    return { outcome: "bad_envelope" };
   }
   const envelope = SubmissionEnvelopeSchema.safeParse(json);
-  if (!envelope.success) return "bad_envelope";
+  if (!envelope.success) return { outcome: "bad_envelope" };
   const body = envelope.data;
 
   const hp = body[HONEYPOT_FIELD];
-  if (hp !== undefined && hp !== null && hp !== "") return "honeypot";
+  if (hp !== undefined && hp !== null && hp !== "") {
+    return { outcome: "honeypot" };
+  }
 
-  if (!input.token || input.token.length > 256) return "unknown_form";
+  if (!input.token || input.token.length > 256) {
+    return { outcome: "unknown_form" };
+  }
   const loaded = await deps.loadFormByTokenHash(hashToken(input.token));
-  if (!loaded) return "unknown_form";
+  if (!loaded) return { outcome: "unknown_form" };
   const { form } = loaded;
+
+  // The answers first: whether they satisfy the form depends only on the body
+  // and the public field definition, so the submitter may be told which keys
+  // failed. Checked before the captcha so a single-use captcha token is not
+  // spent on a submission that must be corrected anyway.
+  const built = buildPropertiesFromFields(form.config.fields, body.fields);
+  if (!built.ok) return { outcome: "invalid_fields", invalid: built.invalid };
+  const properties = built.properties;
 
   const nowMs = deps.now();
   if (
@@ -292,18 +342,15 @@ async function submitInner(
       now: nowMs,
     })
   ) {
-    return "ticket";
+    return { outcome: "ticket" };
   }
 
-  let degraded = false;
   if (form.config.captcha.enabled) {
+    // A provider outage files the submission anyway: it is a proposal the
+    // owner reviews, never a direct write.
     const outcome = await deps.verifyCaptcha(body.captchaToken);
-    if (outcome === "fail") return "captcha_failed";
-    if (outcome === "unavailable") degraded = true;
+    if (outcome === "fail") return { outcome: "captcha_failed" };
   }
-
-  const properties = buildPropertiesFromFields(form.config.fields, body.fields);
-  if (!properties) return "invalid_fields";
 
   // FAIL CLOSED on the actor BEFORE anything is filed.
   if (!(await deps.assertActor(loaded))) {
@@ -311,14 +358,13 @@ async function submitInner(
       { formId: loaded.formId },
       "guest form refused: the form's actor is missing, not an agent, or not least-privilege"
     );
-    return "actor_refused";
+    return { outcome: "actor_refused" };
   }
 
-  // Same awaited work on both identity branches (no timing oracle): identity,
-  // facet and rule lookups always run, then exactly one gate call.
+  // Same awaited work on both identity branches (no timing oracle): identity
+  // and facet lookups always run, then exactly one gate call.
   const identity = await deps.resolveIdentity(loaded, properties);
   const facetSlug = await deps.resolveFacet(loaded);
-  const ruleVerdict = await deps.resolveRuleVerdict(loaded);
 
   const plan = planGuestWrite({
     formId: loaded.formId,
@@ -331,14 +377,8 @@ async function submitInner(
   });
   if (plan.branch === "note" && planCarriesSignal(plan)) {
     // Unreachable by construction; refuse rather than write a signal.
-    return "error";
+    return { outcome: "error" };
   }
-
-  const direct = wantsDirect({
-    storedMode: form.config.mode,
-    ruleVerdict,
-    degraded,
-  });
 
   const perm = await runWithActingAgent(form.actorUserId, () =>
     deps.gate({
@@ -347,7 +387,7 @@ async function submitInner(
       workspaceId: loaded.workspaceId,
       subjectType: "entity",
       action: "create",
-      forcePropose: !direct,
+      forcePropose: true,
       reasoning: `Submitted through the public form "${form.config.name}".`,
       data: {
         id: plan.entityId,
@@ -366,38 +406,20 @@ async function submitInner(
       { formId: loaded.formId, reason: perm.reason },
       "guest form write refused by the gate"
     );
-    return "denied";
+    await deps.recordDrop(loaded, nowMs);
+    return { outcome: "denied" };
   }
   if ("proposalId" in perm) {
     await deps.stampExpiry(loaded, perm.proposalId, nowMs);
-    return "proposed";
+    return { outcome: "proposed" };
   }
-  // Granted: only reachable when `direct` was requested (forcePropose would
-  // otherwise have proposed). Re-assert, never trust the gate alone.
-  if (!direct) {
-    logger.error(
-      { formId: loaded.formId },
-      "guest form: gate granted a forced proposal — refusing to materialize"
-    );
-    return "error";
-  }
-  try {
-    await deps.materializeDirect({
-      loaded,
-      plan,
-      receiptId:
-        "autoApprovedProposalId" in perm
-          ? perm.autoApprovedProposalId
-          : undefined,
-    });
-    return "direct";
-  } catch (err) {
-    logger.warn(
-      { err, formId: loaded.formId },
-      "guest form direct create failed"
-    );
-    return "direct_failed";
-  }
+  // A grant for a forced proposal: nothing was filed, so it is a fault, never
+  // a success.
+  logger.error(
+    { formId: loaded.formId },
+    "guest form: gate granted a forced proposal; nothing was filed"
+  );
+  return { outcome: "error" };
 }
 
 // ── Real dependencies ────────────────────────────────────────────────────────
@@ -515,34 +537,6 @@ async function resolveFacetForForm(loaded: LoadedForm): Promise<string | null> {
   return slug && ok ? slug : null;
 }
 
-/** The per-form mode rule (the forms door is its only writer). */
-export async function resolveFormRuleVerdict(
-  loaded: LoadedForm
-): Promise<"auto" | "propose" | null> {
-  const [rule] = await db
-    .select({ verdict: governanceRules.verdict })
-    .from(governanceRules)
-    .where(
-      and(
-        eq(governanceRules.principalKind, "agent"),
-        eq(governanceRules.agentUserId, loaded.form.actorUserId),
-        eq(governanceRules.scopeKind, "workspace"),
-        eq(governanceRules.workspaceId, loaded.workspaceId),
-        eq(governanceRules.targetKind, "action"),
-        eq(governanceRules.targetPattern, "entity.create"),
-        eq(governanceRules.createdBy, formRuleCreatedBy(loaded.formId)),
-        isNull(governanceRules.revokedAt),
-        or(
-          isNull(governanceRules.expiresAt),
-          gt(governanceRules.expiresAt, new Date())
-        )
-      )
-    )
-    .orderBy(desc(governanceRules.createdAt))
-    .limit(1);
-  return (rule?.verdict as "auto" | "propose" | undefined) ?? null;
-}
-
 /**
  * Give a guest proposal its expiry. Only this form actor's still-PENDING row,
  * and only if nothing stamped one yet (a deduped replay keeps its first clock).
@@ -577,13 +571,13 @@ export function defaultGuestDeps(): GuestDeps {
     verifyCaptcha: (token) => verifyCaptchaReal(token, captcha),
     resolveIdentity: resolveIdentityForForm,
     resolveFacet: resolveFacetForForm,
-    resolveRuleVerdict: resolveFormRuleVerdict,
     gate: checkPermissionOrPropose,
     stampExpiry: stampGuestExpiry,
-    materializeDirect: async (i) => {
-      const { materializeGuestDirect } =
-        await import("./direct-materialize.js");
-      await materializeGuestDirect(i);
-    },
+    recordDrop: (loaded, nowMs) =>
+      recordFormDrop({
+        formId: loaded.formId,
+        actorUserId: loaded.form.actorUserId,
+        now: new Date(nowMs),
+      }),
   };
 }

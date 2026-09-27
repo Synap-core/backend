@@ -22,6 +22,14 @@ const h = vi.hoisted(() => ({
   updates: [] as Array<[string, Record<string, unknown>]>,
 }));
 
+// The caller is a participant. Guest containment probes the caller's audience
+// for every served mutation; it has its own tests
+// (access/guest-containment.pglite.test.ts), so the probe answers "member" here.
+vi.mock("../access/context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../access/context.js")>();
+  actual.AccessContext.prototype.audience = async () => "member";
+  return actual;
+});
 vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn(async () => false),
 }));
@@ -159,7 +167,8 @@ vi.mock("@synap/database", async () => {
   };
 });
 
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   workspaceMembers: { workspaceId: "workspaceId", userId: "userId" },
   workspaces: { id: "id" },
 }));

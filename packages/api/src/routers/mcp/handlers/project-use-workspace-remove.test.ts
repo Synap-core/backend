@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   refusal: vi.fn(),
   link: vi.fn(),
   unlink: vi.fn(),
+  archivedOk: vi.fn(),
   proposalStatus: "pending" as string,
   updates: [] as unknown[],
 }));
@@ -45,6 +46,7 @@ vi.mock("../../../utils/project-workspace.js", async (importOriginal) => {
     ...actual,
     linkProjectToWorkspace: (...a: unknown[]) => h.link(...a),
     unlinkProjectFromWorkspace: (...a: unknown[]) => h.unlink(...a),
+    archivedUsesTargetRemovable: (...a: unknown[]) => h.archivedOk(...a),
   };
 });
 vi.mock("@synap/database", async (importOriginal) => {
@@ -100,6 +102,8 @@ beforeEach(() => {
   h.link.mockReset();
   h.unlink.mockReset();
   h.refusal.mockResolvedValue(null);
+  h.archivedOk.mockReset();
+  h.archivedOk.mockResolvedValue(false);
   h.proposalStatus = "pending";
   h.updates = [];
 });
@@ -158,6 +162,38 @@ describe("synap_project_use_workspace {remove:true}", () => {
     expect(out.error).toBe("Access denied");
     expect(h.perm).not.toHaveBeenCalled();
     expect(h.unlink).not.toHaveBeenCalled();
+  });
+
+  it("an ARCHIVED target the caller's project owns stays removable — gated at pod scope", async () => {
+    h.refusal.mockResolvedValue({ status: 403, error: "Access denied" });
+    h.archivedOk.mockResolvedValue(true);
+    h.perm.mockResolvedValue({ proposalId: "p-2", reviewUrl: "u" });
+    const out = await call({
+      projectId: PROJECT,
+      workspaceId: WS,
+      remove: true,
+    });
+    expect(out.status).toBe("proposed");
+    expect(h.archivedOk).toHaveBeenCalledWith(expect.anything(), {
+      projectId: PROJECT,
+      workspaceId: WS,
+      userId: USER,
+    });
+    const opts = h.perm.mock.calls[0]![0] as Record<string, any>;
+    // Still governed as a link DELETE (destructive ⇒ agent proposes), but the
+    // archived lens is not the RBAC workspace.
+    expect(opts).toMatchObject({ subjectType: "link", action: "delete" });
+    expect(opts.workspaceId).toBeNull();
+    expect(h.unlink).not.toHaveBeenCalled();
+  });
+
+  it("the archived relaxation never applies to the ADD", async () => {
+    h.refusal.mockResolvedValue({ status: 403, error: "Access denied" });
+    h.archivedOk.mockResolvedValue(true);
+    const out = await call({ projectId: PROJECT, workspaceId: WS });
+    expect(out.error).toBe("Access denied");
+    expect(h.archivedOk).not.toHaveBeenCalled();
+    expect(h.perm).not.toHaveBeenCalled();
   });
 
   it("without remove, the add path is unchanged (link create)", async () => {

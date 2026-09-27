@@ -28,6 +28,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
+// Guest containment is its own door with its own tests
+// (__tripwires__/guest-containment-hub-routes.test.ts); here the principal is a
+// participant, and the audience probe would need the stubbed database.
+vi.mock("../../../access/guest-containment.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isGuestPrincipal: vi.fn(async () => false),
+}));
 vi.mock("../../../services/api-keys.js", () => ({
   apiKeyService: {
     getApiKeyStatus: (...a: unknown[]) => getApiKeyStatus(...a),

@@ -22,7 +22,7 @@ import type { RootContent } from "mdast";
 import type { Diagnostic } from "./diagnostics.js";
 import { fenceColonsFor, scanContainers } from "./scan.js";
 
-/** The reference embeds (`synap-section` is prose with an author, not an embed). */
+/** The reference embeds (frames — `FRAME_DIRECTIVES` — carry content, not a reference). */
 export const EMBED_DIRECTIVES = [
   "synap-entity",
   "synap-view",
@@ -33,8 +33,43 @@ export type EmbedDirective = (typeof EMBED_DIRECTIVES)[number];
 /** Attribute channels that carried props before the body form. Read, never written. */
 const LEGACY_PROPS_KEYS = ["cellProps", "data-cell-props"] as const;
 
-/** Container directives whose body is prose, not an embed body. */
-const NOT_EMBEDS = new Set(["synap-section"]);
+/** A report section: prose with an author, the attributable (patch-addressable) unit. */
+export const SECTION_DIRECTIVE = "synap-section";
+
+/**
+ * LAYOUT frames: `synap-columns` holds `synap-column` children, each holding
+ * document content (columns.md §2). Layout, not ownership: a column is never
+ * a section, never a patch target, and never an embed.
+ */
+export const COLUMNS_DIRECTIVE = "synap-columns";
+export const COLUMN_DIRECTIVE = "synap-column";
+export const LAYOUT_DIRECTIVES = [COLUMNS_DIRECTIVE, COLUMN_DIRECTIVE] as const;
+
+/**
+ * FRAMES: `synap-*` containers whose children are DOCUMENT CONTENT, not an
+ * embed body. THE one answer to "is this a frame or an embed?" — every reader
+ * (core, web, native, editor, diff) asks `isFrameDirective`, never a literal
+ * (`one-frame-set.tripwire.test.ts`). A reader walks INTO a frame; it reads an
+ * embed as one reference with a fallback.
+ */
+export const FRAME_DIRECTIVES = [
+  SECTION_DIRECTIVE,
+  ...LAYOUT_DIRECTIVES,
+] as const;
+export type FrameDirective = (typeof FRAME_DIRECTIVES)[number];
+
+export function isFrameDirective(
+  name: string | null | undefined
+): name is FrameDirective {
+  return (FRAME_DIRECTIVES as readonly string[]).includes(name ?? "");
+}
+
+/** A layout frame (`synap-columns` / `synap-column`): a frame that is not a section. */
+export function isLayoutDirective(
+  name: string | null | undefined
+): name is (typeof LAYOUT_DIRECTIVES)[number] {
+  return (LAYOUT_DIRECTIVES as readonly string[]).includes(name ?? "");
+}
 
 type DirectiveLike = {
   type: string;
@@ -111,7 +146,7 @@ function isLabel(node: unknown): boolean {
 
 /**
  * Read one directive node as an embed. Returns null for anything that is not a
- * `synap-*` reference embed (prose directives, `synap-section`).
+ * `synap-*` reference embed (prose directives, frames: `isFrameDirective`).
  *
  * Never throws and never swallows: a malformed props value is `propsError`
  * plus a `malformed-props` diagnostic.
@@ -125,7 +160,8 @@ export function readEmbed(node: DirectiveLike): Embed | null {
     return null;
   }
   const directive = node.name ?? "";
-  if (!directive.startsWith("synap-") || NOT_EMBEDS.has(directive)) return null;
+  if (!directive.startsWith("synap-") || isFrameDirective(directive))
+    return null;
 
   const line = node.position?.start.line;
   const diagnostics: Diagnostic[] = [];
@@ -238,7 +274,7 @@ function hasReference(directive: string, ref: Record<string, string>): boolean {
 export class EmbedSerializeError extends Error {}
 
 export interface EmbedInput {
-  /** `synap-cell` | `synap-view` | `synap-entity` (any `synap-*` except `synap-section`). */
+  /** `synap-cell` | `synap-view` | `synap-entity` (any `synap-*` except a frame). */
   directive: string;
   /** Reference-only attributes, written in this order. */
   ref: Record<string, string>;
@@ -305,7 +341,7 @@ export function serializeEmbed(input: EmbedInput): string {
   const { directive } = input;
   if (
     !/^synap-[A-Za-z0-9-]*[A-Za-z0-9]$/.test(directive) ||
-    NOT_EMBEDS.has(directive)
+    isFrameDirective(directive)
   ) {
     throw new EmbedSerializeError(
       `\`${directive}\` is not an embed directive.`
@@ -341,5 +377,79 @@ export function serializeEmbed(input: EmbedInput): string {
     `${colons}${directive}${serializeAttributes(input.ref)}`,
     ...(body ? [body] : []),
     colons,
+  ].join("\n");
+}
+
+// ─── The columns writer ─────────────────────────────────────────────────────
+
+/** The canonical minimum fence lengths (columns.md §2.3): column ≥ 4, columns ≥ 5. */
+export const COLUMN_MIN_COLONS = 4;
+export const COLUMNS_MIN_COLONS = 5;
+
+export interface ColumnInput {
+  /** Written VERBATIM (`"40%"`); absent or empty = no width. New widths come from `formatColumnWidth`. */
+  width?: string | null;
+  /** The column's markdown content. */
+  body: string;
+  /** The fence length it was authored with; kept when still long enough (no fence churn). */
+  colons?: number;
+}
+
+export interface ColumnsInput {
+  columns: readonly ColumnInput[];
+  /** The outer fence length it was authored with. */
+  colons?: number;
+}
+
+/**
+ * THE columns writer — the editor node and any server writer call it, never
+ * a template of their own. Lossless for what readers tolerate (one column, an
+ * empty column, more than three, a width that is not a percentage): what the
+ * document holds is written back byte-stable, and the diagnostics name it.
+ *
+ * Fences are FIXED MINIMUMS, grown only when a body needs more (so adding an
+ * embed to a prose column does not rewrite both fences): a column is at least
+ * `COLUMN_MIN_COLONS` and longer than any colon line in its body; the outer
+ * fence is at least `COLUMNS_MIN_COLONS` and longer than every column fence —
+ * strictly decreasing from the outside in, the only safe nesting (§2.3).
+ *
+ * Throws `EmbedSerializeError` for input it cannot write losslessly: no
+ * column, a width with a line break, a body that is not self-contained.
+ */
+export function serializeColumns(input: ColumnsInput): string {
+  if (input.columns.length === 0) {
+    throw new EmbedSerializeError("A columns block needs at least one column.");
+  }
+  const columns = input.columns.map((column, i) => {
+    const body = column.body.replace(/^\s*\n/, "").replace(/\s+$/, "");
+    if (body) assertSelfContainedBody(body, `Column ${i + 1}`);
+    const colons = Math.max(
+      column.colons ?? 0,
+      fenceColonsFor(body, COLUMN_MIN_COLONS)
+    );
+    const fence = ":".repeat(colons);
+    const attributes = serializeAttributes(
+      column.width ? { width: column.width } : {}
+    );
+    return {
+      colons,
+      text: [
+        `${fence}${COLUMN_DIRECTIVE}${attributes}`,
+        ...(body ? [body] : []),
+        fence,
+      ].join("\n"),
+    };
+  });
+  const outerFence = ":".repeat(
+    Math.max(
+      input.colons ?? 0,
+      COLUMNS_MIN_COLONS,
+      ...columns.map((c) => c.colons + 1)
+    )
+  );
+  return [
+    `${outerFence}${COLUMNS_DIRECTIVE}`,
+    ...columns.map((c) => c.text),
+    outerFence,
   ].join("\n");
 }

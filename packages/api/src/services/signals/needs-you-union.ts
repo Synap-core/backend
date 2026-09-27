@@ -38,7 +38,7 @@ import {
   type ObjectNavView,
 } from "@synap-core/types/navigation";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
-import type { ExpectedOutput } from "@synap/playbooks";
+import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
 import type { ProposalCluster } from "../proposals/fingerprint.js";
 import type { ProposalClass } from "../proposals/proposal-class.js";
@@ -136,6 +136,20 @@ export interface Signal {
    * fall back to label matching.
    */
   criterionKey?: string;
+  /**
+   * WHERE the agent pointed the person for an `owed-slot` (its
+   * `ExpectedOutput.ref`) — named `slotRef` because `target` is already this
+   * signal's own door (the session). Carried so a tray row can open the thing
+   * the blocker is about without re-reading the session. Absent when the slot
+   * declared no pointer, and on every other kind.
+   */
+  slotRef?: OutputRef;
+  /**
+   * HOW the person can answer an `owed-slot` (its `ExpectedOutput.ask`) —
+   * carried so the tray can quick-answer a confirm / choose in place instead of
+   * opening the session. Absent ⇒ today's verbs (free text / I did this).
+   */
+  ask?: SlotAsk;
   /**
    * Decision CLASS of a `proposal-cluster` signal, carried straight off the
    * cluster (which derives it through `proposalClassFields`, the one door).
@@ -321,6 +335,10 @@ export interface OwedSlotSignalInput {
    * carries none.
    */
   criterionKey?: string;
+  /** The slot's pointer, straight from `listOwedSlots`. */
+  ref?: OutputRef;
+  /** The slot's ask, straight from `listOwedSlots`. */
+  ask?: SlotAsk;
 }
 
 /**
@@ -351,6 +369,12 @@ export interface OwedSlotSignalInput {
  *                                      open the scorecard ON it. A key, never
  *                                      the prose label, so no surface
  *                                      re-derives this file's label format.
+ *   ref                             → `slotRef` (renamed: `target` is the
+ *                                      signal's own door, the session) — so a
+ *                                      tray row opens the thing the blocker
+ *                                      is about without re-reading the session.
+ *   ask                             → `ask` — HOW to answer, so a tray can
+ *                                      quick-answer a confirm / choose in place.
  *
  * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
  *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
@@ -377,6 +401,8 @@ const PROJECTED_OWED_SLOT_FIELDS = [
   "claimedDone",
   "kind",
   "criterionKey",
+  "ref",
+  "ask",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const WITHHELD_OWED_SLOT_FIELDS = [
@@ -456,6 +482,8 @@ export function signalFromOwedSlot(row: OwedSlotSignalInput): Signal {
     ...(row.sessionGoal ? { sessionGoal: row.sessionGoal } : {}),
     ...(row.kind ? { slotKind: row.kind } : {}),
     ...(row.criterionKey ? { criterionKey: row.criterionKey } : {}),
+    ...(row.ref ? { slotRef: row.ref } : {}),
+    ...(row.ask ? { ask: row.ask } : {}),
   };
 }
 

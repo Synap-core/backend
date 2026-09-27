@@ -24,6 +24,7 @@ import {
 import { syncAutoApproveRules } from "@synap/database/agent-governance";
 import { ProfileRepository } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import { applyAgentWorkspacePreset } from "../../../utils/agent-workspace-preset.js";
 import { sql as drizzleSql } from "drizzle-orm";
 import {
   templateHealthFor,
@@ -857,19 +858,9 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         "terminal.read_logs",
       ];
 
-      // Always apply settings (upsert): workspace may have been created before
-      // this preset existed, so re-provisioning must fix existing workspaces.
-      await db
-        .update(workspaces)
-        .set({
-          workspaceType: "agent",
-          settings: {
-            workspaceType: "agent",
-            linkedAgentId: agentUserId,
-            governanceMode: "standard",
-          } as never,
-        })
-        .where(eq(workspaces.id, result.workspaceId));
+      // Always apply the preset keys, merged into the stored settings (see
+      // `applyAgentWorkspacePreset`).
+      await applyAgentWorkspacePreset(db, result.workspaceId, agentUserId);
 
       // Mirror the preset into governance_rules (principal "any", this
       // workspace) — the enforcement path the resolver reads at rung 2.8.

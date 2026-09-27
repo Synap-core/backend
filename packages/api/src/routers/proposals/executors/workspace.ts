@@ -496,6 +496,67 @@ export function registerWorkspaceExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
+      // `workspacesRouter.update` shape — `{ id, name, description, settings }`,
+      // no `definition`, no `operation`. This is the RENAME / settings door
+      // (MCP `synap_update_workspace`, Hub `PATCH /workspaces/:id`); it lands
+      // under the SAME key as a package install onto a workspace. Before this
+      // branch, approving one fell through to `materializeWorkspaceCore` with an
+      // empty definition and renamed nothing. REPLAY through the router as the
+      // APPROVER, so settings stripping / server-owned preservation / audit /
+      // side-effects all run exactly as on the direct path.
+      if (
+        inner.definition === undefined &&
+        inner.operation === undefined &&
+        typeof inner.id === "string"
+      ) {
+        const membership = await getWorkspaceMembership(db, inner.id, userId);
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const { workspacesRouter } = await import("../../workspaces.js");
+        const workspaceCaller = workspacesRouter.createCaller({
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: inner.id,
+          workspaceRole: membership.role,
+        } as unknown as Context);
+        assertApplied(
+          await workspaceCaller.update({
+            id: inner.id,
+            ...(typeof inner.name === "string" ? { name: inner.name } : {}),
+            ...(typeof inner.description === "string"
+              ? { description: inner.description }
+              : {}),
+            ...(inner.settings && typeof inner.settings === "object"
+              ? { settings: inner.settings as Record<string, unknown> }
+              : {}),
+          })
+        );
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId: inner.id };
+      }
+
       if (inner.operation === "set_primary_surface") {
         const parsedSurface = workspaceRuntimePrimarySurfaceSchema
           .nullable()
@@ -864,6 +925,89 @@ export function registerWorkspaceExecutors(): void {
       return { success: true };
     },
   });
+
+  // ── workspace / archive + workspace / restore ─────────────────────────────
+  // Filed by `workspacesRouter.archive` (R8a). The gate passes the PLURAL
+  // `workspaces`; the stored key is singularized (see workspace/delete above),
+  // so `workspace/archive` / `workspace/restore` are the keys approval resolves.
+  //
+  // `archive` sits on the rung-2.5 DESTRUCTIVE floor and `restore` on the
+  // rung-2 ADMIN floor, so an agent ALWAYS proposes. With no executor the
+  // catch-all would flip it APPROVED and archive nothing.
+  //
+  // PAYLOAD: `data: { id, name }` (nested as `data.data`) — the ACTION key
+  // says archive vs restore; no payload flag (P1: it rendered as a stray row);
+  // `proposal.targetId` holds the same id.
+  //
+  // REPLAY, never reconstruct: through `workspacesRouter.archive` as the
+  // APPROVER, so the owner/pod-admin floor, the system-workspace refusal, the
+  // automation pause and the audit row all run exactly as on the direct path.
+  // The re-entrant gate grants the human approver; `assertApplied` refuses a
+  // re-proposal instead of flipping APPROVED with nothing done.
+  for (const action of ["archive", "restore"] as const) {
+    registerProposalExecutor({
+      key: `workspace/${action}`,
+      async execute({ proposal, userId, input, deps }) {
+        const raw = (proposal.data ?? {}) as Record<string, unknown>;
+        const inner = (raw.data ?? raw) as Record<string, unknown>;
+        const workspaceId =
+          (inner.id as string | undefined) ?? proposal.targetId ?? undefined;
+        if (!workspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Workspace ${action} proposal is missing the workspace id`,
+          });
+        }
+
+        const [alreadyDone] = await db
+          .select({ status: proposals.status })
+          .from(proposals)
+          .where(eq(proposals.id, input.proposalId));
+        if (alreadyDone?.status === ProposalStatus.APPROVED) {
+          return { success: true, alreadyApproved: true };
+        }
+
+        const membership = await getWorkspaceMembership(
+          db,
+          workspaceId,
+          userId
+        );
+        const { workspacesRouter } = await import("../../workspaces.js");
+        const workspaceCaller = workspacesRouter.createCaller({
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId,
+          workspaceRole: membership?.role ?? null,
+        } as unknown as Context);
+
+        const result = await workspaceCaller.archive({
+          workspaceId,
+          restore: action === "restore",
+        });
+        assertApplied(result);
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId: workspaceId };
+      },
+    });
+  }
 
   // ── role / delete ────────────────────────────────────────────────────────
   // Lives in this file because a role is a workspace-scoped object and there is

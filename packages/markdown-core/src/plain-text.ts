@@ -21,7 +21,7 @@ import { parseMarkdown } from "./processor.js";
 import type { Root, RootContent, PhrasingContent } from "mdast";
 import type { ContainerDirective } from "mdast-util-directive";
 import { flattenInlineMarkers, type MarkerNoun } from "./markers.js";
-import { readEmbed, type Embed } from "./embeds.js";
+import { isFrameDirective, readEmbed, type Embed } from "./embeds.js";
 
 export interface MarkdownPlainTextOptions {
   /**
@@ -124,9 +124,10 @@ function blockText(node: RootContent, nounFor?: MarkerNoun): string {
         .filter(Boolean)
         .join(" ");
     case "containerDirective": {
-      // A report section is a FRAME around prose — its body is the report.
-      // Dropping it with the other directives emptied every report preview.
-      if ((node as ContainerDirective).name === "synap-section") {
+      // A FRAME (a report section, columns, a column) is transparent: its
+      // body is the document. Dropping it with the other directives emptied
+      // every report preview.
+      if (isFrameDirective((node as ContainerDirective).name)) {
         return (node as ContainerDirective).children
           .map((child) => blockText(child as RootContent, nounFor))
           .filter(Boolean)

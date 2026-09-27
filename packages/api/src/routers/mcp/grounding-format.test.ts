@@ -63,7 +63,7 @@ describe("formatGrounding", () => {
     // reword can't quietly drop the write guidance again.
     expect(out).toMatch(/For WRITES pass kind\/profile/);
     expect(out).toMatch(
-      /omit workspaceId unless you deliberately pin one domain/
+      /omit workspaceId unless you deliberately pin one space/
     );
     expect(out).toMatch(/For READS omit workspaceId/);
   });

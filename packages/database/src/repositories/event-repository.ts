@@ -17,6 +17,8 @@
  */
 
 import type postgres from "postgres";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { SynapEventSchema, type SynapEvent } from "@synap-core/core";
 
 /**
@@ -129,6 +131,31 @@ export interface UserStreamOptions {
 export const UNGOVERNED_INSTRUMENTATION_EPOCH = new Date(
   "2026-08-05T00:00:00.000Z"
 );
+
+const visibilityDialect = new PgDialect();
+
+/**
+ * Open a raw `events` WHERE with a caller-supplied VISIBILITY floor.
+ *
+ * The floor is a Drizzle predicate built by the access layer (the `events`
+ * VisibilityRule, `eventVisibleWhere` in `@synap/api`), so this repository
+ * never re-derives who may see what. It is compiled FIRST, so its `$1..$n`
+ * placeholders stay valid and every filter after it numbers from `n + 1`.
+ */
+function openEventsWhere(
+  select: string,
+  visibleWhere: SQL | undefined
+): { query: string; params: unknown[]; paramIndex: number } {
+  if (!visibleWhere) {
+    return { query: `${select} WHERE 1=1`, params: [], paramIndex: 1 };
+  }
+  const compiled = visibilityDialect.sqlToQuery(visibleWhere);
+  return {
+    query: `${select} WHERE (${compiled.sql})`,
+    params: [...compiled.params],
+    paramIndex: compiled.params.length + 1,
+  };
+}
 
 export class EventRepository {
   private eventHooks: EventHook[] = [];
@@ -724,11 +751,22 @@ export class EventRepository {
        * Ignored when no `workspaceId` is given: there is nothing to widen.
        */
       includePodWide?: boolean;
+      /**
+       * The caller's VISIBILITY floor — every user-facing door passes the
+       * `events` VisibilityRule here (`eventVisibleWhere`). Every other filter
+       * is ANDed onto it, so a filter can only narrow. Omitted = no floor, for
+       * internal/system readers that already clamp by `userId`.
+       */
+      visibleWhere?: SQL;
     } = {}
   ): Promise<EventRecord[]> {
-    let query = "SELECT * FROM events WHERE 1=1";
-    const params: unknown[] = [];
-    let paramIndex = 1;
+    const opened = openEventsWhere(
+      "SELECT * FROM events",
+      filters.visibleWhere
+    );
+    let query = opened.query;
+    const params = opened.params;
+    let paramIndex = opened.paramIndex;
 
     if (filters.userId) {
       query += ` AND user_id = $${paramIndex}`;
@@ -1025,11 +1063,17 @@ export class EventRepository {
       workspaceId?: string;
       fromDate?: Date;
       toDate?: Date;
+      /** Same visibility floor as `searchEvents` — filters only narrow it. */
+      visibleWhere?: SQL;
     } = {}
   ): Promise<number> {
-    let query = "SELECT COUNT(*) as count FROM events WHERE 1=1";
-    const params: unknown[] = [];
-    let paramIndex = 1;
+    const opened = openEventsWhere(
+      "SELECT COUNT(*) as count FROM events",
+      filters.visibleWhere
+    );
+    let query = opened.query;
+    const params = opened.params;
+    let paramIndex = opened.paramIndex;
 
     if (filters.userId) {
       query += ` AND user_id = $${paramIndex}`;

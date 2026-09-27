@@ -1,9 +1,9 @@
 /**
- * THE SHARE CORE (Sites W2 S3) — every owner share door calls this module:
+ * THE SHARE CORE — every owner share door calls this module:
  * tRPC `shares.*`, Hub REST `/shares*`, the `relations.exposeToAnchor` alias,
  * and the `share/create` approval executor. No door re-implements a rule.
  *
- * MODEL (0276 + S2 floor)
+ * MODEL (0276 + the exposure read floor)
  *   - An ANCHOR is always a `projects` row with a workspace. A pod-personal
  *     (NULL-workspace) project is refused.
  *   - GUEST exposure = the record becomes readable by the anchor's members,
@@ -67,6 +67,7 @@ import { auditLog } from "../../utils/audit-log.js";
 import { generateShareToken, hashToken } from "../../utils/share-token.js";
 import { VISIBLE_TO } from "../../utils/project-scope.js";
 import { assertAnchorAdmin } from "./anchor-admin.js";
+import { isPublicationLive } from "./publication-live.js";
 import {
   parseExposurePolicyInput,
   resolveExposurePolicy,
@@ -485,7 +486,9 @@ export async function applyShare(
           agentUserId: opts.agentUserId ?? undefined,
           sourceProposalId: opts.sourceProposalId,
         },
-        opts.userId
+        opts.userId,
+        // This IS the share door: the only writer allowed to mint `visible_to`.
+        { exposureShareDoor: true }
       );
       rowsWritten += edgeRow ? 1 : 0;
       exposed = "created";
@@ -708,7 +711,7 @@ export async function unshareResource(
 }
 
 /** Narrowing needs LESS than sharing: administer the anchor OR write the record. */
-async function assertCanNarrow(
+export async function assertCanNarrow(
   database: Db,
   userId: string,
   target: Target,
@@ -717,8 +720,10 @@ async function assertCanNarrow(
   try {
     await assertAnchorAdmin(database, userId, anchor);
     return;
-  } catch {
-    // fall through to the record-write check
+  } catch (err) {
+    // Only "not an anchor admin" falls through to the record-write check. A
+    // failed membership read is a fault, never a refusal to reinterpret.
+    if (!(err instanceof TRPCError && err.code === "FORBIDDEN")) throw err;
   }
   await assertWorkspaceWrite(database, userId, {
     workspaceId: target.workspaceId,
@@ -748,17 +753,31 @@ async function loadLink(database: Db, shareId: string) {
 
 /**
  * Revoke ONE link, permanently (0276 trigger: a revoked row is frozen; sharing
- * again creates a NEW row). Guests who already joined through it stay members.
+ * again creates a NEW row). Guests who already joined through it stay members
+ * unless `removeGuests` is set: then every GUEST membership this link granted
+ * (`granted_via_share_id`) is removed too, also on an already-revoked link, so
+ * a leaked link that was redeemed can be cleaned up after the fact. The
+ * default keeps them: removing people is a separate, visible choice.
  */
 export async function revokeLink(
   actor: ShareActor,
-  shareId: string
-): Promise<{ status: "revoked" | "already_revoked"; shareId: string }> {
+  shareId: string,
+  options: { removeGuests?: boolean } = {}
+): Promise<{
+  status: "revoked" | "already_revoked";
+  shareId: string;
+  removedGuests: number;
+}> {
   const database = await getDb();
   const link = await loadLink(database, shareId);
   const anchor = await loadAnchor(database, link.anchorProjectId);
   await assertAnchorAdmin(database, actor.userId, anchor);
-  if (link.revokedAt) return { status: "already_revoked", shareId };
+  const removedGuests = options.removeGuests
+    ? await removeGuestsGrantedBy(database, actor, anchor, shareId)
+    : 0;
+  if (link.revokedAt) {
+    return { status: "already_revoked", shareId, removedGuests };
+  }
   await database
     .update(resourceShares)
     .set({
@@ -783,9 +802,78 @@ export async function revokeLink(
       resourceId: link.resourceId,
       anchorProjectId: anchor.id,
       revoked: true,
+      removedGuests,
     },
   });
-  return { status: "revoked", shareId };
+  return { status: "revoked", shareId, removedGuests };
+}
+
+/** Remove the guest memberships one link granted. Returns how many. */
+async function removeGuestsGrantedBy(
+  database: Db,
+  actor: ShareActor,
+  anchor: Anchor,
+  shareId: string
+): Promise<number> {
+  const guests = await database
+    .select({ userId: projectMembers.userId })
+    .from(projectMembers)
+    .where(
+      and(
+        eq(projectMembers.projectId, anchor.id),
+        eq(projectMembers.grantedViaShareId, shareId),
+        eq(projectMembers.role, "guest")
+      )
+    );
+  const repo = new ProjectMemberRepository(database, eventRepository);
+  for (const g of guests) {
+    await repo.remove({ projectId: anchor.id, userId: g.userId }, actor.userId);
+  }
+  return guests.length;
+}
+
+/**
+ * Remove ONE guest from a project, directly and for good: the membership row
+ * is deleted, so the person loses every record exposed to that project. They
+ * can come back only through a new invite or a live link. Anchor owner or
+ * workspace owner/admin only. Only a GUEST membership: a member or viewer is
+ * managed through the project's own member doors, never here.
+ */
+export async function removeGuest(
+  actor: ShareActor,
+  input: { projectId: string; userId: string }
+): Promise<{ status: "removed" | "not_a_guest"; projectId: string }> {
+  const database = await getDb();
+  const anchor = await loadAnchor(database, input.projectId);
+  await assertAnchorAdmin(database, actor.userId, anchor);
+  const [member] = await database
+    .select({ role: projectMembers.role })
+    .from(projectMembers)
+    .where(
+      and(
+        eq(projectMembers.projectId, anchor.id),
+        eq(projectMembers.userId, input.userId)
+      )
+    )
+    .limit(1);
+  if (!member || member.role !== "guest") {
+    return { status: "not_a_guest", projectId: anchor.id };
+  }
+  await new ProjectMemberRepository(database, eventRepository).remove(
+    { projectId: anchor.id, userId: input.userId },
+    actor.userId
+  );
+  auditLog({
+    subjectType: "projectMember",
+    action: "delete",
+    phase: "completed",
+    subjectId: input.userId,
+    userId: actor.userId,
+    agentUserId: agentOf(actor) ?? undefined,
+    workspaceId: anchor.workspaceId,
+    data: { projectId: anchor.id, role: "guest" },
+  });
+  return { status: "removed", projectId: anchor.id };
 }
 
 /**
@@ -963,7 +1051,37 @@ export interface ShareListing {
     createdAt: Date;
     createdBy: string;
   }>;
-  /** True when either list hit {@link LIST_SHARES_CAP}. */
+  /**
+   * The record's PUBLIC rows — current and past publications, so a
+   * surface can mark "on the public web" for a publish made in any session.
+   * Newest first, capped like the rest. A resource listing only: a
+   * publication is never anchored on a project, so an anchor listing's is
+   * always `[]`. Never a token, its hash, or a snapshot VALUE — the snapshot's
+   * keys only.
+   */
+  publications: Array<{
+    id: string;
+    resourceType: string;
+    resourceId: string;
+    /** 'published' | 'draft' (unpublished, or revoked — a revoke also drafts). */
+    state: string;
+    publishedAt: Date | null;
+    revokedAt: Date | null;
+    tokenPrefix: string | null;
+    /** False after an agent's approved publish until the owner mints the url. */
+    hasToken: boolean;
+    /**
+     * THE one derivation of "served on the public web right now": published,
+     * not revoked, not expired, and a url exists. Consumers read this, never
+     * re-derive it from state + revokedAt.
+     */
+    live: boolean;
+    /** The snapshot's keys (never its values). */
+    publishedFields: string[];
+    createdAt: Date;
+    createdBy: string;
+  }>;
+  /** True when any list hit {@link LIST_SHARES_CAP}. */
   truncated: boolean;
 }
 
@@ -981,6 +1099,21 @@ export async function listShares(
   const database = await getDb();
   const cap = LIST_SHARES_CAP;
   const exposures: ShareListing["exposures"] = [];
+  let publicationRows: Array<{
+    id: string;
+    audience: string;
+    resourceType: string;
+    resourceId: string;
+    state: string;
+    publishedAt: Date | null;
+    revokedAt: Date | null;
+    expiresAt: Date | null;
+    tokenPrefix: string | null;
+    tokenHash: string | null;
+    publishedProperties: unknown;
+    createdAt: Date;
+    createdBy: string;
+  }> = [];
 
   let linkWhere;
   if ("anchorProjectId" in req) {
@@ -1055,6 +1188,35 @@ export async function listShares(
       eq(resourceShares.resourceType, target.kind),
       eq(resourceShares.resourceId, target.id)
     );
+    // Publications. A document resolved to its entity above, and a
+    // publication row is always `resource_type = 'entity'`, so this is the one
+    // lookup for both kinds; a view / project has none.
+    publicationRows = await database
+      .select({
+        id: resourceShares.id,
+        audience: resourceShares.audience,
+        resourceType: resourceShares.resourceType,
+        resourceId: resourceShares.resourceId,
+        state: resourceShares.state,
+        publishedAt: resourceShares.publishedAt,
+        revokedAt: resourceShares.revokedAt,
+        expiresAt: resourceShares.expiresAt,
+        tokenPrefix: resourceShares.tokenPrefix,
+        tokenHash: resourceShares.tokenHash,
+        publishedProperties: resourceShares.publishedProperties,
+        createdAt: resourceShares.createdAt,
+        createdBy: resourceShares.createdBy,
+      })
+      .from(resourceShares)
+      .where(
+        and(
+          eq(resourceShares.resourceType, target.kind),
+          eq(resourceShares.resourceId, target.id),
+          eq(resourceShares.audience, "public")
+        )
+      )
+      .orderBy(desc(resourceShares.createdAt))
+      .limit(cap);
   }
 
   const rows = await database
@@ -1075,10 +1237,32 @@ export async function listShares(
     .orderBy(desc(resourceShares.createdAt))
     .limit(cap);
 
+  const now = Date.now();
+  const publications: ShareListing["publications"] = publicationRows.map(
+    ({ tokenHash, expiresAt, publishedProperties, audience, ...r }) => {
+      const hasToken = !!tokenHash;
+      return {
+        ...r,
+        hasToken,
+        live: isPublicationLive({ ...r, audience, expiresAt, hasToken }, now),
+        publishedFields:
+          publishedProperties &&
+          typeof publishedProperties === "object" &&
+          !Array.isArray(publishedProperties)
+            ? Object.keys(publishedProperties)
+            : [],
+      };
+    }
+  );
+
   return {
     exposures: exposures.slice(0, cap),
     links: rows.map(({ tokenHash, ...r }) => ({ ...r, hasToken: !!tokenHash })),
-    truncated: exposures.length >= cap || rows.length >= cap,
+    publications,
+    truncated:
+      exposures.length >= cap ||
+      rows.length >= cap ||
+      publicationRows.length >= cap,
   };
 }
 
@@ -1103,7 +1287,13 @@ async function assertWorkspaceOwner(
   }
 }
 
-/** The EFFECTIVE policy (defaults filled, ceiling applied). Owner only. */
+/**
+ * The EFFECTIVE policy (defaults filled, ceiling applied), COMPLETE: every
+ * kind × audience × action plus each public cell's `fields` allowlist. Owner
+ * only — the owner is its one reader, so nothing is withheld. Exactly the
+ * `kinds` that {@link setExposurePolicy} requires, so get → edit → set is a
+ * lossless round-trip.
+ */
 export async function getExposurePolicy(
   actor: ShareActor,
   workspaceId: string
@@ -1116,6 +1306,9 @@ export async function getExposurePolicy(
 /**
  * Store the owner's policy through the ONE writer. Owner + signed-in human
  * only — agents have no door here. `null` resets to the code default.
+ * FULL REPLACE of a COMPLETE document: a payload missing any kind, audience,
+ * action or public `fields` is refused (BAD_REQUEST) — never stored with the
+ * omission silently reset to the default.
  */
 export async function setExposurePolicy(
   actor: ShareActor,

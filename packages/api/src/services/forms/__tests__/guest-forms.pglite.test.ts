@@ -1,7 +1,8 @@
 /**
- * Sites W4 — public forms end to end on PGlite: the owner door, the minted
- * actor, the anonymous POST, the identity branch, the mode floor, the expiry
- * sweep and the generic-tools refusals.
+ * Public forms end to end on PGlite: the owner door, the minted actor, the
+ * anonymous POST and its reply contract, the identity branch, the
+ * always-a-proposal floor, the drop counter, the expiry sweep (and its payload
+ * scrub) and the generic-tools refusals.
  *
  * REAL: the `forms` tRPC router, the form service, the guest door, the public
  * Hono routes under the real hub auth + idempotency middleware, the `tools`
@@ -16,8 +17,8 @@
  * non-agent actor is granted — EXACTLY the production gate's fall-through —
  * which is why the door's own actor floor is tested against it.
  * What this CANNOT see: the gate's RBAC, its pending-cap refusal (the ceiling
- * row it reads IS asserted), notifications, and DIRECT materialisation through
- * `entities.create` (the seam is replaced by a recorder; NEEDS-DOGFOOD).
+ * row it reads IS asserted; a refusal is simulated by a denying gate), and
+ * notifications.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -120,6 +121,7 @@ import { registerPublicFormsRoutes } from "../../../routers/hub-protocol/rest/pu
 import { formsRouter } from "../../../routers/forms.js";
 import { toolsRouter } from "../../../routers/tools.js";
 import { expireLapsedProposals } from "../../proposals/expire-lapsed-proposals.js";
+import { requestRaiseProposalCap } from "../../proposals/recommend-raise-proposal-cap.js";
 import {
   defaultGuestDeps,
   submitGuestForm,
@@ -176,6 +178,10 @@ const tools = (userId: string) =>
     userId,
     workspaceId: null,
   } as never);
+
+/** The door's outcome only (the reply is asserted through the HTTP route). */
+const outcomeOf = async (...args: Parameters<typeof submitGuestForm>) =>
+  (await submitGuestForm(...args)).outcome;
 
 async function errOf(p: Promise<unknown>) {
   try {
@@ -293,6 +299,8 @@ beforeEach(() => {
   h.gateCalls.length = 0;
   h.ambientAtGate.length = 0;
 });
+
+const RECEIVED_202 = { status: 202, text: '{"received":true}' };
 
 const newSubmission = () => ({
   fields: {
@@ -475,6 +483,7 @@ describe("the anonymous door files ONE governed create, as the form's actor", ()
       "message",
     ]);
     expect(typeof body.ticket).toBe("string");
+    expect(body.minSubmitMs).toBe(0);
     for (const secret of [
       formId,
       actorId,
@@ -640,7 +649,7 @@ describe("identity: a match NEVER reaches a person write, and the reply is ident
     traced.now = () => Date.now();
     const run = async (email: string) => {
       trace.length = 0;
-      const outcome = await submitGuestForm(
+      const outcome = await outcomeOf(
         {
           token,
           rawBody: JSON.stringify({ fields: { name: "X", email } }),
@@ -655,40 +664,86 @@ describe("identity: a match NEVER reaches a person write, and the reply is ident
     expect(b.outcome).toBe("proposed");
     // Non-vacuity: the lookups this guard is about are in the trace.
     expect(a.trace).toEqual(
-      expect.arrayContaining([
-        "resolveIdentity",
-        "resolveFacet",
-        "resolveRuleVerdict",
-        "gate",
-      ])
+      expect.arrayContaining(["resolveIdentity", "resolveFacet", "gate"])
     );
     expect(b.trace).toEqual(a.trace);
   });
 });
 
-describe("fail closed: every failure path is the same 202, and files nothing", () => {
+describe("the reply: constant 202 unless the submitter can fix it or the pod failed", () => {
   const RECEIVED = { status: 202, text: '{"received":true}' };
+  const invalid = (keys: string[]) => ({
+    status: 422,
+    text: JSON.stringify({ received: false, invalid: keys }),
+  });
 
-  it("honeypot, unknown token, bad JSON, missing required field, oversized body", async () => {
+  it("honeypot and unknown token are the constant 202, and file nothing", async () => {
     const app = makeApp();
     const cases = [
       await post(app, token, { ...newSubmission(), hp: "i am a bot" }),
       await post(app, `unknown-${randomUUID()}`, newSubmission()),
-      await post(app, token, null, "{not json"),
-      await post(app, token, { fields: { name: "No email" } }),
-      await post(app, token, { fields: { name: "x", email: "not-an-email" } }),
-      await post(app, token, {
-        fields: { name: { nested: 1 }, email: "a@b.io" },
-      }),
+      // A bot that also sends junk answers learns nothing either.
+      await post(app, token, { fields: { name: {} }, hp: "x" }),
     ];
     for (const c of cases) expect(c).toMatchObject(RECEIVED);
     expect(h.gateCalls).toHaveLength(0);
-    // Oversized: exercised on the door (the transport's own 16 KB cap is W3's).
-    const big = await submitGuestForm({
+  });
+
+  it("the submitter's own answers: 422 with the failing keys, nothing filed", async () => {
+    const app = makeApp();
+    expect(
+      await post(app, token, { fields: { name: "No email" } })
+    ).toMatchObject(invalid(["email"]));
+    expect(
+      await post(app, token, { fields: { name: "x", email: "not-an-email" } })
+    ).toMatchObject(invalid(["email"]));
+    expect(
+      await post(app, token, {
+        fields: { name: { nested: 1 }, email: "a@b.io" },
+      })
+    ).toMatchObject(invalid(["name"]));
+    // Not a submission envelope at all.
+    expect(await post(app, token, null, "{not json")).toMatchObject(
+      invalid([])
+    );
+    expect(h.gateCalls).toHaveLength(0);
+    // Oversized: exercised on the door (the transport caps the stream too).
+    const big = await outcomeOf({
       token,
       rawBody: JSON.stringify({ fields: { name: "x".repeat(17_000) } }),
     });
     expect(big).toBe("too_large");
+  });
+
+  it("the invalid list depends on the payload only: a known email gives the same 422", async () => {
+    const app = makeApp();
+    const unknownEmail = await post(app, token, {
+      fields: { email: `new-${randomUUID().slice(0, 6)}@example.test` },
+    });
+    const knownEmail = await post(app, token, {
+      fields: { email: KNOWN_EMAIL },
+    });
+    expect(knownEmail).toEqual(unknownEmail);
+    expect(unknownEmail).toMatchObject(invalid(["name"]));
+  });
+
+  it("a server fault is 503, never the success reply", async () => {
+    const real = defaultGuestDeps();
+    const failing = makeApp({
+      ...real,
+      gate: (async () => {
+        throw new Error("connection terminated");
+      }) as never,
+    });
+    expect(await post(failing, token, newSubmission())).toMatchObject({
+      status: 503,
+      text: '{"received":false}',
+    });
+    const noActor = makeApp({ ...real, assertActor: async () => false });
+    expect(await post(noActor, token, newSubmission())).toMatchObject({
+      status: 503,
+      text: '{"received":false}',
+    });
   });
 
   it("a time-to-submit ticket is required when the form sets a minimum", async () => {
@@ -714,24 +769,29 @@ describe("fail closed: every failure path is the same 202, and files nothing", (
     };
     const body = (ticket?: string) =>
       JSON.stringify({ ...newSubmission(), ...(ticket ? { ticket } : {}) });
-    expect(await submitGuestForm({ token, rawBody: body() }, deps)).toBe(
-      "ticket"
-    );
+    expect(await outcomeOf({ token, rawBody: body() }, deps)).toBe("ticket");
     const fresh = mintTicket(strict.form.ticketSecret, formId, t0 - 1_000);
-    expect(await submitGuestForm({ token, rawBody: body(fresh) }, deps)).toBe(
+    expect(await outcomeOf({ token, rawBody: body(fresh) }, deps)).toBe(
       "ticket"
     );
     const forged = `${t0 - 10_000}.AAAA`;
-    expect(await submitGuestForm({ token, rawBody: body(forged) }, deps)).toBe(
+    expect(await outcomeOf({ token, rawBody: body(forged) }, deps)).toBe(
       "ticket"
     );
     const ok = mintTicket(strict.form.ticketSecret, formId, t0 - 10_000);
-    expect(await submitGuestForm({ token, rawBody: body(ok) }, deps)).toBe(
+    expect(await outcomeOf({ token, rawBody: body(ok) }, deps)).toBe(
       "proposed"
     );
+    // On the wire: a retry signal, never "received".
+    expect(
+      await post(makeApp(deps), token, JSON.parse(body(fresh)))
+    ).toMatchObject({
+      status: 422,
+      text: '{"received":false,"retry":true}',
+    });
   });
 
-  it("captcha: a failed verification drops; an unreachable provider degrades to a FORCED proposal", async () => {
+  it("captcha: a failed verification drops; an unreachable provider still files a proposal", async () => {
     const real = defaultGuestDeps();
     const loaded = (await real.loadFormByTokenHash(
       createHash("sha256").update(token).digest("hex")
@@ -747,31 +807,25 @@ describe("fail closed: every failure path is the same 202, and files nothing", (
         },
       },
     };
-    const base = {
-      ...real,
-      loadFormByTokenHash: async () => direct,
-      resolveRuleVerdict: async () => "auto" as const,
-      materializeDirect: vi.fn(async () => undefined),
-    };
+    const base = { ...real, loadFormByTokenHash: async () => direct };
     const raw = JSON.stringify(newSubmission());
     expect(
-      await submitGuestForm(
+      await outcomeOf(
         { token, rawBody: raw },
         { ...base, verifyCaptcha: async () => "fail" }
       )
     ).toBe("captcha_failed");
     expect(h.gateCalls).toHaveLength(0);
     expect(
-      await submitGuestForm(
+      await outcomeOf(
         { token, rawBody: raw },
         { ...base, verifyCaptcha: async () => "unavailable" }
       )
     ).toBe("proposed");
     expect(h.gateCalls.at(-1)).toMatchObject({ forcePropose: true });
-    expect(base.materializeDirect).not.toHaveBeenCalled();
   });
 
-  it("a denied / capped gate is still the same 202", async () => {
+  it("a denied / capped gate is still the same 202, and the drop is counted for the owner", async () => {
     const real = defaultGuestDeps();
     const app = makeApp({
       ...real,
@@ -780,7 +834,59 @@ describe("fail closed: every failure path is the same 202, and files nothing", (
         reason: "Agent proposal limit reached",
       })) as never,
     });
+    const dropped = async () =>
+      (await human(A).get({ formId })).droppedSinceReview;
+    const before = await dropped();
     expect(await post(app, token, newSubmission())).toMatchObject(RECEIVED);
+    expect(await post(app, token, newSubmission())).toMatchObject(RECEIVED);
+    expect(await dropped()).toBe(before + 2);
+    const listed = (await human(A).list({ workspaceId: W })).find(
+      (f) => f.id === formId
+    );
+    expect(listed?.droppedSinceReview).toBe(before + 2);
+
+    // The owner decides one of the form's proposals: the count reads 0, and
+    // the next drop starts again at 1.
+    const [p] = (
+      await q<{ id: string }>(
+        `select id from proposals where agent_user_id=$1 limit 1`,
+        [actorId]
+      )
+    ).rows;
+    await q(
+      `update proposals set reviewed_at = now() + interval '1 second' where id=$1`,
+      [p!.id]
+    );
+    expect(await dropped()).toBe(0);
+    await new Promise((r) => setTimeout(r, 1_100));
+    expect(await post(app, token, newSubmission())).toMatchObject(RECEIVED);
+    expect(await dropped()).toBe(1);
+
+    // An edit keeps the count; raising the cap clears it.
+    await human(A).update({
+      formId,
+      config: { ...CONFIG, name: "Contact us" },
+    });
+    expect(await dropped()).toBe(1);
+    await human(A).update({
+      formId,
+      config: { ...CONFIG, limits: { pendingCap: 6, minSubmitMs: 0 } },
+    });
+    expect(await dropped()).toBe(0);
+    await human(A).update({ formId, config: CONFIG });
+  });
+
+  it("at the cap no 'raise the cap' request is filed for a form's actor", async () => {
+    const before = await q<{ n: number }>(
+      `select count(*)::int as n from proposals where target_type='settings'`
+    );
+    expect(
+      await requestRaiseProposalCap(actorId, { pendingCount: 99, cap: 5 })
+    ).toBeNull();
+    const after = await q<{ n: number }>(
+      `select count(*)::int as n from proposals where target_type='settings'`
+    );
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
   });
 });
 
@@ -793,7 +899,7 @@ describe("the actor floor: a dropped or widened actor is REFUSED, never granted"
   ) => {
     await q(mutate, params);
     try {
-      return await submitGuestForm({
+      return await outcomeOf({
         token,
         rawBody: JSON.stringify(newSubmission()),
       });
@@ -804,7 +910,7 @@ describe("the actor floor: a dropped or widened actor is REFUSED, never granted"
 
   it("control: the intact actor files", async () => {
     expect(
-      await submitGuestForm({ token, rawBody: JSON.stringify(newSubmission()) })
+      await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
     ).toBe("proposed");
   });
 
@@ -859,7 +965,7 @@ describe("the actor floor: a dropped or widened actor is REFUSED, never granted"
     await q(`delete from users where id=$1`, [actorId]);
     try {
       expect(
-        await submitGuestForm({
+        await outcomeOf({
           token,
           rawBody: JSON.stringify(newSubmission()),
         })
@@ -893,7 +999,7 @@ describe("the actor floor: a dropped or widened actor is REFUSED, never granted"
   });
 });
 
-describe("mode: proposal unless BOTH stores say direct", () => {
+describe("mode: an anonymous submission is ALWAYS a proposal", () => {
   const setRule = (verdict: "auto" | "propose") =>
     q(
       `update governance_rules set verdict=$2 where agent_user_id=$1 and revoked_at is null`,
@@ -906,75 +1012,55 @@ describe("mode: proposal unless BOTH stores say direct", () => {
         : `update tools set metadata = jsonb_set(metadata, '{form,config,mode}', to_jsonb($2::text)) where id=$1`,
       mode === null ? [formId] : [formId, mode]
     );
-  const run = async () => {
-    const deps = {
+  const run = () =>
+    outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) });
+
+  it("a stored 'direct' form with an 'auto' rule still files a forced proposal", async () => {
+    await setMode("direct");
+    await setRule("auto");
+    try {
+      expect(await run()).toBe("proposed");
+      expect(h.gateCalls.at(-1)).toMatchObject({ forcePropose: true });
+    } finally {
+      await setMode("proposal");
+      await setRule("propose");
+    }
+  });
+
+  it("a gate that grants a forced proposal is a fault (503), never success", async () => {
+    const app = makeApp({
       ...defaultGuestDeps(),
-      materializeDirect: vi.fn(async () => undefined),
-    };
-    const outcome = await submitGuestForm(
-      { token, rawBody: JSON.stringify(newSubmission()) },
-      deps
-    );
-    return { outcome, direct: deps.materializeDirect.mock.calls.length };
-  };
-
-  it("config direct + rule auto ⇒ direct (the positive control)", async () => {
-    await setMode("direct");
-    await setRule("auto");
-    try {
-      const r = await run();
-      expect(h.gateCalls.at(-1)).toMatchObject({ forcePropose: false });
-      expect(r).toEqual({ outcome: "direct", direct: 1 });
-    } finally {
-      await setMode("proposal");
-      await setRule("propose");
-    }
+      gate: (async () => ({ granted: true })) as never,
+    });
+    expect(await post(app, token, newSubmission())).toMatchObject({
+      status: 503,
+      text: '{"received":false}',
+    });
   });
 
-  it("config direct but the rule drifted to propose ⇒ forced proposal", async () => {
-    await setMode("direct");
-    try {
-      const r = await run();
-      expect(h.gateCalls.at(-1)).toMatchObject({ forcePropose: true });
-      expect(r).toEqual({ outcome: "proposed", direct: 0 });
-    } finally {
-      await setMode("proposal");
-    }
-  });
-
-  it("rule auto but config says proposal ⇒ forced proposal (the rule alone never widens)", async () => {
-    await setRule("auto");
-    try {
-      const r = await run();
-      expect(h.gateCalls.at(-1)).toMatchObject({ forcePropose: true });
-      expect(r).toEqual({ outcome: "proposed", direct: 0 });
-    } finally {
-      await setRule("propose");
-    }
-  });
-
-  it("mode ABSENT from the stored row ⇒ the definition parses with the proposal default; never direct", async () => {
-    await setRule("auto");
+  it("mode ABSENT from the stored row ⇒ the definition parses; still a proposal", async () => {
     await setMode(null);
     try {
-      const r = await run();
+      expect(await run()).toBe("proposed");
       expect(h.gateCalls.at(-1)).toMatchObject({ forcePropose: true });
-      expect(r.direct).toBe(0);
     } finally {
       await setMode("proposal");
-      await setRule("propose");
     }
   });
 
-  it("the owner switching to direct rewrites the ONE rule; back to proposal revokes it", async () => {
-    await human(A).update({ formId, config: { ...CONFIG, mode: "direct" } });
-    let rules = await q<{ verdict: string }>(
-      `select verdict from governance_rules where agent_user_id=$1 and revoked_at is null`,
-      [actorId]
-    );
-    expect(rules.rows).toEqual([{ verdict: "auto" }]);
-    await human(A).update({ formId, config: CONFIG });
-    rules = await q<{ verdict: string }>(
+  it("the owner door refuses mode 'direct' on create and on edit; the rule stays propose", async () => {
+    for (const call of [
+      human(A).create({
+        workspaceId: W,
+        config: { ...CONFIG, mode: "direct" },
+      }),
+      human(A).update({ formId, config: { ...CONFIG, mode: "direct" } }),
+    ]) {
+      const e = await errOf(call);
+      expect(e?.code).toBe("BAD_REQUEST");
+      expect(e?.message).toMatch(/held for your review/);
+    }
+    const rules = await q<{ verdict: string }>(
       `select verdict from governance_rules where agent_user_id=$1 and revoked_at is null`,
       [actorId]
     );
@@ -982,19 +1068,68 @@ describe("mode: proposal unless BOTH stores say direct", () => {
   });
 });
 
+describe("browser encodings: an HTML form's strings are read, not dropped", () => {
+  it("'42' and 'on' reach the proposal as a number and a boolean; junk is a 422", async () => {
+    const created = await human(A).create({
+      workspaceId: W,
+      config: {
+        ...CONFIG,
+        name: "Typed",
+        fields: [
+          ...CONFIG.fields,
+          {
+            key: "seats",
+            label: "Seats",
+            type: "number",
+            constraints: { min: 1, max: 50 },
+          },
+          { key: "newsletter", label: "Newsletter", type: "boolean" },
+        ],
+      },
+    });
+    const app = makeApp();
+    const base = newSubmission().fields;
+    expect(
+      await post(app, created.token, {
+        fields: { ...base, seats: "42", newsletter: "on" },
+      })
+    ).toMatchObject(RECEIVED_202);
+    const data = h.gateCalls.at(-1)!.data as {
+      properties: Record<string, unknown>;
+    };
+    expect(data.properties).toMatchObject({ seats: 42, newsletter: true });
+    expect(
+      await post(app, created.token, {
+        fields: { ...base, seats: "lots", newsletter: "on" },
+      })
+    ).toMatchObject({
+      status: 422,
+      text: '{"received":false,"invalid":["seats"]}',
+    });
+    expect(
+      await post(app, created.token, {
+        fields: { ...base, seats: "51" },
+      })
+    ).toMatchObject({
+      status: 422,
+      text: '{"received":false,"invalid":["seats"]}',
+    });
+  });
+});
+
 describe("rotate + disable", () => {
   it("rotating kills the old token; disabling makes the form a miss", async () => {
     const r = await human(A).rotateToken({ formId });
     expect(
-      await submitGuestForm({ token, rawBody: JSON.stringify(newSubmission()) })
+      await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
     ).toBe("unknown_form");
     token = r.token;
     expect(
-      await submitGuestForm({ token, rawBody: JSON.stringify(newSubmission()) })
+      await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
     ).toBe("proposed");
     await human(A).setEnabled({ formId, enabled: false });
     expect(
-      await submitGuestForm({ token, rawBody: JSON.stringify(newSubmission()) })
+      await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
     ).toBe("unknown_form");
     await human(A).setEnabled({ formId, enabled: true });
   });
@@ -1023,5 +1158,51 @@ describe("expiry: the sweeper honours expires_at for GUEST proposals only", () =
     expect(byId[guestLapsed]).toBe("expired");
     expect(byId[guestLive]).toBe("pending");
     expect(byId[agentLapsed]).toBe("pending");
+  });
+
+  it("an expired guest proposal keeps a tombstone with counts, never the answers", async () => {
+    const lapsed = randomUUID();
+    const live = randomUUID();
+    const agentExpired = randomUUID();
+    const answers = {
+      data: {
+        profileSlug: "person",
+        title: "Ada Lovelace",
+        properties: { name: "Ada Lovelace", email: "ada@example.test" },
+        content: "call me",
+      },
+    };
+    const ins = (id: string, agent: string, status: string, expires: string) =>
+      q(
+        `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, agent_user_id, dedup_hash, created_at, expires_at)
+         values ($1::uuid,$2,'entity',$1::text,'create',$3::jsonb,$4,$5,'h-'||$1::text, now() - interval '40 days', now() + $6::interval)`,
+        [id, W, JSON.stringify(answers), status, agent, expires]
+      );
+    await ins(lapsed, actorId, "pending", "-1 day");
+    await ins(live, actorId, "pending", "5 days");
+    await ins(agentExpired, AG, "expired", "-1 day");
+    await expireLapsedProposals(new Date());
+    const rows = await q<{
+      id: string;
+      status: string;
+      data: unknown;
+      dedup_hash: string | null;
+    }>(
+      `select id, status, data, dedup_hash from proposals where id = any($1::uuid[])`,
+      [[lapsed, live, agentExpired]]
+    );
+    const byId = Object.fromEntries(rows.rows.map((r) => [r.id, r]));
+    expect(byId[lapsed]!.status).toBe("expired");
+    expect(byId[lapsed]!.data).toEqual({
+      scrubbed: true,
+      reason: "guest_retention_expired",
+      fieldCount: 2,
+      hadContent: true,
+    });
+    expect(byId[lapsed]!.dedup_hash).toBeNull();
+    expect(JSON.stringify(byId[lapsed]!.data)).not.toMatch(/Ada|ada@/);
+    // Still pending: untouched. Not a guest: untouched.
+    expect(byId[live]!.data).toEqual(answers);
+    expect(byId[agentExpired]!.data).toEqual(answers);
   });
 });

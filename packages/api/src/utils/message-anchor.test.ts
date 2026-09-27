@@ -1,7 +1,8 @@
 /**
  * message-anchor — the shape and authority contract for an anchored comment.
  *
- * DB-FREE: the validator takes its `db`, and the proposal-visibility SSOT gate
+ * DB-FREE: the validator takes its `db`, and the proposal comment gate
+ * (`assertProposalCommentableBy`, pglite-tested in `proposal-review-session-gate`)
  * is replaced (partially — `importOriginal` keeps every other export real) so
  * these observe what the ANCHOR check decides, not the membership lookup the
  * visibility gate owns (tested in its own suite).
@@ -15,7 +16,7 @@ vi.mock("./proposal-visibility.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    assertProposalVisibleTo: (...args: unknown[]) => visibility(...args),
+    assertProposalCommentableBy: (...args: unknown[]) => visibility(...args),
   };
 });
 
@@ -104,6 +105,7 @@ describe("anchor authority", () => {
       anchor: { contentVersion: 0, field: "title" },
       channelId: CHANNEL,
       userId: USER,
+      roster: true,
       db: fakeDb,
     });
     expect(visibility).not.toHaveBeenCalled();
@@ -118,10 +120,15 @@ describe("anchor authority", () => {
         anchor: { proposalId: PROPOSAL, contentVersion: 0 },
         channelId: CHANNEL,
         userId: USER,
+        roster: true,
         db: fakeDb,
       })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expect(visibility).toHaveBeenCalledWith(PROPOSAL, USER, { db: fakeDb });
+    expect(visibility).toHaveBeenCalledWith(
+      PROPOSAL,
+      { userId: USER, roster: true },
+      { db: fakeDb }
+    );
   });
 
   it("on a session channel, a proposal of ANOTHER run is refused", async () => {
@@ -132,6 +139,7 @@ describe("anchor authority", () => {
         anchor: { proposalId: PROPOSAL, contentVersion: 0 },
         channelId: CHANNEL,
         userId: USER,
+        roster: true,
         db: fakeDb,
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
@@ -145,6 +153,7 @@ describe("anchor authority", () => {
         anchor: { proposalId: PROPOSAL, contentVersion: 0 },
         channelId: CHANNEL,
         userId: USER,
+        roster: true,
         db: fakeDb,
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
@@ -158,6 +167,7 @@ describe("anchor authority", () => {
         anchor: { proposalId: PROPOSAL, contentVersion: 3 },
         channelId: CHANNEL,
         userId: USER,
+        roster: true,
         db: fakeDb,
       })
     ).resolves.toBeUndefined();
@@ -170,6 +180,7 @@ describe("anchor authority", () => {
         anchor: { proposalId: PROPOSAL, contentVersion: 0 },
         channelId: CHANNEL,
         userId: USER,
+        roster: true,
         db: fakeDb,
       })
     ).resolves.toBeUndefined();

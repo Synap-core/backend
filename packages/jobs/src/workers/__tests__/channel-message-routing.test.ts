@@ -148,6 +148,7 @@ describe("channel_message output — context-derived channel routing", () => {
     expect(mocks.ensureObjectChannel).toHaveBeenCalledWith({
       type: "entity",
       id: "entity-42",
+      workspaceId: WORKSPACE,
     });
     expect(mocks.ensureAutomationRunChannel).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "sent", channelId: "ch-entity" });
@@ -161,6 +162,7 @@ describe("channel_message output — context-derived channel routing", () => {
     expect(mocks.ensureObjectChannel).toHaveBeenCalledWith({
       type: "entity",
       id: "entity-subject",
+      workspaceId: WORKSPACE,
     });
     expect(result).toMatchObject({ status: "sent", channelId: "ch-entity" });
   });

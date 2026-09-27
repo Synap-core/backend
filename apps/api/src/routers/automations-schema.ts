@@ -15,7 +15,11 @@
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { authMiddleware } from "@synap/auth";
-import { AUTOMATION_SCHEMA, apiKeyService } from "@synap/api";
+import {
+  AUTOMATION_SCHEMA,
+  apiKeyService,
+  refuseGuestSession,
+} from "@synap/api";
 
 const automationsSchemaRouter = new Hono();
 
@@ -34,7 +38,7 @@ const cookieOrApiKeyAuth: MiddlewareHandler = async (c, next) => {
   return authMiddleware(c, next);
 };
 
-automationsSchemaRouter.get("/", cookieOrApiKeyAuth, (c) =>
+automationsSchemaRouter.get("/", cookieOrApiKeyAuth, refuseGuestSession, (c) =>
   c.json(AUTOMATION_SCHEMA)
 );
 

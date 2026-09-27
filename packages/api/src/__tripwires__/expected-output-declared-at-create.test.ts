@@ -63,6 +63,7 @@ const FORGED: Record<string, unknown> = {
     messageId: null,
     answeredBy: "Antoine",
     answeredAt: "2020-01-01T00:00:00.000Z",
+    value: { type: "confirm", confirmed: true },
   },
 };
 

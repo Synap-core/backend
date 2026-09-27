@@ -9,6 +9,7 @@
 
 import { Hono } from "hono";
 import { authMiddleware } from "@synap/auth";
+import { refuseGuestSession } from "@synap/api";
 
 export const connectorsSchemaRouter = new Hono();
 
@@ -77,6 +78,6 @@ const CONNECTOR_SCHEMA = {
   },
 } as const;
 
-connectorsSchemaRouter.get("/", authMiddleware, (c) =>
+connectorsSchemaRouter.get("/", authMiddleware, refuseGuestSession, (c) =>
   c.json(CONNECTOR_SCHEMA)
 );

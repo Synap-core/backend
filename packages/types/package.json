@@ -173,6 +173,10 @@
       "types": "./dist/capture/index.d.ts",
       "import": "./dist/capture/index.js"
     },
+    "./ask": {
+      "types": "./dist/ask/index.d.ts",
+      "import": "./dist/ask/index.js"
+    },
     "./external-connect": {
       "types": "./dist/external-connect/index.d.ts",
       "import": "./dist/external-connect/index.js"

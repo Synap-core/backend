@@ -23,6 +23,7 @@ import {
   sessionReadableWhere,
   type SessionReader,
 } from "../access/session-visibility.js";
+import { eventVisibleWhereFor } from "../access/event-visibility.js";
 import type { EventType } from "@synap/events";
 import { randomUUID } from "crypto";
 
@@ -331,15 +332,22 @@ export const eventsRouter = router({
     }),
 
   /**
-   * Search events (Admin/Owner access)
+   * Search the events the caller may see.
    *
-   * Allows searching events with filters:
-   * - System Admin: Can search ALL events
-   * - Workspace Owner: Can search events for their workspace
+   * The floor is the `events` VisibilityRule (`eventVisibleWhere`): events in
+   * a workspace the caller can see, their own personal (NULL-workspace)
+   * events, and a session's events only when they may read the session. Every
+   * input is a filter ANDed onto that floor — `workspaceId` and `userId`
+   * narrow, they never grant.
+   *
+   * There used to be a "system admin" branch here: anyone who owned ANY
+   * workspace searched every user's events pod-wide, and `workspaceId` was
+   * checked but never applied to the query. Both are gone (2026-09-27).
    */
   search: protectedProcedure
     .input(
       z.object({
+        /** Narrow to one actor's events — within the caller's floor. */
         userId: z.string().optional(),
         eventType: z.string().optional(),
         subjectType: subjectTypeSchema.optional(),
@@ -355,51 +363,18 @@ export const eventsRouter = router({
         toDate: z.date().optional(),
         limit: z.number().min(1).max(100).default(50),
         offset: z.number().min(0).default(0),
-        workspaceId: z.string().uuid().optional(), // Optional context for owners
+        /** Narrow to ONE workspace (strictly: no pod-wide rows). */
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
       const eventRepo = getEventRepository();
 
-      // Permission Check: workspace owner/admin, or scoped to own events
-      // System admin = user who owns at least one workspace
-      const ownedWorkspace = await db.query.workspaceMembers.findFirst({
-        where: (members, { and, eq }) =>
-          and(eq(members.userId, ctx.userId), eq(members.role, "owner")),
-      });
-      const isSystemAdmin = !!ownedWorkspace;
-
-      if (input.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: (members, { and, eq }) =>
-            and(
-              eq(members.workspaceId, input.workspaceId!),
-              eq(members.userId, ctx.userId)
-            ),
-        });
-
-        if (!membership || !["owner", "admin"].includes(membership.role)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Insufficient permissions for this workspace",
-          });
-        }
-      } else if (!isSystemAdmin) {
-        // If not checking a specific workspace and not system admin, restrict to own events
-        // This effectively makes it behave like 'list' but with more filters
-        if (input.userId && input.userId !== ctx.userId) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Cannot view events of other users",
-          });
-        }
-        // Force userId filter to current user if not system admin
-        input.userId = ctx.userId;
-      }
-
-      // Perform search
       const found = await eventRepo.searchEvents({
+        visibleWhere: eventVisibleWhereFor(ctx),
         userId: input.userId,
+        workspaceId: input.workspaceId,
         eventType: input.eventType,
         subjectType: input.subjectType,
         subjectId: input.subjectId,
@@ -412,7 +387,7 @@ export const eventsRouter = router({
         offset: input.offset,
       });
       const events = await omitUnreadableSessionEvents(found, {
-        userId: requireUserId(ctx.userId),
+        userId,
         roster: rosterReadFor(ctx),
       });
 
@@ -432,8 +407,7 @@ export const eventsRouter = router({
       //
       // FAIL-OPEN by construction: an id whose row the CALLER cannot see is
       // simply absent from the map, so `subjectName` is omitted rather than
-      // fabricated — including on the system-admin branch above, where the
-      // resolver still floors on `ctx.userId` and never on the widened filter.
+      // fabricated. The resolver floors on `ctx.userId` on its own.
       const subjectNameByKey = await resolveSubjectNames(events, ctx.userId);
       return events.map((event) => {
         const name =
@@ -582,7 +556,8 @@ export const eventsRouter = router({
     }),
 
   /**
-   * Count events (for pagination/analytics)
+   * Count events (for pagination/analytics) — the same floor as `search`,
+   * with `userId` and `workspaceId` as narrowing filters.
    */
   count: protectedProcedure
     .input(
@@ -597,26 +572,10 @@ export const eventsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const eventRepo = getEventRepository();
-
-      // Same permission logic as search
-      if (input.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: (members, { and, eq }) =>
-            and(
-              eq(members.workspaceId, input.workspaceId!),
-              eq(members.userId, ctx.userId)
-            ),
-        });
-        if (!membership || !["owner", "admin"].includes(membership.role)) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
-        }
-      } else {
-        // Default to current user
-        input.userId = ctx.userId;
-      }
-
       const count = await eventRepo.countEvents({
+        visibleWhere: eventVisibleWhereFor(ctx),
         userId: input.userId,
+        workspaceId: input.workspaceId,
         eventType: input.eventType,
         subjectType: input.subjectType,
         fromDate: input.fromDate,

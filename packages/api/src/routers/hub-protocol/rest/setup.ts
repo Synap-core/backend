@@ -31,6 +31,10 @@ import {
 
 import { resolveKeyIdentity } from "../../../access/key-identity.js";
 import { apiKeyService } from "../../../services/api-keys.js";
+import {
+  GUEST_REFUSED_BODY,
+  isGuestPrincipal,
+} from "../../../access/guest-containment.js";
 import { assertPodAdmin } from "../../../trpc.js";
 import {
   createAdminUser,
@@ -2045,6 +2049,11 @@ export function registerSetupRoutes(app: HubHono): void {
     if (!token) return c.json({ error: "Unauthorized" }, 401);
     const keyRecord = await apiKeyService.validateApiKey(token);
     if (!keyRecord) return c.json({ error: "Unauthorized" }, 401);
+    // This route checks its own key (it sits under an auth-skipped prefix), so
+    // it applies the hub's guest containment itself.
+    if (keyRecord.userId && (await isGuestPrincipal(keyRecord.userId))) {
+      return c.json(GUEST_REFUSED_BODY, 403);
+    }
 
     const key = await db.query.apiKeys.findFirst({
       where: eq(apiKeys.id, keyId),

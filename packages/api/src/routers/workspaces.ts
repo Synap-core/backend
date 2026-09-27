@@ -43,7 +43,10 @@ import {
 import { cpCatalogCache } from "@synap/database/schema";
 import { resolveWorkspaceTemplate } from "../services/capabilities/resolve-workspace-template.js";
 import { TRPCError } from "@trpc/server";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../utils/permission-check.js";
 import { materializePodAdminsIntoWorkspace } from "../utils/workspace-role.js";
 import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { auditLog } from "../utils/audit-log.js";
@@ -61,6 +64,10 @@ import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
 import { mcpServersProcedures } from "./workspaces/mcp-servers.js";
 import { listProjectsUsingWorkspace } from "../utils/project-workspace.js";
 import { podVisibleWorkspaceWhere } from "../utils/user-visible-where.js";
+import {
+  setWorkspaceArchived,
+  type ArchivedAutomationRef,
+} from "../utils/workspace-archive.js";
 
 export { isPodReadableWorkspace } from "./workspaces/helpers.js";
 
@@ -873,20 +880,35 @@ const coreProcedures = {
     }),
 
   /**
-   * Soft-archive a workspace.
+   * Soft-archive (or restore) a workspace — GOVERNED.
    *
    * Sets `workspaces.archived_at = now()`. The row stays in the DB and is
    * filtered out of `list` queries unless `includeArchived: true` is passed.
    * Restore by calling `archive` again with `restore: true`.
    *
-   * Authorization: pod admin OR the workspace owner. (Workspace admins do
+   * Authorization floor: pod admin OR the workspace owner. (Workspace admins do
    * NOT qualify — owners-only matches the pod-admin destructive-action gate.)
+   *
+   * GOVERNANCE — one door for everyone: after the floor, EVERY caller goes
+   * through `checkPermissionOrPropose` (`workspaces` + `archive` | `restore`).
+   * `archive` is a DESTRUCTIVE_ACTIONS verb (rung 2.5) and `restore` is
+   * ADMIN-floored, so an AGENT always proposes (approval replays this
+   * procedure via `executors/workspace.ts`); a human owner / pod admin gets
+   * `granted` from the same call and archives directly. A pod admin who is not
+   * a member of the workspace is gated at pod scope (`workspaceId: null`) —
+   * the owner/pod-admin floor above is the membership check for that case.
+   *
+   * ARCHIVE pauses the workspace's scoped automations (and names them in the
+   * result); RESTORE re-enables nothing and lists the ones still paused by the
+   * archive so a surface can offer re-enabling. See `utils/workspace-archive.ts`.
    */
   archive: protectedProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid(),
         restore: z.boolean().default(false),
+        /** Why — shown to the reviewer when this becomes a proposal. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -905,7 +927,7 @@ const coreProcedures = {
         string,
         unknown
       >;
-      if (settingsRecord.systemSlug) {
+      if (settingsRecord.systemSlug || workspace.systemSlug) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "System workspaces cannot be archived.",
@@ -939,12 +961,62 @@ const coreProcedures = {
         });
       }
 
-      const archivedAt = input.restore ? null : new Date();
-      const [updated] = await db
-        .update(workspaces)
-        .set({ archivedAt, updatedAt: new Date() })
-        .where(eq(workspaces.id, input.workspaceId))
-        .returning();
+      // Already in the requested state → calm no-op (no proposal, no write).
+      const alreadyThere = input.restore
+        ? workspace.archivedAt == null
+        : workspace.archivedAt != null;
+      if (alreadyThere) {
+        return {
+          ...projectWorkspaceSettings(workspace),
+          status: input.restore ? ("restored" as const) : ("archived" as const),
+          unchanged: true as const,
+          pausedAutomations: [] as ArchivedAutomationRef[],
+          pausedByArchive: [] as ArchivedAutomationRef[],
+        };
+      }
+
+      const memberRow = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, input.workspaceId),
+          eq(workspaceMembers.userId, ctx.userId)
+        ),
+        columns: { id: true },
+      });
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? undefined,
+        workspaceId: memberRow ? input.workspaceId : null,
+        subjectType: "workspaces",
+        action: input.restore ? "restore" : "archive",
+        reasoning: input.reasoning,
+        // NO `restore` flag: the ACTION already says archive vs restore (the
+        // executor keys on `workspace/archive` | `workspace/restore`), and a
+        // payload flag rendered on the review card as a stray "Restore: false".
+        data: {
+          id: input.workspaceId,
+          name: workspace.name,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: proposedMessageFor(
+            perm.proposalType,
+            input.restore
+              ? "Restoring this workspace requires approval."
+              : "Archiving this workspace requires approval."
+          ),
+        };
+      }
+
+      const result = await setWorkspaceArchived(await getDb(), {
+        workspaceId: input.workspaceId,
+        archive: !input.restore,
+      });
 
       auditLog({
         subjectType: "workspaces",
@@ -955,11 +1027,20 @@ const coreProcedures = {
         workspaceId: input.workspaceId,
         data: {
           id: input.workspaceId,
-          archivedAt: archivedAt?.toISOString() ?? null,
+          archivedAt: result.archivedAt?.toISOString() ?? null,
+          pausedAutomationIds: result.pausedAutomations.map((a) => a.id),
         },
       });
 
-      return updated;
+      // Client-safe projection: `settings` can carry credentials (the old
+      // `.returning()` row leaked them raw).
+      return {
+        ...projectWorkspaceSettings(workspace),
+        archivedAt: result.archivedAt,
+        status: input.restore ? ("restored" as const) : ("archived" as const),
+        pausedAutomations: result.pausedAutomations,
+        pausedByArchive: result.pausedByArchive,
+      };
     }),
 
   /**

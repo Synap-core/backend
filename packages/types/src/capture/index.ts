@@ -16,23 +16,37 @@
 
 import { z } from "zod";
 import {
-  cleanFieldKey,
-  isSensitiveField,
-  redactSecretValues,
-  SECRET_TYPE_FIELDS,
-} from "../vault/index.js";
+  ASK_LIMITS,
+  ASK_REFUSED_FIELD_TYPES,
+  AskFormValuesSchema,
+  AskOptionSchema,
+  atMostOneRecommended,
+  DynamicFormSpecSchema,
+  isRefusedAskFieldType,
+} from "../ask/index.js";
+
+/**
+ * The chip, form and answer-value schemas live in the shared ASK leaf
+ * (`../ask`) — capture follow-ups and a session slot's ask are one contract.
+ * Re-exported under their capture names so nothing downstream moves.
+ */
+export {
+  atMostOneRecommended,
+  DynamicFormFieldSchema,
+  DynamicFormSpecSchema,
+} from "../ask/index.js";
 
 /** Bounds shared by every door that writes or reads a part. */
 export const CAPTURE_PART_LIMITS = {
   questionMaxChars: 500,
-  chipsMax: 8,
-  chipLabelMaxChars: 80,
-  answerTextMaxChars: 2000,
+  chipsMax: ASK_LIMITS.optionsMax,
+  chipLabelMaxChars: ASK_LIMITS.optionLabelMaxChars,
+  answerTextMaxChars: ASK_LIMITS.answerTextMaxChars,
   /** JSON-serialized form values, in UTF-8 bytes. */
-  formValuesMaxBytes: 8 * 1024,
-  formFieldsMax: 20,
+  formValuesMaxBytes: ASK_LIMITS.formValuesMaxBytes,
+  formFieldsMax: ASK_LIMITS.formFieldsMax,
   /** A chip's one-line imperative consequence ("→ creates a positioning note"). */
-  chipDescriptionMaxChars: 140,
+  chipDescriptionMaxChars: ASK_LIMITS.optionDescriptionMaxChars,
   /** A question's one-line WHY (what answering changes). */
   whyMaxChars: 200,
 } as const;
@@ -45,45 +59,18 @@ export const FOLLOW_UP_CHIP_ACTIONS = [
   "dismiss",
 ] as const;
 
-export const FollowUpChipSchema = z.object({
-  label: z.string().min(1).max(CAPTURE_PART_LIMITS.chipLabelMaxChars),
+/**
+ * A capture chip = the shared {@link AskOptionSchema} plus capture's own APPLY
+ * fields (what choosing it does to the structured result). `value` is required
+ * here: a capture chip is always applied by value.
+ */
+export const FollowUpChipSchema = AskOptionSchema.extend({
   value: z.string().max(500),
   action: z.enum(FOLLOW_UP_CHIP_ACTIONS),
-  icon: z.string().max(64).optional(),
   entityId: z.string().max(200).optional(),
   propertyKey: z.string().max(200).optional(),
-  /** The AI's recommended answer — at most ONE per question. */
-  recommended: z.boolean().optional(),
-  /** One-line imperative consequence of choosing this answer. */
-  description: z
-    .string()
-    .max(CAPTURE_PART_LIMITS.chipDescriptionMaxChars)
-    .optional(),
 });
 export type CaptureFollowUpChip = z.infer<typeof FollowUpChipSchema>;
-
-/** True when no more than one chip is marked `recommended`. */
-export function atMostOneRecommended(
-  chips: ReadonlyArray<{ recommended?: boolean }>
-): boolean {
-  return chips.filter((c) => c.recommended === true).length <= 1;
-}
-
-export const DynamicFormFieldSchema = z.object({
-  key: z.string().min(1).max(200),
-  label: z.string().max(200),
-  type: z.string().max(64),
-  constraints: z
-    .object({
-      enum: z.array(z.string()).optional(),
-      min: z.number().optional(),
-      max: z.number().optional(),
-      pattern: z.string().optional(),
-    })
-    .optional(),
-  required: z.boolean().optional(),
-  help: z.string().optional(),
-});
 
 /**
  * The secret-form-value rule (the tagged `{kind:"new"|"existing"}` shape and
@@ -101,105 +88,16 @@ export {
 export type { SecretFieldValue } from "../vault/index.js";
 
 /**
- * Field types an AI may NOT author on the capture wire.
- *
- * Credential prompts come from a capability MANIFEST
- * (`installParamsToFormSpec`, client-side), never from a model, and a value
- * typed into a room message is persisted into `messages.metadata.capturePart`
- * and fed back as refine context. `type` is a FREE STRING here, which is the
- * whole reason a dropped-set exists — but the set held only `"secret"`, so an
- * AI that wrote `type: "password"` got a masked credential prompt anyway, with
- * the same consequence. The other spellings a model reaches for are here too.
- *
- * Deliberately a DROPPED-SET and not a strict enum: `type` stays open so a new
- * NON-credential type (`"date"`, `"slider"`, whatever a future spec adds) keeps
- * working without a release. Only credential-ish types are refused.
- *
- * Matched case-insensitively, `-`/`_`/space-insensitively, so `"API_KEY"`,
- * `"api-key"` and `"apiKey"` are one entry, not three.
- *
- * ## DERIVED, not hand-written (round-2 review)
- *
- * The hand list missed `secret-key`, `apisecret`, `sshkey`, `totp`/`otp`,
- * `pin`, `cvv`, `cardnumber` and `connectionstring` — and there was nothing to
- * stop the next spelling being missed too. `@synap-core/types/vault` already
- * owns the sensitivity table: every `!`-prefixed key in `SECRET_TYPE_FIELDS`
- * is, by that module's own definition, a credential. So a field name the vault
- * calls sensitive joins this set BY EXISTING.
+ * Field types an AI may NOT author on the capture wire — the ask leaf's
+ * {@link ASK_REFUSED_FIELD_TYPES} (derived from the vault's sensitivity table;
+ * see its docblock), under capture's name.
  */
-
-/** Lowercase, `-`/`_`/space-insensitive. The ONE normalisation for this set. */
-function normaliseFieldType(type: string): string {
-  return type.toLowerCase().replace(/[-_\s]+/g, "");
-}
-
-/**
- * The two `!`-fields that are too GENERIC to refuse as a form `type`.
- *
- * `env_variable: ["key", "!value", …]` makes `value` sensitive as a vault FIELD
- * (it is the variable's content) — but a capture field of type `"value"` is
- * ordinary, and refusing it would silently drop legitimate forms. Same for
- * `note`'s `content`. Sensitivity is contextual in the vault; the context does
- * not survive the move to a form-field type, so these two are named and
- * excluded rather than quietly inherited.
- */
-const NOT_A_CREDENTIAL_TYPE = new Set(["value", "content"]);
-
-/**
- * Spellings a MODEL reaches for that are not vault field names: form-only
- * synonyms and the bare stems of compound `!`-fields (`cardCvv` → `cvv`).
- * Small, explicit, and the only hand-maintained part.
- */
-const CAPTURE_EXTRA_REFUSED_TYPES = [
-  "secret",
-  "secretkey",
-  "token",
-  "authtoken",
-  "bearertoken",
-  "sessiontoken",
-  "apikey",
-  "apisecret",
-  "sshkey",
-  "passwd",
-  "credential",
-  "credentials",
-  "otp",
-  "pin",
-  "cvv",
-] as const;
-
-/** Every `!`-prefixed key in the vault's sensitivity table, normalised. */
-const VAULT_SENSITIVE_TYPES = Object.values(SECRET_TYPE_FIELDS)
-  .flat()
-  .filter(isSensitiveField)
-  .map((f) => normaliseFieldType(cleanFieldKey(f)))
-  .filter((f) => !NOT_A_CREDENTIAL_TYPE.has(f));
-
-export const CAPTURE_REFUSED_FIELD_TYPES: readonly string[] = [
-  ...new Set([...VAULT_SENSITIVE_TYPES, ...CAPTURE_EXTRA_REFUSED_TYPES]),
-];
-
-const refusedTypes = new Set<string>(CAPTURE_REFUSED_FIELD_TYPES);
+export const CAPTURE_REFUSED_FIELD_TYPES: readonly string[] =
+  ASK_REFUSED_FIELD_TYPES;
 
 /** Is this authored `type` a credential prompt? (normalised, never exact-match) */
-export function isRefusedCaptureFieldType(type: unknown): boolean {
-  if (typeof type !== "string") return false;
-  return refusedTypes.has(normaliseFieldType(type));
-}
-
-export const DynamicFormSpecSchema = z.object({
-  title: z.string().optional(),
-  note: z.string().optional(),
-  // Credential-ish fields are DROPPED, never persisted. See
-  // `CAPTURE_REFUSED_FIELD_TYPES` for why the set is a set and not just
-  // `"secret"`, and why `type` stays an open string.
-  fields: z
-    .array(DynamicFormFieldSchema)
-    .max(CAPTURE_PART_LIMITS.formFieldsMax)
-    .transform((fields) =>
-      fields.filter((f) => !isRefusedCaptureFieldType(f.type))
-    ),
-});
+export const isRefusedCaptureFieldType: (type: unknown) => boolean =
+  isRefusedAskFieldType;
 
 export const CAPTURE_QUESTION_STATUSES = [
   "open",
@@ -209,10 +107,6 @@ export const CAPTURE_QUESTION_STATUSES = [
 ] as const;
 export type CaptureQuestionStatus = (typeof CAPTURE_QUESTION_STATUSES)[number];
 
-function utf8Bytes(s: string): number {
-  return new TextEncoder().encode(s).length;
-}
-
 /** The answer a person gives — also the input of `capture.answerFollowUp`. */
 export const CaptureAnswerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("chip"), chip: FollowUpChipSchema }),
@@ -220,22 +114,8 @@ export const CaptureAnswerSchema = z.discriminatedUnion("type", [
     type: z.literal("text"),
     text: z.string().min(1).max(CAPTURE_PART_LIMITS.answerTextMaxChars),
   }),
-  z.object({
-    type: z.literal("form"),
-    values: z
-      .record(z.string(), z.unknown())
-      .refine(
-        (v) =>
-          utf8Bytes(JSON.stringify(v)) <=
-          CAPTURE_PART_LIMITS.formValuesMaxBytes,
-        { message: "form values exceed 8KB serialized" }
-      )
-      // AFTER the size bound (measured on the original, so an oversized payload
-      // cannot become acceptable by being redacted) and BEFORE it is persisted
-      // into `messages.metadata.capturePart`, where a plaintext key would sit
-      // in a JSONB column, readable by every agent, for the life of the row.
-      .transform((v) => redactSecretValues(v)),
-  }),
+  // Bounded at 8KB, then secret values redacted — the shared ask rule.
+  z.object({ type: z.literal("form"), values: AskFormValuesSchema }),
   z.object({ type: z.literal("skip") }),
 ]);
 export type CaptureAnswer = z.infer<typeof CaptureAnswerSchema>;

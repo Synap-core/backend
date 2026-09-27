@@ -105,6 +105,15 @@ describe("humanizeToken", () => {
 });
 
 describe("resolveActionLabel — two moods", () => {
+  it("names the governed space operations in both moods (P1)", () => {
+    expect(resolveActionLabel("move", "imperative")).toBe("Move");
+    expect(resolveActionLabel("move", "past")).toBe("Moved");
+    expect(resolveActionLabel("rename", "past")).toBe("Renamed");
+    // The stored proposalType reads as the act a person recognises.
+    expect(resolveActionLabel("grant_access", "imperative")).toBe("Share");
+    expect(resolveActionLabel("profile.grant_access", "past")).toBe("Shared");
+  });
+
   it("keeps imperative and past DISTINCT (they were an accidental fork)", () => {
     // event-renderer said "Created"; ProposalChrome said "Create". Both right.
     expect(resolveActionLabel("create", "imperative")).toBe("Create");

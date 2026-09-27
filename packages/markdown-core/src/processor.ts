@@ -55,6 +55,7 @@ import type { ContainerDirective } from "mdast-util-directive";
 import type {} from "mdast-util-directive";
 import { VFile } from "vfile";
 import { closerColons, splitLines } from "./scan.js";
+import { isFrameDirective } from "./embeds.js";
 import type { Diagnostic } from "./diagnostics.js";
 import {
   highlightProperties,
@@ -227,14 +228,12 @@ function remarkMathBlocks(this: unknown) {
 
 // ─── 3. Unterminated-embed repair ───────────────────────────────────────────
 
-/** Container directives whose children are CONTENT, never an embed body. */
-const PROSE_CONTAINERS = new Set(["synap-section"]);
-
+/** A `synap-*` container whose body is an embed body (a frame's children are CONTENT). */
 function isEmbedContainer(node: AnyNode): boolean {
   return (
     node.type === "containerDirective" &&
     !!node.name?.startsWith("synap-") &&
-    !PROSE_CONTAINERS.has(node.name)
+    !isFrameDirective(node.name)
   );
 }
 

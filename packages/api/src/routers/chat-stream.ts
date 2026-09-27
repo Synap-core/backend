@@ -64,6 +64,7 @@ import { queryChannelMessages } from "../utils/query-channel-messages.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { createLogger } from "@synap-core/core";
 import { authMiddleware } from "@synap/auth";
+import { refuseGuestSession } from "../access/guest-containment.js";
 import { createContext } from "../context.js";
 import { channelSendMessageInputSchema, channelsRouter } from "./channels.js";
 import { runWithChatTurnObserver } from "../utils/chat-turn-observer.js";
@@ -110,6 +111,7 @@ export const chatStreamApp = new Hono<{
 // requirement co-located with the route — if someone mounts this app at
 // a different prefix, the auth travels with it.
 chatStreamApp.use("*", authMiddleware);
+chatStreamApp.use("*", refuseGuestSession);
 
 /**
  * POST /api/chat/turns

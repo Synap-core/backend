@@ -33,6 +33,10 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { resolveKeyIdentity } from "../../access/key-identity.js";
+import {
+  GUEST_REFUSED_MESSAGE,
+  isGuestPrincipal,
+} from "../../access/guest-containment.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
@@ -96,13 +100,13 @@ export function formatGrounding(
     (a, b) => b.n - a.n || a.name.localeCompare(b.name)
   );
   const emptyNote = ranked.some((w) => w.n === 0)
-    ? " 0-entity workspaces are empty scaffolds; prefer an active one unless the user names it."
+    ? " 0-entity spaces are empty scaffolds; prefer an active one unless the user names it."
     : "";
   // Concept prose lives in the reflexes + lenses skill; grounding carries the
   // live facts and the one rule a model applies to them.
   const rules =
     ` For READS omit workspaceId for pod-wide recall.` +
-    ` For WRITES pass kind/profile (+ roles as facets); omit workspaceId unless you deliberately pin one domain.`;
+    ` For WRITES pass kind/profile (+ roles as facets); omit workspaceId unless you deliberately pin one space.`;
 
   for (let n = Math.min(ranked.length, GROUNDING_WS_LIMIT); n >= 0; n--) {
     const shown = ranked.slice(0, n);
@@ -111,7 +115,8 @@ export function formatGrounding(
       .map((w) => `${w.name} (${w.id}, ${w.n} entities)`)
       .join("; ");
     const more = hidden > 0 ? `${n > 0 ? " " : ""}…and ${hidden} more` : "";
-    const out = `${projPart}Domains, busiest first: ${list}${more}.${emptyNote}${rules}`;
+    // "Spaces" is the user's word (concepts.md, N1); `workspaceId` is the param.
+    const out = `${projPart}Spaces (workspaceId), busiest first: ${list}${more}.${emptyNote}${rules}`;
     if (Buffer.byteLength(out) <= maxBytes) return out;
   }
   return "";
@@ -459,6 +464,15 @@ mcpHttpApp.post("/", async (c) => {
   // delegation fact.
   const { effectiveUserId, agentUserId, isAgent } =
     await resolveKeyIdentity(keyRecord);
+
+  // ── 2a. Guest containment: a guest never uses MCP (reads OR writes). The
+  // data floor is `effectiveUserId`, so that is the principal judged.
+  if (await isGuestPrincipal(effectiveUserId, c.req.raw)) {
+    return jsonRpcForbidden(
+      (parsedBody as { id?: unknown } | null)?.id ?? null,
+      GUEST_REFUSED_MESSAGE
+    );
+  }
 
   // ── 2b. Attribution hard-reject (Phase 0, GOVERNANCE-CONVERGENCE-PLAN.md) ──
   if (

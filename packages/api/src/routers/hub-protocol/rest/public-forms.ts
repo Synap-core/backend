@@ -1,14 +1,17 @@
 /**
- * Hub Protocol REST — the PUBLIC GUEST FORM door (Sites W4).
+ * Hub Protocol REST — the PUBLIC GUEST FORM door.
  *
- *   GET  /public/forms/:token   the form's public field definition + a
- *                               time-to-submit ticket. Unknown / disabled →
- *                               the same 404 as every other public miss.
- *   POST /public/forms/:token   a guest submission. ALWAYS `202
- *                               {"received":true}` — success, duplicate,
- *                               unknown token, honeypot, captcha failure, cap,
- *                               refusal and internal error alike. The caller
- *                               learns nothing about the pod from the reply.
+ *   GET  /public/forms/:token   the form's public field definition, its
+ *                               `minSubmitMs` and a time-to-submit ticket.
+ *                               Unknown / disabled → the same 404 as every
+ *                               other public miss.
+ *   POST /public/forms/:token   a guest submission. The reply is
+ *                               `guestFormReply` (services/forms/guest-submit):
+ *                               202 received (filed, or any outcome a caller
+ *                               must not learn: unknown token, honeypot,
+ *                               captcha failure, the pending cap), 422 with
+ *                               the invalid field keys or `retry`, 503 when
+ *                               the pod failed to file it.
  *
  * It lives under `/public/`, so the ONE predicate (`public-doors.ts`) skips hub
  * auth + idempotency, and the pod edge gives it the credentialless CORS policy,
@@ -24,7 +27,7 @@
 import { logger, httpStatusForTrpcError, type HubHono } from "./_shared.js";
 import { PUBLIC_NOT_FOUND_BODY } from "../../../services/sharing/public-read.js";
 import {
-  GUEST_FORM_RECEIVED,
+  guestFormReply,
   loadFormByTokenHash,
   submitGuestForm,
   type GuestDeps,
@@ -81,13 +84,13 @@ export function registerPublicFormsRoutes(
     } catch {
       raw = "";
     }
-    // The door re-checks the size (GUEST_FORM_MAX_BODY_BYTES); the outcome
-    // is for the log only and never reaches the caller.
-    const outcome = await submitGuestForm(
+    // The door re-checks the size (GUEST_FORM_MAX_BODY_BYTES).
+    const result = await submitGuestForm(
       { token: c.req.param("token") ?? "", rawBody: raw },
       deps
     );
-    logger.info({ outcome }, "guest form submission");
-    return c.json(GUEST_FORM_RECEIVED, 202);
+    logger.info({ outcome: result.outcome }, "guest form submission");
+    const reply = guestFormReply(result);
+    return c.json(reply.body, reply.status);
   });
 }

@@ -1,13 +1,13 @@
 /**
- * THE PUBLISH DOOR (Sites W5a) — put a record on the public web, and take it
+ * THE PUBLISH DOOR — put a record on the public web, and take it
  * off again. Every door calls this module: tRPC `shares.publish` /
  * `shares.unpublish`, Hub REST `POST /shares/publish` / `POST /shares/unpublish`,
  * and the `share/create` approval executor (an agent's publish).
  *
  * WHAT A PUBLICATION IS (0276). One `resource_shares` row per record with
- * `audience = 'public'`, addressed by a TOKEN exactly like a link row (the S3
- * machinery: `generateShareToken`, stored as SHA-256 + a 6-char prefix, shown
- * ONCE). `GET /public/shares/:token` (W3, `public-read.ts`) serves it only while
+ * `audience = 'public'`, addressed by a TOKEN exactly like a link row (the same
+ * token machinery: `generateShareToken`, stored as SHA-256 + a 6-char prefix, shown
+ * ONCE). `GET /public/shares/:token` (`public-read.ts`) serves it only while
  * `state = 'published'`, not revoked, not expired. What it serves is fixed HERE,
  * at publish time, never read from the live record:
  *   - `published_properties` — a SNAPSHOT of exactly the keys the workspace's
@@ -23,7 +23,7 @@
  *
  * WHAT CAN BE PUBLISHED. An entity, or a document (which resolves to its
  * owning entity — documents follow their entity). Views and projects are
- * refused: the public read serves entities only (W3). A pod-wide record (no
+ * refused: the public read serves entities only. A pod-wide record (no
  * workspace) is refused: there is no workspace policy to publish it under.
  * The policy must say `public.read = 'direct'` for the requested kind (the
  * default denies public entirely).
@@ -43,6 +43,9 @@
  * The token is KEPT, so publishing again restores the same URL. It never
  * touches a revoked row (the lookup is `revoked_at IS NULL`, and the 0276
  * trigger freezes a revoked row anyway): revocation is permanent.
+ *
+ * REVOKE ({@link revokePublication}) is the permanent stop: direct for
+ * everyone, the url dies for good, and publishing again mints a NEW url.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -64,6 +67,7 @@ import {
   type ShareKind,
 } from "./exposure-policy.js";
 import { projectPublishedProperties } from "./public-read.js";
+import { isPublicationLive } from "./publication-live.js";
 import { agentOf, type ShareActor } from "./share-service.js";
 
 type Db = Awaited<ReturnType<typeof getDb>>;
@@ -317,7 +321,12 @@ export async function applyPublish(
   const [live] = await database
     .select({
       id: resourceShares.id,
+      audience: resourceShares.audience,
+      resourceType: resourceShares.resourceType,
       state: resourceShares.state,
+      revokedAt: resourceShares.revokedAt,
+      expiresAt: resourceShares.expiresAt,
+      publishedAt: resourceShares.publishedAt,
       tokenHash: resourceShares.tokenHash,
       tokenPrefix: resourceShares.tokenPrefix,
       pin: resourceShares.publishedDocumentVersionId,
@@ -397,7 +406,7 @@ export async function applyPublish(
   }
 
   const status =
-    live?.state === "published"
+    live && isPublicationLive({ ...live, hasToken: !!live.tokenHash })
       ? ("republished" as const)
       : ("published" as const);
   auditLog({
@@ -482,4 +491,66 @@ export async function unpublishResource(
     return { status: "unpublished", shareId };
   }
   return { status: "none" };
+}
+
+/**
+ * REVOKE a record's publication, permanently. Direct for everyone, agents
+ * included — it only narrows, like unpublish and like `revokeLink` (a link
+ * revoke is direct and permanent too). Sets `revoked_at` / `revoked_by` and drafts
+ * the row in the same statement, so no revoked row ever reads as published;
+ * the 0276 `resource_shares_revoke_is_permanent` trigger then freezes it (no
+ * un-revoke, no re-publish, no re-token) and the public read answers its token with
+ * the uniform 404. Publishing again creates a NEW row with a NEW url.
+ *
+ * Unlike unpublish it also reaches a DRAFT publication (an unpublished url can
+ * otherwise be restored by publishing again): "revoke" means that url is dead.
+ * Idempotent: no live public row → `none`.
+ */
+export async function revokePublication(
+  actor: ShareActor,
+  req: PublishRequest
+): Promise<{ status: "revoked" | "none"; shareId?: string }> {
+  const database = await getDb();
+  const record = await loadRecord(database, req);
+  await assertWorkspaceWrite(database, actor.userId, {
+    workspaceId: record.workspaceId,
+    ownerId: record.ownerId,
+  });
+  const now = new Date();
+  const revoked = await database
+    .update(resourceShares)
+    .set({
+      revokedAt: now,
+      revokedBy: actor.userId,
+      state: "draft",
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(resourceShares.resourceType, "entity"),
+        eq(resourceShares.resourceId, record.id),
+        eq(resourceShares.audience, "public"),
+        isNull(resourceShares.revokedAt)
+      )
+    )
+    .returning({ id: resourceShares.id });
+  const shareId = revoked[0]?.id;
+  if (!shareId) return { status: "none" };
+  auditLog({
+    subjectType: "sharing",
+    action: "delete",
+    phase: "completed",
+    subjectId: shareId,
+    userId: actor.userId,
+    agentUserId: agentOf(actor) ?? undefined,
+    workspaceId: record.workspaceId ?? undefined,
+    data: {
+      op: "revoke_publication",
+      shareId,
+      resourceType: "entity",
+      resourceId: record.id,
+      revoked: true,
+    },
+  });
+  return { status: "revoked", shareId };
 }

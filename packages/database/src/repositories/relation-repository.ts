@@ -12,6 +12,37 @@ import type { Relation, NewRelation } from "../schema/relations.js";
 import { sql } from "../client-pg.js";
 import { stampProvenance } from "../utils/stamp-provenance.js";
 
+/**
+ * The relation type that GRANTS read access to a project's guests (the
+ * `visible_to` exposure edge; `@synap/api` `utils/project-scope.ts` VISIBLE_TO
+ * names the same string, and a test pins the two equal). It is written ONLY by
+ * the share door, which runs the anchor-admin check and the exposure policy.
+ * Every generic relation writer (relation doors, capture, property sync,
+ * proposal materialization, templates) must refuse it, or an editor could hand
+ * a record to every guest of a project by picking a relation type.
+ */
+export const EXPOSURE_GRANT_RELATION_TYPE = "visible_to";
+
+/** Thrown when a generic writer is asked to create or retype a `visible_to` edge. */
+export class ExposureEdgeWriteRefused extends Error {
+  constructor(door: string) {
+    super(
+      `${EXPOSURE_GRANT_RELATION_TYPE} is an exposure edge — only the share door writes it (refused: ${door}).`
+    );
+    this.name = "ExposureEdgeWriteRefused";
+  }
+}
+
+/** Refuse a generic write that would create or retype into a `visible_to` edge. */
+export function refuseExposureEdgeWrite(
+  type: string | null | undefined,
+  door: string
+): void {
+  if (type === EXPOSURE_GRANT_RELATION_TYPE) {
+    throw new ExposureEdgeWriteRefused(door);
+  }
+}
+
 export interface CreateRelationInput {
   id?: string;
   /** Entity endpoint when the source end is an entity (default kind). */
@@ -57,9 +88,20 @@ export class RelationRepository extends BaseRepository<
    * Create a new relation between entities
    * Emits: relations.create.completed
    */
-  async create(data: CreateRelationInput, userId: string): Promise<Relation> {
+  async create(
+    data: CreateRelationInput,
+    userId: string,
+    opts?: {
+      /** Set ONLY by the share door (`shareResource`): it may write `visible_to`. */
+      exposureShareDoor?: true;
+    }
+  ): Promise<Relation> {
     // Type validation is handled by the caller (router validates against
-    // workspace relation_defs and system types)
+    // workspace relation_defs and system types) — except the exposure edge,
+    // which no caller but the share door may write.
+    if (opts?.exposureShareDoor !== true) {
+      refuseExposureEdgeWrite(data.type, "RelationRepository.create");
+    }
 
     const [relation] = await this.db
       .insert(relations)
@@ -104,7 +146,20 @@ export class RelationRepository extends BaseRepository<
     userId: string
   ): Promise<Relation> {
     const updates: Partial<NewRelation> = {};
-    if (data.type !== undefined) updates.type = data.type;
+    if (data.type !== undefined) {
+      // Never retype INTO an exposure edge, nor AWAY from one: both change who
+      // may read the source record, and only the share / unshare doors may.
+      refuseExposureEdgeWrite(data.type, "RelationRepository.update");
+      const [current] = await this.db
+        .select({ type: relations.type })
+        .from(relations)
+        .where(eq(relations.id, id))
+        .limit(1);
+      if (current && current.type !== data.type) {
+        refuseExposureEdgeWrite(current.type, "RelationRepository.update");
+      }
+      updates.type = data.type;
+    }
 
     // relation.update is a NON-DESTRUCTIVE partial edit (it auto-approves under
     // NORMAL governance). A partial `metadata` payload must MERGE into the row's

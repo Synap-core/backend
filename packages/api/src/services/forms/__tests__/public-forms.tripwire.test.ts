@@ -1,7 +1,7 @@
 /**
  * TRIPWIRE — the public door's own code never reaches for a caller-chosen
  * identity, never writes anything but a create, and never borrows the shared
- * capture agent (Sites W4).
+ * capture agent.
  *
  * DERIVED, never hand-listed: the scanned set is (a) every Hub REST file that
  * registers a `/public/…` route, plus (b) the relative-import closure of those

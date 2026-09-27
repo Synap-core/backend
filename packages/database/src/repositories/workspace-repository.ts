@@ -4,7 +4,7 @@
  * Handles all workspace CRUD operations with automatic event emission
  */
 
-import { eq, sql, inArray, or, type SQL } from "drizzle-orm";
+import { and, eq, sql, inArray, or, type SQL } from "drizzle-orm";
 import {
   workspaces,
   type WorkspacePrimarySurface,
@@ -13,6 +13,7 @@ import {
 import { entities } from "../schema/entities.js";
 import { relations } from "../schema/relations.js";
 import { proposals } from "../schema/proposals.js";
+import { links } from "../schema/links.js";
 import { documents, documentVersions } from "../schema/documents.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -379,16 +380,37 @@ export class WorkspaceRepository extends BaseRepository<
   /**
    * Delete a workspace
    * Emits: workspaces.delete.completed
+   *
+   * Also removes every `links` edge whose endpoint IS this workspace, in the
+   * SAME transaction as the row delete. `links` is polymorphic (text ids, no
+   * FK), so the workspaces FK cascade never reaches it: before this, a
+   * project's `uses` edge (and a peer workspace's source edge) outlived the
+   * workspace and every reader of the index had to tolerate a dangling id.
+   * Only edges naming THIS workspace as `from`/`to` go — never anything else.
+   * Every hard-delete door (`workspaces.delete`, `adminDelete`, Hub
+   * `POST /workspaces/:id/purge`) ends here, so this is the one place.
    */
   async delete(id: string, userId: string): Promise<void> {
-    const result = await this.db
-      .delete(workspaces)
-      .where(eq(workspaces.id, id))
-      .returning({ id: workspaces.id });
+    await this.db.transaction(async (tx: any) => {
+      await tx
+        .delete(links)
+        .where(
+          or(
+            and(eq(links.toType, "workspace"), eq(links.toId, id)),
+            and(eq(links.fromType, "workspace"), eq(links.fromId, id))
+          )
+        );
 
-    if (result.length === 0) {
-      throw new Error("Workspace not found");
-    }
+      const result = await tx
+        .delete(workspaces)
+        .where(eq(workspaces.id, id))
+        .returning({ id: workspaces.id });
+
+      if (result.length === 0) {
+        // Throwing rolls the link delete back with it.
+        throw new Error("Workspace not found");
+      }
+    });
 
     // Emit completed event
     await this.emitCompleted("delete", { id }, userId);

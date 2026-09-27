@@ -26,6 +26,7 @@ import {
 } from "./utils/error-mappers.js";
 import { auditLogMiddleware } from "./middleware/audit-log.js";
 import { readOnlyGuardMiddleware } from "./middleware/read-only-guard.js";
+import { guestContainmentMiddleware } from "./access/guest-containment.js";
 
 const logger = createLogger({ module: "trpc" });
 
@@ -80,9 +81,14 @@ const errorCatchingMiddleware = t.middleware(async ({ next }) => {
 
 /**
  * Public procedure (no auth required)
- * Base error-catching middleware applied to all procedures.
+ * Base error-catching middleware applied to all procedures, then guest
+ * containment: every procedure is built from this one, so a signed-in guest's
+ * mutation is refused here whichever router it lives in (see
+ * `access/guest-containment.ts`).
  */
-export const publicProcedure = t.procedure.use(errorCatchingMiddleware);
+export const publicProcedure = t.procedure
+  .use(errorCatchingMiddleware)
+  .use(guestContainmentMiddleware);
 
 /**
  * Protected procedure (auth required)

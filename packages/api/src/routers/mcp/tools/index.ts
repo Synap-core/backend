@@ -39,7 +39,10 @@ import { FIND_CATALOGS } from "../../../services/capabilities/find-intent.js";
 // reason for a copy. Widening the union now widens what MCP advertises, in the
 // same commit, and `output-ref-kinds-parity` audits the mirrors this file
 // cannot import (the Hub REST client's duplicated literal).
-import { OUTPUT_REF_KINDS } from "@synap/playbooks";
+import { BLOCKED_REASONS, OUTPUT_REF_KINDS } from "@synap/playbooks";
+// The ONE ask schema (`@synap-core/types/ask`) — the MCP `ask` property is
+// DERIVED from it (below), never hand-copied.
+import { AskSchema } from "@synap-core/types/ask";
 
 import { automationDataContractSchema } from "../../automations.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
@@ -178,6 +181,25 @@ function buildRuleSentenceJsonSchema(): Record<string, unknown> {
 }
 
 const RULE_SENTENCE_JSON_SCHEMA = buildRuleSentenceJsonSchema();
+
+/**
+ * JSON Schema for a declared slot's `ask`, DERIVED from `AskSchema` — the very
+ * schema `expectedOutputWireSchema` parses `ask` with. Same reasoning as the two
+ * builders above: the advertised shape and the parse that refuses a bad ask
+ * cannot drift apart. `$schema` stripped for a deterministic manifest.
+ */
+function buildAskJsonSchema(): Record<string, unknown> {
+  const derived = z.toJSONSchema(AskSchema, { io: "input" }) as Record<
+    string,
+    unknown
+  >;
+  delete derived.$schema;
+  derived.description =
+    "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). Omit for a plain free-text answer. null clears a stored ask.";
+  return derived;
+}
+
+const ASK_JSON_SCHEMA = buildAskJsonSchema();
 
 /**
  * JSON Schema for `synap_run_capability`, DERIVED from the ONE
@@ -1570,14 +1592,7 @@ export const tools = {
                   },
                   blockedReason: {
                     type: "string",
-                    enum: [
-                      "credential",
-                      "permission",
-                      "capability",
-                      "policy",
-                      "decision",
-                      "physical",
-                    ],
+                    enum: [...BLOCKED_REASONS],
                     description:
                       "Only with owner='human'. WHY you could not take it, as the class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world. Pick the one that names what someone would BUILD or DO to remove the block.",
                   },
@@ -1613,6 +1628,7 @@ export const tools = {
                       },
                     ],
                   },
+                  ask: ASK_JSON_SCHEMA,
                 },
                 required: ["kind", "label"],
               },
@@ -1703,14 +1719,7 @@ export const tools = {
                   },
                   blockedReason: {
                     type: "string",
-                    enum: [
-                      "credential",
-                      "permission",
-                      "capability",
-                      "policy",
-                      "decision",
-                      "physical",
-                    ],
+                    enum: [...BLOCKED_REASONS],
                     description:
                       "Only with owner='human'. WHY you could not take it, as the class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world. Pick the one that names what someone would BUILD or DO to remove the block.",
                   },
@@ -1746,6 +1755,7 @@ export const tools = {
                       },
                     ],
                   },
+                  ask: ASK_JSON_SCHEMA,
                 },
                 required: ["kind", "label"],
               },
@@ -1766,14 +1776,7 @@ export const tools = {
                 },
                 blockedReason: {
                   type: "string",
-                  enum: [
-                    "credential",
-                    "permission",
-                    "capability",
-                    "policy",
-                    "decision",
-                    "physical",
-                  ],
+                  enum: [...BLOCKED_REASONS],
                   description:
                     "Only with owner='human'. The class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world.",
                 },
@@ -1809,6 +1812,7 @@ export const tools = {
                     },
                   ],
                 },
+                ask: ASK_JSON_SCHEMA,
               },
               required: ["kind", "label"],
               description:
@@ -3249,7 +3253,9 @@ export const tools = {
         annotations: {
           title: "Project uses workspace",
           readOnlyHint: false,
-          destructiveHint: false,
+          // `remove: true` deletes the edge — MCP hints describe the tool's
+          // worst case, so a client must treat it as destructive.
+          destructiveHint: true,
           openWorldHint: false,
         },
         description:
@@ -3271,6 +3277,117 @@ export const tools = {
             },
           },
           required: ["projectId", "workspaceId"],
+        },
+      },
+      {
+        name: "synap_archive_workspace",
+        annotations: {
+          title: "Archive workspace",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Archive a workspace (hide it everywhere and PAUSE its workspace-scoped automations; pod-wide automations are untouched), or restore it with restore:true — restore re-enables NOTHING and lists the automations still paused so the person can choose. Owner or pod admin only; system workspaces refused. Always a proposal for an agent — `proposed` is success, surface reviewUrl.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description: "Workspace UUID (from synap_list_workspaces).",
+            },
+            restore: {
+              type: "boolean",
+              description: "true = un-archive instead. Default false.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why, in the person's words — shown to the reviewer. One line.",
+            },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
+        name: "synap_update_workspace",
+        annotations: {
+          title: "Rename workspace",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Rename or re-describe an existing workspace (settings are not editable here). Governed: always a proposal for an agent — `proposed` is success.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: { type: "string", description: "Workspace UUID" },
+            name: { type: "string", description: "New name (1-100 chars)." },
+            description: { type: "string" },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
+        name: "synap_move_entities",
+        annotations: {
+          title: "Move entities to workspace",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Move entities into another workspace (e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityIds: {
+              type: "array",
+              items: { type: "string" },
+              description: "Entity UUIDs to move (1-500).",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Destination workspace UUID.",
+            },
+            reasoning: {
+              type: "string",
+              description: "Why they belong there — shown to the reviewer.",
+            },
+          },
+          required: ["entityIds", "workspaceId"],
+        },
+      },
+      {
+        name: "synap_grant_profile_access",
+        annotations: {
+          title: "Share kind with workspace",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Let another workspace see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            profileId: { type: "string", description: "Profile UUID." },
+            targetWorkspaceId: {
+              type: "string",
+              description: "Workspace UUID that gains access.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Acting workspace UUID; omit to use the kind's home workspace.",
+            },
+            reasoning: {
+              type: "string",
+              description: "Why — shown to the reviewer. One line.",
+            },
+          },
+          required: ["profileId", "targetWorkspaceId"],
         },
       },
       {

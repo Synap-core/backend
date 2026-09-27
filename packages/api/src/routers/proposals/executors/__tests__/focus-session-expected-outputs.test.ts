@@ -237,6 +237,51 @@ describe("focus_session/update — the deliverables half of an approval", () => 
     expect(added.owedSince).toEqual(expect.any(String));
   });
 
+  // The executor's addOutput schema was a HAND-LISTED six-field pick that left
+  // out `ref`: a governed addOutput pointing the person at a page lost the
+  // pointer on approval. It is now DERIVED from the declarable field list, so
+  // `ref` and the new `ask` ride through by existing.
+  it("carries the declared ref AND ask through an approved addOutput", async () => {
+    await approve({
+      addOutput: {
+        kind: "entity",
+        label: "Stripe key",
+        owner: "human",
+        blockedReason: "credential",
+        why: "The restricted key for the live account",
+        ref: { url: "https://dashboard.stripe.com/apikeys" },
+        ask: { mode: "act", url: "https://dashboard.stripe.com/apikeys" },
+      },
+    });
+
+    const added = writtenOutputs()!.at(-1)!;
+    expect(added.ref).toEqual({ url: "https://dashboard.stripe.com/apikeys" });
+    expect(added.ask).toEqual({
+      mode: "act",
+      url: "https://dashboard.stripe.com/apikeys",
+    });
+  });
+
+  it("still refuses a server-stamped receipt smuggled into an approved addOutput", async () => {
+    await approve({
+      addOutput: {
+        kind: "entity",
+        label: "Forged",
+        attestedBy: "someone",
+        answer: {
+          text: "x",
+          messageId: null,
+          answeredBy: "a",
+          answeredAt: "t",
+        },
+      },
+    });
+    const added = writtenOutputs()!.at(-1)!;
+    expect(added.label).toBe("Forged");
+    expect(added).not.toHaveProperty("attestedBy");
+    expect(added).not.toHaveProperty("answer");
+  });
+
   it("applies completeOutput on a slot the agent owns", async () => {
     await approve({ completeOutput: "Launch brief" });
     expect(writtenOutputs()![0]).toMatchObject({ status: "done" });

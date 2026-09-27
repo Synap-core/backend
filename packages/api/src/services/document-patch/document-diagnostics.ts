@@ -13,7 +13,8 @@
  * Three sources, one list:
  *   1. GRAMMAR — `collectDiagnostics` from `@synap-core/markdown-core`
  *      (unterminated embeds, legacy/malformed props, missing references,
- *      unknown `synap-*` directives), mapped onto the wire codes below;
+ *      unknown `synap-*` directives, column rows), mapped onto the wire codes
+ *      below;
  *   2. CATALOG — a `synap-cell{cellKey}` whose key is not in this pod's
  *      renderables (`listRenderables`, the ONE catalog door), is not
  *      embeddable in a document, or lacks its required props;
@@ -26,7 +27,10 @@
  */
 
 import { inArray, entities, views, cellInstances } from "@synap/database";
-import { collectDiagnostics } from "@synap-core/markdown-core/diagnostics";
+import {
+  collectDiagnostics,
+  GRAMMAR_WIRE_CODE,
+} from "@synap-core/markdown-core/diagnostics";
 import type { Diagnostic as GrammarDiagnostic } from "@synap-core/markdown-core/diagnostics";
 import {
   WIDGET_BY_KEY,
@@ -36,6 +40,11 @@ import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRenderables, type RenderableRow } from "../cells/renderables.js";
 import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import { TEXT_TONES } from "@synap-core/markdown-core/inline-format";
+import {
+  MAX_COLUMNS,
+  MAX_COLUMN_WIDTH,
+  MIN_COLUMN_WIDTH,
+} from "@synap-core/markdown-core/columns";
 
 export const DOCUMENT_DIAGNOSTIC_CODES = [
   "unknown_key",
@@ -47,6 +56,14 @@ export const DOCUMENT_DIAGNOSTIC_CODES = [
   "unterminated",
   /** `:color[…]{tone}` / `==…=={tone}` names a tone that is not a Synap tone (it draws plain). */
   "unknown_tone",
+  /**
+   * A column row readers render but that is not what its author meant: a
+   * column outside a row, a row in a column, a section in a row, content
+   * between columns, more than three columns, one column, an empty column.
+   */
+  "bad_columns",
+  /** A column width that is not a width, on only some columns, or not adding up to 100%. */
+  "bad_width",
   /**
    * RUN-TIME, not grammar: a chart the report flow could not snapshot (its
    * read failed), so it was left live. Never derived from content — stamped
@@ -149,16 +166,18 @@ export function podEmbedResolver(args: {
 
 // ─── Classification ──────────────────────────────────────────────────────────
 
-const GRAMMAR_CODE: Record<GrammarDiagnostic["code"], DocumentDiagnosticCode> =
-  {
-    "unterminated-embed": "unterminated",
-    "legacy-props": "legacy_props",
-    "duplicate-props": "legacy_props",
-    "malformed-props": "bad_props",
-    "missing-ref": "missing_attr",
-    "unknown-directive": "unknown_key",
-    "unknown-tone": "unknown_tone",
-  };
+// The grammar → wire renaming itself is `GRAMMAR_WIRE_CODE` (markdown-core,
+// `diagnostics.ts` — pure data, exhaustive over `DiagnosticCode` at the
+// TYPE level via `satisfies`). Only its subset check against THIS module's
+// wire vocabulary lives here.
+type _GrammarCodesAreDocumentCodes =
+  GrammarDiagnostic["code"] extends keyof typeof GRAMMAR_WIRE_CODE
+    ? (typeof GRAMMAR_WIRE_CODE)[GrammarDiagnostic["code"]] extends DocumentDiagnosticCode
+      ? true
+      : never
+    : never;
+const _grammarCodesAreDocumentCodes: _GrammarCodesAreDocumentCodes = true;
+void _grammarCodesAreDocumentCodes;
 
 /** What to do about each code — one sentence per code, the ONE copy. */
 export const GRAMMAR_FIX: Record<DocumentDiagnosticCode, string> = {
@@ -168,6 +187,8 @@ export const GRAMMAR_FIX: Record<DocumentDiagnosticCode, string> = {
     "Move the props into a ```json block as the embed's first child (it is read as-is; rewrite on your next edit).",
   bad_props: "Make the ```json props block a single JSON object.",
   unknown_tone: `Name one of the Synap tones: ${TEXT_TONES.join(", ")} (e.g. \`:color[text]{tone=info}\`).`,
+  bad_columns: `Write a row as \`:::::synap-columns\` holding 2 to ${MAX_COLUMNS} \`::::synap-column\` blocks (the row's fence longer than its columns'), inside a section, never around one.`,
+  bad_width: `Give every column a whole-percentage width from ${MIN_COLUMN_WIDTH}% to ${MAX_COLUMN_WIDTH}% (\`width="40%"\`), adding up to 100%, or give none.`,
   missing_attr:
     "Name what the embed shows: `id` (synap-entity), `viewId` (synap-view), `cellKey` or `instanceId` (synap-cell).",
   unknown_key:
@@ -205,7 +226,7 @@ export async function diagnoseDocument(
   resolver: EmbedResolver
 ): Promise<DocumentDiagnostic[]> {
   const out: DocumentDiagnostic[] = collectDiagnostics(markdown).map((d) => {
-    const code = GRAMMAR_CODE[d.code];
+    const code: DocumentDiagnosticCode = GRAMMAR_WIRE_CODE[d.code];
     return {
       code,
       severity: d.severity,

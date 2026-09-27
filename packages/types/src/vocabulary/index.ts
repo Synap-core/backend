@@ -193,6 +193,15 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   unpublish: { imperative: "Unpublish", past: "Unpublished" },
   revoke: { imperative: "Revoke", past: "Revoked" },
   redeem: { imperative: "Redeem", past: "Redeemed" },
+  // Governed space operations (R8a/P1). `move` is emitted by
+  // `entities.moveToWorkspace` (audit `entity.move`) and titles a move
+  // proposal; `rename` titles a space rename; `grant_access` is the stored
+  // proposalType of `profiles.grantAccess` — a person reads it as SHARING a
+  // kind with another space, so it wears `share`'s words, not "Grant access".
+  // Without rows the past mood fell through to `humanizeToken` ("Move").
+  move: { imperative: "Move", past: "Moved" },
+  rename: { imperative: "Rename", past: "Renamed" },
+  grant_access: { imperative: "Share", past: "Shared" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
   // these keys resolve the full proposal types. They are NOT bare "approve":
@@ -839,6 +848,46 @@ export function resolveBlockedReasonLabel(
 }
 
 /**
+ * The GLYPH for each blocked reason — `ui-composition.md` §1, "state is a MARK,
+ * not a sentence": a reader knows what kind of obstacle it is before reading.
+ *
+ * Lucide icon NAMES (the `ObjectKindDef.icon` convention), never bound
+ * components: relay (`lucide-react-native`) and the browser (`lucide-react`)
+ * each resolve the name, so both draw the same mark from ONE table. Moved here
+ * from relay's `owed-slot-detail.ts` so the browser does not grow a second map.
+ *
+ * TONE is deliberately NOT part of the mark: a blocker chip stays neutral and
+ * the reason lives in its label + glyph, never in a colour (a missing
+ * credential is not an error and not a warning).
+ *
+ * Same key set as {@link BLOCKED_REASON_LABELS}; the api parity tripwire
+ * (`blocked-reason-vocabulary-parity.test.ts`) derives `BLOCKED_REASONS` and
+ * fails if a value has no glyph here.
+ */
+export const BLOCKED_REASON_ICONS: Readonly<Record<string, string>> = {
+  credential: "KeyRound",
+  capability: "Plug",
+  permission: "ShieldAlert",
+  policy: "Scale",
+  decision: "Gavel",
+  physical: "Hand",
+};
+
+/** The glyph for a value that bypassed a door — never a row in the table. */
+export const BLOCKED_REASON_FALLBACK_ICON = "CircleHelp";
+
+/** The glyph NAME for a blocked reason; unknown/absent ⇒ the fallback mark. */
+export function resolveBlockedReasonIcon(
+  reason: string | null | undefined
+): string {
+  if (!reason) return BLOCKED_REASON_FALLBACK_ICON;
+  return (
+    BLOCKED_REASON_ICONS[reason.trim().toLowerCase()] ??
+    BLOCKED_REASON_FALLBACK_ICON
+  );
+}
+
+/**
  * NOTIFICATION-CATEGORY labels — the five buckets `notification_preferences`
  * and `NOTIFICATION_REGISTRY` sort every notification type into.
  *
@@ -960,4 +1009,21 @@ export function resolvePrivateObjectLabel(
     ? noun
     : noun.charAt(0).toLowerCase() + noun.slice(1);
   return `Private ${lowered}`;
+}
+
+/**
+ * The mark on a proposal the viewer may SEE but not DECIDE because its subject
+ * is an object only its members may read (founder decision 2026-09-27: nobody
+ * decides what they cannot read — the pod's review reason `session-only`). A
+ * CHIP label, never a sentence; it replaces the Approve / Reject buttons.
+ *
+ *   "focus_session" → "Session members decide"
+ *
+ * The noun comes from {@link resolveObjectNoun}, like the private placeholder.
+ */
+export function resolveMembersDecideLabel(
+  kind: string | null | undefined
+): string {
+  const noun = resolveObjectNoun(kind) || "Item";
+  return `${noun} members decide`;
 }

@@ -245,8 +245,13 @@ export function createScopedProcedure(requiredScopes: string[]) {
  * Helper: Create procedure with API key auth + scope check
  */
 import { publicProcedure } from "../trpc.js";
+import { guestContainmentMiddleware } from "../access/guest-containment.js";
 
-export const apiKeyProcedure = publicProcedure.use(apiKeyMiddleware);
+// Guest containment again AFTER the key resolves the principal: on a Bearer
+// request the base procedure's check ran before any userId existed.
+export const apiKeyProcedure = publicProcedure
+  .use(apiKeyMiddleware)
+  .use(guestContainmentMiddleware);
 
 export function scopedProcedure(scopes: string[]) {
   return apiKeyProcedure.use(createScopedProcedure(scopes));

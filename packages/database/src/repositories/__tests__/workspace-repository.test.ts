@@ -11,6 +11,8 @@ const mockDb = {
   insert: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
+  // `delete` runs the link cleanup + row delete in one transaction.
+  transaction: vi.fn((fn: (tx: unknown) => unknown) => fn(mockDb)),
 } as any;
 
 describe("WorkspaceRepository", () => {

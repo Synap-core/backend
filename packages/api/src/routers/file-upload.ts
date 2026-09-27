@@ -25,6 +25,7 @@ import {
 } from "@synap/database";
 import { channelContextItems } from "@synap/database/schema";
 import { authMiddleware } from "@synap/auth";
+import { refuseGuestSession } from "../access/guest-containment.js";
 
 const logger = createLogger({ module: "file-upload" });
 
@@ -342,6 +343,7 @@ export const fileUploadApp = new Hono<{
 
 // Auth: Kratos session cookie for all routes
 fileUploadApp.use("/*", authMiddleware);
+fileUploadApp.use("/*", refuseGuestSession);
 
 // ---------------------------------------------------------------------------
 // POST /upload — multipart file upload

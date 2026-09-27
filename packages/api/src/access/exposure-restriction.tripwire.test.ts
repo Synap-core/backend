@@ -1,5 +1,5 @@
 /**
- * P3 W1 TRIPWIRE — portal-floor substrate: `exposureRelationTypes` restriction.
+ * TRIPWIRE — portal-floor substrate: `exposureRelationTypes` restriction.
  *
  * Three proofs, all at the compiled-SQL level (PgDialect — the same technique as
  * two-user-floor.test.ts; the api unit suite runs without a seeded DB, and the
@@ -12,9 +12,9 @@
  *      param existed). Every existing caller passes no option, so this is the
  *      proof they are all behavior-preserving.
  *
- *      BASELINES RE-CAPTURED for Sites W2 S2 (the guest floor). Exactly three
+ *      BASELINES RE-CAPTURED when the guest floor landed. Exactly three
  *      fragments moved, every other byte unchanged (token diff OLD vs NEW,
- *      params normalised, recorded in the W2-S2 report):
+ *      params normalised):
  *        (a) the pod-personal branch gained an appended `and not (<guest>)`
  *            conjunct (`podGuestWhere`: a guest role AND no participation);
  *        (b) the workspace union's two POD-LEVEL branches (`workspace_id is
@@ -247,7 +247,7 @@ describe("AccessContext threading — a constructed context pins the restriction
     // the copy methods, the FLOOR occurrence is gone; only the LENS arm keeps
     // it — and a lens only narrows (ANDed with the restricted floor), so it
     // can never re-admit a row whose sole path is a belongs_to_project edge.
-    // visible_to is bound THREE times since Sites W2: the member-anchor floor
+    // visible_to is bound THREE times since the guest floor: the member-anchor floor
     // branch, the guest-anchor floor branch, and the lens arm.
     expect(count(BELONGS_TO_PROJECT)).toBe(1);
     expect(count(VISIBLE_TO)).toBe(3);

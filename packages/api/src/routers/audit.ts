@@ -19,6 +19,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure } from "../trpc.js";
 import { eventRepository } from "@synap/database";
+import { eventVisibleWhereFor } from "../access/event-visibility.js";
 
 export const auditRouter = router({
   /**
@@ -52,7 +53,11 @@ export const auditRouter = router({
         });
       }
 
+      // The admin role gate above is ON TOP of the `events` VisibilityRule,
+      // never instead of it: a colleague's private session stays omitted.
+      const visibleWhere = eventVisibleWhereFor(ctx);
       const filters = {
+        visibleWhere,
         userId: input.userId,
         eventType: input.eventType,
         subjectType: input.subjectType,
@@ -67,6 +72,7 @@ export const auditRouter = router({
 
       const events = await eventRepository.searchEvents(filters);
       const total = await eventRepository.countEvents({
+        visibleWhere,
         userId: input.userId,
         eventType: input.eventType,
         subjectType: input.subjectType,

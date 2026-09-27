@@ -21,7 +21,9 @@ const PROSE =
 /** v2 V1 inline formatting: every reader keeps the words and drops the syntax. */
 const FORMATTED =
   "An :u[underlined] word, a :color[tinted]{tone=info} one and a ==toned=={tone=success} one.";
-const DOC = `# Notes 10:30, $5 and $10\n\nMeet at 10:30 today; the ratio:high case.\n\n::::synap-section{id="s1"}\n## ratio:high\n\n${PROSE}\n\n${FORMATTED}\n::::\n`;
+/** Columns (a layout frame): every reader walks INTO a row, never past it. */
+const COLUMNS = `:::::synap-columns\n::::synap-column{width="40%"}\nLeftcolumnword here.\n::::\n::::synap-column{width="60%"}\nRightcolumnword there.\n::::\n:::::`;
+const DOC = `# Notes 10:30, $5 and $10\n\nMeet at 10:30 today; the ratio:high case.\n\n::::synap-section{id="s1"}\n## ratio:high\n\n${PROSE}\n\n${FORMATTED}\n::::\n\n${COLUMNS}\n`;
 
 /** Every string a reader produced, however deep. */
 function strings(value: unknown, out: string[] = []): string[] {
@@ -131,8 +133,28 @@ const NOT_READERS: Record<string, string> = {
   ALERT_KINDS: "data",
   isMarkerHref: "predicate (a URL, no parse)",
   readAlertMarker: "reads one text line (the alert-marker rule), no parse",
-  // embeds
+  // embeds + frames
   EMBED_DIRECTIVES: "data",
+  SECTION_DIRECTIVE: "data",
+  COLUMNS_DIRECTIVE: "data",
+  COLUMN_DIRECTIVE: "data",
+  LAYOUT_DIRECTIVES: "data",
+  FRAME_DIRECTIVES: "data",
+  isFrameDirective: "predicate (a directive name)",
+  isLayoutDirective: "predicate (a directive name)",
+  COLUMN_MIN_COLONS: "data",
+  COLUMNS_MIN_COLONS: "data",
+  serializeColumns: "writer",
+  // columns (columns.ts; the row's readers are exercised through the readers above)
+  MAX_COLUMNS: "data",
+  MIN_COLUMN_WIDTH: "data",
+  MAX_COLUMN_WIDTH: "data",
+  readColumnWidth: "attribute grammar",
+  formatColumnWidth: "writer (an attribute value)",
+  columnWeights: "arithmetic over widths",
+  readColumns: "reads a parsed node, not markdown",
+  columnsDiagnostics: "diagnostics over a parsed tree, no prose output",
+  isFrameFenceBlock: "predicate (one diff block)",
   REQUIRED_REF: "data",
   readEmbed: "reads a node, not markdown",
   serializeEmbed: "writer",
@@ -144,6 +166,9 @@ const NOT_READERS: Record<string, string> = {
   embedFallback: "reads parsed nodes",
   locateEmbeds: "embed source ranges (prose read through readableMarkdown)",
   DIAGNOSTIC_CODES: "data",
+  EMBED_DIAGNOSTIC_CODES: "data",
+  LAYOUT_DIAGNOSTIC_CODES: "data",
+  GRAMMAR_WIRE_CODE: "data",
   collectDiagnostics: "diagnostics, no prose output",
   blame: "line diff over history, no parse",
   // diff: block/word diff over SOURCE SLICES — never parses, so prose cannot be lost
@@ -214,6 +239,21 @@ describe("prose survives every reader", () => {
       for (const word of ["underlined", "tinted", "toned"])
         expect(read).toContain(word);
       expect(read).not.toMatch(/:u\[|:color\[|\{tone=/);
+    });
+  }
+
+  // A column row is a frame: every reader that is not a source slice reads
+  // its words and none leaks a fence or a directive name.
+  // (stripInlineFormatting is a step of readableMarkdown that removes inline
+  // syntax only; the section's own `::::` closer is kept by readable, hence
+  // the row's five-colon fence is what must be gone.)
+  for (const [name, probe] of Object.entries(READERS)) {
+    if (KEEPS_SOURCE.has(name) || name === "stripInlineFormatting") continue;
+    it(`${name}: the words inside columns come back, never the column fences`, () => {
+      const read = probe();
+      expect(read).toContain("Leftcolumnword");
+      expect(read).toContain("Rightcolumnword");
+      expect(read).not.toMatch(/synap-columns?\b|^:{5}/m);
     });
   }
 
