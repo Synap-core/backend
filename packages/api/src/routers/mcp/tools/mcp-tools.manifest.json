@@ -1306,6 +1306,226 @@
                       "additionalProperties": false
                     }
                   ]
+                },
+                "ask": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "confirm"
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 500
+                        }
+                      },
+                      "required": ["mode"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "choose"
+                        },
+                        "options": {
+                          "minItems": 1,
+                          "maxItems": 8,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "value": {
+                                "type": "string",
+                                "maxLength": 500
+                              },
+                              "icon": {
+                                "type": "string",
+                                "maxLength": 64
+                              },
+                              "recommended": {
+                                "type": "boolean"
+                              },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              }
+                            },
+                            "required": ["label"]
+                          }
+                        },
+                        "allowOther": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": ["mode", "options"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "form"
+                        },
+                        "form": {
+                          "type": "object",
+                          "properties": {
+                            "title": {
+                              "type": "string"
+                            },
+                            "note": {
+                              "type": "string"
+                            },
+                            "fields": {
+                              "maxItems": 20,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "label": {
+                                    "type": "string",
+                                    "maxLength": 200
+                                  },
+                                  "type": {
+                                    "type": "string",
+                                    "maxLength": 64
+                                  },
+                                  "constraints": {
+                                    "type": "object",
+                                    "properties": {
+                                      "enum": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "min": {
+                                        "type": "number"
+                                      },
+                                      "max": {
+                                        "type": "number"
+                                      },
+                                      "pattern": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "required": {
+                                    "type": "boolean"
+                                  },
+                                  "help": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["key", "label", "type"]
+                              }
+                            }
+                          },
+                          "required": ["fields"]
+                        }
+                      },
+                      "required": ["mode", "form"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "act"
+                        },
+                        "url": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "steps": {
+                          "maxItems": 7,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        }
+                      },
+                      "required": ["mode"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "provide"
+                        },
+                        "provide": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "connection"
+                                },
+                                "service": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                }
+                              },
+                              "required": ["kind", "service"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "file"
+                                },
+                                "accept": {
+                                  "maxItems": 10,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  }
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "secret"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                }
+                              },
+                              "required": ["kind", "name"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["mode", "provide"]
+                    }
+                  ],
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). Omit for a plain free-text answer. null clears a stored ask."
                 }
               },
               "required": ["kind", "label"]
@@ -1475,6 +1695,226 @@
                       "additionalProperties": false
                     }
                   ]
+                },
+                "ask": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "confirm"
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 500
+                        }
+                      },
+                      "required": ["mode"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "choose"
+                        },
+                        "options": {
+                          "minItems": 1,
+                          "maxItems": 8,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "value": {
+                                "type": "string",
+                                "maxLength": 500
+                              },
+                              "icon": {
+                                "type": "string",
+                                "maxLength": 64
+                              },
+                              "recommended": {
+                                "type": "boolean"
+                              },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              }
+                            },
+                            "required": ["label"]
+                          }
+                        },
+                        "allowOther": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": ["mode", "options"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "form"
+                        },
+                        "form": {
+                          "type": "object",
+                          "properties": {
+                            "title": {
+                              "type": "string"
+                            },
+                            "note": {
+                              "type": "string"
+                            },
+                            "fields": {
+                              "maxItems": 20,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "label": {
+                                    "type": "string",
+                                    "maxLength": 200
+                                  },
+                                  "type": {
+                                    "type": "string",
+                                    "maxLength": 64
+                                  },
+                                  "constraints": {
+                                    "type": "object",
+                                    "properties": {
+                                      "enum": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "min": {
+                                        "type": "number"
+                                      },
+                                      "max": {
+                                        "type": "number"
+                                      },
+                                      "pattern": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "required": {
+                                    "type": "boolean"
+                                  },
+                                  "help": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["key", "label", "type"]
+                              }
+                            }
+                          },
+                          "required": ["fields"]
+                        }
+                      },
+                      "required": ["mode", "form"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "act"
+                        },
+                        "url": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "steps": {
+                          "maxItems": 7,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        }
+                      },
+                      "required": ["mode"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "provide"
+                        },
+                        "provide": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "connection"
+                                },
+                                "service": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                }
+                              },
+                              "required": ["kind", "service"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "file"
+                                },
+                                "accept": {
+                                  "maxItems": 10,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  }
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "secret"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                }
+                              },
+                              "required": ["kind", "name"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["mode", "provide"]
+                    }
+                  ],
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). Omit for a plain free-text answer. null clears a stored ask."
                 }
               },
               "required": ["kind", "label"]
@@ -1551,6 +1991,226 @@
                     "additionalProperties": false
                   }
                 ]
+              },
+              "ask": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "confirm"
+                      },
+                      "prompt": {
+                        "type": "string",
+                        "maxLength": 500
+                      }
+                    },
+                    "required": ["mode"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "choose"
+                      },
+                      "options": {
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "value": {
+                              "type": "string",
+                              "maxLength": 500
+                            },
+                            "icon": {
+                              "type": "string",
+                              "maxLength": 64
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            }
+                          },
+                          "required": ["label"]
+                        }
+                      },
+                      "allowOther": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["mode", "options"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "form"
+                      },
+                      "form": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "note": {
+                            "type": "string"
+                          },
+                          "fields": {
+                            "maxItems": 20,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "maxLength": 200
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "maxLength": 64
+                                },
+                                "constraints": {
+                                  "type": "object",
+                                  "properties": {
+                                    "enum": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "min": {
+                                      "type": "number"
+                                    },
+                                    "max": {
+                                      "type": "number"
+                                    },
+                                    "pattern": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": {
+                                  "type": "boolean"
+                                },
+                                "help": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["key", "label", "type"]
+                            }
+                          }
+                        },
+                        "required": ["fields"]
+                      }
+                    },
+                    "required": ["mode", "form"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "act"
+                      },
+                      "url": {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      "steps": {
+                        "maxItems": 7,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      }
+                    },
+                    "required": ["mode"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "provide"
+                      },
+                      "provide": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "connection"
+                              },
+                              "service": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              }
+                            },
+                            "required": ["kind", "service"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "file"
+                              },
+                              "accept": {
+                                "maxItems": 10,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 100
+                                }
+                              }
+                            },
+                            "required": ["kind"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "secret"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              }
+                            },
+                            "required": ["kind", "name"]
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["mode", "provide"]
+                  }
+                ],
+                "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). Omit for a plain free-text answer. null clears a stored ask."
               }
             },
             "required": ["kind", "label"],

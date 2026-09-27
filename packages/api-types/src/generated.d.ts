@@ -7485,7 +7485,123 @@ export interface ExpectedOutput {
 	 * `answer.question`.
 	 */
 	answer?: SlotAnswer;
+	/**
+	 * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
+	 * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
+	 * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
+	 * `ask` HOW to resolve it (confirm / choose / form / act / provide).
+	 *
+	 * ABSENT MEANS TODAY'S BEHAVIOUR — free-text answer, "I did this", "Not
+	 * mine" — so every slot stored before this field is unchanged.
+	 *
+	 * `null` IS A WIRE VALUE ONLY and means CLEAR, exactly like `ref`: silence on
+	 * a wholesale patch keeps it, and `mergeExpectedOutputs` deletes the key
+	 * rather than storing the null. Cleared with the other ownership fields when
+	 * the slot is handed back (`stampUnblocked`) — the ask was the person's to
+	 * answer; the answer's `question` keeps what was asked.
+	 */
+	ask?: SlotAsk | null;
 }
+/**
+ * The ASK on a human-owned slot — HOW to answer it.
+ *
+ * STRUCTURAL MIRROR of `Ask` in `@synap-core/types/ask` (the zod schema, its
+ * limits, and the validation rule live there). Duplicated as a TYPE because
+ * this package is dependency-free by design — the `OUTPUT_REF_KINDS`
+ * precedent. The duplication is not left to trust: api's
+ * `expectedOutputWireSchema` parses `ask` with the types-leaf schema and is
+ * `satisfies z.ZodType<ExpectedOutput, ExpectedOutput>`, and
+ * `services/focus-sessions/update-session.ts` asserts the two types are
+ * MUTUALLY assignable at compile time — a drift on either side stops the build.
+ */
+export type SlotAsk = {
+	mode: "confirm";
+	prompt?: string;
+} | {
+	mode: "choose";
+	options: SlotAskOption[];
+	allowOther?: boolean;
+} | {
+	mode: "form";
+	form: SlotAskFormSpec;
+} | {
+	mode: "act";
+	url?: string;
+	steps?: string[];
+} | {
+	mode: "provide";
+	provide: SlotAskProvide;
+};
+/** One offered answer (capture's chip minus its apply fields). */
+export interface SlotAskOption {
+	label: string;
+	/** Absent ⇒ the label IS the value. */
+	value?: string;
+	icon?: string;
+	/** At most ONE option per ask. */
+	recommended?: boolean;
+	/** One-line imperative consequence of choosing it. */
+	description?: string;
+}
+/** A FLAT form (no nested fields). */
+export interface SlotAskFormSpec {
+	title?: string;
+	note?: string;
+	fields: Array<{
+		key: string;
+		label: string;
+		type: string;
+		constraints?: {
+			enum?: string[];
+			min?: number;
+			max?: number;
+			pattern?: string;
+		};
+		required?: boolean;
+		help?: string;
+	}>;
+}
+/** What a `provide` ask hands over — vault-first, through its own door. */
+export type SlotAskProvide = {
+	kind: "connection";
+	service: string;
+} | {
+	kind: "file";
+	accept?: string[];
+} | {
+	kind: "secret";
+	name: string;
+};
+/** A `provide` answer stores a REFERENCE, never the value. */
+export type SlotProvideRef = {
+	kind: "secret";
+	vaultRef: string;
+} | {
+	kind: "connection";
+	connectionId: string;
+} | {
+	kind: "file";
+	fileId: string;
+};
+/**
+ * The TYPED half of an answer. The human-readable line stays on
+ * `SlotAnswer.text`; a `text` answer's words live there.
+ */
+export type SlotAnswerValue = {
+	type: "text";
+} | {
+	type: "confirm";
+	confirmed: boolean;
+} | {
+	type: "chip";
+	chip: SlotAskOption;
+} | {
+	type: "form";
+	values: Record<string, unknown>;
+} | {
+	type: "provide";
+	ref: SlotProvideRef;
+};
 /**
  * A person's answer to an agent's question about one slot. Server-stamped as a
  * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
@@ -7509,6 +7625,15 @@ export interface SlotAnswer {
 	 * existed.
 	 */
 	question?: string;
+	/**
+	 * The TYPED answer, when the slot carried an `ask` — see
+	 * {@link SlotAnswerValue}. Stamped with the rest of the answer by the one
+	 * answer door, validated against the slot's ask. ABSENT on every answer given
+	 * before typed asks existed and on a plain free-text answer to a slot with no
+	 * ask; `text` is ALWAYS present either way, so a reader that only knows text
+	 * keeps working.
+	 */
+	value?: SlotAnswerValue;
 }
 /**
  * The CLOSED rollup category a stage declares membership in. Copied verbatim
@@ -11318,7 +11443,18 @@ export interface PacketSlotItem {
 		text: string;
 		answeredAt: string;
 		messageId: string | null;
+		/**
+		 * The TYPED answer when the slot carried an `ask` (which option, the
+		 * form's values, the vault ref …) — `text` stays the readable summary.
+		 */
+		value?: SlotAnswerValue;
 	};
+	/**
+	 * On an owed item: HOW the agent asked the person to answer (its declared
+	 * `ask`), so a resuming agent sees what it is waiting for, not just that it
+	 * is waiting.
+	 */
+	ask?: SlotAsk;
 }
 export interface PacketProposalItem {
 	id: string;
@@ -11856,6 +11992,18 @@ export interface OwedSlot {
 	 * the field existed; absence means "no criterion to highlight".
 	 */
 	criterionKey?: string;
+	/**
+	 * WHERE the agent pointed the person (`ExpectedOutput.ref`) — carried so a
+	 * tray row can open the door without re-reading the whole session. Floored
+	 * at write time (`isOutputRefVisible`) by the declaring door; this read is
+	 * behind the same owner floor.
+	 */
+	ref?: OutputRef;
+	/**
+	 * HOW the person can answer (`ExpectedOutput.ask`) — carried so a tray can
+	 * quick-answer a confirm / choose in place.
+	 */
+	ask?: SlotAsk;
 }
 /** One capability (skill) the session ran, with how often and how recently. */
 export interface SessionUsageCapability {
@@ -13092,6 +13240,20 @@ export interface Signal {
 	 */
 	criterionKey?: string;
 	/**
+	 * WHERE the agent pointed the person for an `owed-slot` (its
+	 * `ExpectedOutput.ref`) — named `slotRef` because `target` is already this
+	 * signal's own door (the session). Carried so a tray row can open the thing
+	 * the blocker is about without re-reading the session. Absent when the slot
+	 * declared no pointer, and on every other kind.
+	 */
+	slotRef?: OutputRef;
+	/**
+	 * HOW the person can answer an `owed-slot` (its `ExpectedOutput.ask`) —
+	 * carried so the tray can quick-answer a confirm / choose in place instead of
+	 * opening the session. Absent ⇒ today's verbs (free text / I did this).
+	 */
+	ask?: SlotAsk;
+	/**
 	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
 	 * cluster (which derives it through `proposalClassFields`, the one door).
 	 * Absent on every other kind — a notification, an event or an owed slot has
@@ -13378,12 +13540,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					chip: {
 						label: string;
 						value: string;
-						action: "link_entity" | "set_property" | "add_relation" | "confirm" | "dismiss";
+						action: "confirm" | "link_entity" | "set_property" | "add_relation" | "dismiss";
 						icon?: string | undefined;
-						entityId?: string | undefined;
-						propertyKey?: string | undefined;
 						recommended?: boolean | undefined;
 						description?: string | undefined;
+						entityId?: string | undefined;
+						propertyKey?: string | undefined;
 					};
 				} | {
 					type: "text";
@@ -17289,6 +17451,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				revertable: boolean;
+				viewerCanReview: boolean;
+				viewerCanReviewReason: string;
 				id: string;
 				workspaceId: string | null;
 				agentUserId: string | null;
@@ -32336,7 +32500,86 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						answeredBy: string;
 						answeredAt: string;
 						question?: string | undefined;
+						value?: {
+							type: "text";
+						} | {
+							type: "confirm";
+							confirmed: boolean;
+						} | {
+							type: "chip";
+							chip: {
+								label: string;
+								value?: string | undefined;
+								icon?: string | undefined;
+								recommended?: boolean | undefined;
+								description?: string | undefined;
+							};
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							type: "provide";
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								kind: "connection";
+								connectionId: string;
+							} | {
+								kind: "file";
+								fileId: string;
+							};
+						} | undefined;
 					} | undefined;
+					ask?: {
+						mode: "confirm";
+						prompt?: string | undefined;
+					} | {
+						mode: "choose";
+						options: {
+							label: string;
+							value?: string | undefined;
+							icon?: string | undefined;
+							recommended?: boolean | undefined;
+							description?: string | undefined;
+						}[];
+						allowOther?: boolean | undefined;
+					} | {
+						mode: "form";
+						form: {
+							fields: {
+								key: string;
+								label: string;
+								type: string;
+								constraints?: {
+									enum?: string[] | undefined;
+									min?: number | undefined;
+									max?: number | undefined;
+									pattern?: string | undefined;
+								} | undefined;
+								required?: boolean | undefined;
+								help?: string | undefined;
+							}[];
+							title?: string | undefined;
+							note?: string | undefined;
+						};
+					} | {
+						mode: "act";
+						url?: string | undefined;
+						steps?: string[] | undefined;
+					} | {
+						mode: "provide";
+						provide: {
+							kind: "connection";
+							service: string;
+						} | {
+							kind: "file";
+							accept?: string[] | undefined;
+						} | {
+							kind: "secret";
+							name: string;
+						};
+					} | null | undefined;
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
@@ -32465,7 +32708,86 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						answeredBy: string;
 						answeredAt: string;
 						question?: string | undefined;
+						value?: {
+							type: "text";
+						} | {
+							type: "confirm";
+							confirmed: boolean;
+						} | {
+							type: "chip";
+							chip: {
+								label: string;
+								value?: string | undefined;
+								icon?: string | undefined;
+								recommended?: boolean | undefined;
+								description?: string | undefined;
+							};
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							type: "provide";
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								kind: "connection";
+								connectionId: string;
+							} | {
+								kind: "file";
+								fileId: string;
+							};
+						} | undefined;
 					} | undefined;
+					ask?: {
+						mode: "confirm";
+						prompt?: string | undefined;
+					} | {
+						mode: "choose";
+						options: {
+							label: string;
+							value?: string | undefined;
+							icon?: string | undefined;
+							recommended?: boolean | undefined;
+							description?: string | undefined;
+						}[];
+						allowOther?: boolean | undefined;
+					} | {
+						mode: "form";
+						form: {
+							fields: {
+								key: string;
+								label: string;
+								type: string;
+								constraints?: {
+									enum?: string[] | undefined;
+									min?: number | undefined;
+									max?: number | undefined;
+									pattern?: string | undefined;
+								} | undefined;
+								required?: boolean | undefined;
+								help?: string | undefined;
+							}[];
+							title?: string | undefined;
+							note?: string | undefined;
+						};
+					} | {
+						mode: "act";
+						url?: string | undefined;
+						steps?: string[] | undefined;
+					} | {
+						mode: "provide";
+						provide: {
+							kind: "connection";
+							service: string;
+						} | {
+							kind: "file";
+							accept?: string[] | undefined;
+						} | {
+							kind: "secret";
+							name: string;
+						};
+					} | null | undefined;
 				}[] | undefined;
 				currentStage?: string | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -32668,6 +32990,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 				} | {
 					url: string;
+				} | null | undefined;
+				ask?: {
+					mode: "confirm";
+					prompt?: string | undefined;
+				} | {
+					mode: "choose";
+					options: {
+						label: string;
+						value?: string | undefined;
+						icon?: string | undefined;
+						recommended?: boolean | undefined;
+						description?: string | undefined;
+					}[];
+					allowOther?: boolean | undefined;
+				} | {
+					mode: "form";
+					form: {
+						fields: {
+							key: string;
+							label: string;
+							type: string;
+							constraints?: {
+								enum?: string[] | undefined;
+								min?: number | undefined;
+								max?: number | undefined;
+								pattern?: string | undefined;
+							} | undefined;
+							required?: boolean | undefined;
+							help?: string | undefined;
+						}[];
+						title?: string | undefined;
+						note?: string | undefined;
+					};
+				} | {
+					mode: "act";
+					url?: string | undefined;
+					steps?: string[] | undefined;
+				} | {
+					mode: "provide";
+					provide: {
+						kind: "connection";
+						service: string;
+					} | {
+						kind: "file";
+						accept?: string[] | undefined;
+					} | {
+						kind: "secret";
+						name: string;
+					};
 				} | null | undefined;
 			};
 			output: {

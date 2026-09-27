@@ -56,10 +56,11 @@ const SUSPENDED_INTENT_MAX = 400;
  *
  * WHAT IS PARSED, exactly: the whole `expectedOutputs` array through
  * `expectedOutputWireSchema` (the ONE wire shape, which carries
- * `outputRefWireSchema` on `ref`), and `addOutput.ref` through
- * `outputRefWireSchema`. `addOutput`'s other fields keep their cast — they are
- * cast at every door, this one included, and inventing a second `addOutput`
- * shape here is the per-door drift the shared schema exists to prevent.
+ * `outputRefWireSchema` on `ref` and `AskSchema` on `ask`), and the whole
+ * `addOutput` through `addOutputWireSchema` — the declarable slice of that same
+ * schema, DERIVED from `CLIENT_DECLARABLE_OUTPUT_FIELDS` (not a second shape).
+ * So an `ask` a model authors is parsed here exactly as on every other door:
+ * closed modes, ≤1 recommended option, credential form fields dropped.
  *
  * Returns the zod message as MCP ERROR TEXT rather than throwing: an MCP tool's
  * refusal is a result the model reads and can act on, and a message naming the
@@ -69,7 +70,9 @@ function parseSlotInputs(
   args: Record<string, unknown>,
   schemas: {
     expectedOutputWireSchema: { parse: (v: unknown) => ExpectedOutput };
-    outputRefWireSchema: { parse: (v: unknown) => unknown };
+    addOutputWireSchema: {
+      parse: (v: unknown) => NonNullable<UpdateFocusSessionParams["addOutput"]>;
+    };
   }
 ):
   | { error: string }
@@ -90,12 +93,8 @@ function parseSlotInputs(
         schemas.expectedOutputWireSchema.parse(item)
       );
     }
-    if (args.addOutput !== undefined) {
-      const add = args.addOutput as UpdateFocusSessionParams["addOutput"];
-      if (add && add.ref !== undefined && add.ref !== null) {
-        schemas.outputRefWireSchema.parse(add.ref);
-      }
-      out.addOutput = add;
+    if (args.addOutput !== undefined && args.addOutput !== null) {
+      out.addOutput = schemas.addOutputWireSchema.parse(args.addOutput);
     }
   } catch (err) {
     return {
@@ -218,11 +217,11 @@ export const sessionHandlers: McpHandlerMap = {
     }
     const { createFocusSession } =
       await import("../../../services/focus-sessions/create-session.js");
-    const { expectedOutputWireSchema, outputRefWireSchema } =
+    const { expectedOutputWireSchema, addOutputWireSchema } =
       await import("../../../services/focus-sessions/update-session.js");
     const slots = parseSlotInputs(args, {
       expectedOutputWireSchema,
-      outputRefWireSchema,
+      addOutputWireSchema,
     });
     if ("error" in slots) return ok(slots);
     const result = await createFocusSession({
@@ -667,11 +666,11 @@ export const sessionHandlers: McpHandlerMap = {
     const {
       updateFocusSession,
       expectedOutputWireSchema,
-      outputRefWireSchema,
+      addOutputWireSchema,
     } = await import("../../../services/focus-sessions/update-session.js");
     const slots = parseSlotInputs(args, {
       expectedOutputWireSchema,
-      outputRefWireSchema,
+      addOutputWireSchema,
     });
     if ("error" in slots) return ok(slots);
     const result = await updateFocusSession({

@@ -181,6 +181,10 @@ export type {
   HubDiagnoseResult,
   // Focus Sessions
   FocusSessionExpectedOutput,
+  HubSlotAsk,
+  HubSlotAskOption,
+  HubSlotAnswer,
+  HubSlotAnswerValue,
   CreateFocusSessionInput,
   HubFocusSession,
   CreateFocusSessionResult,

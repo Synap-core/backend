@@ -970,10 +970,82 @@ export interface FocusSessionExpectedOutput {
    * human-owned slot goes back to the agent with the answer attached.
    */
   answer?: HubSlotAnswer;
+  /**
+   * HOW the person can answer this slot — declared by the agent alongside
+   * `owner: 'human'` + `blockedReason`. Absent ⇒ a plain free-text answer / "I
+   * did this". Duplicated from `SlotAsk` (@synap/playbooks) because this
+   * package is dependency-free; the pod parses it with the ONE `AskSchema`
+   * (`@synap-core/types/ask`) and refuses anything else. `null` is a WIRE value
+   * meaning CLEAR, exactly like `ref`.
+   */
+  ask?: HubSlotAsk | null;
 }
+
+/**
+ * The ask on a human-owned slot. Mirrors `SlotAsk` (@synap/playbooks) /
+ * `Ask` (@synap-core/types/ask); api `__tripwires__/mcp-slot-schema-parity`
+ * checks the mode and provide-kind literals here against `ASK_MODES` /
+ * `ASK_PROVIDE_KINDS`.
+ */
+export type HubSlotAsk =
+  | { mode: "confirm"; prompt?: string }
+  | { mode: "choose"; options: HubSlotAskOption[]; allowOther?: boolean }
+  | {
+      mode: "form";
+      form: {
+        title?: string;
+        note?: string;
+        fields: Array<{
+          key: string;
+          label: string;
+          type: string;
+          constraints?: {
+            enum?: string[];
+            min?: number;
+            max?: number;
+            pattern?: string;
+          };
+          required?: boolean;
+          help?: string;
+        }>;
+      };
+    }
+  | { mode: "act"; url?: string; steps?: string[] }
+  | {
+      mode: "provide";
+      provide:
+        | { kind: "connection"; service: string }
+        | { kind: "file"; accept?: string[] }
+        | { kind: "secret"; name: string };
+    };
+
+/** One offered answer — at most ONE per ask may be `recommended`. */
+export interface HubSlotAskOption {
+  label: string;
+  value?: string;
+  icon?: string;
+  recommended?: boolean;
+  /** One-line consequence of choosing it. */
+  description?: string;
+}
+
+/** The typed half of an answer; the readable line stays on `text`. */
+export type HubSlotAnswerValue =
+  | { type: "text" }
+  | { type: "confirm"; confirmed: boolean }
+  | { type: "chip"; chip: HubSlotAskOption }
+  | { type: "form"; values: Record<string, unknown> }
+  | {
+      type: "provide";
+      ref:
+        | { kind: "secret"; vaultRef: string }
+        | { kind: "connection"; connectionId: string }
+        | { kind: "file"; fileId: string };
+    };
 
 /** A person's answer to an agent's question about one slot (pod-stamped). */
 export interface HubSlotAnswer {
+  /** Always present: a human-readable line, even for a typed answer. */
   text: string;
   /** The room message carrying it; `null` when the session has no room. */
   messageId: string | null;
@@ -981,6 +1053,8 @@ export interface HubSlotAnswer {
   answeredAt: string;
   /** What was asked, when known. */
   question?: string;
+  /** The typed answer when the slot carried an `ask`. */
+  value?: HubSlotAnswerValue;
 }
 
 /**
