@@ -12,8 +12,8 @@
  *   confirm  — yes / no (+ an optional note)
  *   choose   — one of ≤ 8 offered options (≤ 1 recommended), or free text if
  *              `allowOther`
- *   form     — a small FLAT form. AI-authored credential fields are DROPPED at
- *              the parse, exactly as capture does — secrets never travel in-band
+ *   form     — a small FLAT form. AI-authored credential fields (by type, key
+ *              or label) are DROPPED at the parse, exactly as capture does
  *   act      — do a thing in the world (optionally at an http(s) `url`, in ≤ 7
  *              `steps`), then say "I did this"
  *   provide  — hand over a connection / a file / a secret, through its OWN door
@@ -30,8 +30,11 @@
 import { z } from "zod";
 import {
   cleanFieldKey,
+  isSecretFieldValue,
   isSensitiveField,
   isVaultReference,
+  REDACT_DEPTH_LIMIT,
+  REDACTED_SECRET,
   redactSecretValues,
   SECRET_TYPE_FIELDS,
 } from "../vault/index.js";
@@ -208,18 +211,101 @@ export function isRefusedAskFieldType(type: unknown): boolean {
   return refusedTypes.has(normaliseFieldType(type));
 }
 
+/**
+ * ## The NAME floor — `type` alone was not enough
+ *
+ * `{ key: "stripe_api_key", label: "Stripe secret key", type: "text" }` passed
+ * the type check, and the key a person typed into it then sat in plaintext in
+ * the answer's value and text, the room post, the event, the agent's
+ * continuation and its next model turn. A field NAMED like a credential is a
+ * credential prompt whatever its `type` says.
+ *
+ * A key or label is split into words (camelCase, `_`, `-`, spaces, acronyms)
+ * and refused when any run of 1–3 adjacent words, joined, is a credential
+ * name: the refused TYPES above (so the vault's table still feeds it) plus a
+ * few compound names a model writes as two words. A run matches a WHOLE word
+ * only: `tokenizer`, `keyword`, `passage` are not credentials.
+ *
+ * Deliberately FAIL-CLOSED (`password_hint` is dropped too): a wrongly dropped
+ * field costs an agent one re-ask; a wrongly kept one leaks a key everywhere
+ * the answer is copied. Three single words are too generic to refuse ALONE —
+ * `key` ("Key date"), `certificate` ("Certificate of incorporation"), and the
+ * two contextual vault fields above — they are refused only inside a compound
+ * (`api key`, `private key`, `secret key`).
+ *
+ * What it CANNOT see: a person pasting a key into an ordinary field ("Notes").
+ * It is a floor against an AI AUTHORING a credential prompt, not a scanner.
+ */
+const NOT_A_CREDENTIAL_NAME_ALONE = new Set([
+  ...NOT_A_CREDENTIAL_TYPE,
+  "key",
+  "certificate",
+]);
+
+/** Compounds a model writes as words that are not vault field names. */
+const EXTRA_CREDENTIAL_NAMES = [
+  "accesskey",
+  "signingkey",
+  "encryptionkey",
+  "masterkey",
+  "licensekey",
+  "pincode",
+  "seedphrase",
+  "recoveryphrase",
+  "recoverycode",
+  "backupcode",
+] as const;
+
+const credentialNames = new Set<string>(
+  [...ASK_REFUSED_FIELD_TYPES, ...EXTRA_CREDENTIAL_NAMES].filter(
+    (n) => !NOT_A_CREDENTIAL_NAME_ALONE.has(n)
+  )
+);
+
+function nameWords(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/** Is this field key / label NAMED like a credential? See the docblock above. */
+export function isCredentialFieldName(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const words = nameWords(name);
+  for (let i = 0; i < words.length; i++) {
+    for (let n = 1; n <= 3 && i + n <= words.length; n++) {
+      if (credentialNames.has(words.slice(i, i + n).join(""))) return true;
+    }
+  }
+  return false;
+}
+
+/** A form field an AI may not author: credential TYPE, KEY or LABEL. */
+export function isRefusedAskField(field: {
+  key?: unknown;
+  label?: unknown;
+  type?: unknown;
+}): boolean {
+  return (
+    isRefusedAskFieldType(field.type) ||
+    isCredentialFieldName(field.key) ||
+    isCredentialFieldName(field.label)
+  );
+}
+
 export const DynamicFormSpecSchema = z.object({
   title: z.string().optional(),
   note: z.string().optional(),
-  // Credential-ish fields are DROPPED, never persisted. See
+  // Credential-ish fields are DROPPED, never persisted — by `type` (see
   // `ASK_REFUSED_FIELD_TYPES` for why the set is a set and why `type` stays an
-  // open string.
+  // open string) AND by key / label (`isCredentialFieldName`).
   fields: z
     .array(DynamicFormFieldSchema)
     .max(ASK_LIMITS.formFieldsMax)
-    .transform((fields) =>
-      fields.filter((f) => !isRefusedAskFieldType(f.type))
-    ),
+    .transform((fields) => fields.filter((f) => !isRefusedAskField(f))),
 });
 export type DynamicFormSpec = z.infer<typeof DynamicFormSpecSchema>;
 
@@ -228,11 +314,47 @@ function utf8Bytes(s: string): number {
 }
 
 /**
- * Form VALUES as a person submits them: bounded at 8KB serialized, then every
- * secret-shaped value redacted — AFTER the bound (measured on the original, so
- * an oversized payload cannot become acceptable by being redacted) and BEFORE
- * anything persists it, where a plaintext key would sit in a JSONB column,
- * readable by every agent, for the life of the row.
+ * Redact every value filed under a credential-NAMED key, at any depth (the
+ * same bound as `redactSecretValues`, failing closed past it). A number, a
+ * boolean, `null` and a tagged secret (an `existing` vault ref, or a `new` one
+ * already redacted) pass through — none of them is a typed plaintext key.
+ */
+function redactCredentialKeyed(value: unknown, depth: number): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (isSecretFieldValue(value)) return value;
+  if (depth >= REDACT_DEPTH_LIMIT) return REDACTED_SECRET;
+  if (Array.isArray(value)) {
+    return value.map((v) => redactCredentialKeyed(v, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    const keep =
+      v === null ||
+      typeof v === "number" ||
+      typeof v === "boolean" ||
+      isSecretFieldValue(v);
+    Object.defineProperty(out, key, {
+      value:
+        isCredentialFieldName(key) && !keep
+          ? REDACTED_SECRET
+          : redactCredentialKeyed(v, depth + 1),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * Form VALUES as a person submits them: bounded at 8KB serialized, then
+ * redacted — AFTER the bound (measured on the original, so an oversized
+ * payload cannot become acceptable by being redacted) and BEFORE anything
+ * persists it, where a plaintext key would sit in a JSONB column, readable by
+ * every agent, for the life of the row. Two redactions: every tagged
+ * `{kind:"new"}` secret (`redactSecretValues`), and every value under a
+ * credential-NAMED key (`isCredentialFieldName`) — the second catches a client
+ * that submits a key as a plain string.
  */
 export const AskFormValuesSchema = z
   .record(z.string(), z.unknown())
@@ -240,7 +362,10 @@ export const AskFormValuesSchema = z
     (v) => utf8Bytes(JSON.stringify(v)) <= ASK_LIMITS.formValuesMaxBytes,
     { message: "form values exceed 8KB serialized" }
   )
-  .transform((v) => redactSecretValues(v));
+  .transform(
+    (v) =>
+      redactCredentialKeyed(redactSecretValues(v), 0) as Record<string, unknown>
+  );
 
 // ─── The ask ────────────────────────────────────────────────────────────────
 
@@ -540,9 +665,13 @@ function formatFormValue(v: unknown): string {
 /**
  * The human-readable line that stays on `SlotAnswer.text` — so every reader
  * that predates the typed value (the CLI's `session wait`, the room post, the
- * agent's continuation packet) keeps reading a sentence. Secrets never reach
- * it: form values are redacted at the parse, and a `provide` answer names the
- * KIND of thing handed over, never a reference's contents.
+ * agent's continuation packet) keeps reading a sentence. What keeps a secret
+ * OFF it is upstream, and it is a floor, not a guarantee: credential-named or
+ * -typed form fields are dropped when the ask is parsed, tagged secrets and
+ * values under credential-named keys are redacted when the values are parsed,
+ * and a `provide` answer names the KIND of thing handed over, never a
+ * reference's contents. A key a person pastes into an ordinary field ("Notes")
+ * is not detectable here and WILL be summarised.
  *
  * `text` (the free text or note) is appended after an em dash when present.
  */
@@ -697,3 +826,21 @@ export {
   type PlaybookParamTypeName,
   type PlaybookParamLike,
 } from "./param.js";
+
+/** The Ask card's shared surface rules and copy — see `./card.ts`. */
+export {
+  ASK_COPY,
+  askSlotStanding,
+  classifyAskRefusal,
+  askRowRegion,
+  askOptionChips,
+  askOptionForChip,
+  actView,
+  type AskSlotLite,
+  type AskSlotStanding,
+  type AskRefusal,
+  type AskRefusalKind,
+  type AskRowRegion,
+  type AskOptionChip,
+  type ActView,
+} from "./card.js";
