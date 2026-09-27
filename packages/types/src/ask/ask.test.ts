@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   AskAnswerValueSchema,
   AskSchema,
+  ASK_CHANGED_PREFIX,
+  ASK_INVALID_PREFIX,
   ASK_MODES,
+  askAnswersInline,
+  askFingerprint,
+  askRefusalIsStale,
+  SLOT_MOVED_ON_PHRASES,
   resolveAskResolution,
   summarizeAnswer,
   validateAnswerAgainstAsk,
@@ -354,5 +360,118 @@ describe("isHttpUrl (the one link rule)", () => {
     ]) {
       expect(isHttpUrl(bad), String(bad)).toBe(false);
     }
+  });
+});
+
+describe("askAnswersInline", () => {
+  it("confirm and a short closed choose answer in the row", () => {
+    expect(askAnswersInline(AskSchema.parse({ mode: "confirm" }))).toBe(true);
+    expect(askAnswersInline(choose)).toBe(true);
+  });
+
+  it("a wide choose, 'Other…', a form, act, provide and no ask do not", () => {
+    const four = AskSchema.parse({
+      mode: "choose",
+      options: [{ label: "a" }, { label: "b" }, { label: "c" }, { label: "d" }],
+    });
+    const other = AskSchema.parse({
+      mode: "choose",
+      options: [{ label: "a" }],
+      allowOther: true,
+    });
+    expect(askAnswersInline(four)).toBe(false);
+    expect(askAnswersInline(other)).toBe(false);
+    expect(askAnswersInline(form)).toBe(false);
+    expect(askAnswersInline(AskSchema.parse({ mode: "act" }))).toBe(false);
+    expect(
+      askAnswersInline(
+        AskSchema.parse({
+          mode: "provide",
+          provide: { kind: "secret", name: "Stripe key" },
+        })
+      )
+    ).toBe(false);
+    expect(askAnswersInline(null)).toBe(false);
+    expect(askAnswersInline(undefined)).toBe(false);
+  });
+});
+
+describe("askFingerprint", () => {
+  it("is stable across key order (JSONB does not keep it) and undefined members", () => {
+    const a = askFingerprint({
+      mode: "choose",
+      options: [{ label: "Ship", value: "s", recommended: true }],
+      allowOther: false,
+    });
+    const b = askFingerprint({
+      allowOther: false,
+      options: [
+        { recommended: true, value: "s", label: "Ship", icon: undefined },
+      ],
+      mode: "choose",
+    } as Ask);
+    expect(a).toBe(b);
+    // Round-tripped through JSON (what a client reads back) — same value.
+    expect(askFingerprint(JSON.parse(JSON.stringify(choose)) as Ask)).toBe(
+      askFingerprint(choose)
+    );
+  });
+
+  it("changes when the ask changes — options, their order, the mode", () => {
+    const base = askFingerprint(choose);
+    const relabelled = askFingerprint(
+      AskSchema.parse({
+        mode: "choose",
+        options: [
+          { label: "Ship Monday", value: "fri", recommended: true },
+          { label: "Wait a week" },
+        ],
+      })
+    );
+    const reordered = askFingerprint(
+      AskSchema.parse({
+        mode: "choose",
+        options: [
+          { label: "Wait a week" },
+          {
+            label: "Ship Friday",
+            value: "fri",
+            recommended: true,
+            description: "→ tags the release",
+          },
+        ],
+      })
+    );
+    expect(relabelled).not.toBe(base);
+    expect(reordered).not.toBe(base);
+    expect(askFingerprint(AskSchema.parse({ mode: "confirm" }))).not.toBe(base);
+  });
+
+  it("an absent ask is 'none'", () => {
+    expect(askFingerprint(null)).toBe("none");
+    expect(askFingerprint(undefined)).toBe("none");
+  });
+});
+
+describe("askRefusalIsStale", () => {
+  it("ask_changed and every slot-moved-on phrase are stale", () => {
+    expect(
+      askRefusalIsStale(`${ASK_CHANGED_PREFIX} the question changed`)
+    ).toBe(true);
+    const phrases = Object.values(SLOT_MOVED_ON_PHRASES);
+    expect(phrases.length).toBeGreaterThanOrEqual(4);
+    for (const phrase of phrases) {
+      expect(askRefusalIsStale(`"Stripe key" ${phrase}`)).toBe(true);
+    }
+  });
+
+  it("a wrong answer, an empty answer and a non-string are not", () => {
+    expect(
+      askRefusalIsStale(
+        `${ASK_INVALID_PREFIX} "x" is not one of the offered options.`
+      )
+    ).toBe(false);
+    expect(askRefusalIsStale("The answer is empty")).toBe(false);
+    expect(askRefusalIsStale(undefined)).toBe(false);
   });
 });

@@ -42,7 +42,7 @@ import {
   asc,
   drizzleSql,
 } from "@synap/database";
-import type { ExpectedOutput } from "@synap/playbooks";
+import type { ExpectedOutput, SlotAnswerValue } from "@synap/playbooks";
 import {
   ROOM_POST_META_KEY,
   readRoomPostMeta,
@@ -56,8 +56,13 @@ export const SESSION_ANSWERS_MAX_LIMIT = 100;
 export interface SessionAnswerItem {
   /** Stable id — dedupe on it across polls. */
   id: string;
-  /** What the person said. */
+  /** What the person said — for a typed answer, its readable summary. */
   text: string;
+  /**
+   * The TYPED answer (`SlotAnswer.value`), read from the slot — the answer's
+   * one store; `null` for a free-text answer or a slotless room reply.
+   */
+  value: SlotAnswerValue | null;
   answeredAt: string;
   answeredBy: string;
   /** The room message carrying the answer; `null` when the session has no room. */
@@ -136,6 +141,7 @@ export async function listSessionAnswers(p: {
     byId.set(id, {
       id,
       text: a.text,
+      value: a.value ?? null,
       answeredAt: a.answeredAt,
       answeredBy: a.answeredBy,
       messageId: a.messageId,
@@ -191,6 +197,7 @@ export async function listSessionAnswers(p: {
       byId.set(a.messageId, {
         id: a.messageId,
         text: a.text,
+        value: null,
         answeredAt: a.answeredAt,
         answeredBy: a.answeredBy,
         messageId: a.messageId,

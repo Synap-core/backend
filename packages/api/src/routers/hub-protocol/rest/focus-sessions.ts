@@ -50,6 +50,7 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
+import { AskAnswerValueSchema } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import {
@@ -73,6 +74,7 @@ import type { FollowOutcome } from "../../../services/focus-sessions/follow-play
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
   answerSessionSlot,
+  describeAnswerRefusal,
   type AnswerSessionSlotResult,
 } from "../../../services/focus-sessions/session-answer.js";
 import { SLOT_ANSWER_TEXT_MAX } from "../../../services/focus-sessions/answer-slot.js";
@@ -390,10 +392,19 @@ const UnblockOutputBodySchema = z.object({
 });
 
 /** The person's answer to what an agent asked about a slot. */
-const AnswerOutputBodySchema = z.object({
-  expectedLabel: z.string().min(1).max(500),
-  text: z.string().min(1).max(SLOT_ANSWER_TEXT_MAX),
-});
+// Mirrors tRPC `focusSessions.answerOutput` (W2 door contract): `text` alone
+// is a free-text answer; `value` the typed answer to the slot's ask (parsed —
+// a form's secrets redacted — by `AskAnswerValueSchema`), `text` then a note.
+const AnswerOutputBodySchema = z
+  .object({
+    expectedLabel: z.string().min(1).max(500),
+    text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
+    value: AskAnswerValueSchema.optional(),
+    askFingerprint: z.string().min(1).max(64).optional(),
+  })
+  .refine((v) => v.value !== undefined || !!v.text?.trim(), {
+    message: "An answer needs `text` or `value`.",
+  });
 
 /**
  * Poll cursor. `since` must PARSE as a date (an ISO-8601 string from a prior
@@ -417,27 +428,19 @@ function answerRefusal(
   result: AnswerSessionSlotResult,
   expectedLabel: string,
   sessionId: string
-): { status: 400 | 404; error: string } | null {
-  switch (result.status) {
-    case "not_found":
-      return { status: 404, error: `Focus session ${sessionId} not found` };
-    case "unknown_label":
-      return {
-        status: 404,
-        error: `This session declares no output labelled "${expectedLabel}"`,
-      };
-    case "already_done":
-      return { status: 400, error: `"${expectedLabel}" is already delivered` };
-    case "retired":
-      return {
-        status: 400,
-        error: `"${expectedLabel}" was retired with its cancelled session`,
-      };
-    case "empty_answer":
-      return { status: 400, error: "The answer is empty" };
-    default:
-      return null;
-  }
+): { status: 400 | 404 | 409; error: string } | null {
+  // The ONE wording, shared with the tRPC door (`describeAnswerRefusal`).
+  const refusal = describeAnswerRefusal(result, expectedLabel, sessionId);
+  if (!refusal) return null;
+  return {
+    status:
+      refusal.code === "NOT_FOUND"
+        ? 404
+        : refusal.code === "CONFLICT"
+          ? 409
+          : 400,
+    error: refusal.message,
+  };
 }
 
 const UsedCapabilityBodySchema = z.object({
@@ -707,7 +710,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "session room as the person. Not a delivery: `status` is untouched. A " +
       "slot that was handed to the person goes back to the agent with the " +
       "answer attached, and a pod-run agent that asked is woken. Emits " +
-      "`focus_session.slot_answered.completed`. Refused (403) for an agent key.",
+      "`focus_session.slot_answered.completed`. Refused (403) for an agent key. " +
+      "A slot with a typed `ask` takes `value` (validated against it; 400 " +
+      "`ask_invalid:` when it does not fit, 409 `ask_changed:` when " +
+      "`askFingerprint` no longer matches the slot's ask).",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: AnswerOutputBodySchema,
@@ -730,6 +736,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description: "The slot's ask changed (`ask_changed:`)",
+        schema: ErrorSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -2411,6 +2421,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId: acting.userId,
         expectedLabel: parsed.data.expectedLabel,
         text: parsed.data.text,
+        value: parsed.data.value,
+        askFingerprint: parsed.data.askFingerprint,
       });
       const refusal = answerRefusal(result, parsed.data.expectedLabel, id);
       if (refusal) return c.json({ error: refusal.error }, refusal.status);

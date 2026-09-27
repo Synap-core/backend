@@ -43,7 +43,12 @@
 import { db, focusSessions, and, eq } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
-import type { ExpectedOutput, SlotAnswer } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  SlotAnswer,
+  SlotAnswerValue,
+} from "@synap/playbooks";
+import { askFingerprint } from "@synap-core/types/ask";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { stampUnblocked } from "./block-output.js";
@@ -68,6 +73,21 @@ export interface AnswerExpectedOutputParams {
   messageId: string | null;
   /** Fallback question text when the slot carries no `why` (the agent's post). */
   question?: string;
+  /**
+   * The TYPED answer, already validated against the slot's ask by the caller
+   * (`answerSessionSlot`) and already redacted (`AskAnswerValueSchema`).
+   * Stored on `answer.value`. Absent on the room-reply entrance: a plain
+   * reply is words, not a pick.
+   */
+  value?: SlotAnswerValue;
+  /**
+   * `askFingerprint(slot.ask)` of the ask the caller validated `value` (or
+   * the text) AGAINST. Re-checked under the row lock: an agent that re-asked
+   * between the caller's read and this write gets `ask_changed` instead of an
+   * answer to a question the person was never shown. Absent ⇒ not checked
+   * (the room-reply entrance, which answers in words whatever the ask).
+   */
+  askFingerprint?: string;
   now?: Date;
 }
 
@@ -77,6 +97,8 @@ export type AnswerExpectedOutputResult =
   | { status: "already_done" }
   | { status: "retired" }
   | { status: "empty_answer" }
+  /** The slot's ask is no longer the one the answer was given against. */
+  | { status: "ask_changed" }
   | {
       status: "answered";
       /** The DECLARED label (the slot's own casing). */
@@ -173,6 +195,12 @@ export async function answerExpectedOutput(
       const chosen = selectSlotToAnswer(current, params.expectedLabel);
       if ("refused" in chosen) return { status: chosen.refused };
       const before = current[chosen.index]!;
+      if (
+        params.askFingerprint !== undefined &&
+        askFingerprint(before.ask ?? null) !== params.askFingerprint
+      ) {
+        return { status: "ask_changed" };
+      }
 
       const question = before.why?.trim() || params.question?.trim();
       const answer: SlotAnswer = {
@@ -183,6 +211,7 @@ export async function answerExpectedOutput(
         ...(question
           ? { question: question.slice(0, SLOT_ANSWER_TEXT_MAX) }
           : {}),
+        ...(params.value ? { value: params.value } : {}),
       };
       const next = stampAnswered(current, chosen.index, answer);
       await tx
@@ -260,5 +289,9 @@ function slotAnsweredEventData(
     messageId: answer.messageId,
     answeredBy: answer.answeredBy,
     answeredAt: answer.answeredAt,
+    // The TYPED answer, for a rule to branch on ("when they pick Ship…").
+    // Already redacted at the parse (`AskAnswerValueSchema`) — a form's secret
+    // never reaches an event row. `null` for a plain free-text answer.
+    value: answer.value ?? null,
   };
 }

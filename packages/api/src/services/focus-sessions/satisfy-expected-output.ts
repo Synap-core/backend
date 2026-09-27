@@ -54,9 +54,20 @@
  */
 
 import { db, focusSessions, eq, and } from "@synap/database";
+import { emitSideEffects } from "@synap/events";
+import { createLogger } from "@synap-core/core";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
+import { resolveAskResolution } from "@synap-core/types/ask";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
+import {
+  FOCUS_SESSION_SUBJECT_TYPE,
+  FOCUS_SESSION_SLOT_ATTEST_ACTION,
+  FOCUS_SESSION_SLOT_ATTESTED_EVENT_TYPE,
+} from "./lifecycle-events.js";
+
+const attestLogger = createLogger({ module: "attest-slot" });
 
 /** How long after close an approval still counts as satisfying this session. */
 const RECENTLY_CLOSED_MS = 24 * 60 * 60 * 1000;
@@ -370,7 +381,26 @@ export type AttestExpectedOutputResult =
    * delivered work that was called off.
    */
   | { status: "retired" }
-  | { status: "attested"; expectedLabel: string; kind: string };
+  /**
+   * The slot's ask resolves through the ANSWER door (confirm / choose / form /
+   * provide): the agent needs the person's input, not a "done". Attesting it
+   * would close the slot with the question unanswered.
+   */
+  | { status: "answer_required" }
+  | {
+      status: "attested";
+      expectedLabel: string;
+      kind: string;
+      /** The slot as it stood BEFORE the stamp (delegatedTo, ask, …). */
+      before: ExpectedOutput;
+      attestedAt: string;
+      session: {
+        id: string;
+        workspaceId: string | null;
+        channelId: string | null;
+        agentIds: string[];
+      };
+    };
 
 export async function attestExpectedOutput(
   params: AttestExpectedOutputParams
@@ -379,11 +409,14 @@ export async function attestExpectedOutput(
   const wanted = normalizeExpectedLabel(expectedLabel);
   if (!wanted) return { status: "unknown_label" };
 
-  return await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select({
         id: focusSessions.id,
         expectedOutputs: focusSessions.expectedOutputs,
+        workspaceId: focusSessions.workspaceId,
+        channelId: focusSessions.channelId,
+        agentIds: focusSessions.agentIds,
       })
       .from(focusSessions)
       .where(
@@ -400,18 +433,84 @@ export async function attestExpectedOutput(
     const { index } = chosen;
     const slot = current[index]!;
 
-    const next = stampAttested(current, index, userId);
+    const now = new Date();
+    const next = stampAttested(current, index, userId, now);
     await tx
       .update(focusSessions)
-      .set({ expectedOutputs: next, updatedAt: new Date() })
+      .set({ expectedOutputs: next, updatedAt: now })
       .where(eq(focusSessions.id, sessionId));
+
+    // The history row commits iff the attestation does.
+    await logEvent(
+      userId,
+      FOCUS_SESSION_SLOT_ATTESTED_EVENT_TYPE,
+      slotAttestedEventData(locked.id, slot, userId, now.toISOString()),
+      {
+        subjectId: locked.id,
+        subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+        source: "api",
+      },
+      tx
+    );
 
     return {
       status: "attested" as const,
       expectedLabel: slot.label,
       kind: slot.kind,
+      before: slot,
+      attestedAt: now.toISOString(),
+      session: {
+        id: locked.id,
+        workspaceId: locked.workspaceId ?? null,
+        channelId: locked.channelId ?? null,
+        agentIds: Array.isArray(locked.agentIds) ? locked.agentIds : [],
+      },
     };
   });
+
+  if (result.status === "attested") {
+    // The reactor hop — after commit, so a rule never fires on a rolled-back
+    // attestation. Best-effort: the stamp and its history row already landed.
+    try {
+      await emitSideEffects({
+        subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+        action: FOCUS_SESSION_SLOT_ATTEST_ACTION,
+        subjectId: result.session.id,
+        userId,
+        workspaceId: result.session.workspaceId ?? undefined,
+        sessionId: result.session.id,
+        data: slotAttestedEventData(
+          result.session.id,
+          result.before,
+          userId,
+          result.attestedAt
+        ),
+      });
+    } catch (err) {
+      attestLogger.warn(
+        { err, sessionId: result.session.id },
+        "slot_attested side-effect emit failed — the attestation is recorded"
+      );
+    }
+  }
+  return result;
+}
+
+function slotAttestedEventData(
+  sessionId: string,
+  slot: ExpectedOutput,
+  attestedBy: string,
+  attestedAt: string
+): Record<string, unknown> {
+  return {
+    sessionId,
+    expectedLabel: slot.label,
+    kind: slot.kind,
+    blockedReason: slot.blockedReason ?? null,
+    askMode: slot.ask?.mode ?? null,
+    attestedBy,
+    attestedAt,
+  };
 }
 
 /**
@@ -439,7 +538,12 @@ export function selectSlotToAttest(
 ):
   | { index: number }
   | {
-      refused: "unknown_label" | "already_done" | "not_owed_by_you" | "retired";
+      refused:
+        | "unknown_label"
+        | "already_done"
+        | "not_owed_by_you"
+        | "retired"
+        | "answer_required";
     } {
   const wanted = normalizeExpectedLabel(expectedLabel);
   if (!wanted) return { refused: "unknown_label" };
@@ -458,6 +562,13 @@ export function selectSlotToAttest(
   // called off, and it is unfalsifiable afterwards: `retiredAt` and `attestedAt`
   // would both stand, with nothing to say which one is the truth.
   if (slot.retiredAt != null) return { refused: "retired" };
+  // A slot whose ask wants INPUT (confirm / choose / form / provide) is
+  // answered, never attested: "I did this" on "Which region?" would close the
+  // slot with the agent's question unanswered. `act` and an absent ask (the
+  // legacy verbs) attest as before.
+  if (resolveAskResolution(slot.ask) === "answer") {
+    return { refused: "answer_required" };
+  }
   return { index };
 }
 

@@ -66,10 +66,20 @@ import {
 } from "../services/focus-sessions/block-output.js";
 import { BLOCKED_REASONS } from "@synap/playbooks";
 import {
-  attestExpectedOutput,
-  type AttestExpectedOutputResult,
-} from "../services/focus-sessions/satisfy-expected-output.js";
-import { answerSessionSlot } from "../services/focus-sessions/session-answer.js";
+  answerSessionSlot,
+  attestSessionSlot,
+  describeAnswerRefusal,
+  type AttestSessionSlotResult,
+} from "../services/focus-sessions/session-answer.js";
+import {
+  askAboutSlot,
+  ASK_ABOUT_SLOT_NOTE_MAX,
+} from "../services/focus-sessions/ask-about-slot.js";
+import {
+  AskAnswerValueSchema,
+  ASK_INVALID_PREFIX,
+  SLOT_MOVED_ON_PHRASES,
+} from "@synap-core/types/ask";
 import { SLOT_ANSWER_TEXT_MAX } from "../services/focus-sessions/answer-slot.js";
 import {
   listSessionAnswers,
@@ -161,7 +171,7 @@ const expectedOutputItemSchema = expectedOutputWireSchema;
  * sentences about the same missing label.
  */
 function slotOwnershipResult(
-  result: BlockExpectedOutputResult | AttestExpectedOutputResult,
+  result: BlockExpectedOutputResult | AttestSessionSlotResult,
   input: { sessionId: string; expectedLabel: string }
 ) {
   switch (result.status) {
@@ -173,12 +183,12 @@ function slotOwnershipResult(
     case "unknown_label":
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: `This session declares no output labelled "${input.expectedLabel}"`,
+        message: `This session ${SLOT_MOVED_ON_PHRASES.unknownLabel} "${input.expectedLabel}"`,
       });
     case "already_done":
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `"${input.expectedLabel}" is already delivered`,
+        message: `"${input.expectedLabel}" ${SLOT_MOVED_ON_PHRASES.alreadyDone}`,
       });
     case "ref_unreachable":
       // Block only. The `default` below returns SUCCESS, so a refusal with no
@@ -190,7 +200,7 @@ function slotOwnershipResult(
       // row reads as "delivered" to whoever asked.
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `"${input.expectedLabel}" is not blocked on you — an agent still owes it`,
+        message: `"${input.expectedLabel}" ${SLOT_MOVED_ON_PHRASES.notOwedByYou} — an agent still owes it`,
       });
     case "retired":
       // Attestation only. The `default` below returns SUCCESS, so a refusal
@@ -198,7 +208,15 @@ function slotOwnershipResult(
       // exactly the "guard works, report lies" shape. Every refusal gets a case.
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `"${input.expectedLabel}" was retired when its session was cancelled — there is nothing left to attest`,
+        message: `"${input.expectedLabel}" ${SLOT_MOVED_ON_PHRASES.retired} when its session was cancelled — there is nothing left to attest`,
+      });
+    case "answer_required":
+      // Attestation only. The slot's ask wants the person's INPUT (a yes/no,
+      // a pick, a form, a reference) — "I did this" would close it with the
+      // agent's question unanswered.
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `${ASK_INVALID_PREFIX} "${input.expectedLabel}" asks for an answer — answer it rather than marking it done`,
       });
     default:
       return {
@@ -208,6 +226,25 @@ function slotOwnershipResult(
       };
   }
 }
+
+/**
+ * `focusSessions.answerOutput` input (W2 door contract — FE lanes code against
+ * these names). `text` alone is today's free-text answer; `value` is the typed
+ * answer to the slot's ask (`@synap-core/types/ask`), parsed — and a form's
+ * secrets redacted — by `AskAnswerValueSchema`; `text` is then an optional
+ * note. `askFingerprint` is `askFingerprint(ask)` of the ask the client showed.
+ */
+const AnswerOutputInputSchema = z
+  .object({
+    sessionId: z.string().uuid(),
+    expectedLabel: z.string().min(1).max(500),
+    text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
+    value: AskAnswerValueSchema.optional(),
+    askFingerprint: z.string().min(1).max(64).optional(),
+  })
+  .refine((v) => v.value !== undefined || !!v.text?.trim(), {
+    message: "An answer needs `text` or `value`.",
+  });
 
 // DERIVED from the ONE status vocabulary (`@synap-core/types/focus-sessions`),
 // never hand-mirrored: a new `focus_sessions.status` value reaches this filter
@@ -2313,8 +2350,13 @@ export const focusSessionsRouter = router({
    * back, never merely hidden — GitHub's ambiguous "Done" is the precedent this
    * refuses to repeat.
    *
-   * Runs through `attestExpectedOutput`, which lives inside
+   * Runs through `attestSessionSlot` → `attestExpectedOutput`, which lives inside
    * `satisfy-expected-output.ts` because `status: "done"` has ONE write door.
+   * Once stamped it also emits `focus_session.slot_attested.completed`, posts
+   * "Done: <label>" into the session room as the person, and wakes the pod-run
+   * agent that handed the work over (`triggerAutoRespond`). Refused
+   * (`ask_invalid:`) on a slot whose ask wants an ANSWER — attest is for `act`
+   * asks and ask-less slots.
    *
    * tRPC ONLY, and that is a floor rather than an omission: `protectedProcedure`
    * IS the person, on their own session. There is no Hub REST twin because Hub
@@ -2330,9 +2372,19 @@ export const focusSessionsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const result = await attestExpectedOutput({
+      // Symmetric with `answerOutput`: an agent key attesting its own
+      // hand-over is the self-graded homework this door exists to refuse.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can attest — an agent key cannot.",
+        });
+      }
+      // The stamp, then the room receipt + the agent's wake
+      // (`attestSessionSlot`, session-answer.ts).
+      const result = await attestSessionSlot({
         sessionId: input.sessionId,
-        userId: ctx.userId,
+        userId: requireUserId(ctx.userId),
         expectedLabel: input.expectedLabel,
       });
       return slotOwnershipResult(result, input);
@@ -2351,13 +2403,7 @@ export const focusSessionsRouter = router({
    * an agent answering its own question.
    */
   answerOutput: protectedProcedure
-    .input(
-      z.object({
-        sessionId: z.string().uuid(),
-        expectedLabel: z.string().min(1).max(500),
-        text: z.string().min(1).max(SLOT_ANSWER_TEXT_MAX),
-      })
-    )
+    .input(AnswerOutputInputSchema)
     .mutation(async ({ ctx, input }) => {
       if (ctx.agentUserId) {
         throw new TRPCError({
@@ -2370,36 +2416,57 @@ export const focusSessionsRouter = router({
         userId: requireUserId(ctx.userId),
         expectedLabel: input.expectedLabel,
         text: input.text,
+        value: input.value,
+        askFingerprint: input.askFingerprint,
       });
-      switch (result.status) {
-        case "answered":
-          return { ok: true as const, ...result };
-        case "not_found":
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: `Focus session ${input.sessionId} not found`,
-          });
-        case "unknown_label":
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: `This session declares no output labelled "${input.expectedLabel}"`,
-          });
-        case "already_done":
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `"${input.expectedLabel}" is already delivered`,
-          });
-        case "retired":
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `"${input.expectedLabel}" was retired with its cancelled session`,
-          });
-        case "empty_answer":
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "The answer is empty",
-          });
+      if (result.status === "answered") return { ok: true as const, ...result };
+      const refusal = describeAnswerRefusal(
+        result,
+        input.expectedLabel,
+        input.sessionId
+      );
+      throw new TRPCError(
+        refusal ?? { code: "INTERNAL_SERVER_ERROR", message: "Unknown error" }
+      );
+    }),
+
+  /**
+   * ASK ABOUT IT — the person opens a thread with the agent about one slot it
+   * asked of them (the slot twin of `proposals.askAi`). A seed message
+   * anchored to the slot (`session_slot`) in the session's own room, and a
+   * turn of the owning agent through `triggerAutoRespond` with the slot
+   * resolved into its context. Owner only; never an agent key. Idempotent
+   * under double-tap. Service: `ask-about-slot.ts`.
+   */
+  askAboutSlot: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().min(1).max(500),
+        note: z.string().max(ASK_ABOUT_SLOT_NOTE_MAX).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the person can ask about a slot — an agent key cannot.",
+        });
       }
+      const result = await askAboutSlot({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        expectedLabel: input.expectedLabel,
+        note: input.note,
+      });
+      return {
+        channelId: result.channelId,
+        messageId: result.messageId,
+        ...(result.threadId ? { threadId: result.threadId } : {}),
+        seeded: result.seeded,
+        triggered: result.triggered,
+      };
     }),
 
   /**

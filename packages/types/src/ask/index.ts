@@ -573,5 +573,99 @@ export function summarizeAnswer(
   }
 }
 
+// ─── Door helpers (shared by the pod's doors and every client) ──────────────
+
+/**
+ * Can this ask be answered IN the row, without opening anything? A yes/no, or
+ * a pick among ≤ 3 fixed options. Anything wider (a form, a provide, "Other…",
+ * a long option list) needs its own sheet. An absent ask is a free-text answer
+ * and is never inline.
+ */
+export function askAnswersInline(ask: Ask | null | undefined): boolean {
+  if (!ask) return false;
+  if (ask.mode === "confirm") return true;
+  return (
+    ask.mode === "choose" && ask.options.length <= 3 && ask.allowOther !== true
+  );
+}
+
+/** JSON with object keys SORTED at every depth and `undefined` dropped. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => (v === undefined ? "null" : canonicalJson(v))).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+}
+
+/**
+ * A stable fingerprint of an ask — what a client answered AGAINST. The client
+ * sends it with its answer; the pod compares it with the slot's CURRENT ask and
+ * refuses with `ask_changed:` when the agent re-asked in between (so a person
+ * never answers a question they were not shown).
+ *
+ * Key-order independent on purpose: the ask is stored in JSONB, which does NOT
+ * preserve key order, so a client that fingerprints the ask it READ must get
+ * the same value the pod computes from the same row. `undefined` members are
+ * ignored for the same reason (JSON never carries them). An absent ask is
+ * `"none"`. The hash is 53-bit cyrb53 — a change detector, not a MAC.
+ */
+export function askFingerprint(ask: Ask | null | undefined): string {
+  if (!ask) return "none";
+  const text = canonicalJson(ask);
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/**
+ * Message prefixes the pod's answer / attest doors put on the two ask
+ * refusals, so a client can tell them apart without parsing prose:
+ *   `ask_changed:` — CONFLICT: the slot's ask is no longer the one answered.
+ *   `ask_invalid:` — BAD_REQUEST: the answer does not fit the ask (or the ask
+ *                   resolves through the other door).
+ */
+export const ASK_CHANGED_PREFIX = "ask_changed:";
+export const ASK_INVALID_PREFIX = "ask_invalid:";
+
+/**
+ * The phrases the slot doors use when the slot MOVED ON under the person —
+ * delivered, retired, no longer declared, or no longer theirs. The doors build
+ * their refusal messages FROM these, so {@link askRefusalIsStale} matches the
+ * pod's own words rather than a copy of them.
+ */
+export const SLOT_MOVED_ON_PHRASES = {
+  alreadyDone: "is already delivered",
+  retired: "was retired",
+  unknownLabel: "declares no output labelled",
+  notOwedByYou: "is not blocked on you",
+} as const;
+
+/**
+ * Is this refusal STALE — the ask changed or the slot moved on — as opposed to
+ * a wrong answer? A stale refusal means "re-read the slot and re-render, keep
+ * the draft"; a wrong answer means "fix the input".
+ */
+export function askRefusalIsStale(message: string | null | undefined): boolean {
+  if (typeof message !== "string") return false;
+  if (message.startsWith(ASK_CHANGED_PREFIX)) return true;
+  if (message.startsWith(ASK_INVALID_PREFIX)) return false;
+  return Object.values(SLOT_MOVED_ON_PHRASES).some((p) => message.includes(p));
+}
+
 /** Re-exported beside the form-values schema that applies it. */
 export { redactSecretValues } from "../vault/index.js";

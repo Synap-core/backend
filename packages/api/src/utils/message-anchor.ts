@@ -108,6 +108,28 @@ export const EntityAnchorSchema = z
   .strict();
 export type EntityAnchor = z.infer<typeof EntityAnchorSchema>;
 
+/**
+ * A thread about ONE SLOT of a session (`ExpectedOutput`, by its declared
+ * label) — "ask about it" on something an agent asked of the person. The
+ * thread lives in the session's OWN room (one room per session, filtered by
+ * anchor, like document comments), never a room per slot.
+ *
+ * SERVER-MINTED ONLY, by `askAboutSlot` (services/focus-sessions), after the
+ * owner floor: `ChannelMessageMetadataInputSchema` below does not accept it,
+ * so no send door can pin a thread to a slot. `askFingerprint` is the ask the
+ * person was looking at — the stale mark, like a proposal anchor's
+ * `contentVersion`.
+ */
+export const SessionSlotAnchorSchema = z
+  .object({
+    kind: z.literal("session_slot"),
+    sessionId: z.string().uuid(),
+    label: z.string().trim().min(1).max(500),
+    askFingerprint: z.string().min(1).max(64),
+  })
+  .strict();
+export type SessionSlotAnchor = z.infer<typeof SessionSlotAnchorSchema>;
+
 /** Every anchor a comment in an OBJECT ROOM may carry (the comments door). */
 export const ObjectCommentAnchorSchema = z.discriminatedUnion("kind", [
   DocumentAnchorSchema,

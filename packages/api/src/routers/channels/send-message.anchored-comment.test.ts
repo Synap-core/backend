@@ -252,7 +252,12 @@ describe("tripwire: only the human send door reaches the anchored-comment planne
   };
   walk(srcRoot);
 
-  it("the planner is imported by send-message.ts and nothing else", () => {
+  // The ONE other importer is `askAboutSlot` (focusSessions.askAboutSlot,
+  // W2 typed asks) — also a HUMAN door: tRPC only, owner-floored by the
+  // service, an agent key refused at the router. It plans only its own
+  // server-minted `session_slot` anchor (`planSlotAnchorTurn`), never a
+  // client-supplied proposal anchor. Any third importer is still a failure.
+  it("the planner is imported by the two human doors and nothing else", () => {
     // Non-vacuity: the walk saw the codebase, and it can see a known importer.
     expect(files.length).toBeGreaterThan(500);
     const importers = files
@@ -262,6 +267,9 @@ describe("tripwire: only the human send door reaches the anchored-comment planne
         )
       )
       .map((f) => relative(srcRoot, f));
-    expect(importers).toEqual(["routers/channels/send-message.ts"]);
+    expect(importers.sort()).toEqual([
+      "routers/channels/send-message.ts",
+      "services/focus-sessions/ask-about-slot.ts",
+    ]);
   });
 });

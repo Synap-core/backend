@@ -38,7 +38,10 @@ import {
   opRef as positionalOpRef,
   PRIMARY_REF,
 } from "@synap-core/types/proposals";
-import type { MessageAnchor } from "./message-anchor.js";
+import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
+import { askFingerprint } from "@synap-core/types/ask";
+import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
+import type { MessageAnchor, SessionSlotAnchor } from "./message-anchor.js";
 
 type Database = typeof defaultDb;
 
@@ -51,7 +54,39 @@ export const ANCHOR_FIELD_KEY_MAX = 64;
 
 /** Why the anchor did (not) resolve — a failed lookup is never "resolved". */
 export type AnchorResolution =
-  "resolved" | "no_proposal" | "proposal_not_found" | "op_not_found";
+  | "resolved"
+  | "no_proposal"
+  | "proposal_not_found"
+  | "op_not_found"
+  // A `session_slot` anchor (`planSlotAnchorTurn`).
+  | "slot_resolved"
+  | "slot_not_found";
+
+/** Caps for the slot half — mirrored by the IS `TurnContextAnchorSchema`. */
+export const ANCHOR_SLOT_TEXT_MAX = 1_000;
+
+/**
+ * The slot a `session_slot` anchor names, in words the agent can act on.
+ * Everything free-text here is AGENT- or person-authored reference data; the
+ * IS renders it as untrusted context, never as instructions.
+ */
+export interface AnchorSlotContext {
+  sessionId: string;
+  label: string;
+  kind: string;
+  /** `human` = the person owes it; `agent` = it is (back) with an agent. */
+  owner: "human" | "agent";
+  status: string;
+  blockedReason: string | null;
+  /** The agent's own words for what it needs. */
+  why: string | null;
+  /** The ask, rendered to one bounded line (`describeAskForTurn`). */
+  ask: { mode: string; text: string } | null;
+  /** Where the slot points: an http(s) link or an in-pod `kind:id`. */
+  ref: string | null;
+  /** True iff the agent changed the ask since the person opened it. */
+  askChanged: boolean;
+}
 
 export interface AnchorTurnContext {
   version: typeof ANCHOR_TURN_CONTEXT_VERSION;
@@ -74,13 +109,18 @@ export interface AnchorTurnContext {
   /** True iff the proposal was revised since the commenter saw it. */
   stale: boolean;
   comment: string;
+  /**
+   * Present ONLY for a `session_slot` anchor — absent (not null) on a proposal
+   * anchor, so every proposal turn stays byte-identical to before.
+   */
+  slot?: AnchorSlotContext | null;
 }
 
 export type AnchoredCommentTrigger =
   | { trigger: false; reason: "not_session_channel" | "not_run_or_pending" }
   | {
       trigger: true;
-      reason: "intake_run" | "pending_proposal";
+      reason: "intake_run" | "pending_proposal" | "session_slot";
       /** Agent type that produced the anchored proposal; undefined = default. */
       agentType?: string;
     };
@@ -264,4 +304,131 @@ export async function planAnchoredCommentTurn(params: {
       ...(agentType ? { agentType } : {}),
     },
   };
+}
+
+const SLOT_LABEL_MAX = 200;
+
+/** One bounded line for an ask — the agent re-reads its OWN ask, not a new one. */
+export function describeAskForTurn(ask: SlotAsk): {
+  mode: string;
+  text: string;
+} {
+  const parts: string[] = [];
+  switch (ask.mode) {
+    case "confirm":
+      parts.push(ask.prompt ? `Yes/no: ${ask.prompt}` : "Yes/no");
+      break;
+    case "choose":
+      parts.push(
+        `Options: ${ask.options
+          .map(
+            (o) =>
+              `${o.label}${o.recommended ? " (recommended)" : ""}${o.description ? ` — ${o.description}` : ""}`
+          )
+          .join("; ")}`
+      );
+      if (ask.allowOther) parts.push("Other answers allowed.");
+      break;
+    case "form":
+      parts.push(
+        `Fields: ${ask.form.fields
+          .map(
+            (f) =>
+              `${f.label || f.key}${f.required ? " (required)" : ""}${f.constraints?.enum ? ` [${f.constraints.enum.join("/")}]` : ""}`
+          )
+          .join("; ")}`
+      );
+      break;
+    case "act":
+      if (ask.url) parts.push(`At: ${ask.url}`);
+      if (ask.steps?.length) {
+        parts.push(
+          `Steps: ${ask.steps.map((st, i) => `${i + 1}. ${st}`).join(" ")}`
+        );
+      }
+      if (parts.length === 0) parts.push("Do it, then say done");
+      break;
+    case "provide":
+      parts.push(
+        ask.provide.kind === "connection"
+          ? `Connect: ${ask.provide.service}`
+          : ask.provide.kind === "secret"
+            ? `Secret (via the vault): ${ask.provide.name}`
+            : `File${ask.provide.accept?.length ? ` (${ask.provide.accept.join(", ")})` : ""}`
+      );
+      break;
+  }
+  return {
+    mode: ask.mode,
+    text: clip(parts.join(" "), ANCHOR_SLOT_TEXT_MAX),
+  };
+}
+
+/**
+ * Resolve a `session_slot` anchor against the session row — the slot twin of
+ * {@link planAnchoredCommentTurn}. Owner-floored by the CALLER (the
+ * `askAboutSlot` door); a failed read throws through, never "not found".
+ *
+ * The decision is always to trigger: asking about a slot IS a summons of the
+ * agent that owns the work (the door names it — a session room is a GROUP
+ * room, which wakes only a named agent).
+ */
+export async function planSlotAnchorTurn(params: {
+  anchor: SessionSlotAnchor;
+  comment: string;
+  db?: Database;
+}): Promise<AnchoredCommentPlan> {
+  const { anchor } = params;
+  const database = params.db ?? defaultDb;
+  const [row] = await database
+    .select({ expectedOutputs: focusSessions.expectedOutputs })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, anchor.sessionId))
+    .limit(1);
+  const outputs: ExpectedOutput[] = Array.isArray(row?.expectedOutputs)
+    ? (row.expectedOutputs as ExpectedOutput[])
+    : [];
+  const wanted = normalizeExpectedLabel(anchor.label);
+  const slot =
+    outputs.find((o) => !!o && normalizeExpectedLabel(o.label) === wanted) ??
+    null;
+  const askChanged = slot
+    ? askFingerprint(slot.ask ?? null) !== anchor.askFingerprint
+    : false;
+  const ref = slot?.ref
+    ? "url" in slot.ref
+      ? slot.ref.url
+      : `${slot.ref.kind}:${slot.ref.id}`
+    : null;
+
+  const context: AnchorTurnContext = {
+    version: ANCHOR_TURN_CONTEXT_VERSION,
+    resolution: slot ? "slot_resolved" : "slot_not_found",
+    proposalId: null,
+    proposalStatus: null,
+    opRef: null,
+    op: null,
+    field: null,
+    contentVersion: 0,
+    currentVersion: null,
+    stale: askChanged,
+    comment: clip(params.comment, ANCHOR_COMMENT_MAX),
+    slot: slot
+      ? {
+          sessionId: anchor.sessionId,
+          label: clip(slot.label, SLOT_LABEL_MAX),
+          kind: clip(slot.kind, ANCHOR_FIELD_KEY_MAX),
+          owner: slot.owner === "human" ? "human" : "agent",
+          status: clip(slot.status ?? "pending", ANCHOR_FIELD_KEY_MAX),
+          blockedReason: slot.blockedReason
+            ? clip(slot.blockedReason, ANCHOR_FIELD_KEY_MAX)
+            : null,
+          why: slot.why ? clip(slot.why, ANCHOR_SLOT_TEXT_MAX) : null,
+          ask: slot.ask ? describeAskForTurn(slot.ask) : null,
+          ref: ref ? clip(ref, ANCHOR_SLOT_TEXT_MAX) : null,
+          askChanged,
+        }
+      : null,
+  };
+  return { context, decision: { trigger: true, reason: "session_slot" } };
 }

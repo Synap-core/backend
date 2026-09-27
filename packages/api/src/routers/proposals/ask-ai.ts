@@ -35,13 +35,13 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, eq, desc } from "@synap/database";
-import { messages, proposals, ChannelType } from "@synap/database/schema";
+import { db, eq } from "@synap/database";
+import { proposals, ChannelType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { resolveOrCreateChannel } from "../../utils/resolve-or-create-channel.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
-import { postChannelMessage } from "../../services/messaging/post-message.js";
+import { postSeedOnce } from "../../services/messaging/post-seed-once.js";
 import { verifyWorkspaceAccess } from "../hub-protocol/rest/_shared.js";
 
 const logger = createLogger({ module: "proposal-ask-ai" });
@@ -145,78 +145,30 @@ export async function askAiAboutProposal(params: {
   // (4) IDEMPOTENCY — an unanswered seed already waiting means a turn is
   // already in flight (or already dropped); either way a second seed produces a
   // second turn answering the same question. Keyed on the LAST message: if it
-  // is our own seed, the agent has not replied yet.
+  // is our own seed, the agent has not replied yet. The read-then-write race is
+  // closed by the WRITE (a deterministic idempotency key naming the message the
+  // decision was made against), never by a lock — the shared mechanism and why
+  // the advisory lock had to go live in `postSeedOnce`.
   //
-  // READ-THEN-WRITE IS A RACE, and it is closed by the WRITE, not by a lock.
-  // The read runs on the ambient `db`; the post carries an `idempotencyKey`
-  // that NAMES the message the decision was made against, so two taps arriving
-  // together derive the SAME deterministic message id, and
-  // `postChannelMessage`'s `ON CONFLICT DO NOTHING` lets exactly one of them
-  // insert. The loser gets `ackState: "duplicate-ignored"` and does not trigger.
-  //
-  // ## Why the advisory lock had to go (round-2 review)
-  //
-  // It was `db.transaction(tx => { pg_advisory_xact_lock; read; await
-  // postChannelMessage(…) })` — and `postChannelMessage` runs three or more
-  // queries on the AMBIENT `db`, i.e. on OTHER pool connections, while this one
-  // is pinned for the whole critical section. At concurrency ≥ pool size every
-  // holder waits for a connection that only another holder can release: a
-  // deadlock made of connections, not of rows. Threading `tx` through the
-  // message helper would have meant plumbing an executor through its
-  // authorization read, its dedup lookup, its insert and its event emit — a
-  // large change to a shared door to buy a guarantee that door already offers.
-  //
-  // The guarantee is UNCHANGED: two concurrent taps → one seed, one trigger.
-  // Authorization still happens BEFORE any write, and the turn still starts
-  // through the ONE door, outside any transaction.
-  const [latest] = await db
-    .select({
-      id: messages.id,
-      role: messages.role,
-      content: messages.content,
-    })
-    .from(messages)
-    .where(eq(messages.channelId, channel.id))
-    // `messages` has NO `createdAt`: its clock column is `timestamp`. Ordering
-    // by the wrong column would typecheck nowhere but read as a harmless
-    // rename in review — and the mocked chain in the test cannot see it, which
-    // is exactly why the typecheck is the gate that catches this one.
-    .orderBy(desc(messages.timestamp))
-    .limit(1);
-
-  if (latest && isAskAiSeed(latest.role, latest.content)) {
-    logger.info(
-      { proposalId, channelId: channel.id },
-      "ask-ai seed already unanswered — not posting a second one"
-    );
-    return { channelId: channel.id, seeded: false, triggered: false };
-  }
-
   // Posted as the CALLER, role `user` — this is the human asking, and `user`
   // is the role the turn starter expects to be answering.
-  const posted = await postChannelMessage({
+  const seed = await postSeedOnce({
     channelId: channel.id,
-    content,
-    role: "user",
     userId,
-    // The serialiser. It names the message this decision was made AGAINST, so
-    // it is stable across concurrent taps of the SAME question and different
-    // once the agent has replied (the thread's last message changed) — which
-    // is exactly the "ask again after an answer" case that must still work.
-    idempotencyKey: `ask-ai:${proposalId}:${latest?.id ?? "empty"}`,
-    // NOT `triggerAI` — that path starts an orchestrator turn with no session
-    // context. The ONE door below does.
-    triggerAI: false,
+    content,
+    idempotencyScope: `ask-ai:${proposalId}`,
+    isPendingSeed: (latest) => isAskAiSeed(latest.role, latest.content),
   });
-
-  if (posted.ackState === "duplicate-ignored") {
-    // A concurrent tap won the insert. It will trigger the turn; we must not.
+  if (!seed.seeded) {
     logger.info(
-      { proposalId, channelId: channel.id },
-      "ask-ai seed lost the idempotent insert — a concurrent tap owns the turn"
+      { proposalId, channelId: channel.id, reason: seed.reason },
+      seed.reason === "pending"
+        ? "ask-ai seed already unanswered — not posting a second one"
+        : "ask-ai seed lost the idempotent insert — a concurrent tap owns the turn"
     );
     return { channelId: channel.id, seeded: false, triggered: false };
   }
+  const posted = seed;
 
   // (3) THE ONE DOOR.
   const triggered = await triggerAutoRespond({

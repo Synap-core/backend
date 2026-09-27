@@ -60,3 +60,12 @@ export const FOCUS_SESSION_CONVERSION_REVERTED_EVENT_TYPE =
 export const FOCUS_SESSION_SLOT_ANSWER_ACTION = "slot_answered" as const;
 export const FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE =
   `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_SLOT_ANSWER_ACTION}.completed` as const;
+
+/**
+ * The person said "I did this" about a slot they owed (`attestExpectedOutput`).
+ * Unlike an answer this IS a delivery — the slot is `done` — and it is emitted
+ * so the agent that handed the work over can be woken and a rule can react.
+ */
+export const FOCUS_SESSION_SLOT_ATTEST_ACTION = "slot_attested" as const;
+export const FOCUS_SESSION_SLOT_ATTESTED_EVENT_TYPE =
+  `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_SLOT_ATTEST_ACTION}.completed` as const;
