@@ -48,6 +48,10 @@
       "types": "./dist/vocabulary/index.d.ts",
       "import": "./dist/vocabulary/index.js"
     },
+    "./surfaces": {
+      "types": "./dist/surfaces/index.d.ts",
+      "import": "./dist/surfaces/index.js"
+    },
     "./property-hints": {
       "types": "./dist/property-hints/index.d.ts",
       "import": "./dist/property-hints/index.js"
