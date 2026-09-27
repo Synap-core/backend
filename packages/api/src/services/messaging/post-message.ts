@@ -237,6 +237,40 @@ async function assertCallerMayPostToChannel(
   return { workspaceId: row.workspaceId ?? null };
 }
 
+/**
+ * An agent's question ABOUT A SLOT is filed on that slot as its ask
+ * (`room-question-slot.ts`). After the post: the question stands whatever the
+ * slot says, and the outcome is reported, never thrown. `undefined` when the
+ * post is not a slot question.
+ */
+async function fileSlotQuestion(
+  params: PostChannelMessageParams,
+  messageId: string
+): Promise<PostChannelMessageResult["slot"]> {
+  const { channelId, content, userId, agentUserId } = params;
+  if (!agentUserId || params.kind !== "question" || !params.slotLabel?.trim())
+    return undefined;
+  const { fileRoomQuestionOnSlot } =
+    await import("../focus-sessions/room-question-slot.js");
+  try {
+    const filed = await fileRoomQuestionOnSlot({
+      channelId,
+      slotLabel: params.slotLabel,
+      question: content,
+      ...(params.ask ? { ask: params.ask } : {}),
+      agentUserId,
+      userId,
+    });
+    return { status: filed.status };
+  } catch (err) {
+    logger.warn(
+      { err, channelId, messageId },
+      "question post: filing the question on its slot failed — the post stands"
+    );
+    return { status: "failed" };
+  }
+}
+
 export async function postChannelMessage(
   params: PostChannelMessageParams
 ): Promise<PostChannelMessageResult> {
@@ -299,7 +333,16 @@ export async function postChannelMessage(
         )
         .orderBy(desc(messages.timestamp))
         .limit(1);
-      if (prior) return duplicateReceipt(prior.id, channelId);
+      if (prior) {
+        // A replayed question still files on its slot: the first post may have
+        // named a slot that did not exist yet, and dedup must not swallow the
+        // EFFECT along with the duplicate row. Filing is a re-stamp, so safe.
+        const slot = await fileSlotQuestion(params, prior.id);
+        return {
+          ...duplicateReceipt(prior.id, channelId),
+          ...(slot ? { slot } : {}),
+        };
+      }
     } catch (err) {
       // Best-effort — degrade to a normal insert rather than block a real write.
       logger.warn(
@@ -372,8 +415,10 @@ export async function postChannelMessage(
   if (inserted.length === 0) {
     // Explicit-key retry (or a concurrent double-insert of the same derived id):
     // the prior write is authoritative, and its AI turn already fired — do NOT
-    // re-trigger (at-most-once external effect).
-    return duplicateReceipt(msgId, channelId);
+    // re-trigger (at-most-once external effect). The slot filing still runs:
+    // it converges (a re-stamp), it is not an external effect.
+    const slot = await fileSlotQuestion(params, msgId);
+    return { ...duplicateReceipt(msgId, channelId), ...(slot ? { slot } : {}) };
   }
 
   // Keystone fact write: append `message.sent` to the `events` log — reached
@@ -404,31 +449,7 @@ export async function postChannelMessage(
     workspaceId: channel.workspaceId,
   });
 
-  // An agent's question ABOUT A SLOT is filed on that slot as its ask
-  // (`room-question-slot.ts`). After the post: the question stands whatever
-  // the slot says, and the outcome is reported, never thrown.
-  let slot: PostChannelMessageResult["slot"];
-  if (agentUserId && params.kind === "question" && params.slotLabel?.trim()) {
-    const { fileRoomQuestionOnSlot } =
-      await import("../focus-sessions/room-question-slot.js");
-    try {
-      const filed = await fileRoomQuestionOnSlot({
-        channelId,
-        slotLabel: params.slotLabel,
-        question: content,
-        ...(params.ask ? { ask: params.ask } : {}),
-        agentUserId,
-        userId,
-      });
-      slot = { status: filed.status };
-    } catch (err) {
-      logger.warn(
-        { err, channelId, messageId: msgId },
-        "question post: filing the question on its slot failed — the post stands"
-      );
-      slot = { status: "failed" };
-    }
-  }
+  const slot = await fileSlotQuestion(params, msgId);
 
   if (triggerAI) {
     const { emitChatEvent } =

@@ -85,6 +85,8 @@ vi.mock("@synap/database", () => {
       EXTERNAL: "external",
       BOT: "bot",
     },
+    // An AGENT post stamps routedSource (attribution) on the insert.
+    RoutedSource: { DIRECT: "direct" },
     computeMessageHash: () => "hash",
     and: vi.fn(),
     eq: vi.fn(),
@@ -99,6 +101,13 @@ vi.mock("@synap/database", () => {
 // Who-hears-about-it is `notify-room-post.ts`'s own suite
 // (`room-first-notifications.pglite.test.ts`); stubbed so this file's
 // hand-built database mock does not have to model the notification tables.
+const { fileRoomQuestionOnSlot } = vi.hoisted(() => ({
+  fileRoomQuestionOnSlot: vi.fn(async () => ({ status: "blocked" })),
+}));
+vi.mock("../focus-sessions/room-question-slot.js", () => ({
+  fileRoomQuestionOnSlot,
+}));
+
 vi.mock("./notify-room-post.js", () => ({
   notifyRoomPost: state.notifyRoomPost,
 }));
@@ -182,5 +191,34 @@ describe("postChannelMessage — ack integrity", () => {
     // First returns applied with the derived id; both calls compute the SAME id.
     expect(r1.messageId).toBe(r2.messageId);
     expect(r1.messageId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("postChannelMessage — a replayed slot question still files on its slot", () => {
+  it("content-dedup replay runs the slot filing against the prior message", async () => {
+    state.selectRows = [{ id: "prior-msg" }];
+    const r = await postChannelMessage({
+      ...base,
+      kind: "question",
+      slotLabel: "DF region",
+      agentUserId: "agent-1",
+    });
+    expect(r.ackState).toBe("duplicate-ignored");
+    expect(state.insertCalls).toBe(0);
+    expect(fileRoomQuestionOnSlot).toHaveBeenCalledTimes(1);
+    expect(r.slot).toEqual({ status: "blocked" });
+  });
+
+  it("explicit-key replay also files", async () => {
+    state.insertRows = [];
+    const r = await postChannelMessage({
+      ...base,
+      idempotencyKey: "k-2",
+      kind: "question",
+      slotLabel: "DF region",
+      agentUserId: "agent-1",
+    });
+    expect(r.ackState).toBe("duplicate-ignored");
+    expect(r.slot).toEqual({ status: "blocked" });
   });
 });
