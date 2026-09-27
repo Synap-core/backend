@@ -59,6 +59,8 @@ import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { countProjectSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
 import { needsYouRole } from "../notifications/registry.js";
+import { listDraftAskSlots } from "../services/focus-sessions/draft-asks.js";
+import { resolveScope } from "../utils/scope-filter.js";
 
 /**
  * The open-question read for the `"session-pointer"` rows in a notification
@@ -86,6 +88,41 @@ const NOTIFICATION_SCAN_LIMIT = 100;
 /** How many owed slots the COUNT door pulls before it must call its number a
  *  floor. `focusSessions.owed` caps at 200; this is a page, not a total. */
 const OWED_SCAN_LIMIT = 100;
+
+/**
+ * The DRAFT half — owed slots on undecided agent drafts, folded by the union
+ * into one `draft-asks` row per draft (founder decision 2026-09-27). The SAME
+ * lens and suppression rule as the owed half (`floorLens`, `isOwedNarrowable`),
+ * and the SAME cap for `list` and `count`, so the two fold the same drafts
+ * with the same ask counts. Read through the service rather than a tRPC door:
+ * it is the owed door's own read (`listOwedSlots`) under the inverse triage
+ * lens, owner-floored the same way.
+ */
+async function readDraftAsks(
+  ctx: { userId?: string | null; workspaceId?: string | null },
+  input: { workspaceId?: string | null; projectId?: string }
+) {
+  const draft = await listDraftAskSlots({
+    userId: requireUserId(ctx.userId),
+    scope: resolveScope(ctx, {
+      workspaceId: floorLens(input.workspaceId),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+    }),
+    limit: OWED_SCAN_LIMIT,
+  });
+  return {
+    draftAsks: {
+      slots: draft.slots as OwedSlotSignalInput[],
+      starterNames: draft.starterNames,
+    },
+    draftAsksTruncated: draft.slots.length >= OWED_SCAN_LIMIT,
+  };
+}
+
+const NO_DRAFT_ASKS = {
+  draftAsks: { slots: [], starterNames: new Map<string, string>() },
+  draftAsksTruncated: false,
+};
 
 /**
  * The workspace lens, translated for EVERY half of the union that resolves its
@@ -223,7 +260,7 @@ async function countSignals(
   input: z.infer<z.ZodObject<typeof SignalScope>>
 ) {
   const scoped = isContainerScoped(input);
-  const [groups, notifs, owed, review] = await Promise.all([
+  const [groups, notifs, owed, review, drafts] = await Promise.all([
     proposalsRouter.createCaller(ctx).groups({
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,
@@ -256,6 +293,9 @@ async function countSignals(
           projectId: input.projectId,
         })
       : Promise.resolve({ review: 0, truncated: false }),
+    isOwedNarrowable(input)
+      ? readDraftAsks(ctx, input)
+      : Promise.resolve(NO_DRAFT_ASKS),
   ]);
 
   const notificationRows = notifs.notifications as NotificationSignalInput[];
@@ -271,6 +311,8 @@ async function countSignals(
     owedTruncated: owed.length >= OWED_SCAN_LIMIT,
     reviewSessions: review.review,
     reviewTruncated: review.truncated,
+    draftAsks: drafts.draftAsks,
+    draftAsksTruncated: drafts.draftAsksTruncated,
   });
 }
 
@@ -315,7 +357,7 @@ export const signalsRouter = router({
       if (input.lens === "needs-you") {
         // Container-scoped → proposals only. See `isContainerScoped`.
         const scoped = isContainerScoped(input);
-        const [groups, notifs, owed] = await Promise.all([
+        const [groups, notifs, owed, drafts] = await Promise.all([
           proposalsRouter.createCaller(ctx).groups({
             workspaceId: input.workspaceId,
             sessionId: input.sessionId,
@@ -344,6 +386,10 @@ export const signalsRouter = router({
                 excludeDrafts: true,
               })
             : Promise.resolve([]),
+          // Same half, same rule as `count` — see `readDraftAsks`.
+          isOwedNarrowable(input)
+            ? readDraftAsks(ctx, input)
+            : Promise.resolve(NO_DRAFT_ASKS),
         ]);
 
         const notificationRows =
@@ -355,6 +401,7 @@ export const signalsRouter = router({
           // Same read as `count`, so the list and the badge fold the same rows.
           openQuestionSessionIds:
             await openQuestionSessionIdsFor(notificationRows),
+          draftAsks: drafts.draftAsks,
         });
         // Paged through `pageNeedsYou`, never a bare slice: owed slots are an
         // unbounded, never-expiring source sitting FIRST, so one shared cap let
@@ -435,8 +482,9 @@ export const signalsRouter = router({
    * The number ships WITH its parts: `decisions` (distinct pending clusters),
    * `notifications` (deduped unread), `blocked` (owed slots) and `review`
    * (sessions awaiting your review/close — project scope only, see
-   * `isReviewCountable`), with
-   * `needsYou === decisions + notifications + blocked + review`. A client reads
+   * `isReviewCountable`) and `drafts` (undecided agent drafts that ask you
+   * something, one per draft — the `draft-asks` rows of `list`), with
+   * `needsYou === decisions + notifications + blocked + review + drafts`. A client reads
    * the part it needs; it never derives one by subtracting the others.
    *
    * `suggestions` (unread AI suggestions, the `suggestions` lens of `list`)

@@ -62,6 +62,7 @@ import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
+import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_SLOT_ATTEST_ACTION,
@@ -503,6 +504,9 @@ export async function attestExpectedOutput(
         "slot_attested side-effect emit failed — the attestation is recorded"
       );
     }
+    // "I did this" on an undecided agent draft takes the draft on — the ONE
+    // acceptance door, after commit, idempotent (accept-on-engagement.ts).
+    await acceptDraftOnEngagement({ sessionId: result.session.id, userId });
   }
   return result;
 }

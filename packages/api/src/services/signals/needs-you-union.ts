@@ -32,6 +32,7 @@
  */
 
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import { ASK_COPY } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
 import {
   isObjectNavView,
@@ -67,7 +68,14 @@ export type SignalKind =
   /** A proposal that has been approved / rejected / expired (history lens). */
   | "decided-proposal"
   /** One deliverable an agent handed to the human and nobody has closed. */
-  | "owed-slot";
+  | "owed-slot"
+  /**
+   * One undecided agent DRAFT that asks the person something — "<agent>
+   * started <work> · asks you N things". Its asks are not listed one by one
+   * (`excludeDrafts`) until the draft is accepted; answering any of them
+   * accepts it (`accept-on-engagement.ts`). Proposals under a draft stay out.
+   */
+  | "draft-asks";
 
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
@@ -441,6 +449,110 @@ function owedInstant(owedSince: string): Date {
 }
 
 /**
+ * FIELD CLASSIFICATION for the DRAFT row — the same compile-time floor as the
+ * owed-slot projection above, because the draft row is built from the SAME
+ * `OwedSlot` rows (`listDraftAskSlots`), folded per session.
+ *
+ * PROJECTED:
+ *   sessionId   → `target.id` and the fold key (one row per draft)
+ *   sessionGoal → the work named in `title`, and `sessionGoal`
+ *   owedSince   → `occurredAt` = the draft's OLDEST ask, so it sorts among
+ *                 owed slots by the same age-is-severity rule
+ *   label       → counted (`count` = asks on the draft); each label is the
+ *                 fold's unit, never shown on the row
+ *
+ * WITHHELD — the per-ask disclosure belongs to the ask's OWN row, which the
+ * person sees the moment the draft is accepted (answering one accepts it):
+ *   kind, icon, blockedReason, why, claimedDone, criterionKey, ref, ask →
+ *     one row stands for N asks, and any single ask's reason/pointer/answer
+ *     region on it would misdescribe the other N-1. The row is a door to the
+ *     session, where every ask renders in full.
+ *   sessionStatus, workspaceId, projectId → withheld for the reasons the
+ *     owed-slot classification gives.
+ */
+const PROJECTED_DRAFT_ASK_FIELDS = [
+  "sessionId",
+  "sessionGoal",
+  "owedSince",
+  "label",
+] as const satisfies ReadonlyArray<keyof OwedSlot>;
+
+const WITHHELD_DRAFT_ASK_FIELDS = [
+  "kind",
+  "icon",
+  "blockedReason",
+  "why",
+  "claimedDone",
+  "criterionKey",
+  "ref",
+  "ask",
+  "sessionStatus",
+  "workspaceId",
+  "projectId",
+] as const satisfies ReadonlyArray<keyof OwedSlot>;
+
+type _DraftAskFieldsClassified =
+  Exclude<
+    keyof OwedSlot,
+    (typeof PROJECTED_DRAFT_ASK_FIELDS)[number]
+  > extends (typeof WITHHELD_DRAFT_ASK_FIELDS)[number]
+    ? true
+    : never;
+const _draftAskFieldsClassified: _DraftAskFieldsClassified = true;
+void _draftAskFieldsClassified;
+
+/** The draft half of the union: owed slots on pending drafts + who started each. */
+export interface DraftAsksInput {
+  /** Owed slots on undecided drafts (`listDraftAskSlots`), any order. */
+  slots: OwedSlotSignalInput[];
+  /** sessionId → the starting agent's display name, when the pod knows it. */
+  starterNames: ReadonlyMap<string, string>;
+}
+
+/**
+ * Pending drafts → one signal per draft that asks at least one thing. A draft
+ * with no owed slot never appears: it has no row in `slots` to fold.
+ *
+ * `count` is the number of asks, so the count chip and the title's "N things"
+ * are the same number. `id` keys on the session, so a draft stays one row as
+ * asks come and go.
+ */
+export function signalsFromDraftAsks(input: DraftAsksInput): Signal[] {
+  const bySession = new Map<string, OwedSlotSignalInput[]>();
+  for (const slot of input.slots) {
+    const list = bySession.get(slot.sessionId);
+    if (list) list.push(slot);
+    else bySession.set(slot.sessionId, [slot]);
+  }
+  return [...bySession].map(([sessionId, slots]) => {
+    const oldest = slots
+      .map((s) => owedInstant(s.owedSince))
+      .reduce((a, b) => (b.getTime() < a.getTime() ? b : a));
+    const goal = slots.find((s) => s.sessionGoal)?.sessionGoal ?? null;
+    return {
+      id: `draft:${sessionId}`,
+      kind: "draft-asks" as const,
+      title: ASK_COPY.draftAsks(
+        input.starterNames.get(sessionId) ?? null,
+        goal ?? "a session",
+        slots.length
+      ),
+      count: slots.length,
+      occurredAt: oldest,
+      target: { kind: "session", id: sessionId },
+      // Agent-originated, like the owed slots it folds.
+      category: "ai",
+      ...(goal ? { sessionGoal: goal } : {}),
+    };
+  });
+}
+
+/** The two kinds that sit on the OWED side of the page: things the person owes. */
+function isOwedSide(signal: Signal): boolean {
+  return signal.kind === "owed-slot" || signal.kind === "draft-asks";
+}
+
+/**
  * One owed slot → one signal.
  *
  * ONE ROW PER SLOT, never a cluster: a session owing three deliverables owes
@@ -649,14 +761,24 @@ export function unionNeedsYou(args: {
   owedSlots: OwedSlotSignalInput[];
   /** See {@link SessionLiveNeeds.openQuestionSessionIds}. Absent = unmeasured. */
   openQuestionSessionIds?: ReadonlySet<string>;
+  /**
+   * Undecided drafts that ask something — one row each. Absent ⇒ none. The
+   * router always passes it; `countNeedsYou` takes the same input, so the
+   * list and the badge fold the same drafts.
+   */
+  draftAsks?: DraftAsksInput;
 }): Signal[] {
-  const owed = args.owedSlots
-    .map(signalFromOwedSlot)
-    .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+  const draftSlots = args.draftAsks?.slots ?? [];
+  const owed = [
+    ...args.owedSlots.map(signalFromOwedSlot),
+    ...(args.draftAsks ? signalsFromDraftAsks(args.draftAsks) : []),
+  ].sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
   const rest = [
     ...args.clusters.map(signalFromCluster),
     ...dedupeNotifications(args.notifications, args.clusters, {
-      owedSessionIds: owedSessionIdsOf(args.owedSlots),
+      // A draft's `session.needs_you` pointer folds into its draft row, the
+      // same way an owed slot's does — one entry per session.
+      owedSessionIds: owedSessionIdsOf([...args.owedSlots, ...draftSlots]),
       openQuestionSessionIds: args.openQuestionSessionIds,
     }).map(signalFromNotification),
   ].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
@@ -699,8 +821,8 @@ export const RESERVED_DECISION_ROWS = 10;
  * blocker, not a proposal.
  */
 export function pageNeedsYou(signals: Signal[], limit: number): Signal[] {
-  const owed = signals.filter((s) => s.kind === "owed-slot");
-  const rest = signals.filter((s) => s.kind !== "owed-slot");
+  const owed = signals.filter(isOwedSide);
+  const rest = signals.filter((s) => !isOwedSide(s));
   const reserved = Math.min(
     RESERVED_DECISION_ROWS,
     Math.floor(limit / 2),
@@ -727,8 +849,9 @@ export function pageNeedsYou(signals: Signal[], limit: number): Signal[] {
  * query; nothing has to run a second count, and the counting rule is not forked
  * to produce the second number.
  *
- * `decisions` / `notifications` / `blocked` / `review` are the PARTS the badge
- * is made of, and `needsYou === decisions + notifications + blocked + review`
+ * `decisions` / `notifications` / `blocked` / `review` / `drafts` are the PARTS
+ * the badge is made of, and
+ * `needsYou === decisions + notifications + blocked + review + drafts`
  * by construction (asserted in `signals.union.test.ts`). `suggestions` is
  * shipped alongside and is deliberately NOT a part: AI suggestions never count
  * toward needs-you. `review` — sessions
@@ -774,6 +897,10 @@ export function countNeedsYou(args: {
   reviewSessions?: number;
   /** The review scan hit its cap, so its count is a floor. */
   reviewTruncated?: boolean;
+  /** Undecided drafts that ask something — the SAME input `unionNeedsYou` takes. */
+  draftAsks?: DraftAsksInput;
+  /** The draft-slot scan hit its cap, so `drafts` is a floor. */
+  draftAsksTruncated?: boolean;
 }): {
   needsYou: number;
   distinct: number;
@@ -786,24 +913,38 @@ export function countNeedsYou(args: {
   /** Sessions awaiting your review / close (project scope only; else 0). */
   review: number;
   /**
+   * Undecided agent drafts that ask you something — ONE per draft, however
+   * many asks it holds, exactly the `draft-asks` rows `list` returns (the
+   * same fold, `signalsFromDraftAsks`). Their asks are NOT in `blocked`.
+   */
+  drafts: number;
+  /**
    * Unread AI suggestions: the sibling bucket. NOT part of `needsYou` and
    * not one of its parts. 0 under a container scope, like `notifications`.
    */
   suggestions: number;
 } {
   const decisions = args.distinctClusters;
+  const draftSlots = args.draftAsks?.slots ?? [];
   const buckets = partitionNotifications(args.notifications, args.clusters, {
-    owedSessionIds: owedSessionIdsOf(args.owedSlots),
+    owedSessionIds: owedSessionIdsOf([...args.owedSlots, ...draftSlots]),
     openQuestionSessionIds: args.openQuestionSessionIds,
   });
   const notifications = buckets.needsYou.length;
   const blocked = args.owedSlots.length;
   const review = args.reviewSessions ?? 0;
+  // The SAME fold the list renders, counted — never a second rule.
+  const drafts = args.draftAsks
+    ? signalsFromDraftAsks(args.draftAsks).length
+    : 0;
   return {
     // THE item sum (`needsYouTotal`) over the rule's three populations, plus
-    // the notification half, which exists only at the pod/workspace floor.
+    // the notification half, which exists only at the pod/workspace floor,
+    // plus one per asking draft (founder decision 2026-09-27).
     needsYou:
-      needsYouTotal({ owed: blocked, decisions, review }) + notifications,
+      needsYouTotal({ owed: blocked, decisions, review }) +
+      notifications +
+      drafts,
     distinct: decisions,
     decisions,
     notifications,
@@ -811,9 +952,11 @@ export function countNeedsYou(args: {
       args.clustersTruncated ||
       args.notificationsTruncated ||
       args.owedTruncated ||
-      (args.reviewTruncated ?? false),
+      (args.reviewTruncated ?? false) ||
+      (args.draftAsksTruncated ?? false),
     blocked,
     review,
+    drafts,
     suggestions: buckets.suggestions.length,
   };
 }

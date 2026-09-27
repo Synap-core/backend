@@ -182,10 +182,26 @@ describe("actView", () => {
 describe("ASK_COPY", () => {
   it("has no em dash in any visible string", () => {
     const strings = Object.values(ASK_COPY).map((v) =>
-      typeof v === "function" ? v("x") : v
+      typeof v === "function"
+        ? (v as (...args: unknown[]) => string)("x", "y", 2)
+        : v
     );
     expect(strings.length).toBeGreaterThan(10);
     for (const s of strings) expect(s).not.toContain("—");
     expect(ASK_COPY.youAnswered("Yes")).toBe("You answered: Yes");
+  });
+
+  it("draftAsks: names the agent, the work, and pluralises the count", () => {
+    expect(ASK_COPY.draftAsks("Claude Code", "Ship billing", 1)).toBe(
+      "Claude Code started Ship billing · asks you 1 thing"
+    );
+    expect(ASK_COPY.draftAsks("Claude Code", "Ship billing", 3)).toBe(
+      "Claude Code started Ship billing · asks you 3 things"
+    );
+    // Unknown starter: a noun, never an empty subject or a uuid.
+    expect(ASK_COPY.draftAsks(null, "Ship billing", 2)).toBe(
+      "An agent started Ship billing · asks you 2 things"
+    );
+    expect(ASK_COPY.draftAsks("  ", "Ship billing", 2)).toMatch(/^An agent /);
   });
 });

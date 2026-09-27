@@ -209,6 +209,9 @@ export async function acceptFromTriage(
   }
 
   const acceptedAt = new Date().toISOString();
+  // The pending predicate rides the UPDATE too, so two engagements racing on
+  // one draft (an answer and an attest, `acceptDraftOnEngagement`) stamp it
+  // ONCE: the loser matches no row and reads `not_pending`, no second event.
   const [updated] = await db
     .update(focusSessions)
     .set({
@@ -217,8 +220,9 @@ export async function acceptFromTriage(
       }),
       updatedAt: new Date(),
     })
-    .where(eq(focusSessions.id, session.id))
+    .where(and(eq(focusSessions.id, session.id), triagePendingWhere()))
     .returning();
+  if (!updated) return { ok: false, reason: "not_pending" };
 
   const data = {
     sessionId: updated.id,

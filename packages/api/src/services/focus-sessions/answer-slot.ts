@@ -52,6 +52,7 @@ import { askFingerprint } from "@synap-core/types/ask";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { stampUnblocked } from "./block-output.js";
+import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import { paramValueFromAnswer } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import {
@@ -217,8 +218,7 @@ export async function answerExpectedOutput(
       // slot's `why` (the reason it is owed), which is only the fallback.
       const prompt =
         before.ask?.mode === "confirm" ? before.ask.prompt?.trim() : undefined;
-      const question =
-        prompt || before.why?.trim() || params.question?.trim();
+      const question = prompt || before.why?.trim() || params.question?.trim();
       const answer: SlotAnswer = {
         text,
         messageId: params.messageId,
@@ -310,6 +310,12 @@ export async function answerExpectedOutput(
         "slot_answered side-effect emit failed — the answer is recorded"
       );
     }
+    // Answering an ask on an undecided agent draft takes the draft on — the
+    // ONE acceptance door, after commit, idempotent (accept-on-engagement.ts).
+    await acceptDraftOnEngagement({
+      sessionId: result.session.id,
+      userId: params.userId,
+    });
   }
   return result;
 }

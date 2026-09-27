@@ -56,7 +56,7 @@ import type { SQL } from "@synap/database";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
-import { notTriagePendingWhere } from "./triage.js";
+import { notTriagePendingWhere, triagePendingWhere } from "./triage.js";
 
 /**
  * SQL: sessions carrying at least one slot that is still owed by the human.
@@ -229,6 +229,13 @@ export interface ListOwedSlotsParams {
    * decision). Applied in SQL, so drafts cannot eat the `limit`.
    */
   excludeDrafts?: boolean;
+  /**
+   * The inverse lens: ONLY slots on an undecided agent draft
+   * (`triagePendingWhere`). The needs-you "draft row" reads it — one row per
+   * draft that asks the person something (`draft-asks.ts`). Never combined
+   * with `excludeDrafts`; the two would select nothing.
+   */
+  onlyDrafts?: boolean;
 }
 
 type OwedRow = {
@@ -313,6 +320,7 @@ export async function listOwedSlots(
     owedSlotWhere(),
   ];
   if (params.excludeDrafts) conditions.push(notTriagePendingWhere());
+  if (params.onlyDrafts) conditions.push(triagePendingWhere());
 
   const rows = await db
     .select({

@@ -49,6 +49,15 @@ export const ASK_COPY = {
   agentHasIt: "The agent has it back.",
   provideTitle: "Not answerable here yet",
   provideBody: "Talk it through with the agent.",
+  /**
+   * The needs-you row for an undecided agent draft that asks the person
+   * something (`draft-asks` signal). Composed ONCE, server-side, into the
+   * signal's `title`; `agent` is null when the pod cannot name who started it.
+   */
+  draftAsks: (agent: string | null, work: string, asks: number): string =>
+    `${agent?.trim() || "An agent"} started ${work} · asks you ${
+      asks === 1 ? "1 thing" : `${asks} things`
+    }`,
 } as const;
 
 // ─── Where the slot stands ──────────────────────────────────────────────────
