@@ -84,6 +84,81 @@ export async function recordFormDrop(input: {
 }
 
 /**
+ * RETIRED TOKEN HASHES — so a submission to a form that stopped listening is
+ * still counted for its owner.
+ *
+ * A rotated token's hash leaves `metadata.form.tokenHash`, and a disabled form
+ * is not loaded by the guest door, so both used to fall into "unknown token":
+ * the constant 202 went back to the old embed and the lead vanished with no
+ * trace anywhere. The door must keep answering 202 (an anonymous caller must not
+ * learn which tokens once existed), so the loss is surfaced to the OWNER
+ * instead, on the same `droppedSinceReview` counter the pending cap uses.
+ *
+ * Only SHA-256 hashes of dead tokens are kept (the same storage the live token
+ * already has — never plaintext), newest first, at most
+ * {@link RETIRED_TOKEN_HASHES_MAX}. No door ever ACCEPTS a retired hash: the
+ * lookup below only counts. Kept beside the definition, never inside
+ * `metadata.form` (whose schema is strict).
+ */
+export const RETIRED_TOKEN_HASHES_KEY = "formRetiredTokenHashes";
+export const RETIRED_TOKEN_HASHES_MAX = 10;
+const RETIRED = drizzleSql.raw(`'${RETIRED_TOKEN_HASHES_KEY}'`);
+
+/** The metadata's retired list with `tokenHash` put first (deduped, capped). */
+export function withRetiredTokenHash(
+  metadata: Record<string, unknown>,
+  tokenHash: string | null
+): Record<string, unknown> {
+  if (!tokenHash) return metadata;
+  const prior = Array.isArray(metadata[RETIRED_TOKEN_HASHES_KEY])
+    ? (metadata[RETIRED_TOKEN_HASHES_KEY] as unknown[]).filter(
+        (h): h is string => typeof h === "string" && h !== tokenHash
+      )
+    : [];
+  return {
+    ...metadata,
+    [RETIRED_TOKEN_HASHES_KEY]: [tokenHash, ...prior].slice(
+      0,
+      RETIRED_TOKEN_HASHES_MAX
+    ),
+  };
+}
+
+/**
+ * A guest submission whose token matches no LIVE form: if the hash belongs to a
+ * form that still exists but stopped listening (disabled, or the token was
+ * rotated away), count it as dropped on that form. Returns whether it counted.
+ * A hash that matches nothing, or matches more than one row, counts nowhere.
+ */
+export async function recordClosedFormHit(input: {
+  tokenHash: string;
+  now: Date;
+}): Promise<boolean> {
+  const rows = await db
+    .select({
+      id: tools.id,
+      actorUserId: drizzleSql<
+        string | null
+      >`${tools.metadata}->'form'->>'actorUserId'`,
+    })
+    .from(tools)
+    .where(
+      drizzleSql`(
+        (${tools.metadata}->'form'->>'tokenHash' = ${input.tokenHash} and ${tools.status} <> 'active')
+        or coalesce(${tools.metadata}->${RETIRED}, '[]'::jsonb) @> jsonb_build_array(${input.tokenHash}::text)
+      )`
+    )
+    .limit(2);
+  if (rows.length !== 1 || !rows[0]!.actorUserId) return false;
+  await recordFormDrop({
+    formId: rows[0]!.id,
+    actorUserId: rows[0]!.actorUserId,
+    now: input.now,
+  });
+  return true;
+}
+
+/**
  * The owner-facing count for each form: the stored count, or 0 when a decision
  * on the actor's proposals came after the last drop. One query for the page.
  */

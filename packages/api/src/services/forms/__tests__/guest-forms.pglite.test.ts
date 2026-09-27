@@ -119,6 +119,8 @@ import { hubAuthMiddleware } from "../../../routers/hub-protocol/_middleware/aut
 import { idempotencyMiddleware } from "../../../routers/hub-protocol/_middleware/idempotency.js";
 import { registerPublicFormsRoutes } from "../../../routers/hub-protocol/rest/public-forms.js";
 import { formsRouter } from "../../../routers/forms.js";
+import { sharesRouter } from "../../../routers/shares.js";
+import { proposalsRouter } from "../../../routers/proposals.js";
 import { toolsRouter } from "../../../routers/tools.js";
 import { expireLapsedProposals } from "../../proposals/expire-lapsed-proposals.js";
 import { requestRaiseProposalCap } from "../../proposals/recommend-raise-proposal-cap.js";
@@ -1118,20 +1120,68 @@ describe("browser encodings: an HTML form's strings are read, not dropped", () =
 });
 
 describe("rotate + disable", () => {
-  it("rotating kills the old token; disabling makes the form a miss", async () => {
-    const r = await human(A).rotateToken({ formId });
+  const dropped = async () =>
+    (await human(A).get({ formId })).droppedSinceReview;
+
+  it("rotating kills the old token — a submission still arriving on it is the same 202 AND counted for the owner", async () => {
+    const oldToken = token;
+    // Later tests use the live token, whatever this one asserts.
+    token = (await human(A).rotateToken({ formId })).token;
+    const before = await dropped();
     expect(
-      await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
-    ).toBe("unknown_form");
-    token = r.token;
+      await outcomeOf({
+        token: oldToken,
+        rawBody: JSON.stringify(newSubmission()),
+      })
+    ).toBe("closed_form");
+    expect(await dropped()).toBe(before + 1);
+    // The anonymous caller learns nothing: identical bytes to a filed one.
+    expect(await post(makeApp(), oldToken, newSubmission())).toMatchObject(
+      RECEIVED_202
+    );
+    expect(await dropped()).toBe(before + 2);
+    // Only the retired HASH is kept — never the token itself.
+    const [row] = (
+      await q<{ metadata: Record<string, unknown>; text: string }>(
+        `select metadata, metadata::text as text from tools where id=$1`,
+        [formId]
+      )
+    ).rows;
+    expect(row!.metadata.formRetiredTokenHashes).toEqual([
+      createHash("sha256").update(oldToken).digest("hex"),
+    ]);
+    expect(row!.text).not.toContain(oldToken);
     expect(
       await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
     ).toBe("proposed");
+  });
+
+  it("a DISABLED form's token is the same 202 and counted; a token no form ever had counts nowhere", async () => {
     await human(A).setEnabled({ formId, enabled: false });
-    expect(
-      await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
-    ).toBe("unknown_form");
-    await human(A).setEnabled({ formId, enabled: true });
+    try {
+      const before = await dropped();
+      expect(
+        await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
+      ).toBe("closed_form");
+      expect(await dropped()).toBe(before + 1);
+      expect(
+        await outcomeOf({
+          token: "z".repeat(43),
+          rawBody: JSON.stringify(newSubmission()),
+        })
+      ).toBe("unknown_form");
+      expect(await dropped()).toBe(before + 1);
+      // Honeypot traffic on a closed form is a bot, not a lost lead.
+      expect(
+        await outcomeOf({
+          token,
+          rawBody: JSON.stringify({ ...newSubmission(), hp: "x" }),
+        })
+      ).toBe("honeypot");
+      expect(await dropped()).toBe(before + 1);
+    } finally {
+      await human(A).setEnabled({ formId, enabled: true });
+    }
   });
 });
 
@@ -1204,5 +1254,189 @@ describe("expiry: the sweeper honours expires_at for GUEST proposals only", () =
     // Still pending: untouched. Not a guest: untouched.
     expect(byId[live]!.data).toEqual(answers);
     expect(byId[agentExpired]!.data).toEqual(answers);
+  });
+  it("a guest proposal the owner REJECTS keeps the same tombstone — and cannot be reopened as an empty shell", async () => {
+    const guest = randomUUID();
+    const guestBatch = randomUUID();
+    const agentWrite = randomUUID();
+    const answers = {
+      data: {
+        profileSlug: "person",
+        title: "Grace Hopper",
+        properties: { name: "Grace Hopper", email: "grace@example.test" },
+        content: "hi",
+      },
+    };
+    for (const [id, agent] of [
+      [guest, actorId],
+      [guestBatch, actorId],
+      [agentWrite, AG],
+    ] as const) {
+      await q(
+        `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, agent_user_id, dedup_hash, created_at)
+         values ($1::uuid,$2,'entity',$1::text,'create',$3::jsonb,'pending',$4,'h-'||$1::text, now())`,
+        [id, W, JSON.stringify(answers), agent]
+      );
+    }
+    const reviewer = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: A,
+      workspaceId: W,
+    } as never);
+    await reviewer.reject({ proposalId: guest, reason: "spam" });
+    await reviewer.reject({ proposalId: agentWrite, reason: "no" });
+    await reviewer.batchReject({ proposalIds: [guestBatch], reason: "spam" });
+
+    const rows = await q<{
+      id: string;
+      status: string;
+      data: unknown;
+      dedup_hash: string | null;
+    }>(
+      `select id, status, data, dedup_hash from proposals where id = any($1::uuid[])`,
+      [[guest, guestBatch, agentWrite]]
+    );
+    const byId = Object.fromEntries(rows.rows.map((r) => [r.id, r]));
+    for (const id of [guest, guestBatch]) {
+      expect(byId[id]!.status).toBe("rejected");
+      expect(byId[id]!.data).toEqual({
+        scrubbed: true,
+        reason: "guest_rejected",
+        fieldCount: 2,
+        hadContent: true,
+      });
+      expect(byId[id]!.dedup_hash).toBeNull();
+      expect(JSON.stringify(byId[id]!.data)).not.toMatch(/Grace|grace@/);
+    }
+    // Not a public-form submission: a rejection keeps its payload.
+    expect(byId[agentWrite]!.status).toBe("rejected");
+    expect(byId[agentWrite]!.data).toEqual(answers);
+
+    const reopen = await errOf(reviewer.reopen({ proposalId: guest }));
+    expect(reopen?.code).toBe("BAD_REQUEST");
+    expect(reopen?.message).toMatch(/answers were deleted/);
+    // An ordinary rejected proposal still reopens.
+    expect(await reviewer.reopen({ proposalId: agentWrite })).toEqual({
+      success: true,
+    });
+  });
+});
+
+describe("the public doors switch: off by default when visitors share one IP, on when the owner says so", () => {
+  const owner = () =>
+    sharesRouter.createCaller({
+      authenticated: true,
+      userId: A,
+      workspaceId: null,
+    } as never);
+  const getForm = (app: ReturnType<typeof makeApp>, t: string) =>
+    app.request(`/api/hub/public/forms/${t}`);
+  const DISABLED = {
+    error:
+      "The owner has not turned on public pages and forms for this workspace.",
+    code: "public_doors_disabled",
+  };
+  const withSharedIp = async (
+    value: string | undefined,
+    fn: () => Promise<void>
+  ) => {
+    const prior = process.env.SYNAP_SHARED_CLIENT_IP;
+    if (value === undefined) delete process.env.SYNAP_SHARED_CLIENT_IP;
+    else process.env.SYNAP_SHARED_CLIENT_IP = value;
+    try {
+      await fn();
+    } finally {
+      if (prior === undefined) delete process.env.SYNAP_SHARED_CLIENT_IP;
+      else process.env.SYNAP_SHARED_CLIENT_IP = prior;
+      await owner().setPublicDoors({ workspaceId: W, enabled: null });
+    }
+  };
+
+  it("shared-IP pod, no owner choice: a LIVE form refuses GET and POST with the distinct 403, and files nothing", async () => {
+    await withSharedIp("true", async () => {
+      expect(await owner().getPublicDoors({ workspaceId: W })).toEqual({
+        enabled: false,
+        ownerChoice: null,
+        sharedClientIp: true,
+      });
+      const app = makeApp();
+      const got = await getForm(app, token);
+      expect(got.status).toBe(403);
+      expect(await got.json()).toEqual(DISABLED);
+      const posted = await post(app, token, newSubmission());
+      expect(posted.status).toBe(403);
+      expect(JSON.parse(posted.text)).toEqual(DISABLED);
+      expect(
+        await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
+      ).toBe("doors_closed");
+      expect(h.gateCalls).toHaveLength(0);
+      // Never used for a miss: an unknown token keeps the uniform answers.
+      expect((await getForm(app, "q".repeat(43))).status).toBe(404);
+      expect(await post(app, "q".repeat(43), newSubmission())).toMatchObject(
+        RECEIVED_202
+      );
+    });
+  });
+
+  it("shared-IP pod, the owner opts in: the form answers again", async () => {
+    await withSharedIp("true", async () => {
+      expect(
+        await owner().setPublicDoors({ workspaceId: W, enabled: true })
+      ).toEqual({ enabled: true, ownerChoice: true, sharedClientIp: true });
+      const app = makeApp();
+      expect((await getForm(app, token)).status).toBe(200);
+      expect(
+        await outcomeOf({ token, rawBody: JSON.stringify(newSubmission()) })
+      ).toBe("proposed");
+    });
+  });
+
+  it("no signal: the doors stay on by default (today's behaviour); an explicit off still closes them", async () => {
+    await withSharedIp(undefined, async () => {
+      const app = makeApp();
+      expect((await getForm(app, token)).status).toBe(200);
+      await owner().setPublicDoors({ workspaceId: W, enabled: false });
+      const got = await getForm(app, token);
+      expect(got.status).toBe(403);
+      expect(await got.json()).toEqual(DISABLED);
+    });
+  });
+
+  it("replacing the policy grid keeps the switch; only a signed-in owner can flip it", async () => {
+    await withSharedIp("true", async () => {
+      await owner().setPublicDoors({ workspaceId: W, enabled: true });
+      const grid = await owner().getPolicy({ workspaceId: W });
+      await owner().setPolicy({
+        workspaceId: W,
+        policy: { version: 1, kinds: grid },
+      });
+      expect(
+        (await owner().getPublicDoors({ workspaceId: W })).ownerChoice
+      ).toBe(true);
+      await owner().setPolicy({ workspaceId: W, policy: null });
+      expect(
+        (await owner().getPublicDoors({ workspaceId: W })).ownerChoice
+      ).toBe(true);
+      const agent = sharesRouter.createCaller({
+        authenticated: true,
+        userId: A,
+        agentUserId: AG,
+        keyType: "agent",
+        workspaceId: null,
+      } as never);
+      expect(
+        (await errOf(agent.setPublicDoors({ workspaceId: W, enabled: false })))
+          ?.code
+      ).toBe("FORBIDDEN");
+      expect(
+        (
+          await errOf(
+            sharesRouter
+              .createCaller({ authenticated: true, userId: B } as never)
+              .setPublicDoors({ workspaceId: W, enabled: true })
+          )
+        )?.code
+      ).toBe("FORBIDDEN");
+    });
   });
 });

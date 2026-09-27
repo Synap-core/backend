@@ -5,8 +5,11 @@ import { governanceRules } from "../schema/governance-rules.js";
 import { governanceCeilings } from "../schema/governance-ceilings.js";
 import { events } from "../schema/events.js";
 import { channels, ChannelType } from "../schema/channels.js";
+import { entities } from "../schema/entities.js";
 import {
   decideAgentPolicy,
+  governanceLaneFor,
+  ENTITY_BODY_LANES,
   getWorkspaceGovernanceMode,
   matchesActionPattern,
   DEFAULT_DAILY_WRITE_CEILING,
@@ -103,6 +106,60 @@ export interface ResolveAgentGovernanceInput {
    *   - automation door (`false`): only the workspace override is consulted.
    */
   preferAgentMetadataAutoApproveFor: boolean;
+  /**
+   * The write subject's id when it is a DOCUMENT (the gate `data.id`). Only read
+   * for a key in `ENTITY_BODY_LANES` (`document.update`): the resolver then asks
+   * whether that document is a human-owned entity's body
+   * ({@link isHumanOwnedEntityBody}) and, if so, decides it on the entity lane.
+   */
+  subjectDocumentId?: string | null;
+}
+
+/**
+ * Is `documentId` the BODY (`entities.document_id`) of a live entity whose owner
+ * is a human (`users.user_type = 'human'`)? The I/O half of the engine's
+ * `bodyOfHumanOwnedEntity` classification (text tiers b). An agent-owned
+ * entity's body, a standalone document and a view canvas all answer false and
+ * keep the document lane.
+ */
+export async function isHumanOwnedEntityBody(
+  db: DbHandle,
+  documentId: string
+): Promise<boolean> {
+  const [row] = await db
+    .select({ ownerType: users.userType })
+    .from(entities)
+    .innerJoin(users, eq(users.id, entities.userId))
+    .where(and(eq(entities.documentId, documentId), isNull(entities.deletedAt)))
+    .limit(1);
+  return row?.ownerType === "human";
+}
+
+/**
+ * The classification + the rule-store key for one write — shared by both
+ * callers of the engine that resolve rules (`resolveAgentGovernanceDecision`
+ * and the anonymous-principal branch of `checkPermissionOrPropose`), so the
+ * rule store is always queried on the lane the engine decides on.
+ */
+export async function resolveGovernanceLane(input: {
+  db: DbHandle;
+  subjectType: string;
+  action: string;
+  subjectDocumentId?: string | null;
+}): Promise<{
+  bodyOfHumanOwnedEntity: boolean | undefined;
+  subjectType: string;
+  action: string;
+}> {
+  const { db, subjectType, action, subjectDocumentId } = input;
+  const bodyOfHumanOwnedEntity =
+    subjectDocumentId && ENTITY_BODY_LANES[`${subjectType}.${action}`]
+      ? await isHumanOwnedEntityBody(db, subjectDocumentId)
+      : undefined;
+  return {
+    bodyOfHumanOwnedEntity,
+    ...governanceLaneFor(subjectType, action, bodyOfHumanOwnedEntity),
+  };
 }
 
 /**
@@ -910,12 +967,20 @@ export async function resolveAgentGovernanceDecision(
   // autoApproveFor, so it must not start matching a rule BACKFILLED from
   // that same per-agent JSONB list either — only "any"-principal
   // (workspace-authored) rules are eligible for it.
+  // Text tiers (b): a human-owned entity's body is ruled on the entity lane —
+  // the store is queried on the SAME key the engine's lists use.
+  const lane = await resolveGovernanceLane({
+    db,
+    subjectType,
+    action,
+    subjectDocumentId: input.subjectDocumentId,
+  });
   const ruleMatch = await resolveGovernanceRule({
     db,
     agentUserId,
     workspaceId,
-    subjectType,
-    action,
+    subjectType: lane.subjectType,
+    action: lane.action,
     profileSlug: input.subjectProfileSlug,
     includeAgentPrincipal: input.preferAgentMetadataAutoApproveFor,
   });
@@ -959,6 +1024,7 @@ export async function resolveAgentGovernanceDecision(
     governanceRuleVerdict: ruleMatch?.verdict,
     governanceRuleId: ruleMatch?.ruleId,
     originTrust,
+    bodyOfHumanOwnedEntity: lane.bodyOfHumanOwnedEntity,
   };
 
   let decision = decideAgentPolicy(basePolicyInput);

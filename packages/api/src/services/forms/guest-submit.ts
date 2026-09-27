@@ -28,7 +28,13 @@
  * the HTTP reply, and that mapping is the public contract:
  *   - `202 {"received":true}`: filed for review, AND every outcome that must not
  *     teach a caller anything (unknown token, honeypot, failed captcha, the
- *     form's pending cap). Identical bytes on the identity-match branch.
+ *     form's pending cap, a disabled form or a rotated-away token). Identical
+ *     bytes on the identity-match branch. A submission to a form that still
+ *     exists but stopped listening is counted on that form for its OWNER
+ *     (`form-drops.ts`), so an old embed losing leads is visible to them.
+ *   - `403 {"error":…,"code":"public_doors_disabled"}`: the token is a LIVE
+ *     form, but its workspace's public doors are switched off
+ *     (`services/sharing/public-doors-switch.ts`). Never used for a miss.
  *   - `422 {"received":false,"invalid":[<field keys>]}`: the submitter's own
  *     answers do not satisfy the form (a required field is missing, or a value
  *     does not read as its type or breaks a constraint). Decided on the payload
@@ -77,7 +83,12 @@ import {
   type FormConfig,
   type StoredFormDefinition,
 } from "./form-definition.js";
-import { recordFormDrop } from "./form-drops.js";
+import { recordClosedFormHit, recordFormDrop } from "./form-drops.js";
+import {
+  PUBLIC_DOORS_DISABLED_BODY,
+  PUBLIC_DOORS_DISABLED_STATUS,
+  publicDoorsOpenFor,
+} from "../sharing/public-doors-switch.js";
 import {
   captchaConfigFromEnv,
   verifyCaptcha as verifyCaptchaReal,
@@ -98,6 +109,10 @@ export type GuestOutcome =
   | "bad_envelope"
   | "honeypot"
   | "unknown_form"
+  /** Unknown to every LIVE form, but a disabled / rotated form's: counted. */
+  | "closed_form"
+  /** A live form whose workspace's public doors are switched off. */
+  | "doors_closed"
   | "ticket"
   | "captcha_failed"
   | "invalid_fields"
@@ -116,6 +131,10 @@ export type GuestReply =
   | { status: 202; body: { received: true } }
   | { status: 422; body: { received: false; invalid: string[] } }
   | { status: 422; body: { received: false; retry: true } }
+  | {
+      status: typeof PUBLIC_DOORS_DISABLED_STATUS;
+      body: typeof PUBLIC_DOORS_DISABLED_BODY;
+    }
   | { status: 503; body: { received: false } };
 
 /** The HTTP reply for a door result; see the module header for the contract. */
@@ -134,9 +153,15 @@ export function guestFormReply(result: GuestResult): GuestReply {
     case "actor_refused":
     case "error":
       return { status: 503, body: { received: false } };
+    case "doors_closed":
+      return {
+        status: PUBLIC_DOORS_DISABLED_STATUS,
+        body: PUBLIC_DOORS_DISABLED_BODY,
+      };
     case "proposed":
     case "honeypot":
     case "unknown_form":
+    case "closed_form":
     case "captcha_failed":
     case "denied":
       return { status: 202, body: GUEST_FORM_RECEIVED };
@@ -179,6 +204,10 @@ export interface GuestDeps {
   ) => Promise<void>;
   /** Count a submission the gate refused (the form's pending cap). */
   recordDrop: (loaded: LoadedForm, nowMs: number) => Promise<void>;
+  /** Count a submission to a disabled / rotated form; true when it counted. */
+  recordClosedHit: (tokenHash: string, nowMs: number) => Promise<boolean>;
+  /** May this form's workspace answer on its public doors right now? */
+  publicDoorsOpen: (loaded: LoadedForm) => Promise<boolean>;
 }
 
 // ── Pure planning ────────────────────────────────────────────────────────────
@@ -320,8 +349,13 @@ async function submitInner(
   if (!input.token || input.token.length > 256) {
     return { outcome: "unknown_form" };
   }
-  const loaded = await deps.loadFormByTokenHash(hashToken(input.token));
-  if (!loaded) return { outcome: "unknown_form" };
+  const tokenHash = hashToken(input.token);
+  const loaded = await deps.loadFormByTokenHash(tokenHash);
+  if (!loaded) {
+    const counted = await deps.recordClosedHit(tokenHash, deps.now());
+    return { outcome: counted ? "closed_form" : "unknown_form" };
+  }
+  if (!(await deps.publicDoorsOpen(loaded))) return { outcome: "doors_closed" };
   const { form } = loaded;
 
   // The answers first: whether they satisfy the form depends only on the body
@@ -579,5 +613,8 @@ export function defaultGuestDeps(): GuestDeps {
         actorUserId: loaded.form.actorUserId,
         now: new Date(nowMs),
       }),
+    recordClosedHit: (tokenHash, nowMs) =>
+      recordClosedFormHit({ tokenHash, now: new Date(nowMs) }),
+    publicDoorsOpen: (loaded) => publicDoorsOpenFor(loaded.workspaceId),
   };
 }

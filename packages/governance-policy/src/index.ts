@@ -1147,6 +1147,50 @@ export interface AgentPolicyInput {
    * never deny, and (sitting below all three floors) can never weaken a floor.
    */
   ceilingVerdict?: "propose";
+  /**
+   * CLASSIFICATION INPUT: the write subject is a document that is the BODY
+   * (`entities.document_id`) of a live entity owned by a human. Resolved by the
+   * I/O half (`isHumanOwnedEntityBody` in @synap/database — this engine stays
+   * pure). Founder decision (text tiers b, 2026-09-27): prose that moved from a
+   * property into its entity's body must not change governance lane, so a
+   * `document.update` on such a body is decided on the lane an `entity.update`
+   * of that entity takes — see {@link governanceLaneFor}. It re-keys ONLY the
+   * lane rungs (4 explicit autoApproveFor, 8 DEFAULT_AUTO_APPROVE); every floor
+   * and CBAC keep the real event key, so it can never widen past a floor.
+   * Absent/false → no effect.
+   */
+  bodyOfHumanOwnedEntity?: boolean;
+}
+
+/**
+ * The event keys that follow another key's LANE when the subject is a human-
+ * owned entity's body. One row today: the full / text document patch
+ * (`applyDocumentPatch` → `document.update`). Section writes, creates and every
+ * destructive verb are deliberately absent — they keep their own lane.
+ */
+export const ENTITY_BODY_LANES: Readonly<
+  Record<string, { subjectType: string; action: string }>
+> = {
+  "document.update": { subjectType: "entity", action: "update" },
+};
+
+/**
+ * The (subjectType, action) whose LANE decides this write — the key the
+ * governance_rules store (rung 2.8) and the auto-approve lists (rungs 4/8) are
+ * consulted under. Identity unless {@link AgentPolicyInput.bodyOfHumanOwnedEntity}
+ * applies. Exported so the I/O half resolves rules on the SAME key the engine
+ * uses for its lists — one mapping, never a mirror.
+ */
+export function governanceLaneFor(
+  subjectType: string,
+  action: string,
+  bodyOfHumanOwnedEntity: boolean | undefined
+): { subjectType: string; action: string } {
+  if (bodyOfHumanOwnedEntity === true) {
+    const lane = ENTITY_BODY_LANES[`${subjectType}.${action}`];
+    if (lane) return lane;
+  }
+  return { subjectType, action };
 }
 
 /**
@@ -1217,6 +1261,14 @@ const CAPABILITY_BLOCKED_REASON =
 export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   const { subjectType, action } = input;
   const eventKey = `${subjectType}.${action}`;
+  // The LANE key (rungs 4 and 8 only). Equal to `eventKey` unless the subject
+  // is a human-owned entity's body; floors and CBAC always read `eventKey`.
+  const lane = governanceLaneFor(
+    subjectType,
+    action,
+    input.bodyOfHumanOwnedEntity
+  );
+  const laneKey = `${lane.subjectType}.${lane.action}`;
 
   // 1. CBAC capability allowlist (empty/absent = unrestricted).
   const caps = input.agentCapabilities;
@@ -1515,7 +1567,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // DEFAULT_AUTO_APPROVE fallback is checked after writesRequireProposal (step 8).
   if (
     input.autoApproveFor !== undefined &&
-    isAutoApproved(eventKey, input.autoApproveFor)
+    isAutoApproved(laneKey, input.autoApproveFor)
   ) {
     return { verdict: "execute" };
   }
@@ -1571,7 +1623,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // 8. DEFAULT_AUTO_APPROVE whitelist → execute.
   // Uses DEFAULT_AUTO_APPROVE when input.autoApproveFor is undefined.
   // Explicit list was already checked at step 4.
-  if (isAutoApproved(eventKey, input.autoApproveFor)) {
+  if (isAutoApproved(laneKey, input.autoApproveFor)) {
     return { verdict: "execute" };
   }
 

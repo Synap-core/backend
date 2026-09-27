@@ -106,12 +106,12 @@ describe("EntityBodyService", () => {
         text: long,
       });
       expect(res).toEqual({ documentId: "doc-1" });
-      // Uploaded the md body under the entity's storage path, with a fresh
-      // suffix: a second materialization never lands on the first body's key.
+      // Uploaded through the create door under a FRESH document id: a second
+      // materialization never lands on the first body's key.
       expect(storage.buildPath).toHaveBeenCalledWith(
         "user-1",
-        "entity",
-        expect.stringMatching(/^e-1-[0-9a-f-]{36}$/),
+        "document",
+        expect.stringMatching(/^[0-9a-f-]{36}$/),
         "md"
       );
       await svc.setBody({

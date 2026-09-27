@@ -17,18 +17,14 @@
 import { z } from "zod";
 import {
   db,
+  eventRepository,
+  createDocumentWithContent,
   eq,
   and,
   desc,
-  documents,
-  documentVersions,
   cellInstances,
   normalizeDocumentType,
-  storedVersionValues,
-  uploadDocumentVersionSnapshot,
 } from "@synap/database";
-import { storage } from "@synap/storage";
-import { randomUUID } from "crypto";
 import {
   hasScope,
   logger,
@@ -384,51 +380,16 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       }
 
       const title = body.name ?? "HTML Cell";
-      const documentId = randomUUID();
-      const docType = normalizeDocumentType("text", "text");
-      const storageKey = storage.buildPath(
-        userId,
-        "document",
-        documentId,
-        "html"
-      );
-      const metadata = await storage.upload(storageKey, body.html, {
-        contentType: "text/html",
-      });
-      const versionId = randomUUID();
-      const snapshot = await uploadDocumentVersionSnapshot({
-        userId,
-        documentId,
-        versionId,
-        documentType: "html",
-        mimeType: "text/html",
+      // The ONE create door: fresh-key upload + row + v1 checkpoint.
+      const document = await createDocumentWithContent(db, eventRepository, {
+        ownerUserId: userId,
+        workspaceId,
+        title,
+        type: normalizeDocumentType("text", "text"),
+        extension: "html",
         content: body.html,
-      });
-      const [document] = await db
-        .insert(documents)
-        .values({
-          id: documentId,
-          userId,
-          workspaceId,
-          title,
-          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType: "text/html",
-          currentVersion: 1,
-          lastSavedVersion: 1,
-        })
-        .returning();
-
-      await db.insert(documentVersions).values({
-        id: versionId,
-        documentId,
-        version: 1,
-        ...storedVersionValues(snapshot),
-        author: "user",
-        authorId: userId,
-        message: "Initial version",
+        mimeType: "text/html",
+        provenance: { createdByKind: "human" },
       });
 
       const [row] = await db

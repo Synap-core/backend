@@ -62,7 +62,11 @@ import {
   type FormConfig,
   type StoredFormDefinition,
 } from "./form-definition.js";
-import { FORM_STATS_KEY, droppedSinceReview } from "./form-drops.js";
+import {
+  FORM_STATS_KEY,
+  droppedSinceReview,
+  withRetiredTokenHash,
+} from "./form-drops.js";
 
 export interface FormActor {
   userId: string;
@@ -470,7 +474,12 @@ export async function rotateFormToken(
   await database
     .update(tools)
     .set({
-      metadata: metadataWith(current.metadata, stored),
+      // The old hash is kept (hash only) so a submission still arriving on it
+      // is counted for the owner instead of vanishing — see form-drops.ts.
+      metadata: withRetiredTokenHash(
+        metadataWith(current.metadata, stored),
+        form.tokenHash
+      ),
       updatedAt: new Date(),
     })
     .where(eq(tools.id, formId));

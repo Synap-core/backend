@@ -8,7 +8,9 @@
  * a fresh bucket).
  *
  * Contract (see `services/sharing/public-read.ts`): snapshot + pinned revision
- * only; no internal id, no actor; every miss is the byte-identical 404;
+ * only; no internal id, no actor; every miss is the byte-identical 404; a
+ * LIVE share whose workspace's public doors are switched off is a 403
+ * `public_doors_disabled` (`services/sharing/public-doors-switch.ts`);
  * `Cache-Control: no-cache` + a weak ETag on the pinned revision, so an unshare
  * is visible on the very next revalidation (the global GET default would
  * otherwise let a browser show a revoked page for 90 s). The handler never
@@ -27,6 +29,10 @@ import {
   ifNoneMatchHits,
   readPublishedShare,
 } from "../../../services/sharing/public-read.js";
+import {
+  PUBLIC_DOORS_DISABLED_BODY,
+  PUBLIC_DOORS_DISABLED_STATUS,
+} from "../../../services/sharing/public-doors-switch.js";
 
 /** Revalidate every time: a revoked share must disappear on the next request. */
 export const PUBLIC_SHARE_CACHE_CONTROL = "no-cache";
@@ -51,6 +57,12 @@ export function registerPublicSharesRoutes(app: HubHono): void {
       304: {
         description: "Not modified (If-None-Match matched the pinned revision)",
       },
+      403: {
+        description:
+          "The share is live but its workspace's public pages are switched off " +
+          "(body code `public_doors_disabled`; never used for a miss)",
+        schema: ErrorSchema,
+      },
       404: {
         description: "Not found (every kind of miss)",
         schema: ErrorSchema,
@@ -72,6 +84,9 @@ export function registerPublicSharesRoutes(app: HubHono): void {
       return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));
     }
     if (!read) return c.json(PUBLIC_NOT_FOUND_BODY, 404);
+    if ("closed" in read) {
+      return c.json(PUBLIC_DOORS_DISABLED_BODY, PUBLIC_DOORS_DISABLED_STATUS);
+    }
 
     c.header("ETag", read.etag);
     if (ifNoneMatchHits(c.req.header("if-none-match"), read.etag)) {

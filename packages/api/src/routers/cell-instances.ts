@@ -31,19 +31,14 @@ import {
   desc,
   getDb,
   eventRepository,
+  createDocumentWithContent,
   RelationRepository,
   RelationDefRepository,
   SYSTEM_RELATION_TYPES,
   normalizeDocumentType,
-  storedVersionValues,
-  uploadDocumentVersionSnapshot,
-  documents,
-  documentVersions,
   cellInstances,
 } from "@synap/database";
-import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
-import { randomUUID } from "crypto";
 
 // ============================================================================
 // SCHEMAS
@@ -152,52 +147,17 @@ export const cellInstancesRouter = router({
 
       const title = input.name ?? "HTML Cell";
 
-      // 1. Create the backing document via the existing MinIO path.
-      const documentId = randomUUID();
-      const docType = normalizeDocumentType("text", "text");
-      const storageKey = storage.buildPath(
-        userId,
-        "document",
-        documentId,
-        "html"
-      );
-      const metadata = await storage.upload(storageKey, input.html, {
-        contentType: "text/html",
-      });
-      const versionId = randomUUID();
-      const snapshot = await uploadDocumentVersionSnapshot({
-        userId,
-        documentId,
-        versionId,
-        documentType: "html",
-        mimeType: "text/html",
+      // 1. Create the backing document through the ONE create door
+      //    (fresh-key upload + row + v1 checkpoint).
+      const document = await createDocumentWithContent(db, eventRepository, {
+        ownerUserId: userId,
+        workspaceId,
+        title,
+        type: normalizeDocumentType("text", "text"),
+        extension: "html",
         content: input.html,
-      });
-      const [document] = await db
-        .insert(documents)
-        .values({
-          id: documentId,
-          userId,
-          workspaceId,
-          title,
-          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType: "text/html",
-          currentVersion: 1,
-          lastSavedVersion: 1,
-        })
-        .returning();
-
-      await db.insert(documentVersions).values({
-        id: versionId,
-        documentId,
-        version: 1,
-        ...storedVersionValues(snapshot),
-        author: "user",
-        authorId: userId,
-        message: "Initial version",
+        mimeType: "text/html",
+        provenance: { createdByKind: "human" },
       });
 
       // 2. Create the html-embed cell referencing the versioned document.

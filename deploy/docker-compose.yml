@@ -94,6 +94,14 @@ x-backend-env: &backend-env
   NANGO_HOST: ${NANGO_HOST:-}
   NANGO_SECRET_KEY: ${NANGO_SECRET_KEY:-}
   NANGO_CONNECT_URL: ${NANGO_CONNECT_URL:-}
+  # Every visitor reaches this pod from ONE client IP (a Cloudflare tunnel's
+  # cloudflared peer), so per-IP limits on public pages and forms are one shared
+  # bucket. When true, each workspace's public doors are OFF until its owner
+  # turns them on (packages/api/src/services/sharing/public-doors-switch.ts).
+  # Derived from the tunnel token's presence (the token itself is never passed
+  # to the backend); set SYNAP_SHARED_CLIENT_IP=false in deploy/.env once Caddy
+  # trusts the real client IP.
+  SYNAP_SHARED_CLIENT_IP: ${SYNAP_SHARED_CLIENT_IP:-${CLOUDFLARED_TUNNEL_TOKEN:+true}}
 
 services:
   # ============================================================================

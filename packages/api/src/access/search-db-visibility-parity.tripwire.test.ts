@@ -54,18 +54,18 @@ describe("keyword entity floor emission", () => {
       visibleWorkspaceIds: MEMBER_WS,
     });
     expect(filter).toBe(
-      "(userId:=`user-A` || visibleInWorkspaces:=[`ws-1`,`ws-2`])"
+      "((userId:=`user-A` || visibleInWorkspaces:=[`ws-1`,`ws-2`]))"
     );
   });
 
-  it("no member workspaces => owner-only (byte-for-byte the pre-parity floor)", () => {
+  it("no member workspaces => owner-only (byte-for-byte the pre-parity floor, modulo the outer wrap every clause now gets)", () => {
     expect(
       buildFilter({
         userId: CALLER,
         collection: "entities",
         visibleWorkspaceIds: [],
       })
-    ).toBe("userId:=`user-A`");
+    ).toBe("(userId:=`user-A`)");
   });
 
   it("non-entity collections stay owner-only even with member workspaces", () => {
@@ -75,7 +75,7 @@ describe("keyword entity floor emission", () => {
         collection: "documents",
         visibleWorkspaceIds: MEMBER_WS,
       })
-    ).toBe("userId:=`user-A`");
+    ).toBe("(userId:=`user-A`)");
   });
 
   it("channelId short-circuit is preserved (multi-author message gate)", () => {
@@ -98,7 +98,7 @@ describe("keyword entity floor emission", () => {
     });
     // Floor (owner OR membership) AND the workspace narrow (ws-1 + pod-wide).
     expect(filter).toBe(
-      "(userId:=`user-A` || visibleInWorkspaces:=[`ws-1`,`ws-2`]) && (workspaceId:=`ws-1` || workspaceId:=`__pod_wide__`)"
+      "((userId:=`user-A` || visibleInWorkspaces:=[`ws-1`,`ws-2`])) && ((workspaceId:=`ws-1` || workspaceId:=`__pod_wide__`))"
     );
   });
 });

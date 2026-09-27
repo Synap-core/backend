@@ -147,8 +147,29 @@ export {
 } from "./proposals/apply-approval.js";
 import type { ProposalExecutorResult } from "./proposals/execution-registry.js";
 import { askAiAboutProposal } from "./proposals/ask-ai.js";
+import {
+  isScrubbedGuestPayload,
+  scrubGuestPayloads,
+} from "../services/forms/guest-retention.js";
 
 const logger = createLogger({ module: "proposals" });
+
+/**
+ * The reject doors' call into the ONE guest scrub (`guest-retention.ts`). A
+ * failure is logged, never thrown: the rejection itself already committed, and
+ * the proposal sweeper re-runs the same scrub by state on its next pass.
+ */
+async function scrubRejectedGuestPayloads(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    await scrubGuestPayloads({ proposalIds: ids });
+  } catch (err) {
+    logger.warn(
+      { err, count: ids.length },
+      "reject: guest payload scrub failed (the sweeper retries it)"
+    );
+  }
+}
 
 /**
  * A facet to attach at approve time (approve-time FACET channel). The subset of
@@ -1546,6 +1567,9 @@ export const proposalsRouter = router({
       // Same door the approve path uses — a rejected proposal's notification
       // used to stay unread forever (Approve/Reject still offered on a decided row).
       markProposalNotificationsActioned([input.proposalId]);
+      // A rejected PUBLIC-FORM submission keeps no answers: the owner said no,
+      // so the stranger's personal data has nothing left to be reviewed for.
+      await scrubRejectedGuestPayloads([input.proposalId]);
 
       // A refused proposal that was holding a STAGED source blob must not leave
       // the bytes (and their `documents` row) behind: nothing else will ever
@@ -1805,6 +1829,16 @@ export const proposalsRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Only a rejected proposal can be reopened.",
+        });
+      }
+      // A rejected public-form submission had its answers deleted on
+      // rejection; reopening would put an empty shell back in the queue, and
+      // approving that would write nothing the visitor sent.
+      if (isScrubbedGuestPayload(proposal.data)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This form submission's answers were deleted when it was rejected, so it cannot be reopened.",
         });
       }
 
@@ -3190,6 +3224,8 @@ export const proposalsRouter = router({
       // already no-ops on an empty list, so a batch that rejected nothing
       // issues no query at all.
       markProposalNotificationsActioned(actionedIds);
+      // Parity with the single `reject` door: rejected public-form answers go.
+      await scrubRejectedGuestPayloads(actionedIds);
 
       return { success: true };
     }),

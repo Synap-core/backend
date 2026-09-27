@@ -38,6 +38,7 @@ import {
 import { resourceShares } from "@synap/database/schema";
 import { hashToken } from "../../utils/share-token.js";
 import { isPublicationLive } from "./publication-live.js";
+import { publicDoorsOpenFor } from "./public-doors-switch.js";
 
 /** The ONE body every miss is answered with. */
 export const PUBLIC_NOT_FOUND_BODY = { error: "Not found" } as const;
@@ -124,18 +125,27 @@ export interface PublicShareRead {
   etag: string;
 }
 
+/** A live share whose workspace's public doors are switched off. */
+export interface PublicShareClosed {
+  closed: true;
+}
+
 /**
- * Resolve a public token to what may be served, or `null` for every kind of
- * miss. Throws on a failed read.
+ * Resolve a public token to what may be served, `null` for every kind of miss,
+ * or {@link PublicShareClosed} when the share is live but its workspace's
+ * public doors are off (`public-doors-switch.ts`) — decided LAST, so only a
+ * token that would otherwise have been served can learn the switch is off.
+ * Throws on a failed read.
  */
 export async function readPublishedShare(
   token: string
-): Promise<PublicShareRead | null> {
+): Promise<PublicShareRead | PublicShareClosed | null> {
   // Hash FIRST, always; the indexed lookup runs for every shape of token.
   const tokenHash = hashToken(typeof token === "string" ? token : "");
   const [row] = await db
     .select({
       id: resourceShares.id,
+      workspaceId: resourceShares.workspaceId,
       resourceType: resourceShares.resourceType,
       resourceId: resourceShares.resourceId,
       audience: resourceShares.audience,
@@ -195,6 +205,8 @@ export async function readPublishedShare(
       body = { format: "markdown", content: redactInternalIds(content) };
     }
   }
+
+  if (!(await publicDoorsOpenFor(row.workspaceId))) return { closed: true };
 
   const properties = projectPublishedProperties(row.publishedProperties);
   const title =

@@ -387,7 +387,9 @@ describe("the human owner shares DIRECTLY; a guest sees exactly what was shared"
     const expired = await errOf(
       human(R2).redeemLink({ token: expiring.token! })
     );
-    await human(A).revokeLink({ shareId });
+    // Keep the people: this revoke is about the token's answer, and R (who
+    // joined through it) is needed by the explicit-keep test below.
+    await human(A).revokeLink({ shareId, removeGuests: false });
     const revoked = await errOf(human(R2).redeemLink({ token }));
     expect(unknown).toEqual({
       code: "NOT_FOUND",
@@ -402,7 +404,7 @@ describe("the human owner shares DIRECTLY; a guest sees exactly what was shared"
     expect(rows[0]).toEqual({ n: 0 });
   });
 
-  it("revoking a link does NOT remove the guest who already joined", async () => {
+  it("revoking a link with removeGuests:false does NOT remove the guest who already joined", async () => {
     const { rows } = await q(
       `select role from project_members where project_id=$1 and user_id=$2`,
       [P, R]
@@ -462,6 +464,70 @@ describe("removing guests: one guest, or everyone one link admitted", () => {
     expect((await seenEntities(R2)).has(E)).toBe(false);
   });
 
+  // Mint a live link on E into P and have `userId` redeem it.
+  async function linkRedeemedBy(userId: string): Promise<string> {
+    const live = await human(A).share({
+      resourceType: "entity",
+      resourceId: E,
+      anchorProjectId: P,
+      audience: "link",
+    });
+    if (live.status === "proposed") throw new Error("unreachable");
+    const { token } = await human(A).rotateLink({ shareId: live.shareId! });
+    expect(await human(userId).redeemLink({ token })).toMatchObject({
+      status: "joined",
+    });
+    return live.shareId!;
+  }
+
+  it("revokeLink with NO flag removes the guests that link admitted — and nobody else", async () => {
+    // An owner-invited guest (no link behind it) must survive any link revoke.
+    const INVITED = randomUUID();
+    await q(
+      `insert into project_members (id, project_id, user_id, role) values ($1,$2,$3,'guest')`,
+      [randomUUID(), P, INVITED]
+    );
+    const JOINER = randomUUID();
+    const shareId = await linkRedeemedBy(JOINER);
+
+    const res = await human(A).revokeLink({ shareId });
+    expect(res).toMatchObject({ status: "revoked", removedGuests: 1 });
+    const members = await membersOfP();
+    expect(members.some((m) => m.user_id === JOINER)).toBe(false);
+    // Same project, other means: untouched.
+    expect(members).toContainEqual({ user_id: INVITED, role: "guest" });
+    expect(members).toContainEqual({ user_id: R, role: "guest" });
+  });
+
+  it("the Hub REST revoke with an empty body removes them too (same default, one place)", async () => {
+    const JOINER = randomUUID();
+    const shareId = await linkRedeemedBy(JOINER);
+    const res = await hubApp({
+      userId: A,
+      scopes: ["hub-protocol.write"],
+    }).request(`/shares/links/${shareId}/revoke`, { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ removedGuests: 1 });
+    expect((await membersOfP()).some((m) => m.user_id === JOINER)).toBe(false);
+  });
+
+  it("removeGuests:false keeps them, and a later default revoke of the SAME link still cleans up", async () => {
+    const JOINER = randomUUID();
+    const shareId = await linkRedeemedBy(JOINER);
+    expect(
+      await human(A).revokeLink({ shareId, removeGuests: false })
+    ).toMatchObject({ status: "revoked", removedGuests: 0 });
+    expect(await membersOfP()).toContainEqual({
+      user_id: JOINER,
+      role: "guest",
+    });
+    expect(await human(A).revokeLink({ shareId })).toMatchObject({
+      status: "already_revoked",
+      removedGuests: 1,
+    });
+    expect((await membersOfP()).some((m) => m.user_id === JOINER)).toBe(false);
+  });
+
   it("removeGuest: anchor admins only, guests only, and the guest loses the shared records", async () => {
     // A guest is not an anchor admin.
     expect(
@@ -489,6 +555,91 @@ describe("removing guests: one guest, or everyone one link admitted", () => {
     });
     expect((await membersOfP()).some((m) => m.user_id === R)).toBe(false);
     expect((await seenEntities(R)).has(E)).toBe(false);
+  });
+});
+
+describe("listShares tells the owner how many guests a project share reaches", () => {
+  const G1 = randomUUID();
+  const G2 = randomUUID();
+  const G3 = randomUUID();
+  let P4 = "";
+  let P5 = "";
+  let link4 = "";
+
+  async function linkInto(
+    project: string
+  ): Promise<{ shareId: string; token: string }> {
+    const res = await human(A).share({
+      resourceType: "entity",
+      resourceId: U,
+      anchorProjectId: project,
+      audience: "link",
+    });
+    if (res.status === "proposed") throw new Error("unreachable");
+    return { shareId: res.shareId!, token: res.token! };
+  }
+
+  beforeAll(async () => {
+    const repo = new ProjectRepository(
+      h.db as never,
+      { append: async () => undefined } as never
+    );
+    P4 = (await repo.create({ name: "Client", workspaceId: W, userId: A }, A))
+      .id;
+    P5 = (await repo.create({ name: "Other", workspaceId: W, userId: A }, A))
+      .id;
+  });
+
+  it("two guests who joined → 2; a member who is not a guest does not count", async () => {
+    const { shareId, token } = await linkInto(P4);
+    link4 = shareId;
+    await human(G1).redeemLink({ token });
+    await human(G2).redeemLink({ token });
+    await human(G2).redeemLink({ token }); // idempotent: still one person
+    await q(
+      `insert into project_members (id, project_id, user_id, role) values ($1,$2,$3,'editor')`,
+      [randomUUID(), P4, randomUUID()]
+    );
+    const list = await human(A).listShares({ anchorProjectId: P4 });
+    expect(list.guestCount).toBe(2);
+  });
+
+  it("a guest of ANOTHER project does not count", async () => {
+    const { token } = await linkInto(P5);
+    await human(G3).redeemLink({ token });
+    expect(
+      (await human(A).listShares({ anchorProjectId: P4 })).guestCount
+    ).toBe(2);
+    expect(
+      (await human(A).listShares({ anchorProjectId: P5 })).guestCount
+    ).toBe(1);
+  });
+
+  it("a count only: the listing never names a guest", async () => {
+    const json = JSON.stringify(
+      await human(A).listShares({ anchorProjectId: P4 })
+    );
+    // non-vacuity: the listing did serialise the project's rows
+    expect(json).toContain(P4);
+    for (const g of [G1, G2, G3]) expect(json).not.toContain(g);
+  });
+
+  it("a revoke that keeps people leaves the count; removing them lowers it", async () => {
+    await human(A).revokeLink({ shareId: link4, removeGuests: false });
+    expect(
+      (await human(A).listShares({ anchorProjectId: P4 })).guestCount
+    ).toBe(2);
+    await human(A).revokeLink({ shareId: link4 });
+    expect(
+      (await human(A).listShares({ anchorProjectId: P4 })).guestCount
+    ).toBe(0);
+  });
+
+  it("a resource listing has no single number: null, not 0", async () => {
+    expect(
+      (await human(A).listShares({ resourceType: "entity", resourceId: U }))
+        .guestCount
+    ).toBeNull();
   });
 });
 

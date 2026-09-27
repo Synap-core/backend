@@ -30,11 +30,12 @@
  * degraded clears the marker and records `restructuredAt`.
  */
 
-import { createHash, randomUUID } from "crypto";
+import { createHash } from "crypto";
 import {
   DocumentRepository,
   documents as documentsTable,
   eventRepository,
+  createDocumentWithContent,
   and,
   eq,
   isNull,
@@ -357,29 +358,20 @@ export async function stageIntakeSource(
     };
   }
 
-  const { storage } = await import("@synap/storage");
-  const documentId = randomUUID();
-  const content = body as string;
-  const uploaded = await storage.upload(
-    storage.buildPath(userId, "document", documentId, "md"),
-    content,
-    { contentType: "text/markdown" }
-  );
-  await new DocumentRepository(database, eventRepository).create(
+  // The ONE create door: fresh-key upload + row + v1 checkpoint.
+  const { id: documentId } = await createDocumentWithContent(
+    database,
+    eventRepository,
     {
-      id: documentId,
+      ownerUserId: userId,
+      workspaceId: input.workspaceId ?? null,
       title,
       type: "markdown",
-      storageUrl: uploaded.url,
-      storageKey: uploaded.path,
-      size: uploaded.size,
+      content: body as string,
       mimeType: "text/markdown",
       metadata: { [INTAKE_SOURCE_METADATA_KEY]: sourceMeta },
-      userId,
-      workspaceId: input.workspaceId ?? null,
-      content,
-    },
-    userId
+      provenance: { createdByKind: "human" },
+    }
   );
   return {
     documentId,

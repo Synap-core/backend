@@ -1,6 +1,8 @@
 /**
- * TRIPWIRE — a document's stored content is written ONLY through
- * `claimDocumentRevision` (@synap/database, utils/claim-document-revision.ts).
+ * TRIPWIRE — a document's stored content is written ONLY through the two doors
+ * in @synap/database `utils/claim-document-revision.ts`:
+ * `claimDocumentRevision` (REPLACE a live body) and `createDocumentWithContent`
+ * (CREATE a document with its body). Part 2 (the create door) is at the bottom.
  *
  * THE DEFECT THIS PINS (documents-centerpiece W4a): six independent writers
  * replaced a document's body — human save, restore, approval, section door,
@@ -124,6 +126,121 @@ describe("document content has ONE write door", () => {
       const exempt = EXEMPT[file];
       if (exempt && hits.length === exempt.count) continue;
       violations.push(`${file}: ${hits.join(" | ")}`);
+    }
+    expect(violations).toEqual([]);
+  });
+});
+
+/**
+ * PART 2 — THE CREATE DOOR (text tiers T3 follow-up).
+ *
+ * THE DEFECT THIS PINS: nine writers each hand-rolled "upload a body to a key,
+ * insert the `documents` row, write the v1 version" — two tRPC routes, the Hub
+ * `createDocument`, the promote door, the approval materializer, intake, the
+ * session document, the entity body service, and three html-cell doors. Each
+ * chose its own v1 author (the rail named the human for an agent's document),
+ * its own key, its own mimeType. `createDocumentWithContent` is the one place.
+ *
+ * WHAT IT SCANS (derived, same walk as part 1): a file is a DOCUMENT-CREATE SITE
+ * when it both calls `storage.upload(` and creates a `documents` row — an
+ * `insert(documents)` or any use of `DocumentRepository`. Every upload in such
+ * a file outside the door module is a violation unless the FILE is exempt below
+ * with an exact upload count (so a new upload in an exempt file still fails).
+ *
+ * WHAT IT CANNOT SEE (measured): granularity is the FILE, not the call — an
+ * upload for an unrelated purpose in a file that also creates documents counts
+ * (hence the pinned counts); and a create that reaches the row insert only
+ * through a helper imported from elsewhere, with no `DocumentRepository` /
+ * `insert(documents)` in the file, is invisible. Measured: a bare upload added
+ * to `routers/documents.ts` (which now creates only through the door) stayed
+ * GREEN; re-inlining the create (upload + `insert(documents)`) there went RED.
+ *
+ * EXEMPT — not the text content plane, each with its reason:
+ */
+const CREATE_EXEMPT: Record<string, { count: number; reason: string }> = {
+  "packages/api/src/routers/views.ts": {
+    count: 3,
+    reason: "whiteboard/canvas VIEW content (tldraw JSON)",
+  },
+  "packages/database/src/utils/create-default-whiteboard.ts": {
+    count: 1,
+    reason: "a workspace's default whiteboard (tldraw JSON)",
+  },
+  "packages/jobs/src/workers/materializer.ts": {
+    count: 1,
+    reason: "an approved whiteboard VIEW's canvas JSON",
+  },
+  "packages/api/src/routers/sync.ts": {
+    count: 1,
+    reason: "federation replica write under the remote pod's key",
+  },
+  "packages/api/src/utils/store-entity-source-blob.ts": {
+    count: 1,
+    reason: "the raw SOURCE bytes slot (sourceFile*), not a body",
+  },
+  "packages/database/src/services/entity-body-service.ts": {
+    count: 1,
+    reason:
+      "bytes-mode BINARY body (pdf/docx upload): uploaded once with a pre-uploaded v1; the create door is for text",
+  },
+};
+
+const DOCUMENT_ROW_CREATE_RE =
+  /\binsert\(\s*documents\s*\)|\bDocumentRepository\b/;
+
+/** The uploads in a file that creates document rows; 0 when it creates none. */
+export function documentCreateUploads(source: string): number {
+  if (!DOCUMENT_ROW_CREATE_RE.test(source)) return 0;
+  return [...source.matchAll(UPLOAD_RE)].length;
+}
+
+let createScanned: Map<string, number> | undefined;
+function createScan(): Map<string, number> {
+  if (createScanned) return createScanned;
+  const byFile = new Map<string, number>();
+  for (const pkg of scan().pkgs) {
+    for (const file of walk(join(PACKAGES, pkg, "src"))) {
+      const n = documentCreateUploads(readFileSync(file, "utf8"));
+      if (n > 0) byFile.set(relative(BACKEND, file), n);
+    }
+  }
+  return (createScanned = byFile);
+}
+
+describe("a document is CREATED with its body through ONE door", () => {
+  it("self-check: an upload beside a documents insert is a create site; an upload alone is not", () => {
+    expect(
+      documentCreateUploads(
+        "await storage.upload(key, md, {});\nawait tx.insert( documents ).values({})"
+      )
+    ).toBe(1);
+    expect(
+      documentCreateUploads(
+        "const r = new DocumentRepository(db, ev);\nawait storage\n  .upload(k, b, {})"
+      )
+    ).toBe(1);
+    expect(documentCreateUploads("await storage.upload(key, png, {})")).toBe(0);
+  });
+
+  it("non-vacuity: the door itself is seen as a create site, among several", () => {
+    const byFile = createScan();
+    // The door module holds both uploads (replace + create).
+    expect(byFile.get(DOOR)).toBeGreaterThanOrEqual(2);
+    expect(byFile.size).toBeGreaterThanOrEqual(5);
+    // Every exemption still names a real create site (a stale one is noise
+    // that would silently widen the next time the file changes).
+    for (const file of Object.keys(CREATE_EXEMPT)) {
+      expect({ file, seen: byFile.has(file) }).toEqual({ file, seen: true });
+    }
+  });
+
+  it("no document-create upload outside the door module (exemptions pinned by count)", () => {
+    const violations: string[] = [];
+    for (const [file, n] of createScan()) {
+      if (file === DOOR) continue;
+      const exempt = CREATE_EXEMPT[file];
+      if (exempt && n === exempt.count) continue;
+      violations.push(`${file}: ${n} upload(s) beside a documents-row create`);
     }
     expect(violations).toEqual([]);
   });

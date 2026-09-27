@@ -45,6 +45,7 @@ import {
   isNull,
   isNotNull,
   desc,
+  drizzleSql,
   eventRepository,
   RelationRepository,
   ProjectMemberRepository,
@@ -71,9 +72,17 @@ import { isPublicationLive } from "./publication-live.js";
 import {
   parseExposurePolicyInput,
   resolveExposurePolicy,
+  storedExposurePolicyRecord,
   type ResolvedExposurePolicy,
   type ShareKind,
 } from "./exposure-policy.js";
+import {
+  PUBLIC_DOORS_KEY,
+  resolvePublicDoors,
+  sharedClientIpFromEnv,
+  storedPublicDoorsChoice,
+  type PublicDoorsState,
+} from "./public-doors-switch.js";
 
 // ── Actor ────────────────────────────────────────────────────────────────────
 
@@ -250,17 +259,26 @@ async function loadAnchor(
   return { id: row.id, workspaceId: row.workspaceId, userId: row.userId };
 }
 
-async function loadPolicy(
+async function loadWorkspaceSettings(
   database: Db,
   workspaceId: string
-): Promise<ResolvedExposurePolicy> {
+): Promise<unknown> {
   const [ws] = await database
     .select({ settings: workspaces.settings })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
   if (!ws) throw notFound("Workspace");
-  return resolveExposurePolicy(ws.settings);
+  return ws.settings;
+}
+
+async function loadPolicy(
+  database: Db,
+  workspaceId: string
+): Promise<ResolvedExposurePolicy> {
+  return resolveExposurePolicy(
+    await loadWorkspaceSettings(database, workspaceId)
+  );
 }
 
 // ── Share (the gate) ─────────────────────────────────────────────────────────
@@ -753,11 +771,16 @@ async function loadLink(database: Db, shareId: string) {
 
 /**
  * Revoke ONE link, permanently (0276 trigger: a revoked row is frozen; sharing
- * again creates a NEW row). Guests who already joined through it stay members
- * unless `removeGuests` is set: then every GUEST membership this link granted
- * (`granted_via_share_id`) is removed too, also on an already-revoked link, so
- * a leaked link that was redeemed can be cleaned up after the fact. The
- * default keeps them: removing people is a separate, visible choice.
+ * again creates a NEW row).
+ *
+ * BY DEFAULT the guests this link admitted are removed too. Revoking access has
+ * to mean revoking access: a leaked link that was redeemed would otherwise stay
+ * open forever through the memberships it left behind, and nobody would see
+ * them as the link's doing. Only memberships whose `granted_via_share_id` is
+ * THIS link are touched — a guest the owner invited, or one who came through a
+ * different link, keeps their place. It also runs on an already-revoked link,
+ * so an old revoke that kept people can be finished later. Pass
+ * `removeGuests: false` to keep the people and only kill the link.
  */
 export async function revokeLink(
   actor: ShareActor,
@@ -772,9 +795,10 @@ export async function revokeLink(
   const link = await loadLink(database, shareId);
   const anchor = await loadAnchor(database, link.anchorProjectId);
   await assertAnchorAdmin(database, actor.userId, anchor);
-  const removedGuests = options.removeGuests
-    ? await removeGuestsGrantedBy(database, actor, anchor, shareId)
-    : 0;
+  const removedGuests =
+    (options.removeGuests ?? true)
+      ? await removeGuestsGrantedBy(database, actor, anchor, shareId)
+      : 0;
   if (link.revokedAt) {
     return { status: "already_revoked", shareId, removedGuests };
   }
@@ -1081,6 +1105,16 @@ export interface ShareListing {
     createdAt: Date;
     createdBy: string;
   }>;
+  /**
+   * How many PEOPLE can see what this project shares: its distinct GUEST
+   * members, however they joined (invite or any link). A share to a project
+   * is a share to all of them, so the owner needs this number to know how far
+   * a share reaches. A count only — never who.
+   *
+   * `null` on a resource listing: a record can be exposed to several projects,
+   * so there is no single number; ask the anchor listing of each project.
+   */
+  guestCount: number | null;
   /** True when any list hit {@link LIST_SHARES_CAP}. */
   truncated: boolean;
 }
@@ -1115,10 +1149,23 @@ export async function listShares(
     createdBy: string;
   }> = [];
 
+  let guestCount: number | null = null;
   let linkWhere;
   if ("anchorProjectId" in req) {
     const anchor = await loadAnchor(database, req.anchorProjectId);
     await assertAnchorAdmin(database, actor.userId, anchor);
+    const [guests] = await database
+      .select({
+        n: drizzleSql<number>`count(distinct ${projectMembers.userId})::int`,
+      })
+      .from(projectMembers)
+      .where(
+        and(
+          eq(projectMembers.projectId, anchor.id),
+          eq(projectMembers.role, "guest")
+        )
+      );
+    guestCount = Number(guests?.n ?? 0);
     const edges = await database
       .select({ sourceEntityId: relations.sourceEntityId })
       .from(relations)
@@ -1259,6 +1306,7 @@ export async function listShares(
     exposures: exposures.slice(0, cap),
     links: rows.map(({ tokenHash, ...r }) => ({ ...r, hasToken: !!tokenHash })),
     publications,
+    guestCount,
     truncated:
       exposures.length >= cap ||
       rows.length >= cap ||
@@ -1308,7 +1356,12 @@ export async function getExposurePolicy(
  * only — agents have no door here. `null` resets to the code default.
  * FULL REPLACE of a COMPLETE document: a payload missing any kind, audience,
  * action or public `fields` is refused (BAD_REQUEST) — never stored with the
- * omission silently reset to the default.
+ * omission silently reset to the default. The public-doors switch stored under
+ * the same key is carried over untouched ({@link setPublicDoors} owns it).
+ *
+ * Tightening a cell NEVER retracts what is already shared: the policy is a
+ * ceiling checked when something is shared or published, and no reader
+ * re-checks it (`POLICY_CHANGE_EFFECT`, served as `shares.policyChangeEffect`).
  */
 export async function setExposurePolicy(
   actor: ShareActor,
@@ -1328,6 +1381,14 @@ export async function setExposurePolicy(
       );
     }
   }
+  // The public-doors switch shares the stored key but not this door: it is set
+  // only by `setPublicDoors`, so replacing (or resetting) the grid keeps it.
+  const doors = storedPublicDoorsChoice(
+    await loadWorkspaceSettings(database, workspaceId)
+  );
+  if (doors !== null) {
+    stored = { ...(stored ?? {}), [PUBLIC_DOORS_KEY]: doors };
+  }
   const updated = await new WorkspaceRepository(
     database,
     eventRepository
@@ -1342,4 +1403,64 @@ export async function setExposurePolicy(
     data: { exposurePolicy: stored },
   });
   return resolveExposurePolicy(updated.settings);
+}
+
+// ── Public doors switch (owner only, human only to change) ──────────────────
+
+/**
+ * Do this workspace's public pages and forms answer right now, and why? Owner
+ * only. `sharedClientIp` is the pod's reason for a default of OFF — the surface
+ * says so beside the switch (see `public-doors-switch.ts`).
+ */
+export async function getPublicDoors(
+  actor: ShareActor,
+  workspaceId: string
+): Promise<PublicDoorsState> {
+  const database = await getDb();
+  await assertWorkspaceOwner(database, actor.userId, workspaceId);
+  return resolvePublicDoors(
+    await loadWorkspaceSettings(database, workspaceId),
+    sharedClientIpFromEnv()
+  );
+}
+
+/**
+ * Turn a workspace's public pages and forms on (`true`) or off (`false`), or
+ * go back to the pod default (`null`). Owner + signed-in human only, like the
+ * policy: an agent must never open a public door. Stored inside the
+ * server-owned exposure-policy key through its ONE writer; the policy grid is
+ * left exactly as it is.
+ */
+export async function setPublicDoors(
+  actor: ShareActor,
+  workspaceId: string,
+  enabled: boolean | null
+): Promise<PublicDoorsState> {
+  assertHumanSession(actor, "Turning public pages and forms on or off");
+  const database = await getDb();
+  await assertWorkspaceOwner(database, actor.userId, workspaceId);
+  const { [PUBLIC_DOORS_KEY]: _prior, ...rest } =
+    storedExposurePolicyRecord(
+      await loadWorkspaceSettings(database, workspaceId)
+    ) ?? {};
+  const next: Record<string, unknown> =
+    enabled === null ? rest : { ...rest, [PUBLIC_DOORS_KEY]: enabled };
+  const updated = await new WorkspaceRepository(
+    database,
+    eventRepository
+  ).setExposurePolicy(
+    workspaceId,
+    Object.keys(next).length > 0 ? next : null,
+    actor.userId
+  );
+  auditLog({
+    subjectType: "sharing",
+    action: "update",
+    phase: "completed",
+    subjectId: workspaceId,
+    userId: actor.userId,
+    workspaceId,
+    data: { publicDoorsEnabled: enabled },
+  });
+  return resolvePublicDoors(updated.settings, sharedClientIpFromEnv());
 }

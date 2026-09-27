@@ -47,6 +47,7 @@ import {
 } from "../repositories/document-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
 import { uploadDocumentVersionSnapshot } from "../utils/document-version-storage.js";
+import { createDocumentWithContent } from "../utils/claim-document-revision.js";
 
 const logger = createLogger({ module: "entity-body-service" });
 
@@ -173,7 +174,7 @@ export class EntityBodyService {
 
   constructor(
     private readonly db: any,
-    eventRepo: EventRepository
+    private readonly eventRepo: EventRepository
   ) {
     this.docRepo = new DocumentRepository(db, eventRepo);
   }
@@ -223,34 +224,16 @@ export class EntityBodyService {
     if (!shouldMaterializeAsDocument(text)) return { inlineContent: text };
 
     try {
-      // A FRESH key per created document. The key used to be derived from the
-      // entity alone, so a second materialization of the same entity uploaded
-      // over the FIRST document's live body — a content write outside
-      // `claimDocumentRevision` that the one-door tripwire cannot see.
-      const key = storage.buildPath(
-        userId,
-        "entity",
-        `${entityId}-${randomUUID()}`,
-        "md"
-      );
-      const metadata = await storage.upload(key, text, {
-        contentType: "text/markdown",
+      // The ONE create door: fresh-key upload + row + v1 checkpoint.
+      const doc = await createDocumentWithContent(this.db, this.eventRepo, {
+        ownerUserId: userId,
+        workspaceId: workspaceId ?? null,
+        title: title || "Untitled",
+        type: "markdown",
+        content: text,
+        mimeType: "text/markdown",
+        provenance,
       });
-      const doc = await this.docRepo.create(
-        {
-          title: title || "Untitled",
-          type: "markdown",
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType: "text/markdown",
-          userId,
-          workspaceId: workspaceId ?? undefined,
-          content: text,
-          ...this.provenanceFields(provenance),
-        },
-        userId
-      );
       return { documentId: doc.id };
     } catch (err) {
       // Best-effort fold-back-to-inline — a materialization failure never blocks

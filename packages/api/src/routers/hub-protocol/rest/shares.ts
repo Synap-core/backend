@@ -13,7 +13,8 @@
  *   POST /shares/links/:id/revoke              revoke one link — direct;
  *                                              { removeGuests?: boolean }
  *                                              also removes the guests it
- *                                              admitted (default false)
+ *                                              admitted (default true; pass
+ *                                              false to keep them)
  *   POST /shares/publish                       { resourceType, resourceId,
  *                                              reasoning? } — put a record on
  *                                              the public web; an agent
@@ -201,7 +202,8 @@ export function registerSharesRoutes(app: HubHono): void {
     try {
       return c.json(
         await revokeLink(actorOf(c), id.data, {
-          removeGuests: body.data.removeGuests ?? false,
+          // The default lives in the core (`revokeLink`): undefined = remove.
+          removeGuests: body.data.removeGuests,
         })
       );
     } catch (err) {

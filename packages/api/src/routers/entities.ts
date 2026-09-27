@@ -49,6 +49,7 @@ import { createProcs } from "./entities/create.js";
 import { facetProcs } from "./entities/facets.js";
 import { mutateProcs } from "./entities/mutate.js";
 import { adminProcs } from "./entities/admin.js";
+import { bodyProcs } from "./entities/body.js";
 
 export {
   mergeSystemData,
@@ -244,6 +245,8 @@ export const entitiesRouter = router({
   moveToWorkspace: mutateProcs.moveToWorkspace,
   setEntityViewMode: mutateProcs.setEntityViewMode,
   setEntityRenderer: mutateProcs.setEntityRenderer,
+  promotePropertyToBody: bodyProcs.promotePropertyToBody,
+  undoPromotePropertyToBody: bodyProcs.undoPromotePropertyToBody,
   adminList: adminProcs.adminList,
   batchCreate: createProcs.batchCreate,
   adminGet: adminProcs.adminGet,

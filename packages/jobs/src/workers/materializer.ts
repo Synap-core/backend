@@ -34,6 +34,8 @@ import {
   type ProfileScope,
   sql,
   db as sharedDb,
+  eventRepository as sharedEventRepository,
+  createDocumentWithContent,
   eq,
   and,
   storedVersionValues,
@@ -876,62 +878,21 @@ async function materializeCell(
     (data.sourceDocumentId as string) || undefined;
 
   if (cellType === "html-embed" && html && !sourceDocumentId) {
-    const { randomUUID } = await import("crypto");
-    const { storage } = await import("@synap/storage");
-
-    const title = name ?? "HTML Cell";
-    const documentId = randomUUID();
-    const docType = normalizeDocumentType("text", "text");
-    const storageKey = storage.buildPath(
-      effectiveUserId,
-      "document",
-      documentId,
-      "html"
-    );
-
-    const metadata = await storage.upload(storageKey, html, {
-      contentType: "text/html",
-    });
-
-    const versionId = randomUUID();
-    const snapshot = await uploadDocumentVersionSnapshot({
-      userId: effectiveUserId,
-      documentId,
-      versionId,
-      documentType: "html",
-      mimeType: "text/html",
-      content: html,
-    });
-
-    await sharedDb
-      .insert(documents)
-      .values({
-        id: documentId,
-        userId: effectiveUserId,
-        workspaceId: effectiveWorkspaceId,
-        title,
-        type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
-        storageUrl: metadata.url,
-        storageKey: metadata.path,
-        size: metadata.size,
+    // The ONE create door: fresh-key upload + row + v1 checkpoint.
+    const { id: documentId } = await createDocumentWithContent(
+      sharedDb,
+      sharedEventRepository,
+      {
+        ownerUserId: effectiveUserId,
+        workspaceId: effectiveWorkspaceId || null,
+        title: name ?? "HTML Cell",
+        type: normalizeDocumentType("text", "text"),
+        extension: "html",
+        content: html,
         mimeType: "text/html",
-        currentVersion: 1,
-        lastSavedVersion: 1,
-      })
-      .onConflictDoNothing();
-
-    await sharedDb
-      .insert(documentVersions)
-      .values({
-        id: versionId,
-        documentId,
-        version: 1,
-        ...storedVersionValues(snapshot),
-        author: "user",
-        authorId: effectiveUserId,
-        message: "Initial version",
-      })
-      .onConflictDoNothing();
+        provenance: { createdByKind: "human" },
+      }
+    );
 
     sourceDocumentId = documentId;
   }

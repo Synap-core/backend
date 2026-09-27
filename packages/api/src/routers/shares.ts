@@ -12,9 +12,10 @@
  *                  Agent: always a proposal (ADMIN floor, no rule widens it).
  *   - unshare      stop sharing a record with a project (exposure removed, its
  *                  live links revoked). Direct for everyone.
- *   - revokeLink   revoke one link, permanently. Direct for everyone. Guests who
- *                  already joined through it stay members unless
- *                  `removeGuests` is true (default false).
+ *   - revokeLink   revoke one link, permanently. Direct for everyone. The
+ *                  guests who joined THROUGH IT are removed too unless
+ *                  `removeGuests: false` (default true); guests added any
+ *                  other way are never touched.
  *   - removeGuest  remove one GUEST from a project, directly and for good
  *                  (anchor owner / workspace owner or admin).
  *   - listShares   exposures + links of a record, or of an anchor project. Capped.
@@ -22,6 +23,12 @@
  *   - redeemLink   a signed-in person joins the link's project as a GUEST.
  *   - getPolicy / setPolicy   the workspace's exposure policy (owner only;
  *                  setPolicy is human only — agents have no policy door).
+ *                  Tightening it never retracts what is already shared:
+ *                  `policyChangeEffect` says so for the surface to show.
+ *   - getPublicDoors / setPublicDoors   do this workspace's public pages
+ *                  and forms answer at all (owner only; set is human only).
+ *                  OFF by default on a pod whose visitors share one client
+ *                  IP (`services/sharing/public-doors-switch.ts`).
  *   - publish      put a record on the public web (`publish-service.ts`):
  *                  snapshot of the policy's allowlisted fields + pinned
  *                  checkpoint, addressed by a token shown ONCE. Human owner:
@@ -37,12 +44,14 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import {
   getExposurePolicy,
+  getPublicDoors,
   listShares,
   redeemLink,
   removeGuest,
   revokeLink,
   rotateLink,
   setExposurePolicy,
+  setPublicDoors,
   shareResource,
   unshareResource,
   SHARE_AUDIENCES,
@@ -50,6 +59,7 @@ import {
 } from "../services/sharing/share-service.js";
 import {
   ExposurePolicyInputSchema,
+  POLICY_CHANGE_EFFECT,
   SHARE_KINDS,
 } from "../services/sharing/exposure-policy.js";
 import { registerShareExecutors } from "../services/sharing/share-executors.js";
@@ -122,7 +132,8 @@ export const sharesRouter = router({
     .input(z.object({ shareId: Uuid, removeGuests: z.boolean().optional() }))
     .mutation(({ input, ctx }) =>
       revokeLink(shareActorFromCtx(ctx), input.shareId, {
-        removeGuests: input.removeGuests ?? false,
+        // The default lives in the core (`revokeLink`): undefined = remove.
+        removeGuests: input.removeGuests,
       })
     ),
 
@@ -198,5 +209,27 @@ export const sharesRouter = router({
     )
     .mutation(({ input, ctx }) =>
       setExposurePolicy(shareActorFromCtx(ctx), input.workspaceId, input.policy)
+    ),
+
+  // Kept OFF `setPolicy`'s response on purpose: that response is the policy
+  // itself, and clients store it as the `getPolicy` answer they send back.
+  policyChangeEffect: protectedProcedure.query(() => POLICY_CHANGE_EFFECT),
+
+  getPublicDoors: protectedProcedure
+    .input(z.object({ workspaceId: Uuid }))
+    .query(({ input, ctx }) =>
+      getPublicDoors(shareActorFromCtx(ctx), input.workspaceId)
+    ),
+
+  setPublicDoors: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: Uuid,
+        // true = on, false = off, null = back to the pod default.
+        enabled: z.boolean().nullable(),
+      })
+    )
+    .mutation(({ input, ctx }) =>
+      setPublicDoors(shareActorFromCtx(ctx), input.workspaceId, input.enabled)
     ),
 });

@@ -3,20 +3,20 @@
  * approval executor and a connected plan's `create_document` step.
  *
  * Extracted verbatim from `executors/document.ts` so the plan does not grow a
- * second copy of "upload the body, then `DocumentRepository.create`". Both
- * branches route through the ONE document door (`DocumentRepository.create`),
- * which writes the row + the immutable v1 snapshot and emits
- * `document.create.completed`.
+ * second copy of "upload the body, then `DocumentRepository.create`". A body
+ * goes through the ONE create door (`createDocumentWithContent`); an external
+ * reference through `DocumentRepository.create`. Both write the row (+ the
+ * immutable v1 snapshot for a body) and emit `document.create.completed`.
  */
 
 import {
   db,
   DocumentRepository,
   eventRepository,
+  createDocumentWithContent,
   type CreateDocumentInput,
   normalizeDocumentType,
 } from "@synap/database";
-import { storage } from "@synap/storage";
 
 export async function materializeApprovedDocument(input: {
   /** The id the row is written with (a proposal's targetId, or a fresh one). */
@@ -63,44 +63,29 @@ export async function materializeApprovedDocument(input: {
   }
 
   const docType = normalizeDocumentType(input.type || "markdown", "markdown");
-  const extension = docType === "markdown" ? "md" : docType;
-  const content = input.content || "";
-  const storageKey = storage.buildPath(
-    input.userId,
-    "document",
-    input.documentId,
-    extension
-  );
   const mimeType =
     docType === "html"
       ? "text/html"
       : docType === "code"
         ? "text/plain"
         : "text/markdown";
-  const metadata = await storage.upload(storageKey, content, {
-    contentType: mimeType,
-  });
-
-  // ONE door: create() writes the row + the immutable v1 snapshot atomically.
-  // The row's mimeType stays "text/markdown" exactly as the prior raw insert
-  // (the computed `mimeType` above is only the storage content-type).
-  await docRepo.create(
-    {
-      id: input.documentId,
-      title,
-      type: docType as CreateDocumentInput["type"],
-      storageUrl: metadata.url,
-      storageKey: metadata.path,
-      size: metadata.size,
-      mimeType: "text/markdown",
-      userId: input.userId,
-      workspaceId: input.workspaceId,
-      content, // → writes the v1 document_versions snapshot
+  // The ONE create door: fresh-key upload + row + v1 checkpoint. (The row's
+  // mimeType is now the body's real type; it used to say text/markdown for an
+  // html/code body, which the claim door then re-uploaded under.)
+  await createDocumentWithContent(db, eventRepository, {
+    id: input.documentId,
+    ownerUserId: input.userId,
+    workspaceId: input.workspaceId,
+    title,
+    type: docType,
+    content: input.content || "",
+    mimeType,
+    provenance: {
+      createdByKind: "human",
       ...(input.sourceProposalId
         ? { sourceProposalId: input.sourceProposalId }
         : {}),
     },
-    input.userId
-  );
+  });
   return { id: input.documentId };
 }

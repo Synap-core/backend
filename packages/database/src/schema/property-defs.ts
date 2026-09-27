@@ -45,6 +45,11 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  * a separate wave — a blind rename here would mis-map the near-miss tokens. They
  * are recorded as distinct members precisely so the duplication is visible in
  * the type instead of hiding in the data.
+ *
+ * The canonical list is `@synap-core/types/property-hints` (what the renderer
+ * types against). This package cannot import it (types builds against the
+ * database), so this is a second copy, held EQUAL to it at compile time by
+ * `types/src/property-hints/pod-parity.contract.ts`.
  */
 export type PropertyInputType =
   // declared before the census, and genuinely written
@@ -52,6 +57,8 @@ export type PropertyInputType =
   | "phone"
   | "url"
   | "richtext"
+  // a long-text alias the renderer reads (text-tiers W2); authorable, unwritten
+  | "markdown"
   | "datetime-local"
   | "select"
   // declared before the census, written NOWHERE (kept: frontend may author them)
@@ -76,6 +83,7 @@ export const PROPERTY_INPUT_TYPES = [
   "phone",
   "url",
   "richtext",
+  "markdown",
   "datetime-local",
   "select",
   "person",
@@ -129,7 +137,21 @@ export interface PropertyUIHints {
   label?: string;
   placeholder?: string;
   inputType?: PropertyInputType;
-  displayAs?: "status" | "priority" | "progress" | "person";
+  /**
+   * The semantic intent a renderer draws. `body` = the entity's substance
+   * (`isBodyPropertyDef`); `richtext` / `markdown` = long text. Canonical list:
+   * `@synap-core/types/property-hints` `PROPERTY_DISPLAY_AS` (held equal).
+   */
+  displayAs?:
+    | "status"
+    | "priority"
+    | "progress"
+    | "person"
+    | "rating"
+    | "currency"
+    | "body"
+    | "richtext"
+    | "markdown";
   format?: "locale" | "currency" | "percent" | "compact";
   includeTime?: boolean;
   linkedProfileSlug?: string;

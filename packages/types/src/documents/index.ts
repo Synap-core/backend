@@ -7,6 +7,17 @@
 // document", shared by every writer surface (api capture/import + jobs worker).
 export { shouldMaterializeAsDocument } from "./document-heuristic.js";
 
+// Which property may become an entity's body document (text tiers, W3).
+export {
+  BODY_PROPERTY_SLUGS,
+  isBodyPropertyDef,
+  PROMOTE_TO_BODY_REFUSALS,
+  UNDO_PROMOTE_TO_BODY_REFUSALS,
+  type BodyPropertyDefLike,
+  type PromoteToBodyRefusal,
+  type UndoPromoteToBodyRefusal,
+} from "./body-property.js";
+
 // Re-export types from database schema (single source of truth)
 export type {
   Document,

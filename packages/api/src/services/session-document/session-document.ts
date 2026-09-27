@@ -16,7 +16,6 @@
  * callers always converge on one document.
  */
 
-import { randomUUID } from "crypto";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -27,11 +26,10 @@ import {
   asc,
   eq,
   drizzleSql,
-  DocumentRepository,
   eventRepository,
+  createDocumentWithContent,
   type SQL,
 } from "@synap/database";
-import { storage } from "@synap/storage";
 import { createLogger } from "@synap-core/core";
 import { recordSessionArtifact } from "../focus-sessions/record-session-artifact.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -158,35 +156,24 @@ export async function getOrCreateSessionDocument(
   const existing = await findSessionDocumentId(session.id);
   if (existing) return { documentId: existing, created: false };
 
-  const documentId = randomUUID();
   const title = sessionDocumentTitle(session);
-  const storageKey = storage.buildPath(
-    session.userId,
-    "document",
-    documentId,
-    "md"
-  );
-  const uploaded = await storage.upload(storageKey, "", {
-    contentType: "text/markdown",
-  });
-  const repo = new DocumentRepository(db, eventRepository);
-  await repo.create(
+  // The ONE create door: fresh-key upload + row + v1 checkpoint.
+  const { id: documentId } = await createDocumentWithContent(
+    db,
+    eventRepository,
     {
-      id: documentId,
+      ownerUserId: session.userId,
+      workspaceId: session.workspaceId,
       title,
       type: "markdown",
-      storageUrl: uploaded.url,
-      storageKey: uploaded.path,
-      size: uploaded.size,
-      mimeType: "text/markdown",
-      workspaceId: session.workspaceId,
       content: "",
-      userId: session.userId,
-      createdByKind: opts.agentUserId ? "ai_agent" : "human",
-      createdByUserId: session.userId,
-      ...(opts.agentUserId ? { agentUserId: opts.agentUserId } : {}),
-    },
-    session.userId
+      mimeType: "text/markdown",
+      provenance: {
+        createdByKind: opts.agentUserId ? "ai_agent" : "human",
+        createdByUserId: session.userId,
+        ...(opts.agentUserId ? { agentUserId: opts.agentUserId } : {}),
+      },
+    }
   );
 
   await recordSessionArtifact({

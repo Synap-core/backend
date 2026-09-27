@@ -256,6 +256,8 @@ function setupAgentSelectSequence(
   const builder = (limitResult: unknown[]) => {
     const b: Record<string, unknown> = {
       from: vi.fn(() => b),
+      // The body-lane classification (a document/* write) joins entities→users.
+      innerJoin: vi.fn(() => b),
       where: vi.fn(() => b),
       orderBy: vi.fn(() => b),
       limit: vi.fn().mockResolvedValue(limitResult),

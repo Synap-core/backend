@@ -4,14 +4,18 @@
  *   GET  /public/forms/:token   the form's public field definition, its
  *                               `minSubmitMs` and a time-to-submit ticket.
  *                               Unknown / disabled → the same 404 as every
- *                               other public miss.
+ *                               other public miss. A live form whose
+ *                               workspace's public doors are switched off →
+ *                               403 `public_doors_disabled`.
  *   POST /public/forms/:token   a guest submission. The reply is
  *                               `guestFormReply` (services/forms/guest-submit):
  *                               202 received (filed, or any outcome a caller
  *                               must not learn: unknown token, honeypot,
  *                               captcha failure, the pending cap), 422 with
- *                               the invalid field keys or `retry`, 503 when
- *                               the pod failed to file it.
+ *                               the invalid field keys or `retry`, 403
+ *                               `public_doors_disabled` for a live form
+ *                               behind a closed switch, 503 when the pod
+ *                               failed to file it.
  *
  * It lives under `/public/`, so the ONE predicate (`public-doors.ts`) skips hub
  * auth + idempotency, and the pod edge gives it the credentialless CORS policy,
@@ -38,6 +42,11 @@ import {
 } from "../../../services/forms/form-definition.js";
 import { captchaConfigFromEnv } from "../../../services/forms/captcha.js";
 import { hashToken } from "../../../utils/share-token.js";
+import {
+  PUBLIC_DOORS_DISABLED_BODY,
+  PUBLIC_DOORS_DISABLED_STATUS,
+  publicDoorsOpenFor,
+} from "../../../services/sharing/public-doors-switch.js";
 
 /** The ticket is time-bound: never cache the form definition response. */
 export const PUBLIC_FORM_CACHE_CONTROL = "no-store";
@@ -50,6 +59,7 @@ export function registerPublicFormsRoutes(
     c.header("Cache-Control", PUBLIC_FORM_CACHE_CONTROL);
     const token = c.req.param("token") ?? "";
     let loaded;
+    let open = true;
     try {
       loaded =
         token && token.length <= 256
@@ -57,12 +67,20 @@ export function registerPublicFormsRoutes(
               hashToken(token)
             )
           : null;
+      if (loaded) {
+        open = await (
+          deps?.publicDoorsOpen ?? ((l) => publicDoorsOpenFor(l.workspaceId))
+        )(loaded);
+      }
     } catch (err) {
       // A FAILED read is a 5xx, never a calm 404. The token is never logged.
       logger.error({ err }, "public form read failed");
       return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));
     }
     if (!loaded) return c.json(PUBLIC_NOT_FOUND_BODY, 404);
+    if (!open) {
+      return c.json(PUBLIC_DOORS_DISABLED_BODY, PUBLIC_DOORS_DISABLED_STATUS);
+    }
     const captcha = captchaConfigFromEnv();
     const now = deps?.now?.() ?? Date.now();
     return c.json(

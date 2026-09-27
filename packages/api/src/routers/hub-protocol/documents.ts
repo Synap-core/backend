@@ -19,6 +19,7 @@ import {
   normalizeDocumentType,
   DocumentRepository,
   eventRepository,
+  createDocumentWithContent,
   documents,
   and,
   eq,
@@ -308,48 +309,26 @@ export const documentsRouter = router({
         };
       }
 
-      // Auto-approved (matches workspace autoApproveFor whitelist):
-      // write to MinIO and DB immediately. The current-content object is uploaded
-      // here, then DocumentRepository.create writes the row + the immutable v1
-      // snapshot atomically (its `content` arg replaces the hand-inlined
-      // uploadDocumentVersionSnapshot + documentVersions insert). create() also
-      // emits `document.create.completed`, so the prior manual auditLog(completed)
-      // is dropped to avoid a double completed event; Typesense emitSideEffects
-      // kept.
-      const { storage } = await import("@synap/storage");
-      const docType = normalizeDocumentType(input.type, "markdown");
-      const extension = docType === "markdown" ? "md" : docType;
-      const content = input.content || "";
-      const storageKey = storage.buildPath(
-        userId,
-        "document",
-        documentId,
-        extension
-      );
-      const metadata = await storage.upload(storageKey, content, {
-        contentType: "text/markdown",
-      });
-
-      const created = await docRepo.create(
-        {
-          id: documentId,
-          title: input.title,
-          type: docType as CreateDocumentInput["type"],
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType: "text/markdown",
-          metadata: { idempotencyKey },
-          userId,
-          workspaceId: input.workspaceId ?? null,
-          content, // → writes the v1 document_versions snapshot
+      // Auto-approved (matches workspace autoApproveFor whitelist): the ONE
+      // create door writes the body (fresh key), the row and the v1 checkpoint
+      // (authored `ai` — provenance), and emits `document.create.completed`, so
+      // no manual auditLog(completed). Typesense emitSideEffects kept.
+      const created = await createDocumentWithContent(db, eventRepository, {
+        id: documentId,
+        ownerUserId: userId,
+        workspaceId: input.workspaceId ?? null,
+        title: input.title,
+        type: normalizeDocumentType(input.type, "markdown"),
+        content: input.content || "",
+        mimeType: "text/markdown",
+        metadata: { idempotencyKey },
+        provenance: {
           createdByKind: "ai_agent",
           createdByUserId: userId,
           agentUserId: input.agentUserId,
           correlationId,
         },
-        userId
-      );
+      });
 
       emitSideEffects({
         subjectType: "document",

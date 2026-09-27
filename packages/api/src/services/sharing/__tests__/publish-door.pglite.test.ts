@@ -777,3 +777,93 @@ describe("Hub REST doors", () => {
     expect(row!.revoked_at).toBeTruthy();
   });
 });
+
+describe("tightening the policy never retracts what is already published", () => {
+  const E_D8 = randomUUID();
+  const E_D8_NEXT = randomUUID();
+  let liveToken = "";
+
+  beforeAll(async () => {
+    for (const id of [E_D8, E_D8_NEXT]) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, title, type, properties) values ($1,$2,$3,'Offer','note','{"tagline":"Hi"}'::jsonb)`,
+        [id, A, W]
+      );
+    }
+    await human(A).setPolicy({ workspaceId: W, policy: ALLOW_ENTITY_PUBLIC });
+    const pub = await human(A).publish({
+      resourceType: "entity",
+      resourceId: E_D8,
+    });
+    if (pub.status === "proposed") throw new Error("unreachable");
+    liveToken = pub.token!;
+  });
+
+  it("deny future publishing of entities: the existing page keeps serving, a NEW publish is refused", async () => {
+    expect((await readPublic(liveToken)).status).toBe(200);
+    const denied = {
+      ...ALLOW_ENTITY_PUBLIC,
+      kinds: {
+        ...ALLOW_ENTITY_PUBLIC.kinds,
+        entity: {
+          ...ALLOW_ENTITY_PUBLIC.kinds.entity,
+          public: {
+            read: "denied" as const,
+            create: "denied" as const,
+            fields: [],
+          },
+        },
+      },
+    };
+    await human(A).setPolicy({ workspaceId: W, policy: denied });
+    // The ceiling bites on the NEXT write only.
+    expect(
+      (
+        await errOf(
+          human(A).publish({ resourceType: "entity", resourceId: E_D8_NEXT })
+        )
+      )?.code
+    ).toBe("FORBIDDEN");
+    // The existing row is untouched and still served.
+    const read = await readPublic(liveToken);
+    expect(read.status).toBe(200);
+    expect(read.body.properties.tagline).toBe("Hi");
+    const [row] = await publicRow(E_D8);
+    expect(row!.state).toBe("published");
+    expect(row!.revoked_at).toBeNull();
+    // …and the owner-facing door says so, for the surface to show on Save.
+    expect(await human(A).policyChangeEffect()).toEqual({
+      affectsExistingShares: false,
+      note: expect.stringMatching(/stay as they are/),
+    });
+    await human(A).setPolicy({ workspaceId: W, policy: ALLOW_ENTITY_PUBLIC });
+  });
+
+  it("a pod whose visitors share one IP: a LIVE page answers the distinct 403 until the owner opts in; misses stay 404", async () => {
+    const prior = process.env.SYNAP_SHARED_CLIENT_IP;
+    process.env.SYNAP_SHARED_CLIENT_IP = "true";
+    try {
+      const closed = await readPublic(liveToken);
+      expect(closed.status).toBe(403);
+      expect(closed.body).toEqual({
+        error:
+          "The owner has not turned on public pages and forms for this workspace.",
+        code: "public_doors_disabled",
+      });
+      // Never used for a miss.
+      expect(
+        (await readPublic("tok-never-minted-" + "d".repeat(30))).status
+      ).toBe(404);
+      expect(
+        await human(A).setPublicDoors({ workspaceId: W, enabled: true })
+      ).toMatchObject({ enabled: true, sharedClientIp: true });
+      expect((await readPublic(liveToken)).status).toBe(200);
+    } finally {
+      if (prior === undefined) delete process.env.SYNAP_SHARED_CLIENT_IP;
+      else process.env.SYNAP_SHARED_CLIENT_IP = prior;
+      await human(A).setPublicDoors({ workspaceId: W, enabled: null });
+    }
+    // No signal: served as before.
+    expect((await readPublic(liveToken)).status).toBe(200);
+  });
+});

@@ -36,7 +36,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
-import { scrubExpiredGuestPayloads } from "../forms/guest-retention.js";
+import { scrubGuestPayloads } from "../forms/guest-retention.js";
 import {
   CLASS_LIFETIME_HOURS,
   proposalLifetimeHours,
@@ -215,7 +215,7 @@ async function findLapsedGuestProposals(
 /** The sweep's call: a scrub failure is logged and retried next run. */
 async function scrubExpiredGuestPayloadsSafely(): Promise<void> {
   try {
-    const n = await scrubExpiredGuestPayloads();
+    const n = await scrubGuestPayloads();
     if (n > 0) logger.info({ scrubbed: n }, "expiry: guest payloads scrubbed");
   } catch (err) {
     logger.warn(

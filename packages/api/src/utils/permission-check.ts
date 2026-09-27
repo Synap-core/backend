@@ -40,6 +40,7 @@ import {
 } from "@synap-core/types/focus-sessions";
 import {
   resolveAgentGovernanceDecision,
+  resolveGovernanceLane,
   resolveGovernanceRule,
   resolveOriginTrust,
   resolvePendingProposalCap,
@@ -1025,6 +1026,20 @@ export async function previewPermissionDecision(
 }
 
 /**
+ * The document a `document/*` gate call targets (`data.id`, as the patch door
+ * sends it) — the input the body-lane classification needs. Undefined for any
+ * other subject.
+ */
+function subjectDocumentIdOf(
+  subjectType: string,
+  data: Record<string, unknown> | undefined
+): string | undefined {
+  return subjectType === "document" && typeof data?.id === "string"
+    ? data.id
+    : undefined;
+}
+
+/**
  * The facts an ANONYMOUS PRINCIPAL write actually carries. Everything the
  * engine can consult that is NOT one of these is agent-only and has no honest
  * value here — see {@link anonymousPolicyInput}.
@@ -1046,6 +1061,8 @@ interface AnonymousPolicyFacts {
   governanceRuleId: string | undefined;
   /** rung 2.55 — server-resolved trust of the acting channel's ORIGIN. */
   originTrust: "trusted" | "untrusted" | undefined;
+  /** lanes 4/8 — the subject is a human-owned entity's body (text tiers b). */
+  bodyOfHumanOwnedEntity: boolean | undefined;
 }
 
 /**
@@ -1137,6 +1154,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     governanceRuleVerdict: facts.governanceRuleVerdict,
     governanceRuleId: facts.governanceRuleId,
     originTrust: facts.originTrust,
+    bodyOfHumanOwnedEntity: facts.bodyOfHumanOwnedEntity,
 
     // ── AGENT-ONLY INPUTS — omitted on purpose, never given a plausible
     // default. Each line is a decision, not an oversight; see the per-rung
@@ -1675,6 +1693,8 @@ async function evaluatePermission(
         channelId: actingChannelId,
         userId,
         preferAgentMetadataAutoApproveFor: true,
+        // Text tiers (b): a human-owned entity's body rides the entity lane.
+        subjectDocumentId: subjectDocumentIdOf(subjectType, data),
       });
 
       if (gov.decision === "deny") {
@@ -2031,11 +2051,18 @@ async function evaluatePermission(
       // `includeAgentPrincipal: false`: there is no agent user here to attribute
       // an agent-scoped rule to, so only "any"-principal (workspace-authored)
       // rules are eligible.
+      // Text tiers (b): the rule store is read on the lane the engine decides on.
+      const lane = await resolveGovernanceLane({
+        db,
+        subjectType,
+        action,
+        subjectDocumentId: subjectDocumentIdOf(subjectType, data),
+      });
       const ruleMatch = await resolveGovernanceRule({
         db,
         workspaceId,
-        subjectType,
-        action,
+        subjectType: lane.subjectType,
+        action: lane.action,
         includeAgentPrincipal: false,
       });
 
@@ -2063,6 +2090,7 @@ async function evaluatePermission(
           governanceRuleVerdict: ruleMatch?.verdict,
           governanceRuleId: ruleMatch?.ruleId,
           originTrust,
+          bodyOfHumanOwnedEntity: lane.bodyOfHumanOwnedEntity,
         })
       );
 

@@ -40,7 +40,10 @@
  * create / update / mergeSettings strip it (`@synap/database`,
  * `withoutExposurePolicy`). The ONE writer is `WorkspaceRepository.setExposurePolicy`,
  * called only by `shares.setPolicy` (owner, human). It is not in the client-safe
- * settings projection; `shares.getPolicy` is its read door.
+ * settings projection; `shares.getPolicy` is its read door. The same stored
+ * key also holds the public-doors switch (`publicDoorsEnabled`, see
+ * `public-doors-switch.ts`), which this module's resolver ignores and
+ * `shares.setPolicy` carries over.
  */
 
 import { z } from "zod";
@@ -53,7 +56,21 @@ export type ExposureAudience = (typeof EXPOSURE_AUDIENCES)[number];
 
 /** READ: allowed (`direct`) or not. There is no "propose to read". */
 const ReadMode = z.enum(["direct", "denied"]);
-/** CREATE (guest intake): applied, reviewed, or refused. */
+/**
+ * CREATE (guest intake): applied, reviewed, or refused.
+ *
+ * INFORMATIONAL ONLY — NOTHING READS A `create` CELL TO DECIDE ANYTHING. No
+ * signed-in guest or link-holder create door exists, so the `guest.create` and
+ * `link.create` cells (4 kinds × 2) govern nothing; `public.create` is only
+ * clamped here, and the one anonymous create door (a public form) files every
+ * submission as a proposal on its own (`services/forms/guest-submit.ts`,
+ * `forcePropose`) without reading the policy. The cells stay in the stored and
+ * served shape so an existing policy round-trips unchanged (get → edit → set).
+ * The owner's screen no longer offers the guest / link cells; it still offers
+ * `public.create`, which is equally unread (a form never consults it). A
+ * create door must wire itself to these cells explicitly before any surface
+ * may present them as having an effect.
+ */
 const CreateMode = z.enum(["direct", "proposal", "denied"]);
 
 export type ReadMode = z.infer<typeof ReadMode>;
@@ -266,6 +283,39 @@ export function resolvePublicFields(
     }
   }
   return out.slice(0, 64);
+}
+
+/**
+ * What changing the policy does to what is ALREADY shared: nothing. The policy
+ * is a ceiling checked when something is shared, published or minted
+ * (`planShare`, `planPublish`); no reader re-checks it afterwards — the public
+ * read, link redemption and the guest access floor never consult it. So
+ * tightening a cell stops NEW shares of that kind; existing guest shares, links
+ * and publications keep serving until the owner unshares, revokes or
+ * unpublishes them. Served by `shares.policyChangeEffect` so a surface can say
+ * so beside the Save button instead of letting the owner believe a tightened
+ * cell retracted anything.
+ */
+export const POLICY_CHANGE_EFFECT = Object.freeze({
+  affectsExistingShares: false as const,
+  note: "Existing shares, links and published pages stay as they are. This only limits what can be shared from now on; stop or unpublish them one by one to take them back.",
+});
+
+/**
+ * The STORED policy object as-is (no defaults, no clamp), or null when absent
+ * or unreadable. For readers of keys that live beside the grid (the public
+ * doors switch) — the grid itself is read through {@link resolveExposurePolicy}.
+ */
+export function storedExposurePolicyRecord(
+  settings: unknown
+): Record<string, unknown> | null {
+  const raw =
+    settings && typeof settings === "object" && !Array.isArray(settings)
+      ? (settings as Record<string, unknown>).exposurePolicy
+      : undefined;
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : null;
 }
 
 /** Validate an owner's policy for storage. Throws a ZodError on anything the

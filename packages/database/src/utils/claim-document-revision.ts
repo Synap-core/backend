@@ -43,6 +43,12 @@ import {
   storedVersionValues,
   uploadDocumentVersionSnapshot,
 } from "./document-version-storage.js";
+import {
+  DocumentRepository,
+  type CreateDocumentInput,
+} from "../repositories/document-repository.js";
+import type { EventRepository } from "../repositories/event-repository.js";
+import type { Document } from "../schema/documents.js";
 
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -376,4 +382,109 @@ export async function claimDocumentRevision(
     contentChanged: writesContent,
     skipped,
   };
+}
+
+// ---------------------------------------------------------------------------
+// THE create door
+// ---------------------------------------------------------------------------
+
+/** Who a new document's first version belongs to (row provenance + v1 author). */
+export interface DocumentCreateProvenance {
+  createdByKind: "human" | "ai_agent" | "system";
+  /** Defaults to the owner. */
+  createdByUserId?: string;
+  agentUserId?: string;
+  sourceProposalId?: string;
+  correlationId?: string;
+}
+
+export interface CreateDocumentWithContentInput {
+  /** A pre-chosen id (idempotent callers); a fresh uuid otherwise. */
+  id?: string;
+  /** `documents.user_id`, and the storage namespace of the body. */
+  ownerUserId: string;
+  /** `null`/absent = pod-wide. */
+  workspaceId?: string | null;
+  title: string;
+  /** `documents.type` (a free text column: markdown, html, code, …). */
+  type: string;
+  content: string;
+  mimeType: string;
+  /** Storage key extension; derived from `type` when absent (`markdown` → `md`). */
+  extension?: string;
+  language?: string;
+  metadata?: Record<string, unknown>;
+  provenance: DocumentCreateProvenance;
+}
+
+/** Storage extension for a document type (`markdown` → `md`). */
+function extensionFor(type: string): string {
+  return type === "markdown" ? "md" : type;
+}
+
+/**
+ * createDocumentWithContent — THE create door for a text document with a body.
+ *
+ * The companion of {@link claimDocumentRevision}: that door REPLACES a live
+ * body; this one BRINGS ONE INTO EXISTENCE. It owns the three steps every
+ * creator used to hand-roll (routers/documents create + upload, the hub
+ * `createDocument`, the promote door, the approval materializer, intake, the
+ * session document, the entity body service, the html cell doors):
+ *   1. the upload to a FRESH key (`<owner>/document/<new id>.<ext>`) — never
+ *      over an existing `storage_key`;
+ *   2. the row insert and 3. the immutable v1 checkpoint, atomically, with the
+ *      v1 author derived from provenance (`initialVersionAuthor` — an agent's
+ *      document is authored `ai`), via `DocumentRepository.create`, which also
+ *      emits `document.create.completed`.
+ *
+ * Why not create-then-claim: on a document with no version rows the claim door
+ * would cut a phantom empty pre-image checkpoint — a history step nobody wrote.
+ *
+ * `dbOrTx`: pass the caller's transaction to create the document atomically with
+ * the caller's own writes (the promote door re-points an entity in the same tx).
+ * The upload is not transactional; a rolled-back create leaves an unreferenced
+ * blob under a key no row will ever name, never a live body overwritten.
+ *
+ * Tripwire: `document-content-one-door` allows a document-content upload ONLY
+ * in this module.
+ */
+export async function createDocumentWithContent(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dbOrTx: any,
+  eventRepo: EventRepository,
+  input: CreateDocumentWithContentInput
+): Promise<Document> {
+  const id = input.id ?? randomUUID();
+  const key = storage.buildPath(
+    input.ownerUserId,
+    "document",
+    id,
+    input.extension ?? extensionFor(input.type)
+  );
+  const stored = await storage.upload(key, input.content, {
+    contentType: input.mimeType,
+  });
+  return new DocumentRepository(dbOrTx, eventRepo).create(
+    {
+      id,
+      title: input.title,
+      // The DB column is free text; "html" is stored verbatim, as before.
+      type: input.type as CreateDocumentInput["type"],
+      language: input.language,
+      storageUrl: stored.url,
+      storageKey: stored.path,
+      size: stored.size,
+      mimeType: input.mimeType,
+      metadata: input.metadata,
+      userId: input.ownerUserId,
+      workspaceId: input.workspaceId ?? null,
+      content: input.content,
+      createdByKind: input.provenance.createdByKind,
+      createdByUserId: input.provenance.createdByUserId ?? input.ownerUserId,
+      agentUserId: input.provenance.agentUserId,
+      sourceProposalId: input.provenance.sourceProposalId,
+      correlationId: input.provenance.correlationId,
+    },
+    input.ownerUserId
+  );
 }

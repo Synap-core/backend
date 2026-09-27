@@ -2109,8 +2109,13 @@ export interface McpToolPolicy {
  * a separate wave — a blind rename here would mis-map the near-miss tokens. They
  * are recorded as distinct members precisely so the duplication is visible in
  * the type instead of hiding in the data.
+ *
+ * The canonical list is `@synap-core/types/property-hints` (what the renderer
+ * types against). This package cannot import it (types builds against the
+ * database), so this is a second copy, held EQUAL to it at compile time by
+ * `types/src/property-hints/pod-parity.contract.ts`.
  */
-export type PropertyInputType = "email" | "phone" | "url" | "richtext" | "datetime-local" | "select" | "person" | "datetime" | "text" | "textarea" | "number" | "date" | "checkbox" | "tags" | "json" | "color" | "entity" | "entity-select" | "tel";
+export type PropertyInputType = "email" | "phone" | "url" | "richtext" | "markdown" | "datetime-local" | "select" | "person" | "datetime" | "text" | "textarea" | "number" | "date" | "checkbox" | "tags" | "json" | "color" | "entity" | "entity-select" | "tel";
 export interface PropertyUIHints {
 	displayName?: string;
 	/**
@@ -2127,7 +2132,12 @@ export interface PropertyUIHints {
 	label?: string;
 	placeholder?: string;
 	inputType?: PropertyInputType;
-	displayAs?: "status" | "priority" | "progress" | "person";
+	/**
+	 * The semantic intent a renderer draws. `body` = the entity's substance
+	 * (`isBodyPropertyDef`); `richtext` / `markdown` = long text. Canonical list:
+	 * `@synap-core/types/property-hints` `PROPERTY_DISPLAY_AS` (held equal).
+	 */
+	displayAs?: "status" | "priority" | "progress" | "person" | "rating" | "currency" | "body" | "richtext" | "markdown";
 	format?: "locale" | "currency" | "percent" | "compact";
 	includeTime?: boolean;
 	linkedProfileSlug?: string;
@@ -5421,6 +5431,18 @@ export interface DismissCaptureResultRowResult {
 	/** False when the row was already in the requested state (idempotent no-op). */
 	changed: boolean;
 }
+declare const PROMOTE_TO_BODY_REFUSALS: readonly [
+	"not_body_property",
+	"empty_value",
+	"body_exists",
+	"agent_caller"
+];
+export type PromoteToBodyRefusal = (typeof PROMOTE_TO_BODY_REFUSALS)[number];
+declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
+	"edited_since",
+	"not_promoted"
+];
+export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
 /**
  * View Query Types
  *
@@ -6724,6 +6746,27 @@ declare function buildDegradedCaptureFallback(inputText: string, degradedReason:
 	dedupCandidates: Record<string, DedupCandidate[]>;
 	degraded: true;
 	degradedReason: DegradedCaptureReasonOrUnknown;
+};
+export type PromotePropertyToBodyResult = {
+	status: "promoted";
+	entityId: string;
+	propertySlug: string;
+	documentId: string;
+	revision: number;
+} | {
+	status: "refused";
+	reason: PromoteToBodyRefusal;
+	message: string;
+};
+export type UndoPromotePropertyToBodyResult = {
+	status: "restored";
+	entityId: string;
+	propertySlug: string;
+	documentId: string;
+} | {
+	status: "refused";
+	reason: UndoPromoteToBodyRefusal;
+	message: string;
 };
 /**
  * ONE door from an AI/IS failure to the words a user reads.
@@ -10194,6 +10237,14 @@ export interface ResolvedKindPolicy {
 /** The EFFECTIVE policy — `shares.getPolicy`'s answer. The owner is its only
  *  reader, so it carries everything the stored policy holds (incl. `fields`). */
 export type ResolvedExposurePolicy = Record<ShareKind, ResolvedKindPolicy>;
+export interface PublicDoorsState {
+	/** Do this workspace's public pages and forms answer right now? */
+	enabled: boolean;
+	/** The owner's explicit choice; null = the pod default applies. */
+	ownerChoice: boolean | null;
+	/** The pod cannot tell visitors apart (the reason the default is off). */
+	sharedClientIp: boolean;
+}
 declare const SHARE_AUDIENCES: readonly [
 	"guest",
 	"link"
@@ -10283,6 +10334,16 @@ export interface ShareListing {
 		createdAt: Date;
 		createdBy: string;
 	}>;
+	/**
+	 * How many PEOPLE can see what this project shares: its distinct GUEST
+	 * members, however they joined (invite or any link). A share to a project
+	 * is a share to all of them, so the owner needs this number to know how far
+	 * a share reaches. A count only — never who.
+	 *
+	 * `null` on a resource listing: a record can be exposed to several projects,
+	 * so there is no single number; ask the anchor listing of each project.
+	 */
+	guestCount: number | null;
 	/** True when any list hit {@link LIST_SHARES_CAP}. */
 	truncated: boolean;
 }
@@ -15505,6 +15566,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		promotePropertyToBody: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				propertySlug: string;
+			};
+			output: PromotePropertyToBodyResult;
+			meta: object;
+		}>;
+		undoPromotePropertyToBody: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				documentId: string;
+			};
+			output: UndoPromotePropertyToBodyResult;
+			meta: object;
+		}>;
 		adminList: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
@@ -19246,7 +19323,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				title: string;
 				content?: string | undefined;
-				type?: "code" | "text" | "markdown" | "html" | "pdf" | "docx" | undefined;
+				type?: "code" | "markdown" | "text" | "html" | "pdf" | "docx" | undefined;
 				workspaceId?: string | undefined;
 				expectedLabel?: string | undefined;
 				duplicatedFrom?: {
@@ -19265,7 +19342,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		upload: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				type: "code" | "text" | "markdown" | "html" | "pdf" | "docx";
+				type: "code" | "markdown" | "text" | "html" | "pdf" | "docx";
 				content: string;
 				title?: string | undefined;
 				language?: string | undefined;
@@ -19443,7 +19520,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				limit?: number | undefined;
 				offset?: number | undefined;
-				type?: "code" | "text" | "markdown" | "html" | "pdf" | "docx" | undefined;
+				type?: "code" | "markdown" | "text" | "html" | "pdf" | "docx" | undefined;
 			};
 			output: {
 				documents: {
@@ -24857,6 +24934,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: ResolvedExposurePolicy;
 			meta: object;
 		}>;
+		policyChangeEffect: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: Readonly<{
+				affectsExistingShares: false;
+				note: "Existing shares, links and published pages stay as they are. This only limits what can be shared from now on; stop or unpublish them one by one to take them back.";
+			}>;
+			meta: object;
+		}>;
+		getPublicDoors: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: PublicDoorsState;
+			meta: object;
+		}>;
+		setPublicDoors: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				enabled: boolean | null;
+			};
+			output: PublicDoorsState;
+			meta: object;
+		}>;
 	}>>;
 	forms: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -29020,7 +29120,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		analyze: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "markdown" | "obsidian" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -29059,7 +29159,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		applyImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "markdown" | "obsidian" | "csv" | "bookmark";
 				workspaceId?: string | undefined;
 				operations?: Record<string, unknown>[] | undefined;
 				idempotencyKey?: string | undefined;
@@ -29089,7 +29189,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		analyzeLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "markdown" | "obsidian" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -29147,7 +29247,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		enqueueLargeImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "markdown" | "obsidian" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -29173,7 +29273,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		applyLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "obsidian" | "markdown" | "csv" | "bookmark";
+				source: "markdown" | "obsidian" | "csv" | "bookmark";
 				workspaceId?: string | undefined;
 				idempotencyKey?: string | undefined;
 				proposalId?: string | undefined;

@@ -32,12 +32,11 @@ import {
   documentVersions,
   documentSessions,
   normalizeDocumentType,
-  storedVersionValues,
-  uploadDocumentVersionSnapshot,
   readDocumentVersionContent,
   claimDocumentRevision,
   EntityBodyService,
   eventRepository,
+  createDocumentWithContent,
   resolveWorkspacePlacement,
 } from "@synap/database";
 
@@ -186,63 +185,17 @@ export const documentsRouter = router({
             revision: source.contentRevision,
           }))
         : null;
-      const documentId = randomUUID();
       const docType = normalizeDocumentType(input.type, "markdown");
-      const extension = docType === "markdown" ? "md" : docType;
-      const storageKey = storage.buildPath(
-        userId,
-        "document",
-        documentId,
-        extension
-      );
-
-      // 1. Upload content to MinIO
-      const content = input.content || "";
-      const resolvedMimeType = mimeTypeForDocType(docType);
-      const metadata = await storage.upload(storageKey, content, {
-        contentType: resolvedMimeType,
-      });
-      const versionId = randomUUID();
-      const snapshot = await uploadDocumentVersionSnapshot({
-        userId,
-        documentId,
-        versionId,
-        documentType: docType,
-        mimeType: resolvedMimeType,
-        content,
-      });
-
-      // 2. Insert document + immutable v1 snapshot into DB
-      const [document] = await db.transaction(async (tx) => {
-        const [doc] = await tx
-          .insert(documents)
-          .values({
-            id: documentId,
-            userId,
-            workspaceId,
-            title: input.title,
-            type: docType,
-            storageUrl: metadata.url,
-            storageKey: metadata.path,
-            size: metadata.size,
-            mimeType: resolvedMimeType,
-            currentVersion: 1,
-            lastSavedVersion: 1,
-            ...(duplicatedFrom ? { metadata: { duplicatedFrom } } : {}),
-          })
-          .returning();
-
-        await tx.insert(documentVersions).values({
-          id: versionId,
-          documentId,
-          version: 1,
-          ...storedVersionValues(snapshot),
-          author: "user",
-          authorId: userId,
-          message: "Initial version",
-        });
-
-        return [doc];
+      // The ONE create door: fresh-key upload + row + v1 checkpoint.
+      const document = await createDocumentWithContent(db, eventRepository, {
+        ownerUserId: userId,
+        workspaceId,
+        title: input.title,
+        type: docType,
+        content: input.content || "",
+        mimeType: mimeTypeForDocType(docType),
+        ...(duplicatedFrom ? { metadata: { duplicatedFrom } } : {}),
+        provenance: { createdByKind: "human" },
       });
 
       // OUTPUT LEDGER — the same writer the Hub twin and `entities.create` use.
@@ -290,62 +243,17 @@ export const documentsRouter = router({
       // podProcedure dropped workspaceProcedure's membership gate — re-assert the
       // write on the RESOLVED workspace, never a request-supplied id.
       await assertWorkspaceWrite(db, userId, { workspaceId, ownerId: userId });
-      const documentId = randomUUID();
       const docType = normalizeDocumentType(input.type, "markdown");
-      const extension = docType === "markdown" ? "md" : docType;
-      const mimeType = input.mimeType || "text/plain";
-      const storageKey = storage.buildPath(
-        userId,
-        "document",
-        documentId,
-        extension
-      );
-
-      // 1. Upload content to MinIO
-      const metadata = await storage.upload(storageKey, input.content, {
-        contentType: mimeType,
-      });
-      const versionId = randomUUID();
-      const snapshot = await uploadDocumentVersionSnapshot({
-        userId,
-        documentId,
-        versionId,
-        documentType: docType,
-        mimeType,
+      // The ONE create door: fresh-key upload + row + v1 checkpoint.
+      const document = await createDocumentWithContent(db, eventRepository, {
+        ownerUserId: userId,
+        workspaceId,
+        title: input.title || "Untitled",
+        type: docType,
+        language: input.language || undefined,
         content: input.content,
-      });
-
-      // 2. Insert document + immutable v1 snapshot into DB
-      const [document] = await db.transaction(async (tx) => {
-        const [doc] = await tx
-          .insert(documents)
-          .values({
-            id: documentId,
-            userId,
-            workspaceId,
-            title: input.title || "Untitled",
-            type: docType,
-            language: input.language || undefined,
-            storageUrl: metadata.url,
-            storageKey: metadata.path,
-            size: metadata.size,
-            mimeType,
-            currentVersion: 1,
-            lastSavedVersion: 1,
-          })
-          .returning();
-
-        await tx.insert(documentVersions).values({
-          id: versionId,
-          documentId,
-          version: 1,
-          ...storedVersionValues(snapshot),
-          author: "user",
-          authorId: userId,
-          message: "Initial version",
-        });
-
-        return [doc];
+        mimeType: input.mimeType || "text/plain",
+        provenance: { createdByKind: "human" },
       });
 
       return {
