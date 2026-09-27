@@ -23182,7 +23182,58 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						params?: Record<string, unknown>[] | undefined;
 						inputStrategy?: Record<string, unknown> | undefined;
 						channelSpec?: Record<string, unknown> | undefined;
-						expectedOutputs?: Record<string, unknown>[] | undefined;
+						expectedOutputs?: {
+							[x: string]: unknown;
+							ask?: {
+								mode: "confirm";
+								prompt?: string | undefined;
+							} | {
+								mode: "choose";
+								options: {
+									label: string;
+									value?: string | undefined;
+									icon?: string | undefined;
+									recommended?: boolean | undefined;
+									description?: string | undefined;
+								}[];
+								allowOther?: boolean | undefined;
+							} | {
+								mode: "form";
+								form: {
+									fields: {
+										key: string;
+										label: string;
+										type: string;
+										constraints?: {
+											enum?: string[] | undefined;
+											min?: number | undefined;
+											max?: number | undefined;
+											pattern?: string | undefined;
+										} | undefined;
+										required?: boolean | undefined;
+										help?: string | undefined;
+									}[];
+									title?: string | undefined;
+									note?: string | undefined;
+								};
+							} | {
+								mode: "act";
+								url?: string | undefined;
+								steps?: string[] | undefined;
+							} | {
+								mode: "provide";
+								provide: {
+									kind: "connection";
+									service: string;
+								} | {
+									kind: "file";
+									accept?: string[] | undefined;
+								} | {
+									kind: "secret";
+									name: string;
+								};
+							} | null | undefined;
+						}[] | undefined;
 						stages?: {
 							[x: string]: unknown;
 							key: string;
@@ -23200,6 +23251,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: string;
 								label: string;
 								icon?: string | undefined;
+								ask?: {
+									mode: "confirm";
+									prompt?: string | undefined;
+								} | {
+									mode: "choose";
+									options: {
+										label: string;
+										value?: string | undefined;
+										icon?: string | undefined;
+										recommended?: boolean | undefined;
+										description?: string | undefined;
+									}[];
+									allowOther?: boolean | undefined;
+								} | {
+									mode: "form";
+									form: {
+										fields: {
+											key: string;
+											label: string;
+											type: string;
+											constraints?: {
+												enum?: string[] | undefined;
+												min?: number | undefined;
+												max?: number | undefined;
+												pattern?: string | undefined;
+											} | undefined;
+											required?: boolean | undefined;
+											help?: string | undefined;
+										}[];
+										title?: string | undefined;
+										note?: string | undefined;
+									};
+								} | {
+									mode: "act";
+									url?: string | undefined;
+									steps?: string[] | undefined;
+								} | {
+									mode: "provide";
+									provide: {
+										kind: "connection";
+										service: string;
+									} | {
+										kind: "file";
+										accept?: string[] | undefined;
+									} | {
+										kind: "secret";
+										name: string;
+									};
+								} | null | undefined;
 							}[] | undefined;
 							suggestedTasks?: string[] | undefined;
 							position?: number | undefined;
@@ -32854,6 +32954,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: string;
 						label: string;
 						icon?: string | undefined;
+						ask?: {
+							mode: "confirm";
+							prompt?: string | undefined;
+						} | {
+							mode: "choose";
+							options: {
+								label: string;
+								value?: string | undefined;
+								icon?: string | undefined;
+								recommended?: boolean | undefined;
+								description?: string | undefined;
+							}[];
+							allowOther?: boolean | undefined;
+						} | {
+							mode: "form";
+							form: {
+								fields: {
+									key: string;
+									label: string;
+									type: string;
+									constraints?: {
+										enum?: string[] | undefined;
+										min?: number | undefined;
+										max?: number | undefined;
+										pattern?: string | undefined;
+									} | undefined;
+									required?: boolean | undefined;
+									help?: string | undefined;
+								}[];
+								title?: string | undefined;
+								note?: string | undefined;
+							};
+						} | {
+							mode: "act";
+							url?: string | undefined;
+							steps?: string[] | undefined;
+						} | {
+							mode: "provide";
+							provide: {
+								kind: "connection";
+								service: string;
+							} | {
+								kind: "file";
+								accept?: string[] | undefined;
+							} | {
+								kind: "secret";
+								name: string;
+							};
+						} | null | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
 					position?: number | undefined;
@@ -33168,13 +33317,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId: string;
 				expectedLabel: string;
 				note?: string | undefined;
+				askFingerprint?: string | undefined;
 			};
 			output: {
-				seeded: boolean;
-				triggered: boolean;
-				threadId?: string | undefined;
 				channelId: string;
 				messageId: string;
+				threadId: string;
+				seeded: boolean;
+				triggered: boolean;
 			};
 			meta: object;
 		}>;
@@ -33646,7 +33796,58 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params?: Record<string, unknown>[] | undefined;
 				inputStrategy?: Record<string, unknown> | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
-				expectedOutputs?: Record<string, unknown>[] | undefined;
+				expectedOutputs?: {
+					[x: string]: unknown;
+					ask?: {
+						mode: "confirm";
+						prompt?: string | undefined;
+					} | {
+						mode: "choose";
+						options: {
+							label: string;
+							value?: string | undefined;
+							icon?: string | undefined;
+							recommended?: boolean | undefined;
+							description?: string | undefined;
+						}[];
+						allowOther?: boolean | undefined;
+					} | {
+						mode: "form";
+						form: {
+							fields: {
+								key: string;
+								label: string;
+								type: string;
+								constraints?: {
+									enum?: string[] | undefined;
+									min?: number | undefined;
+									max?: number | undefined;
+									pattern?: string | undefined;
+								} | undefined;
+								required?: boolean | undefined;
+								help?: string | undefined;
+							}[];
+							title?: string | undefined;
+							note?: string | undefined;
+						};
+					} | {
+						mode: "act";
+						url?: string | undefined;
+						steps?: string[] | undefined;
+					} | {
+						mode: "provide";
+						provide: {
+							kind: "connection";
+							service: string;
+						} | {
+							kind: "file";
+							accept?: string[] | undefined;
+						} | {
+							kind: "secret";
+							name: string;
+						};
+					} | null | undefined;
+				}[] | undefined;
 				stages?: {
 					[x: string]: unknown;
 					key: string;
@@ -33664,6 +33865,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: string;
 						label: string;
 						icon?: string | undefined;
+						ask?: {
+							mode: "confirm";
+							prompt?: string | undefined;
+						} | {
+							mode: "choose";
+							options: {
+								label: string;
+								value?: string | undefined;
+								icon?: string | undefined;
+								recommended?: boolean | undefined;
+								description?: string | undefined;
+							}[];
+							allowOther?: boolean | undefined;
+						} | {
+							mode: "form";
+							form: {
+								fields: {
+									key: string;
+									label: string;
+									type: string;
+									constraints?: {
+										enum?: string[] | undefined;
+										min?: number | undefined;
+										max?: number | undefined;
+										pattern?: string | undefined;
+									} | undefined;
+									required?: boolean | undefined;
+									help?: string | undefined;
+								}[];
+								title?: string | undefined;
+								note?: string | undefined;
+							};
+						} | {
+							mode: "act";
+							url?: string | undefined;
+							steps?: string[] | undefined;
+						} | {
+							mode: "provide";
+							provide: {
+								kind: "connection";
+								service: string;
+							} | {
+								kind: "file";
+								accept?: string[] | undefined;
+							} | {
+								kind: "secret";
+								name: string;
+							};
+						} | null | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
 					position?: number | undefined;
@@ -33762,7 +34012,58 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params?: Record<string, unknown>[] | undefined;
 				inputStrategy?: Record<string, unknown> | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
-				expectedOutputs?: Record<string, unknown>[] | undefined;
+				expectedOutputs?: {
+					[x: string]: unknown;
+					ask?: {
+						mode: "confirm";
+						prompt?: string | undefined;
+					} | {
+						mode: "choose";
+						options: {
+							label: string;
+							value?: string | undefined;
+							icon?: string | undefined;
+							recommended?: boolean | undefined;
+							description?: string | undefined;
+						}[];
+						allowOther?: boolean | undefined;
+					} | {
+						mode: "form";
+						form: {
+							fields: {
+								key: string;
+								label: string;
+								type: string;
+								constraints?: {
+									enum?: string[] | undefined;
+									min?: number | undefined;
+									max?: number | undefined;
+									pattern?: string | undefined;
+								} | undefined;
+								required?: boolean | undefined;
+								help?: string | undefined;
+							}[];
+							title?: string | undefined;
+							note?: string | undefined;
+						};
+					} | {
+						mode: "act";
+						url?: string | undefined;
+						steps?: string[] | undefined;
+					} | {
+						mode: "provide";
+						provide: {
+							kind: "connection";
+							service: string;
+						} | {
+							kind: "file";
+							accept?: string[] | undefined;
+						} | {
+							kind: "secret";
+							name: string;
+						};
+					} | null | undefined;
+				}[] | undefined;
 				stages?: {
 					[x: string]: unknown;
 					key: string;
@@ -33780,6 +34081,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: string;
 						label: string;
 						icon?: string | undefined;
+						ask?: {
+							mode: "confirm";
+							prompt?: string | undefined;
+						} | {
+							mode: "choose";
+							options: {
+								label: string;
+								value?: string | undefined;
+								icon?: string | undefined;
+								recommended?: boolean | undefined;
+								description?: string | undefined;
+							}[];
+							allowOther?: boolean | undefined;
+						} | {
+							mode: "form";
+							form: {
+								fields: {
+									key: string;
+									label: string;
+									type: string;
+									constraints?: {
+										enum?: string[] | undefined;
+										min?: number | undefined;
+										max?: number | undefined;
+										pattern?: string | undefined;
+									} | undefined;
+									required?: boolean | undefined;
+									help?: string | undefined;
+								}[];
+								title?: string | undefined;
+								note?: string | undefined;
+							};
+						} | {
+							mode: "act";
+							url?: string | undefined;
+							steps?: string[] | undefined;
+						} | {
+							mode: "provide";
+							provide: {
+								kind: "connection";
+								service: string;
+							} | {
+								kind: "file";
+								accept?: string[] | undefined;
+							} | {
+								kind: "secret";
+								name: string;
+							};
+						} | null | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
 					position?: number | undefined;
