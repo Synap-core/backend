@@ -1019,7 +1019,7 @@ export interface FocusSessionExpectedOutput {
  * checks the mode and provide-kind literals here against `ASK_MODES` /
  * `ASK_PROVIDE_KINDS`.
  */
-export type HubSlotAsk =
+export type HubSlotAsk = (
   | { mode: "confirm"; prompt?: string }
   | { mode: "choose"; options: HubSlotAskOption[]; allowOther?: boolean }
   | {
@@ -1049,7 +1049,30 @@ export type HubSlotAsk =
         | { kind: "connection"; service: string }
         | { kind: "file"; accept?: string[] }
         | { kind: "secret"; name: string };
-    };
+    }
+) & {
+  /**
+   * "What I looked at" — at most 8 objects the agent read before asking. A
+   * `title` sent here is DROPPED by the pod (it resolves the name itself,
+   * through the access floor, on the owed-slot read).
+   */
+  lookedAt?: HubSlotAskLookedAt[];
+};
+
+/** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
+export interface HubSlotAskLookedAt {
+  kind: HubSlotAskLookedAtKind;
+  id: string;
+  /** Pod-resolved on reads; never sent. */
+  title?: string;
+}
+
+export type HubSlotAskLookedAtKind =
+  | "entity"
+  | "document"
+  | "view"
+  | "automation"
+  | "playbook";
 
 /** One offered answer — at most ONE per ask may be `recommended`. */
 export interface HubSlotAskOption {

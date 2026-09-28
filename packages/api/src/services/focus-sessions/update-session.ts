@@ -29,12 +29,18 @@ import {
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
+  ASK_LOOKED_AT_KINDS,
   AskAnswerValueSchema,
   AskSchema,
   type Ask,
   type AskAnswerValue,
 } from "@synap-core/types/ask";
-import type { SlotAnswerValue, SlotAsk } from "@synap/playbooks";
+import type {
+  OutputRefKind,
+  SlotAnswerValue,
+  SlotAsk,
+  SlotAskLookedAtKind,
+} from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
@@ -367,6 +373,16 @@ const _askParity: _Mutual<SlotAsk, Ask> = true;
 const _answerValueParity: _Mutual<SlotAnswerValue, AskAnswerValue> = true;
 void _askParity;
 void _answerValueParity;
+// "What I looked at" cites only kinds the ref floor can adjudicate: the leaf's
+// set is a subset of OUTPUT_REF_KINDS, and the playbooks mirror names the same
+// set. A kind added to one side and not the other stops the build.
+const _lookedAtKindsAreRefKinds: readonly OutputRefKind[] = ASK_LOOKED_AT_KINDS;
+const _lookedAtKindParity: _Mutual<
+  SlotAskLookedAtKind,
+  (typeof ASK_LOOKED_AT_KINDS)[number]
+> = true;
+void _lookedAtKindsAreRefKinds;
+void _lookedAtKindParity;
 
 /**
  * The slot fields the SERVER owns — written by governance, delegation and

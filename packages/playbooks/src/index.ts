@@ -512,12 +512,36 @@ export interface ExpectedOutput {
  * `services/focus-sessions/update-session.ts` asserts the two types are
  * MUTUALLY assignable at compile time — a drift on either side stops the build.
  */
-export type SlotAsk =
+export type SlotAsk = (
   | { mode: "confirm"; prompt?: string }
   | { mode: "choose"; options: SlotAskOption[]; allowOther?: boolean }
   | { mode: "form"; form: SlotAskFormSpec }
   | { mode: "act"; url?: string; steps?: string[] }
-  | { mode: "provide"; provide: SlotAskProvide };
+  | { mode: "provide"; provide: SlotAskProvide }
+) & {
+  /**
+   * "What I looked at" (trust ladder rung 1, a PREPARED question): at most 8
+   * objects the agent read before asking. Stored as `{kind, id}` — the agent's
+   * own `title` is stripped at the parse — and floored at the declaring door
+   * like `ref`. `title` is filled ONLY by the owed-slot read, resolved through
+   * the viewer's access floor; a ref the viewer cannot see is dropped there.
+   */
+  lookedAt?: SlotAskLookedAt[];
+};
+
+/** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
+export interface SlotAskLookedAt {
+  kind: SlotAskLookedAtKind;
+  id: string;
+  /** Server-resolved on the owed read; never stored, never trusted. */
+  title?: string;
+}
+
+/** Mirrors `ASK_LOOKED_AT_KINDS` — a subset of {@link OUTPUT_REF_KINDS}. */
+export type SlotAskLookedAtKind = Extract<
+  OutputRefKind,
+  "entity" | "document" | "view" | "automation" | "playbook"
+>;
 
 /** One offered answer (capture's chip minus its apply fields). */
 export interface SlotAskOption {

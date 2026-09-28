@@ -179,10 +179,16 @@ export async function blockExpectedOutput(
 
   // ONE door for the ref floor — the same `isOutputRefVisible` the attach-output
   // doors apply. Checked BEFORE the lock: a refusal must change nothing.
-  if (params.ref) {
+  if (params.ref || params.ask?.lookedAt?.length) {
     const unreachable = await findUnreachableOutputRefs({
       userId: params.userId,
-      outputs: [{ label: slot.label, ref: params.ref }],
+      outputs: [
+        {
+          label: slot.label,
+          ...(params.ref ? { ref: params.ref } : {}),
+          ...(params.ask ? { ask: params.ask } : {}),
+        },
+      ],
     });
     if (unreachable.length > 0) {
       return {

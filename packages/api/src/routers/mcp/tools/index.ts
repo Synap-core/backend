@@ -216,7 +216,7 @@ function buildAskJsonSchema(): Record<string, unknown> {
   >;
   delete derived.$schema;
   derived.description =
-    "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). Omit for a plain free-text answer. null clears a stored ask.";
+    "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).";
   return derived;
 }
 

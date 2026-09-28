@@ -62,6 +62,9 @@ export const ASK_LIMITS = {
   /** A provide(connection)'s service id, a provide(secret)'s name. */
   provideNameMaxChars: 120,
   acceptMax: 10,
+  /** "What I looked at" — the objects the agent read before asking. */
+  lookedAtMax: 8,
+  lookedAtIdMaxChars: 200,
 } as const;
 
 // ─── Modes ──────────────────────────────────────────────────────────────────
@@ -396,10 +399,54 @@ export const AskProvideSchema = z.discriminatedUnion("kind", [
 ]);
 export type AskProvide = z.infer<typeof AskProvideSchema>;
 
+// ─── "What I looked at" ─────────────────────────────────────────────────────
+
+/**
+ * The object kinds an ask may cite as "what I looked at" — the kinds whose
+ * visibility the pod can adjudicate and whose name it can resolve (a subset of
+ * `OUTPUT_REF_KINDS`, `@synap/playbooks`; api asserts the subset at compile
+ * time). Not `cell` (no backing row, nothing to name) and not a URL (a web page
+ * the agent read is prose in `why`, not a door).
+ */
+export const ASK_LOOKED_AT_KINDS = [
+  "entity",
+  "document",
+  "view",
+  "automation",
+  "playbook",
+] as const;
+export type AskLookedAtKind = (typeof ASK_LOOKED_AT_KINDS)[number];
+
+/**
+ * ONE thing the agent read before asking — trust-ladder rung 1, "a prepared
+ * question: the agent gathered the data first, shows what it looked at".
+ *
+ * `{kind, id}` ONLY. A `title` an agent sends is STRIPPED at this parse (zod
+ * drops unknown keys): the name the person reads is resolved server-side,
+ * through the access floor, on the owed-slot read — never trusted from the
+ * agent. The pod refuses a declared ref the declaring caller cannot see
+ * (`findUnreachableOutputRefs`), exactly like a slot's `ref`.
+ */
+export const AskLookedAtRefSchema = z.object({
+  kind: z.enum(ASK_LOOKED_AT_KINDS),
+  id: z.string().min(1).max(ASK_LIMITS.lookedAtIdMaxChars),
+});
+export type AskLookedAtRef = z.infer<typeof AskLookedAtRefSchema>;
+
+/** Shared by every mode: provenance is not a mode, it rides beside one. */
+const lookedAtField = {
+  /** At most {@link ASK_LIMITS.lookedAtMax}; more is REFUSED, never clipped. */
+  lookedAt: z
+    .array(AskLookedAtRefSchema)
+    .max(ASK_LIMITS.lookedAtMax)
+    .optional(),
+};
+
 export const AskSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("confirm"),
     prompt: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
+    ...lookedAtField,
   }),
   z.object({
     mode: z.literal("choose"),
@@ -413,6 +460,7 @@ export const AskSchema = z.discriminatedUnion("mode", [
       }),
     /** Offer "Other…" — a free-text answer instead of one of the options. */
     allowOther: z.boolean().optional(),
+    ...lookedAtField,
   }),
   z.object({
     mode: z.literal("form"),
@@ -422,6 +470,7 @@ export const AskSchema = z.discriminatedUnion("mode", [
       message:
         "a form ask needs at least one answerable field (credential fields are dropped — ask for a secret with mode 'provide', kind 'secret')",
     }),
+    ...lookedAtField,
   }),
   z.object({
     mode: z.literal("act"),
@@ -431,10 +480,12 @@ export const AskSchema = z.discriminatedUnion("mode", [
       .array(z.string().min(1).max(ASK_LIMITS.stepMaxChars))
       .max(ASK_LIMITS.stepsMax)
       .optional(),
+    ...lookedAtField,
   }),
   z.object({
     mode: z.literal("provide"),
     provide: AskProvideSchema,
+    ...lookedAtField,
   }),
 ]);
 export type Ask = z.infer<typeof AskSchema>;
@@ -761,10 +812,15 @@ function canonicalJson(value: unknown): string {
  * the same value the pod computes from the same row. `undefined` members are
  * ignored for the same reason (JSON never carries them). An absent ask is
  * `"none"`. The hash is 53-bit cyrb53 — a change detector, not a MAC.
+ *
+ * `lookedAt` is OUTSIDE the fingerprint: it is provenance, not the question.
+ * The owed read resolves each ref's `title` into it for the viewer, so a client
+ * fingerprinting the ask it READ would otherwise never match the stored one.
  */
 export function askFingerprint(ask: Ask | null | undefined): string {
   if (!ask) return "none";
-  const text = canonicalJson(ask);
+  const { lookedAt: _provenance, ...question } = ask;
+  const text = canonicalJson(question);
   let h1 = 0xdeadbeef;
   let h2 = 0x41c6ce57;
   for (let i = 0; i < text.length; i++) {

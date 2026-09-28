@@ -200,7 +200,9 @@ export interface OwedSlot {
   ref?: OutputRef;
   /**
    * HOW the person can answer (`ExpectedOutput.ask`) — carried so a tray can
-   * quick-answer a confirm / choose in place.
+   * quick-answer a confirm / choose in place. Its `lookedAt` ("what I looked
+   * at") arrives with each ref's `title` resolved through the READER's access
+   * floor; a ref the reader cannot see is dropped (`looked-at.ts`).
    */
   ask?: SlotAsk;
 }
@@ -333,12 +335,19 @@ export async function listOwedSlots(
     .orderBy(owedSlotOrder())
     .limit(limit);
 
-  return rows
+  const slots = rows
     .flatMap((r) => projectOwedSlots(r as OwedRow))
     .sort((a, b) =>
       a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0
     )
     .slice(0, limit);
+  // "What I looked at": names resolved through THIS reader's access floor.
+  // Loaded lazily, and only when some slot carries provenance, so the access
+  // registry stays out of this read's import graph on the common path (and out
+  // of every suite that mocks `@synap/database` around it).
+  if (!slots.some((s) => s.ask?.lookedAt?.length)) return slots;
+  const { resolveLookedAtForReader } = await import("./looked-at.js");
+  return resolveLookedAtForReader(userId, slots);
 }
 
 /**

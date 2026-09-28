@@ -47,6 +47,7 @@ import {
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { assertViewAccess } from "../../routers/views.js";
 import { isHttpUrl } from "@synap/shared-utils";
+import { ASK_LOOKED_AT_KINDS } from "@synap-core/types/ask";
 import type { SessionArtifactKind } from "./record-session-artifact.js";
 import type { ExpectedOutput } from "@synap/playbooks";
 // ONE uuid shape floor for the session services — this file had its own copy.
@@ -173,24 +174,54 @@ export async function isOutputRefVisible(params: {
  * this floor uses; it is re-checked here anyway so a caller reaching the service
  * directly — the proposal executor re-applying an approved patch, above all —
  * cannot bypass the parse.
+ *
+ * THE SAME FLOOR for an ask's "what I looked at" (`ask.lookedAt`): each cited
+ * object is a pointer the owed read resolves a NAME for, so an unfloored one
+ * is the same read oracle one field over. Every door that declares an ask
+ * (update, create, block, a room question) reaches this function, so the
+ * provenance is floored BY EXISTING, never per door.
  */
 export async function findUnreachableOutputRefs(params: {
   userId: string;
-  outputs: ReadonlyArray<Pick<ExpectedOutput, "label" | "ref">>;
+  outputs: ReadonlyArray<Pick<ExpectedOutput, "label" | "ref" | "ask">>;
 }): Promise<string[]> {
   const bad: string[] = [];
   for (const slot of params.outputs) {
     const ref = slot?.ref;
-    if (!ref) continue;
-    const visible =
-      "url" in ref
-        ? isHttpUrl(ref.url)
-        : await isOutputRefVisible({
-            userId: params.userId,
-            kind: ref.kind,
-            refId: ref.id,
-          });
-    if (!visible) bad.push(slot.label);
+    if (ref) {
+      const visible =
+        "url" in ref
+          ? isHttpUrl(ref.url)
+          : await isOutputRefVisible({
+              userId: params.userId,
+              kind: ref.kind,
+              refId: ref.id,
+            });
+      if (!visible) bad.push(slot.label);
+    }
+    // Not every caller parsed the ask (the service is reached directly by the
+    // proposal executor), so a malformed list is read defensively — and a
+    // malformed ENTRY is unreachable, never skipped.
+    const lookedAt: unknown[] = Array.isArray(slot?.ask?.lookedAt)
+      ? slot!.ask!.lookedAt!
+      : [];
+    for (const raw of lookedAt) {
+      const seen = raw as { kind?: unknown; id?: unknown } | null;
+      const visible =
+        !!seen &&
+        typeof seen.kind === "string" &&
+        (ASK_LOOKED_AT_KINDS as readonly string[]).includes(seen.kind) &&
+        typeof seen.id === "string" &&
+        (await isOutputRefVisible({
+          userId: params.userId,
+          kind: seen.kind as SessionArtifactKind,
+          refId: seen.id,
+        }));
+      if (!visible) {
+        bad.push(`${slot.label} (what I looked at)`);
+        break;
+      }
+    }
   }
   return bad;
 }
