@@ -337,7 +337,7 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
     expect(await ruleCount()).toBe(2);
   });
 
-  it("a do+tell receipt (pod default) offers just-do-it; a receipt under the person's own rule is already there", async () => {
+  it("receipts read their rung (do+tell under the default, quiet under an own rule) but offer nothing in V1", async () => {
     const classRow = await insertRule({
       targetPattern: REVERSIBLE_CLASS_PATTERN,
       verdict: "auto",
@@ -363,15 +363,18 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
     });
     const byId = new Map(rungs.map((r) => [r.proposalId, r]));
     expect(byId.get(underDefault)!.rung).toBe("do_tell");
-    expect(byId.get(underDefault)!.offer?.to).toBe("quiet");
-    expect(byId.get(underDefault)!.rule?.targetProfile).toBe("note");
+    expect(byId.get(underDefault)!.offer).toBeNull();
     expect(byId.get(underOwnRule)!.rung).toBe("quiet");
     expect(byId.get(underOwnRule)!.offer).toBeNull();
 
-    const result = await caller(OWNER).proposeNextRung({
-      itemRef: { kind: "proposal", id: underDefault },
-    });
-    expect(result.outcome).toBe("created");
+    // do_tell → quiet is DEFERRED: the door refuses and writes nothing.
+    const before = await ruleCount();
+    await expect(
+      caller(OWNER).proposeNextRung({
+        itemRef: { kind: "proposal", id: underDefault },
+      })
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(await ruleCount()).toBe(before);
   });
 });
 

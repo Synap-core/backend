@@ -26,17 +26,19 @@
  * agent keeping its own session record, attention `history`) sits on NO rung:
  * it is not work done for the person.
  *
- * ## The next rung is a grant — and ask → propose is not grantable yet
+ * ## The next rung is a grant — only propose → do_tell in V1
  *
  * {@link NEXT_RUNG_VIA} says which config expresses each step. propose →
- * do_tell and do_tell → quiet are both the SAME config: the narrowest
- * agent-scoped `auto` row in `governance_rules` ({@link nextRungRuleDraft}),
- * resolved at rung 2.8 of the ONE engine (`decideAgentPolicy`). From a pending
- * card it lets the next one act (with Undo); from a do+tell receipt it turns
- * the default's permission into the person's own named rule in Settings.
- * ask → propose has NO stored config ("stop asking me this" — a param slot
- * could pin its param on a playbook/track; not built), so {@link nextRung}
- * offers nothing there rather than a button that does nothing.
+ * do_tell is the narrowest agent-scoped `auto` row in `governance_rules`
+ * ({@link nextRungRuleDraft}), resolved at rung 2.8 of the ONE engine
+ * (`decideAgentPolicy`): the next write of that kind acts, with Undo in
+ * Activity. That is the ceiling of an OFFER in V1 (team-lead decision
+ * 2026-09-28): do_tell → quiet is DEFERRED (it is the next ladder step to put
+ * to the founder), and ask → propose has NO stored config ("stop asking me
+ * this" — a param slot could pin its param on a playbook/track; not built).
+ * {@link nextRung} offers nothing there rather than a button that does
+ * nothing. The `quiet` RUNG is still READ (a receipt under the person's own
+ * rule sits on it); only the offer to climb to it is withheld.
  *
  * ## Why the floors are an INPUT here, not a list
  *
@@ -149,7 +151,8 @@ export type NextRungVia = "governance_rule";
 export const NEXT_RUNG_VIA = {
   ask: null,
   propose: "governance_rule",
-  do_tell: "governance_rule",
+  // DEFERRED for V1 (team-lead, 2026-09-28): the offer ceiling is do_tell.
+  do_tell: null,
   quiet: null,
 } as const satisfies Record<TrustRung, NextRungVia | null>;
 
@@ -247,8 +250,8 @@ export interface NextRungOffer {
  * expresses the step yet ({@link NEXT_RUNG_VIA}); or the grant could never
  * fire / must never be offered:
  *   - a proposal the person REJECTED, withdrawn, expired or failed — a "no"
- *     is not a reason to trust more (propose is offered from `pending` and
- *     `approved` only; do+tell from the `auto_approved` receipt itself);
+ *     is not a reason to trust more (offered from `pending` and `approved`
+ *     only);
  *   - no acting agent;
  *   - the write is not reversible (or reversibility is unknown);
  *   - a floor routed it ({@link ruleCanReachReason}).
@@ -259,15 +262,10 @@ export function nextRung(input: NextRungInput): NextRungOffer | null {
   const to = rungAbove(from);
   const via = NEXT_RUNG_VIA[from];
   if (!to || !via) return null;
-  // `via === "governance_rule"` ⇒ the item is a proposal (a slot is `ask`).
+  // `via === "governance_rule"` ⇒ the item is a proposal (only `propose` has it).
   if (input.item.kind !== "proposal") return null;
   const status = input.item.status ?? "";
-  if (
-    from === "propose"
-      ? status !== "pending" && status !== "approved"
-      : status !== "auto_approved"
-  )
-    return null;
+  if (status !== "pending" && status !== "approved") return null;
   if (!input.agentUserId) return null;
   if (input.reversible !== true) return null;
   if (!ruleCanReachReason(input.governanceReason)) return null;

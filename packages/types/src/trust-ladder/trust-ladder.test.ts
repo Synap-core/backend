@@ -132,22 +132,19 @@ describe("nextRung", () => {
     }
   });
 
-  it("a do+tell receipt offers just-do-it through the same narrowest rule", () => {
-    const receipt = pending({
-      item: {
-        kind: "proposal",
-        status: "auto_approved",
-        proposalType: "entity.create",
-        targetType: "entity",
-      },
-    });
-    expect(nextRung(receipt)).toEqual({
-      from: "do_tell",
-      to: "quiet",
-      via: "governance_rule",
-    });
-    expect(nextRung({ ...receipt, reversible: false })).toBeNull();
-    expect(nextRung({ ...receipt, agentUserId: null })).toBeNull();
+  it("do+tell is the V1 offer ceiling: a do+tell receipt offers nothing (quiet deferred)", () => {
+    expect(
+      nextRung(
+        pending({
+          item: {
+            kind: "proposal",
+            status: "auto_approved",
+            proposalType: "entity.create",
+            targetType: "entity",
+          },
+        })
+      )
+    ).toBeNull();
   });
 
   it("offers nothing where no config expresses the step (ask → propose), at the top, or on bookkeeping", () => {
@@ -180,7 +177,7 @@ describe("nextRung", () => {
     expect(NEXT_RUNG_VIA).toEqual({
       ask: null,
       propose: "governance_rule",
-      do_tell: "governance_rule",
+      do_tell: null,
       quiet: null,
     });
   });
