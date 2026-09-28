@@ -67,7 +67,7 @@ export function toSpaceCandidate(
   // THE reader — malformed parts read as absent.
   const brief = readSpaceBrief(row.settings);
   const collect = (brief?.collect ?? []).map((c) => c.profileSlug);
-  const purpose = spacePurposeLine(row.description, brief);
+  const purpose = spacePurposeLine(row.description, row.settings);
   const persona = oneLine(brief?.framing, SPACE_PERSONA_LINE_CAP);
   return {
     workspaceId: row.id,
@@ -193,10 +193,7 @@ export async function suggestSpacesForKinds(
       matches: top.flatMap(([id, kinds]) => {
         const row = rowById.get(id);
         if (!row) return [];
-        const purpose = spacePurposeLine(
-          row.description,
-          readSpaceBrief(row.settings)
-        );
+        const purpose = spacePurposeLine(row.description, row.settings);
         return [
           {
             workspaceId: id,

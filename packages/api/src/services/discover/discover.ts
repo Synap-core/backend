@@ -755,7 +755,7 @@ export async function discover(
           // for zero information and read like an authored description (9 of
           // 14 live workspaces said "Domain: personal"); both full and light
           // now emit `description` only when there is a real one.
-          const authored = resolveSpacePurpose(w.description, onboarding);
+          const authored = resolveSpacePurpose(w.description, settings);
           const purpose = authored;
           const out: DiscoverWorkspace = {
             id: w.id,
@@ -789,7 +789,7 @@ export async function discover(
             // hand a `Domain: x` placeholder back as the description here.
             out.description = purpose ?? null;
           } else {
-            const purposeLine = spacePurposeLine(w.description, onboarding);
+            const purposeLine = spacePurposeLine(w.description, settings);
             if (purposeLine) out.description = purposeLine;
           }
           if (detail === "full") {

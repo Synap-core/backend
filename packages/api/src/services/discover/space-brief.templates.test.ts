@@ -185,9 +185,8 @@ describe("built brief — measured from the real templates", () => {
   it("Brand Library: the W3 fields arrive; the playbook list goes before them", async () => {
     const t = all.find((x) => x.slug === "brand-library")!;
     const brief = await build(t);
-    const o = t.onboarding as { purpose: string };
-    // The brief's steady-state purpose, not the workspace description.
-    const flat = o.purpose.replace(/\s+/g, " ").trim();
+    // ONE ladder: the authored description (the template's own) wins.
+    const flat = t.description!.replace(/\s+/g, " ").trim();
     expect(brief.purpose).toBe(
       flat.length > BRIEF_PROSE_CAP
         ? `${flat.slice(0, BRIEF_PROSE_CAP - 1)}…`

@@ -32,9 +32,9 @@ import {
   isNotNull,
 } from "@synap/database";
 import {
-  briefPurpose,
-  normalizeSpaceBrief,
   readSpaceBrief,
+  resolveAuthoredDescription,
+  resolveSpacePurpose as resolveSpacePurposeLeaf,
 } from "@synap-core/types/space-brief";
 import type { HubProtocolCaller } from "../../routers/hub-protocol/rest/_shared.js";
 import { resolveProfileDescription } from "../../utils/profile-presentation.js";
@@ -91,11 +91,7 @@ export interface SpaceBriefKind {
 export interface BuiltSpaceBrief {
   workspaceId: string;
   name: string;
-  /**
-   * The brief's steady-state `purpose` (what an agent entering the space is
-   * told every time), else the authored description, else the onboarding
-   * goal. Lists of spaces keep the row ladder (`resolveSpacePurpose`).
-   */
+  /** `resolveSpacePurpose` — the ONE ladder every door uses. */
   purpose?: string;
   /** `onboarding.framing` — the voice/expertise to adopt here. */
   persona?: string;
@@ -146,38 +142,23 @@ function lines(value: unknown, cap: number): string[] | undefined {
 }
 
 /**
- * A description that is a rendering of another field, never an authored
- * purpose: "Domain: personal" was written into 9 of 14 live workspaces.
+ * The authored-description check and THE purpose ladder live in the leaf
+ * (`@synap-core/types/space-brief`) so the browser and relay apply the same
+ * rule: authored description (never a `Domain: x` placeholder) >
+ * brief.purpose > onboarding.goal. Re-exported here for the pod's callers.
  */
-const PLACEHOLDER_DESCRIPTION = /^\s*domain:\s*\S+\s*$/i;
+export { resolveAuthoredDescription };
 
 /**
- * A workspace's AUTHORED description — trimmed, and null for empty or
- * placeholder text. The one rule orient, the brief and diagnose apply.
- */
-export function resolveAuthoredDescription(
-  description: unknown
-): string | null {
-  if (typeof description !== "string") return null;
-  const t = description.trim();
-  return t && !PLACEHOLDER_DESCRIPTION.test(t) ? t : null;
-}
-
-/**
- * A space's REAL purpose: its authored description, else the brief's purpose
- * (steady-state `purpose`, else interview `goal` — `briefPurpose`) — never a
- * rendering of another field. `onboarding` is the RAW stored brief; it is
- * read through the one normalizer.
+ * THE purpose ladder — a thin call into the leaf. Every pod door that says
+ * what a space is for goes through this (tripwire:
+ * `__tripwires__/space-purpose-one-ladder.test.ts`).
  */
 export function resolveSpacePurpose(
   description: unknown,
-  onboarding: unknown
+  settings: unknown
 ): string | null {
-  return (
-    resolveAuthoredDescription(description) ||
-    briefPurpose(normalizeSpaceBrief(onboarding)) ||
-    null
-  );
+  return resolveSpacePurposeLeaf({ description, settings });
 }
 
 /** One-line cap for a space's purpose in a LIST of spaces (orient light, find). */
@@ -190,10 +171,10 @@ export const SPACE_PURPOSE_LINE_CAP = 120;
  */
 export function spacePurposeLine(
   description: unknown,
-  onboarding: unknown
+  settings: unknown
 ): string | undefined {
   return line(
-    resolveSpacePurpose(description, onboarding),
+    resolveSpacePurpose(description, settings),
     SPACE_PURPOSE_LINE_CAP
   );
 }
@@ -542,11 +523,7 @@ export async function buildSpaceBrief(p: {
   ]);
 
   const purpose = line(
-    stored.purpose ??
-      resolveSpacePurpose(
-        row.description,
-        (row.settings as { onboarding?: unknown } | null)?.onboarding
-      ),
+    resolveSpacePurpose(row.description, row.settings),
     BRIEF_PROSE_CAP
   );
   const persona = line(stored.framing, BRIEF_PROSE_CAP);

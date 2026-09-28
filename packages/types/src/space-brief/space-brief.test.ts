@@ -9,6 +9,8 @@ import {
   diffSpaceBrief,
   isInterviewBrief,
   readSpaceBrief,
+  resolveAuthoredDescription,
+  resolveSpacePurpose,
   type SpaceBrief,
 } from "./index.js";
 
@@ -162,3 +164,30 @@ describe("applySpaceBriefPatch / diffSpaceBrief", () => {
     ).toEqual([]);
   });
 });
+
+describe("resolveSpacePurpose — THE purpose ladder", () => {
+  // Rows chosen where the candidate orders DISAGREE (description vs purpose
+  // vs goal), so each rules one alternative out.
+  const cases: Array<[unknown, unknown, string | null]> = [
+    ["Authored.", { onboarding: { purpose: "P", goal: "G" } }, "Authored."],
+    ["  Domain: personal ", { onboarding: { purpose: "P", goal: "G" } }, "P"],
+    [null, { onboarding: { purpose: "P", goal: "G" } }, "P"],
+    [undefined, { onboarding: { goal: "G" } }, "G"],
+    ["   ", { onboarding: { purpose: "   ", goal: "G" } }, "G"],
+    [42, null, null],
+  ];
+  for (const [description, settings, want] of cases) {
+    it(`${JSON.stringify(description)} + ${JSON.stringify(settings)} → ${want}`, () => {
+      expect(resolveSpacePurpose({ description, settings })).toBe(want);
+    });
+  }
+
+  it("the placeholder check is the description's only filter", () => {
+    expect(resolveAuthoredDescription(" Real ")).toBe("Real");
+    expect(resolveAuthoredDescription("domain: crm")).toBeNull();
+    expect(resolveAuthoredDescription("Domain: the CRM space")).toBe(
+      "Domain: the CRM space"
+    );
+  });
+});
+

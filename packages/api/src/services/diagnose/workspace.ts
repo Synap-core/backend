@@ -37,11 +37,14 @@
  * SAYS so rather than shipping a quadratic scan.
  */
 
-import { briefPurpose, readSpaceBrief } from "@synap-core/types/space-brief";
+import { readSpaceBrief } from "@synap-core/types/space-brief";
 import { db, and, eq, workspaces } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { loadEntityUsage } from "../discover/usage-aggregate.js";
-import { resolveAuthoredDescription } from "../discover/space-brief.js";
+import {
+  resolveAuthoredDescription,
+  resolveSpacePurpose,
+} from "../discover/space-brief.js";
 import type { ClassReport, ObjectReport } from "./types.js";
 
 /** Beyond this many workspaces the in-memory pairwise pass is skipped. */
@@ -390,7 +393,8 @@ async function loadLandscape(
       workspaceType: w.workspaceType ?? null,
       description: desc,
       onboardingGoal: brief?.goal ?? null,
-      hasOnboarding: briefPurpose(brief) !== null,
+      // The brief half of THE purpose ladder (no description passed).
+      hasOnboarding: resolveSpacePurpose(null, settings) !== null,
       entityCount: bucket?.count ?? 0,
       profileSlugs: [...(bucket?.slugs ?? [])].sort(),
       lastActivityAt: bucket?.last ? bucket.last.toISOString() : null,

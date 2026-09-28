@@ -424,6 +424,8 @@ describe("buildSpaceBrief", () => {
     }));
     const brief = await build({
       ...brandLibrary,
+      // No authored description, so the ladder reaches brief.purpose.
+      description: null,
       settings: {
         onboarding: {
           purpose: prose(230),
@@ -450,7 +452,7 @@ describe("buildSpaceBrief", () => {
     expect(kinds.every((k) => k.description?.length === 90)).toBe(true);
   });
 
-  it("W3 steady-state fields arrive: purpose outranks the description, anchors, rule keys", async () => {
+  it("W3 steady-state fields arrive: anchors, rule keys; the authored description outranks brief.purpose", async () => {
     const brief = await build({
       ...brandLibrary,
       settings: {
@@ -467,7 +469,8 @@ describe("buildSpaceBrief", () => {
         },
       },
     });
-    expect(brief.purpose).toBe("Read the brand before generating anything.");
+    // ONE ladder: the user's authored description wins over brief.purpose.
+    expect(brief.purpose).toBe(brandLibrary.description);
     expect(brief.anchors).toEqual({
       root: { kind: "brand-identity", entityId: "e1" },
       context: ["brand-rule"],
@@ -488,16 +491,24 @@ describe("buildSpaceBrief", () => {
 
 describe("resolveSpacePurpose — one rule for orient, the brief and diagnose", () => {
   it("prefers an authored description, skips a `Domain: x` placeholder, falls back to the goal", () => {
-    expect(resolveSpacePurpose("  Real purpose. ", { goal: "g" })).toBe(
+    expect(
+      resolveSpacePurpose("  Real purpose. ", { onboarding: { goal: "g" } })
+    ).toBe(
       "Real purpose."
     );
-    expect(resolveSpacePurpose("Domain: personal", { goal: "The goal." })).toBe(
+    expect(
+      resolveSpacePurpose("Domain: personal", {
+        onboarding: { goal: "The goal." },
+      })
+    ).toBe(
       "The goal."
     );
     expect(resolveSpacePurpose(null, undefined)).toBeNull();
     // The brief's steady-state purpose precedes the interview goal.
     expect(
-      resolveSpacePurpose(null, { purpose: " The purpose. ", goal: "g" })
+      resolveSpacePurpose(null, {
+        onboarding: { purpose: " The purpose. ", goal: "g" },
+      })
     ).toBe("The purpose.");
   });
 });

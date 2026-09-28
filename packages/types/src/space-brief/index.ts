@@ -351,14 +351,54 @@ export function isInterviewBrief(
 }
 
 /**
- * A space's purpose for an agent: the brief's steady-state `purpose`, else its
- * interview `goal`. (The workspace's authored DESCRIPTION outranks both — that
- * ladder lives with the row reader, `resolveSpacePurpose`.)
+ * The brief half of the purpose ladder: steady-state `purpose`, else the
+ * interview `goal`. Callers that say what a SPACE is for use
+ * `resolveSpacePurpose` (the authored description outranks both).
  */
 export function briefPurpose(
   brief: SpaceBrief | null | undefined
 ): string | null {
   return brief?.purpose ?? brief?.goal ?? null;
+}
+
+/**
+ * A description that is a rendering of another field, never an authored
+ * purpose: "Domain: personal" was written into 9 of 14 live workspaces.
+ */
+const PLACEHOLDER_DESCRIPTION = /^\s*domain:\s*\S+\s*$/i;
+
+/**
+ * A workspace's AUTHORED description — trimmed; `null` for empty, non-string
+ * or placeholder text (`Domain: x`).
+ */
+export function resolveAuthoredDescription(
+  description: unknown
+): string | null {
+  if (typeof description !== "string") return null;
+  const t = description.trim();
+  return t && !PLACEHOLDER_DESCRIPTION.test(t) ? t : null;
+}
+
+/**
+ * THE purpose ladder — one rule for every surface that says what a space is
+ * for (pod: pinned brief, orient, find, ask, diagnose; browser; relay):
+ *
+ *   1. the workspace's AUTHORED description (the user's own words, never a
+ *      `Domain: x` placeholder) — it persists, so it wins;
+ *   2. the brief's steady-state `purpose`;
+ *   3. the brief's interview `goal`.
+ *
+ * `settings` is the workspace's settings; the brief is read through THE
+ * reader. Returns `null` when the space states no purpose.
+ */
+export function resolveSpacePurpose(input: {
+  description?: unknown;
+  settings?: unknown;
+}): string | null {
+  return (
+    resolveAuthoredDescription(input.description) ??
+    briefPurpose(readSpaceBrief(input.settings))
+  );
 }
 
 // ─── Editing: the narrow patch the `update_brief` door applies ───────────────
