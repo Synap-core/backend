@@ -33057,6 +33057,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind?: "run" | "all" | "receipt" | "work" | undefined;
 				unfiled?: boolean | undefined;
 				includeTrackedRuns?: boolean | undefined;
+				trackId?: string | undefined;
 				order?: "started" | "open_first" | undefined;
 				playbookId?: string | undefined;
 				automationId?: string | undefined;
@@ -33119,6 +33120,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind?: "run" | "all" | "receipt" | "work" | undefined;
 				q?: string | undefined;
 				unfiled?: boolean | undefined;
+				includeTrackedRuns?: boolean | undefined;
+				trackId?: string | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -35556,6 +35559,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				actor?: string | undefined;
 				projectId?: string | undefined;
+				trackId?: string | undefined;
 				workspaceId?: string | null | undefined;
 				outcome?: "running" | "failed" | "proposed" | "reverted" | "rejected" | "succeeded" | "waiting" | "stopped" | undefined;
 				source?: "session" | "run" | "proposal" | "decision" | undefined;
