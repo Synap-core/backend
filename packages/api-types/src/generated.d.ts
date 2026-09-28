@@ -32780,6 +32780,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stale?: string | undefined;
 					closed?: string | undefined;
 				} | undefined;
+				settledSince?: string | undefined;
 				limit?: number | undefined;
 				edges?: boolean | undefined;
 				nextMove?: boolean | undefined;
@@ -32845,6 +32846,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stale?: string | undefined;
 					closed?: string | undefined;
 				} | undefined;
+				settledSince?: string | undefined;
 				lens?: "default" | "all" | "triage" | undefined;
 				kind?: "run" | "all" | "receipt" | "work" | undefined;
 				q?: string | undefined;
