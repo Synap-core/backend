@@ -1,9 +1,10 @@
 /**
  * `findByIntent` — the discovery door.
  *
- * WHAT IS MOCKED, AND WHY ONLY THAT. Exactly two I/O boundaries are stubbed:
- * `listCapabilities` (6 SQL round trips) and `matchSessionTemplate` (a 7th).
- * Everything between the wire rows and the wire answer is the REAL code —
+ * WHAT IS MOCKED, AND WHY ONLY THAT. Three I/O boundaries are stubbed:
+ * `listCapabilities` (6 SQL round trips), `matchSessionTemplate` (a 7th), and
+ * `queryCatalogCache` (the marketplace read — it hits the DB). Everything
+ * between the wire rows and the wire answer is the REAL code —
  * `projectRunnableActions`, `runPosture`, `rankByTerms`, `foldVerbsByIntent`.
  * That is deliberate: the defect this door exists to prevent is a field that is
  * declared but never populated, and a test that hand-builds the output
@@ -22,6 +23,7 @@ import { TEMPLATE_OPT_OUT } from "../focus-sessions/match-session-template.js";
 
 const listCapabilities = vi.fn();
 const matchSessionTemplate = vi.fn();
+const queryCatalogCache = vi.fn();
 const listIntentSlugs = vi.fn(async () => [
   "search_external",
   "find_people",
@@ -47,6 +49,9 @@ vi.mock("./intent-registry.js", () => ({
 vi.mock("../focus-sessions/match-session-template.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   matchSessionTemplate: (...a: unknown[]) => matchSessionTemplate(...a),
+}));
+vi.mock("./catalog-cache-query.js", () => ({
+  queryCatalogCache: (...a: unknown[]) => queryCatalogCache(...a),
 }));
 
 const { findByIntent } = await import("./find-intent.js");
@@ -137,6 +142,7 @@ const NO_PLAYBOOKS = { candidates: [], optOut: TEMPLATE_OPT_OUT };
 beforeEach(() => {
   listCapabilities.mockReset().mockResolvedValue(CATALOG);
   matchSessionTemplate.mockReset().mockResolvedValue(NO_PLAYBOOKS);
+  queryCatalogCache.mockReset().mockResolvedValue([]);
 });
 
 const lens = { workspaceId: null, userId: "u1" };
@@ -313,6 +319,99 @@ describe("findByIntent — a miss is never bare emptiness", () => {
     expect(r.capabilities!.matches).toEqual([]);
     expect(r.playbooks!.candidates).toHaveLength(1);
     expect(r.noConfidentMatch).toBeUndefined();
+  });
+});
+
+describe("findByIntent — an unserved intent offers marketplace packages", () => {
+  it("an intent match with no verbs attaches up to 3 marketplace packages", async () => {
+    queryCatalogCache.mockResolvedValue([
+      {
+        slug: "web-read",
+        kind: "capability",
+        name: "Web read",
+        description: "Read a public page",
+        version: "1.2.0",
+        tier: "free",
+        vendor: "synap",
+      },
+      {
+        slug: "postiz",
+        kind: "capability",
+        name: "Postiz",
+        description: null,
+      },
+      {
+        slug: "buffer",
+        kind: "capability",
+        name: "Buffer",
+        description: "Queue a post",
+      },
+      {
+        slug: "fourth",
+        kind: "capability",
+        name: "Fourth",
+        description: "must be dropped",
+      },
+    ]);
+
+    const r = await findByIntent({ intent: "capture into pod", ...lens });
+
+    const capture = r.intents!.matches.find(
+      (m) => m.intent === "capture_into_pod"
+    )!;
+    expect(capture).toBeDefined();
+    expect(capture.verbs).toEqual([]);
+    expect(queryCatalogCache).toHaveBeenCalledTimes(1);
+    expect(queryCatalogCache).toHaveBeenCalledWith({
+      query: "capture into pod capture_into_pod",
+      kind: "capability",
+      limit: 3,
+    });
+    // The VALUE arrives, and only the install fields — version/tier/vendor
+    // are catalog noise, and the fourth row is past the cap.
+    expect(r.marketplace).toEqual({
+      matches: [
+        {
+          slug: "web-read",
+          name: "Web read",
+          description: "Read a public page",
+          kind: "capability",
+        },
+        {
+          slug: "postiz",
+          name: "Postiz",
+          description: null,
+          kind: "capability",
+        },
+        {
+          slug: "buffer",
+          name: "Buffer",
+          description: "Queue a post",
+          kind: "capability",
+        },
+      ],
+    });
+  });
+
+  it("a thrown catalog read sets marketplace.error and still returns the intent", async () => {
+    queryCatalogCache.mockRejectedValue(new Error("catalog down"));
+
+    const r = await findByIntent({ intent: "capture into pod", ...lens });
+
+    expect(
+      r.intents!.matches.find((m) => m.intent === "capture_into_pod")!.verbs
+    ).toEqual([]);
+    expect(r.marketplace).toEqual({ error: "catalog down" });
+    expect(r.noConfidentMatch).toBeUndefined();
+  });
+
+  it("a fully covered intent that already has verbs does not search the marketplace", async () => {
+    const r = await findByIntent({ intent: "send a message", ...lens });
+    expect(r.intents!.matches[0]!.intent).toBe("send_message");
+    expect(r.intents!.matches[0]!.verbs.length).toBeGreaterThan(0);
+    expect(r.intents!.matches[0]!.termCoverage).toEqual({ hit: 2, of: 2 });
+    expect("marketplace" in r).toBe(false);
+    expect(queryCatalogCache).not.toHaveBeenCalled();
   });
 });
 

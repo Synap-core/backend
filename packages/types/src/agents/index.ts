@@ -216,21 +216,36 @@ export function resolveAgentMark(
   const active = row?.activeKeys ?? 0;
   const pending = row?.pendingKeys ?? 0;
   const canDisconnect =
-    !!row && !row.builtIn && active + pending > 0 && row.viewerCanDisconnect !== false;
+    !!row &&
+    !row.builtIn &&
+    active + pending > 0 &&
+    row.viewerCanDisconnect !== false;
   const approveUrl = (pending > 0 && row?.approveUrl) || null;
   const mark = (
     kind: AgentMarkKind,
     tone: AgentMarkTone,
     label: string | null,
     seenAt: string | null = null
-  ): AgentMark => ({ kind, tone, label, seenAt, host, canDisconnect, approveUrl });
+  ): AgentMark => ({
+    kind,
+    tone,
+    label,
+    seenAt,
+    host,
+    canDisconnect,
+    approveUrl,
+  });
 
   if (!row) return mark("unmeasured", "neutral", null);
-  if (row.builtIn) return { ...mark("builtIn", "neutral", "Built-in"), host: null };
+  if (row.builtIn)
+    return { ...mark("builtIn", "neutral", "Built-in"), host: null };
   const connection = resolveAgentConnection([row]);
-  if (connection.kind === "unmeasured") return mark("unmeasured", "neutral", null);
+  if (connection.kind === "unmeasured")
+    return mark("unmeasured", "neutral", null);
   const seenAt =
-    connection.kind === "seen" ? connection.agent.lastSeenAt.toISOString() : null;
+    connection.kind === "seen"
+      ? connection.agent.lastSeenAt.toISOString()
+      : null;
 
   if (active === 0 && pending > 0) {
     return mark("approve", "warning", "Key awaiting your approval", seenAt);
@@ -262,8 +277,84 @@ export function agentMarkText(
   if (!mark.seenAt) return mark.label;
   const rel = relativeSeen(mark.seenAt);
   if (!rel) return mark.label;
-  if (mark.kind === "seen" || mark.kind === "stale") return `${mark.label} ${rel}`;
+  if (mark.kind === "seen" || mark.kind === "stale")
+    return `${mark.label} ${rel}`;
   return `${mark.label} · seen ${rel}`;
+}
+
+// ---------------------------------------------------------------------------
+// Agent DIRECTION — whose agent is this: one the person brought to the pod
+// (`external`), or the pod's own intelligence (`house`: the twin, the capture
+// and form agents, Intelligence Service personas).
+//
+// WHY. `builtIn` answers a different question ("would a key-based mark lie
+// about it?") and is false for an IS persona, because the registry mints it a
+// hub key — so every persona listed among "your agents". Direction is decided
+// from ORIGIN alone, never from keys, and the pod computes it once
+// (`agentUsers.list` → `direction`) so every surface reads the same value.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every value `users.created_via` may hold for an agent. The database column
+ * is typed with its own copy of this union (`@synap/database` does not depend
+ * on this package), and `agent-users.ts` holds a compile-time equality floor
+ * between the two — so a new writer value fails the build until it is added
+ * here, and adding it here fails the build until {@link AGENT_DIRECTION_BY_ORIGIN}
+ * classifies it.
+ */
+export const AGENT_ORIGINS = [
+  "cli",
+  "ui",
+  "system",
+  "intelligence-service",
+] as const;
+export type AgentOrigin = (typeof AGENT_ORIGINS)[number];
+
+export type AgentDirection = "external" | "house";
+
+/**
+ * Every origin, classified. `satisfies Record<AgentOrigin, …>` is the coverage
+ * floor: an unclassified origin is a missing key, and the build stops.
+ *  - `cli`  — a person ran `synap init` for their own agent;
+ *  - `ui`   — a person made or activated it from the app (an add-on agent);
+ *  - `system` — the pod made it for itself (twin, capture, form agents);
+ *  - `intelligence-service` — an IS persona the pod runs.
+ */
+export const AGENT_DIRECTION_BY_ORIGIN = {
+  cli: "external",
+  ui: "external",
+  system: "house",
+  "intelligence-service": "house",
+} as const satisfies Record<AgentOrigin, AgentDirection>;
+
+/** The slice of an agent row the direction reads. */
+export interface AgentDirectionInput {
+  /** `users.created_via` (`agentUsers.list` → `origin`). */
+  origin: string | null | undefined;
+  isPersonalAgent?: boolean | null;
+}
+
+/**
+ * The ONE direction rule:
+ *  1. a personal agent (the twin) is the pod's own, whatever its origin says;
+ *  2. a known origin → its classification;
+ *  3. no origin (an agent older than migration 0225 that 0285 did not
+ *     backfill) or an origin this build does not know → `external`. Hiding a
+ *     person's connected agent under "the pod's own" is the worse error, so the
+ *     unknown case is shown as theirs — the same stance `builtIn` takes on NULL.
+ */
+export function resolveAgentDirection(
+  row: AgentDirectionInput
+): AgentDirection {
+  if (row.isPersonalAgent === true) return "house";
+  const origin = row.origin;
+  if (
+    origin != null &&
+    Object.prototype.hasOwnProperty.call(AGENT_DIRECTION_BY_ORIGIN, origin)
+  ) {
+    return AGENT_DIRECTION_BY_ORIGIN[origin as AgentOrigin];
+  }
+  return "external";
 }
 
 // ---------------------------------------------------------------------------

@@ -55,6 +55,7 @@ import {
   listOutputsForSessions,
 } from "../services/focus-sessions/session-outputs.js";
 import { attachLastAgentActivity } from "../services/focus-sessions/agent-activity.js";
+import { sessionSettledAtSql } from "../services/focus-sessions/session-status-filter.js";
 import {
   LANDED_SESSION_STATUSES,
   LANDED_SINCE_MAX,
@@ -532,6 +533,12 @@ export const focusSessionsRouter = router({
          * rendered of 19 qualifying. See `session-status-filter.ts`.
          */
         statusSince: statusSinceSchema,
+        /**
+         * NARROW to sessions settled at or after this instant
+         * (`coalesce(closed_at, updated_at) >= settledSince`) — the Landed
+         * band's "Show all". `statusSince` WIDENS and cannot say this.
+         */
+        settledSince: z.string().datetime({ offset: true }).optional(),
         limit: z.number().int().min(1).max(50).default(20),
         /**
          * Also project the dependency edges for the page. TWO kinds, on the
@@ -630,6 +637,7 @@ export const focusSessionsRouter = router({
             automationId: input.automationId,
           },
           statusSince: input.statusSince,
+          settledSince: input.settledSince,
           unfiled: input.unfiled,
           includeTrackedRuns: input.includeTrackedRuns,
           // Shared sessions (human roster of the room) list too — decision C.
@@ -693,6 +701,12 @@ export const focusSessionsRouter = router({
         projectId: ScopeFilterShape.projectId,
         status: statusFilterSchema,
         statusSince: statusSinceSchema,
+        /**
+         * NARROW to sessions settled at or after this instant
+         * (`coalesce(closed_at, updated_at) >= settledSince`) — the Landed
+         * band's "Show all". `statusSince` WIDENS and cannot say this.
+         */
+        settledSince: z.string().datetime({ offset: true }).optional(),
         lens: sessionLensSchema,
         kind: sessionKindFilterSchema,
         q: z.string().trim().max(200).optional(),
@@ -715,6 +729,7 @@ export const focusSessionsRouter = router({
               lens: input.lens,
               kind: input.kind,
               statusSince: input.statusSince,
+              settledSince: input.settledSince,
               q: input.q,
               unfiled: input.unfiled,
               roster: rosterReadFor(ctx),
@@ -763,7 +778,12 @@ export const focusSessionsRouter = router({
         since: z.string().datetime({ offset: true }),
         workspaceId: ScopeFilterShape.workspaceId,
         projectId: ScopeFilterShape.projectId,
-        limit: z.number().int().min(1).max(LANDED_SINCE_MAX).default(LANDED_SINCE_MAX),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(LANDED_SINCE_MAX)
+          .default(LANDED_SINCE_MAX),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -773,7 +793,7 @@ export const focusSessionsRouter = router({
         ...input,
         workspaceId: input.workspaceId === undefined ? [] : input.workspaceId,
       });
-      const settledAt = drizzleSql`coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt})`;
+      const settledAt = sessionSettledAtSql();
       const rows = await db
         .select()
         .from(focusSessions)
@@ -787,8 +807,9 @@ export const focusSessionsRouter = router({
               kind: "work",
               includeTrackedRuns: true,
               roster: rosterReadFor(ctx),
-            }),
-            drizzleSql`${settledAt} >= ${input.since}::timestamptz`
+              // The SAME narrowing `list`/`browse` take as `settledSince`.
+              settledSince: input.since,
+            })
           )
         )
         .orderBy(desc(settledAt), desc(focusSessions.id))

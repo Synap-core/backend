@@ -275,7 +275,7 @@ export interface ResolvePackageDependenciesResult {
  * Deterministic when several match: prefer a workspace the user owns, then the
  * most recently created. Ambiguity is logged.
  */
-async function findWorkspaceBySubtype(
+export async function findWorkspaceBySubtype(
   slug: string,
   userId: string,
   requireWrite: boolean

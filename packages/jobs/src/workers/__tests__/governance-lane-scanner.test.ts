@@ -179,6 +179,23 @@ describe("computeDominantMotif", () => {
     });
   });
 
+  it("does not double the target when proposalType is already dotted", () => {
+    const rows = [
+      ...makeRows(4, "approved", {
+        targetType: "entity",
+        proposalType: "entity.create",
+      }),
+      ...makeRows(2, "approved", {
+        targetType: "entity",
+        proposalType: "create",
+      }),
+    ];
+    expect(computeDominantMotif(rows)).toEqual({
+      targetType: "entity",
+      targetPattern: "entity.create",
+    });
+  });
+
   it("returns undefined when there are no approved rows", () => {
     const rows = makeRows(10, "rejected");
     expect(computeDominantMotif(rows)).toBeUndefined();

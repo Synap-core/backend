@@ -15,15 +15,30 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockPreflight, mockCheckPermission, mockMaterialize, mockApplyPost } =
-  vi.hoisted(() => ({
-    mockPreflight: vi.fn(),
-    mockCheckPermission: vi.fn(),
-    mockMaterialize: vi.fn(),
-    mockApplyPost: vi.fn(),
-  }));
+const {
+  mockPreflight,
+  mockCheckPermission,
+  mockMaterialize,
+  mockApplyPost,
+  mockComposeTarget,
+} = vi.hoisted(() => ({
+  mockPreflight: vi.fn(),
+  mockCheckPermission: vi.fn(),
+  mockMaterialize: vi.fn(),
+  mockApplyPost: vi.fn(),
+  mockComposeTarget: vi.fn(),
+}));
 
-vi.mock("@synap/database", () => ({
+vi.mock("../../../services/preflight-compose-target.js", () => ({
+  resolvePreflightComposeTarget: (...a: unknown[]) => mockComposeTarget(...a),
+}));
+
+// Partial mock: the route's import graph reaches modules that read real
+// `@synap/database` enums at load time (e.g. `ProposalStatus` in
+// forms/guest-retention.ts) — a bare factory mock failed the whole suite at
+// import, before any assertion ran.
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   preflightWorkspaceFromDefinition: (...a: unknown[]) => mockPreflight(...a),
 }));
 
@@ -129,6 +144,35 @@ describe("POST /packages/apply — LIVE preflight gate", () => {
     expect(res.status).toBe(422);
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockMaterialize).not.toHaveBeenCalled();
+  });
+
+  it("hands the preflight the compose target materialize will reconcile onto (--onto)", async () => {
+    // business-model --onto Foundation: the live 422. The preflight can only
+    // resolve foundation's kinds if it is told WHERE the apply layers.
+    mockComposeTarget.mockResolvedValue({ workspaceId: "ws-foundation" });
+    mockPreflight.mockResolvedValue(conflictReport);
+    await apply(buildApp(), {
+      targetWorkspaceId: "8f894661-db21-4f6d-ba30-5334f7b67bef",
+      dependencies: [{ slug: "foundation", relation: "compose" }],
+      entityLinks: [
+        {
+          sourceProfileSlug: "offer",
+          targetProfileSlug: "audience",
+          type: "rests_on",
+        },
+      ],
+    });
+    expect(mockComposeTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user-1",
+        targetWorkspaceId: "8f894661-db21-4f6d-ba30-5334f7b67bef",
+      })
+    );
+    expect(mockPreflight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        composeTarget: { workspaceId: "ws-foundation" },
+      })
+    );
   });
 
   it("proceeds past the gate when preflight is ok", async () => {

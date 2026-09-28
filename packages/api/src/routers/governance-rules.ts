@@ -332,7 +332,9 @@ export const governanceRulesRouter = router({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId,
-        subjectType: input.subjectType ?? "",
+        // Absent → `action` is the full event key (what every preview UI
+        // holds); the dry-run splits it the way a real write carries it.
+        subjectType: input.subjectType,
         action: input.action,
         profileSlug: input.profileSlug,
         door: input.door ?? "chat",

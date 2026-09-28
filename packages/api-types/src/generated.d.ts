@@ -8,6 +8,15 @@ declare const AGENT_POSTURE_NAMES: readonly [
 	"create-with-undo"
 ];
 export type AgentPostureName = (typeof AGENT_POSTURE_NAMES)[number];
+/**
+ * Every value `users.created_via` may hold (null for humans and for agents
+ * older than migration 0225). `@synap-core/types/agents` owns the canonical
+ * list (`AGENT_ORIGINS`) and its classification (`AGENT_DIRECTION_BY_ORIGIN`);
+ * this package cannot import it, so `agent-users.ts` holds a compile-time
+ * equality floor between the two. A writer stamping a new value fails the
+ * build here first.
+ */
+export type AgentCreatedVia = "cli" | "ui" | "system" | "intelligence-service";
 export interface AgentMetadata {
 	agentType: string;
 	agentTemplate?: "twin" | "assistant" | "custom";
@@ -619,6 +628,51 @@ export interface PublicProjectionSettings {
 	 */
 	fields: string[];
 }
+export interface WorkspaceSpaceBriefCollectTarget {
+	profileSlug: string;
+	what: string;
+	cardinality?: "one" | "few" | "several";
+	keyFields?: string[];
+	min?: number;
+}
+export interface WorkspaceSpaceBriefExpertise {
+	starters?: string[];
+	blindSpots?: string[];
+	bar?: string;
+}
+export interface WorkspaceSpaceBriefAnchor {
+	profileSlug: string;
+	role: "root" | "context";
+	seedRef?: string;
+	entityId?: string;
+	limit?: number;
+}
+export interface WorkspaceSpaceBriefFetchHint {
+	profileSlug?: string;
+	query?: string;
+	note?: string;
+}
+export interface WorkspaceSpaceBriefRuleRef {
+	key: string;
+	ruleId?: string;
+}
+export interface WorkspaceSpaceBrief {
+	purpose?: string;
+	goal?: string;
+	framing?: string;
+	expertise?: WorkspaceSpaceBriefExpertise;
+	collect?: WorkspaceSpaceBriefCollectTarget[];
+	openingQuestions?: string[];
+	doneWhen?: string;
+	anchors?: WorkspaceSpaceBriefAnchor[];
+	rules?: WorkspaceSpaceBriefRuleRef[];
+	fetch?: WorkspaceSpaceBriefFetchHint[];
+}
+/** `settings.onboardingSeed` — per-field hashes of what the reconcile wrote. */
+export interface SpaceBriefSeed {
+	v: 1;
+	fields: Partial<Record<string, string>>;
+}
 export interface WorkspaceSettings {
 	defaultEntityTypes?: string[];
 	theme?: string;
@@ -645,24 +699,20 @@ export interface WorkspaceSettings {
 	 */
 	workspaceSubtype?: string;
 	/**
-	 * Per-workspace onboarding context — the dynamic "what this workspace needs"
-	 * that the shared `onboard` skill reads to run an adaptive interview when the
-	 * workspace is sparse. Declared by the template; goal + framing + data shape.
-	 * Typed loosely here (the OnboardingSpec shape lives in package-definition.ts)
-	 * to avoid a settings→utils import cycle.
+	 * THE SPACE BRIEF — how an agent works in this space (key kept as
+	 * `onboarding`; the interview fields are its onboarding mode). Canonical
+	 * type: `@synap-core/types/space-brief` `SpaceBrief`; this is its mirror —
+	 * see {@link WorkspaceSpaceBrief}.
 	 */
-	onboarding?: {
-		goal: string;
-		framing: string;
-		collect: Array<{
-			profileSlug: string;
-			what: string;
-			cardinality?: "one" | "few" | "several";
-			keyFields?: string[];
-		}>;
-		openingQuestions?: string[];
-		doneWhen?: string;
-	};
+	onboarding?: WorkspaceSpaceBrief;
+	/**
+	 * Three-way convergence marker for `onboarding`: per template-seeded brief
+	 * field, the hash of the value the template reconcile last WROTE. Equal to
+	 * the stored value's hash ⇒ untouched by the user ⇒ the template may update
+	 * it; different ⇒ the user edited it ⇒ left alone and reported. Written only
+	 * by `convergeSpaceBrief` (utils/space-brief-seed.ts).
+	 */
+	onboardingSeed?: SpaceBriefSeed;
 	/**
 	 * Discovery/read visibility. Defaults to "members" when absent.
 	 */
@@ -4829,6 +4879,34 @@ export interface ReversibleDefaultState {
 	/** The active row, so a surface can open it; null when off. */
 	ruleId: string | null;
 }
+declare const SPACE_BRIEF_SEEDED_FIELDS: readonly [
+	"purpose",
+	"goal",
+	"framing",
+	"expertise",
+	"collect",
+	"openingQuestions",
+	"doneWhen",
+	"anchors",
+	"fetch"
+];
+export type SpaceBriefSeededField = (typeof SPACE_BRIEF_SEEDED_FIELDS)[number];
+export type BriefFieldOutcome = "written" | "updated" | "removed" | "adopted" | "kept";
+export interface BriefFieldConflict {
+	field: SpaceBriefSeededField;
+	/** `edited` = the user changed a value the template since changed too;
+	 *  `unstamped` = a value written before the stamp existed differs from the
+	 *  template, so this pass cannot tell template from user. */
+	reason: "edited" | "unstamped";
+}
+export interface SpaceBriefConvergence {
+	/** The brief to store; `null` when nothing changes (no write needed). */
+	next: WorkspaceSpaceBrief | null;
+	/** The marker to store alongside `next` (or alone, when only stamps move). */
+	nextSeed: SpaceBriefSeed | null;
+	outcomes: Partial<Record<SpaceBriefSeededField, BriefFieldOutcome>>;
+	conflicts: BriefFieldConflict[];
+}
 /** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
 export type PropertyTargetUnresolvedReason = 
 /** The owning profile never entered `profileMap` (kind conflict → skipped). */
@@ -4898,6 +4976,18 @@ export interface ReconcileReport {
 	dryRun: boolean;
 	settings: {
 		merged: string[];
+	};
+	/**
+	 * The space brief's three-way convergence (`settings.onboarding`). Absent
+	 * when this reconcile does not own the brief (no identity: a compose
+	 * overlay or the base-defaults pass). `conflicts` are fields the user edited
+	 * while the template moved too — left alone, reported here.
+	 */
+	brief?: {
+		outcomes: SpaceBriefConvergence["outcomes"];
+		conflicts: SpaceBriefConvergence["conflicts"];
+		/** A concurrent brief write won the compare-and-set; retried next pass. */
+		raced?: true;
 	};
 	profiles: {
 		added: string[];
@@ -6610,27 +6700,27 @@ export interface CaptureUpdateResult {
 	reviewUrl?: string;
 	reason?: string;
 }
-export interface IntakeEcho {
-	/** The session this run ACTUALLY belongs to (null only when minting failed). */
-	sessionId: string | null;
-	intake: {
-		status: "recorded" | "partial" | "failed";
-		sessionSource: "provided" | "minted" | "failed";
-		/** A session handle was sent but a different (verified/minted) one was used. */
-		requestedSessionIgnored: boolean;
-		sourceDocumentIds: string[];
-		/** Present only for a degraded outcome: was the input kept for re-structure? */
-		degradedSourceKept?: boolean;
-		/**
-		 * Present whenever at least one source was attempted, on EVERY outcome:
-		 * false when any input could not be stored (the reason is in `errors`).
-		 */
-		sourcesKept?: boolean;
-		/** `keepRaw: false` was overridden — the file was not read, bytes kept. */
-		originalRetainedUntilStructured?: true;
-		errors?: string[];
-	};
-}
+declare const OBJECT_NAV_VIEWS: readonly [
+	"room"
+];
+export type ObjectNavView = (typeof OBJECT_NAV_VIEWS)[number];
+/** Additive field on `capture.structure`. Absent when the text is not a lone URL,
+ *  or when the installed-verb lookup failed (that is not "nothing installed"). */
+export type CaptureUrlReader = {
+	status: "enriched";
+	title: string;
+	author: string | null;
+	text: string;
+	imageUrl: string | null;
+	sourceUrl: string;
+} | {
+	status: "unavailable";
+	sourceUrl: string;
+} | {
+	status: "install";
+	installSlug: "web.read";
+	sourceUrl: string;
+};
 export interface KnownSourceHash {
 	/** The hash as ASKED (matched against either ledger key). */
 	hash: string;
@@ -6671,8 +6761,40 @@ export interface KnownSourceHash {
  *               description / goal (strongest: it is what the user SAID)
  *   - kind    — the candidate is built for the entity's own kind
  *   - facet   — the candidate is built for a role the entity plays
- *   - anyKind — an automation with no kind filter (fires for everything new)
- * Ties keep the matcher's order (most recently updated first).
+ *   - anyKind — the candidate has no kind filter (fires for everything new)
+ *
+ * ── RARITY (founder decision 2026-09-28, space-brief plan item 8) ───────────
+ * An intent term is weighted by how RARE it is in THIS candidate pool, using
+ * the pod's ONE IDF formula (`rarityWeight`, `utils/term-match.ts`). Measured
+ * defect it fixes: the intent "design and build a feature … fix MCP discovery
+ * gaps" ranked "CRM Hygiene" first on the words "agent" and "each" — "each"
+ * sits in 7 of the 20 live candidates — and the flat 3-points-per-word sum tied it with
+ * "AI Dev Session" (which alone says "build"), the tie then going to whichever
+ * was edited last. A word most candidates share is weak evidence; a word only
+ * one candidate has is strong evidence. The pool is whatever the caller
+ * passes, so pass it AFTER every gate (rows a caller cannot see must never
+ * move the ranking — same rule as `rankByTerms`).
+ *
+ * WHY NOT `rankByTerms` ITSELF: it caps a query at `MAX_QUERY_TERMS` (8 — a
+ * bound for its SQL twin) and matches substrings, so a session goal would
+ * lose every word after the eighth and "fix" would hit "prefix". The ranker
+ * here keeps its whole-word stems and reuses only the rarity formula, so
+ * there is still ONE IDF rule in the pod.
+ *
+ * ── WHAT IS RETURNED ────────────────────────────────────────────────────────
+ * A candidate is returned only when it carries a signal ABOUT THIS REQUEST:
+ * an intent word, the entity's kind, or one of its roles. `anyKind` is a
+ * modifier, not evidence — "runs for anything new" is true of every
+ * subject-less candidate for every request — so it is recorded (and scores)
+ * only alongside an intent match, and a candidate with no real signal is not
+ * returned at all. On the same live call, 9 of the 20 candidates returned
+ * matched no word at all and rode back as "Runs for anything new" at 0.5.
+ *
+ * ── TIES ────────────────────────────────────────────────────────────────────
+ * Broken by relevance, never by recency: more distinct intent words, then the
+ * rarest word matched, then the structural signal (kind > facet), then the
+ * name (a stable, edit-independent order). Editing a playbook must never
+ * promote it.
  */
 export type RouteCandidateKind = "playbook" | "automation";
 export interface RouteCandidate {
@@ -9208,6 +9330,27 @@ export interface RankComparison {
 	};
 }
 export type SubstrateKind = "semantic" | "structured" | "procedural" | "episodic";
+export interface AskSpaceHint {
+	workspaceId: string;
+	name: string;
+	/** One-line purpose (`spacePurposeLine`). Absent when the space has none. */
+	purpose?: string;
+	/** The asked-about kinds this space HOLDS, with its own entity counts. */
+	kinds: Array<{
+		slug: string;
+		count: number;
+	}>;
+}
+/**
+ * The space(s) holding the kinds a question is about — `ask`'s routing hint.
+ * `matches: []` = read, and no member space holds any of those kinds.
+ * `{ status: "unavailable" }` = the read failed — never folded into "none".
+ */
+export type AskSpacesHint = {
+	matches: AskSpaceHint[];
+} | {
+	status: "unavailable";
+};
 /**
  * A degradation tag on the response. Substrate outages use the substrate name;
  * the semantic backbone additionally reports `"semantic:vector-down"` when its
@@ -9270,6 +9413,14 @@ export interface AskResult {
 	 * substrate). Omitted when empty. See AskPendingBlock.
 	 */
 	pending?: AskPendingBlock;
+	/**
+	 * Where the kinds this question is about LIVE: the member spaces holding
+	 * entities of `understanding.profileTypes`, from the usage aggregate
+	 * (`services/discover/space-catalog.ts`). A routing HINT, never an answer.
+	 * ABSENT when no kind was understood; `{ status: "unavailable" }` when the
+	 * read failed — never dropped.
+	 */
+	spaces?: AskSpacesHint;
 }
 export interface SynthesisSource {
 	substrate: string;
@@ -9537,6 +9688,15 @@ export interface RuleScope {
 	workspaceId?: string;
 	/** Cross-cutting project lens. Absent = the rule is not project-scoped. */
 	projectId?: string;
+}
+/** See {@link RuleMetadata.seed}. */
+export interface RuleSeed {
+	/** The template (package slug) that installed the rule. */
+	template: string;
+	/** The template's stable key for the rule (`SpaceTemplateRule.key`). */
+	key: string;
+	/** Hash of the applier-written fields when last written. */
+	hash: string;
 }
 export interface DivergedBehaviour {
 	automationId: string;
@@ -10157,6 +10317,20 @@ export type CapabilityEnableOffer = {
  * than reality in at least one live case, so rejecting on `unknown` alone would
  * refuse calls that work today. It rides in the repair payload so the caller
  * can still see and fix it.
+ *
+ * …EXCEPT WHEN THE HANDLER ITSELF REFUSES THEM. A `.strict()` builtin schema
+ * (`tool.request`, `playbook.update`, `automation.update`, …) throws on an
+ * undeclared key in the handler's own `parse()` — so the extra key is not
+ * harmless, it is a certain failure AFTER approval. Measured 2026-09-28:
+ * `playbook.update {playbookId, params:[…]}` (no `params` field then) filed
+ * proposal 612cb32d, the founder approved it, and it died `approval_failed`
+ * "internal error". Zod reports that as ONE `unrecognized_keys` issue on the
+ * object itself (empty path), which the per-field loop below skipped, so the
+ * check answered "unvalidated" and the proposal went through. That issue is
+ * now `unrecognized` and makes the call `invalid`. Only a schema that REFUSES
+ * extra keys can produce it, so the rule above still holds for every other
+ * verb. Likewise a schema's own refinement message (`custom` issue) rides in
+ * `hints` — it is usually the one sentence that says how to fix the call.
  */
 /** What the caller must change, machine-readable. */
 export interface ParameterRepair {
@@ -10169,6 +10343,13 @@ export interface ParameterRepair {
 	}>;
 	/** Passed but not declared. Informational — never a rejection on its own. */
 	unknown: string[];
+	/**
+	 * Passed, not declared, and the verb's schema REFUSES undeclared keys
+	 * (`.strict()`) — the handler would throw on approval. A rejection.
+	 */
+	unrecognized?: string[];
+	/** The schema's own fix-it sentences (Zod `custom` issues), verbatim. */
+	hints?: string[];
 }
 export type ExecuteCapabilityResult = {
 	kind: "run";
@@ -10914,6 +11095,7 @@ export interface AgentPresence {
 	 */
 	pendingKeyIds: string[];
 }
+export type AgentDirection = "external" | "house";
 /**
  * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
  *  - `pod-default`      — creates and edits apply directly with Undo;
@@ -13562,10 +13744,6 @@ export interface IntegrationRoutingRule {
 	channelId: string | null;
 	lastRunAt: string | null;
 }
-declare const OBJECT_NAV_VIEWS: readonly [
-	"room"
-];
-export type ObjectNavView = (typeof OBJECT_NAV_VIEWS)[number];
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
 	/** An `objectNavTarget` kind: `proposal`, `channel`, `entity`, `automation`… */
@@ -14060,7 +14238,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[]>;
 				degraded: true;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_invalid_response" | "is_empty_result");
-			} & IntakeEcho) | {
+			} & {
+				reader?: CaptureUrlReader | undefined;
+				sessionId: string | null;
+				intake: {
+					status: "recorded" | "partial" | "failed";
+					sessionSource: "provided" | "minted" | "failed";
+					requestedSessionIgnored: boolean;
+					sourceDocumentIds: string[];
+					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
+					errors?: string[];
+				};
+			}) | {
 				followUpMessageId: string | null;
 				channelId: string | null;
 				extraction: {
@@ -14117,6 +14308,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				reader?: CaptureUrlReader | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -14176,6 +14368,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				reader?: CaptureUrlReader | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -14248,6 +14441,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				reader?: CaptureUrlReader | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -14311,6 +14505,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				reader?: CaptureUrlReader | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -14449,7 +14644,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[]>;
 				degraded: true;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_invalid_response" | "is_empty_result");
-			} & IntakeEcho) | {
+			} & {
+				reader?: CaptureUrlReader | undefined;
+				sessionId: string | null;
+				intake: {
+					status: "recorded" | "partial" | "failed";
+					sessionSource: "provided" | "minted" | "failed";
+					requestedSessionIgnored: boolean;
+					sourceDocumentIds: string[];
+					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
+					errors?: string[];
+				};
+			}) | {
 				followUpMessageId: string | null;
 				channelId: string | null;
 				extraction: {
@@ -14506,6 +14714,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				reader?: CaptureUrlReader | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -14565,6 +14774,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				reader?: CaptureUrlReader | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -14637,6 +14847,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				reader?: CaptureUrlReader | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -14700,6 +14911,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				reader?: CaptureUrlReader | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -15215,7 +15427,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				global?: boolean | undefined;
 				targetWorkspaceId?: string | undefined;
 				workspaceScoped?: boolean | undefined;
-				source?: "system" | "user" | "agent" | "ai" | "intelligence" | "cli" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
+				source?: "system" | "user" | "agent" | "cli" | "ai" | "intelligence" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				viewContext?: {
@@ -15726,7 +15938,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				contextEntityId?: string | null | undefined;
 				status?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
-				source?: "system" | "user" | "agent" | "ai" | "intelligence" | "cli" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
+				source?: "system" | "user" | "agent" | "cli" | "ai" | "intelligence" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				automationContext?: {
@@ -15780,7 +15992,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
 				workspaceId?: string | null | undefined;
-				source?: "system" | "user" | "agent" | "ai" | "intelligence" | "cli" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
+				source?: "system" | "user" | "agent" | "cli" | "ai" | "intelligence" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				automationContext?: {
@@ -15829,7 +16041,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		detachFacet: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				facetId: string;
-				source?: "system" | "user" | "agent" | "ai" | "intelligence" | "cli" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
+				source?: "system" | "user" | "agent" | "cli" | "ai" | "intelligence" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				automationContext?: {
@@ -15979,7 +16191,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string | undefined;
 					properties?: Record<string, unknown> | undefined;
 					content?: string | undefined;
-					source?: "system" | "user" | "agent" | "ai" | "intelligence" | "cli" | undefined;
+					source?: "system" | "user" | "agent" | "cli" | "ai" | "intelligence" | undefined;
 					profileHints?: {
 						displayName?: string | undefined;
 						icon?: string | undefined;
@@ -17491,7 +17703,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reason: FeedQueryPlanFailure;
 					message: string;
 				} | {
-					status: "unavailable" | "planned";
+					status: "planned" | "unavailable";
 					reason?: undefined;
 					message?: undefined;
 				};
@@ -20407,6 +20619,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata: Record<string, unknown> | null;
 				status: string;
 				enabled: boolean;
+				isDefault: boolean;
 				createdAt: Date;
 				updatedAt: Date;
 			}[];
@@ -21440,6 +21653,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				verdict: RetrievalVerdict;
 				failureClass: AiFailureClass | undefined;
 				truncated: SynthesisTruncation | undefined;
+				spaces: AskSpacesHint | undefined;
 			};
 			meta: object;
 		}>;
@@ -23253,7 +23467,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					isPersonalAgent: boolean;
 					agentTemplate: string | null;
 					agentType: string | null;
-					createdVia: string | null;
+					createdVia: AgentCreatedVia | null;
 					parentAgentId: string | null;
 					kratosIdentityId: string | null;
 					lastSyncedAt: Date | null;
@@ -23688,7 +23902,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							[x: string]: unknown;
 							key: string;
 							name: string;
-							category: "paused" | "completed" | "planned" | "backlog" | "started" | "canceled";
+							category: "paused" | "completed" | "backlog" | "planned" | "started" | "canceled";
 							description?: string | undefined;
 							goal?: string | undefined;
 							grants?: {
@@ -23860,6 +24074,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							confirmLabel?: string | undefined;
 						} | undefined;
 					}[] | undefined;
+					rules?: unknown[] | undefined;
 				};
 				packageSlug?: string | undefined;
 				packageVersion?: string | undefined;
@@ -24037,6 +24252,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							confirmLabel?: string | undefined;
 						} | undefined;
 					}[] | undefined;
+					rules?: unknown[] | undefined;
 				};
 				dryRun?: boolean | undefined;
 			};
@@ -25978,6 +26194,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						behaviours: RuleBehaviourRecord[];
 						routing?: RuleRouting;
 						sentence?: unknown;
+						seed?: RuleSeed;
 						createdAt: string;
 					};
 				};
@@ -27920,12 +28137,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string | null;
 				email: string;
 				agentMetadata: AgentMetadata | null;
-				createdVia: string | null;
+				createdVia: AgentCreatedVia | null;
 				isPersonalAgent: boolean;
 				createdByUserId: string | null;
 			} & AgentPresence & {
 				origin: string | null;
 				builtIn: boolean;
+				direction: AgentDirection;
 			}, "pendingKeyIds"> & {
 				viewerCanDisconnect: boolean;
 				approveUrl: string | null;
@@ -33484,7 +33702,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: unknown;
 					key: string;
 					name: string;
-					category: "paused" | "completed" | "planned" | "backlog" | "started" | "canceled";
+					category: "paused" | "completed" | "backlog" | "planned" | "started" | "canceled";
 					description?: string | undefined;
 					goal?: string | undefined;
 					grants?: {
@@ -34398,7 +34616,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: unknown;
 					key: string;
 					name: string;
-					category: "paused" | "completed" | "planned" | "backlog" | "started" | "canceled";
+					category: "paused" | "completed" | "backlog" | "planned" | "started" | "canceled";
 					description?: string | undefined;
 					goal?: string | undefined;
 					grants?: {
@@ -34614,7 +34832,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: unknown;
 					key: string;
 					name: string;
-					category: "paused" | "completed" | "planned" | "backlog" | "started" | "canceled";
+					category: "paused" | "completed" | "backlog" | "planned" | "started" | "canceled";
 					description?: string | undefined;
 					goal?: string | undefined;
 					grants?: {
@@ -35620,7 +35838,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: (ProposedOutcome & {
 				missingDomains: string[];
 			}) | {
-				status: "exists" | "started";
+				status: "started" | "exists";
 				track: TrackView;
 			};
 			meta: object;
@@ -36085,7 +36303,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				tools: {
 					name: string;
-					state: "wanted" | "connect" | "install";
+					state: "install" | "wanted" | "connect";
 					providerKey?: string | undefined;
 				}[];
 				origin?: "settings" | "onboarding" | undefined;
@@ -36364,7 +36582,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				lens?: "history" | "needs-you" | "suggestions" | undefined;
+				lens?: "history" | "suggestions" | "needs-you" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
 				workspaceId?: string | null | undefined;

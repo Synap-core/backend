@@ -43,7 +43,10 @@ import {
   resolveOriginTrust,
 } from "@synap/database/agent-governance";
 import { tools, skills } from "@synap/database/schema";
-import { decideAgentPolicy } from "@synap/governance-policy";
+import {
+  capabilityVerbAllowsRuleWiden,
+  decideAgentPolicy,
+} from "@synap/governance-policy";
 
 /** The grantable kinds a capability run can target. */
 export type CapabilityRunKind = "tool" | "skill" | "command";
@@ -437,6 +440,11 @@ export async function gateCapabilityExecution(
   });
 
   if (verdict.verdict === "execute") {
+    // An auto grant must not publish. The rule path is refused inside
+    // capabilityRuleAuthorizesRun; this is the grant-execMode auto path.
+    if (!capabilityVerbAllowsRuleWiden(verbName)) {
+      return buildProposeDecision(input, "CAPABILITY_PROPOSE");
+    }
     return { decision: "run" };
   }
   if (verdict.verdict === "deny") {
@@ -485,6 +493,8 @@ async function capabilityRuleAuthorizesRun(
   verbName: string | null
 ): Promise<boolean> {
   if (!input.agentUserId) return false;
+  // A public post stays a proposal even when a lane rule says auto.
+  if (!capabilityVerbAllowsRuleWiden(verbName)) return false;
   // Defence-in-depth: `input.capabilityKind` is typed `CapabilityRunKind`
   // ("tool" | "skill" | "command"), which structurally excludes "secret" —
   // this runtime guard holds even against a future type widening or an

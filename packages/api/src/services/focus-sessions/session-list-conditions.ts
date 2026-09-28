@@ -38,6 +38,7 @@ import { escapeLikePattern } from "../../utils/like-pattern.js";
 import { sessionScopeConditions } from "./session-scope.js";
 import {
   sessionStatusConditions,
+  settledSinceWhere,
   type StatusSinceWindows,
 } from "./session-status-filter.js";
 import { triagePendingWhere, notTriagePendingWhere } from "./triage.js";
@@ -63,6 +64,12 @@ export interface SessionListQuery {
   kind?: SessionKindFilter;
   flow?: { playbookId?: string; automationId?: string };
   statusSince?: StatusSinceWindows;
+  /**
+   * NARROW to rows settled at or after this ISO instant (`settledSinceWhere`:
+   * `coalesce(closed_at, updated_at) >= since`). Pair with the landed status
+   * set to read exactly what `landedSince` selects, uncapped.
+   */
+  settledSince?: string;
   /** Case-insensitive substring match on the session goal. */
   q?: string;
   /**
@@ -116,6 +123,7 @@ export function sessionListConditions({
   kind = "work",
   flow = {},
   statusSince,
+  settledSince,
   q,
   unfiled,
   includeTrackedRuns,
@@ -136,6 +144,7 @@ export function sessionListConditions({
   // STATUS and its recency windows. See `session-status-filter.ts` for why a
   // time window is a WHERE clause too.
   conditions.push(...sessionStatusConditions(status, statusSince));
+  if (settledSince) conditions.push(settledSinceWhere(settledSince));
 
   // TRIAGE LENS. A page is `limit`-capped in SQL, so filtering after the fact
   // would let unaccepted agent drafts consume the slots and push real work off

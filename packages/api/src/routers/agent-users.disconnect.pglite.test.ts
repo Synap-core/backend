@@ -119,7 +119,14 @@ const keyRow = (id: string) =>
 
 beforeAll(async () => {
   // pod_members / project_members: the user floor (`userVisibleWhere`) reads them.
-  for (const t of [users, apiKeys, workspaces, workspaceMembers, podMembers, projectMembers])
+  for (const t of [
+    users,
+    apiKeys,
+    workspaces,
+    workspaceMembers,
+    podMembers,
+    projectMembers,
+  ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   await q(
     `insert into users (id, email, user_type, created_by_user_id) values
@@ -239,26 +246,32 @@ describe("agentUsers.list — built-in agents are marked, from created_via (neve
     expect(byId.get(ids.get("b-sys")!)).toMatchObject({
       builtIn: true,
       origin: "system",
+      direction: "house",
     });
     expect(byId.get(ids.get("b-is")!)).toMatchObject({
       builtIn: true,
       origin: "intelligence-service",
+      direction: "house",
     });
     expect(byId.get(ids.get("b-twin")!)).toMatchObject({
       builtIn: true,
       origin: null,
+      direction: "house",
     });
     expect(byId.get(ids.get("byoa-cli")!)).toMatchObject({
       builtIn: false,
       origin: "cli",
+      direction: "external",
     });
     expect(byId.get(ids.get("byoa-ui")!)).toMatchObject({
       builtIn: false,
       origin: "ui",
+      direction: "external",
     });
     expect(byId.get(ids.get("legacy")!)).toMatchObject({
       builtIn: false,
       origin: null,
+      direction: "external",
     });
   });
 });
@@ -303,6 +316,11 @@ describe("agentUsers.list — built-in needs a pod origin AND no key ever (W4 A2
     expect(byId.get(keyed)).toMatchObject({ builtIn: false });
     expect(byId.get(cut)).toMatchObject({ builtIn: false });
     expect(byId.get(keyless)).toMatchObject({ builtIn: true });
+    // …yet all three are the POD's own (IS personas): a key moves the mark,
+    // never whose agent it is. This is the row that listed personas among
+    // "your agents" when the roster split on `builtIn`.
+    for (const id of [keyed, cut, keyless])
+      expect(byId.get(id)).toMatchObject({ direction: "house" });
   });
 });
 

@@ -277,7 +277,12 @@ export function computeDominantMotif(
 
   const counts = new Map<string, { targetType: string; count: number }>();
   for (const r of approvedRows) {
-    const key = `${r.targetType}.${r.proposalType}`;
+    // Receipts store a DOTTED proposalType (`entity.create`) while reviewed
+    // rows carry the bare verb (`create`). Prefixing the dotted form minted
+    // `entity.entity.create` rules that no write ever matches.
+    const key = r.proposalType.startsWith(`${r.targetType}.`)
+      ? r.proposalType
+      : `${r.targetType}.${r.proposalType}`;
     const entry = counts.get(key);
     if (entry) entry.count += 1;
     else counts.set(key, { targetType: r.targetType, count: 1 });

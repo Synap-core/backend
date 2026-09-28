@@ -86,3 +86,23 @@ export function sessionStatusConditions(
 
   return windows.length === 0 ? [selected] : [or(selected, ...windows) as SQL];
 }
+
+/**
+ * THE settle clock: `coalesce(closed_at, updated_at)` — the conclusion time of
+ * a closed row, the last touch otherwise. Same clock the windows above use,
+ * and the one `landedSince` (`@synap-core/types/landed`) applies in memory.
+ */
+export function sessionSettledAtSql(): SQL {
+  return drizzleSql`coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt})`;
+}
+
+/**
+ * NARROWING: only rows whose settle clock is at or after `since` (ISO). Unlike
+ * `statusSince` — which WIDENS a status set by admitting windowed rows — this
+ * only ever restricts. ONE predicate for `focusSessions.landed` and the
+ * `settledSince` input of `list` / `browse` ("Show all" of a Landed band), so
+ * the band and its full list cannot select different sessions.
+ */
+export function settledSinceWhere(since: string): SQL {
+  return drizzleSql`${sessionSettledAtSql()} >= ${since}::timestamptz`;
+}

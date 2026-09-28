@@ -55,7 +55,10 @@
  * **ABSENT ≠ EMPTY, per catalog.** A block that is missing means that catalog
  * was NOT searched. A block whose `matches` is `[]` means it WAS searched and
  * nothing fit. Same distinction the `playbooks` block on `start_session`
- * already ships (and has door-parity tests for).
+ * already ships (and has door-parity tests for). `marketplace` is the same
+ * fact: absent means the catalog cache was not read; `matches` (possibly
+ * empty) means it was; `error` means the read threw — never rewritten as
+ * `matches: []`.
  *
  * **The RESULT is never bare emptiness.** Best published Recall@5 for lexical
  * intent routing is ~0.83, so one intent in five or six will miss — and an
@@ -175,6 +178,22 @@ export interface AbstractIntentMatch {
   termCoverage: { hit: number; of: number };
 }
 
+/** One marketplace capability package a caller can install. */
+export interface MarketplaceCapabilityMatch {
+  slug: string;
+  name: string;
+  description: string | null;
+  kind: string;
+}
+
+/**
+ * Marketplace follow-up for an intent the pod does not serve.
+ * `matches` and `error` are mutually exclusive: a thrown catalog read is
+ * `error`, never a fake empty list.
+ */
+export type FindMarketplace =
+  { matches: MarketplaceCapabilityMatch[] } | { error: string };
+
 /** One member space the query's words landed on. */
 export interface SpaceIntentMatch {
   workspaceId: string;
@@ -248,6 +267,12 @@ export interface FindByIntentResult {
   intents?: { matches: AbstractIntentMatch[] };
   /** The EXACT block `start_session` ships. ABSENT when not searched. */
   playbooks?: SessionPlaybookCandidates;
+  /**
+   * Capability packages from the pod catalog cache. Present when a returned
+   * intent has no installed verbs, or the best intent match is weak (it
+   * missed a query term). ABSENT when that lookup did not run.
+   */
+  marketplace?: FindMarketplace;
   /** Member spaces to route the work to. ABSENT when not searched. */
   spaces?: FindSpaces;
   scoring: FindScoring;
@@ -296,6 +321,64 @@ function normalise(score: number, best: number): number {
 /** Words for an abstract verb token, so "send a message" reaches `send_message`. */
 function intentText(verb: string): string {
   return verb.replace(/_/g, " ");
+}
+
+/** How many marketplace packages an unserved intent offers. */
+const MARKETPLACE_LIMIT = 3;
+
+/**
+ * Which intent slug to ask the marketplace about, if any.
+ *
+ * An intent with `verbs: []` is a known kind of work nothing installed
+ * serves. Otherwise the best row is weak when it missed a query term —
+ * its confidence is always 1 when it ranked first, so that number cannot
+ * say the routing was poor. `termCoverage` is the absolute signal. No row
+ * at all is not a weak match: there is no slug to query, and the
+ * escalation ladder already names `market.search`.
+ */
+function marketplaceSlugFor(
+  matches: readonly AbstractIntentMatch[]
+): string | undefined {
+  const unserved = matches.find((m) => m.verbs.length === 0);
+  if (unserved) return unserved.intent;
+  const best = matches[0];
+  if (best && best.termCoverage.hit < best.termCoverage.of) return best.intent;
+  return undefined;
+}
+
+/** "capture_into_pod" → "capture into pod capture_into_pod". */
+function marketplaceQueryFor(slug: string): string {
+  return `${intentText(slug)} ${slug}`;
+}
+
+/**
+ * Catalog-cache read. A throw becomes `error` and does not fail the find —
+ * the intent matches are already on the result.
+ */
+async function lookupMarketplace(slug: string): Promise<FindMarketplace> {
+  try {
+    const { queryCatalogCache } = await import("./catalog-cache-query.js");
+    const entries = await queryCatalogCache({
+      query: marketplaceQueryFor(slug),
+      kind: "capability",
+      limit: MARKETPLACE_LIMIT,
+    });
+    return {
+      matches: entries.slice(0, MARKETPLACE_LIMIT).map((entry) => ({
+        slug: entry.slug,
+        name: entry.name,
+        description: entry.description,
+        kind: entry.kind,
+      })),
+    };
+  } catch (err) {
+    return {
+      error:
+        err instanceof Error && err.message.length > 0
+          ? err.message
+          : String(err),
+    };
+  }
 }
 
 /** How many kinds a space match suggests. */
@@ -495,8 +578,10 @@ export async function findByIntent(
       ranker:
         "rankByTerms over the intent registry (seed plus capability_intents rows)",
       scale: "confidence = score ÷ the best intent score in THIS result",
-      note: `Routing only — an intent resolves to CONCRETE verb ids that synap_run_capability then governs exactly as before. An intent with verbs: [] means nothing visible declares it; ${verbsDeclaringIntent} of ${verbs} verb catalog entries declare an intent at all, so this axis cannot see the rest.`,
+      note: `Routing only — an intent resolves to CONCRETE verb ids that synap_run_capability then governs exactly as before. An intent with verbs: [] means nothing visible declares it; ${verbsDeclaringIntent} of ${verbs} verb catalog entries declare an intent at all, so this axis cannot see the rest. When a returned intent has no verbs, or the best intent missed a query term, marketplace lists up to 3 capability packages — or marketplace.error if that catalog read failed.`,
     };
+    const slug = marketplaceSlugFor(result.intents.matches);
+    if (slug) result.marketplace = await lookupMarketplace(slug);
   }
 
   // ── Catalog 3: the pod's own processes ────────────────────────────────────

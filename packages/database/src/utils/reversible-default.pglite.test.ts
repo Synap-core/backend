@@ -13,7 +13,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
+import { REVERSIBILITY_DOOR_CLASS } from "@synap/governance-policy";
 import {
+  dryRunAgentGovernanceDecision,
   resolveAgentGovernanceDecision,
   resolveGovernanceRule,
   syncAutoApproveRules,
@@ -228,5 +230,68 @@ describe("attribution + the settings mirror", () => {
       createdBy: HUMAN,
     });
     expect((await readReversibleDefault(db)).enabled).toBe(true);
+  });
+});
+
+/**
+ * The PREVIEW must say what the WRITE does. Every preview UI (Settings › Agents
+ * "Effective policy", Trust rules "Test policy") holds an EVENT KEY
+ * (`entity.create`) and sends it as `action` with no subject. The dry-run used
+ * to resolve that as the key `.entity.create`, which nothing matches — so the
+ * page read "Requires proposal · rung default" while the pod auto-applied the
+ * same write via `@reversible` (live, 2026-09-28).
+ */
+describe("the governance preview agrees with the real write", () => {
+  async function preview(eventKey: string) {
+    return dryRunAgentGovernanceDecision({
+      db,
+      agentUserId: STRICT_AGENT,
+      workspaceId: null,
+      action: eventKey,
+      door: "chat",
+    });
+  }
+
+  it("entity.create previews as auto via @reversible; entity.delete as propose", async () => {
+    await pg.exec(MIGRATION);
+    // The live agent also carried an (unmatched) earned rule; it must not
+    // change the answer.
+    await pg.exec(`
+      INSERT INTO governance_rules (principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by)
+      VALUES ('agent', '${STRICT_AGENT}', 'pod', 'action', 'entity.entity.create', 'auto', 'user:${HUMAN}');
+    `);
+    const { ruleId } = await readReversibleDefault(db);
+
+    const create = await preview("entity.create");
+    expect(create).toMatchObject({
+      outcome: "auto",
+      rung: "governance-rule",
+      winningRule: { ruleId, matchedPattern: "@reversible", verdict: "auto" },
+    });
+    expect(create.reason).toContain("@reversible");
+
+    const del = await preview("entity.delete");
+    expect(del.outcome).toBe("propose");
+    expect(del.rung).not.toBe("default");
+  });
+
+  it("for EVERY classified door, preview(eventKey) === the resolver's verdict on the real pair", async () => {
+    await pg.exec(MIGRATION);
+    // Derived, not hand-listed: a new door joins the check by existing.
+    const doors = Object.keys(REVERSIBILITY_DOOR_CLASS);
+    expect(doors.length).toBeGreaterThan(50);
+    let autos = 0;
+    for (const door of doors) {
+      const [subjectType, action] = door.split("/") as [string, string];
+      const real = await decide(subjectType, action);
+      const shown = await preview(`${subjectType}.${action}`);
+      expect({ door, outcome: shown.outcome }).toEqual({
+        door,
+        outcome: real === "execute" ? "auto" : "propose",
+      });
+      if (shown.outcome === "auto") autos++;
+    }
+    // Non-vacuity: the reversible lane really fired through the preview.
+    expect(autos).toBeGreaterThan(10);
   });
 });

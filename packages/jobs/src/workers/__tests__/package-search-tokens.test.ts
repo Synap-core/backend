@@ -53,6 +53,20 @@ describe("derivePackageSearchTokens", () => {
     expect(tokens).toContain("content.editorial");
     expect(tokens).toContain("editorial");
   });
+
+  it("indexes a skill intent so market search can find the package by what it does", () => {
+    const tokens = derivePackageSearchTokens({
+      capability: {
+        key: "web.read",
+        skills: [{ name: "read_public_url", intent: "capture_into_pod" }],
+      },
+      skills: [{ name: "send_note", intent: "send_message" }],
+    });
+    expect(tokens).toContain("capture_into_pod");
+    expect(tokens).toContain("capture");
+    expect(tokens).toContain("send_message");
+    expect(tokens).toContain("send");
+  });
 });
 
 describe("mergePackageSearchTags", () => {

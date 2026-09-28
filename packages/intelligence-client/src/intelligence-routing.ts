@@ -193,6 +193,49 @@ export async function resolveIntelligenceService(
     logger.debug({ userId: ctx.userId }, "Step 2: No user IS preference set");
   }
 
+  // 3 + 4. The POD DEFAULT — the `is_default` service, else the failover (any
+  //    active service with a real key). ONE selector, shared with every surface
+  //    that names "the pod default" (`intelligenceRegistry.list` → `isDefault`),
+  //    so the badge and the routing can never disagree.
+  const podDefault = await selectPodDefaultService();
+  if (podDefault) {
+    return { ...createClient(podDefault), agentUserId };
+  }
+
+  // 5. Fallback to default service from environment
+  logger.debug(
+    "Step 5: No DB-registered service matched — falling back to env default"
+  );
+  const defaultService = createDefaultClient();
+  logger.info(
+    {
+      url: defaultService.endpoint,
+      source: "env_fallback",
+      hasKey: !!defaultService.serviceApiKey,
+    },
+    "IS resolved via environment fallback"
+  );
+  return { ...defaultService, agentUserId };
+}
+
+/** A registered intelligence-service row, as the resolver reads it. */
+export type IntelligenceServiceRow = typeof intelligenceServices.$inferSelect;
+
+/**
+ * The POD DEFAULT intelligence service: what `resolveIntelligenceService`
+ * routes to when no capability, workspace pin or user preference applies —
+ * steps 3 + 4 of the ladder, and the ONLY place that rule lives.
+ *
+ *   3. the explicitly selected default (`is_default`), when it has a real key;
+ *   4. failover — the most recently updated active+enabled service with a real
+ *      key (replica pods whose synced rows carry `SYNC_PLACEHOLDER`).
+ *
+ * `null` = no registered row qualifies; the resolver then falls to the env
+ * service (step 5), which is not a registered row. Reads rows only — never
+ * decrypts a key or builds a client, so naming the default cannot fail on an
+ * undecryptable key the way building a client can.
+ */
+export async function selectPodDefaultService(): Promise<IntelligenceServiceRow | null> {
   // 3. Pod default: the explicitly SELECTED default IS (the `is_default` flag) —
   //    the "switch" target, the pod's chosen agent service when no workspace/user
   //    preference applies (background jobs, pod-level calls).
@@ -218,7 +261,7 @@ export async function resolveIntelligenceService(
         { serviceId: selectedDefault.serviceId, source: "is_default" },
         "IS resolved via the pod's selected default (is_default)"
       );
-      return { ...createClient(selectedDefault), agentUserId };
+      return selectedDefault;
     }
     logger.debug(
       { serviceId: selectedDefault.serviceId },
@@ -257,7 +300,7 @@ export async function resolveIntelligenceService(
         },
         "IS resolved via failover — using first active service"
       );
-      return { ...createClient(anyActiveService), agentUserId };
+      return anyActiveService;
     }
 
     logger.debug(
@@ -266,20 +309,7 @@ export async function resolveIntelligenceService(
     );
   }
 
-  // 5. Fallback to default service from environment
-  logger.debug(
-    "Step 5: No DB-registered service matched — falling back to env default"
-  );
-  const defaultService = createDefaultClient();
-  logger.info(
-    {
-      url: defaultService.endpoint,
-      source: "env_fallback",
-      hasKey: !!defaultService.serviceApiKey,
-    },
-    "IS resolved via environment fallback"
-  );
-  return { ...defaultService, agentUserId };
+  return null;
 }
 
 /**

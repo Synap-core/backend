@@ -61,6 +61,7 @@ import {
 import { inviteProcedures } from "./workspaces/invites.js";
 import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
 import { mcpServersProcedures } from "./workspaces/mcp-servers.js";
+import { briefProcedures } from "./workspaces/brief.js";
 import { listProjectsUsingWorkspace } from "../utils/project-workspace.js";
 import { podVisibleWorkspaceWhere } from "../utils/user-visible-where.js";
 import {
@@ -776,13 +777,21 @@ const coreProcedures = {
         }
       }
 
-      // 1. Permission check
+      // 1. Permission check. The gate `data` IS the proposal payload the
+      // `workspace/update` executor replays on approval — it must carry the
+      // chosen service (`null` = reset to the pod default) under a named
+      // `operation`, or the bare `{ id }` lands on the rename branch and an
+      // approved pin changes nothing.
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         workspaceId: input.workspaceId,
         subjectType: "workspaces",
         action: "update",
-        data: { id: input.workspaceId },
+        data: {
+          id: input.workspaceId,
+          operation: "set_intelligence_service",
+          intelligenceServiceId: input.serviceId,
+        },
       });
 
       if ("denied" in perm && perm.denied) {
@@ -804,11 +813,26 @@ const coreProcedures = {
       const eventRepo = eventRepository;
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
 
-      await workspaceRepo.mergeSettings(
-        input.workspaceId,
-        { intelligenceServiceId: input.serviceId ?? undefined },
-        ctx.userId
-      );
+      if (input.serviceId) {
+        await workspaceRepo.mergeSettings(
+          input.workspaceId,
+          { intelligenceServiceId: input.serviceId },
+          ctx.userId
+        );
+      } else {
+        // `null` = follow the pod default: REMOVE the key. `mergeSettings` can
+        // only add keys (`settings || patch`, and JSON drops an `undefined`),
+        // so `{ intelligenceServiceId: undefined }` was a silent no-op that
+        // answered "updated" while the space stayed pinned. Same
+        // strip-and-replace as `intelligenceRegistry.disconnectFromWorkspace`.
+        const { intelligenceServiceId: _cleared, ...rest } =
+          (workspace.settings as Record<string, unknown> | null) ?? {};
+        await workspaceRepo.update(
+          input.workspaceId,
+          { settings: rest },
+          ctx.userId
+        );
+      }
 
       // 3. Audit log
       auditLog({
@@ -1256,6 +1280,7 @@ export const workspacesRouter = router({
   update: coreProcedures.update,
   setPrimarySurface: coreProcedures.setPrimarySurface,
   setIntelligenceService: coreProcedures.setIntelligenceService,
+  updateBrief: briefProcedures.updateBrief,
   delete: coreProcedures.delete,
   archive: coreProcedures.archive,
   adminGet: coreProcedures.adminGet,

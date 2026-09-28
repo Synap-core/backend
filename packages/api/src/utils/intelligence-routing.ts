@@ -10,6 +10,7 @@ export {
   resolveAgent,
   getDefaultActiveService,
   setDefaultIntelligenceService,
+  selectPodDefaultService,
   IntelligenceAuthError,
 } from "@synap/intelligence-client";
 

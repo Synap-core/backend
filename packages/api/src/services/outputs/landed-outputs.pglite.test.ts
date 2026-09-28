@@ -62,6 +62,8 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { TRPCError } from "@trpc/server";
 import {
+  LANDED_SESSION_STATUSES,
+  landedSince,
   resolveLandedDecisionView,
   type LandedObjectRow,
 } from "@synap-core/types/landed";
@@ -80,7 +82,8 @@ function ddlFor(table: PgTable): string {
   const cols = cfg.columns.map((c) => {
     const t = c.getSQLType();
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
-    const def = c.primary && type === "uuid" ? " default gen_random_uuid()" : "";
+    const def =
+      c.primary && type === "uuid" ? " default gen_random_uuid()" : "";
     return `"${c.name}" ${type}${c.primary ? " primary key" : ""}${def}`;
   });
   const schema = cfg.schema ? `"${cfg.schema}".` : "";
@@ -89,7 +92,8 @@ function ddlFor(table: PgTable): string {
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
-const ago = (mins: number) => new Date(Date.now() - mins * 60_000).toISOString();
+const ago = (mins: number) =>
+  new Date(Date.now() - mins * 60_000).toISOString();
 
 const W1 = randomUUID();
 const W2 = randomUUID();
@@ -101,6 +105,7 @@ const S = {
   old: randomUUID(),
   w2: randomUUID(),
   str: randomUUID(),
+  touched: randomUUID(),
 };
 const CH3 = randomUUID();
 const E_AUTO = randomUUID();
@@ -207,18 +212,26 @@ const proposal = (p: {
 
 const ctx = (extra: Record<string, unknown> = {}) =>
   ({ db: null, authenticated: true, userId: USER, ...extra }) as never;
-const landed = (input: Parameters<ReturnType<typeof outputsRouter.createCaller>["landed"]>[0], c = ctx()) =>
-  outputsRouter.createCaller(c).landed(input);
+const landed = (
+  input: Parameters<ReturnType<typeof outputsRouter.createCaller>["landed"]>[0],
+  c = ctx()
+) => outputsRouter.createCaller(c).landed(input);
 
 beforeAll(async () => {
   for (const t of h.tables) {
     const cfg = getTableConfig(t as PgTable);
-    if (cfg.schema) await h.client!.exec(`create schema if not exists "${cfg.schema}";`);
+    if (cfg.schema)
+      await h.client!.exec(`create schema if not exists "${cfg.schema}";`);
     await h.client!.exec(ddlFor(t as PgTable));
   }
-  await h.client!.exec(`create schema if not exists pgboss; create table if not exists pgboss.job (id uuid primary key default gen_random_uuid(), name text, state text, data jsonb);`);
+  await h.client!.exec(
+    `create schema if not exists pgboss; create table if not exists pgboss.job (id uuid primary key default gen_random_uuid(), name text, state text, data jsonb);`
+  );
 
-  await q(`insert into workspaces (id, name) values ($1,'Builder'),($2,'CRM')`, [W1, W2]);
+  await q(
+    `insert into workspaces (id, name) values ($1,'Builder'),($2,'CRM')`,
+    [W1, W2]
+  );
   await q(
     `insert into workspace_members (id, workspace_id, user_id) values ($1,$2,$4),($3,$5,$4)`,
     [randomUUID(), W1, randomUUID(), USER, W2]
@@ -235,25 +248,142 @@ beforeAll(async () => {
     [HIDDEN_PROJECT, STRANGER]
   );
 
-  await session(S.s1, { goal: "Outreach wave", status: "closed", updated: 30, closed: 30 });
-  await session(S.s2, { goal: "Scrape pricing", status: "failed", updated: 10, closed: null });
-  await session(S.s3, { goal: "Still running", status: "active", updated: 3, channelId: CH3 });
-  await session(S.old, { goal: "Last week", status: "closed", updated: 2880, closed: 2880 });
-  await session(S.w2, { ws: W2, goal: "CRM import", status: "closed", updated: 5, closed: 5 });
-  await session(S.str, { user: STRANGER, goal: "Not yours", status: "closed", updated: 4, closed: 4 });
+  await session(S.s1, {
+    goal: "Outreach wave",
+    status: "closed",
+    updated: 30,
+    closed: 30,
+  });
+  await session(S.s2, {
+    goal: "Scrape pricing",
+    status: "failed",
+    updated: 10,
+    closed: null,
+  });
+  await session(S.s3, {
+    goal: "Still running",
+    status: "active",
+    updated: 3,
+    channelId: CH3,
+  });
+  await session(S.old, {
+    goal: "Last week",
+    status: "closed",
+    updated: 2880,
+    closed: 2880,
+  });
+  await session(S.w2, {
+    ws: W2,
+    goal: "CRM import",
+    status: "closed",
+    updated: 5,
+    closed: 5,
+  });
+  // Closed long ago, TOUCHED a minute ago: the settle clock is closed_at, so
+  // it is NOT "settled since" — the input that tells coalesce from updated_at.
+  await session(S.touched, {
+    goal: "Old but touched",
+    status: "closed",
+    updated: 1,
+    closed: 3000,
+  });
+  await session(S.str, {
+    user: STRANGER,
+    goal: "Not yours",
+    status: "closed",
+    updated: 4,
+    closed: 4,
+  });
 
   // S1 — E_AUTO: receipt filed BEFORE the write, and a LATER approved edit.
   // …and an EARLIER first attempt a person REJECTED: not the object's birth.
-  await proposal({ id: randomUUID(), status: "rejected", targetType: "entity", targetId: E_AUTO, proposalType: "create", mins: 55, sessionId: S.s1, agent: AGENT });
-  await proposal({ id: P_RECEIPT, status: "auto_approved", targetType: "entity", targetId: E_AUTO, proposalType: "entity.create", mins: 50, sessionId: S.s1, agent: AGENT });
-  await proposal({ id: P_LATER_EDIT, status: "approved", targetType: "entity", targetId: E_AUTO, proposalType: "update", mins: 35, sessionId: S.s1, agent: AGENT, reviewedBy: USER });
+  await proposal({
+    id: randomUUID(),
+    status: "rejected",
+    targetType: "entity",
+    targetId: E_AUTO,
+    proposalType: "create",
+    mins: 55,
+    sessionId: S.s1,
+    agent: AGENT,
+  });
+  await proposal({
+    id: P_RECEIPT,
+    status: "auto_approved",
+    targetType: "entity",
+    targetId: E_AUTO,
+    proposalType: "entity.create",
+    mins: 50,
+    sessionId: S.s1,
+    agent: AGENT,
+  });
+  await proposal({
+    id: P_LATER_EDIT,
+    status: "approved",
+    targetType: "entity",
+    targetId: E_AUTO,
+    proposalType: "update",
+    mins: 35,
+    sessionId: S.s1,
+    agent: AGENT,
+    reviewedBy: USER,
+  });
   // S1 — E_COMP: an approved COMPOSITE whose target is another id.
-  await proposal({ id: P_COMP, status: "approved", targetType: "entity", targetId: randomUUID(), proposalType: "create_composite", mins: 48, sessionId: S.s1, agent: AGENT, reviewedBy: USER, data: { materialized: { entityIds: [E_COMP, randomUUID(), randomUUID(), randomUUID()] } } });
+  await proposal({
+    id: P_COMP,
+    status: "approved",
+    targetType: "entity",
+    targetId: randomUUID(),
+    proposalType: "create_composite",
+    mins: 48,
+    sessionId: S.s1,
+    agent: AGENT,
+    reviewedBy: USER,
+    data: {
+      materialized: {
+        entityIds: [E_COMP, randomUUID(), randomUUID(), randomUUID()],
+      },
+    },
+  });
   // A creating receipt the viewer CANNOT see (another member's workspace).
-  await proposal({ id: P_HIDDEN, status: "auto_approved", targetType: "entity", targetId: E_HIDDEN, proposalType: "entity.create", mins: 46, sessionId: S.s1, agent: AGENT, ws: W_HIDDEN });
+  await proposal({
+    id: P_HIDDEN,
+    status: "auto_approved",
+    targetType: "entity",
+    targetId: E_HIDDEN,
+    proposalType: "entity.create",
+    mins: 46,
+    sessionId: S.s1,
+    agent: AGENT,
+    ws: W_HIDDEN,
+  });
   // S1 — a pending CREATE (no such object) and a pending EDIT of E_AUTO.
-  await proposal({ id: P_PEND, status: "pending", targetType: "entity", targetId: P_PEND_TARGET, proposalType: "create", mins: 31, sessionId: S.s1, agent: AGENT, data: { targetType: "entity", changeType: "create", requestId: "r1", data: { title: "Linear" } } });
-  await proposal({ id: P_EDIT, status: "pending", targetType: "entity", targetId: E_AUTO, proposalType: "update", mins: 31, sessionId: S.s1, agent: AGENT });
+  await proposal({
+    id: P_PEND,
+    status: "pending",
+    targetType: "entity",
+    targetId: P_PEND_TARGET,
+    proposalType: "create",
+    mins: 31,
+    sessionId: S.s1,
+    agent: AGENT,
+    data: {
+      targetType: "entity",
+      changeType: "create",
+      requestId: "r1",
+      data: { title: "Linear" },
+    },
+  });
+  await proposal({
+    id: P_EDIT,
+    status: "pending",
+    targetType: "entity",
+    targetId: E_AUTO,
+    proposalType: "update",
+    mins: 31,
+    sessionId: S.s1,
+    agent: AGENT,
+  });
 
   // A CUSTOM kind with its own plural — the label both apps must render.
   await q(
@@ -267,14 +397,33 @@ beforeAll(async () => {
       ($9,$2,$3,'Older thing','note',null,null,null,null,$10,$10),
       ($11,$12,$3,'Theirs','note',null,null,null,null,$13,$13),
       ($14,$2,$3,'Quiet one','note','human',$2,null,null,$15,$15)`,
-    [E_AUTO, USER, W1, AGENT, ago(49), E_COMP, P_COMP, ago(40), E_S3, ago(200), randomUUID(), STRANGER, ago(4), E_HIDDEN, ago(45)]
+    [
+      E_AUTO,
+      USER,
+      W1,
+      AGENT,
+      ago(49),
+      E_COMP,
+      P_COMP,
+      ago(40),
+      E_S3,
+      ago(200),
+      randomUUID(),
+      STRANGER,
+      ago(4),
+      E_HIDDEN,
+      ago(45),
+    ]
   );
   await q(
     `insert into documents (id, user_id, workspace_id, title, created_at, updated_at) values
       ($1,$2,$3,'My notes',$4,$4),($5,$2,$6,'CRM brief',$7,$7),($8,$9,$3,'Stranger doc',$10,$10)`,
     [D_MINE, USER, W1, ago(33), D_W2, W2, ago(6), D_STR, STRANGER, ago(4)]
   );
-  await q(`update entities set profile_id = $1 where id = $2`, [COMPANY_PROFILE, E_COMP]);
+  await q(`update entities set profile_id = $1 where id = $2`, [
+    COMPANY_PROFILE,
+    E_COMP,
+  ]);
   await produced(S.s1, E_AUTO, 49);
   await produced(S.s1, E_COMP, 40);
   await produced(S.s1, E_HIDDEN, 45);
@@ -282,7 +431,15 @@ beforeAll(async () => {
   await artifact(S.s2, "view", V_AGENT, "Scrape log", "agent", 11);
   await produced(S.s3, E_S3, 200);
   await artifact(S.w2, "document", D_W2, "CRM brief", "agent", 6);
-  await artifact(S.str, "document", D_STR, "Stranger doc", "agent", 4, STRANGER);
+  await artifact(
+    S.str,
+    "document",
+    D_STR,
+    "Stranger doc",
+    "agent",
+    4,
+    STRANGER
+  );
 
   // S3's room: an agent post (2m ago) is later than any proposal in S3.
   await q(`insert into channels (id) values ($1)`, [CH3]);
@@ -295,7 +452,16 @@ beforeAll(async () => {
     `insert into messages (id, channel_id, role, author_type, content, user_id, timestamp) values ($1,$2,'user','human','thanks',$3,$4)`,
     [randomUUID(), CH3, USER, ago(1)]
   );
-  await proposal({ id: randomUUID(), status: "auto_approved", targetType: "entity", targetId: randomUUID(), proposalType: "entity.update", mins: 20, sessionId: S.s3, agent: AGENT });
+  await proposal({
+    id: randomUUID(),
+    status: "auto_approved",
+    targetType: "entity",
+    targetId: randomUUID(),
+    proposalType: "entity.update",
+    mins: 20,
+    sessionId: S.s3,
+    agent: AGENT,
+  });
 });
 
 const byRef = (items: LandedObjectRow[], id: string) =>
@@ -314,7 +480,10 @@ describe("outputs.landed — objects that landed, pod-wide", () => {
       "Older thing", // 200m, from the ACTIVE session: landed objects are not only from settled sessions
     ]);
     expect(page.items.some((i) => i.title === "Stranger doc")).toBe(false);
-    expect(byRef(page.items, E_AUTO).session).toEqual({ id: S.s1, title: "Outreach wave" });
+    expect(byRef(page.items, E_AUTO).session).toEqual({
+      id: S.s1,
+      title: "Outreach wave",
+    });
     expect(page.truncated).toBe(false);
     expect(page.nextCursor).toBeNull();
     // Pending never mixes into what landed.
@@ -323,7 +492,13 @@ describe("outputs.landed — objects that landed, pod-wide", () => {
 
   it("decision = the CREATING proposal: the receipt before the write — never a later edit, never a rejected first attempt", async () => {
     const row = byRef((await landed({})).items, E_AUTO);
-    expect(row.decision).toEqual({ state: "auto_approved", proposalId: P_RECEIPT, decidedBy: null, decidedAt: null, changeCount: 1 });
+    expect(row.decision).toEqual({
+      state: "auto_approved",
+      proposalId: P_RECEIPT,
+      decidedBy: null,
+      decidedAt: null,
+      changeCount: 1,
+    });
     expect(resolveLandedDecisionView(row.decision.state).undoable).toBe(true);
   });
 
@@ -333,24 +508,46 @@ describe("outputs.landed — objects that landed, pod-wide", () => {
     expect(row.decision.proposalId).toBe(P_COMP);
     expect(row.decision.decidedBy).toEqual({ id: USER, name: "Antoine" });
     expect(row.decision.decidedAt).not.toBeNull();
-    expect(row.actor).toEqual({ kind: "agent", id: AGENT, name: "Claude Code" });
-    expect(row.entityProfile).toMatchObject({ displayName: "Company", plural: "Companies" });
+    expect(row.actor).toEqual({
+      kind: "agent",
+      id: AGENT,
+      name: "Claude Code",
+    });
+    expect(row.entityProfile).toMatchObject({
+      displayName: "Company",
+      plural: "Companies",
+    });
     // Undo reverts the WHOLE composite — the row says how much.
     expect(row.decision.changeCount).toBe(4);
   });
 
   it("a creating proposal the viewer cannot see reads UNKNOWN — nothing of it leaks, never 'applied'", async () => {
     const row = byRef((await landed({})).items, E_HIDDEN);
-    expect(row.decision).toEqual({ state: "unknown", proposalId: null, decidedBy: null, decidedAt: null, changeCount: null });
+    expect(row.decision).toEqual({
+      state: "unknown",
+      proposalId: null,
+      decidedBy: null,
+      decidedAt: null,
+      changeCount: null,
+    });
     // The actor comes from the object's own provenance, not the hidden proposal's agent.
     expect(row.actor).toMatchObject({ kind: "human", id: USER });
   });
 
   it("actor: a legacy no-provenance row is the owner (human, me); an unattributed agent artifact is an agent with no id", async () => {
     const items = (await landed({})).items;
-    expect(byRef(items, D_MINE).actor).toEqual({ kind: "human", id: USER, name: "Antoine", isViewer: true });
+    expect(byRef(items, D_MINE).actor).toEqual({
+      kind: "human",
+      id: USER,
+      name: "Antoine",
+      isViewer: true,
+    });
     expect(byRef(items, D_MINE).decision.state).toBe("applied");
-    expect(byRef(items, V_AGENT).actor).toEqual({ kind: "agent", id: null, name: null });
+    expect(byRef(items, V_AGENT).actor).toEqual({
+      kind: "agent",
+      id: null,
+      name: null,
+    });
   });
 
   it("a pending CREATE rides APART (count + samples) with its proposal door; a pending EDIT of a live object is not one", async () => {
@@ -366,14 +563,25 @@ describe("outputs.landed — objects that landed, pod-wide", () => {
       decision: { state: "pending", proposalId: P_PEND },
       actor: { kind: "agent", id: AGENT },
     });
-    expect(resolveLandedDecisionView(pending.decision.state).landed).toBe(false);
-    expect(page.pending.samples.some((i) => i.id === `proposal:${P_EDIT}`)).toBe(false);
+    expect(resolveLandedDecisionView(pending.decision.state).landed).toBe(
+      false
+    );
+    expect(
+      page.pending.samples.some((i) => i.id === `proposal:${P_EDIT}`)
+    ).toBe(false);
     expect(page.items.some((i) => i.id.startsWith("proposal:"))).toBe(false);
   });
 
   it("actor filter: agents / me", async () => {
-    const agents = (await landed({ actor: "agents" })).items.map((i) => i.title);
-    expect(agents).toEqual(["CRM brief", "Scrape log", "Linear Co", "Ada Lovelace"]);
+    const agents = (await landed({ actor: "agents" })).items.map(
+      (i) => i.title
+    );
+    expect(agents).toEqual([
+      "CRM brief",
+      "Scrape log",
+      "Linear Co",
+      "Ada Lovelace",
+    ]);
     const mine = (await landed({ actor: "me" })).items.map((i) => i.title);
     expect(mine).toEqual(["My notes", "Quiet one", "Older thing"]);
     // The pending count follows the same filter: an agent's proposal is not "me".
@@ -407,14 +615,21 @@ describe("outputs.landed — objects that landed, pod-wide", () => {
   });
 
   it("errors throw — a hidden project, a bad cursor, a bad since — never an empty page", async () => {
-    await expect(landed({ projectId: HIDDEN_PROJECT })).rejects.toMatchObject({ code: "NOT_FOUND" });
-    await expect(landed({ cursor: "garbage" })).rejects.toBeInstanceOf(TRPCError);
-    await expect(landed({ since: "yesterday" })).rejects.toBeInstanceOf(TRPCError);
+    await expect(landed({ projectId: HIDDEN_PROJECT })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(landed({ cursor: "garbage" })).rejects.toBeInstanceOf(
+      TRPCError
+    );
+    await expect(landed({ since: "yesterday" })).rejects.toBeInstanceOf(
+      TRPCError
+    );
   });
 });
 
 describe("focusSessions.landed — sessions settled since, as their result", () => {
-  const caller = () => focusSessionsRouter.createCaller(ctx({ workspaceId: W1 }));
+  const caller = () =>
+    focusSessionsRouter.createCaller(ctx({ workspaceId: W1 }));
 
   it("settled (failures included) since, newest settled first; open and older sessions out; floor not header", async () => {
     const rows = await caller().landed({ since: ago(60) });
@@ -438,7 +653,10 @@ describe("focusSessions.landed — sessions settled since, as their result", () 
       plural: "Companies",
       icon: null,
     });
-    expect(s1.outputsSummary.top).toMatchObject({ title: "My notes", ref: { kind: "document", id: D_MINE } });
+    expect(s1.outputsSummary.top).toMatchObject({
+      title: "My notes",
+      ref: { kind: "document", id: D_MINE },
+    });
     expect(rows.find((r) => r.id === S.s2)!.outputsSummary.count).toBe(1);
   });
 });
@@ -465,18 +683,26 @@ describe("lastAgentActivityAt — on landed + get only, never the polled list", 
     const snapshot = await q<Record<string, unknown>>(`select * from messages`);
     await h.client!.exec(`alter table messages rename to messages_away;`);
     try {
-      const got = await focusSessionsRouter.createCaller(ctx()).get({ id: S.s3 });
+      const got = await focusSessionsRouter
+        .createCaller(ctx())
+        .get({ id: S.s3 });
       expect(got.liveness.status).toBe("unavailable");
       expect(got.id).toBe(S.s3);
     } finally {
       await h.client!.exec(`alter table messages_away rename to messages;`);
     }
-    expect((await q(`select * from messages`)).rows).toHaveLength(snapshot.rows.length);
+    expect((await q(`select * from messages`)).rows).toHaveLength(
+      snapshot.rows.length
+    );
   });
 
   it("landed rows carry it", async () => {
-    const rows = await focusSessionsRouter.createCaller(ctx()).landed({ since: ago(60) });
-    expect(near(rows.find((r) => r.id === S.s1)!.lastAgentActivityAt, ago(31))).toBe(true);
+    const rows = await focusSessionsRouter
+      .createCaller(ctx())
+      .landed({ since: ago(60) });
+    expect(
+      near(rows.find((r) => r.id === S.s1)!.lastAgentActivityAt, ago(31))
+    ).toBe(true);
   });
 
   it("list / browse rows do NOT (no query on the 30s poll)", async () => {
@@ -491,39 +717,104 @@ describe("lastAgentActivityAt — on landed + get only, never the polled list", 
 
 describe("proposals.list({ subject }) — Lineage 'Decided by' reaches the creating proposal", () => {
   const list = (input: Record<string, unknown>) =>
-    proposalsRouter.createCaller(ctx()).list({ status: "all", ...input } as never);
+    proposalsRouter
+      .createCaller(ctx())
+      .list({ status: "all", ...input } as never);
 
   it("targetId alone misses a composite's proposal; subject finds it, with the approver", async () => {
     const byTarget = await list({ targetId: E_COMP });
-    expect(byTarget.items.map((p: { id: string }) => p.id)).not.toContain(P_COMP);
+    expect(byTarget.items.map((p: { id: string }) => p.id)).not.toContain(
+      P_COMP
+    );
     const bySubject = await list({ subject: { kind: "entity", id: E_COMP } });
     const row = bySubject.items.find((p: { id: string }) => p.id === P_COMP) as
-      | { status: string; approverName?: string }
-      | undefined;
+      { status: string; approverName?: string } | undefined;
     expect(row).toBeDefined();
     expect(row!.status).toBe("approved");
     expect(row!.approverName).toBe("Antoine");
   });
 
   it("subject keeps every proposal targeting the object (receipt + later edits)", async () => {
-    const ids = (await list({ subject: { kind: "entity", id: E_AUTO } })).items.map((p: { id: string }) => p.id);
-    expect(ids).toEqual(expect.arrayContaining([P_RECEIPT, P_LATER_EDIT, P_EDIT]));
+    const ids = (
+      await list({ subject: { kind: "entity", id: E_AUTO } })
+    ).items.map((p: { id: string }) => p.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([P_RECEIPT, P_LATER_EDIT, P_EDIT])
+    );
   });
 
   it("the CREATING proposal is PINNED past the page, even after more edits than the limit", async () => {
     for (let i = 0; i < 30; i++) {
-      await proposal({ id: randomUUID(), status: "auto_approved", targetType: "entity", targetId: E_AUTO, proposalType: "entity.update", mins: 30 - i * 0.5, sessionId: S.s1, agent: AGENT });
+      await proposal({
+        id: randomUUID(),
+        status: "auto_approved",
+        targetType: "entity",
+        targetId: E_AUTO,
+        proposalType: "entity.update",
+        mins: 30 - i * 0.5,
+        sessionId: S.s1,
+        agent: AGENT,
+      });
     }
-    const page = await list({ subject: { kind: "entity", id: E_AUTO }, limit: 25 });
+    const page = await list({
+      subject: { kind: "entity", id: E_AUTO },
+      limit: 25,
+    });
     const ids = page.items.map((p: { id: string }) => p.id);
     expect(ids).toContain(P_RECEIPT);
     expect(ids).toHaveLength(26); // 25 newest edits + the pinned creation
     expect(ids.filter((id: string) => id === P_RECEIPT)).toHaveLength(1);
     // Without the pin the creation is past the page — the edits alone fill it.
     const plain = await list({ targetId: E_AUTO, limit: 25 });
-    expect(plain.items.map((p: { id: string }) => p.id)).not.toContain(P_RECEIPT);
+    expect(plain.items.map((p: { id: string }) => p.id)).not.toContain(
+      P_RECEIPT
+    );
     // Page 2 carries no second pin.
-    const next = await list({ subject: { kind: "entity", id: E_AUTO }, limit: 25, cursor: page.pagination.nextCursor });
-    expect(next.items.filter((p: { id: string }) => p.id === P_RECEIPT).length).toBeLessThanOrEqual(1);
+    const next = await list({
+      subject: { kind: "entity", id: E_AUTO },
+      limit: 25,
+      cursor: page.pagination.nextCursor,
+    });
+    expect(
+      next.items.filter((p: { id: string }) => p.id === P_RECEIPT).length
+    ).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("settledSince — list/browse narrow exactly like landedSince (the band's Show all)", () => {
+  it("browse + list with the landed statuses select exactly landedSince's rows, uncapped", async () => {
+    const c = focusSessionsRouter.createCaller(ctx());
+    const since = ago(60);
+    const everything = await c.list({ status: "all", limit: 50 });
+    const want = landedSince(everything, since, {
+      limit: Number.MAX_SAFE_INTEGER,
+    })
+      .map((r) => r.id)
+      .sort();
+    expect(want).toEqual([S.s1, S.s2, S.w2].sort()); // non-vacuous, and the touched/old rows are out
+    const browse = await c.browse({
+      status: [...LANDED_SESSION_STATUSES],
+      settledSince: since,
+      limit: 100,
+    } as never);
+    expect(browse.items.map((r: { id: string }) => r.id).sort()).toEqual(want);
+    const list = await c.list({
+      status: [...LANDED_SESSION_STATUSES],
+      settledSince: since,
+      limit: 50,
+    } as never);
+    expect(list.map((r) => r.id).sort()).toEqual(want);
+    // …and the band door agrees (it is capped; here the set is under the cap).
+    const band = await c.landed({ since });
+    expect(band.map((r) => r.id).sort()).toEqual(want);
+  });
+
+  it("settledSince only NARROWS (statusSince widens): without it the touched row is back", async () => {
+    const c = focusSessionsRouter.createCaller(ctx());
+    const plain = await c.browse({
+      status: [...LANDED_SESSION_STATUSES],
+      limit: 100,
+    } as never);
+    expect(plain.items.map((r: { id: string }) => r.id)).toContain(S.touched);
   });
 });

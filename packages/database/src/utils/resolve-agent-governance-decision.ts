@@ -1263,7 +1263,16 @@ export interface DryRunAgentGovernanceInput {
   userId?: string | null;
   agentUserId: string;
   workspaceId?: string | null;
-  subjectType: string;
+  /**
+   * The write's subject (`entity`, `document`, …). ABSENT (or empty) means
+   * `action` is the FULL event key a real write resolves under
+   * (`entity.create`, `entity.renderer.set`) — the shape every preview UI
+   * holds, because the action catalogue (`governanceRules.platformDefaults`)
+   * and rule patterns are event keys. {@link splitGovernanceEventKey} turns it
+   * back into the `(subjectType, action)` pair the gates pass, so the preview
+   * resolves the SAME `${subjectType}.${action}` key as the real write.
+   */
+  subjectType?: string | null;
   action: string;
   profileSlug?: string | null;
   door: GovernanceDoor;
@@ -1301,7 +1310,7 @@ export interface DryRunAgentGovernanceInput {
  * still resolve through the real gates at execution time).
  */
 export async function dryRunAgentGovernanceDecision(
-  input: DryRunAgentGovernanceInput
+  rawInput: DryRunAgentGovernanceInput
 ): Promise<{
   outcome: "auto" | "propose" | "deny";
   rung: string;
@@ -1321,6 +1330,15 @@ export async function dryRunAgentGovernanceDecision(
     matchedPattern: string;
   } | null;
 }> {
+  // ONE key: a bare event key (no subjectType) is split back into the pair
+  // the real gates pass. Before this, a preview sent `action:"entity.create"`
+  // with no subject and resolved the key `.entity.create` — which no rule,
+  // floor or whitelist ever matches — so every preview fell through to
+  // "Requires proposal · rung default" while the real write auto-applied.
+  const input = {
+    ...rawInput,
+    ...splitGovernanceEventKey(rawInput.subjectType, rawInput.action),
+  };
   const resolution = await resolveAgentGovernanceDecision({
     db: input.db,
     agentUserId: input.agentUserId,
@@ -1386,6 +1404,17 @@ export async function dryRunAgentGovernanceDecision(
         winningRule,
       };
     case "execute":
+      // Rung 2.8 decided: name the rule, not the retired JSONB list (the
+      // resolver reports a rule win as `explicitAutoApproveFor:[pattern]` for
+      // back-compat, which used to read as "the workspace's autoApproveFor").
+      if (resolution.governanceRuleId) {
+        return {
+          outcome: "auto",
+          rung: "governance-rule",
+          reason: `Matched governance rule "${resolution.explicitAutoApproveFor?.[0] ?? winningRule?.matchedPattern ?? ""}".`,
+          winningRule,
+        };
+      }
       return {
         outcome: "auto",
         rung: resolution.explicitAutoApproveFor
@@ -1397,6 +1426,25 @@ export async function dryRunAgentGovernanceDecision(
         winningRule,
       };
   }
+}
+
+/**
+ * `(subjectType?, action)` → the pair a real gate resolves. With a subject,
+ * returned as-is. Without one, `action` is a full event key and splits at the
+ * FIRST dot — subjects never contain a dot, actions may (`renderer.set`), so
+ * `entity.renderer.set` → `("entity", "renderer.set")`. The resolver re-joins
+ * them as `${subjectType}.${action}`, so the round-trip is the identity on the
+ * key. A dot-less action with no subject stays `("", action)` (fail-closed:
+ * it matches nothing, exactly as before).
+ */
+export function splitGovernanceEventKey(
+  subjectType: string | null | undefined,
+  action: string
+): { subjectType: string; action: string } {
+  if (subjectType) return { subjectType, action };
+  const dot = action.indexOf(".");
+  if (dot <= 0) return { subjectType: "", action };
+  return { subjectType: action.slice(0, dot), action: action.slice(dot + 1) };
 }
 
 /**

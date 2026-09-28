@@ -35,6 +35,7 @@ import {
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { resolvePreflightComposeTarget } from "../../services/preflight-compose-target.js";
 import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertPackageTierAccess } from "../../utils/tier-check.js";
@@ -142,6 +143,17 @@ export const definitionEngineProcedures = {
       return preflightWorkspaceFromDefinition({
         definition: input.definition as unknown as WorkspaceDefinitionInput,
         userId: ctx.userId,
+        // Same compose resolution the Hub doors use (a declared compose base).
+        composeTarget: await resolvePreflightComposeTarget({
+          definition: input.definition as {
+            dependencies?: Array<{
+              slug: string;
+              kind?: string;
+              relation?: string;
+            }>;
+          },
+          userId: ctx.userId,
+        }),
       });
     }),
 

@@ -18,6 +18,7 @@ import {
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
+import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
 import { resolveProjectForPackInstall } from "../../../services/resolve-project-for-pack-install.js";
 import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
 import {
@@ -450,6 +451,11 @@ export function registerPackagesRoutes(app: HubHono): void {
     const report = await preflightWorkspaceFromDefinition({
       definition: body as unknown as WorkspaceDefinitionInput,
       userId,
+      composeTarget: await resolvePreflightComposeTarget({
+        definition: body,
+        userId,
+        targetWorkspaceId: body.targetWorkspaceId,
+      }),
     });
     return c.json(report, 200);
   });
@@ -485,9 +491,17 @@ export function registerPackagesRoutes(app: HubHono): void {
     // lint only, never for a structural conflict). Not imported now: the export
     // isn't in this repo's installed package version yet, so importing it breaks
     // typecheck.
+    // A COMPOSE apply (`--onto`, or a declared compose base) resolves slugs its
+    // base contributes — the preflight must see the same target materialize
+    // will reconcile onto, or an overlay linking to its base's kinds 422s.
     const preflight = await preflightWorkspaceFromDefinition({
       definition: body as unknown as WorkspaceDefinitionInput,
       userId,
+      composeTarget: await resolvePreflightComposeTarget({
+        definition: body,
+        userId,
+        targetWorkspaceId: body.targetWorkspaceId,
+      }),
     });
     if (!preflight.ok) {
       return c.json(

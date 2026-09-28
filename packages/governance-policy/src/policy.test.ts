@@ -17,6 +17,7 @@ import {
   ARBITRARY_EXECUTION_EVENT_KEYS,
   DIRECT_PROPOSAL_DOORS,
   DESTRUCTIVE_ACTIONS,
+  capabilityVerbAllowsRuleWiden,
   PROPOSE_REASON,
   findUnsafeAutoApproveEntries,
   deriveGatePairFromOperations,
@@ -83,6 +84,16 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   configure_public_projection: "write", // workspace public-projection config door
   write: "write", // filesystem.write
 };
+
+describe("capabilityVerbAllowsRuleWiden", () => {
+  it("refuses to widen the three Postiz publish verbs and leaves gmail_send alone", () => {
+    expect(capabilityVerbAllowsRuleWiden("postiz_publish")).toBe(false);
+    expect(capabilityVerbAllowsRuleWiden("postiz_schedule")).toBe(false);
+    expect(capabilityVerbAllowsRuleWiden("postiz_draft")).toBe(false);
+    expect(capabilityVerbAllowsRuleWiden("gmail_send")).toBe(true);
+    expect(capabilityVerbAllowsRuleWiden(null)).toBe(true);
+  });
+});
 
 describe("requiredPermissionFor", () => {
   it("maps delete → delete", () => {

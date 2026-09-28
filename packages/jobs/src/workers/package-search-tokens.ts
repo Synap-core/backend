@@ -134,6 +134,14 @@ function collectPlaybooks(out: string[], playbooks: unknown): void {
   }
 }
 
+function collectSkillIntents(out: string[], skills: unknown): void {
+  for (const item of asArray(skills)) {
+    const skill = asRecord(item);
+    if (!skill) continue;
+    pushSlug(out, str(skill.intent));
+  }
+}
+
 function collectCapabilities(out: string[], capabilities: unknown): void {
   for (const item of asArray(capabilities)) {
     if (typeof item === "string") {
@@ -177,6 +185,7 @@ export function derivePackageSearchTokens(
 
   collectPlaybooks(out, def.playbooks);
   collectCapabilities(out, def.capabilities);
+  collectSkillIntents(out, def.skills);
   // YAML source uses `integrations[].templateKey`; the converter renames it.
   collectCapabilities(out, def.integrations);
 
@@ -185,6 +194,7 @@ export function derivePackageSearchTokens(
     pushSlug(out, str(capability.key));
     pushPhrase(out, str(capability.name));
     collectPlaybooks(out, capability.playbooks);
+    collectSkillIntents(out, capability.skills);
   }
 
   const workspace = asRecord(def.workspace);

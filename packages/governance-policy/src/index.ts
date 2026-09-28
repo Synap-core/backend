@@ -213,6 +213,27 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
  * branch merges can never auto-execute. Format used by the floor is the bare
  * action verb; event keys are `${subjectType}.${action}` (e.g. `entity.merge`).
  */
+/**
+ * Capability verb ids a stored `auto` rule must not widen to a direct run.
+ * The policy engine itself never sees a verb id — `capability-gate` consults
+ * this before `capabilityRuleAuthorizesRun`. Gmail and every other send stay
+ * off the list.
+ */
+export const PROPOSE_ONLY_CAPABILITY_VERBS = [
+  "postiz_draft",
+  "postiz_schedule",
+  "postiz_publish",
+] as const;
+
+export function capabilityVerbAllowsRuleWiden(
+  verbName: string | null | undefined
+): boolean {
+  if (!verbName) return true;
+  return !(PROPOSE_ONLY_CAPABILITY_VERBS as readonly string[]).includes(
+    verbName
+  );
+}
+
 export const DESTRUCTIVE_ACTIONS: readonly string[] = [
   "delete",
   "archive",

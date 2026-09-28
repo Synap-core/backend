@@ -425,7 +425,12 @@ export async function allAgentsScorecard(params: {
   // `computeAgentScorecard`) — any item disposition whose status is "reject".
   const isPartial = drizzleSql<boolean>`coalesce(jsonb_path_exists(${proposals.data}, '$.dispositions.*.status ? (@ == "reject")'), false)`;
 
-  const isRecent = drizzleSql<boolean>`(${proposals.createdAt} > now() - make_interval(days => ${RECENT_WRITES_WINDOW_DAYS}))`;
+  // The window is inlined as a SQL literal, never a bind parameter: this
+  // expression is both SELECTed and GROUPed BY, and Postgres treats `$1` and `$5`
+  // as different expressions — "created_at must appear in the GROUP BY clause"
+  // (a 500 on the live Agents page, 2026-09-28). The value is a module constant
+  // integer, so `sql.raw` carries no injection surface.
+  const isRecent = drizzleSql<boolean>`(${proposals.createdAt} > now() - make_interval(days => ${drizzleSql.raw(String(Math.trunc(RECENT_WRITES_WINDOW_DAYS)))}))`;
 
   const rows = await db
     .select({

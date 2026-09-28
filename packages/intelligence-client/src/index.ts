@@ -33,11 +33,13 @@ export {
   resolveAgent,
   getDefaultActiveService,
   setDefaultIntelligenceService,
+  selectPodDefaultService,
 } from "./intelligence-routing.js";
 
 export type {
   ServiceResolutionContext,
   ResolvedService,
+  IntelligenceServiceRow,
 } from "./intelligence-routing.js";
 
 export { resolveAgentForTask } from "./agent-routing.js";

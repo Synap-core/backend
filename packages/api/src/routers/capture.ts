@@ -27,6 +27,7 @@ import {
 import { ensureIntakeSession } from "../services/intake/ensure-intake-session.js";
 import { stageExecuteSources } from "../services/intake/stage-execute-sources.js";
 import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
+import { readInstalledPublicUrl } from "../services/capabilities/read-public-url.js";
 import {
   captureClarificationAnswered,
   claimCaptureQuestion,
@@ -1206,6 +1207,20 @@ const captureBaseRouter = router({
         input.text ??
         (input.file?.filename ? `[file: ${input.file.filename}]` : "");
 
+      // Additive. A lone URL is read in-process when a reader verb is installed,
+      // or named as one install invite when none is. Never fails the capture.
+      const publicUrlReader = readInstalledPublicUrl({
+        text: inputText,
+        userId,
+        workspaceId: workspaceId ?? null,
+        onLookupError: (err) => {
+          logger.warn(
+            { err, userId },
+            "capture.structure: capability intent lookup failed — reader omitted (not an install invite)"
+          );
+        },
+      });
+
       logger.debug(
         { userId, contentLength: input.text?.length ?? 0 },
         "Structure capture: calling IS"
@@ -1617,7 +1632,8 @@ const captureBaseRouter = router({
             podTimings,
           }),
         });
-        return { ...result, ...echo };
+        const reader = await publicUrlReader;
+        return { ...result, ...echo, ...(reader ? { reader } : {}) };
       };
 
       // Routing memory — recent corrections (negatives: the user moved the AI's

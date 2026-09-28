@@ -243,6 +243,7 @@ export {
   type CreateFromDefinitionOptions,
   type CreateFromDefinitionResult,
   type WorkspacePreflightReport,
+  type PreflightComposeTarget,
   type ResumeState,
 } from "./utils/create-workspace-from-definition.js";
 export { findUserDefaultWorkspaceId } from "./utils/user-default-workspace.js";

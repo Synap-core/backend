@@ -43,7 +43,10 @@ import { encryptServiceKey } from "../utils/service-key-crypto.js";
 import { auditLog } from "../utils/audit-log.js";
 import { getServiceEntry } from "../utils/agent-services/index.js";
 import { scopedProcedure } from "../middleware/api-key-auth.js";
-import { setDefaultIntelligenceService } from "../utils/intelligence-routing.js";
+import {
+  setDefaultIntelligenceService,
+  selectPodDefaultService,
+} from "../utils/intelligence-routing.js";
 import { SecretsVaultRepository } from "@synap/database";
 import {
   encryptConfig,
@@ -181,10 +184,17 @@ export const intelligenceRegistryRouter = router({
         conditions.push(eq(intelligenceServices.enabled, input.enabled));
       }
 
-      const services = await db.query.intelligenceServices.findMany({
-        where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: (services, { desc }) => [desc(services.createdAt)],
-      });
+      const [services, podDefault] = await Promise.all([
+        db.query.intelligenceServices.findMany({
+          where: conditions.length > 0 ? and(...conditions) : undefined,
+          orderBy: (services, { desc }) => [desc(services.createdAt)],
+        }),
+        // The row a space with no pin routes to — the resolver's OWN pod-default
+        // selector (is_default, else failover), never a re-derived flag read.
+        // `null` = the env service (step 5), which is no registered row, so
+        // every row is then honestly not the default.
+        selectPodDefaultService(),
+      ]);
 
       // Don't expose API keys in list
       return services.map((s) => ({
@@ -200,6 +210,8 @@ export const intelligenceRegistryRouter = router({
         metadata: s.metadata,
         status: s.status,
         enabled: s.enabled,
+        /** The pod default: what a space with no pinned service routes to. */
+        isDefault: podDefault !== null && podDefault.id === s.id,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
       }));
@@ -327,6 +339,18 @@ export const intelligenceRegistryRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Owner/admin only — the SAME floor `workspaces.setIntelligenceService`
+      // applies to the same `settings.intelligenceServiceId` key. Without it any
+      // member could re-route a space's AI. `ctx.workspaceRole` is the role
+      // `workspaceProcedure` already read from the membership row.
+      if (ctx.workspaceRole !== "owner" && ctx.workspaceRole !== "admin") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only workspace owner or admin can change intelligence service",
+        });
+      }
+
       // Verify the service exists and is active
       const service = await db.query.intelligenceServices.findFirst({
         where: and(

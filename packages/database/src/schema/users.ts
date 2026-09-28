@@ -15,6 +15,16 @@ import { entities } from "./entities.js";
 import { apiKeys } from "./api-keys.js";
 import { userPreferences } from "./user-preferences.js";
 
+/**
+ * Every value `users.created_via` may hold (null for humans and for agents
+ * older than migration 0225). `@synap-core/types/agents` owns the canonical
+ * list (`AGENT_ORIGINS`) and its classification (`AGENT_DIRECTION_BY_ORIGIN`);
+ * this package cannot import it, so `agent-users.ts` holds a compile-time
+ * equality floor between the two. A writer stamping a new value fails the
+ * build here first.
+ */
+export type AgentCreatedVia = "cli" | "ui" | "system" | "intelligence-service";
+
 export interface AgentMetadata {
   agentType: string;
   agentTemplate?: "twin" | "assistant" | "custom";
@@ -119,7 +129,7 @@ export const users = pgTable("users", {
   // How this agent-user came to exist — provenance for the Agent dashboard
   // ('cli' | 'intelligence-service' | 'ui' | 'system'). Null for humans and for
   // agents created before migration 0225. Stamped at each creation call-site.
-  createdVia: text("created_via"),
+  createdVia: text("created_via").$type<AgentCreatedVia>(),
   parentAgentId: text("parent_agent_id").references((): any => users.id, {
     onDelete: "set null",
   }),

@@ -604,6 +604,72 @@ export function registerWorkspaceExecutors(): void {
         return { success: true, primaryId: targetWorkspaceId };
       }
 
+      // `workspaces.setIntelligenceService` — pin a space to a service, or
+      // `null` = remove the pin (follow the pod default). REPLAYED through the
+      // procedure as the APPROVER, so the owner/admin floor, the active-service
+      // check and the null-removes-the-key write all run exactly as on the
+      // direct path (never a reconstructed settings patch).
+      if (inner.operation === "set_intelligence_service") {
+        const serviceId = inner.intelligenceServiceId;
+        if (
+          !Object.prototype.hasOwnProperty.call(
+            inner,
+            "intelligenceServiceId"
+          ) ||
+          (serviceId !== null && typeof serviceId !== "string")
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Intelligence service proposal is missing the chosen service",
+          });
+        }
+        const membership = await getWorkspaceMembership(
+          db,
+          targetWorkspaceId,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const { workspacesRouter } = await import("../../workspaces.js");
+        const workspaceCaller = workspacesRouter.createCaller({
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: targetWorkspaceId,
+          workspaceRole: membership.role,
+        } as unknown as Context);
+        assertApplied(
+          await workspaceCaller.setIntelligenceService({
+            workspaceId: targetWorkspaceId,
+            serviceId,
+          })
+        );
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId: targetWorkspaceId };
+      }
+
       if (inner.operation === "set_primary_surface") {
         const parsedSurface = workspaceRuntimePrimarySurfaceSchema
           .nullable()

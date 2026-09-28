@@ -25,7 +25,10 @@ import {
   apiKeys,
   workspaces,
 } from "@synap/database/schema";
-import type { WorkspaceSettings } from "@synap/database/schema";
+import type {
+  WorkspaceSettings,
+  AgentCreatedVia,
+} from "@synap/database/schema";
 import { verifyPermission } from "@synap/database";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
@@ -40,8 +43,27 @@ import {
 import { readReversibleDefault } from "@synap/database";
 import {
   AGENT_WRITE_MODE_LINE,
+  resolveAgentDirection,
   resolveAgentWriteMode,
+  type AgentDirection,
+  type AgentOrigin,
 } from "@synap-core/types/agents";
+
+/**
+ * Coverage floor: the values the `users.created_via` column accepts
+ * (`AgentCreatedVia`, `@synap/database`) and the origins the direction rule
+ * classifies (`AGENT_ORIGINS`, `@synap-core/types/agents`) are the SAME set.
+ * A writer that stamps a new origin must widen the column type, which breaks
+ * this line until the origin is added to `AGENT_ORIGINS` — which in turn
+ * breaks the build until `AGENT_DIRECTION_BY_ORIGIN` classifies it.
+ */
+type _OriginsAgree = [AgentCreatedVia] extends [AgentOrigin]
+  ? [AgentOrigin] extends [AgentCreatedVia]
+    ? true
+    : never
+  : never;
+const _originsAgree: _OriginsAgree = true;
+void _originsAgree;
 
 /**
  * Floor-first agent-user fetch backing `list`.
@@ -150,13 +172,25 @@ export function withAgentOrigin<
     pendingKeys: number;
     revokedKeys: number;
   },
->(row: T): T & { origin: string | null; builtIn: boolean } {
-  const podMade =
-    row.createdVia === "system" ||
-    row.createdVia === "intelligence-service" ||
-    row.isPersonalAgent === true;
+>(
+  row: T
+): T & { origin: string | null; builtIn: boolean; direction: AgentDirection } {
+  // `direction` is the ONE whose-agent rule (`resolveAgentDirection`): the
+  // pod's own (`house` — twin, system agents, IS personas, keyed or not) vs one
+  // a person brought (`external`). `podMade` below is the same partition, read
+  // off it so the two can never disagree.
+  const direction = resolveAgentDirection({
+    origin: row.createdVia,
+    isPersonalAgent: row.isPersonalAgent,
+  });
+  const podMade = direction === "house";
   const everKeyed = row.activeKeys + row.pendingKeys + row.revokedKeys > 0;
-  return { ...row, origin: row.createdVia, builtIn: podMade && !everKeyed };
+  return {
+    ...row,
+    origin: row.createdVia,
+    builtIn: podMade && !everKeyed,
+    direction,
+  };
 }
 
 /**
