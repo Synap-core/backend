@@ -8,7 +8,10 @@ import type {
   ProposalFieldDrift,
   ProposalReviewChange,
 } from "@synap-core/types";
-import { humanizeToken } from "@synap-core/types/vocabulary";
+import {
+  humanizeToken,
+  resolveSpaceBriefFieldLabel,
+} from "@synap-core/types/vocabulary";
 import { stableStringify } from "../../utils/stable-stringify.js";
 import {
   labelFromPath,
@@ -91,7 +94,7 @@ export function buildProposalChanges(
       return [
         {
           path: `onboarding.${c.field}`,
-          label: humanizeToken(c.field),
+          label: resolveSpaceBriefFieldLabel(c.field),
           operation:
             before === undefined
               ? ("create" as const)

@@ -61,6 +61,7 @@ describe("update_brief — the narrow patch", () => {
         purpose: "P",
         doneWhen: null,
         framing: "New voice",
+        anchors: [{ profileSlug: "brand-identity", role: "root" }],
       })
     );
     const rows = buildProposalChanges(
@@ -79,10 +80,17 @@ describe("update_brief — the narrow patch", () => {
       ["onboarding.purpose", "Purpose", "create", undefined, "P"],
       [
         "onboarding.framing",
-        "Framing",
+        "Persona",
         "update",
         "THE BRAND STRATEGIST",
         "New voice",
+      ],
+      [
+        "onboarding.anchors",
+        "Read first",
+        "create",
+        undefined,
+        [{ profileSlug: "brand-identity", role: "root" }],
       ],
     ]);
   });

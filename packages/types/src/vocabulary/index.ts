@@ -24,6 +24,7 @@
  */
 
 import { OBJECT_KINDS, OBJECT_KIND_ALIASES } from "./object-kinds.js";
+import type { SpaceBrief } from "../space-brief/index.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -1109,3 +1110,39 @@ export function resolveMembersDecideLabel(
   const noun = resolveObjectNoun(kind) || "Item";
   return `${noun} members decide`;
 }
+
+// ─── Space brief fields (`SpaceBrief`, stored at settings.onboarding) ────────
+
+/**
+ * What a space brief's fields are CALLED wherever a person reads them (the
+ * brief-edit proposal card, a brief editor). The storage keys are historical
+ * (`framing`, `collect`, `anchors`) and humanize into words that mean nothing
+ * to a reader ("Framing", "Collect"). Keyed by `keyof SpaceBrief`, so a new
+ * brief field is a BUILD error here until it is named — never a raw token.
+ */
+export const SPACE_BRIEF_FIELD_LABELS: Readonly<
+  Record<keyof SpaceBrief, string>
+> = {
+  purpose: "Purpose",
+  goal: "Goal",
+  framing: "Persona",
+  expertise: "Expertise",
+  collect: "Kinds to collect",
+  openingQuestions: "Opening questions",
+  doneWhen: "Done when",
+  anchors: "Read first",
+  rules: "Rules",
+  fetch: "Where to look",
+};
+
+/** The label for a brief field; an unknown key humanizes rather than leaks. */
+export function resolveSpaceBriefFieldLabel(
+  field: string | null | undefined
+): string {
+  if (!field) return "";
+  return (
+    (SPACE_BRIEF_FIELD_LABELS as Readonly<Record<string, string>>)[field] ??
+    humanizeToken(field)
+  );
+}
+
