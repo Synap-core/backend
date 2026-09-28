@@ -27757,6 +27757,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string | null;
 				email: string;
 				agentMetadata: AgentMetadata | null;
+				createdVia: string | null;
+				isPersonalAgent: boolean;
+			} & {
+				origin: string | null;
+				builtIn: boolean;
 			} & AgentPresence)[];
 			meta: object;
 		}>;
@@ -27788,6 +27793,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				status: "updated";
 				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		disconnect: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+			};
+			output: {
+				revokedCount: number;
 			};
 			meta: object;
 		}>;
