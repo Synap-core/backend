@@ -197,6 +197,10 @@
       "types": "./dist/ask/index.d.ts",
       "import": "./dist/ask/index.js"
     },
+    "./landed": {
+      "types": "./dist/landed/index.d.ts",
+      "import": "./dist/landed/index.js"
+    },
     "./needs-you": {
       "types": "./dist/needs-you/index.d.ts",
       "import": "./dist/needs-you/index.js"

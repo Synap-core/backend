@@ -597,6 +597,10 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // The proposal's effect was taken back after approval. One word for the row's
   // status chip on every surface (the workbench and the phone both name it).
   reverted: "Reverted",
+  // A write that landed with no decision in between (a person's own write, or
+  // a legacy row with no receipt) — the `applied` state of a landed object
+  // (`@synap-core/types/landed`), beside `approved` / `auto_approved`.
+  applied: "Applied",
   // NOT a `proposals.status` enum value, and deliberately so: partial approval
   // ships as per-item dispositions, the row keeps storing `approved`, and the
   // reviewer's per-item denials live in `data.dispositions`. It IS a real
