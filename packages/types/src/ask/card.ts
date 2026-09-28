@@ -47,6 +47,11 @@ export const ASK_COPY = {
   /** The surface appends " · {age}" itself. */
   youAnswered: (answer: string): string => `You answered: ${answer}`,
   agentHasIt: "The agent has it back.",
+  /**
+   * The heading over an ask's `lookedAt` — the objects the agent read before
+   * asking (trust-ladder rung 1). The agent speaks, so it is first person.
+   */
+  lookedAt: "What I looked at",
   provideTitle: "Not answerable here yet",
   provideBody: "Talk it through with the agent.",
   /**
