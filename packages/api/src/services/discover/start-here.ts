@@ -12,6 +12,7 @@ import {
   profileDisplayName,
   USED_MOST_LIMIT,
   type RankableProfile,
+  type RankedProfile,
 } from "./profile-ranking.js";
 import type { StartHere } from "./discover.js";
 
@@ -68,26 +69,48 @@ async function readSessionsOwingGrade(
   }
 }
 
+/** A listed profile row as the ranking and the space brief read it. */
+export type LensProfile = RankableProfile & {
+  profileKind?: string;
+  parentProfileId?: string | null;
+  uiHints?: unknown;
+};
+
+/**
+ * THE lens's profile listing, ranked by usage AT that lens — read once and
+ * shared by `topKinds` and the space brief's `keyKinds` (a pinned orient
+ * computes both from this one read). THROWS on a failed read; each consumer
+ * decides how to surface it.
+ */
+export async function readRankedLensProfiles(p: {
+  caller: HubProtocolCaller;
+  userId: string;
+  workspaceId?: string;
+}): Promise<Array<RankedProfile<LensProfile>>> {
+  const res = await p.caller.profiles.listProfiles({
+    userId: p.userId,
+    ...(p.workspaceId ? { workspaceId: p.workspaceId } : {}),
+  });
+  const profiles = ((res as { profiles?: unknown }).profiles ??
+    []) as LensProfile[];
+  // Rank the WHOLE listing — so a kind's `rank` is the same number
+  // `GET /discover?summary=true` gives it at the same lens.
+  const { ranked } = await rankProfilesByUsage({
+    userId: p.userId,
+    workspaceId: p.workspaceId,
+    profiles: profiles.filter((row) => Boolean(row.slug)),
+  });
+  return ranked;
+}
+
 async function readTopKinds(p: {
   caller: HubProtocolCaller;
   userId: string;
   workspaceId?: string;
+  ranked?: Promise<Array<RankedProfile<LensProfile>>>;
 }): Promise<StartHere["topKinds"]> {
   try {
-    const res = await p.caller.profiles.listProfiles({
-      userId: p.userId,
-      ...(p.workspaceId ? { workspaceId: p.workspaceId } : {}),
-    });
-    const profiles = ((res as { profiles?: unknown }).profiles ?? []) as Array<
-      RankableProfile & { profileKind?: string }
-    >;
-    // Rank the WHOLE listing, then keep kinds — so a kind's `rank` is the same
-    // number `GET /discover?summary=true` gives it at the same lens.
-    const { ranked } = await rankProfilesByUsage({
-      userId: p.userId,
-      workspaceId: p.workspaceId,
-      profiles: profiles.filter((row) => Boolean(row.slug)),
-    });
+    const ranked = await (p.ranked ?? readRankedLensProfiles(p));
     return ranked
       .filter(
         (r) => r.score > 0 && (r.profile.profileKind ?? "kind") === "kind"
@@ -199,6 +222,8 @@ export async function buildStartHere(p: {
   workspaceId?: string;
   pending: PendingReviewState;
   learnMoreSkill: string;
+  /** The lens listing, when the caller already started reading it. */
+  ranked?: Promise<Array<RankedProfile<LensProfile>>>;
 }): Promise<StartHere> {
   const [openSessions, sessionsOwingGrade, topKinds, actions, openFindings] =
     await Promise.all([

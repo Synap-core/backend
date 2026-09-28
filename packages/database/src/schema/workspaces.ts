@@ -556,6 +556,8 @@ export interface WorkspaceSettings {
       cardinality?: "one" | "few" | "several";
       keyFields?: string[];
     }>;
+    /** Authored domain expertise — mirrors `OnboardingExpertise` in package-definition.ts. */
+    expertise?: { starters?: string[]; blindSpots?: string[]; bar?: string };
     openingQuestions?: string[];
     doneWhen?: string;
   };

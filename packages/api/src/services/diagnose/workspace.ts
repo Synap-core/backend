@@ -40,6 +40,7 @@
 import { db, and, eq, workspaces } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { loadEntityUsage } from "../discover/usage-aggregate.js";
+import { resolveAuthoredDescription } from "../discover/space-brief.js";
 import type { ClassReport, ObjectReport } from "./types.js";
 
 /** Beyond this many workspaces the in-memory pairwise pass is skipped. */
@@ -49,16 +50,10 @@ const MAX_REPORTED_PAIRS = 20;
 /** Jaccard at or above this reads as "these two are the same lens twice". */
 export const NEAR_DUPLICATE_JACCARD = 0.5;
 
-/**
- * A machine-generated stand-in for a description, not authored identity.
- * `orient` against the live pod returns `description: "Domain: builder"` for
- * nine of ten workspaces; the current source no longer renders that fallback
- * (see the comment in `discover.ts`), so the value is either persisted or still
- * produced by the deployed build. Either way, counting it as an authored
- * description would report identity that nobody wrote — which is the exact
- * blind spot this surface exists to expose.
- */
-const PLACEHOLDER_DESCRIPTION = /^\s*domain:\s*\S+\s*$/i;
+// A `Domain: x` stand-in is not authored identity: counting it would report a
+// purpose nobody wrote — the blind spot this surface exists to expose. The ONE
+// rule lives in `resolveAuthoredDescription` (`discover/space-brief.ts`),
+// shared with orient and the space brief.
 
 /** One workspace as the landscape sees it. Pure data — no DB types leak out. */
 export interface WorkspaceLandscapeRow {
@@ -383,16 +378,13 @@ async function loadLandscape(
     const bucket = byWs.get(w.id);
     const settings = (w.settings ?? {}) as Record<string, unknown>;
     const onboarding = settings.onboarding as { goal?: unknown } | undefined;
-    const desc =
-      typeof w.description === "string" && w.description.trim()
-        ? w.description.trim()
-        : null;
+    const desc = resolveAuthoredDescription(w.description);
     return {
       id: w.id,
       name: w.name,
       domain: w.domain ?? null,
       workspaceType: w.workspaceType ?? null,
-      description: desc && !PLACEHOLDER_DESCRIPTION.test(desc) ? desc : null,
+      description: desc,
       onboardingGoal:
         typeof onboarding?.goal === "string" ? onboarding.goal : null,
       hasOnboarding: Boolean(onboarding),
