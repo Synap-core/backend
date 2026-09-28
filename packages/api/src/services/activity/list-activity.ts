@@ -11,9 +11,9 @@
  *              REVIEWER, at `reviewed_at`.
  *   run      — automation + playbook runs, at `coalesce(completed_at,
  *              started_at)`. An automation run is a RULE acting (`system`).
- *   session  — one row per WORK session (the population `listSessionRuns`
- *              reads: no receipts, no runs, no appointments, no session that a
- *              playbook run already carries): "started" at its start while it
+ *   session  — one row per session of the project-path population (work +
+ *              tracked runs; no receipts, no untracked runs, no appointments,
+ *              no session that a playbook run already carries): "started" at its start while it
  *              is live, "closed" at `coalesce(closed_at, updated_at)` once it
  *              settled.
  *
@@ -100,7 +100,7 @@ import { displayNameForUser } from "../../routers/proposals/helper-functions.js"
 import { proposalPayloadTargetName } from "../../routers/proposals/display.js";
 import { proposalNeighborNames } from "../object-graph/graph-service.js";
 import { proposalChangeCountSql } from "../proposals/object-subject.js";
-import { sessionKindWhere } from "../focus-sessions/session-kind.js";
+import { workAndTrackedRunsWhere } from "../focus-sessions/session-list-conditions.js";
 
 export interface ActivityQuery {
   database?: typeof db;
@@ -112,6 +112,8 @@ export interface ActivityQuery {
   roster: boolean;
   actor: ParsedActivityActorFilter;
   projectId?: string;
+  /** Only acts inside this track's sessions (automation runs never are). */
+  trackId?: string;
   outcome?: ActivityOutcome;
   source?: ActivitySource;
   since?: string;
@@ -257,6 +259,10 @@ const DECISION_STATUSES = [
 
 const LIVE_SESSION_STATUSES = ["active", "paused", "forming"] as const;
 
+/** A proposal filed into one of this track's sessions. */
+const proposalInTrack = (trackId: string) =>
+  drizzleSql`exists (select 1 from ${focusSessions} where ${focusSessions.id} = ${proposals.sessionId} and ${focusSessions.trackId} = ${trackId})`;
+
 function proposalFloor(viewer: string, lens: Lens): SQL {
   const floor = or(
     and(
@@ -313,6 +319,7 @@ async function readProposalActs(
         // The session source carries a session's lifecycle once.
         drizzleSql`not (${proposals.targetType} = 'focus_session' and ${proposals.status} = 'auto_approved')`,
         q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
+        q.trackId ? proposalInTrack(q.trackId) : undefined,
         statuses ? inArray(proposals.status, statuses as never[]) : undefined,
         actor,
         ...window(at, key, cursor, q.since)
@@ -375,6 +382,7 @@ async function readDecisions(
         isNotNull(proposals.reviewedAt),
         inArray(proposals.status, statuses as never[]),
         q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
+        q.trackId ? proposalInTrack(q.trackId) : undefined,
         actor,
         ...window(at, key, cursor, q.since)
       )
@@ -404,7 +412,7 @@ async function readAutomationRuns(
 ): Promise<Candidate[]> {
   // A rule acts on its own: it is never "an agent" or "me", and it has no
   // project to be filed under.
-  if (q.actor.kind !== "all" || q.projectId) return [];
+  if (q.actor.kind !== "all" || q.projectId || q.trackId) return [];
   const statuses = statusesFor(
     automationRuns.status.enumValues,
     activityOutcomeForRun,
@@ -505,6 +513,7 @@ async function readPlaybookRuns(
           ownAgentUserFilter(playbookRuns.createdBy, viewer)
         ),
         q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
+        q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
         statuses
           ? inArray(playbookRuns.status, statuses as never[])
           : undefined,
@@ -572,10 +581,14 @@ async function readSessions(
       and(
         scopedDb(q.access).predicate(focusSessions),
         // The work population the runs feed's session flow reads.
-        sessionKindWhere("work"),
+        // The project path's population: work, plus run sessions filed in a
+        // track (a track's stage sessions). A run carried by a playbook_runs
+        // row is excluded below, so nothing is listed twice.
+        workAndTrackedRunsWhere(),
         ne(focusSessions.status, "scheduled"),
         isNull(playbookRuns.id),
         q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
+        q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
         statuses
           ? inArray(focusSessions.status, statuses as never[])
           : undefined,

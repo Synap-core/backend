@@ -81,6 +81,10 @@ const S_OPEN = randomUUID();
 const S_DONE = randomUUID();
 const S_PB = randomUUID();
 const S_STR = randomUUID();
+// A track in PROJ: S_OPEN is filed in it, and S_TRK is a tracked RUN session
+// (playbook-minted, no playbook_runs row) — the project path's population.
+const TRACK = randomUUID();
+const S_TRK = randomUUID();
 const E_ADA = randomUUID();
 const P_AUTO = randomUUID();
 const P_APPR = randomUUID();
@@ -231,6 +235,22 @@ beforeAll(async () => {
     origin: "agent",
     metadata: { agentUserId: AGENT },
   });
+  await session(S_TRK, {
+    goal: "Stage 2 — outline",
+    status: "active",
+    started: 15,
+    origin: "playbook",
+    metadata: { agentUserId: AGENT },
+  });
+  await q(`update focus_sessions set track_id = $1 where id in ($2, $3)`, [
+    TRACK,
+    S_OPEN,
+    S_TRK,
+  ]);
+  await q(`update focus_sessions set playbook_id = $1 where id = $2`, [
+    randomUUID(),
+    S_TRK,
+  ]);
   await session(S_DONE, {
     goal: "Tidy inbox",
     status: "closed",
@@ -477,6 +497,17 @@ describe("activity.list — one ledger through the real door", () => {
       ])
     );
     expect(items.every((r) => r.project?.id === PROJ)).toBe(true);
+  });
+
+  it("the track filter narrows to that track's sessions and what was filed in them", async () => {
+    const { items } = await list({ trackId: TRACK, limit: 100 });
+    expect(new Set(ids(items))).toEqual(
+      new Set([`proposal:${P_AUTO}`, `session:${S_OPEN}`, `session:${S_TRK}`])
+    );
+    // A tracked run session is in the population even with no filter.
+    expect(ids((await list({ limit: 100 })).items)).toContain(
+      `session:${S_TRK}`
+    );
   });
 
   it("decided = the decisions a person made", async () => {

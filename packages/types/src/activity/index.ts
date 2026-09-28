@@ -300,6 +300,8 @@ export interface ActivityFilter {
   actor?: ActivityActorFilter;
   /** Only acts filed into / run under this project. */
   projectId?: string;
+  /** Only acts inside this track's sessions (automation runs never are). */
+  trackId?: string;
   /**
    * Same three-state lens as `signals`: a string = that workspace, `null` =
    * pod-personal only, absent = the WHOLE floor (never the active-workspace

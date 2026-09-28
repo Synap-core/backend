@@ -87,6 +87,13 @@ export interface SessionListQuery {
    */
   includeTrackedRuns?: boolean;
   /**
+   * Only sessions filed in this TRACK (`focus_sessions.track_id`) — the Work
+   * header's track filter inside a project. A track's stage sessions are
+   * `run`-kind, so pair it with `includeTrackedRuns` (or `kind: "all"`) to see
+   * them; alone, under `kind: "work"`, it lists the track's work sessions.
+   */
+  trackId?: string;
+  /**
    * Also list sessions the caller reads through the HUMAN ROSTER of the
    * session's room (`sessionReadableWhere`, founder decision C). Default false:
    * a door that does not opt in keeps the owner-only population — which is
@@ -127,6 +134,7 @@ export function sessionListConditions({
   q,
   unfiled,
   includeTrackedRuns,
+  trackId,
   roster,
 }: SessionListQuery): SQL[] {
   const conditions: SQL[] = [
@@ -139,6 +147,9 @@ export function sessionListConditions({
   conditions.push(...sessionScopeConditions({ workspaceLens, projectLens }));
   if (unfiled) {
     conditions.push(isNull(focusSessions.projectId));
+  }
+  if (trackId) {
+    conditions.push(eq(focusSessions.trackId, trackId));
   }
 
   // STATUS and its recency windows. See `session-status-filter.ts` for why a

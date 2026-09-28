@@ -401,6 +401,23 @@ const sessionLinksRouter = router({
  * not on the page. Pair it with an open-status set + `statusSince` to read
  * "everything open, plus what settled recently".
  */
+/**
+ * `includeTrackedRuns` widens the `work` population, so it is a caller error
+ * with any other kind — one refusal for `list` and `browse`.
+ */
+function assertTrackedRunsKind(input: {
+  includeTrackedRuns?: boolean;
+  kind?: string;
+}): void {
+  if (input.includeTrackedRuns && input.kind !== "work") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        'includeTrackedRuns widens the "work" population; it cannot combine with another kind',
+    });
+  }
+}
+
 function queryUserSessions(
   query: SessionListQuery,
   limit: number,
@@ -587,6 +604,8 @@ export const focusSessionsRouter = router({
          * any kind other than `work`.
          */
         includeTrackedRuns: z.boolean().optional(),
+        /** Only sessions filed in this track — see `SessionListQuery.trackId`. */
+        trackId: z.string().uuid().optional(),
         /**
          * `started` (default): newest-started first — unchanged for every
          * existing consumer. `open_first`: every OPEN session before every
@@ -617,13 +636,7 @@ export const focusSessionsRouter = router({
       // `blockedBy`/`waitsOnOutputs` were erased from the api-types snapshot
       // and no typed client could see a dependency edge. Optional here means
       // "present when `edges: true`", which is the true contract.
-      if (input.includeTrackedRuns && input.kind !== "work") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            'includeTrackedRuns widens the "work" population; it cannot combine with another kind',
-        });
-      }
+      assertTrackedRunsKind(input);
       const scope = resolveScope(ctx, input);
       const sessions = await queryUserSessions(
         {
@@ -640,6 +653,7 @@ export const focusSessionsRouter = router({
           settledSince: input.settledSince,
           unfiled: input.unfiled,
           includeTrackedRuns: input.includeTrackedRuns,
+          trackId: input.trackId,
           // Shared sessions (human roster of the room) list too — decision C.
           roster: rosterReadFor(ctx),
         },
@@ -712,10 +726,20 @@ export const focusSessionsRouter = router({
         q: z.string().trim().max(200).optional(),
         /** Only sessions filed in no project — see `SessionListQuery.unfiled`. */
         unfiled: z.boolean().optional(),
+        /**
+         * Widen `kind: "work"` by the RUN sessions filed in a track — the same
+         * flag and population as `list` (`workAndTrackedRunsWhere`), so a
+         * search finds a tracked run the list shows. Refused with any kind
+         * other than `work`.
+         */
+        includeTrackedRuns: z.boolean().optional(),
+        /** Only sessions filed in this track — see `SessionListQuery.trackId`. */
+        trackId: z.string().uuid().optional(),
         limit: z.number().int().min(1).max(100).default(30),
       })
     )
     .query(async ({ ctx, input }) => {
+      assertTrackedRunsKind(input);
       const scope = resolveScope(ctx, input);
       const rows = await db
         .select()
@@ -732,6 +756,8 @@ export const focusSessionsRouter = router({
               settledSince: input.settledSince,
               q: input.q,
               unfiled: input.unfiled,
+              includeTrackedRuns: input.includeTrackedRuns,
+              trackId: input.trackId,
               roster: rosterReadFor(ctx),
             })
           )

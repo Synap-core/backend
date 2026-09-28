@@ -49,6 +49,8 @@ export const activityRouter = router({
         /** `all` | `agents` | `me` | `agent:<agentUserId>`. */
         actor: z.string().max(200).default("all"),
         projectId: z.string().uuid().optional(),
+        /** Only acts inside this track's sessions. */
+        trackId: z.string().uuid().optional(),
         /**
          * Same three-state lens as `signals`: a string = that workspace,
          * `null` = pod-personal only, absent = the WHOLE floor (never the
@@ -83,6 +85,7 @@ export const activityRouter = router({
         roster: rosterReadFor(ctx),
         actor,
         projectId: input.projectId,
+        trackId: input.trackId,
         outcome: input.outcome,
         source: input.source,
         since: input.since,
