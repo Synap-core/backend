@@ -21,7 +21,7 @@
  * Capped: a project with more open sessions than the cap reports `truncated`,
  * and the count is a FLOOR — never a silent under-count.
  *
- * SESSION-KIND-LENS-EXEMPT: returns a count, never a session row; the population is projectPathConditions (kind + triage lens applied in SQL).
+ * SESSION-KIND-LENS-EXEMPT: returns a count or a narrow {id, title, goal, updatedAt} projection for a needs-you signal row, never a session row; the population is projectPathConditions (kind + triage lens applied in SQL).
  */
 
 import { db, focusSessions, and, desc, inArray } from "@synap/database";
@@ -33,11 +33,35 @@ import { projectPathConditions } from "./project-path.js";
 /** How many open sessions one project's review scan reads before it is a floor. */
 export const REVIEW_SCAN_LIMIT = 100;
 
+/** One project session whose next move is the person's acceptance. */
+export interface ReviewSessionRow {
+  id: string;
+  title: string | null;
+  goal: string | null;
+  /** When the session last moved — the row's `occurredAt`. */
+  updatedAt: Date;
+}
+
+/**
+ * The count, derived from THE list — so a badge that counts review sessions
+ * and a tray that lists them can never disagree (W2 "one number, one
+ * predicate").
+ */
 export async function countProjectSessionsAwaitingReview(q: {
   userId: string;
   projectId: string;
   database?: typeof db;
 }): Promise<{ review: number; truncated: boolean }> {
+  const { sessions, truncated } = await listProjectSessionsAwaitingReview(q);
+  return { review: sessions.length, truncated };
+}
+
+/** The review population as ROWS — what `signals.list` emits under a project. */
+export async function listProjectSessionsAwaitingReview(q: {
+  userId: string;
+  projectId: string;
+  database?: typeof db;
+}): Promise<{ sessions: ReviewSessionRow[]; truncated: boolean }> {
   const database = q.database ?? db;
   const rows = await database
     .select()
@@ -61,8 +85,13 @@ export async function countProjectSessionsAwaitingReview(q: {
     database,
     logContext: { projectId: q.projectId, door: "projectNeedsYou" },
   });
-  const review = withFacts.filter(
-    (r) => needsYouReason(r.unitFacts) === "review"
-  ).length;
-  return { review, truncated };
+  const sessions = withFacts
+    .filter((r) => needsYouReason(r.unitFacts) === "review")
+    .map((r) => ({
+      id: r.id,
+      title: r.title ?? null,
+      goal: r.goal ?? null,
+      updatedAt: new Date(r.updatedAt),
+    }));
+  return { sessions, truncated };
 }

@@ -49,6 +49,8 @@ import {
   drizzleSql,
   openRunSession,
   normalizeCommandNodeData,
+  liveRunStatusWhere,
+  isLiveRunStatus,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
@@ -382,7 +384,7 @@ async function executeAutomationFlow(params: {
         .where(
           and(
             eq(automationRuns.id, runId),
-            eq(automationRuns.status, "running"),
+            liveRunStatusWhere(automationRuns.status),
             isNull(automationRuns.definitionSnapshot)
           )
         )
@@ -1929,7 +1931,12 @@ async function executeAutomationFlow(params: {
         })
       )
       .where(
-        and(eq(automationRuns.id, runId), eq(automationRuns.status, "running"))
+        // LIVE (running | waiting_on_you): a run the reaper parked while it
+        // was still walking must still record its verdict here.
+        and(
+          eq(automationRuns.id, runId),
+          liveRunStatusWhere(automationRuns.status)
+        )
       );
 
     // Claims protect a live run from concurrent writers. Once a run has
@@ -2115,7 +2122,7 @@ export async function handleAutomationExecute(job: {
   // recorded an honest failure). Re-executing would duplicate side effects and
   // could overwrite that verdict — skip instead. Delay-resume is unaffected
   // (a suspended run's row stays 'running').
-  if (run.status !== "running") {
+  if (!isLiveRunStatus(run.status)) {
     logger.warn(
       { runId, status: run.status },
       "Skipping automation execution: run already finalized"
@@ -2156,7 +2163,7 @@ export async function handleAutomationExecute(job: {
       .where(
         and(
           eq(automationRuns.id, runId),
-          eq(automationRuns.status, "running"),
+          liveRunStatusWhere(automationRuns.status),
           RUN_NOT_DELAY_SUSPENDED
         )
       );

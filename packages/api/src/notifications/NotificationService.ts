@@ -485,6 +485,11 @@ export const NotificationService = {
       // this read alone is a read-then-write two simultaneous events could
       // both pass. The insert below closes that race on `dedupe_key` — set
       // ONLY for windowed types — with a partial unique index (0281).
+      //
+      // OPEN rows only (W2 review): a row the person already READ (or
+      // dismissed/actioned) is news they have seen; the next occurrence is
+      // new news and must land, even inside the window. Only a repeat of
+      // something still unread (or snoozed) is noise.
       if (def.dedupeWindowMs) {
         if (!groupKey) {
           logger.warn(
@@ -500,6 +505,7 @@ export const NotificationService = {
                 eq(notifications.userId, input.userId),
                 eq(notifications.type, input.type),
                 eq(notifications.groupKey, groupKey),
+                drizzleSql`${notifications.status} IN ('unread', 'snoozed')`,
                 gte(
                   notifications.createdAt,
                   new Date(Date.now() - def.dedupeWindowMs)
@@ -563,6 +569,10 @@ export const NotificationService = {
             workspaceUrl: input.workspaceUrl ?? null,
             actions: def.actions ?? [],
             createdAt: drizzleSql`now()`,
+            // New news resurfaces: a snoozed row that is re-raised comes back
+            // unread (the snooze deferred the OLD occurrence, not this one).
+            status: "unread",
+            snoozedUntil: null,
           })
           .where(
             and(

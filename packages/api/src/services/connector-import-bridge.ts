@@ -433,8 +433,11 @@ export async function syncConnectionToImport(
     // OWNER (they reconnect/fix it). Scoped to THIS sync entry — generic agent
     // reads via `pullToImport` do NOT notify, so a transient read blip never
     // fans a high-priority alert (the alert-fatigue anti-pattern). groupKey
-    // collapses repeats per provider. Best-effort, non-fatal; the throw is
-    // preserved so callers' error handling is unchanged.
+    // collapses repeats per CONNECTION (two Gmail accounts failing are two
+    // things to fix, not one), scoped `pod` when the sync has no workspace —
+    // never a literal "null:" prefix. The registry dedupes it per day.
+    // Best-effort, non-fatal; the throw is preserved so callers' error
+    // handling is unchanged.
     const provider = connectionId.split(":")[2] ?? model;
     await NotificationService.create({
       type: "connector.sync.failed",
@@ -442,7 +445,7 @@ export async function syncConnectionToImport(
       sourceId: connectionId,
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
-      groupKey: `${ctx.workspaceId}:connector.sync.failed:${provider}`,
+      groupKey: connectorSyncFailedGroupKey(ctx.workspaceId, connectionId),
       data: {
         connectorName: provider,
         errorMessage: err instanceof Error ? err.message : "Sync failed",
@@ -459,4 +462,15 @@ export async function syncConnectionToImport(
     itemCount: result.itemCount,
     source: result.source,
   };
+}
+
+/**
+ * The `connector.sync.failed` dedupe identity: one per CONNECTION, in its
+ * workspace or `pod`. Pure; exported for the test that pins it.
+ */
+export function connectorSyncFailedGroupKey(
+  workspaceId: string | null | undefined,
+  connectionId: string
+): string {
+  return `${workspaceId ?? "pod"}:connector.sync.failed:${connectionId}`;
 }

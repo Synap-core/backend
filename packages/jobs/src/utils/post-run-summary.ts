@@ -40,6 +40,8 @@ import {
   automationStepRuns,
   computeMessageHash,
   ChannelRepository,
+  settledRunStatusWhere,
+  isLiveRunStatus,
 } from "@synap/database";
 import {
   messages,
@@ -471,7 +473,7 @@ async function isFirstSuccessAfterFailure(
     where: and(
       eq(automationRuns.automationId, run.automationId),
       ne(automationRuns.id, run.id),
-      ne(automationRuns.status, "running"),
+      settledRunStatusWhere(automationRuns.status),
       lt(automationRuns.startedAt, run.startedAt)
     ),
     orderBy: desc(automationRuns.startedAt),
@@ -504,7 +506,8 @@ export async function postRunSummary(
     // after a guarded UPDATE that is a no-op for a delay-suspended run (row stays
     // `running`) — never narrate that as a failure. The reaper always stamps the
     // row terminal before calling, so its `timeout` path still passes here.
-    if (run.status === "running") return;
+    // `waiting_on_you` is not terminal either — it is parked on the person.
+    if (isLiveRunStatus(run.status)) return;
     // A precondition-`skipped` run (Wave 4.V3) did no work and is not a failure —
     // narrate it quietly (the skipped run row itself is the record in the runs
     // UI); posting a chat summary would be noise, and classifying it below would

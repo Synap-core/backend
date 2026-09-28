@@ -140,7 +140,8 @@ export const notifications = pgTable(
       .on(t.userId, t.workspaceId)
       .where(sql`${t.status} = 'unread'`),
     // Race guard behind the registry dedupe window (migration 0281):
-    // NotificationService inserts ON CONFLICT on exactly this target.
+    // NotificationService inserts and catches the 23505 THIS index raises
+    // (then refreshes the open row) — deliberately not ON CONFLICT.
     idxOpenDedupeKey: uniqueIndex("notifs_open_dedupe_key_uq")
       .on(t.userId, t.dedupeKey)
       .where(

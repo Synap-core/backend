@@ -41,6 +41,7 @@ import {
   and,
   desc,
   drizzleSql,
+  liveRunStatusWhere,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -257,7 +258,9 @@ export async function completeFocusSession(
     .where(
       and(
         eq(playbookRuns.sessionId, sessionId),
-        eq(playbookRuns.status, "running")
+        // LIVE, not just `running`: a run the reaper parked as
+        // `waiting_on_you` must still finish when its session does.
+        liveRunStatusWhere(playbookRuns.status)
       )
     )
     .limit(1);

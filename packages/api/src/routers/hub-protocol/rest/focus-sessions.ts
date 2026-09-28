@@ -35,6 +35,7 @@ import {
   focusSessions,
   playbookRuns,
   drizzleSql,
+  liveRunStatusWhere,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -2864,7 +2865,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         .where(
           and(
             eq(playbookRuns.sessionId, sessionId),
-            eq(playbookRuns.status, "running")
+            // LIVE (running | waiting_on_you) — a parked run completes too.
+            liveRunStatusWhere(playbookRuns.status)
           )
         )
         .limit(1);

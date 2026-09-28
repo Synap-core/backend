@@ -38,6 +38,7 @@ import {
   desc,
   inArray,
   drizzleSql,
+  liveRunStatusWhere,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -143,7 +144,9 @@ export async function resolveStageGateForSession(params: {
     .where(
       and(
         eq(playbookRuns.sessionId, sessionId),
-        eq(playbookRuns.status, "running")
+        // LIVE (running | waiting_on_you): a parked run's frozen definition
+        // still governs its stages.
+        liveRunStatusWhere(playbookRuns.status)
       )
     )
     .orderBy(desc(playbookRuns.startedAt))

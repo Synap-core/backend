@@ -331,3 +331,45 @@ describe("universal signal fields reach every producer", () => {
     expect(ids(orderNeedsYou([...base].reverse()))).toEqual(ids(base));
   });
 });
+
+describe("project REVIEW sessions — listed and counted as ONE population (W2 review)", () => {
+  it("each review session is a `session-review` row in its session's block, and the count counts exactly those rows", () => {
+    const reviewSessions = [
+      { id: "s-r", title: "Ship v2", goal: "Ship v2", updatedAt: ago(1) },
+      {
+        id: "s-q",
+        title: null,
+        goal: "Close Q3 books",
+        updatedAt: ago(9 * DAY),
+      },
+    ];
+    const owedSlots = [owed("s-r", "Sign off", ago(2))];
+    const listed = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots,
+      reviewSessions,
+      now: NOW,
+    });
+    const review = listed.filter((s) => s.kind === "session-review");
+    expect(review.map((s) => s.title)).toEqual(["Ship v2", "Close Q3 books"]);
+    // Grouped with what the same session owes.
+    expect(listed.slice(0, 2).map((s) => s.groupKey)).toEqual([
+      "session:s-r",
+      "session:s-r",
+    ]);
+    expect(review[1]!.ageBucket).toBe("older");
+    const counted = countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [],
+      notificationsTruncated: false,
+      owedSlots,
+      owedTruncated: false,
+      reviewSessions: reviewSessions.length,
+    });
+    expect(counted.review).toBe(2);
+    expect(counted.needsYou).toBe(listed.length);
+  });
+});

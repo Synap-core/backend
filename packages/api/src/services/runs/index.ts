@@ -1602,6 +1602,23 @@ function withinRecentRuns(
  */
 export const RECENT_FAILURE_WINDOW_DAYS = 7;
 
+/**
+ * THE recent-failure rule in TypeScript — the twin of the SQL in the run
+ * groupers: a failure's instant is `completedAt ?? startedAt`, recent iff after
+ * `now - RECENT_FAILURE_WINDOW_DAYS`. Used for ledgers the groupers do not
+ * cover (chat turns), so flow and chat failures are windowed ONE way.
+ *
+ * `failed` only: a `blocked_by_policy` run is a calm governance outcome, not a
+ * failure — it never makes a flow "failing".
+ */
+export function isRecentFailure(
+  run: { completedAt?: Date | string | null; startedAt: Date | string },
+  nowMs: number
+): boolean {
+  const at = new Date(run.completedAt ?? run.startedAt).getTime();
+  return at > nowMs - RECENT_FAILURE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+}
+
 async function groupAutomationRuns(
   userId: string,
   workspaceId: string | undefined,
@@ -1637,7 +1654,7 @@ async function groupAutomationRuns(
       // needs-attention 'failed' rollup alongside genuine failures (the run-detail
       // surface renders the two with distinct calm/red tones).
       failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy')))::int`,
-      recentFailedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy') and coalesce(${automationRuns.completedAt}, ${automationRuns.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')))::int`,
+      recentFailedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'failed' and coalesce(${automationRuns.completedAt}, ${automationRuns.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${automationRuns.status} = 'running')`,
       runningCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'running'))::int`,
       ...durationAggregates(automationRuns),
@@ -1684,7 +1701,7 @@ async function groupAutomationRuns(
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
-    recentFailedCount: r.recentFailedCount ?? 0,
+    recentFailedCount: r.recentFailedCount,
     runningCount: r.runningCount,
     durationSampleCount: r.durationSampleCount,
     medianDurationMs: roundMs(r.medianDurationMs),
@@ -1771,7 +1788,7 @@ async function groupPlaybookRuns(
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
-    recentFailedCount: r.recentFailedCount ?? 0,
+    recentFailedCount: r.recentFailedCount,
     runningCount: r.runningCount,
     durationSampleCount: r.durationSampleCount,
     medianDurationMs: roundMs(r.medianDurationMs),

@@ -16,7 +16,9 @@
  *   opened. The split is a STABLE partition, so it cannot reorder anything the
  *   server already put in place.
  * - `repeatCount` / `count` — how many identical things one row stands for,
- *   drawn as "×N".
+ *   drawn as "×N". KIND-AWARE ({@link repeatOf}): a notification's repeats
+ *   are `repeatCount`, a cluster's N proposals are `count`, and nothing else
+ *   is a repeat — a draft-asks row's `count` is its number of DISTINCT asks.
  *
  * The three fields are typed REQUIRED, because the pod's `Signal` classifies
  * them universal (every producer, every kind). The reads below still tolerate
@@ -34,7 +36,11 @@ export type NeedsYouAgeBucket = "recent" | "older";
 export interface GroupableSignal {
   id: string;
   kind: string;
-  /** How many underlying things this row stands for (1 unless a cluster). */
+  /**
+   * How many underlying things this row stands for: a cluster's proposals, a
+   * draft-asks row's DISTINCT asks, a folded notification's repeats; 1
+   * otherwise. Not every `count` is a repeat — {@link repeatOf} decides.
+   */
   count: number;
   /** `session:<id>` | `proposal-cluster:<key>` | null. */
   groupKey: string | null;
@@ -130,15 +136,28 @@ export function capNeedsYouGroups<T extends GroupableSignal>(
   return { shown, hiddenRows };
 }
 
-/** The two fields ×N reads. Optional: a row from a pre-W2 pod may lack them. */
+/** The fields ×N reads. Optional: a row from a pre-W2 pod may lack them. */
 export interface RepeatableSignal {
+  kind?: string | null;
   count?: number | null;
   repeatCount?: number | null;
 }
 
-/** How many identical things this ONE row stands for. */
+/**
+ * How many IDENTICAL things this ONE row stands for — kind-aware:
+ *   - `notification` → `repeatCount` (the same news raised N times);
+ *   - `proposal-cluster` → `count` (N identical-shape proposals);
+ *   - anything else → 1. A `draft-asks` row's `count` is its number of
+ *     DISTINCT asks — "asks you 3 things", never "×3" of one thing — and an
+ *     owed slot is never a repeat.
+ */
 export function repeatOf(signal: RepeatableSignal): number {
-  const n = Math.max(signal.count ?? 1, signal.repeatCount ?? 1);
+  const n =
+    signal.kind === "notification"
+      ? (signal.repeatCount ?? 1)
+      : signal.kind === "proposal-cluster"
+        ? (signal.count ?? 1)
+        : 1;
   return Number.isFinite(n) && n > 1 ? Math.floor(n) : 1;
 }
 

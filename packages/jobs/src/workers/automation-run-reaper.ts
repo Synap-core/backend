@@ -25,7 +25,7 @@ import {
   drizzleSql,
   automationRuns,
   focusSessions,
-  owedSlotExistsIn,
+  openOwingSessionSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { postRunSummary } from "../utils/post-run-summary.js";
@@ -119,7 +119,7 @@ export const RUN_NOT_DELAY_SUSPENDED = drizzleSql`NOT EXISTS (
 export const RUN_SESSION_OWES_HUMAN = drizzleSql`EXISTS (
   SELECT 1 FROM focus_sessions owing
   WHERE owing.metadata->>'automationRunId' = ${automationRuns.id}::text
-    AND ${owedSlotExistsIn(drizzleSql.raw("owing.expected_outputs"))}
+    AND ${openOwingSessionSql("owing")}
 )`;
 
 /** A run past the stale window that no delay step is holding. */
@@ -132,6 +132,27 @@ const RUN_IS_STALE = and(
 /** Called by the cron scheduler every ~5 minutes. */
 export async function handleAutomationRunReaper(): Promise<void> {
   try {
+    // 00. UNPARK: a run marked waiting whose session no longer owes the
+    //     person (answered, closed, gone) is live again — back to `running`,
+    //     so the stale sweep below applies to it like any other run. Without
+    //     this a parked run could never leave `waiting_on_you`.
+    const unparked = await db
+      .update(automationRuns)
+      .set({ status: "running" })
+      .where(
+        and(
+          eq(automationRuns.status, "waiting_on_you"),
+          drizzleSql`NOT ${RUN_SESSION_OWES_HUMAN}`
+        )
+      )
+      .returning({ id: automationRuns.id });
+    if (unparked.length > 0) {
+      logger.info(
+        { unparked: unparked.length },
+        "Automation run reaper resumed runs no longer waiting on the person"
+      );
+    }
+
     // 0. A stale run whose session owes the person is WAITING ON YOU, not
     //    failed (W2 calm). Marked before the fail sweep, so the sweep below
     //    (status = 'running') can never reach it. Its session is left open —

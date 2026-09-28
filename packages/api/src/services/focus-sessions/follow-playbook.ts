@@ -60,6 +60,7 @@ import {
   and,
   desc,
   drizzleSql,
+  liveRunStatusWhere,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import {
@@ -620,7 +621,8 @@ async function releasePlaybook(
     .where(
       and(
         eq(playbookRuns.sessionId, session.id),
-        eq(playbookRuns.status, "running")
+        // LIVE (running | waiting_on_you) — a parked run is still this session's run.
+        liveRunStatusWhere(playbookRuns.status)
       )
     )
     .orderBy(desc(playbookRuns.startedAt))

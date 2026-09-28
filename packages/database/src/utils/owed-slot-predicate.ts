@@ -56,14 +56,36 @@ export function owedSlotWhere(): SQL {
 }
 
 /**
+ * The session statuses in which an owed slot can still PARK a run. A closed,
+ * failed or cancelled session with a leftover owed slot still counts in the
+ * needs-you tray (the slot is owed), but it must not hold a run in
+ * `waiting_on_you` forever: nothing will ever resume that session's run.
+ */
+export const OPEN_SESSION_STATUSES = ["active", "paused", "stale"] as const;
+
+const OPEN_SESSION_SQL_LIST = drizzleSql.raw(
+  OPEN_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
+);
+
+/**
+ * SQL: the OPEN session behind `owing` (an alias the caller joins) owes the
+ * person something. Shared by every run-parking predicate.
+ */
+export function openOwingSessionSql(alias: string): SQL {
+  return drizzleSql`${drizzleSql.raw(`${alias}.status`)} IN (${OPEN_SESSION_SQL_LIST})
+      AND ${owedSlotExistsIn(drizzleSql.raw(`${alias}.expected_outputs`))}`;
+}
+
+/**
  * SQL: the session whose id is `sessionId` (a correlated column or
- * expression, e.g. `playbook_runs.session_id`) owes the person something.
- * False when the id is NULL or names no session.
+ * expression, e.g. `playbook_runs.session_id`) is OPEN and owes the person
+ * something. False when the id is NULL, names no session, or the session is
+ * closed/failed/cancelled.
  */
 export function sessionOwesHumanWhere(sessionId: AnyPgColumn | SQL): SQL {
   return drizzleSql`EXISTS (
     SELECT 1 FROM focus_sessions owing
     WHERE owing.id = ${sessionId}
-      AND ${owedSlotExistsIn(drizzleSql.raw("owing.expected_outputs"))}
+      AND ${openOwingSessionSql("owing")}
   )`;
 }

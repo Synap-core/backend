@@ -70,7 +70,7 @@ vi.mock("../../../utils/notification-creator.js", () => ({
   createNotificationViaService: createNotificationViaServiceMock,
 }));
 
-import { executeOutputStep } from "../output.js";
+import { executeOutputStep, notificationDigest } from "../output.js";
 import type {
   StepContext,
   ExecutionPayload,
@@ -130,9 +130,31 @@ describe("output notification — routed through the canonical write door", () =
     expect(createNotificationViaServiceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sourceId: "entity-9",
-        groupKey: "automation.auto-1.entity-9",
+        groupKey: `automation.auto-1.entity-9.${notificationDigest("Automation notification", "note")}`,
       })
     );
+  });
+
+  it("the key carries the MESSAGE: same words share a key, different words never do (W2 review)", async () => {
+    await run({ body: "Invoice #1 paid" });
+    await run({ body: "Invoice #1 paid" });
+    await run({ body: "Invoice #2 paid" });
+    const keys = (
+      createNotificationViaServiceMock.mock.calls as unknown as Array<
+        [{ groupKey: string }]
+      >
+    ).map((c) => c[0].groupKey);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[0]).toMatch(/^automation\.auto-1\.self\.[0-9a-f]{12}$/);
+  });
+
+  it("nothing written (deduped / muted) → the step reports `suppressed`, never `sent`", async () => {
+    createNotificationViaServiceMock.mockResolvedValueOnce(
+      undefined as unknown as string
+    );
+    const res = await run({ title: "Again", body: "Same thing" });
+    expect(res).toMatchObject({ status: "suppressed" });
   });
 
   it("missing body/message → skipped, door never called", async () => {

@@ -5,7 +5,7 @@
  * step family; kept as ONE module because every branch shares the SAME
  * idempotency-id/config/attribution preamble and the governance-gate pattern.
  */
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import {
   db,
   eq,
@@ -622,12 +622,14 @@ export async function executeOutputStep(
       const title = (config.title ?? "Automation notification") as string;
       const entityId = config.entityId as string | undefined;
       // ALWAYS a key (W2 calm): the registry dedupes this type per
-      // (user, type, target) per day, and a row with no key cannot be
+      // (user, type, target, MESSAGE) per day, and a row with no key cannot be
       // deduped at all — a step firing every run stacked one row per run.
-      // The target is the linked entity, else the automation itself.
+      // The target is the linked entity, else the automation itself. The
+      // message digest is part of the identity: a repeat of the SAME words is
+      // noise, a DIFFERENT message from the same step is news and must land.
       const groupKey =
         (config.groupKey as string | undefined) ??
-        `automation.${automationContext.automationId}.${entityId ?? "self"}`;
+        `automation.${automationContext.automationId}.${entityId ?? "self"}.${notificationDigest(title, body ?? "")}`;
 
       if (config.category !== undefined || config.priority !== undefined) {
         logger.warn(
@@ -645,7 +647,7 @@ export async function executeOutputStep(
         return { status: "skipped" };
       }
 
-      await createNotificationViaService({
+      const notificationId = await createNotificationViaService({
         type: "automation.notification",
         userId: ownerId,
         workspaceId,
@@ -656,6 +658,10 @@ export async function executeOutputStep(
         ...(groupKey ? { groupKey } : {}),
       });
 
+      // Nothing written ⇒ never report `sent`: the same message is already
+      // open inside its window, the person muted the type, or the write door
+      // declined. The run record must say so.
+      if (!notificationId) return { status: "suppressed", title, body };
       return { status: "sent", title, body };
     }
 
@@ -1309,4 +1315,16 @@ export async function executeOutputStep(
       logger.warn({ outputType: data.outputType }, "Unknown output type");
       return { status: "unknown_output_type", outputType: data.outputType };
   }
+}
+
+/**
+ * Short, stable digest of a notification's words — the MESSAGE half of the
+ * automation.notification dedupe key. Not a security hash; 12 hex chars keep
+ * the key readable in the bell's group column.
+ */
+export function notificationDigest(title: string, body: string): string {
+  return createHash("sha256")
+    .update(`${title}\u0000${body}`)
+    .digest("hex")
+    .slice(0, 12);
 }

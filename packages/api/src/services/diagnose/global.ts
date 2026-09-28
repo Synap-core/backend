@@ -32,6 +32,7 @@ import {
   listRuns,
   listRunGroups,
   RECENT_FAILURE_WINDOW_DAYS,
+  isRecentFailure,
 } from "../runs/index.js";
 import {
   collapseProposalsToClusters,
@@ -580,9 +581,9 @@ export async function diagnoseGlobal(params: {
     }));
   // Chat has no flowId group — surface failed chat as one synthetic "Chat" row,
   // windowed the same way.
-  const failureCutoff = now - RECENT_FAILURE_WINDOW_DAYS * 24 * HOUR_MS;
-  const recentFailedChat = failedChatRuns.filter(
-    (r) => new Date(r.startedAt).getTime() > failureCutoff
+  // The SAME cutoff rule the flow groupers apply in SQL (`isRecentFailure`).
+  const recentFailedChat = failedChatRuns.filter((r) =>
+    isRecentFailure(r, now)
   );
   if (recentFailedChat.length > 0) {
     failedFlows.push({

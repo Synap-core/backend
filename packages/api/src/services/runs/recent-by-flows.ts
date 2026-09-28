@@ -5,7 +5,14 @@ import {
   drizzleSql,
   automationRuns,
   playbookRuns,
+  settledRunStatusWhere,
+  LIVE_RUN_STATUSES,
 } from "@synap/database";
+
+/** `'running','waiting_on_you'` — THE live set, as a SQL list literal. */
+const LIVE_RUN_SQL_LIST = drizzleSql.raw(
+  LIVE_RUN_STATUSES.map((s) => `'${s}'`).join(", ")
+);
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import type { RunStatus } from "./types.js";
 
@@ -74,7 +81,7 @@ async function loadAutomationHistory(
         ${automationRuns.startedAt} AS "startedAt",
         ${automationRuns.completedAt} AS "completedAt",
         count(*) FILTER (
-          WHERE ${automationRuns.status} <> 'running'
+          WHERE ${settledRunStatusWhere(automationRuns.status)}
         ) OVER (
           PARTITION BY ${automationRuns.automationId}
           ORDER BY ${automationRuns.startedAt} DESC, ${automationRuns.id} ASC
@@ -86,7 +93,7 @@ async function loadAutomationHistory(
         ${workspaceId ? drizzleSql`AND ${eq(automationRuns.workspaceId, workspaceId)}` : drizzleSql``}
     )
     SELECT * FROM ranked
-    WHERE "status" = 'running'
+    WHERE "status" IN (${LIVE_RUN_SQL_LIST})
        OR terminal_row_number <= ${perFlowLimit}
     ORDER BY "flowId" ASC, "startedAt" DESC, "id" ASC
   `);
@@ -112,7 +119,7 @@ async function loadPlaybookHistory(
         ${playbookRuns.startedAt} AS "startedAt",
         ${playbookRuns.completedAt} AS "completedAt",
         count(*) FILTER (
-          WHERE ${playbookRuns.status} <> 'running'
+          WHERE ${settledRunStatusWhere(playbookRuns.status)}
         ) OVER (
           PARTITION BY ${playbookRuns.playbookId}
           ORDER BY ${playbookRuns.startedAt} DESC, ${playbookRuns.id} ASC
@@ -124,7 +131,7 @@ async function loadPlaybookHistory(
         ${workspaceId ? drizzleSql`AND ${eq(playbookRuns.workspaceId, workspaceId)}` : drizzleSql``}
     )
     SELECT * FROM ranked
-    WHERE "status" = 'running'
+    WHERE "status" IN (${LIVE_RUN_SQL_LIST})
        OR terminal_row_number <= ${perFlowLimit}
     ORDER BY "flowId" ASC, "startedAt" DESC, "id" ASC
   `);

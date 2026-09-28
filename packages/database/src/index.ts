@@ -69,6 +69,7 @@ export * from "./utils/persist-assistant-reply.js";
 export * from "./utils/emit-message-event.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/owed-slot-predicate.js";
+export * from "./utils/live-run-status.js";
 export * from "./utils/resolve-session-project.js";
 export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";

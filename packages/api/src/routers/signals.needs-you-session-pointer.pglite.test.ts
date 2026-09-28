@@ -75,6 +75,10 @@ vi.mock("../services/projects/project-needs-you.js", () => ({
     review: 0,
     truncated: false,
   }),
+  listProjectSessionsAwaitingReview: async () => ({
+    sessions: [],
+    truncated: false,
+  }),
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
@@ -192,15 +196,15 @@ describe("signals: session.needs_you in needs-you (session.room_update retired)"
     );
   });
 
-  it("session.room_update is retired (founder decision F, 2026-09-25): no producer writes it, and a stray row of that type is now an ordinary item, not a suppressed one", async () => {
+  it("session.room_update is retired (founder decision F, 2026-09-25): a stray legacy row neither counts nor lists (W2 calm)", async () => {
     const s = await seedSession();
     await notify("session.room_update", s);
 
-    // It is no longer tagged "informational" in the registry (that row was
-    // removed with its producer, `notifyRoomPost`'s update branch) — it
-    // falls back to the ordinary "item" role, same as any unknown type.
-    expect((await count()).needsYou).toBe(1);
-    expect(await list()).toHaveLength(1);
+    // Its producer is gone and `RETIRED_NOTIFICATION_TYPES` names it, so its
+    // role is "informational": it stays in the bell's history, out of
+    // needs-you (migration 0281 also marks legacy open rows read).
+    expect((await count()).needsYou).toBe(0);
+    expect(await list()).toHaveLength(0);
   });
 
   it("session.needs_you + the owed slot it announced = ONE entry, counted once", async () => {

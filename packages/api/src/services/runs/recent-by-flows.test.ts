@@ -132,8 +132,12 @@ describe("listRecentRunsByFlows", () => {
     ]);
     const query = sqlText(execute.mock.calls[0]?.[0]);
     expect(query).toContain("count(*) FILTER");
-    expect(query).toContain("WHERE status <> 'running'");
-    expect(query).toContain("WHERE \"status\" = 'running'");
+    // Settled = NOT live; live = running OR waiting_on_you (a parked run is
+    // still an execution, never a terminal history row).
+    expect(query).toContain("WHERE status not in ");
+    expect(query).toContain(
+      "WHERE \"status\" IN ('running', 'waiting_on_you')"
+    );
     expect(query).toContain("OR terminal_row_number <= ");
   });
 });

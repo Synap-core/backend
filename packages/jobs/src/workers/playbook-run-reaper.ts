@@ -82,6 +82,27 @@ const RUN_IS_STALE = and(
 /** Called by the cron scheduler every ~30 minutes. */
 export async function handlePlaybookRunReaper(): Promise<void> {
   try {
+    // 00. UNPARK: a waiting run whose session no longer owes the person
+    //     (answered, closed, gone) goes back to `running`, so the sweeps
+    //     below judge it like any other run. The completing doors finish a
+    //     live run directly (`LIVE_RUN_STATUSES`); this catches the rest.
+    const unparked = await db
+      .update(playbookRuns)
+      .set({ status: "running" })
+      .where(
+        and(
+          eq(playbookRuns.status, "waiting_on_you"),
+          drizzleSql`NOT ${sessionOwesHumanWhere(playbookRuns.sessionId)}`
+        )
+      )
+      .returning({ id: playbookRuns.id });
+    if (unparked.length > 0) {
+      logger.info(
+        { unparked: unparked.length },
+        "Playbook run reaper resumed runs no longer waiting on the person"
+      );
+    }
+
     // 0. A quiet run whose session owes the person is WAITING ON YOU, not
     //    orphaned (W2 calm): a session waiting on the person is quiet by
     //    definition, so `RUN_SESSION_NOT_ACTIVE` alone read it as dead. Marked

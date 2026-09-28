@@ -32,6 +32,7 @@
  */
 
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { ASK_COPY } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
 import type { GroupableSignal } from "@synap-core/types/needs-you";
@@ -76,7 +77,14 @@ export type SignalKind =
    * (`excludeDrafts`) until the draft is accepted; answering any of them
    * accepts it (`accept-on-engagement.ts`). Proposals under a draft stay out.
    */
-  | "draft-asks";
+  | "draft-asks"
+  /**
+   * One session whose next move is the person's ACCEPTANCE (`needsYouReason`
+   * = `"review"`, THE needs-you rule's third population). Emitted under a
+   * bare PROJECT scope only — the one scope that counts it — so the project
+   * badge and the project list are one number over one predicate (W2 review).
+   */
+  | "session-review";
 
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
@@ -783,6 +791,38 @@ export interface SessionLiveNeeds {
   openQuestionSessionIds?: ReadonlySet<string>;
 }
 
+/** One session awaiting the person's review/close (`listProjectSessionsAwaitingReview`). */
+export interface ReviewSessionSignalInput {
+  id: string;
+  title: string | null;
+  goal: string | null;
+  updatedAt: Date;
+}
+
+/**
+ * One review session → one signal. The title is the session's own title (the
+ * ONE derivation, `resolveSessionTitle`), never composed here; the row is a
+ * door to the session, grouped with anything else that session owes.
+ */
+export function signalFromReviewSession(
+  row: ReviewSessionSignalInput,
+  now: Date = new Date()
+): Signal {
+  return {
+    id: `review:${row.id}`,
+    kind: "session-review",
+    title: resolveSessionTitle(row),
+    count: 1,
+    occurredAt: row.updatedAt,
+    target: { kind: "session", id: row.id },
+    category: "ai",
+    ...(row.goal ? { sessionGoal: row.goal } : {}),
+    groupKey: sessionGroupKey(row.id),
+    ageBucket: ageBucketOf(row.updatedAt, now),
+    repeatCount: 1,
+  };
+}
+
 /** The session ids behind an owed page. */
 export function owedSessionIdsOf(
   owedSlots: readonly OwedSlotSignalInput[]
@@ -931,6 +971,11 @@ export function unionNeedsYou(args: {
    * list and the badge fold the same drafts.
    */
   draftAsks?: DraftAsksInput;
+  /**
+   * Sessions awaiting the person's review — PROJECT scope only (the one scope
+   * `countNeedsYou` counts them under). Absent ⇒ none.
+   */
+  reviewSessions?: readonly ReviewSessionSignalInput[];
   /** The clock `ageBucket` is measured against. Absent ⇒ now. */
   now?: Date;
 }): Signal[] {
@@ -947,6 +992,7 @@ export function unionNeedsYou(args: {
   return orderNeedsYou([
     ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
     ...(args.draftAsks ? signalsFromDraftAsks(args.draftAsks, now) : []),
+    ...(args.reviewSessions ?? []).map((r) => signalFromReviewSession(r, now)),
     ...args.clusters.map((c) => signalFromCluster(c, now)),
     ...notifications.map((f) =>
       signalFromNotification(f.row, now, f.repeatCount)

@@ -233,6 +233,11 @@ describe("room-first notifications", () => {
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
+    // The derived DDL carries no column defaults; the real table defaults
+    // `status` to 'unread' (0000 baseline) — the dedupe reads OPEN rows only.
+    await h.client!.exec(
+      `alter table notifications alter column status set default 'unread'`
+    );
     await q(
       `insert into users (id, email, name, timezone) values ($1, 'a@example.test', 'Antoine Servant', 'UTC'), ($2, 'agent@example.test', 'Claude Code', 'UTC')`,
       [USER, AGENT]

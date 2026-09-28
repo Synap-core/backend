@@ -68,6 +68,10 @@ vi.mock("../services/projects/project-needs-you.js", () => ({
     review: 0,
     truncated: false,
   }),
+  listProjectSessionsAwaitingReview: async () => ({
+    sessions: [],
+    truncated: false,
+  }),
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";

@@ -185,6 +185,36 @@ describe("automation-run reaper", () => {
     expect(await statusOf("automation_runs", orphan.run)).toBe("failed");
     expect(closed).toContain(orphan.sess);
   });
+  it("UNPARK: once the session no longer owes the person, the parked run leaves waiting (swept as usual)", async () => {
+    const parked = await staleRun(OWED);
+    await handleAutomationRunReaper();
+    expect(await statusOf("automation_runs", parked.run)).toBe(
+      "waiting_on_you"
+    );
+    // The person answers.
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [parked.sess, JSON.stringify(DONE)]
+    );
+    await handleAutomationRunReaper();
+    expect(await statusOf("automation_runs", parked.run)).toBe("failed");
+  });
+
+  it("a CLOSED session with a leftover owed slot never parks its run", async () => {
+    const run = randomUUID();
+    await q(
+      `insert into automation_runs (id, automation_id, status, started_at) values ($1, $2, 'running', now() - interval '2 hours')`,
+      [run, randomUUID()]
+    );
+    await session({
+      idleHours: 1,
+      outputs: OWED,
+      status: "closed",
+      metadata: { automationRunId: run },
+    });
+    await handleAutomationRunReaper();
+    expect(await statusOf("automation_runs", run)).toBe("failed");
+  });
 });
 
 describe("playbook-run reaper", () => {
@@ -209,6 +239,33 @@ describe("playbook-run reaper", () => {
     expect(closed).not.toContain(owing.sess);
     expect(await statusOf("playbook_runs", orphan.run)).toBe("failed");
     expect(closed).toContain(orphan.sess);
+  });
+  it("UNPARK: an answered session releases its parked run back to the sweeps", async () => {
+    const parked = await staleRun(OWED);
+    await handlePlaybookRunReaper();
+    expect(await statusOf("playbook_runs", parked.run)).toBe("waiting_on_you");
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [parked.sess, JSON.stringify(DONE)]
+    );
+    await handlePlaybookRunReaper();
+    expect(await statusOf("playbook_runs", parked.run)).toBe("failed");
+  });
+
+  it("a CLOSED session with a leftover owed slot never parks its run", async () => {
+    const sess = await session({
+      idleHours: 30,
+      outputs: OWED,
+      status: "closed",
+    });
+    const run = randomUUID();
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, started_at, created_by, input)
+       values ($1, $2, $3, 'external-agent', 'running', now() - interval '30 hours', 'u1', '{}'::jsonb)`,
+      [run, randomUUID(), sess]
+    );
+    await handlePlaybookRunReaper();
+    expect(await statusOf("playbook_runs", run)).toBe("failed");
   });
 });
 

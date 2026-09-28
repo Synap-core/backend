@@ -137,11 +137,26 @@ describe("capNeedsYouGroups", () => {
 });
 
 describe("repeatLabel", () => {
-  it("draws ×N = max(count, repeatCount), nothing at 1", () => {
-    expect(repeatLabel({ count: 1, repeatCount: 4 })).toBe("×4");
-    expect(repeatLabel({ count: 3, repeatCount: 1 })).toBe("×3");
-    expect(repeatLabel({ count: 1, repeatCount: 1 })).toBeNull();
+  it("draws ×N kind-aware (notification repeatCount, cluster count), nothing at 1", () => {
+    // Kind-aware (W2 review): the field that means "repeat" differs per kind.
+    expect(
+      repeatLabel({ kind: "notification", count: 4, repeatCount: 4 })
+    ).toBe("×4");
+    expect(
+      repeatLabel({ kind: "proposal-cluster", count: 3, repeatCount: 1 })
+    ).toBe("×3");
+    expect(
+      repeatLabel({ kind: "notification", count: 1, repeatCount: 1 })
+    ).toBeNull();
     expect(repeatLabel({})).toBeNull();
+    // A draft-asks row's count is its DISTINCT asks — never "×3".
+    expect(
+      repeatLabel({ kind: "draft-asks", count: 3, repeatCount: 1 })
+    ).toBeNull();
+    // An owed slot is never a repeat, whatever a field says.
+    expect(
+      repeatLabel({ kind: "owed-slot", count: 2, repeatCount: 2 })
+    ).toBeNull();
   });
 });
 

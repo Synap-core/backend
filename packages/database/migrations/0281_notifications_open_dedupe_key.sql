@@ -10,9 +10,11 @@
 -- non-windowed type, so `proposal.created` — which legitimately shares a group
 -- key across an agent's run — is never constrained), and the partial unique
 -- index allows at most ONE open (unread or snoozed) row per (user, key). The
--- writer inserts with ON CONFLICT on this index: a repeat whose window has
--- elapsed REFRESHES the open row (content + created_at — a re-raise, never a
--- second row); a repeat inside the window does nothing.
+-- writer does a plain INSERT and catches the unique violation (23505) this
+-- index raises — not ON CONFLICT, so a database without the index still
+-- writes: a repeat whose window has elapsed REFRESHES the open row (content +
+-- created_at, back to unread — a re-raise, never a second row); a repeat
+-- inside the window does nothing.
 --
 -- `snoozed` is inside the predicate on purpose: the snooze reader flips a due
 -- row back to `unread`, and a second open row under the same key would then

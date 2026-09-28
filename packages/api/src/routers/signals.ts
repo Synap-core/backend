@@ -56,7 +56,7 @@ import {
   type Signal,
 } from "../services/signals/needs-you-union.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
-import { countProjectSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
+import { listProjectSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
 import { needsYouRole } from "../notifications/registry.js";
 import { listDraftAskSlots } from "../services/focus-sessions/draft-asks.js";
@@ -117,6 +117,29 @@ async function readDraftAsks(
     },
     draftAsksTruncated: draft.slots.length >= OWED_SCAN_LIMIT,
   };
+}
+
+/**
+ * The REVIEW half of THE needs-you rule, as ROWS, under a bare project scope
+ * (`isReviewCountable`) — empty elsewhere. ONE read for `list` (which emits
+ * each as a `session-review` signal) and `count` (which counts them), so the
+ * project badge can never count a population its list does not show.
+ */
+function readReviewSessions(
+  ctx: { userId?: string | null },
+  input: {
+    workspaceId?: string | null;
+    sessionId?: string;
+    projectId?: string;
+    automationId?: string;
+  }
+) {
+  return isReviewCountable(input)
+    ? listProjectSessionsAwaitingReview({
+        userId: requireUserId(ctx.userId),
+        projectId: input.projectId,
+      })
+    : Promise.resolve({ sessions: [], truncated: false });
 }
 
 const NO_DRAFT_ASKS = {
@@ -287,12 +310,7 @@ async function countSignals(
           excludeDrafts: true,
         })
       : Promise.resolve([]),
-    isReviewCountable(input)
-      ? countProjectSessionsAwaitingReview({
-          userId: requireUserId(ctx.userId),
-          projectId: input.projectId,
-        })
-      : Promise.resolve({ review: 0, truncated: false }),
+    readReviewSessions(ctx, input),
     isOwedNarrowable(input)
       ? readDraftAsks(ctx, input)
       : Promise.resolve(NO_DRAFT_ASKS),
@@ -309,7 +327,8 @@ async function countSignals(
       notifs.notifications.length >= NOTIFICATION_SCAN_LIMIT,
     owedSlots: owed as OwedSlotSignalInput[],
     owedTruncated: owed.length >= OWED_SCAN_LIMIT,
-    reviewSessions: review.review,
+    // Counted as ROWS — the very rows `list` emits as `session-review`.
+    reviewSessions: review.sessions.length,
     reviewTruncated: review.truncated,
     draftAsks: drafts.draftAsks,
     draftAsksTruncated: drafts.draftAsksTruncated,
@@ -357,7 +376,7 @@ export const signalsRouter = router({
       if (input.lens === "needs-you") {
         // Container-scoped → proposals only. See `isContainerScoped`.
         const scoped = isContainerScoped(input);
-        const [groups, notifs, owed, drafts] = await Promise.all([
+        const [groups, notifs, owed, drafts, review] = await Promise.all([
           proposalsRouter.createCaller(ctx).groups({
             workspaceId: input.workspaceId,
             sessionId: input.sessionId,
@@ -393,6 +412,9 @@ export const signalsRouter = router({
           isOwedNarrowable(input)
             ? readDraftAsks(ctx, input)
             : Promise.resolve(NO_DRAFT_ASKS),
+          // The REVIEW half, as rows — the same read `count` counts, so the
+          // project badge equals the project list (W2 review).
+          readReviewSessions(ctx, input),
         ]);
 
         const notificationRows =
@@ -405,6 +427,7 @@ export const signalsRouter = router({
           openQuestionSessionIds:
             await openQuestionSessionIdsFor(notificationRows),
           draftAsks: drafts.draftAsks,
+          reviewSessions: review.sessions,
         });
         // A plain cut of the ONE order. The per-source reserve this used to
         // apply (`pageNeedsYou`) existed because owed slots sorted FIRST and
@@ -498,9 +521,9 @@ export const signalsRouter = router({
    * ships in the same result but is NOT a part: it is never added into
    * `needsYou`. It is 0 under a container scope, like `notifications`.
    *
-   * ⚠️ Under a project scope `review` has no ROWS in `list` yet (it would need
-   * a new `Signal` kind every tray renderer learns), so the project list is
-   * shorter than the project count by exactly `review`.
+   * Under a project scope `review` IS in `list`: one `session-review` row per
+   * session, from the same read (`readReviewSessions`), so the project badge
+   * equals the project list (W2 review, "one number, one predicate").
    */
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))

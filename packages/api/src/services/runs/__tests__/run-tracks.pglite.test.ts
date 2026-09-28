@@ -51,7 +51,7 @@ import {
   users,
   projectMembers,
 } from "@synap/database/schema";
-import { listRunTracks, listRunGroups } from "../index.js";
+import { listRunTracks, listRunGroups, isRecentFailure } from "../index.js";
 
 type ColumnLike = {
   name: string;
@@ -324,6 +324,12 @@ describe("recentFailedCount — the HEALTH number is windowed (W2 calm)", () => 
     await failedDaysAgo(AU_RECENT, 8);
     await failedDaysAgo(AU_OLD, 8);
     await failedDaysAgo(AU_OLD, 40);
+    // A recent POLICY BLOCK is a calm outcome, never a failure (W2 review).
+    await h.client!.query(
+      `insert into automation_runs (id, automation_id, workspace_id, status, started_at, completed_at)
+       values (gen_random_uuid(), $1, null, 'blocked_by_policy', now() - interval '1 hour', now() - interval '1 hour')`,
+      [AU_OLD]
+    );
 
     const map = await listRunTracks({
       userId: USER,
@@ -335,8 +341,35 @@ describe("recentFailedCount — the HEALTH number is windowed (W2 calm)", () => 
       recentFailedCount: 1,
     });
     expect(map.get(`automation:${AU_OLD}`)).toMatchObject({
-      failedCount: 2,
+      // lifetime keeps its rollup (policy block counted as needing an eye)…
+      failedCount: 3,
+      // …but the HEALTH number counts real failures only.
       recentFailedCount: 0,
     });
+  });
+});
+
+describe("isRecentFailure — the ONE cutoff rule (chat uses it; SQL is its twin)", () => {
+  it("dates a failure by completedAt, else startedAt, against the 7-day window", () => {
+    const now = Date.UTC(2026, 8, 28);
+    const day = 24 * 60 * 60 * 1000;
+    expect(
+      isRecentFailure(
+        {
+          startedAt: new Date(now - 8 * day),
+          completedAt: new Date(now - day),
+        },
+        now
+      )
+    ).toBe(true);
+    expect(
+      isRecentFailure(
+        { startedAt: new Date(now - 8 * day), completedAt: null },
+        now
+      )
+    ).toBe(false);
+    expect(isRecentFailure({ startedAt: new Date(now - 6 * day) }, now)).toBe(
+      true
+    );
   });
 });
