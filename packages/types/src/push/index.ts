@@ -33,6 +33,7 @@ import {
   type Ask,
   type AskAnswerValue,
 } from "../ask/index.js";
+import { humanizeToken } from "../vocabulary/index.js";
 
 // ─── Categories ─────────────────────────────────────────────────────────────
 
@@ -103,6 +104,55 @@ export const PUSH_CATEGORY_POLICY: Readonly<
   },
   system: { defaultOn: false, level: "passive", interruptionLevel: "passive" },
 };
+
+// ─── Labels ─────────────────────────────────────────────────────────────────
+
+/** What a settings row says for a category: a name and one line under it. */
+export interface PushCategoryLabel {
+  name: string;
+  hint: string;
+}
+
+/**
+ * The ONE wording of each push category. Lives beside the category list (not
+ * in `../vocabulary`) so a new category cannot compile without its label —
+ * the `Record<PushCategory, …>` type is the coverage floor. Read it through
+ * {@link resolvePushCategoryLabel}; never humanize the token.
+ */
+export const PUSH_CATEGORY_LABELS: Readonly<
+  Record<PushCategory, PushCategoryLabel>
+> = {
+  "blocking-ask": {
+    name: "Questions that block your work",
+    hint: "An agent is waiting on your answer — reply from the lock screen",
+  },
+  "decision-blocking": {
+    name: "Decisions that block your work",
+    hint: "An agent's change is waiting for your approval before it can go on",
+  },
+  "work-broke": {
+    name: "When something breaks",
+    hint: "A task failed, a session closed short, or a connection expired",
+  },
+  mention: {
+    name: "When you're mentioned",
+    hint: "Someone names you in a room, or invites you to a space",
+  },
+  system: {
+    name: "System notices",
+    hint: "Storage, intelligence and pod health — also shown in Settings",
+  },
+};
+
+/**
+ * The label for a category. An unknown value (a newer pod) humanizes rather
+ * than leaking the raw token, with no hint.
+ */
+export function resolvePushCategoryLabel(category: string): PushCategoryLabel {
+  return isPushCategory(category)
+    ? PUSH_CATEGORY_LABELS[category]
+    : { name: humanizeToken(category), hint: "" };
+}
 
 // ─── Classification ─────────────────────────────────────────────────────────
 

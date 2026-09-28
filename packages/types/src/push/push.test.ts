@@ -3,6 +3,8 @@ import { askFingerprint, AskSchema, type Ask } from "../ask/index.js";
 import {
   PUSH_CATEGORIES,
   PUSH_CATEGORY_POLICY,
+  PUSH_CATEGORY_LABELS,
+  resolvePushCategoryLabel,
   PUSH_QUICK_ANSWER_CATEGORIES,
   PUSH_TYPE_RULES,
   blockingAskTarget,
@@ -220,4 +222,27 @@ describe("envelope", () => {
     expect(PUSH_CATEGORY_POLICY.system.level).toBe("passive");
   });
 
+});
+
+describe("labels", () => {
+  it("every category (derived from PUSH_CATEGORIES) has a name and a hint", () => {
+    expect(PUSH_CATEGORIES.length).toBeGreaterThanOrEqual(5);
+    for (const c of PUSH_CATEGORIES) {
+      const label = resolvePushCategoryLabel(c);
+      expect(label.name.trim(), c).not.toBe("");
+      expect(label.hint.trim(), c).not.toBe("");
+      // Never the humanized token — a real name was written.
+      expect(label.name.toLowerCase()).not.toBe(c.replace(/-/g, " "));
+    }
+    expect(Object.keys(PUSH_CATEGORY_LABELS).sort()).toEqual(
+      [...PUSH_CATEGORIES].sort()
+    );
+  });
+
+  it("an unknown category humanizes, never leaks the raw token", () => {
+    expect(resolvePushCategoryLabel("landed-digest")).toEqual({
+      name: "Landed digest",
+      hint: "",
+    });
+  });
 });
