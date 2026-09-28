@@ -6,7 +6,11 @@
  * unresolved" for every playbook and make the whole door a no-op.
  */
 import { describe, expect, it } from "vitest";
-import { findUnresolvedGoalReferences } from "./goal-references.js";
+import {
+  describeGoalPlaceholderProblems,
+  findGoalPlaceholderProblems,
+  findUnresolvedGoalReferences,
+} from "./goal-references.js";
 
 describe("findUnresolvedGoalReferences", () => {
   it("a goal fully backed by declared params is clean", () => {
@@ -54,5 +58,74 @@ describe("findUnresolvedGoalReferences", () => {
     expect(findUnresolvedGoalReferences("see {the notes}", [])).toEqual([
       { text: "{the notes}", kind: "unsupported" },
     ]);
+  });
+});
+
+describe("findGoalPlaceholderProblems — what the doors refuse", () => {
+  it("a bare {{name}} is a problem whether or not it is declared", () => {
+    expect(findGoalPlaceholderProblems('Run "{{task}}"', [])).toEqual([
+      { text: "{{task}}", name: "task", kind: "double-brace", declared: false },
+    ]);
+    expect(
+      findGoalPlaceholderProblems('Run "{{ task }}"', [{ name: "task" }])
+    ).toEqual([
+      {
+        text: "{{ task }}",
+        name: "task",
+        kind: "double-brace",
+        declared: true,
+      },
+    ]);
+  });
+
+  it("an undeclared {name} / @{arg:name} is a problem; a declared one is not", () => {
+    expect(
+      findGoalPlaceholderProblems("Enrich {target} via @{arg:source:text}", [
+        { name: "target", type: "text" },
+      ])
+    ).toEqual([
+      {
+        text: "@{arg:source:text}",
+        name: "source",
+        kind: "undeclared",
+        declared: false,
+      },
+    ]);
+  });
+
+  it("rooted automation paths and braced prose are NOT placeholders", () => {
+    expect(
+      findGoalPlaceholderProblems(
+        "Use {{trigger.payload.prompt}} and {{steps.a.output}}; see {the notes}",
+        []
+      )
+    ).toEqual([]);
+  });
+
+  it("declared means what the RUN door reads (readPlaybookParams: trimmed names)", () => {
+    expect(findGoalPlaceholderProblems("Do {x}", [{ name: " x " }])).toEqual(
+      []
+    );
+  });
+
+  it("orders as written, each text once", () => {
+    expect(
+      findGoalPlaceholderProblems("{b} then {{a}} then {b} then {{a}}", []).map(
+        (p) => p.text
+      )
+    ).toEqual(["{b}", "{{a}}"]);
+  });
+});
+
+describe("describeGoalPlaceholderProblems — the refusal names the fix", () => {
+  it("says what to declare and how to respell", () => {
+    const msg = describeGoalPlaceholderProblems(
+      findGoalPlaceholderProblems("Qualify {{lead}} ({segment})", [])
+    );
+    expect(msg).toContain('"lead", "segment"');
+    expect(msg).toContain(
+      '{ "name": "lead", "type": "text", "required": true }'
+    );
+    expect(msg).toContain("{{lead}} → {lead}");
   });
 });

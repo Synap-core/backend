@@ -112,7 +112,11 @@ import {
   materializePlaybookCronAutomation,
   findNonArchivedAutomationByName,
 } from "../services/playbooks/cron-automation.js";
-import { findUnresolvedGoalReferences } from "../services/playbooks/goal-references.js";
+import {
+  describeGoalPlaceholderProblems,
+  findGoalPlaceholderProblems,
+  findUnresolvedGoalReferences,
+} from "../services/playbooks/goal-references.js";
 import { findUnenabledPlaybookSkills } from "../services/playbooks/playbook-skill-preflight.js";
 import { proposeCapabilityEnable } from "../services/capabilities/propose-capability-enable.js";
 import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
@@ -161,27 +165,72 @@ async function findNonArchivedPlaybookByName(
 }
 
 /**
- * WARN (never reject) when a persisted goal carries references substitution
- * cannot resolve. This is the catch-all door — MCP, CLI, Hub and the browser
- * all land here, and unlike the IS tool's `.refine()` it sees the MERGED stored
- * row rather than only the params passed in the same call. Rejecting would fail
- * several live playbooks and would stop an author saving a work-in-progress
- * goal, so the write proceeds and the miss is named in the log.
+ * WARN about what a persisted goal still carries that substitution cannot
+ * resolve — after the write. Two things reach here: braced prose that is not
+ * a placeholder (`{see below}`, never refused), and a placeholder the stored
+ * row ALREADY had when this write did not introduce it (grandfathered by
+ * {@link assertGoalPlaceholdersDeclared}). This is the catch-all door — MCP,
+ * CLI, Hub, the browser and the package installer all land here, and it sees
+ * the MERGED stored row.
  */
 function warnUnresolvedGoalReferences(playbook: Playbook): void {
   const unresolved = findUnresolvedGoalReferences(
     playbook.goalTemplate,
     playbook.params
   );
-  if (unresolved.length === 0) return;
+  const placeholders = findGoalPlaceholderProblems(
+    playbook.goalTemplate,
+    playbook.params
+  );
+  if (unresolved.length === 0 && placeholders.length === 0) return;
   logger.warn(
     {
       playbookId: playbook.id,
       workspaceId: playbook.workspaceId,
       unresolved,
+      placeholders,
     },
-    "Playbook goalTemplate has references no declared param backs — substitution will drop or pass them through"
+    "Playbook goalTemplate has references no run will fill — substitution will drop or pass them through"
   );
+}
+
+/**
+ * REFUSE a goalTemplate whose placeholders no run will fill (founder decision
+ * 2026-09-28, space-brief plan item 9): a `{name}` / `@{arg:name}` with no
+ * declared param, or any bare `{{name}}` — see `goal-references.ts` for why
+ * `{{name}}` is filled by nobody. Measured: 10 live playbooks shipped one, and
+ * a run then hands the agent `Run the dev task "{{task}}"` verbatim while
+ * persisting `metadata.params: {}`.
+ *
+ * Same shape and placement as {@link assertSubjectProfileResolves}: checked
+ * BEFORE the governance gate, so an agent's broken goal is refused with the
+ * fix instead of being filed as a proposal that can only mislead at run time.
+ *
+ * `previous` is the stored row on UPDATE: only placeholders this write
+ * INTRODUCES are refused. One the row already carried is left to the warning
+ * above — an existing broken playbook must stay editable (including editable
+ * to fix it), exactly as the subject guard on update.
+ */
+function assertGoalPlaceholdersDeclared(
+  next: { goalTemplate: unknown; params: unknown },
+  previous?: { goalTemplate: unknown; params: unknown }
+): void {
+  const grandfathered = new Set(
+    previous
+      ? findGoalPlaceholderProblems(previous.goalTemplate, previous.params).map(
+          (p) => p.text
+        )
+      : []
+  );
+  const introduced = findGoalPlaceholderProblems(
+    next.goalTemplate,
+    next.params
+  ).filter((p) => !grandfathered.has(p.text));
+  if (introduced.length === 0) return;
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message: describeGoalPlaceholderProblems(introduced),
+  });
 }
 
 /**
@@ -1436,8 +1485,9 @@ export const playbooksRouter = router({
         workspaceId: z.string().uuid(),
         /**
          * What the user said they want (capture note / intent). Ranks the
-         * candidates — never filters them; see `rankRouteCandidates`. Sufficient
-         * on its own when `profileSlug` is omitted.
+         * candidates, and is the ONLY reason a subject-less playbook is
+         * returned; see `rankRouteCandidates`. Sufficient on its own when
+         * `profileSlug` is omitted.
          */
         intentText: z.string().max(2000).optional(),
         /**
@@ -1502,7 +1552,8 @@ export const playbooksRouter = router({
         .orderBy(desc(playbooks.updatedAt));
 
       // Ranked with a human-readable `reason` (suggest-and-confirm): intent
-      // words first, then kind, then facet. Ties keep the updatedAt order.
+      // words (rarity-weighted over this pool) first, then kind, then facet.
+      // Ties break by relevance, never by updatedAt (suggest-routes.ts).
       const ranked = rankRouteCandidates({
         entity: {
           entityId: input.entityId,
@@ -1623,6 +1674,11 @@ export const playbooksRouter = router({
       if (input.name) input.name = decodeHtmlEntities(input.name);
       // Dangling `subjectProfile` slugs are refused here, before the gate.
       await assertSubjectProfileResolves(await getDb(), input.subjectProfile);
+      // …and so are goal placeholders no run will fill.
+      assertGoalPlaceholdersDeclared({
+        goalTemplate: input.goalTemplate,
+        params: input.params,
+      });
       const gateOpts = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -1910,6 +1966,18 @@ export const playbooksRouter = router({
       // uneditable — including uneditable to FIX it).
       if (input.subjectProfile !== undefined) {
         await assertSubjectProfileResolves(database, input.subjectProfile);
+      }
+
+      // 2c. Same rule for the goal's placeholders, over the MERGED row, and
+      // only for what THIS patch introduces (see the helper).
+      if (input.goalTemplate !== undefined || input.params !== undefined) {
+        assertGoalPlaceholdersDeclared(
+          {
+            goalTemplate: input.goalTemplate ?? existing.goalTemplate,
+            params: input.params ?? existing.params,
+          },
+          existing
+        );
       }
 
       // 3. Governance membrane decides approve vs propose.

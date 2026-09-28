@@ -2407,7 +2407,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Track template') is a method a project runs as a TRACK — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). When profileSlug is omitted, every active visible playbook is a candidate (ranked by intentText). When present, kind/facet matches AND playbooks with no subject (e.g. Plan Next Content) stay in the pool.",
+          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Track template') is a method a project runs as a TRACK — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2429,7 +2429,7 @@ export const tools = {
             intentText: {
               type: "string",
               description:
-                "What the user said they want. Sufficient on its own — ranks the candidates (never filters) and each result carries `score` and a human-readable `reason`. Show the reason when you suggest a playbook; never run one without the user's confirmation.",
+                "What the user said they want. Sufficient on its own — ranks the candidates and each result carries `score` and a human-readable `reason`. A kind or role match is returned without a word match; a playbook with no subject needs one. Show the reason when you suggest a playbook; never run one without the user's confirmation.",
             },
             projectId: {
               type: "string",
@@ -2449,7 +2449,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may contain {{param}} placeholders. Pass scope: "project" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default "session" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts (goalTemplate/stage goals read them as {{name}}). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Pass scope: "project" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default "session" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.',
         inputSchema: {
           type: "object",
           properties: {
@@ -2457,7 +2457,7 @@ export const tools = {
             goalTemplate: {
               type: "string",
               description:
-                "The session goal this playbook instantiates (e.g. 'Analyze competitors for {{market}}'). May contain {{param}} placeholders.",
+                "The session goal this playbook instantiates (e.g. 'Analyze competitors for {market}', with market declared in params). Reference a param as {name}, never {{name}}.",
             },
             description: {
               type: "string",
@@ -2540,7 +2540,8 @@ export const tools = {
                 properties: {
                   name: {
                     type: "string",
-                    description: "Key, read as {{name}} in goal templates.",
+                    description:
+                      "Key, referenced as {name} in the goalTemplate.",
                   },
                   label: {
                     type: "string",
@@ -3986,7 +3987,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What can do this? Searches the pod's runnable verbs, the abstract-intent axis and the user's playbooks in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+          "What can do this, and where does it belong? Searches the pod's runnable verbs, the abstract-intent axis, the user's playbooks and their spaces (with the kinds to write there) in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
         inputSchema: {
           type: "object",
           properties: {
@@ -4004,7 +4005,7 @@ export const tools = {
               type: "array",
               items: { type: "string", enum: [...FIND_CATALOGS] },
               description:
-                "Which catalogs to search. Omit for all three. A catalog you leave out is ABSENT from the result, not empty.",
+                "Which catalogs to search. Omit for all. A catalog you leave out is ABSENT from the result, not empty.",
             },
             limit: {
               type: "number",
@@ -4376,7 +4377,7 @@ export const tools = {
             params: {
               type: "object",
               description:
-                "Values for the playbook's {{param}} placeholders (e.g. { market: 'EU fintech' }).",
+                "Values for the playbook's declared params, filled into its goalTemplate's {name} placeholders (e.g. { market: 'EU fintech' }).",
             },
             subjectId: {
               type: "string",

@@ -77,7 +77,7 @@ export const CreatePlaybookBodySchema = playbookDefinitionSchema
   .extend({
     workspaceId: z.string().uuid().describe("The playbook's home workspace."),
     goalTemplate: playbookDefinitionSchema.shape.goalTemplate.describe(
-      "May contain {{param}} placeholders."
+      "May reference a declared param as {name}; an undeclared name, or {{name}}, is refused."
     ),
     status: playbookDefinitionSchema.shape.status.describe(
       "Defaults to active."
