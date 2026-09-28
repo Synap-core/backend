@@ -439,7 +439,8 @@ describe("buildSpaceBrief", () => {
     expect(briefBytes(brief)).toBeLessThanOrEqual(BRIEF_BUDGET_BYTES);
     // Non-vacuity: the list really was shed, its total kept.
     expect(brief.trimmed).toContain("playbooks.items");
-    expect(brief.playbooks).toEqual({ total: 8 });
+    // Emptied, never removed: published CLIs read `items.length`.
+    expect(brief.playbooks).toEqual({ items: [], total: 8 });
     expect(brief.purpose).toHaveLength(230);
     expect(brief.persona).toBeDefined();
     expect(brief.anchors?.root).toEqual({ kind: "kind-0", entityId: "e-root" });

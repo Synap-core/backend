@@ -118,8 +118,11 @@ export interface BuiltSpaceBrief {
   keyKindsTotal?: number;
   playbooks?:
     | {
-        /** Shed (total kept) before purpose, persona, root anchor and kinds. */
-        items?: Array<{ id: string; name: string; description?: string }>;
+        /**
+         * Emptied (total kept) before purpose, persona, root anchor and kinds.
+         * Emptied, never removed: published clients read `items.length`.
+         */
+        items: Array<{ id: string; name: string; description?: string }>;
         total: number;
       }
     | Unavailable;
@@ -344,7 +347,7 @@ const TRIM_LADDER: Array<[string, (b: BuiltSpaceBrief) => boolean]> = [
     "playbooks.description",
     (b) => {
       const pb = b.playbooks;
-      if (!pb || "status" in pb || !pb.items?.some((i) => i.description))
+      if (!pb || "status" in pb || !pb.items.some((i) => i.description))
         return false;
       pb.items.forEach((i) => delete i.description);
       return true;
@@ -361,13 +364,14 @@ const TRIM_LADDER: Array<[string, (b: BuiltSpaceBrief) => boolean]> = [
   ["rules", (b) => !!b.rules && (delete b.rules, true)],
   // The playbook LIST goes before purpose, persona, the root anchor and the
   // kinds (founder order 2026-09-28): its `total` stays, so the agent knows
-  // to call list_playbooks.
+  // to call list_playbooks. `items: []`, not deleted — synap-cli <= de24716
+  // reads `playbooks.items.length` unguarded.
   [
     "playbooks.items",
     (b) => {
       const pb = b.playbooks;
-      if (!pb || "status" in pb || !pb.items) return false;
-      delete pb.items;
+      if (!pb || "status" in pb || pb.items.length === 0) return false;
+      pb.items = [];
       return true;
     },
   ],
