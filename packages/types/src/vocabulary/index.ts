@@ -25,6 +25,7 @@
 
 import { OBJECT_KINDS, OBJECT_KIND_ALIASES } from "./object-kinds.js";
 import type { SpaceBrief } from "../space-brief/index.js";
+import type { TrustRung } from "../trust-ladder/index.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -1187,3 +1188,37 @@ export function resolveSpaceBriefFieldLabel(
   );
 }
 
+/**
+ * The words of the TRUST LADDER (`@synap-core/types/trust-ladder`), in two
+ * moods, like {@link ACTION_VERBS}:
+ *
+ *   - `name`  — what the rung IS, for a mark on a card or a Settings row
+ *               ("Proposes").
+ *   - `offer` — the next-rung button that moves work TO this rung, an
+ *               imperative the person says ("Next time, do it and tell me").
+ *
+ * Keyed by `TrustRung`, so a new rung is a BUILD error here until it is named.
+ * `ask` has an `offer` only for completeness: nothing climbs TO the lowest rung.
+ */
+export const TRUST_RUNG_LABELS: Readonly<
+  Record<TrustRung, { name: string; offer: string }>
+> = {
+  ask: { name: "Asks you", offer: "Ask me first" },
+  propose: { name: "Proposes", offer: "Next time, prepare it for me to decide" },
+  do_tell: { name: "Does it, tells you", offer: "Next time, do it and tell me" },
+  quiet: { name: "Just does it", offer: "Next time, just do it" },
+};
+
+/** A rung's words in one mood; an unknown rung humanizes rather than leaks. */
+export function resolveTrustRungLabel(
+  rung: string | null | undefined,
+  mood: "name" | "offer" = "name"
+): string {
+  if (!rung) return "";
+  const row = (
+    TRUST_RUNG_LABELS as Readonly<
+      Record<string, { name: string; offer: string }>
+    >
+  )[rung];
+  return row ? row[mood] : humanizeToken(rung);
+}

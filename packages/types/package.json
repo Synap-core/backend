@@ -213,6 +213,10 @@
       "types": "./dist/needs-you/index.d.ts",
       "import": "./dist/needs-you/index.js"
     },
+    "./trust-ladder": {
+      "types": "./dist/trust-ladder/index.d.ts",
+      "import": "./dist/trust-ladder/index.js"
+    },
     "./external-connect": {
       "types": "./dist/external-connect/index.d.ts",
       "import": "./dist/external-connect/index.js"
