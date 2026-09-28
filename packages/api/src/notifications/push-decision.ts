@@ -18,11 +18,13 @@
  */
 import {
   db,
+  desc,
   eq,
   focusSessions,
   proposals,
   storedSessionSource,
 } from "@synap/database";
+import { loadAgentPresence } from "../services/agent-presence.js";
 import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
   classifyPush,
@@ -58,30 +60,93 @@ export function decidePush(p: {
   return { push: true, category, reason: "earned" };
 }
 
-const OPEN = new Set<string>(OPEN_SESSION_STATUSES);
+/**
+ * Statuses a proposal can block: the open ones, plus `stale` — the reaper
+ * marks a long-idle session stale, but an agent that files a proposal from it
+ * is back at work and waiting on the decision. Terminal ones never block.
+ */
+const BLOCKABLE = new Set<string>([...OPEN_SESSION_STATUSES, "stale"]);
 
 /**
- * A proposal BLOCKS work when it was filed from an open session or run the
- * agent was explicitly working in. The receipt session the pod mints for a
- * stray agent write (`sessionSource: "derived"`) groups the proposal; nothing
- * waits on it. A pod-wide governance recommendation has no session at all.
+ * How recently the filing agent must have called the pod for its proposal to
+ * count as something it is waiting on. Its keys stamp `last_used_at` at most
+ * once a minute, so this is comfortably above that throttle.
+ */
+export const PROPOSAL_BLOCKING_SEEN_WITHIN_MS = 15 * 60_000;
+
+/**
+ * A proposal BLOCKS work — THE RULE, and why it is this one.
+ *
+ * The tight rule would be "the agent is waiting on THIS proposal": a recent
+ * `wait_for_answer` poll on its session, or an owed slot / `blockedReason`
+ * that references it. NEITHER is recorded today: a wait poll writes nothing
+ * (it only reads), and an output ref cannot name a proposal
+ * (`OUTPUT_REF_KINDS` has no `proposal`). So the rule is the tightest the
+ * data supports, every clause required:
+ *
+ *   1. filed from a session the agent NAMED (`session_id` set and not the
+ *      receipt session the pod mints for a stray write, `sessionSource:
+ *      "derived"`) — a pod-wide recommendation has none;
+ *   2. that session is open or `stale` (see {@link BLOCKABLE});
+ *   3. an AGENT filed it (`agent_user_id`) — a person's own proposal blocks
+ *      no agent;
+ *   4. the agent is PRESENT: its last call is within
+ *      {@link PROPOSAL_BLOCKING_SEEN_WITHIN_MS}. An agent with no hub key at
+ *      all (a key-less house agent) cannot be measured, so this clause does
+ *      not apply to it — "cannot tell" is not "absent";
+ *   5. this session is the agent's CURRENT one: its newest proposal anywhere
+ *      is in this session.
+ *
+ * Clauses 4 and 5 hold by construction at FILING time (the agent just
+ * called, from this session). They bite when the notification is raised
+ * later than the filing (a reactor hop, a retry) or when the agent has moved
+ * on to other work since. Recording a wait poll is what would make this rule
+ * tight; until then it is honest about what it can see.
  */
 export async function proposalBlocksOpenSession(
-  proposalId: string
+  proposalId: string,
+  now: Date = new Date()
 ): Promise<boolean> {
   const [row] = await db
-    .select({ sessionId: proposals.sessionId, data: proposals.data })
+    .select({
+      sessionId: proposals.sessionId,
+      data: proposals.data,
+      agentUserId: proposals.agentUserId,
+    })
     .from(proposals)
     .where(eq(proposals.id, proposalId))
     .limit(1);
   if (!row?.sessionId) return false;
   if (storedSessionSource(row.data) === "derived") return false;
+  if (!row.agentUserId) return false;
+
   const [session] = await db
     .select({ status: focusSessions.status })
     .from(focusSessions)
     .where(eq(focusSessions.id, row.sessionId))
     .limit(1);
-  return !!session && OPEN.has(session.status);
+  if (!session || !BLOCKABLE.has(session.status)) return false;
+
+  const presence = (await loadAgentPresence([row.agentUserId], now)).get(
+    row.agentUserId
+  );
+  const measurable =
+    !!presence &&
+    presence.activeKeys + presence.pendingKeys + presence.revokedKeys > 0;
+  if (measurable) {
+    const seen = presence!.lastSeenAt ? Date.parse(presence!.lastSeenAt) : NaN;
+    if (!(now.getTime() - seen <= PROPOSAL_BLOCKING_SEEN_WITHIN_MS)) {
+      return false;
+    }
+  }
+
+  const [latest] = await db
+    .select({ sessionId: proposals.sessionId })
+    .from(proposals)
+    .where(eq(proposals.agentUserId, row.agentUserId))
+    .orderBy(desc(proposals.createdAt))
+    .limit(1);
+  return latest?.sessionId === row.sessionId;
 }
 
 /** The facts `classifyPush` needs for this type, computed only when needed. */
@@ -104,4 +169,4 @@ export async function derivePushFacts(input: {
   return {};
 }
 
-export { readPushPrefs } from "./push-prefs.js";
+export { readPushPrefs, readPodPushSettings } from "./push-prefs.js";

@@ -768,8 +768,6 @@ export function attestReceiptText(label: string): string {
 
 export type AttestSessionSlotResult =
   | Exclude<AttestExpectedOutputResult, { status: "attested" }>
-  /** `askFingerprint` given and the slot's ask is no longer that one. */
-  | { status: "ask_changed" }
   | {
       status: "attested";
       expectedLabel: string;
@@ -811,29 +809,12 @@ export async function attestSessionSlot(p: {
    */
   askFingerprint?: string;
 }): Promise<AttestSessionSlotResult> {
-  if (p.askFingerprint !== undefined) {
-    const session = await db.query.focusSessions.findFirst({
-      where: and(
-        eq(focusSessions.id, p.sessionId),
-        eq(focusSessions.userId, p.userId)
-      ),
-      columns: { expectedOutputs: true },
-    });
-    const wanted = normalizeExpectedLabel(p.expectedLabel);
-    const slot = (
-      Array.isArray(session?.expectedOutputs)
-        ? (session.expectedOutputs as ExpectedOutput[])
-        : []
-    ).find((o) => normalizeExpectedLabel(o.label) === wanted);
-    // No session / no slot: the attest door below says which, in its words.
-    if (slot && askFingerprint(slot.ask ?? null) !== p.askFingerprint) {
-      return { status: "ask_changed" };
-    }
-  }
+  // The fingerprint is compared INSIDE the attest door's locked read.
   const attested = await attestExpectedOutput({
     sessionId: p.sessionId,
     userId: p.userId,
     expectedLabel: p.expectedLabel,
+    askFingerprint: p.askFingerprint,
   });
   if (attested.status !== "attested") return attested;
 

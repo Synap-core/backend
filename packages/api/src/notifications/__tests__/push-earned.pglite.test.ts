@@ -151,19 +151,33 @@ async function seedSession(status = "active"): Promise<string> {
 async function seedProposal(opts: {
   sessionId?: string | null;
   derived?: boolean;
+  /** Filing agent; `null` = a person's own proposal. Default AGENT. */
+  agentUserId?: string | null;
+  createdAt?: string;
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into proposals (id, workspace_id, target_type, proposal_type, status, data, session_id, created_at, updated_at)
-     values ($1, $2, 'entity', 'create', 'pending', $3::jsonb, $4, now(), now())`,
+    `insert into proposals (id, workspace_id, target_type, proposal_type, status, data, session_id, agent_user_id, created_at, updated_at)
+     values ($1, $2, 'entity', 'create', 'pending', $3::jsonb, $4, $5, coalesce($6::timestamptz, now()), now())`,
     [
       id,
       WORKSPACE,
       JSON.stringify(opts.derived ? { sessionSource: "derived" } : {}),
       opts.sessionId ?? null,
+      opts.agentUserId === undefined ? AGENT : opts.agentUserId,
+      opts.createdAt ?? null,
     ]
   );
   return id;
+}
+
+/** Give AGENT a hub key last used `minutesAgo` minutes ago. */
+async function agentSeen(minutesAgo: number) {
+  await q(
+    `insert into api_keys (id, user_id, key_type, is_active, last_used_at, linked_user_id)
+     values ($1, $2, 'hub_inbound', true, now() - ($3 || ' minutes')::interval, $4)`,
+    [randomUUID(), AGENT, String(minutesAgo), USER]
+  );
 }
 
 const proposalCreated = (proposalId: string) =>
@@ -200,6 +214,10 @@ describe("W8 — a push is earned", () => {
     await h.client!.exec(
       `alter table notification_preferences alter column enabled set default true`
     );
+    // 0290 — the conflict target of the push-prefs upsert.
+    await h.client!.exec(
+      `create unique index notif_prefs_user_pod_unique on notification_preferences (user_id) where workspace_id is null`
+    );
     await q(
       `insert into users (id, email, name, timezone) values ($1, 'a@example.test', 'Antoine', 'UTC'), ($2, 'agent@example.test', 'Claude Code', 'UTC')`,
       [USER, AGENT]
@@ -214,6 +232,8 @@ describe("W8 — a push is earned", () => {
     h.pushes.length = 0;
     await q(`delete from notifications`);
     await q(`delete from notification_preferences`);
+    await q(`delete from proposals`);
+    await q(`delete from api_keys`);
   });
 
   // ── 1. proposal pushes only when blocking ──────────────────────────────────
@@ -245,6 +265,49 @@ describe("W8 — a push is earned", () => {
     expect(h.pushes).toHaveLength(0);
   });
 
+  it("a STALE session still blocks: the agent filing from it is back", async () => {
+    const p = await seedProposal({ sessionId: await seedSession("stale") });
+    await proposalCreated(p);
+    expect(h.pushes).toHaveLength(1);
+  });
+
+  // Measured boundary: removing clause 3 (`agent_user_id` required) leaves
+  // this GREEN — clause 5 ("the agent's newest proposal is here") also finds
+  // no agent for a person's proposal. Clause 3 is kept as the explicit rule.
+  it("a PERSON's own proposal blocks no agent — no push", async () => {
+    const p = await seedProposal({
+      sessionId: await seedSession("active"),
+      agentUserId: null,
+    });
+    await proposalCreated(p);
+    expect(await rowsFor(p)).toHaveLength(1);
+    expect(h.pushes).toHaveLength(0);
+  });
+
+  it("an agent last seen 2h ago is not waiting — no push; seen 1 min ago — push", async () => {
+    await agentSeen(120);
+    const stale = await seedProposal({ sessionId: await seedSession("active") });
+    await proposalCreated(stale);
+    expect(h.pushes).toHaveLength(0);
+
+    await agentSeen(1);
+    const fresh = await seedProposal({ sessionId: await seedSession("active") });
+    await proposalCreated(fresh);
+    expect(h.pushes).toHaveLength(1);
+  });
+
+  it("an agent that moved on to ANOTHER session is not waiting here — no push", async () => {
+    const here = await seedSession("active");
+    const p = await seedProposal({
+      sessionId: here,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    await seedProposal({ sessionId: await seedSession("active") }); // newer, elsewhere
+    await proposalCreated(p);
+    expect(await rowsFor(p)).toHaveLength(1);
+    expect(h.pushes).toHaveLength(0);
+  });
+
   it("a proposal with no session (pod-wide recommendation shape) — no push", async () => {
     const p = await seedProposal({ sessionId: null });
     await proposalCreated(p);
@@ -266,6 +329,17 @@ describe("W8 — a push is earned", () => {
   it("turning a category off stops its pushes; the tray row still lands", async () => {
     await writePushPrefs(USER, { categories: { "decision-blocking": false } });
     const p = await seedProposal({ sessionId: await seedSession("active") });
+    await proposalCreated(p);
+    expect(await rowsFor(p)).toHaveLength(1);
+    expect(h.pushes).toHaveLength(0);
+  });
+
+  it("a per-TYPE 'all' rule on a WORKSPACE override row does NOT force a push", async () => {
+    await q(
+      `insert into notification_preferences (id, user_id, workspace_id, enabled, routing_rules) values ($1, $2, $3, true, $4::jsonb)`,
+      [randomUUID(), USER, WORKSPACE, JSON.stringify({ "proposal.created": "all" })]
+    );
+    const p = await seedProposal({ sessionId: null });
     await proposalCreated(p);
     expect(await rowsFor(p)).toHaveLength(1);
     expect(h.pushes).toHaveLength(0);
@@ -320,6 +394,8 @@ describe("W8 — a push is earned", () => {
       data: Record<string, unknown>;
     };
     expect(push.interruptionLevel).toBe("time-sensitive");
+    // The body shows the question Yes/No answers: the PROMPT, not the why.
+    expect((push as unknown as { body: string }).body).toBe("Tone: Casual tone?");
     expect(push.threadId).toBe(sessionId);
     expect(push.categoryId).toBe("ask-confirm");
     expect(push.data).toMatchObject({
@@ -342,6 +418,25 @@ describe("W8 — a push is earned", () => {
       askFingerprint: quick.askFingerprint,
     });
     expect(answered.status).toBe("answered");
+  });
+
+  it("a choose-recommended push names the recommended option in its body", async () => {
+    const sessionId = await seedSession("active");
+    await blockExpectedOutput({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      expectedLabel: "Tone",
+      blockedReason: "decision",
+      why: "casual or formal",
+      ask: {
+        mode: "choose",
+        options: [{ label: "Casual", recommended: true }, { label: "Formal" }],
+      },
+    } as Parameters<typeof blockExpectedOutput>[0]);
+    const push = h.pushes[0] as { body: string; categoryId: string };
+    expect(push.categoryId).toBe("ask-choose-recommended");
+    expect(push.body).toBe("Tone: casual or formal\nRecommended: Casual");
   });
 
   const blockAct = async (sessionId: string, ask: Ask) => {

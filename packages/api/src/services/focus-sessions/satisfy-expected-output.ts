@@ -57,7 +57,7 @@ import { db, focusSessions, eq, and } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
-import { resolveAskResolution } from "@synap-core/types/ask";
+import { askFingerprint, resolveAskResolution } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
@@ -377,6 +377,13 @@ export interface AttestExpectedOutputParams {
    * answer-shaped ask is still refused. Never set from a wire input.
    */
   criterionGraded?: boolean;
+  /**
+   * `askFingerprint(ask)` of the ask the person SAW (the lock-screen "I did
+   * it"). Compared INSIDE the locked read, so an agent re-asking between the
+   * check and the stamp cannot slip a different question under the attest.
+   * Omit ⇒ unbound.
+   */
+  askFingerprint?: string;
 }
 
 export type AttestExpectedOutputResult =
@@ -397,6 +404,8 @@ export type AttestExpectedOutputResult =
    * would close the slot with the question unanswered.
    */
   | { status: "answer_required" }
+  /** `askFingerprint` given and the slot's ask is no longer that one. */
+  | { status: "ask_changed" }
   | {
       status: "attested";
       expectedLabel: string;
@@ -444,6 +453,12 @@ export async function attestExpectedOutput(
     if ("refused" in chosen) return { status: chosen.refused };
     const { index } = chosen;
     const slot = current[index]!;
+    if (
+      params.askFingerprint !== undefined &&
+      askFingerprint(slot.ask ?? null) !== params.askFingerprint
+    ) {
+      return { status: "ask_changed" as const };
+    }
 
     const now = new Date();
     const next = stampAttested(current, index, userId, now);

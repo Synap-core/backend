@@ -23,14 +23,35 @@ import {
 
 /** No row ⇒ defaults (`{}`). A FAILED read throws — never read as defaults. */
 export async function readPushPrefs(userId: string): Promise<PushPrefs> {
+  return (await readPodPushSettings(userId)).prefs;
+}
+
+/**
+ * Everything the push decision reads from the person's POD-WIDE row: their
+ * categories, and the per-type routing rules that may FORCE a push. A forced
+ * push is the person's own statement about their phone, so only the pod-wide
+ * row can make it — a workspace override row must never ring a phone the
+ * person silenced. A FAILED read throws.
+ */
+export async function readPodPushSettings(userId: string): Promise<{
+  prefs: PushPrefs;
+  routingRules: Record<string, string>;
+}> {
   const row = await db.query.notificationPreferences.findFirst({
     where: and(
       eq(notificationPreferences.userId, userId),
       isNull(notificationPreferences.workspaceId)
     ),
-    columns: { pushPrefs: true },
+    columns: { pushPrefs: true, routingRules: true },
   });
-  return normalizePushPrefs(row?.pushPrefs);
+  const rules = row?.routingRules;
+  return {
+    prefs: normalizePushPrefs(row?.pushPrefs),
+    routingRules:
+      rules && typeof rules === "object" && !Array.isArray(rules)
+        ? (rules as Record<string, string>)
+        : {},
+  };
 }
 
 export interface PushPrefsPatch {
@@ -50,31 +71,25 @@ export async function writePushPrefs(
   const categories = normalizePushPrefs({ categories: patch.categories })
     .categories;
 
-  const podRow = and(
-    eq(notificationPreferences.userId, userId),
-    isNull(notificationPreferences.workspaceId)
-  );
-  const existing = await db.query.notificationPreferences.findFirst({
-    where: podRow,
-    columns: { id: true },
-  });
-  if (!existing) {
-    await db
-      .insert(notificationPreferences)
-      .values({ userId, workspaceId: null, pushPrefs: {} });
-  }
-
   const catsJson = JSON.stringify(categories ?? {});
+  const initial = { categories: categories ?? {} };
+  // ONE statement: insert the pod-wide row, or merge into it. The partial
+  // unique index (0290) is the conflict target, so two first writes can
+  // never leave two pod-wide rows.
   await db
-    .update(notificationPreferences)
-    .set({
-      pushPrefs: drizzleSql`(coalesce(${notificationPreferences.pushPrefs}, '{}'::jsonb)
-        || jsonb_build_object('categories',
-             coalesce(${notificationPreferences.pushPrefs}->'categories', '{}'::jsonb)
-             || ${catsJson}::jsonb))`,
-      updatedAt: new Date(),
-    })
-    .where(podRow);
+    .insert(notificationPreferences)
+    .values({ userId, workspaceId: null, pushPrefs: initial })
+    .onConflictDoUpdate({
+      target: notificationPreferences.userId,
+      targetWhere: drizzleSql`workspace_id IS NULL`,
+      set: {
+        pushPrefs: drizzleSql`(coalesce(${notificationPreferences.pushPrefs}, '{}'::jsonb)
+          || jsonb_build_object('categories',
+               coalesce(${notificationPreferences.pushPrefs}->'categories', '{}'::jsonb)
+               || ${catsJson}::jsonb))`,
+        updatedAt: new Date(),
+      },
+    });
 
   return readPushPrefs(userId);
 }

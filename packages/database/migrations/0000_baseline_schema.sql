@@ -2539,6 +2539,10 @@ ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "updated_at" tim
 
 CREATE INDEX IF NOT EXISTS "notif_prefs_user_workspace_idx"
   ON "notification_preferences" ("user_id", "workspace_id");
+-- One pod-wide row per person (0290).
+CREATE UNIQUE INDEX IF NOT EXISTS "notif_prefs_user_pod_unique"
+  ON "notification_preferences" ("user_id")
+  WHERE "workspace_id" IS NULL;
 
 -- ─── 37. api_keys ────────────────────────────────────────────────────────────
 

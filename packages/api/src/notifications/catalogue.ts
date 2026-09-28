@@ -54,6 +54,11 @@
  */
 
 import {
+  PUSH_CATEGORY_POLICY,
+  PUSH_TYPE_RULES,
+  type PushCategory,
+} from "@synap-core/types/push";
+import {
   NOTIFICATION_REGISTRY,
   type DeliveryChannel,
   type NotificationDef,
@@ -213,8 +218,21 @@ export interface NotificationCatalogueEntry {
   /** lucide icon name, from the registry entry. */
   icon: string;
   priority: NotificationDef["priority"];
-  /** The type's declared defaults, narrowed to channels with a transport. */
+  /**
+   * The channels this type ACTUALLY goes out on when the person has set
+   * nothing: the registry's defaults, narrowed to channels with a transport,
+   * and WITHOUT `os` when the push contract (`@synap-core/types/push`) never
+   * pushes it by default — an unclassified type, or a category that is off
+   * by default. A settings screen must not advertise a push that never comes.
+   */
   defaultChannels: DeliveryChannel[];
+  /**
+   * The push category this type rings the phone under, or `null` when it
+   * never pushes on its own (a per-type rule can still force it).
+   * `onlyWhenBlocking` — `proposal.created` pushes only when it blocks an
+   * open session.
+   */
+  push: { category: PushCategory; onlyWhenBlocking: boolean } | null;
   /** Present only when the type declares one; narrowed to deliverable channels. */
   channelCeiling?: DeliveryChannel[];
   /** Rule values a picker may offer for THIS type — derived from the ceiling. */
@@ -302,11 +320,33 @@ function deliverable(channels: readonly DeliveryChannel[]): DeliveryChannel[] {
   return channels.filter((c) => DELIVERABLE.has(c));
 }
 
+/**
+ * The push half of an entry, DERIVED from the push contract — never a second
+ * table. `PUSH_TYPE_RULES` names every os-default type (tripwire:
+ * `push-classification-covers-os-types.test.ts`).
+ */
+export function pushDefaultFor(
+  type: string
+): NotificationCatalogueEntry["push"] {
+  const rule = Object.prototype.hasOwnProperty.call(PUSH_TYPE_RULES, type)
+    ? PUSH_TYPE_RULES[type]
+    : null;
+  if (!rule) return null;
+  return rule === "blocking-proposal"
+    ? { category: "decision-blocking", onlyWhenBlocking: true }
+    : { category: rule, onlyWhenBlocking: false };
+}
+
 /** Project one registry entry. Exported for the catalogue tests. */
 export function catalogueEntryFor(
   def: NotificationDef
 ): NotificationCatalogueEntry {
-  const defaults = deliverable(def.defaultChannels);
+  const push = pushDefaultFor(def.type);
+  const pushesByDefault =
+    !!push && PUSH_CATEGORY_POLICY[push.category].defaultOn;
+  const defaults = deliverable(def.defaultChannels).filter(
+    (c) => c !== "os" || pushesByDefault
+  );
   const allowedRules = allowedRulesFor(def);
   const defaultRule =
     allowedRules.find(
@@ -322,6 +362,7 @@ export function catalogueEntryFor(
     icon: def.icon,
     priority: def.priority,
     defaultChannels: defaults,
+    push,
     allowedRules,
     defaultRule,
   };

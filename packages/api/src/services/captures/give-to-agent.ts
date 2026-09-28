@@ -18,7 +18,15 @@
  * it.
  *
  * Idempotent by the create door's own twin rule: giving the same capture again
- * while its session is open returns that session (`deduped: true`).
+ * while its session is open returns that session (`deduped: true`). The twin
+ * rule ignores the roster, so a repeat naming ANOTHER agent APPENDS it to that
+ * session's roster through the one roster door (`attachSessionAgent`) rather
+ * than refusing: the work is the same, and both agents may pick it up. The
+ * `line` is built from the roster the session ACTUALLY has after that.
+ *
+ * WHICH AGENTS. Only one the person OPERATES (`agentsOperatedBy`: a key linked
+ * to them). Another person's agent may be on a shared roster, but its calls
+ * run as that other person, so its orient never lists this person's sessions.
  */
 import {
   and,
@@ -32,13 +40,35 @@ import {
 import { resolveAgentDirection } from "@synap-core/types/agents";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { queryAgentUsers } from "../../routers/agent-users.js";
-import { loadAgentPresence } from "../agent-presence.js";
+import { agentsOperatedBy, loadAgentPresence } from "../agent-presence.js";
+import { attachSessionAgent } from "../focus-sessions/attach-session-agent.js";
 import { createFocusSession } from "../focus-sessions/create-session.js";
 import {
   INTAKE_SOURCE_METADATA_KEY,
   type IntakeSourceMetadata,
 } from "../intake/stage-intake-source.js";
 import { ownCapturesWhere } from "./capture-scope.js";
+
+export interface RosterAgent {
+  id: string;
+  name: string | null;
+  /** ISO; `null` = never seen. */
+  lastSeenAt: string | null;
+}
+
+/**
+ * "Delivered when Claude Code checks in" / "…when Claude Code or Codex checks
+ * in" — whoever checks in first can pick it up. No em dash (UI copy).
+ */
+export function deliveryLine(roster: readonly RosterAgent[]): string {
+  const names = roster.map((a) => a.name ?? "your agent");
+  if (names.length === 0) return "Delivered to the next agent that checks in";
+  const who =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+  return `Delivered when ${who} checks in`;
+}
 
 /** `focusSessions.create`'s own goal bound. */
 const GOAL_MAX = 2000;
@@ -49,12 +79,12 @@ export type GiveToAgentResult =
       sessionId: string;
       /** The capture's session was already open — nothing new was written. */
       deduped: boolean;
-      agent: {
-        id: string;
-        name: string | null;
-        /** ISO; `null` = never seen. */
-        lastSeenAt: string | null;
-      } | null;
+      agent: RosterAgent | null;
+      /**
+       * Every agent on the session's roster after this call, the requested one
+       * included. On a repeat it can hold an agent given the work earlier.
+       */
+      roster: RosterAgent[];
       /**
        * How the work reaches the agent. `on_check_in` — it sees it the next
        * time it calls the pod (orient / wait); nothing wakes it.
@@ -112,8 +142,13 @@ export async function giveCaptureToAgent(p: {
     if (direction === "house") {
       return {
         status: "agent_not_wakeable",
-        message: `${found.name ?? "This agent"} is the pod's own agent and has no check-in to pick this up — ask it in its chat instead.`,
+        message: `${found.name ?? "This agent"} is the pod's own agent and never checks in to pick this up. Ask it in its chat instead.`,
       };
+    }
+    // Visible is not enough: the agent must act for THIS person, or it will
+    // never see the session (its orient reads its operator's sessions).
+    if (!(await agentsOperatedBy(p.userId, [found.id])).has(found.id)) {
+      return { status: "agent_not_found" };
     }
     agent = { id: found.id, name: found.name };
   }
@@ -152,19 +187,50 @@ export async function giveCaptureToAgent(p: {
     return { status: "proposed", message: created.message };
   }
 
-  const presence = agent
-    ? (await loadAgentPresence([agent.id])).get(agent.id)
-    : undefined;
-  const lastSeenAt = presence?.lastSeenAt ?? null;
-  const who = agent?.name ?? "your agent";
+  const sessionId = created.session.id;
+  let agentIds = Array.isArray(created.session.agentIds)
+    ? created.session.agentIds
+    : [];
+  if (agent && !agentIds.includes(agent.id)) {
+    // A repeat naming another agent: the twin rule returned the open session,
+    // whose roster does not hold this agent yet. Append it (the ONE roster
+    // writer, locked + idempotent) so the line below is true.
+    const attached = await attachSessionAgent({
+      sessionId,
+      agentId: agent.id,
+      userId: p.userId,
+    });
+    if (attached.status === "not_found") return { status: "not_found" };
+    agentIds = attached.agentIds;
+  }
+
+  // The line names the roster the session ACTUALLY has, among the agents this
+  // person operates (the only ones that will ever see it).
+  const [operated, presence] = await Promise.all([
+    agentsOperatedBy(p.userId, agentIds),
+    loadAgentPresence(agentIds),
+  ]);
+  const names = agentIds.length
+    ? new Map(
+        (await queryAgentUsers({ userId: p.userId }, undefined)).map(
+          (r) => [r.id, r.name] as const
+        )
+      )
+    : new Map<string, string | null>();
+  const roster: RosterAgent[] = agentIds
+    .filter((id) => operated.has(id))
+    .map((id) => ({
+      id,
+      name: names.get(id) ?? null,
+      lastSeenAt: presence.get(id)?.lastSeenAt ?? null,
+    }));
   return {
     status: "given",
-    sessionId: created.session.id,
+    sessionId,
     deduped: created.status === "deduped",
-    agent: agent ? { ...agent, lastSeenAt } : null,
+    agent: agent ? (roster.find((r) => r.id === agent!.id) ?? null) : null,
+    roster,
     delivery: "on_check_in",
-    line: agent
-      ? `Delivered when ${who} checks in`
-      : "Delivered to the next agent that checks in",
+    line: deliveryLine(roster),
   };
 }

@@ -34,7 +34,10 @@ import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import type { AgentMetadata } from "@synap/database/schema";
-import { withAgentPresence } from "../services/agent-presence.js";
+import {
+  agentsOperatedBy,
+  withAgentPresence,
+} from "../services/agent-presence.js";
 import { toPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import {
   applyAgentPosture,
@@ -477,7 +480,17 @@ export const agentUsersRouter = router({
         isPodAdmin: await isPodAdmin(ctx.userId),
         podAdminOrigin: publicOrigin ? toPodAdminOrigin(publicOrigin) : null,
       };
-      return rows.map((r) => withViewerVerbs(withAgentOrigin(r), viewer));
+      // `operatedByViewer`: this agent acts on the viewer's behalf (one of its
+      // keys is linked to them), so it can see and pick up the viewer's work.
+      // The ONE rule `captures.giveToAgent` enforces — a picker filters on it.
+      const operated = await agentsOperatedBy(
+        ctx.userId,
+        rows.map((r) => r.id)
+      );
+      return rows.map((r) => ({
+        ...withViewerVerbs(withAgentOrigin(r), viewer),
+        operatedByViewer: operated.has(r.id),
+      }));
     }),
 
   /**

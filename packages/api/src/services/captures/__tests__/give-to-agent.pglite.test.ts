@@ -92,6 +92,8 @@ const OTHER = "99999999-9999-4999-8999-999999999999";
 const AGENT = "22222222-2222-4222-8222-222222222222";
 const AGENT_B = "33333333-3333-4333-8333-333333333333";
 const HOUSE = "44444444-4444-4444-8444-444444444444";
+/** An agent another person operates — visible on the pod-wide roster. */
+const THEIRS = "55555555-5555-4555-8555-555555555555";
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
 
@@ -182,13 +184,17 @@ describe("captures.giveToAgent", () => {
         ($2, 'cc@x.test', 'Claude Code', 'agent', 'cli', false),
         ($3, 'cx@x.test', 'Codex', 'agent', 'cli', false),
         ($4, 'twin@x.test', 'Twin', 'agent', null, true),
-        ($5, 'o@x.test', 'Other', 'human', null, false)`,
-      [USER, AGENT, AGENT_B, HOUSE, OTHER]
+        ($5, 'o@x.test', 'Other', 'human', null, false),
+        ($6, 'theirs@x.test', 'Their Claude', 'agent', 'cli', false)`,
+      [USER, AGENT, AGENT_B, HOUSE, OTHER, THEIRS]
     );
+    // Operator links: AGENT and AGENT_B act for USER; THEIRS acts for OTHER.
     await q(
-      `insert into api_keys (id, user_id, key_type, is_active, last_used_at, instance_id)
-       values ($1, $2, 'hub_inbound', true, '2026-09-28T08:00:00Z', 'mbp')`,
-      [randomUUID(), AGENT]
+      `insert into api_keys (id, user_id, key_type, is_active, last_used_at, instance_id, linked_user_id) values
+        ($1, $2, 'hub_inbound', true, '2026-09-28T08:00:00Z', 'mbp', $3),
+        ($4, $5, 'hub_inbound', true, null, null, $3),
+        ($6, $7, 'hub_inbound', true, null, null, $8)`,
+      [randomUUID(), AGENT, USER, randomUUID(), AGENT_B, randomUUID(), THEIRS, OTHER]
     );
   }, 120_000);
 
@@ -216,6 +222,7 @@ describe("captures.giveToAgent", () => {
       delivery: "on_check_in",
       line: "Delivered when Claude Code checks in",
       agent: { id: AGENT, name: "Claude Code" },
+      roster: [{ id: AGENT, name: "Claude Code" }],
     });
     if (r.status !== "given") throw new Error("unreachable");
     expect(r.agent?.lastSeenAt).toBe("2026-09-28T08:00:00.000Z");
@@ -257,12 +264,40 @@ describe("captures.giveToAgent", () => {
     expect(b.deduped).toBe(true);
   });
 
+  it("a repeat naming ANOTHER agent appends it to the open session's roster; the line names the real roster", async () => {
+    const captureId = await seedCapture({});
+    const a = await giveCaptureToAgent({ access, userId: USER, captureId, agentUserId: AGENT });
+    const b = await giveCaptureToAgent({ access, userId: USER, captureId, agentUserId: AGENT_B });
+    if (a.status !== "given" || b.status !== "given") throw new Error("not given");
+    expect(b.sessionId).toBe(a.sessionId);
+    expect(b.deduped).toBe(true);
+    const row = await q<{ agent_ids: string[] }>(
+      `select agent_ids from focus_sessions where id = $1`,
+      [b.sessionId]
+    );
+    expect(row.rows[0]!.agent_ids).toEqual([AGENT, AGENT_B]);
+    expect(b.roster.map((r) => r.id)).toEqual([AGENT, AGENT_B]);
+    expect(b.line).toBe("Delivered when Claude Code or Codex checks in");
+    // Codex can now actually see it.
+    expect(await handedTo(AGENT_B)).toMatchObject({ items: [{ id: b.sessionId }] });
+  });
+
+  it("another person's agent cannot be picked (it would never see the work)", async () => {
+    const captureId = await seedCapture({});
+    expect(
+      await giveCaptureToAgent({ access, userId: USER, captureId, agentUserId: THEIRS })
+    ).toEqual({ status: "agent_not_found" });
+    const n = await q<{ n: number }>(`select count(*)::int as n from focus_sessions`);
+    expect(n.rows[0]!.n).toBe(0);
+  });
+
   it("no agent named ⇒ honest 'next agent that checks in'", async () => {
     const captureId = await seedCapture({});
     const r = await giveCaptureToAgent({ access, userId: USER, captureId });
     expect(r).toMatchObject({
       status: "given",
       agent: null,
+      roster: [],
       line: "Delivered to the next agent that checks in",
     });
   });

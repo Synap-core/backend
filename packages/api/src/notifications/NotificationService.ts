@@ -41,6 +41,7 @@ import { getNotificationDef } from "./registry.js";
 import { sendExpoPush } from "./expo-push.js";
 import { openLink } from "../utils/deep-links.js";
 import {
+  classifyPush,
   pushEnvelope,
   type PushFacts,
   type PushPayloadExtras,
@@ -49,7 +50,7 @@ import {
 import {
   decidePush,
   derivePushFacts,
-  readPushPrefs,
+  readPodPushSettings,
 } from "./push-decision.js";
 import type { DeliveryChannel, NotificationDef } from "./registry.js";
 import type {
@@ -124,6 +125,12 @@ export interface CreateNotificationInput {
     slot?: string;
     quickAnswer?: PushQuickAnswer | null;
     threadId?: string;
+    /**
+     * The PUSH body, when it must differ from the row's: a quick-answerable
+     * ask shows the question its lock-screen buttons answer
+     * (`quickAnswerPushBody`). The bell row keeps the registry template.
+     */
+    body?: string;
   };
 }
 
@@ -702,15 +709,29 @@ export const NotificationService = {
       let pushCategory: PushPayloadExtras["pushCategory"] | null = null;
       if (channels.has("os")) {
         try {
-          const [facts, pushPrefs] = await Promise.all([
-            input.push?.facts ?? derivePushFacts(input),
-            readPushPrefs(input.userId),
-          ]);
+          const facts = await (input.push?.facts ?? derivePushFacts(input));
+          let pod: Awaited<ReturnType<typeof readPodPushSettings>>;
+          try {
+            pod = await readPodPushSettings(input.userId);
+          } catch (err) {
+            // The person's settings could not be read. A BLOCKING ASK still
+            // goes out on its category default (an agent is stopped until
+            // they answer; silence is the costlier miss); anything else is
+            // skipped. Logged either way — never read as "no settings".
+            if (classifyPush(input.type, facts) !== "blocking-ask") throw err;
+            logger.warn(
+              { err, type: input.type, notificationId: row.id },
+              "Push settings unreadable — blocking ask pushed on its category default"
+            );
+            pod = { prefs: {}, routingRules: {} };
+          }
           const decision = decidePush({
             type: input.type,
-            typeRule: rules[input.type],
+            // A FORCED push reads the POD-WIDE rule only: a workspace
+            // override row must never ring a phone the person silenced.
+            typeRule: pod.routingRules[input.type],
             facts,
-            prefs: pushPrefs,
+            prefs: pod.prefs,
           });
           if (!decision.push) {
             channels.delete("os");
@@ -738,7 +759,7 @@ export const NotificationService = {
         void sendExpoPush({
           userId: input.userId,
           title,
-          body,
+          body: input.push?.body ?? body,
           // A FORCED push of an unclassified type (a per-type rule) keeps the
           // pre-W8 envelope: no level, default sound.
           ...(pushCategory

@@ -13,7 +13,7 @@
  * A failed read throws — "never seen" and "could not tell" are different facts.
  */
 
-import { apiKeys, db, and, eq, inArray } from "@synap/database";
+import { apiKeys, db, and, eq, inArray, isNull } from "@synap/database";
 
 export interface AgentPresence {
   /** ISO — most recent authenticated call on any of the agent's keys; `null` = never. */
@@ -92,6 +92,34 @@ export async function loadAgentPresence(
     out.set(r.userId, cur);
   }
   return out;
+}
+
+/**
+ * The agents (among `agentUserIds`) that `viewerId` OPERATES: at least one
+ * unrevoked hub key of the agent acts on behalf of the viewer
+ * (`api_keys.linked_user_id`). That link is what makes the agent's calls run
+ * AS the viewer — so it is exactly the set whose orient can see the viewer's
+ * sessions. Another person's agent is visible on a shared roster but never
+ * reads your work. A failed read throws.
+ */
+export async function agentsOperatedBy(
+  viewerId: string,
+  agentUserIds: readonly string[]
+): Promise<Set<string>> {
+  const ids = [...new Set(agentUserIds)].filter(Boolean);
+  if (ids.length === 0) return new Set();
+  const rows = await db
+    .select({ userId: apiKeys.userId })
+    .from(apiKeys)
+    .where(
+      and(
+        inArray(apiKeys.userId, ids),
+        eq(apiKeys.keyType, "hub_inbound"),
+        eq(apiKeys.linkedUserId, viewerId),
+        isNull(apiKeys.revokedAt)
+      )
+    );
+  return new Set(rows.map((r) => r.userId));
 }
 
 /** Spread presence onto rows that carry an agent user `id`. */

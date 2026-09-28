@@ -30,6 +30,7 @@ import { sql } from "../client-pg.js";
 import { governanceTargetEnum } from "../schema/governance-rules.js";
 import { governanceCeilingAxisEnum } from "../schema/governance-ceilings.js";
 import { entityExternalLinks } from "../schema/entity-external-links.js";
+import { notificationPreferences } from "../schema/notifications.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -134,8 +135,10 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0281_notifications_open_dedupe_key.sql",
   },
   // notification_preferences — per-person push categories (0289). The
-  // producer reads it on every os-channel notification; missing, every push
-  // decision throws and falls back to the non-fatal catch (no notification).
+  // producer reads it on every os-channel notification; missing, the push
+  // decision read throws, the row is still written and the bell still
+  // shows it, but NO push is sent (blocking asks fall back to the category
+  // default).
   {
     table: "notification_preferences",
     column: "push_prefs",
@@ -1766,7 +1769,12 @@ export async function findMissingEnumValues(
  * one writers conflict on. DERIVED from the drizzle table config — a new index
  * declared in the schema joins this check by existing.
  */
-const REQUIRED_INDEX_TABLES = [entityExternalLinks] as const;
+const REQUIRED_INDEX_TABLES = [
+  entityExternalLinks,
+  // The pod-wide push-prefs upsert conflicts on `notif_prefs_user_pod_unique`
+  // (0290); without it every `setPushPrefs` errors.
+  notificationPreferences,
+] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */
 export async function findMissingIndexes(

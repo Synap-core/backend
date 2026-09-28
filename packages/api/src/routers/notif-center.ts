@@ -397,6 +397,13 @@ export const notifCenterRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // How the person is interrupted is theirs — never an agent key's.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can change their notification settings.",
+        });
+      }
       const { scope, ...values } = input;
       const targetWorkspaceId = scope === "pod" ? null : ctx.workspaceId;
 
@@ -489,8 +496,10 @@ export const notifCenterRouter = router({
   setPushPrefs: protectedProcedure
     .input(
       z.object({
+        // `partialRecord`: zod 4's `record` over an enum key is EXHAUSTIVE
+        // (every category required), which refused every real toggle.
         categories: z
-          .record(z.enum(PUSH_CATEGORIES), z.boolean())
+          .partialRecord(z.enum(PUSH_CATEGORIES), z.boolean())
           .refine((c) => Object.keys(c).length > 0, "Nothing to change."),
       })
     )

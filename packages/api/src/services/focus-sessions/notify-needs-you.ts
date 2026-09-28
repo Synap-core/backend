@@ -31,6 +31,7 @@ import type { Ask } from "@synap-core/types/ask";
 import {
   blockingAskTarget,
   quickAnswerFor,
+  quickAnswerPushBody,
   type PushTarget,
 } from "@synap-core/types/push";
 import { createLogger } from "@synap-core/core";
@@ -114,22 +115,27 @@ export function needsYouPush(
   target: Extract<PushTarget, { kind: "owed" | "session" }>;
   slot?: string;
   quickAnswer: ReturnType<typeof quickAnswerFor>;
+  /** The lock-screen body when a quick answer rides: what its buttons answer. */
+  body?: string;
 } {
   const target = blockingAskTarget(
     sessionId,
     fresh.map((o) => o.label)
   ) as Extract<PushTarget, { kind: "owed" | "session" }>;
   if (target.kind !== "owed") return { target, quickAnswer: null };
+  // `SlotAsk` is the compile-time mutual mirror of `Ask` (see
+  // update-session.ts), and the fingerprint is computed from the same stored
+  // shape the answer door re-reads.
+  const ask = (fresh[0]?.ask ?? null) as Ask | null;
+  const quickAnswer = quickAnswerFor({ sessionId, label: target.slot }, ask);
+  const body = quickAnswer
+    ? quickAnswerPushBody({ label: target.slot, why: fresh[0]?.why }, ask)
+    : null;
   return {
     target,
     slot: target.slot,
-    // `SlotAsk` is the compile-time mutual mirror of `Ask` (see
-    // update-session.ts), and the fingerprint is computed from the same
-    // stored shape the answer door re-reads.
-    quickAnswer: quickAnswerFor(
-      { sessionId, label: target.slot },
-      (fresh[0]?.ask ?? null) as Ask | null
-    ),
+    quickAnswer,
+    ...(body ? { body } : {}),
   };
 }
 
@@ -215,6 +221,7 @@ export async function notifySessionNeedsYou(p: {
               slot: push.slot,
               quickAnswer: push.quickAnswer,
               threadId: session.id,
+              ...(push.body ? { body: push.body } : {}),
             },
           }
         : { push: { threadId: session.id } }),

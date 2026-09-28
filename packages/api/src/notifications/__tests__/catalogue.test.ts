@@ -121,7 +121,9 @@ describe("notification catalogue — allowedRules derive from channelCeiling", (
   };
   const uncapped: NotificationDef = {
     ...capped,
-    type: "test.uncapped",
+    // A type the push contract pushes by default (work-broke, on) — an
+    // unclassified test type would, correctly, advertise no push (see below).
+    type: "agent.task_failed",
     defaultChannels: ["in_app", "os"],
     channelCeiling: undefined,
   };
@@ -141,6 +143,30 @@ describe("notification catalogue — allowedRules derive from channelCeiling", (
   it("names the rule equivalent to the type's defaults", () => {
     expect(catalogueEntryFor(uncapped).defaultRule).toBe("all");
     expect(catalogueEntryFor(capped).defaultRule).toBe("in_app");
+  });
+
+  it("the phone default is DERIVED from the push contract, never the raw registry", () => {
+    const entry = (type: string) => catalogue.types.find((t) => t.type === type);
+    // Unclassified-to-null: declared os in the registry, never pushed.
+    expect(entry("connector.sync.failed")?.defaultChannels).toEqual(["in_app"]);
+    expect(entry("connector.sync.failed")?.push).toBeNull();
+    // A category OFF by default (system): no push advertised.
+    const storage = entry("pod.storage_warning");
+    if (storage) {
+      expect(storage.defaultChannels).toEqual(["in_app"]);
+      expect(storage.push).toEqual({ category: "system", onlyWhenBlocking: false });
+    }
+    // Pushes, but only when blocking.
+    expect(entry("proposal.created")?.defaultChannels).toContain("os");
+    expect(entry("proposal.created")?.push).toEqual({
+      category: "decision-blocking",
+      onlyWhenBlocking: true,
+    });
+    expect(entry("session.needs_you")?.defaultChannels).toContain("os");
+    // An unknown type declaring os advertises none.
+    expect(
+      catalogueEntryFor({ ...capped, type: "test.unclassified", defaultChannels: ["in_app", "os"], channelCeiling: undefined }).defaultChannels
+    ).toEqual(["in_app"]);
   });
 
   it("applies the ceiling to the REAL registry entry that has one", () => {

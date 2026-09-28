@@ -201,6 +201,10 @@ export const notificationPreferences = pgTable(
       t.userId,
       t.workspaceId
     ),
+    // One POD-WIDE row per person (0290) — the push prefs door upserts on it.
+    uniqUserPod: uniqueIndex("notif_prefs_user_pod_unique")
+      .on(t.userId)
+      .where(sql`workspace_id IS NULL`),
   })
 );
 
