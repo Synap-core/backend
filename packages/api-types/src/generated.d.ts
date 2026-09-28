@@ -11287,11 +11287,18 @@ declare const TRUST_RUNGS: readonly [
 export type TrustRung = (typeof TRUST_RUNGS)[number];
 /** The config a next-rung grant writes. */
 export type NextRungVia = "governance_rule";
+/**
+ * Where a grant applies: `space` = one space, `pod` = EVERY space. A pod-wide
+ * grant is legitimate (a personal record has no space) but never silent — a
+ * surface says "in every space" when `reach` is `pod`.
+ */
+export type NextRungReach = "space" | "pod";
 /** One step up, and the config that grants it. */
 export interface NextRungOffer {
 	from: TrustRung;
 	to: TrustRung;
 	via: NextRungVia;
+	reach: NextRungReach;
 }
 export interface NextRungRuleInput {
 	/** The item the grant is made FROM — stored as the rule's lineage. */
@@ -11317,6 +11324,12 @@ export interface NextRungProjection {
 	offer: NextRungOffer | null;
 	/** The exact rule accepting the offer writes; `null` when there is no offer. */
 	rule: GovernanceRuleDraft$1 | null;
+	/**
+	 * An ACTIVE rule already says exactly what the offer would: the offer is
+	 * withdrawn (`offer: null`) and this names the rule, so a surface shows
+	 * "Already a rule" as a DOOR to it. `null` when nothing covers the card.
+	 */
+	coveredByRuleId: string | null;
 }
 export type FileNextRungResult = {
 	outcome: "created";
@@ -11328,6 +11341,10 @@ export type FileNextRungResult = {
 	offer: NextRungOffer;
 } | {
 	outcome: "proposed";
+	proposalId: string;
+	offer: NextRungOffer;
+} | {
+	outcome: "needs_admin";
 	proposalId: string;
 	offer: NextRungOffer;
 };
@@ -14282,6 +14299,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	errorShape: {
 		message: string;
 		data: {
+			reasonCode?: string | undefined;
 			captureQuestionStatus?: string | undefined;
 			code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 			httpStatus: number;
@@ -14298,6 +14316,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -14323,6 +14342,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -14487,6 +14507,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -15705,6 +15726,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -16612,6 +16634,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -16718,6 +16741,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -18225,6 +18249,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -18885,6 +18910,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -18901,6 +18927,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -19453,6 +19480,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -19528,6 +19556,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -19872,6 +19901,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -19956,6 +19986,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -20221,6 +20252,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -20556,6 +20588,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -20602,6 +20635,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -20651,6 +20685,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -20775,6 +20810,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -20877,6 +20913,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -21341,6 +21378,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -21951,6 +21989,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -21997,6 +22036,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -22013,6 +22053,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -22159,6 +22200,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -22382,6 +22424,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -22806,6 +22849,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -23096,6 +23140,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -23375,6 +23420,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -24901,6 +24947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -25406,6 +25453,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -25635,6 +25683,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -25737,6 +25786,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -25965,6 +26015,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -26035,6 +26086,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -26352,6 +26404,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -26459,6 +26512,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -26854,6 +26908,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -27057,6 +27112,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -27199,6 +27255,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -27300,6 +27357,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28083,6 +28141,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28109,6 +28168,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28254,6 +28314,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28328,6 +28389,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28428,6 +28490,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28506,6 +28569,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28630,6 +28694,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28888,6 +28953,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -28988,6 +29054,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29188,6 +29255,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29235,6 +29303,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29442,6 +29511,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29536,6 +29606,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29679,6 +29750,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29888,6 +29960,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29935,6 +30008,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30097,6 +30171,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30148,6 +30223,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30369,6 +30445,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30744,6 +30821,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30945,6 +31023,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31054,6 +31133,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31201,6 +31281,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31302,6 +31383,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31440,6 +31522,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31562,6 +31645,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31770,6 +31854,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31882,6 +31967,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32352,6 +32438,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32509,6 +32596,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32556,6 +32644,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32833,6 +32922,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32904,6 +32994,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33043,6 +33134,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33143,6 +33235,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33159,6 +33252,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -34664,6 +34758,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -34680,6 +34775,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -34716,6 +34812,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -34738,6 +34835,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -34771,6 +34869,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -34841,6 +34940,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
+					reasonCode?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -35777,6 +35877,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -35816,6 +35917,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -35868,6 +35970,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -35919,6 +36022,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -35990,6 +36094,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36025,6 +36130,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36156,6 +36262,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36382,6 +36489,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36411,6 +36519,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36517,6 +36626,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36960,6 +37070,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37027,6 +37138,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37181,6 +37293,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37258,6 +37371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37340,6 +37454,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37407,6 +37522,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37484,6 +37600,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
+				reasonCode?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
