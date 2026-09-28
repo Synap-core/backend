@@ -41,6 +41,7 @@ import {
   proposalEventKey,
   resolveTrustRung,
   NO_NEXT_RUNG_CODE,
+  type NextRungCovered,
   type NextRungOffer,
   type TrustRung,
 } from "@synap-core/types/trust-ladder";
@@ -149,7 +150,7 @@ export interface NextRungProjection {
    * withdrawn (`offer: null`) and this names the rule, so a surface shows
    * "Already a rule" as a DOOR to it. `null` when nothing covers the card.
    */
-  coveredByRuleId: string | null;
+  covered: NextRungCovered | null;
 }
 
 /**
@@ -207,7 +208,7 @@ export function projectNextRung(row: NextRungRow): NextRungProjection {
             profileSlug,
           })
         : null,
-    coveredByRuleId: null,
+    covered: null,
   };
 }
 
@@ -228,7 +229,7 @@ const ROW_COLUMNS = {
  * same answer as one that does not exist. Visibility is `visibleProposalIds`,
  * the batch form of `assertProposalVisibleTo` (kept in step by a parity test).
  * A card an active rule already covers has its offer WITHDRAWN and names the
- * rule (`coveredByRuleId`).
+ * rule (`covered: { ruleId }`).
  */
 export async function readNextRungs(params: {
   userId: string;
@@ -249,7 +250,7 @@ export async function readNextRungs(params: {
   return projections.map((p) => {
     const ruleId = p.rule ? covering.get(ruleKey(p.rule)) : undefined;
     return ruleId
-      ? { ...p, offer: null, rule: null, coveredByRuleId: ruleId }
+      ? { ...p, offer: null, rule: null, covered: { ruleId } }
       : p;
   });
 }

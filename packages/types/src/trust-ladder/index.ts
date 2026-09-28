@@ -66,7 +66,7 @@ import {
   type ProposalAttentionInput,
 } from "../proposals/attention.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
-import { NEXT_RUNG_OUTCOME_LABELS } from "../vocabulary/index.js";
+import { resolveNextRungOutcomeLabel } from "../vocabulary/index.js";
 import {
   isNonWidenableGovernanceReason,
   type GovernanceRuleDraft,
@@ -257,6 +257,15 @@ export interface NextRungInput {
  */
 export type NextRungReach = "space" | "pod";
 
+/**
+ * A card an ACTIVE rule already covers: the offer is withdrawn and this names
+ * the rule, so a surface shows "Already a rule" as a DOOR to it.
+ * `governanceRules.nextRungs` rows carry `covered: NextRungCovered | null`.
+ */
+export interface NextRungCovered {
+  ruleId: string;
+}
+
 /** One step up, and the config that grants it. */
 export interface NextRungOffer {
   from: TrustRung;
@@ -282,7 +291,7 @@ export const PROFILED_SUBJECTS: readonly string[] = ["entity"];
  *                      pod admin (a pod-wide rule): filed for a pod admin,
  *                      never "sent to the owner" — they are the owner.
  * Words: `NEXT_RUNG_OUTCOME_LABELS` in the vocabulary; marks:
- * {@link NEXT_RUNG_OUTCOME}.
+ * {@link resolveNextRungOutcomeView}.
  */
 export const NEXT_RUNG_OUTCOMES = [
   "created",
@@ -329,12 +338,13 @@ export function nextRung(input: NextRungInput): NextRungOffer | null {
 // ─── Outcomes of accepting an offer ─────────────────────────────────────────
 
 /**
- * Each outcome as a MARK — tone + glyph (`@synap-core/types/units` tokens) +
- * its words from the vocabulary (`NEXT_RUNG_OUTCOME_LABELS`, the one word
- * table) — ONCE, for both apps. `failed` is the client's own state (the call
- * threw for a reason other than {@link isNoNextRungError}); it is a mark too,
- * never a sentence. Keyed by `NextRungOutcome | "failed"`: a new outcome
- * stops the build here until it has a mark.
+ * Each outcome as a MARK — tone + glyph (`@synap-core/types/units` tokens).
+ * The words are NOT here: they are the vocabulary's one table
+ * (`NEXT_RUNG_OUTCOME_LABELS`), read through `resolveNextRungOutcomeLabel` by
+ * {@link resolveNextRungOutcomeView}. `failed` is the client's own state (the
+ * call threw for a reason other than {@link isNoNextRungError}); a mark too,
+ * never a sentence. Keyed by `NextRungOutcome | "failed"`: a new outcome stops
+ * the build here until it has a mark.
  */
 const NEXT_RUNG_OUTCOME_MARKS = {
   created: { tone: "success", glyph: "check" },
@@ -347,19 +357,27 @@ const NEXT_RUNG_OUTCOME_MARKS = {
   { tone: UnitTone; glyph: UnitGlyph }
 >;
 
-export const NEXT_RUNG_OUTCOME: Readonly<
-  Record<
-    NextRungOutcome | "failed",
-    { label: string; tone: UnitTone; glyph: UnitGlyph }
-  >
-> = Object.fromEntries(
-  (Object.keys(NEXT_RUNG_OUTCOME_MARKS) as Array<NextRungOutcome | "failed">).map(
-    (o) => [o, { label: NEXT_RUNG_OUTCOME_LABELS[o], ...NEXT_RUNG_OUTCOME_MARKS[o] }]
-  )
-) as Record<
-  NextRungOutcome | "failed",
-  { label: string; tone: UnitTone; glyph: UnitGlyph }
->;
+export interface NextRungOutcomeView {
+  label: string;
+  tone: UnitTone;
+  glyph: UnitGlyph;
+}
+
+/**
+ * What accepting an offer did, as a view both apps render: the vocabulary's
+ * label + the mark. An outcome this build does not know humanizes its label
+ * and wears the neutral "question" mark — never a guessed success.
+ */
+export function resolveNextRungOutcomeView(
+  outcome: NextRungOutcome | "failed" | (string & {})
+): NextRungOutcomeView {
+  const mark = (
+    NEXT_RUNG_OUTCOME_MARKS as Readonly<
+      Record<string, { tone: UnitTone; glyph: UnitGlyph }>
+    >
+  )[outcome] ?? { tone: "textSecondary", glyph: "question" };
+  return { label: resolveNextRungOutcomeLabel(outcome), ...mark };
+}
 
 // ─── The typed refusal ──────────────────────────────────────────────────────
 

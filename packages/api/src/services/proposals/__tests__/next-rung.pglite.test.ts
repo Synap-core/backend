@@ -309,7 +309,7 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
       via: "governance_rule",
       reach: "space",
     });
-    expect(rungs[0]!.coveredByRuleId).toBeNull();
+    expect(rungs[0]!.covered).toBeNull();
 
     const result = await caller(OWNER).proposeNextRung({
       itemRef: { kind: "proposal", id: cardId },
@@ -344,9 +344,9 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
     // The read withdraws the offer and names the covering rule (a door).
     const after = await caller(OWNER).nextRungs({ proposalIds: [cardId] });
     expect(after.rungs[0]!.offer).toBeNull();
-    expect(after.rungs[0]!.coveredByRuleId).toBe(
-      (result as { ruleId: string }).ruleId
-    );
+    expect(after.rungs[0]!.covered).toEqual({
+      ruleId: (result as { ruleId: string }).ruleId,
+    });
 
     // Idempotent: a second click writes nothing new.
     const again = await caller(OWNER).proposeNextRung({

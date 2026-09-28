@@ -17,7 +17,7 @@ import {
   resolveTrustRungLabel,
 } from "../vocabulary/index.js";
 import {
-  NEXT_RUNG_OUTCOME,
+  resolveNextRungOutcomeView,
   NEXT_RUNG_OUTCOMES,
   NO_NEXT_RUNG_CODE,
   isNoNextRungError,
@@ -295,12 +295,17 @@ describe("W7 review: kind, reach, outcomes, refusal", () => {
 
   it("every outcome is a mark with words from the vocabulary", () => {
     for (const o of [...NEXT_RUNG_OUTCOMES, "failed"] as const) {
-      const m = NEXT_RUNG_OUTCOME[o];
+      const m = resolveNextRungOutcomeView(o);
       expect(m.label.length, o).toBeGreaterThan(0);
       expect(m.label, o).toBe(NEXT_RUNG_OUTCOME_LABELS[o]);
+      expect(m.glyph, o).not.toBe("question");
     }
-    expect(NEXT_RUNG_OUTCOME.needs_admin.label).toBe("Sent to a pod admin");
-    expect(NEXT_RUNG_OUTCOME.failed).toMatchObject({ tone: "error", glyph: "alert" });
+    expect(resolveNextRungOutcomeView("needs_admin").label).toBe("Sent to a pod admin");
+    expect(resolveNextRungOutcomeView("failed")).toMatchObject({ tone: "error", glyph: "alert" });
+    expect(resolveNextRungOutcomeView("from_the_future")).toMatchObject({
+      label: "From the future",
+      glyph: "question",
+    });
   });
 
   it("isNoNextRungError reads the typed code, and the pinned prefix for older pods", () => {
