@@ -13,7 +13,8 @@ import {
   assertPodAdmin,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, inArray, drizzleSql } from "@synap/database";
+import { db, eq, and, inArray, isNull, drizzleSql } from "@synap/database";
+import { isPodAdmin } from "../utils/workspace-role.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import type { Lens } from "../access/context.js";
@@ -78,6 +79,8 @@ async function queryAgentUsers(ctx: { userId: string }, workspaceLens: Lens) {
           name: users.name,
           email: users.email,
           agentMetadata: users.agentMetadata,
+          createdVia: users.createdVia,
+          isPersonalAgent: users.isPersonalAgent,
           role: workspaceMembers.role,
           joinedAt: workspaceMembers.joinedAt,
         })
@@ -95,6 +98,8 @@ async function queryAgentUsers(ctx: { userId: string }, workspaceLens: Lens) {
       name: users.name,
       email: users.email,
       agentMetadata: users.agentMetadata,
+      createdVia: users.createdVia,
+      isPersonalAgent: users.isPersonalAgent,
     })
     .from(users)
     .where(
@@ -110,7 +115,33 @@ async function queryAgentUsers(ctx: { userId: string }, workspaceLens: Lens) {
     joinedAt: null as Date | null,
   }));
 
-  return [...tied, ...podWide];
+  return [...tied, ...podWide].map(withAgentOrigin);
+}
+
+/**
+ * Where an agent came from, from the ONE column that records it
+ * (`users.created_via`, migration 0225), plus the `is_personal_agent` column
+ * for twins provisioned before 0225 stamped provenance. Never a name match.
+ *
+ * `builtIn` = the pod made it for itself — the personal twin, the capture and
+ * form agents (`system`), or an Intelligence Service persona synced from its
+ * roster (`intelligence-service`). Those never hold a hub key, so a surface
+ * that reads the key-based presence ("Waiting for first call") must not ask
+ * them to connect: mark them "Built-in" or leave them out. `cli` / `ui` are
+ * agents a person brought or made; a NULL `created_via` (pre-0225) is not
+ * claimed as built-in unless it is a twin.
+ */
+export function withAgentOrigin<
+  T extends { createdVia: string | null; isPersonalAgent: boolean | null },
+>(row: T): T & { origin: string | null; builtIn: boolean } {
+  return {
+    ...row,
+    origin: row.createdVia,
+    builtIn:
+      row.createdVia === "system" ||
+      row.createdVia === "intelligence-service" ||
+      row.isPersonalAgent === true,
+  };
 }
 
 export const agentUsersRouter = router({
@@ -523,6 +554,86 @@ export const agentUsersRouter = router({
       });
 
       return { status: "updated" as const };
+    }),
+
+  /**
+   * DISCONNECT an agent: revoke every hub key it holds (active AND pending),
+   * in one door. The agent stays — listed, with its history and governance —
+   * and re-running `synap init` mints it a fresh key.
+   *
+   * WHO: the agent's owner (`users.created_by_user_id`, the person the agent
+   * acts for) or a pod admin — decided on the LOADED agent row, never on input.
+   * A PERSON's act: an agent key is refused (agents never disconnect agents),
+   * so it is not an AI mutation and does not go through the proposal gate.
+   * `apiKeys.revoke` refuses agent keys (the agent user owns them) and
+   * `apiKeys.adminRevokeAllForUser` is admin-only — this is the owner's door.
+   */
+  disconnect: protectedProcedure
+    .input(z.object({ agentUserId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only a person can disconnect an agent — an agent key cannot.",
+        });
+      }
+      const callerId = ctx.userId;
+
+      const [agent] = await db
+        .select({ id: users.id, createdByUserId: users.createdByUserId })
+        .from(users)
+        .where(
+          and(eq(users.id, input.agentUserId), eq(users.userType, "agent"))
+        )
+        .limit(1);
+      if (!agent) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Agent user not found",
+        });
+      }
+      const isOwner =
+        !!agent.createdByUserId && agent.createdByUserId === callerId;
+      if (!isOwner && !(await isPodAdmin(callerId))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the agent's owner or a pod admin can disconnect it",
+        });
+      }
+
+      const revoked = await db
+        .update(apiKeys)
+        .set({
+          isActive: false,
+          revokedAt: new Date(),
+          revokedBy: callerId,
+          revokedReason: isOwner
+            ? "Disconnected by its owner"
+            : "Disconnected by a pod admin",
+        })
+        .where(and(eq(apiKeys.userId, agent.id), isNull(apiKeys.revokedAt)))
+        .returning({ id: apiKeys.id });
+
+      // Activity: the same event shape `apiKeys.adminRevokeAllForUser` writes
+      // for a bulk revoke, subject = the agent.
+      await auditLog({
+        subjectType: "apiKey",
+        action: "delete",
+        phase: "completed",
+        subjectId: agent.id,
+        userId: callerId,
+        data: {
+          agentUserId: agent.id,
+          targetUserId: agent.id,
+          revokedCount: revoked.length,
+          disconnected: true,
+          bulk: true,
+          by: isOwner ? "owner" : "pod_admin",
+        },
+      });
+
+      return { revokedCount: revoked.length };
     }),
 
   /**
