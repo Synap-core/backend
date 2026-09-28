@@ -34,6 +34,7 @@
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { ASK_COPY } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
+import type { GroupableSignal } from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
   type ObjectNavView,
@@ -262,6 +263,15 @@ type _UniversalAreRequired =
     : never;
 const _universalAreRequired: _UniversalAreRequired = true;
 void _universalAreRequired;
+
+/**
+ * Every surface shapes this page through ONE leaf (`@synap-core/types/needs-you`,
+ * `groupNeedsYou`). A `Signal` must stay assignable to what that leaf reads, so
+ * renaming or retyping `groupKey` / `ageBucket` / `repeatCount` here stops the
+ * build instead of silently un-grouping every surface.
+ */
+const _signalIsGroupable = (s: Signal): GroupableSignal => s;
+void _signalIsGroupable;
 
 /** The universal fields, exported for the tests that prove every producer sets them. */
 export const SIGNAL_UNIVERSAL_FIELDS: readonly (keyof Signal)[] =

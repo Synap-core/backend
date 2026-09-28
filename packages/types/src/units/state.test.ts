@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveUnitState,
+  resolveRunUnitState,
+  RUN_STATUS_WAITING_ON_YOU,
   describeCadence,
   UNIT_STATES,
   type UnitStateInput,
@@ -243,5 +245,37 @@ describe("describeCadence", () => {
   it("no schedule is null, not a label", () => {
     expect(describeCadence(null)).toBeNull();
     expect(describeCadence(undefined)).toBeNull();
+  });
+});
+
+describe("resolveRunUnitState — a run's status wears the unit mark", () => {
+  it("waiting_on_you is YOUR TURN — needs_you, never failed, never working", () => {
+    const v = resolveRunUnitState(RUN_STATUS_WAITING_ON_YOU);
+    expect(v.state).toBe("needs_you");
+    expect(v.tone).toBe("primary");
+    expect(v.glyph).toBe("person");
+    // The same mark a session with an owed slot wears — one derivation.
+    expect(v).toEqual(resolveUnitState({ ...base, owedFromYou: 1 }));
+  });
+
+  it("keeps the other run statuses apart", () => {
+    expect(resolveRunUnitState("failed").state).toBe("failed");
+    expect(resolveRunUnitState("running").state).toBe("working");
+    expect(resolveRunUnitState("completed").state).toBe("done");
+    expect(resolveRunUnitState("blocked_by_policy").state).toBe("done");
+  });
+
+  it("an unknown or absent status is unmeasured, never calm", () => {
+    expect(resolveRunUnitState("something_new").state).toBe("unmeasured");
+    expect(resolveRunUnitState(null).state).toBe("unmeasured");
+  });
+
+  it("waitingOnYou outranks a blocker and running, but not a failure", () => {
+    expect(
+      resolveUnitState({ ...base, waitingOnYou: true, running: true, blockedBy: "X" }).state
+    ).toBe("needs_you");
+    expect(resolveUnitState({ ...base, waitingOnYou: true, failed: true }).state).toBe(
+      "failed"
+    );
   });
 });

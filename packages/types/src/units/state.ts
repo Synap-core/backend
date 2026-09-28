@@ -97,6 +97,11 @@ export interface UnitStateInput {
   failed?: boolean;
   /** A `check` stage gate paused the run pending a person. */
   checkGate?: boolean;
+  /**
+   * A run the reaper parked because its session still owes the person an open
+   * slot (run status `waiting_on_you`, W2 calm). Your turn — never `failed`.
+   */
+  waitingOnYou?: boolean;
   /** Slots owed BY the person (`owner: "human"` expected outputs, criterion slots). */
   owedFromYou?: number | null;
   /**
@@ -159,7 +164,7 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       rail: determinate(100),
     };
   }
-  if (input.checkGate || (input.owedFromYou ?? 0) > 0) {
+  if (input.checkGate || input.waitingOnYou || (input.owedFromYou ?? 0) > 0) {
     return {
       state: "needs_you",
       tone: "primary",
@@ -233,6 +238,45 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
     };
   }
   return { state: "working", tone: "ai", glyph: "spark", rail: determinate(0) };
+}
+
+/** The run status the reapers stamp on a run whose session still owes the person. */
+export const RUN_STATUS_WAITING_ON_YOU = "waiting_on_you";
+
+/**
+ * A RUN's lifecycle status (`automation_runs` / `playbook_runs` / the unified
+ * runs read) as a unit-state input — so a run wears the same mark a session
+ * does. `waiting_on_you` is your turn (`needs_you`), never a failure; an
+ * unknown or absent status is `unmeasured`, never a guess at calm.
+ */
+export function unitStateInputOfRunStatus(
+  status: string | null | undefined
+): UnitStateInput {
+  switch (status) {
+    case "failed":
+      return { failed: true };
+    case RUN_STATUS_WAITING_ON_YOU:
+      return { waitingOnYou: true };
+    case "running":
+    case "pending":
+    case "queued":
+      return { running: true };
+    case "completed":
+    case "success":
+    case "cancelled":
+    case "skipped":
+    case "blocked_by_policy":
+      return { terminal: true };
+    default:
+      return { unreadable: true };
+  }
+}
+
+/** {@link resolveUnitState} for a run status. */
+export function resolveRunUnitState(
+  status: string | null | undefined
+): UnitStateView {
+  return resolveUnitState(unitStateInputOfRunStatus(status));
 }
 
 /**
