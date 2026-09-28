@@ -543,7 +543,16 @@ function validateDefinition(
  * the SAME structural failures the create door throws on — one source of truth,
  * never a second re-implementation that could drift.
  */
-function collectCrossRefErrors(def: WorkspaceDefinitionInput): string[] {
+function collectCrossRefErrors(
+  def: WorkspaceDefinitionInput,
+  /**
+   * Slugs the apply resolves OUTSIDE this definition — only ever non-empty on a
+   * COMPOSE apply (see `PreflightComposeTarget`). The create door passes nothing:
+   * its entityLink step reads `profileMap` only, so it genuinely cannot resolve
+   * a slug it did not declare (beyond the system profiles).
+   */
+  externallyResolved: ReadonlySet<string> = new Set()
+): string[] {
   const errors: string[] = [];
   const definedSlugs = new Set<string>();
 
@@ -566,8 +575,12 @@ function collectCrossRefErrors(def: WorkspaceDefinitionInput): string[] {
   // references system profiles without re-declaring them. Kept separate from
   // `definedSlugs` so a definition that DOES re-declare `person` (to overlay
   // props) is still allowed and not flagged as a duplicate.
+  // A COMPOSE apply additionally resolves the slugs its base contributes
+  // (`externallyResolved`) — the compose half of the publish rule.
   const known = (s: string) =>
-    definedSlugs.has(s) || SYSTEM_PROFILE_SLUGS.has(s);
+    definedSlugs.has(s) ||
+    SYSTEM_PROFILE_SLUGS.has(s) ||
+    externallyResolved.has(s);
 
   for (const v of def.views ?? []) {
     const vname = v.name ?? v.displayName ?? "(unnamed)";
@@ -702,9 +715,52 @@ export interface WorkspacePreflightReport {
  * it, exactly the lens a just-created workspace has — so system/shared profiles
  * resolve pod-wide (reuse) precisely as they would on a real create.
  */
+/**
+ * Where a COMPOSE apply layers this definition, as far as profile-slug
+ * resolution is concerned. Absent ⇒ the apply CREATES a workspace, and only
+ * declared + system slugs resolve (the create door's entityLink step reads
+ * `profileMap` only).
+ *
+ * A compose apply reconciles the definition ONTO a workspace
+ * (`composeOntoBaseWorkspace` → `reconcileWorkspaceFromDefinition`), whose
+ * entityLink step resolves a slug the definition does not declare through the
+ * target's live lens (`profileRepo.getBySlugForWorkspace`). The preflight must
+ * agree with that, or every overlay linking to its base's kinds is uninstallable
+ * although it publishes green (business-model → foundation's offer/audience).
+ *
+ *   - `workspaceId`: the target already exists (`--onto`, or a declared compose
+ *     base the user already has). Resolved through the SAME lens reconcile uses.
+ *   - `baseProfileSlugs`: the compose base does not exist yet — the dependency
+ *     step will install it from its template first. The caller passes that
+ *     template's vocabulary (compose closure: every profile of the base and of
+ *     ITS compose bases, which all land in the one workspace).
+ */
+export interface PreflightComposeTarget {
+  workspaceId?: string;
+  baseProfileSlugs?: Iterable<string>;
+}
+
+/** Every profile slug a definition REFERENCES (view scopes, seeds, entityLinks). */
+function referencedProfileSlugs(def: WorkspaceDefinitionInput): Set<string> {
+  const out = new Set<string>();
+  for (const v of def.views ?? []) {
+    for (const s of [v.scopeProfileSlug, ...(v.scopeProfileSlugs ?? [])])
+      if (s) out.add(s);
+  }
+  for (const e of def.suggestedEntities ?? [])
+    if (e.profileSlug) out.add(e.profileSlug);
+  for (const l of def.entityLinks ?? []) {
+    if (l.sourceProfileSlug) out.add(l.sourceProfileSlug);
+    if (l.targetProfileSlug) out.add(l.targetProfileSlug);
+  }
+  return out;
+}
+
 export async function preflightWorkspaceFromDefinition(opts: {
   definition: WorkspaceDefinitionInput;
   userId: string;
+  /** Set when the apply COMPOSES (see `PreflightComposeTarget`). */
+  composeTarget?: PreflightComposeTarget;
 }): Promise<WorkspacePreflightReport> {
   const { userId } = opts;
   const { randomUUID } = await import("crypto");
@@ -742,15 +798,36 @@ export async function preflightWorkspaceFromDefinition(opts: {
     ];
     return report; // definition shape is unreliable — cannot safely resolve
   }
-  const crossRef = collectCrossRefErrors(definition);
+  // ── 1b. Compose apply: slugs the base contributes (see PreflightComposeTarget)
+  const externallyResolved = new Set<string>(
+    opts.composeTarget?.baseProfileSlugs ?? []
+  );
+  const lensWorkspaceId = opts.composeTarget?.workspaceId;
+  let profileRepo: ProfileRepository | undefined;
+  if (lensWorkspaceId) {
+    profileRepo = new ProfileRepository(await getDb());
+    const declared = new Set((definition.profiles ?? []).map((p) => p.slug));
+    for (const slug of referencedProfileSlugs(definition)) {
+      if (
+        declared.has(slug) ||
+        SYSTEM_PROFILE_SLUGS.has(slug) ||
+        externallyResolved.has(slug)
+      )
+        continue;
+      // The exact lookup reconcile's entityLink step falls back to.
+      if (await profileRepo.getBySlugForWorkspace(slug, lensWorkspaceId))
+        externallyResolved.add(slug);
+    }
+  }
+
+  const crossRef = collectCrossRefErrors(definition, externallyResolved);
   if (crossRef.length > 0) {
     report.validationErrors = crossRef;
     return report; // slugs referenced don't exist — resolution would double-report
   }
 
   // ── 2. Resolve every profile write-free against the live pod catalog ────────
-  const dbConn = await getDb();
-  const profileRepo = new ProfileRepository(dbConn);
+  profileRepo ??= new ProfileRepository(await getDb());
   // Fresh empty-workspace lens: models exactly what a create provisions.
   const workspaceId = randomUUID();
   /**
@@ -760,7 +837,12 @@ export async function preflightWorkspaceFromDefinition(opts: {
    * never declares it) resolves at apply — without this seed the soft checks
    * below would wrongly flag those as unresolved and keep `ok:false` (422).
    */
-  const resolvedSlugs = new Set<string>(SYSTEM_PROFILE_SLUGS);
+  const resolvedSlugs = new Set<string>([
+    ...SYSTEM_PROFILE_SLUGS,
+    // A compose base's slugs resolve at apply exactly as the cross-ref check
+    // above accepted them — never re-flag them as unresolved links/orphans.
+    ...externallyResolved,
+  ]);
 
   for (const profile of definition.profiles ?? []) {
     const scope = normalizeProfileScope(profile.scope);

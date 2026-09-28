@@ -70,6 +70,13 @@ import { ViewRepository } from "../repositories/view-repository.js";
 import { views } from "../schema/views.js";
 import { profileRelations } from "../schema/profile-relations.js";
 import { workspaces } from "../schema/workspaces.js";
+import { entities } from "../schema/entities.js";
+import {
+  convergeSpaceBrief,
+  projectTemplateBrief,
+  seedRefResolver,
+  type SpaceBriefConvergence,
+} from "./space-brief-seed.js";
 import type {
   WorkspaceLayoutDefinition,
   WorkspaceSettings,
@@ -158,6 +165,18 @@ export interface ReconcileReport {
   workspaceId: string;
   dryRun: boolean;
   settings: { merged: string[] };
+  /**
+   * The space brief's three-way convergence (`settings.onboarding`). Absent
+   * when this reconcile does not own the brief (no identity: a compose
+   * overlay or the base-defaults pass). `conflicts` are fields the user edited
+   * while the template moved too — left alone, reported here.
+   */
+  brief?: {
+    outcomes: SpaceBriefConvergence["outcomes"];
+    conflicts: SpaceBriefConvergence["conflicts"];
+    /** A concurrent brief write won the compare-and-set; retried next pass. */
+    raced?: true;
+  };
   profiles: {
     added: string[];
     reused: string[];
@@ -455,6 +474,63 @@ export async function reconcileWorkspaceFromDefinition(
     report.settings.merged = Object.keys(settingsPatch);
     if (!dryRun)
       await workspaceRepo.mergeSettings(workspaceId, settingsPatch, userId);
+  }
+
+  // ── 1b. Space brief — THREE-WAY stamp (utils/space-brief-seed.ts) ─────────
+  // Only the workspace's IDENTITY definition owns its brief. A compose overlay
+  // arrives with its shell stripped (`overlayDefinitionForIdentifiedBase`
+  // drops `workspaceSubtype`) and the base-defaults pass carries only
+  // operational carriers, so "carries a subtype, or is stamped with the
+  // package identity" is exactly "this is the space's own template" — two
+  // templates never fight over one brief. Every template that declares
+  // `onboarding` also declares a subtype (checked across the bundle).
+  if (
+    definition.onboarding &&
+    (definition.workspaceSubtype !== undefined || opts.packageSlug)
+  ) {
+    const liveSettings = (ws.settings ?? {}) as WorkspaceSettings;
+    const seeds = definition.suggestedEntities ?? definition.seedEntities ?? [];
+    const needsSeedRefs = (definition.onboarding.anchors ?? []).some(
+      (a) => a.seedRef && !a.entityId
+    );
+    let resolveSeedRef: ((ref: string) => string | undefined) | undefined;
+    if (needsSeedRefs && seeds.length > 0) {
+      const live = await dbConn
+        .select({ id: entities.id, type: entities.type, title: entities.title })
+        .from(entities)
+        .where(eq(entities.workspaceId, workspaceId));
+      resolveSeedRef = seedRefResolver(
+        seeds,
+        new Map(live.map((e) => [`${e.type}:${e.title}`, e.id]))
+      );
+    }
+    const convergence = convergeSpaceBrief({
+      stored: liveSettings.onboarding,
+      seed: liveSettings.onboardingSeed,
+      template: projectTemplateBrief(definition.onboarding, resolveSeedRef),
+    });
+    report.brief = {
+      outcomes: convergence.outcomes,
+      conflicts: convergence.conflicts,
+    };
+    if (convergence.conflicts.length > 0) {
+      logger.info(
+        { workspaceId, conflicts: convergence.conflicts },
+        "reconcile: space brief fields the user owns differ from the template — left alone"
+      );
+    }
+    if (!dryRun && (convergence.next || convergence.nextSeed)) {
+      const wrote = await workspaceRepo.replaceSpaceBrief(
+        workspaceId,
+        {
+          expected: liveSettings.onboarding,
+          ...(convergence.next ? { brief: convergence.next } : {}),
+          ...(convergence.nextSeed ? { seed: convergence.nextSeed } : {}),
+        },
+        userId
+      );
+      if (!wrote) report.brief.raced = true;
+    }
   }
 
   // ── 2. Profiles + property-defs (mirrors the create-path additive pass) ─────

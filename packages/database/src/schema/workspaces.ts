@@ -509,6 +509,75 @@ export interface PublicProjectionSettings {
   fields: string[];
 }
 
+// ─── Space brief (settings.onboarding) — MIRROR of @synap-core/types ──────────
+//
+// The canonical `SpaceBrief` lives in `@synap-core/types/space-brief`, which
+// this package cannot import (`@synap-core/types` already depends on
+// `@synap/database` — a build cycle; see entity-body-service.ts). This is the
+// ONE database-side declaration: `package-definition.ts` and the definition
+// input alias it. `@synap/api` compiles a MUTUAL-ASSIGNABILITY floor between
+// the two (services/space-brief-door.ts), so a field added on one side and
+// not the other stops the api build.
+
+export interface WorkspaceSpaceBriefCollectTarget {
+  profileSlug: string;
+  what: string;
+  cardinality?: "one" | "few" | "several";
+  keyFields?: string[];
+  min?: number;
+}
+
+export interface WorkspaceSpaceBriefExpertise {
+  starters?: string[];
+  blindSpots?: string[];
+  bar?: string;
+}
+
+export interface WorkspaceSpaceBriefAnchor {
+  profileSlug: string;
+  role: "root" | "context";
+  seedRef?: string;
+  entityId?: string;
+  limit?: number;
+}
+
+export interface WorkspaceSpaceBriefFetchHint {
+  profileSlug?: string;
+  query?: string;
+  note?: string;
+}
+
+export interface WorkspaceSpaceBriefRuleRef {
+  key: string;
+  ruleId?: string;
+}
+
+export interface WorkspaceSpaceBrief {
+  purpose?: string;
+  goal?: string;
+  framing?: string;
+  expertise?: WorkspaceSpaceBriefExpertise;
+  collect?: WorkspaceSpaceBriefCollectTarget[];
+  openingQuestions?: string[];
+  doneWhen?: string;
+  anchors?: WorkspaceSpaceBriefAnchor[];
+  rules?: WorkspaceSpaceBriefRuleRef[];
+  fetch?: WorkspaceSpaceBriefFetchHint[];
+}
+
+/** A template-declared rule (package `rules[]`) — mirror of `SpaceTemplateRule`. */
+export interface WorkspaceSpaceTemplateRule {
+  key: string;
+  intent: string;
+  sentence?: unknown;
+}
+
+/** `settings.onboardingSeed` — per-field hashes of what the reconcile wrote. */
+export interface SpaceBriefSeed {
+  v: 1;
+  fields: Partial<Record<string, string>>;
+}
+
 export interface WorkspaceSettings {
   // ─── Entity & UI Settings ───────────────────────────────────────────────────
   defaultEntityTypes?: string[];
@@ -541,26 +610,20 @@ export interface WorkspaceSettings {
    */
   workspaceSubtype?: string;
   /**
-   * Per-workspace onboarding context — the dynamic "what this workspace needs"
-   * that the shared `onboard` skill reads to run an adaptive interview when the
-   * workspace is sparse. Declared by the template; goal + framing + data shape.
-   * Typed loosely here (the OnboardingSpec shape lives in package-definition.ts)
-   * to avoid a settings→utils import cycle.
+   * THE SPACE BRIEF — how an agent works in this space (key kept as
+   * `onboarding`; the interview fields are its onboarding mode). Canonical
+   * type: `@synap-core/types/space-brief` `SpaceBrief`; this is its mirror —
+   * see {@link WorkspaceSpaceBrief}.
    */
-  onboarding?: {
-    goal: string;
-    framing: string;
-    collect: Array<{
-      profileSlug: string;
-      what: string;
-      cardinality?: "one" | "few" | "several";
-      keyFields?: string[];
-    }>;
-    /** Authored domain expertise — mirrors `OnboardingExpertise` in package-definition.ts. */
-    expertise?: { starters?: string[]; blindSpots?: string[]; bar?: string };
-    openingQuestions?: string[];
-    doneWhen?: string;
-  };
+  onboarding?: WorkspaceSpaceBrief;
+  /**
+   * Three-way convergence marker for `onboarding`: per template-seeded brief
+   * field, the hash of the value the template reconcile last WROTE. Equal to
+   * the stored value's hash ⇒ untouched by the user ⇒ the template may update
+   * it; different ⇒ the user edited it ⇒ left alone and reported. Written only
+   * by `convergeSpaceBrief` (utils/space-brief-seed.ts).
+   */
+  onboardingSeed?: SpaceBriefSeed;
   /**
    * Discovery/read visibility. Defaults to "members" when absent.
    */

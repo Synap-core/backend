@@ -12,6 +12,12 @@
  */
 
 import type { WorkspaceDefinitionInput } from "./create-workspace-from-definition.js";
+import type {
+  WorkspaceSpaceBrief,
+  WorkspaceSpaceBriefCollectTarget,
+  WorkspaceSpaceBriefExpertise,
+  WorkspaceSpaceTemplateRule,
+} from "../schema/workspaces.js";
 
 // ─── Package-level metadata ──────────────────────────────────────────────────
 
@@ -119,69 +125,23 @@ export interface PackageLoop {
   params?: Record<string, string>;
 }
 
-// ─── Onboarding spec (the per-workspace dynamic onboarding CONTEXT) ──────────
+// ─── The space brief (stored at `workspace.settings.onboarding`) ─────────────
 //
-// Stored on `workspace.settings.onboarding`. The SHARED `onboard` skill (the
-// reusable adaptive interview PROCESS) reads this to know WHAT a given
-// workspace needs — without a per-domain skill file. The skill stays generic;
-// the domain knowledge lives here as data, declared by each template.
+// ONE type: `SpaceBrief` in `@synap-core/types/space-brief`, mirrored once on
+// the database side as `WorkspaceSpaceBrief` (schema/workspaces.ts — this
+// package cannot import `@synap-core/types`). The names below are ALIASES kept
+// so existing importers compile; they are not a second declaration.
 //
-// This is NOT a rigid questionnaire. It's a GOAL + the data shape to collect +
-// domain framing the agent uses to ask good questions and adapt as it learns
-// about the user. The agent keeps interviewing until the goal is satisfied.
+// The interview fields (goal / collect / openingQuestions / doneWhen) are the
+// brief's ONBOARDING MODE, read by the shared `onboard` skill; purpose /
+// anchors / rules / fetch are its steady state, read by every agent.
 
-export interface OnboardingCollectTarget {
-  /** Profile slug to populate (e.g. "brand_guidelines", "repository"). */
-  profileSlug: string;
-  /** Human description of what to capture for this target. */
-  what: string;
-  /** Roughly how many to expect ("one", "a few", "several") — guides depth. */
-  cardinality?: "one" | "few" | "several";
-  /** Key fields the agent should make sure to fill. */
-  keyFields?: string[];
-}
-
-/**
- * Authored domain expertise the onboarding agent LEADS with — so it resolves
- * the founder's gaps (brings best practices they lack, surfaces what they miss)
- * instead of only extracting what they already know. Mirrors
- * `TemplateOnboardingExpertise` in @synap-core/workspace-templates.
- */
-export interface OnboardingExpertise {
-  /** Concrete starting points the agent proposes instead of asking blank. */
-  starters?: string[];
-  /** Blind spots founders in this domain miss — surfaced proactively. */
-  blindSpots?: string[];
-  /** What a great result looks like here — the bar the agent pushes toward. */
-  bar?: string;
-}
-
-export interface OnboardingSpec {
-  /** The outcome this onboarding achieves, in one sentence. */
-  goal: string;
-  /**
-   * Domain framing the agent uses to ask good, adaptive questions. Free text —
-   * the voice/expertise the agent adopts for THIS workspace (e.g. "act as a
-   * brand strategist; tease out voice, audience, and cadence").
-   */
-  framing: string;
-  /**
-   * Authored domain expertise the agent leads with (optional). Turns the
-   * interview from "extract" into "resolve the founder's gaps". Consumed by the
-   * `onboard` skill's "Lead with your expertise" step.
-   */
-  expertise?: OnboardingExpertise;
-  /** What structured data to collect (entities to create + their key fields). */
-  collect: OnboardingCollectTarget[];
-  /** A few opening questions — the agent adapts from here, never rigid. */
-  openingQuestions?: string[];
-  /**
-   * "Done" signal: when the agent can consider onboarding complete. Free text
-   * the agent self-evaluates against (e.g. "voice + 2 audience segments + a
-   * first month of content cadence captured").
-   */
-  doneWhen?: string;
-}
+/** @deprecated alias — use `WorkspaceSpaceBriefCollectTarget`. */
+export type OnboardingCollectTarget = WorkspaceSpaceBriefCollectTarget;
+/** @deprecated alias — use `WorkspaceSpaceBriefExpertise`. */
+export type OnboardingExpertise = WorkspaceSpaceBriefExpertise;
+/** @deprecated alias — use `WorkspaceSpaceBrief`. */
+export type OnboardingSpec = WorkspaceSpaceBrief;
 
 // ─── Template-composition dependencies ───────────────────────────────────────
 //
@@ -295,7 +255,15 @@ export interface PackageDefinition {
    * Per-workspace onboarding context (the dynamic "what this workspace needs"
    * the shared `onboard` skill reads). Written to workspace.settings.onboarding.
    */
-  onboarding?: OnboardingSpec;
+  onboarding?: WorkspaceSpaceBrief;
+  /**
+   * Rules this template installs in its space — applied by
+   * `applyPackagePostWorkspace` through the ONE rule door
+   * (`createRuleGoverned`), each row stamped `metadata.rule.seed` so the
+   * reconcile can tell a template rule the user edited from one they did not.
+   * The brief lists them as refs (`onboarding.rules`), never their bodies.
+   */
+  rules?: WorkspaceSpaceTemplateRule[];
   /**
    * Template-composition dependencies — other templates this package needs. The
    * install resolver installs missing built-in `workspace` dependencies first

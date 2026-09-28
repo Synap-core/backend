@@ -17,7 +17,12 @@ import { links } from "../schema/links.js";
 import { documents, documentVersions } from "../schema/documents.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
-import type { Workspace, NewWorkspace } from "../schema/workspaces.js";
+import type {
+  Workspace,
+  NewWorkspace,
+  SpaceBriefSeed,
+  WorkspaceSpaceBrief,
+} from "../schema/workspaces.js";
 import { projectWorkspaceSettings } from "../utils/workspace-client-projection.js";
 import {
   EXPOSURE_POLICY_SETTINGS_KEY,
@@ -208,6 +213,51 @@ export class WorkspaceRepository extends BaseRepository<
 
     await this.emitWorkspaceCompleted("update", workspace, userId);
     return workspace;
+  }
+
+  /**
+   * Compare-and-set the space brief (`settings.onboarding`) and/or its
+   * three-way marker (`settings.onboardingSeed`) — nothing else in settings.
+   *
+   * The ONE write door for the brief after create: the template reconcile
+   * (`convergeSpaceBrief`) and the narrow `update_brief` edit door both land
+   * here. `expected` is the brief the caller computed its change FROM; when
+   * the stored brief no longer matches it (a concurrent edit), nothing is
+   * written and `false` comes back — the caller re-reads, never overwrites.
+   * `brief: undefined` leaves the brief alone (stamp-only write).
+   */
+  async replaceSpaceBrief(
+    id: string,
+    input: {
+      expected: unknown;
+      brief?: WorkspaceSpaceBrief;
+      seed?: SpaceBriefSeed;
+    },
+    userId: string
+  ): Promise<boolean> {
+    const patch: Record<string, unknown> = {};
+    if (input.brief !== undefined) patch.onboarding = input.brief;
+    if (input.seed !== undefined) patch.onboardingSeed = input.seed;
+    if (Object.keys(patch).length === 0) return true;
+    const expected =
+      input.expected === undefined || input.expected === null
+        ? sql`${workspaces.settings}->'onboarding' IS NULL`
+        : sql`${workspaces.settings}->'onboarding' = ${JSON.stringify(
+            input.expected
+          )}::jsonb`;
+    const [workspace] = await this.db
+      .update(workspaces)
+      .set({
+        settings: sql`COALESCE(${workspaces.settings}, '{}'::jsonb) || ${JSON.stringify(
+          patch
+        )}::jsonb`,
+        updatedAt: new Date(),
+      } as Partial<NewWorkspace>)
+      .where(and(eq(workspaces.id, id), expected))
+      .returning();
+    if (!workspace) return false;
+    await this.emitWorkspaceCompleted("update", workspace, userId);
+    return true;
   }
 
   /**
