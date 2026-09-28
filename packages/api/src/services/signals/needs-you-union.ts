@@ -35,7 +35,10 @@ import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { ASK_COPY } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
-import type { GroupableSignal } from "@synap-core/types/needs-you";
+import {
+  SUGGESTIONS_CAP,
+  type GroupableSignal,
+} from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
   type ObjectNavView,
@@ -985,9 +988,12 @@ function pointerStillNeedsYou(
 }
 
 /**
- * The `suggestions` lens: unread AI suggestions, newest first. The sibling of
+ * The `suggestions` lens: unread AI suggestions, newest first, CAPPED at
+ * {@link SUGGESTIONS_CAP} ("possibilities", capped — V1 W7). The sibling of
  * {@link unionNeedsYou}, from the same partition. Unlike an owed slot, a
- * suggestion decays, so newest first is the right order.
+ * suggestion decays, so newest first is the right order — and the cap keeps
+ * the newest. `countNeedsYou().suggestions` applies the same cap, so the
+ * number equals the rows.
  */
 export function unionSuggestions(
   notifications: NotificationSignalInput[],
@@ -995,7 +1001,8 @@ export function unionSuggestions(
 ): Signal[] {
   return partitionNotifications(notifications, [])
     .suggestions.map((r) => signalFromNotification(r, now))
-    .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+    .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
+    .slice(0, SUGGESTIONS_CAP);
 }
 
 /**
@@ -1228,6 +1235,7 @@ export function countNeedsYou(args: {
   /**
    * Unread AI suggestions: the sibling bucket. NOT part of `needsYou` and
    * not one of its parts. 0 under a container scope, like `notifications`.
+   * Capped at `SUGGESTIONS_CAP`, exactly like the lens it counts.
    */
   suggestions: number;
 } {
@@ -1266,6 +1274,6 @@ export function countNeedsYou(args: {
     blocked,
     review,
     drafts,
-    suggestions: buckets.suggestions.length,
+    suggestions: Math.min(buckets.suggestions.length, SUGGESTIONS_CAP),
   };
 }

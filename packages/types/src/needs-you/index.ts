@@ -360,3 +360,15 @@ export function needsYouCountsLabel(counts: readonly NeedsYouCount[]): string {
     .map((c) => resolveNeedsYouItemCount(c.kind, c.count))
     .join(" · ");
 }
+
+/**
+ * "POSSIBILITIES", CAPPED — the most AI suggestions (`ai.proactive.*`,
+ * `agent.insight`: registry role `suggestion`) any surface is ever handed at
+ * once, newest first (V1 W7; founder: "connected tools feed 'possibilities',
+ * capped"). Applied server-side, in the ONE partition both the `suggestions`
+ * lens and its count read (`needs-you-union.ts`), so the section's number
+ * always equals the rows it can show. Older unread suggestions stay in the
+ * bell; they are simply not offered as possibilities. A suggestion decays —
+ * the five newest are the ones worth a glance.
+ */
+export const SUGGESTIONS_CAP = 5;
