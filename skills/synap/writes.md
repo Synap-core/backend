@@ -99,6 +99,15 @@ You CAN store content you **hold** — you send it inline. Pick by what you have
 | A **large file on a local disk** you don't hold in context                                  | the CLI `synap upload <path>` (streams it) — an agent can't send bytes it doesn't have          | a `file` entity backed by stored bytes                               |
 | Only a file's **name**, nothing else                                                        | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                                                    |
 
+**A typed thing with a file → the KIND first, the bytes on it.** When a kind
+exists for the thing (a logo is a `brand-asset`, not a `file`; check the space
+brief or `synap_list_profiles`): (1) resolve-or-create that entity
+(`synap_ask`, then `synap_create_entity`); (2) `synap_store_file` with
+`attachToEntityId` = its id (`content` for SVG/text, `contentBase64` for
+binary, ≤10MB inline; larger local files: CLI `synap upload`); (3) link it /
+`synap_file_into_project` if asked. A `proposed` create has no live id yet —
+attach after approval. A bare `file` is only for bytes with no kind.
+
 **Store ≠ analyze.** `synap_store_file` / `synap_create_document` store content
 **deterministically — the file is NEVER read by an LLM.** Only fetch a document
 and reason over it when the user explicitly says "read/analyze this file."
