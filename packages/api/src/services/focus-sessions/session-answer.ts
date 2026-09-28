@@ -768,6 +768,8 @@ export function attestReceiptText(label: string): string {
 
 export type AttestSessionSlotResult =
   | Exclude<AttestExpectedOutputResult, { status: "attested" }>
+  /** `askFingerprint` given and the slot's ask is no longer that one. */
+  | { status: "ask_changed" }
   | {
       status: "attested";
       expectedLabel: string;
@@ -801,8 +803,38 @@ export async function attestSessionSlot(p: {
   /** Owner floor AND the attesting person. */
   userId: string;
   expectedLabel: string;
+  /**
+   * `askFingerprint(ask)` of the ask the person SAW — the lock-screen "I did
+   * it" is sent without reading the pod first, so it must be bound to the
+   * question it answered (same rule as the answer door). Omit ⇒ unbound, as
+   * before.
+   */
+  askFingerprint?: string;
 }): Promise<AttestSessionSlotResult> {
-  const attested = await attestExpectedOutput(p);
+  if (p.askFingerprint !== undefined) {
+    const session = await db.query.focusSessions.findFirst({
+      where: and(
+        eq(focusSessions.id, p.sessionId),
+        eq(focusSessions.userId, p.userId)
+      ),
+      columns: { expectedOutputs: true },
+    });
+    const wanted = normalizeExpectedLabel(p.expectedLabel);
+    const slot = (
+      Array.isArray(session?.expectedOutputs)
+        ? (session.expectedOutputs as ExpectedOutput[])
+        : []
+    ).find((o) => normalizeExpectedLabel(o.label) === wanted);
+    // No session / no slot: the attest door below says which, in its words.
+    if (slot && askFingerprint(slot.ask ?? null) !== p.askFingerprint) {
+      return { status: "ask_changed" };
+    }
+  }
+  const attested = await attestExpectedOutput({
+    sessionId: p.sessionId,
+    userId: p.userId,
+    expectedLabel: p.expectedLabel,
+  });
   if (attested.status !== "attested") return attested;
 
   const channelId = attested.session.channelId;

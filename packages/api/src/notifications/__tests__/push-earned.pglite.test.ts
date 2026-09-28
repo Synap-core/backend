@@ -15,6 +15,10 @@
  *    with a quick answer — and that quick answer, sent unchanged through the
  *    owed page's own answer service, ANSWERS the slot (the seam, not a shape).
  *
+ * 4. The lock-screen "I did it" (an `act` ask) goes through the attest door
+ *    BOUND to the ask it showed: the same fingerprint attests; a re-asked
+ *    slot is refused `ask_changed` instead of attesting a different question.
+ *
  * Real: the doors above, `NotificationService.create`, `push-decision`,
  * `push-prefs`, `answerSessionSlot`, the tables. Stubbed: Expo + socket (no
  * transport; captured), governance (granted), side-effect emitters.
@@ -108,7 +112,10 @@ import type { PushQuickAnswer } from "@synap-core/types/push";
 import { NotificationService } from "../NotificationService.js";
 import { writePushPrefs, readPushPrefs } from "../push-prefs.js";
 import { blockExpectedOutput } from "../../services/focus-sessions/block-output.js";
-import { answerSessionSlot } from "../../services/focus-sessions/session-answer.js";
+import {
+  answerSessionSlot,
+  attestSessionSlot,
+} from "../../services/focus-sessions/session-answer.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -337,5 +344,55 @@ describe("W8 — a push is earned", () => {
       askFingerprint: quick.askFingerprint,
     });
     expect(answered.status).toBe("answered");
+  });
+
+  const blockAct = async (sessionId: string, ask: Ask) => {
+    h.pushes.length = 0;
+    const r = await blockExpectedOutput({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      expectedLabel: "Tone",
+      blockedReason: "action",
+      why: "rotate the key",
+      ask,
+    } as Parameters<typeof blockExpectedOutput>[0]);
+    expect(r.status).toBe("blocked");
+    return (h.pushes[0]!.data as { quickAnswer: PushQuickAnswer }).quickAnswer;
+  };
+
+  it("an act ask's 'I did it' attests through the fingerprint-bound attest door", async () => {
+    const sessionId = await seedSession("active");
+    const quick = await blockAct(sessionId, { mode: "act", steps: ["Rotate"] });
+    expect(quick).toMatchObject({ door: "attest", category: "ask-act" });
+    const r = await attestSessionSlot({
+      sessionId: quick.sessionId,
+      userId: USER,
+      expectedLabel: quick.expectedLabel,
+      askFingerprint: quick.askFingerprint,
+    });
+    expect(r.status).toBe("attested");
+  });
+
+  it("a re-asked slot refuses the stale 'I did it' (ask_changed), attesting nothing", async () => {
+    const sessionId = await seedSession("active");
+    const quick = await blockAct(sessionId, { mode: "act", steps: ["Rotate"] });
+    // The agent re-asks the same slot with a different act.
+    await q(
+      `update focus_sessions set expected_outputs = jsonb_set(expected_outputs, '{0,ask}', $1::jsonb) where id = $2`,
+      [JSON.stringify({ mode: "act", steps: ["Revoke instead"] }), sessionId]
+    );
+    const r = await attestSessionSlot({
+      sessionId,
+      userId: USER,
+      expectedLabel: quick.expectedLabel,
+      askFingerprint: quick.askFingerprint,
+    });
+    expect(r.status).toBe("ask_changed");
+    const row = await q<{ s: string }>(
+      `select expected_outputs->0->>'status' as s from focus_sessions where id = $1`,
+      [sessionId]
+    );
+    expect(row.rows[0]!.s).not.toBe("done");
   });
 });

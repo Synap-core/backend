@@ -88,6 +88,7 @@ import {
 } from "../services/focus-sessions/ask-about-slot.js";
 import {
   AskAnswerValueSchema,
+  ASK_CHANGED_PREFIX,
   ASK_INVALID_PREFIX,
   SLOT_MOVED_ON_PHRASES,
 } from "@synap-core/types/ask";
@@ -220,6 +221,13 @@ function slotOwnershipResult(
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: `"${input.expectedLabel}" ${SLOT_MOVED_ON_PHRASES.retired} when its session was cancelled — there is nothing left to attest`,
+      });
+    case "ask_changed":
+      // Attestation only, when the caller bound it to a fingerprint (the
+      // lock-screen "I did it"): the agent re-asked in between.
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `${ASK_CHANGED_PREFIX} the question on "${input.expectedLabel}" changed since you opened it — here is the current one`,
       });
     case "answer_required":
       // Attestation only. The slot's ask wants the person's INPUT (a yes/no,
@@ -2546,6 +2554,12 @@ export const focusSessionsRouter = router({
       z.object({
         sessionId: z.string().uuid(),
         expectedLabel: z.string().min(1).max(500),
+        /**
+         * `askFingerprint(ask)` of the ask the person saw. Sent by the
+         * lock-screen quick answer (`@synap-core/types/push`); a mismatch is
+         * refused `ask_changed:` instead of attesting a different question.
+         */
+        askFingerprint: z.string().min(1).max(64).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2563,6 +2577,7 @@ export const focusSessionsRouter = router({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
         expectedLabel: input.expectedLabel,
+        askFingerprint: input.askFingerprint,
       });
       return slotOwnershipResult(result, input);
     }),
