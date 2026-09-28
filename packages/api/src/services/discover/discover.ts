@@ -788,9 +788,9 @@ export async function discover(
           // as one list line (`spacePurposeLine`, ~120 chars); the pinned
           // space's full purpose rides in its `brief`.
           if (detail === "full") {
-            out.description = purpose
-              ? (w.description ?? purpose)
-              : (w.description ?? null);
+            // The same purpose rule, unclipped — `w.description ?? …` used to
+            // hand a `Domain: x` placeholder back as the description here.
+            out.description = purpose ?? null;
           } else {
             const purposeLine = spacePurposeLine(w.description, onboarding);
             if (purposeLine) out.description = purposeLine;

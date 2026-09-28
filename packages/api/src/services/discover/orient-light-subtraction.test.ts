@@ -486,6 +486,10 @@ describe("orient light — every listed space carries its purpose as ONE line", 
     });
     // Full keeps the whole spec everywhere.
     const full = await run("full");
+    // …and full never emits a `Domain: x` placeholder as the description:
+    // it is the same purpose rule, unclipped.
+    const fullPlaceholder = full.workspaces.find((w) => w.id === "ws-2")!;
+    expect(fullPlaceholder.description).toMatch(/^Goal 2: capture the domain/);
     expect(
       full.workspaces.find((w) => w.id === "ws-0")?.onboarding?.goal
     ).toMatch(/^Goal 0/);
