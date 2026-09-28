@@ -366,6 +366,36 @@ describe("the ONE usage aggregate", () => {
       ["task", 2, 5],
     ]);
   });
+
+  it("a PINNED orient counts topKinds inside that workspace only — never the pod bucket", async () => {
+    // W1 holds 3 live tasks; the caller's 2 pod-scoped tasks belong to no
+    // workspace. Counting them under the pin briefed a 39-entity space with
+    // pod-wide totals (knowledge 590, person 342) — the space's kinds drowned.
+    const orient = await discover({
+      caller: listProfilesCaller,
+      userId: U,
+      authScopes: ["mcp.read"],
+      workspaceId: W1,
+    });
+    const top = orient.startHere.topKinds as Array<{
+      slug: string;
+      entityCount: number;
+    }>;
+    expect(top.map((k) => [k.slug, k.entityCount])).toEqual([["task", 3]]);
+    // The same lens through the shared ranking discover's summary tier reads.
+    const { ranked } = await rankProfilesByUsage({
+      userId: U,
+      workspaceId: W2,
+      profiles: (
+        (await (listProfilesCaller as any).profiles.listProfiles()) as {
+          profiles: any[];
+        }
+      ).profiles,
+    });
+    expect(
+      Object.fromEntries(ranked.map((r) => [r.profile.slug, r.entityCount]))
+    ).toEqual({ note: 2, task: 0 });
+  });
 });
 
 describe("orient `who` — qualify in SQL, then limit", () => {

@@ -110,7 +110,10 @@ export function groupRankedProfiles<P extends RankableProfile>(
 export async function rankProfilesByUsage<P extends RankableProfile>(params: {
   /** The AUTHENTICATED user — the floor. Never a request body/query id. */
   userId: string;
-  /** Optional lens; narrows to it only when the user can access it. */
+  /**
+   * Optional lens; narrows to it only when the user can access it. When set,
+   * counts are that workspace's rows ONLY (no pod-scoped bucket).
+   */
   workspaceId?: string;
   profiles: readonly P[];
   now?: Date;
@@ -121,11 +124,16 @@ export async function rankProfilesByUsage<P extends RankableProfile>(params: {
     ? accessible.filter((id) => id === workspaceId)
     : accessible;
 
+  // A PINNED lens counts only that workspace's rows. The caller's pod-scoped
+  // bucket (`workspace_id IS NULL`) belongs to no workspace, so adding it under
+  // a pin credited every lens with the whole pod: orient pinned to Brand Library
+  // (39 entities) briefed `knowledge 590, person 342` and crowded out the
+  // space's own kinds (2026-09-28). Unpinned = pod altitude, bucket included.
   const usage = usageByProfile(
     await loadEntityUsage({
       userId,
       workspaceIds: lens,
-      includePodScoped: true,
+      includePodScoped: !workspaceId,
       withOpens: true,
     })
   );
