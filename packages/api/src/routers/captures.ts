@@ -564,6 +564,56 @@ export const capturesRouter = router({
       }
       return result;
     }),
+
+  /**
+   * GIVE TO AGENT — hand one own capture to an agent as work: a new session
+   * (goal = the capture's words, the agent on its roster, the capture's run as
+   * its parent) where the agent's orient lists it. Nothing wakes the agent, so
+   * the answer says "Delivered when <agent> checks in" with its last-seen time
+   * — never "sent". Omit `agentUserId` for "the next agent that checks in".
+   * The person only; an agent key cannot hand a person's capture to itself.
+   * Service: `services/captures/give-to-agent.ts`.
+   */
+  giveToAgent: protectedProcedure
+    .input(
+      z.object({
+        captureId: z.string().uuid(),
+        agentUserId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can hand their capture to an agent.",
+        });
+      }
+      const { giveCaptureToAgent } =
+        await import("../services/captures/give-to-agent.js");
+      const result = await giveCaptureToAgent({
+        access: AccessContext.from(ctx),
+        userId: requireUserId(ctx.userId),
+        captureId: input.captureId,
+        agentUserId: input.agentUserId ?? null,
+      });
+      switch (result.status) {
+        case "given":
+          return result;
+        case "not_found":
+          throw new TRPCError({ code: "NOT_FOUND", message: "Capture not found" });
+        case "agent_not_found":
+          throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
+        case "agent_not_wakeable":
+          throw new TRPCError({ code: "BAD_REQUEST", message: result.message });
+        case "empty_capture":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "This capture has no words to hand over.",
+          });
+        case "proposed":
+          throw new TRPCError({ code: "FORBIDDEN", message: result.message });
+      }
+    }),
 });
 
 /**

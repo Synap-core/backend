@@ -157,6 +157,19 @@ export interface StartHere {
       }
     | StartHereUnavailable;
   /**
+   * Open sessions the person HANDED TO THIS AGENT (the agent is on the
+   * session's roster — e.g. relay Capture "Give to agent"), newest first.
+   * Present only when an agent calls; a pull-only agent learns about work it
+   * was given HERE, since nothing can wake it.
+   */
+  handedToYou?:
+    | {
+        count: number;
+        countIsLowerBound: boolean;
+        items: Array<{ id: string; goal: string | null; startedAt: string | null }>;
+      }
+    | StartHereUnavailable;
+  /**
    * Open sessions the caller OWNS whose criteria are not all graded —
    * "grade with evaluate_session before you say done". Bounded read; the lens
    * is stated on the value (`owned-open`).
@@ -286,6 +299,12 @@ export interface DiscoverParams extends DiscoverOptions {
   userId: string;
   /** The caller's auth scopes — echoed to `me.scopes` (NOT the section filter). */
   authScopes: string[];
+  /**
+   * The AGENT principal calling (an agent key), if any — `startHere.
+   * handedToYou` lists the open sessions the person handed to it. Omit for a
+   * person's own orient.
+   */
+  agentUserId?: string | null;
 }
 
 /**
@@ -956,6 +975,7 @@ export async function discover(
     buildStartHere({
       caller,
       userId,
+      agentUserId: params.agentUserId ?? null,
       workspaceId,
       pending: pendingState,
       learnMoreSkill: ORIENT_LEARN_MORE_SKILL,

@@ -18,6 +18,8 @@ import type { StartHere } from "./discover.js";
 
 /** Open sessions read before reporting "at least N". */
 export const OPEN_SESSIONS_READ_CAP = 10;
+/** Sessions handed to the calling agent, listed. */
+export const HANDED_TO_YOU_READ_CAP = 5;
 
 export type PendingReviewState =
   | { status: "ok"; count: number; oldestDays: number; oldestId?: string }
@@ -51,6 +53,55 @@ async function readOpenSessions(
             },
           }
         : {}),
+    };
+  } catch {
+    return UNAVAILABLE;
+  }
+}
+
+/**
+ * Open sessions owned by the person with THIS agent on the roster. Owner-
+ * floored (`focus_sessions` is owner-private); `scheduled` is excluded for the
+ * same reason `listOpenFocusSessions` excludes it (future work, not now).
+ */
+async function readHandedToYou(
+  userId: string,
+  agentUserId: string
+): Promise<NonNullable<StartHere["handedToYou"]>> {
+  try {
+    const { db, and, eq, inArray, desc, drizzleSql, focusSessions } =
+      await import("@synap/database");
+    const { OPEN_SESSION_STATUSES } =
+      await import("@synap-core/types/focus-sessions");
+    const rows = await db
+      .select({
+        id: focusSessions.id,
+        goal: focusSessions.goal,
+        startedAt: focusSessions.startedAt,
+      })
+      .from(focusSessions)
+      .where(
+        and(
+          eq(focusSessions.userId, userId),
+          inArray(
+            focusSessions.status,
+            OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
+          ),
+          drizzleSql`${agentUserId} = ANY(${focusSessions.agentIds})`
+        )
+      )
+      // SESSION-KIND-LENS-EXEMPT: a roster read for ONE agent — every kind the
+      // person put it on is work it was given.
+      .orderBy(desc(focusSessions.startedAt))
+      .limit(HANDED_TO_YOU_READ_CAP);
+    return {
+      count: rows.length,
+      countIsLowerBound: rows.length >= HANDED_TO_YOU_READ_CAP,
+      items: rows.map((r) => ({
+        id: r.id,
+        goal: r.goal,
+        startedAt: r.startedAt ? new Date(r.startedAt).toISOString() : null,
+      })),
     };
   } catch {
     return UNAVAILABLE;
@@ -219,19 +270,30 @@ async function readOpenFindings(
 export async function buildStartHere(p: {
   caller: HubProtocolCaller;
   userId: string;
+  /** The calling agent, when an agent key calls — see `handedToYou`. */
+  agentUserId?: string | null;
   workspaceId?: string;
   pending: PendingReviewState;
   learnMoreSkill: string;
   /** The lens listing, when the caller already started reading it. */
   ranked?: Promise<Array<RankedProfile<LensProfile>>>;
 }): Promise<StartHere> {
-  const [openSessions, sessionsOwingGrade, topKinds, actions, openFindings] =
-    await Promise.all([
+  const [
+    openSessions,
+    sessionsOwingGrade,
+    topKinds,
+    actions,
+    openFindings,
+    handedToYou,
+  ] = await Promise.all([
       readOpenSessions(p.userId),
       readSessionsOwingGrade(p.userId),
       readTopKinds(p),
       readActions(p),
       readOpenFindings(p.userId),
+      p.agentUserId
+        ? readHandedToYou(p.userId, p.agentUserId)
+        : Promise.resolve(undefined),
     ]);
   const pendingReview: StartHere["pendingReview"] =
     p.pending.status === "unavailable"
@@ -252,6 +314,7 @@ export async function buildStartHere(p: {
     pendingReview,
     openFindings,
     openSessions,
+    ...(handedToYou ? { handedToYou } : {}),
     sessionsOwingGrade,
     topKinds,
     actions,

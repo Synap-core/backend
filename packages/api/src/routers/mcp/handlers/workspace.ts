@@ -60,12 +60,13 @@ import {
 
 export const workspaceHandlers: McpHandlerMap = {
   synap_orient: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, caller } = ctx;
+    const { toolName, args, userId, apiKeyScopes, caller, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { discover } = await import("../../../services/discover/discover.js");
     const result = await discover({
       caller,
       userId,
+      agentUserId: agentUserId ?? null,
       authScopes: apiKeyScopes,
       detail: (args.detail as "light" | "full" | undefined) ?? "light",
       scope: args.scope as

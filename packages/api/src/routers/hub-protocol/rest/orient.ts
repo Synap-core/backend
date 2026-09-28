@@ -78,6 +78,7 @@ export function registerOrientRoutes(app: HubHono): void {
       const result = await discover({
         caller,
         userId,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
         authScopes: scopes,
         detail,
         scope,

@@ -75,7 +75,14 @@ void _originsAgree;
  * membership-tied half; pod-wide agents are ALWAYS included, except when the
  * lens is `null` (= pod-wide only). The lens can never widen past the floor.
  */
-async function queryAgentUsers(ctx: { userId: string }, workspaceLens: Lens) {
+/**
+ * The caller's agent roster — the ONE visibility floor for "which agents can
+ * this person reach" (`agentUsers.list`, and `captures.giveToAgent`'s pick).
+ */
+export async function queryAgentUsers(
+  ctx: { userId: string },
+  workspaceLens: Lens
+) {
   // Membership-tied agents — the caller's accessible agents. `userVisibleWhere`
   // is the structural floor (only workspaces the caller can see); the lens
   // narrows within it. `null` lens = no tied rows (pod-wide only).
