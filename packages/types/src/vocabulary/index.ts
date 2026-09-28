@@ -25,7 +25,7 @@
 
 import { OBJECT_KINDS, OBJECT_KIND_ALIASES } from "./object-kinds.js";
 import type { SpaceBrief } from "../space-brief/index.js";
-import type { TrustRung } from "../trust-ladder/index.js";
+import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -1221,4 +1221,31 @@ export function resolveTrustRungLabel(
     >
   )[rung];
   return row ? row[mood] : humanizeToken(rung);
+}
+
+/**
+ * What accepting a next-rung offer did, as a MARK's words (ui-composition §1),
+ * the same on every surface: `created` / `already_covered` name the rule (a
+ * door to it), `proposed` the change filed for the agent's owner. `failed` is
+ * the mark for a refused call OTHER than "no next rung" (which withdraws the
+ * offer and claims nothing). Keyed by `NextRungOutcome`, so a new outcome is a
+ * BUILD error here until it is named.
+ */
+export const NEXT_RUNG_OUTCOME_LABELS: Readonly<
+  Record<NextRungOutcome | "failed", string>
+> = {
+  created: "Rule added",
+  already_covered: "Already a rule",
+  proposed: "Sent to the agent's owner",
+  failed: "Not saved",
+};
+
+/** An outcome's words; an unknown outcome humanizes rather than leaks. */
+export function resolveNextRungOutcomeLabel(
+  outcome: NextRungOutcome | "failed" | (string & {})
+): string {
+  return (
+    (NEXT_RUNG_OUTCOME_LABELS as Readonly<Record<string, string>>)[outcome] ??
+    humanizeToken(outcome)
+  );
 }

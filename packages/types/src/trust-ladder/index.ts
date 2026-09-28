@@ -244,6 +244,16 @@ export interface NextRungOffer {
 }
 
 /**
+ * What accepting an offer did (`governanceRules.proposeNextRung`):
+ *   created          — the caller may grant, so the rule was written now;
+ *   already_covered  — an identical active rule already stands;
+ *   proposed         — filed for the agent's owner to approve.
+ * Words: `NEXT_RUNG_OUTCOME_LABELS` in the vocabulary.
+ */
+export const NEXT_RUNG_OUTCOMES = ["created", "already_covered", "proposed"] as const;
+export type NextRungOutcome = (typeof NEXT_RUNG_OUTCOMES)[number];
+
+/**
  * The next-rung offer for an item, or `null`.
  *
  * `null` when: the item sits on no rung; the rung is the top one; no config
