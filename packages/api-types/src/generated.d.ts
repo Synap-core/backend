@@ -10805,6 +10805,130 @@ export interface SpaceStatsRow {
 	 */
 	pausedRuleCount: number | null;
 }
+/**
+ * THE SPACE BRIEF — how an agent works inside one space (workspace).
+ *
+ * ONE type, ONE reader. Stored at `workspace.settings.onboarding` (the key is
+ * kept: 28 templates and every installed space already write it there), and
+ * called `SpaceBrief` in code. The interview fields (`goal`, `collect`,
+ * `openingQuestions`, `doneWhen`) are the brief's ONBOARDING MODE — what the
+ * shared `onboard` skill runs while a space is still empty. The steady-state
+ * fields (`purpose`, `anchors`, `rules`, `fetch`) are what any agent entering
+ * the space is told every time.
+ *
+ * WHY ONE TYPE (2026-09-28). The onboarding shape was declared in eight places
+ * (package definition, workspace settings, template authoring, discover,
+ * browser, CLI, CP, hub client) and they had drifted — one required `framing`,
+ * another typed the whole thing `Record<string, unknown>`. This leaf is the
+ * source; the others re-export it or, where a package boundary forbids the
+ * import, mirror it under a compile-time parity floor.
+ *
+ * Pure and dependency-free: the pod, the browser, relay, the CLI and the
+ * template authoring package import the same answer.
+ */
+/** How many of a kind the interview should aim for — guides depth. */
+export type SpaceBriefCardinality = "one" | "few" | "several";
+/** One kind the onboarding interview fills. */
+export interface SpaceBriefCollectTarget {
+	/** Profile slug to populate (e.g. "brand-identity"). */
+	profileSlug: string;
+	/** Human description of what to capture for this target. */
+	what: string;
+	/** Roughly how many to expect — guides interview depth. */
+	cardinality?: SpaceBriefCardinality;
+	/** Key fields the agent should make sure to fill. */
+	keyFields?: string[];
+	/**
+	 * The MINIMUM this space needs before it counts as onboarded: at least `min`
+	 * entities of this kind with every `keyFields` entry filled. Folded in from
+	 * the golden standards' `requires` so a pod can check itself.
+	 */
+	min?: number;
+}
+/** Authored domain expertise the agent LEADS with. */
+export interface SpaceBriefExpertise {
+	/** Concrete starting points the agent proposes instead of asking blank. */
+	starters?: string[];
+	/** Blind spots people in this domain miss — surfaced proactively. */
+	blindSpots?: string[];
+	/** What a great result looks like here — the bar the agent pushes toward. */
+	bar?: string;
+}
+/** `root` = THE entity this space is about; `context` = read it too. */
+export type SpaceBriefAnchorRole = "root" | "context";
+/**
+ * An entity an agent reads FIRST in this space. A template names it by kind
+ * (and optionally by one of its own suggested entities, `seedRef`); the pod
+ * resolves `seedRef` to `entityId` at install. Without an `entityId`, the
+ * anchor means "the `limit` most relevant entities of this kind here".
+ */
+export interface SpaceBriefAnchor {
+	profileSlug: string;
+	role: SpaceBriefAnchorRole;
+	/** A suggested entity of the template (`refKey` | `kind:title` | unique title). */
+	seedRef?: string;
+	/** Resolved at install from `seedRef`, or set by the user. */
+	entityId?: string;
+	/** How many entities of the kind to read when no `entityId` is set. */
+	limit?: number;
+}
+/** Where to look for context before acting — a kind, a query, or both. */
+export interface SpaceBriefFetchHint {
+	profileSlug?: string;
+	query?: string;
+	/** Why this is worth reading, in a few words. */
+	note?: string;
+}
+/**
+ * A reference to a RULE a template installed in this space. The brief lists
+ * refs; the rule itself (intent, sentence, behaviour) lives in its own row,
+ * written through the ONE rule door.
+ */
+export interface SpaceBriefRuleRef {
+	/** The template's stable key for the rule (`SpaceTemplateRule.key`). */
+	key: string;
+	/** The installed rule row, once the pod created it. */
+	ruleId?: string;
+}
+/** The brief, as stored at `settings.onboarding`. */
+export interface SpaceBrief {
+	/** What this space is for, day to day (steady state). */
+	purpose?: string;
+	/** Onboarding mode: the outcome the interview achieves, in one sentence. */
+	goal?: string;
+	/** The persona / voice to adopt in this space. */
+	framing?: string;
+	expertise?: SpaceBriefExpertise;
+	/** Onboarding mode: what structured data to collect. */
+	collect?: SpaceBriefCollectTarget[];
+	/** Onboarding mode: a few opening questions — adapt from here. */
+	openingQuestions?: string[];
+	/** Onboarding mode: when the interview is done. */
+	doneWhen?: string;
+	/** Entities to read first. */
+	anchors?: SpaceBriefAnchor[];
+	/** Rules this space's template installed (refs, not bodies). */
+	rules?: SpaceBriefRuleRef[];
+	/** Where to look before acting. */
+	fetch?: SpaceBriefFetchHint[];
+}
+export interface SpaceBriefFieldChange {
+	field: keyof SpaceBrief;
+	before?: unknown;
+	after?: unknown;
+}
+export type UpdateSpaceBriefResult = {
+	status: "updated";
+	workspaceId: string;
+	changes: SpaceBriefFieldChange[];
+} | {
+	status: "unchanged";
+	workspaceId: string;
+} | {
+	status: "proposed";
+	proposalId: string;
+	changes: SpaceBriefFieldChange[];
+};
 export interface ArchivedAutomationRef {
 	id: string;
 	name: string;
@@ -23275,6 +23399,45 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId?: undefined;
 			};
+			meta: object;
+		}>;
+		updateBrief: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				patch: {
+					purpose?: string | null | undefined;
+					goal?: string | null | undefined;
+					framing?: string | null | undefined;
+					expertise?: {
+						starters?: string[] | undefined;
+						blindSpots?: string[] | undefined;
+						bar?: string | undefined;
+					} | null | undefined;
+					collect?: {
+						profileSlug: string;
+						what: string;
+						cardinality?: "one" | "few" | "several" | undefined;
+						keyFields?: string[] | undefined;
+						min?: number | undefined;
+					}[] | null | undefined;
+					openingQuestions?: string[] | null | undefined;
+					doneWhen?: string | null | undefined;
+					anchors?: {
+						profileSlug: string;
+						role: "context" | "root";
+						seedRef?: string | undefined;
+						entityId?: string | undefined;
+						limit?: number | undefined;
+					}[] | null | undefined;
+					fetch?: {
+						profileSlug?: string | undefined;
+						query?: string | undefined;
+						note?: string | undefined;
+					}[] | null | undefined;
+				};
+				reasoning?: string | undefined;
+			};
+			output: UpdateSpaceBriefResult;
 			meta: object;
 		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{
