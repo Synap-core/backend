@@ -14,16 +14,83 @@
  *
  * Auth: protectedProcedure, USER-floored via `userVisibleWhere` (the SAME access
  * predicate `proposals.list` uses) so no other workspace's pending queue leaks.
+ *
+ * `list` is "what happened, filtered" — one ledger over proposals, decisions,
+ * runs and session lifecycles, filtered and cursor-paged in SQL. Contract:
+ * `@synap-core/types/activity`; see `services/activity/list-activity.ts`.
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
+import {
+  ACTIVITY_DEFAULT_LIMIT,
+  ACTIVITY_MAX_LIMIT,
+  ACTIVITY_OUTCOMES,
+  ACTIVITY_SOURCES,
+  parseActivityActorFilter,
+} from "@synap-core/types/activity";
 import { router, protectedProcedure } from "../trpc.js";
+import { AccessContext } from "../access/index.js";
+import { rosterReadFor } from "../access/session-visibility.js";
+import { listActivity } from "../services/activity/list-activity.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalUserFloor } from "./proposals/scope-conditions.js";
 import { db, proposals, and, eq, isNotNull, count } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 
 export const activityRouter = router({
+  /**
+   * What happened, newest first. Every filter only narrows; a failed read
+   * throws (never an empty page).
+   */
+  list: protectedProcedure
+    .input(
+      z.object({
+        /** `all` | `agents` | `me` | `agent:<agentUserId>`. */
+        actor: z.string().max(200).default("all"),
+        projectId: z.string().uuid().optional(),
+        /**
+         * Same three-state lens as `signals`: a string = that workspace,
+         * `null` = pod-personal only, absent = the WHOLE floor (never the
+         * active-workspace header).
+         */
+        workspaceId: z.string().nullish(),
+        outcome: z.enum(ACTIVITY_OUTCOMES).optional(),
+        source: z.enum(ACTIVITY_SOURCES).optional(),
+        /** ISO instant: only acts at or after it. */
+        since: z.string().datetime({ offset: true }).optional(),
+        cursor: z.string().min(1).max(1000).optional(),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(ACTIVITY_MAX_LIMIT)
+          .default(ACTIVITY_DEFAULT_LIMIT),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      requireUserId(ctx.userId);
+      const actor = parseActivityActorFilter(input.actor);
+      if (!actor) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "actor must be all | agents | me | agent:<id>",
+        });
+      }
+      return listActivity({
+        access: AccessContext.from(ctx).withLens(input.workspaceId),
+        workspaceLens: input.workspaceId,
+        roster: rosterReadFor(ctx),
+        actor,
+        projectId: input.projectId,
+        outcome: input.outcome,
+        source: input.source,
+        since: input.since,
+        cursor: input.cursor,
+        limit: input.limit,
+      });
+    }),
+
   /**
    * Per-unit "needs attention" counts (pending proposals). Returns one entry per
    * unit that has ≥1 pending proposal; units with none are simply absent (the

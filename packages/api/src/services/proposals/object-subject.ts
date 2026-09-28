@@ -104,6 +104,14 @@ export interface CreatingProposal {
 const materializedLength = (key: string) =>
   drizzleSql`(case when jsonb_typeof(${proposals.data}->'materialized'->${key}) = 'array' then jsonb_array_length(${proposals.data}->'materialized'->${key}) else 0 end)`;
 
+/**
+ * Objects a proposal created or changed — the undo's reach. Counted in SQL
+ * from its materialized record; at least 1, the proposal's own target. Shared
+ * with `activity.list`'s Undo door.
+ */
+export const proposalChangeCountSql = () =>
+  drizzleSql<number>`greatest(1, ${materializedLength("entityIds")} + ${materializedLength("documentIds")} + ${materializedLength("relationIds")} + ${materializedLength("facetIds")} + ${materializedLength("propertyDiffs")})::int`;
+
 function creatingColumns(viewer: string) {
   return {
     id: proposals.id,
@@ -114,7 +122,7 @@ function creatingColumns(viewer: string) {
     reviewedAt: proposals.reviewedAt,
     createdAt: proposals.createdAt,
     visible: drizzleSql<boolean>`(${userVisibleWhere(proposals.workspaceId, viewer)})`,
-    changeCount: drizzleSql<number>`greatest(1, ${materializedLength("entityIds")} + ${materializedLength("documentIds")} + ${materializedLength("relationIds")} + ${materializedLength("facetIds")} + ${materializedLength("propertyDiffs")})::int`,
+    changeCount: proposalChangeCountSql(),
   };
 }
 

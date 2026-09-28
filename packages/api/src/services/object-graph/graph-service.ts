@@ -1053,8 +1053,10 @@ export async function getTemporalNeighbors(
  * the rows through `redactUnreadableSessionTargets` first (owner-only reader):
  * a proposal about a session the viewer cannot read is named by the vocabulary
  * placeholder, never by the goal copied into its payload.
+ *
+ * Also the headline of every proposal / decision row in `activity.list`.
  */
-async function proposalNeighborNames(
+export async function proposalNeighborNames(
   rows: ReadonlyArray<{
     id: string;
     proposalType: string;
