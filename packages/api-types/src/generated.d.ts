@@ -5662,6 +5662,36 @@ declare const EVENT_ACTIONS: readonly [
 	"restore"
 ];
 export type EventAction = (typeof EVENT_ACTIONS)[number];
+/**
+ * Governance grant-option derivation — "always approve for…" menu.
+ *
+ * A per-proposal escape hatch that turns a one-off approval decision into a
+ * standing `governance_rules` row (Governance Convergence Plan, Phase A — see
+ * `synap-backend/GOVERNANCE-CONVERGENCE-PLAN.md`). Given the handful of
+ * fields a proposal can resolve (a capability target, an action event key, a
+ * profile slug, an authoring agent), this computes WHICH of the five
+ * granularities — capability / action / profile / agent / global — are
+ * offerable and the exact `governanceRules.create` payload each one writes.
+ *
+ * Pure, no UI/runtime dependencies — safe to import from any frontend
+ * (browser, Electron, Next.js) or server context. This is the SINGLE SOURCE
+ * for the derivation: `synap-app`'s `GovernanceMenu` (end-user "Always
+ * approve for…") and `pod-admin`'s `AlwaysApproveMenu` ("Approve & always…")
+ * both call it — see those files for the two `GovernanceGrantMode`s they use.
+ */
+/** The exact `governanceRules.create` input shape (see
+ * `packages/api/src/routers/governance-rules.ts`'s `CreateInputSchema`). */
+export interface GovernanceRuleDraft {
+	principalKind: "any" | "agent";
+	agentUserId?: string;
+	scopeKind: "workspace" | "pod";
+	workspaceId?: string;
+	targetKind: "action" | "profile" | "capability";
+	targetPattern: string;
+	targetProfile?: string;
+	verdict: "auto";
+	sourceProposalId: string;
+}
 declare const PROPOSAL_SOURCES: readonly [
 	"user",
 	"ai",
@@ -7308,7 +7338,7 @@ export interface ExpectedOutput {
  * `services/focus-sessions/update-session.ts` asserts the two types are
  * MUTUALLY assignable at compile time — a drift on either side stops the build.
  */
-export type SlotAsk = {
+export type SlotAsk = ({
 	mode: "confirm";
 	prompt?: string;
 } | {
@@ -7325,7 +7355,25 @@ export type SlotAsk = {
 } | {
 	mode: "provide";
 	provide: SlotAskProvide;
+}) & {
+	/**
+	 * "What I looked at" (trust ladder rung 1, a PREPARED question): at most 8
+	 * objects the agent read before asking. Stored as `{kind, id}` — the agent's
+	 * own `title` is stripped at the parse — and floored at the declaring door
+	 * like `ref`. `title` is filled ONLY by the owed-slot read, resolved through
+	 * the viewer's access floor; a ref the viewer cannot see is dropped there.
+	 */
+	lookedAt?: SlotAskLookedAt[];
 };
+/** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
+export interface SlotAskLookedAt {
+	kind: SlotAskLookedAtKind;
+	id: string;
+	/** Server-resolved on the owed read; never stored, never trusted. */
+	title?: string;
+}
+/** Mirrors `ASK_LOOKED_AT_KINDS` — a subset of {@link OUTPUT_REF_KINDS}. */
+export type SlotAskLookedAtKind = Extract<OutputRefKind, "entity" | "document" | "view" | "automation" | "playbook">;
 /** One offered answer (capture's chip minus its apply fields). */
 export interface SlotAskOption {
 	label: string;
@@ -11230,6 +11278,59 @@ export type AgentDirection = "external" | "house";
  * Deletions and structural changes ask in every mode (engine floors).
  */
 export type AgentWriteMode = "pod-default" | "create-with-undo" | "ask-first";
+declare const TRUST_RUNGS: readonly [
+	"ask",
+	"propose",
+	"do_tell",
+	"quiet"
+];
+export type TrustRung = (typeof TRUST_RUNGS)[number];
+/** The config a next-rung grant writes. */
+export type NextRungVia = "governance_rule";
+/** One step up, and the config that grants it. */
+export interface NextRungOffer {
+	from: TrustRung;
+	to: TrustRung;
+	via: NextRungVia;
+}
+export interface NextRungRuleInput {
+	/** The item the grant is made FROM — stored as the rule's lineage. */
+	proposalId: string;
+	agentUserId: string;
+	/** The proposal's workspace; `null` ⇒ a pod-scope rule. */
+	workspaceId?: string | null;
+	/** `proposalEventKey(row)`. */
+	eventKey: string;
+	/**
+	 * The profile slug the GATE saw for this write (`data.profileSlug` on a
+	 * receipt, `data.data.profileSlug` on a pending row) — never a slug looked
+	 * up afterwards, or the rule narrows to a key the write never carries and
+	 * never fires.
+	 */
+	profileSlug?: string | null;
+}
+declare function nextRungRuleDraft(input: NextRungRuleInput): GovernanceRuleDraft;
+type GovernanceRuleDraft$1 = ReturnType<typeof nextRungRuleDraft>;
+export interface NextRungProjection {
+	proposalId: string;
+	rung: TrustRung | null;
+	offer: NextRungOffer | null;
+	/** The exact rule accepting the offer writes; `null` when there is no offer. */
+	rule: GovernanceRuleDraft$1 | null;
+}
+export type FileNextRungResult = {
+	outcome: "created";
+	ruleId: string;
+	offer: NextRungOffer;
+} | {
+	outcome: "already_covered";
+	ruleId: string;
+	offer: NextRungOffer;
+} | {
+	outcome: "proposed";
+	proposalId: string;
+	offer: NextRungOffer;
+};
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
  * propose a change to `governance_rules` / `governance_ceilings` /
@@ -11259,6 +11360,7 @@ export interface SettingsUpdateProposalData {
 	agentName?: string | null;
 	currentLimit?: number;
 	pendingCount?: number;
+	nextRungFromProposalId?: string;
 }
 export interface ApplyGovConfigChangeResult {
 	rows: number;
@@ -12688,7 +12790,9 @@ export interface OwedSlot {
 	ref?: OutputRef;
 	/**
 	 * HOW the person can answer (`ExpectedOutput.ask`) — carried so a tray can
-	 * quick-answer a confirm / choose in place.
+	 * quick-answer a confirm / choose in place. Its `lookedAt` ("what I looked
+	 * at") arrives with each ref's `title` resolved through the READER's access
+	 * floor; a ref the reader cannot see is dropped (`looked-at.ts`).
 	 */
 	ask?: SlotAsk;
 }
@@ -24118,6 +24222,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							[x: string]: unknown;
 							ask?: {
 								mode: "confirm";
+								lookedAt?: {
+									kind: "entity" | "automation" | "playbook" | "document" | "view";
+									id: string;
+								}[] | undefined;
 								prompt?: string | undefined;
 							} | {
 								mode: "choose";
@@ -24128,6 +24236,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									recommended?: boolean | undefined;
 									description?: string | undefined;
 								}[];
+								lookedAt?: {
+									kind: "entity" | "automation" | "playbook" | "document" | "view";
+									id: string;
+								}[] | undefined;
 								allowOther?: boolean | undefined;
 							} | {
 								mode: "form";
@@ -24148,8 +24260,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									title?: string | undefined;
 									note?: string | undefined;
 								};
+								lookedAt?: {
+									kind: "entity" | "automation" | "playbook" | "document" | "view";
+									id: string;
+								}[] | undefined;
 							} | {
 								mode: "act";
+								lookedAt?: {
+									kind: "entity" | "automation" | "playbook" | "document" | "view";
+									id: string;
+								}[] | undefined;
 								url?: string | undefined;
 								steps?: string[] | undefined;
 							} | {
@@ -24164,6 +24284,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "secret";
 									name: string;
 								};
+								lookedAt?: {
+									kind: "entity" | "automation" | "playbook" | "document" | "view";
+									id: string;
+								}[] | undefined;
 							} | null | undefined;
 						}[] | undefined;
 						stages?: {
@@ -24185,6 +24309,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								icon?: string | undefined;
 								ask?: {
 									mode: "confirm";
+									lookedAt?: {
+										kind: "entity" | "automation" | "playbook" | "document" | "view";
+										id: string;
+									}[] | undefined;
 									prompt?: string | undefined;
 								} | {
 									mode: "choose";
@@ -24195,6 +24323,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										recommended?: boolean | undefined;
 										description?: string | undefined;
 									}[];
+									lookedAt?: {
+										kind: "entity" | "automation" | "playbook" | "document" | "view";
+										id: string;
+									}[] | undefined;
 									allowOther?: boolean | undefined;
 								} | {
 									mode: "form";
@@ -24215,8 +24347,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										title?: string | undefined;
 										note?: string | undefined;
 									};
+									lookedAt?: {
+										kind: "entity" | "automation" | "playbook" | "document" | "view";
+										id: string;
+									}[] | undefined;
 								} | {
 									mode: "act";
+									lookedAt?: {
+										kind: "entity" | "automation" | "playbook" | "document" | "view";
+										id: string;
+									}[] | undefined;
 									url?: string | undefined;
 									steps?: string[] | undefined;
 								} | {
@@ -24231,6 +24371,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "secret";
 										name: string;
 									};
+									lookedAt?: {
+										kind: "entity" | "automation" | "playbook" | "document" | "view";
+										id: string;
+									}[] | undefined;
 								} | null | undefined;
 							}[] | undefined;
 							suggestedTasks?: string[] | undefined;
@@ -28692,6 +28836,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetProfile: string | null;
 				};
 			};
+			meta: object;
+		}>;
+		nextRungs: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				proposalIds: string[];
+			};
+			output: {
+				rungs: NextRungProjection[];
+			};
+			meta: object;
+		}>;
+		proposeNextRung: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				itemRef: {
+					kind: "proposal";
+					id: string;
+				};
+			};
+			output: FileNextRungResult;
 			meta: object;
 		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
@@ -33696,6 +33859,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					answerPickedUpAt?: string | undefined;
 					ask?: {
 						mode: "confirm";
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						prompt?: string | undefined;
 					} | {
 						mode: "choose";
@@ -33706,6 +33873,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							description?: string | undefined;
 						}[];
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						allowOther?: boolean | undefined;
 					} | {
 						mode: "form";
@@ -33726,8 +33897,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							title?: string | undefined;
 							note?: string | undefined;
 						};
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 					} | {
 						mode: "act";
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						url?: string | undefined;
 						steps?: string[] | undefined;
 					} | {
@@ -33742,6 +33921,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 					} | null | undefined;
 				}[] | undefined;
 				channelId?: string | undefined;
@@ -33906,6 +34089,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					answerPickedUpAt?: string | undefined;
 					ask?: {
 						mode: "confirm";
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						prompt?: string | undefined;
 					} | {
 						mode: "choose";
@@ -33916,6 +34103,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							description?: string | undefined;
 						}[];
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						allowOther?: boolean | undefined;
 					} | {
 						mode: "form";
@@ -33936,8 +34127,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							title?: string | undefined;
 							note?: string | undefined;
 						};
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 					} | {
 						mode: "act";
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						url?: string | undefined;
 						steps?: string[] | undefined;
 					} | {
@@ -33952,6 +34151,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 					} | null | undefined;
 				}[] | undefined;
 				currentStage?: string | undefined;
@@ -33990,6 +34193,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						icon?: string | undefined;
 						ask?: {
 							mode: "confirm";
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							prompt?: string | undefined;
 						} | {
 							mode: "choose";
@@ -34000,6 +34207,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								description?: string | undefined;
 							}[];
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							allowOther?: boolean | undefined;
 						} | {
 							mode: "form";
@@ -34020,8 +34231,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								title?: string | undefined;
 								note?: string | undefined;
 							};
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 						} | {
 							mode: "act";
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							url?: string | undefined;
 							steps?: string[] | undefined;
 						} | {
@@ -34036,6 +34255,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 						} | null | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
@@ -34209,6 +34432,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null | undefined;
 				ask?: {
 					mode: "confirm";
+					lookedAt?: {
+						kind: "entity" | "automation" | "playbook" | "document" | "view";
+						id: string;
+					}[] | undefined;
 					prompt?: string | undefined;
 				} | {
 					mode: "choose";
@@ -34219,6 +34446,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						recommended?: boolean | undefined;
 						description?: string | undefined;
 					}[];
+					lookedAt?: {
+						kind: "entity" | "automation" | "playbook" | "document" | "view";
+						id: string;
+					}[] | undefined;
 					allowOther?: boolean | undefined;
 				} | {
 					mode: "form";
@@ -34239,8 +34470,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title?: string | undefined;
 						note?: string | undefined;
 					};
+					lookedAt?: {
+						kind: "entity" | "automation" | "playbook" | "document" | "view";
+						id: string;
+					}[] | undefined;
 				} | {
 					mode: "act";
+					lookedAt?: {
+						kind: "entity" | "automation" | "playbook" | "document" | "view";
+						id: string;
+					}[] | undefined;
 					url?: string | undefined;
 					steps?: string[] | undefined;
 				} | {
@@ -34255,6 +34494,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "secret";
 						name: string;
 					};
+					lookedAt?: {
+						kind: "entity" | "automation" | "playbook" | "document" | "view";
+						id: string;
+					}[] | undefined;
 				} | null | undefined;
 			};
 			output: {
@@ -34837,6 +35080,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: unknown;
 					ask?: {
 						mode: "confirm";
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						prompt?: string | undefined;
 					} | {
 						mode: "choose";
@@ -34847,6 +35094,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							description?: string | undefined;
 						}[];
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						allowOther?: boolean | undefined;
 					} | {
 						mode: "form";
@@ -34867,8 +35118,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							title?: string | undefined;
 							note?: string | undefined;
 						};
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 					} | {
 						mode: "act";
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						url?: string | undefined;
 						steps?: string[] | undefined;
 					} | {
@@ -34883,6 +35142,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 					} | null | undefined;
 				}[] | undefined;
 				stages?: {
@@ -34904,6 +35167,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						icon?: string | undefined;
 						ask?: {
 							mode: "confirm";
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							prompt?: string | undefined;
 						} | {
 							mode: "choose";
@@ -34914,6 +35181,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								description?: string | undefined;
 							}[];
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							allowOther?: boolean | undefined;
 						} | {
 							mode: "form";
@@ -34934,8 +35205,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								title?: string | undefined;
 								note?: string | undefined;
 							};
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 						} | {
 							mode: "act";
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							url?: string | undefined;
 							steps?: string[] | undefined;
 						} | {
@@ -34950,6 +35229,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 						} | null | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
@@ -35053,6 +35336,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: unknown;
 					ask?: {
 						mode: "confirm";
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						prompt?: string | undefined;
 					} | {
 						mode: "choose";
@@ -35063,6 +35350,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							description?: string | undefined;
 						}[];
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						allowOther?: boolean | undefined;
 					} | {
 						mode: "form";
@@ -35083,8 +35374,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							title?: string | undefined;
 							note?: string | undefined;
 						};
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 					} | {
 						mode: "act";
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 						url?: string | undefined;
 						steps?: string[] | undefined;
 					} | {
@@ -35099,6 +35398,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						lookedAt?: {
+							kind: "entity" | "automation" | "playbook" | "document" | "view";
+							id: string;
+						}[] | undefined;
 					} | null | undefined;
 				}[] | undefined;
 				stages?: {
@@ -35120,6 +35423,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						icon?: string | undefined;
 						ask?: {
 							mode: "confirm";
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							prompt?: string | undefined;
 						} | {
 							mode: "choose";
@@ -35130,6 +35437,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								description?: string | undefined;
 							}[];
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							allowOther?: boolean | undefined;
 						} | {
 							mode: "form";
@@ -35150,8 +35461,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								title?: string | undefined;
 								note?: string | undefined;
 							};
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 						} | {
 							mode: "act";
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 							url?: string | undefined;
 							steps?: string[] | undefined;
 						} | {
@@ -35166,6 +35485,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							lookedAt?: {
+								kind: "entity" | "automation" | "playbook" | "document" | "view";
+								id: string;
+							}[] | undefined;
 						} | null | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
