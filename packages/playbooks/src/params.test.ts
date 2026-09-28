@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   readPlaybookParams,
+  findDroppedParamEntries,
   validatePlaybookParams,
   describeMissingParams,
 } from "./params.js";
@@ -381,5 +382,32 @@ describe("describeMissingParams", () => {
         p({ name: "topic" }),
       ])
     ).toBe("Who is this for, topic");
+  });
+});
+
+describe("findDroppedParamEntries — what a write door must refuse", () => {
+  it("names each entry the reader would drop, with the reason", () => {
+    const raw = [
+      { key: "task", type: "text" },
+      { name: "area" },
+      { name: " area " },
+      "task",
+      { name: "" },
+    ];
+    expect(findDroppedParamEntries(raw)).toEqual([
+      { index: 0, reason: "missing_name", key: "task" },
+      { index: 2, reason: "duplicate_name" },
+      { index: 3, reason: "not_an_object" },
+      { index: 4, reason: "missing_name" },
+    ]);
+    // Agreement with the reader: exactly the survivors are read.
+    expect(readPlaybookParams(raw).map((p) => p.name)).toEqual(["area"]);
+  });
+
+  it("a clean declaration drops nothing", () => {
+    expect(
+      findDroppedParamEntries([{ name: "task", type: "text", required: true }])
+    ).toEqual([]);
+    expect(findDroppedParamEntries(undefined)).toEqual([]);
   });
 });

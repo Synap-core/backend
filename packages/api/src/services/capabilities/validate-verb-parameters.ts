@@ -36,6 +36,20 @@
  * than reality in at least one live case, so rejecting on `unknown` alone would
  * refuse calls that work today. It rides in the repair payload so the caller
  * can still see and fix it.
+ *
+ * …EXCEPT WHEN THE HANDLER ITSELF REFUSES THEM. A `.strict()` builtin schema
+ * (`tool.request`, `playbook.update`, `automation.update`, …) throws on an
+ * undeclared key in the handler's own `parse()` — so the extra key is not
+ * harmless, it is a certain failure AFTER approval. Measured 2026-09-28:
+ * `playbook.update {playbookId, params:[…]}` (no `params` field then) filed
+ * proposal 612cb32d, the founder approved it, and it died `approval_failed`
+ * "internal error". Zod reports that as ONE `unrecognized_keys` issue on the
+ * object itself (empty path), which the per-field loop below skipped, so the
+ * check answered "unvalidated" and the proposal went through. That issue is
+ * now `unrecognized` and makes the call `invalid`. Only a schema that REFUSES
+ * extra keys can produce it, so the rule above still holds for every other
+ * verb. Likewise a schema's own refinement message (`custom` issue) rides in
+ * `hints` — it is usually the one sentence that says how to fix the call.
  */
 
 import { z } from "zod";
@@ -49,6 +63,13 @@ export interface ParameterRepair {
   wrongType: Record<string, { expected: string; received: string }>;
   /** Passed but not declared. Informational — never a rejection on its own. */
   unknown: string[];
+  /**
+   * Passed, not declared, and the verb's schema REFUSES undeclared keys
+   * (`.strict()`) — the handler would throw on approval. A rejection.
+   */
+  unrecognized?: string[];
+  /** The schema's own fix-it sentences (Zod `custom` issues), verbatim. */
+  hints?: string[];
 }
 
 export type VerbParameterCheck =
@@ -192,6 +213,20 @@ function checkZodObject(
   const repair: ParameterRepair = { missing: [], wrongType: {}, unknown };
   for (const issue of parsed.error.issues) {
     const path = issue.path.map(String).join(".");
+    if (issue.code === "custom" && issue.message) {
+      (repair.hints ??= []).push(issue.message);
+    }
+    if (issue.code === "unrecognized_keys") {
+      // A strict schema refusing extra keys (header). The keys are relative to
+      // the issue's own path, so prefix it for a nested strict object.
+      for (const key of issue.keys) {
+        const full = path ? `${path}.${key}` : key;
+        if (!(repair.unrecognized ??= []).includes(full)) {
+          repair.unrecognized.push(full);
+        }
+      }
+      continue;
+    }
     if (!path) continue; // a whole-object issue names no field to repair
     // MISSING is derived from the INPUT, not from the issue text. Zod 4's
     // `invalid_type` issue carries `expected` but no `received` (verified
@@ -226,7 +261,11 @@ function checkZodObject(
   }
   // Zod rejected the call, but every issue landed on the object itself (no
   // field path) — we cannot say WHAT to repair, so we do not claim to.
-  if (!repair.missing.length && !Object.keys(repair.wrongType).length) {
+  if (
+    !repair.missing.length &&
+    !Object.keys(repair.wrongType).length &&
+    !repair.unrecognized?.length
+  ) {
     return { status: "unvalidated", reason: "no_declared_schema" };
   }
   return { status: "invalid", repair };
@@ -283,11 +322,20 @@ export function describeParameterRepair(
   for (const [field, t] of Object.entries(repair.wrongType)) {
     parts.push(`${field} should be ${t.expected}, got ${t.received}`);
   }
-  if (repair.unknown.length) {
+  if (repair.unrecognized?.length) {
     parts.push(
-      `unknown argument${repair.unknown.length > 1 ? "s" : ""} ${repair.unknown.join(", ")}`
+      `${repair.unrecognized.join(", ")} ${repair.unrecognized.length > 1 ? "are" : "is"} not accepted by this verb`
     );
   }
+  const unknownOnly = repair.unknown.filter(
+    (k) => !repair.unrecognized?.includes(k)
+  );
+  if (unknownOnly.length) {
+    parts.push(
+      `unknown argument${unknownOnly.length > 1 ? "s" : ""} ${unknownOnly.join(", ")}`
+    );
+  }
+  for (const hint of repair.hints ?? []) parts.push(hint);
   return (
     `${verbLabel} was called with arguments that do not match its declared ` +
     `schema (${parts.join("; ")}). Nothing was proposed or run — fix the ` +

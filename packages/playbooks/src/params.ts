@@ -94,14 +94,61 @@ const PARAM_TYPES: readonly PlaybookParamType[] = [
  * behaving as it did instead of silently vanishing from validation.
  */
 export function readPlaybookParams(raw: unknown): PlaybookParam[] {
-  if (!Array.isArray(raw)) return [];
+  return readParamsAndDrops(raw).params;
+}
+
+/** Why {@link readPlaybookParams} drops a declared entry. */
+export type DroppedParamReason =
+  "not_an_object" | "missing_name" | "duplicate_name";
+
+export interface DroppedParamEntry {
+  /** Position in the declared array. */
+  index: number;
+  reason: DroppedParamReason;
+  /** A `key` the entry carried instead of `name` — the usual author slip. */
+  key?: string;
+}
+
+/**
+ * The entries {@link readPlaybookParams} would DROP, and why — for a WRITE
+ * door. The reader stays tolerant (a stored bag must not break every run); a
+ * door that is about to STORE a bag must refuse an entry it knows the reader
+ * will silently discard, or the caller is told "saved" about a param no run
+ * will ever see. Same loop as the reader, so the two cannot disagree.
+ */
+export function findDroppedParamEntries(raw: unknown): DroppedParamEntry[] {
+  return readParamsAndDrops(raw).dropped;
+}
+
+function readParamsAndDrops(raw: unknown): {
+  params: PlaybookParam[];
+  dropped: DroppedParamEntry[];
+} {
   const out: PlaybookParam[] = [];
+  const dropped: DroppedParamEntry[] = [];
+  if (!Array.isArray(raw)) return { params: out, dropped };
   const seen = new Set<string>();
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object") continue;
+  for (const [index, entry] of raw.entries()) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      dropped.push({ index, reason: "not_an_object" });
+      continue;
+    }
     const e = entry as Record<string, unknown>;
     const name = typeof e.name === "string" ? e.name.trim() : "";
-    if (!name || seen.has(name)) continue;
+    if (!name) {
+      dropped.push({
+        index,
+        reason: "missing_name",
+        ...(typeof e.key === "string" && e.key.trim()
+          ? { key: e.key.trim() }
+          : {}),
+      });
+      continue;
+    }
+    if (seen.has(name)) {
+      dropped.push({ index, reason: "duplicate_name" });
+      continue;
+    }
     const type = (PARAM_TYPES as readonly unknown[]).includes(e.type)
       ? (e.type as PlaybookParamType)
       : "text";
@@ -125,7 +172,7 @@ export function readPlaybookParams(raw: unknown): PlaybookParam[] {
       ...(typeof e.required === "boolean" ? { required: e.required } : {}),
     });
   }
-  return out;
+  return { params: out, dropped };
 }
 
 /**

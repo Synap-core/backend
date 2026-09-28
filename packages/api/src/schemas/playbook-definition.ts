@@ -27,6 +27,7 @@
 
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
+import { findDroppedParamEntries } from "@synap/playbooks";
 import { playbookStagesSchema } from "./playbook-stage.js";
 import { sessionCriteriaSchema } from "./session-criteria.js";
 import { playbookScheduleInputSchema } from "./playbook-schedule.js";
@@ -67,11 +68,39 @@ export const playbookExpectedOutputSchema = z.looseObject({
   ask: AskSchema.nullable().optional(),
 });
 
+/**
+ * The declared params, as a WRITE door takes them. Each entry stays a loose
+ * record (its type/label/options/default are read tolerantly by
+ * `readPlaybookParams`), but an entry that reader would DROP is refused here:
+ * no `name` (the usual slip is `key`), a duplicate name, or a non-object.
+ * Accepting it would tell the caller "saved" about a param no run will ever
+ * see. The rule is the reader's own (`findDroppedParamEntries`), never a copy.
+ * Issues land on `[index, "name"]` so the propose-time check names the field.
+ */
+export const playbookParamsInputSchema = z
+  .array(jsonRecord)
+  .superRefine((entries, ctx) => {
+    for (const d of findDroppedParamEntries(entries)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [d.index, "name"],
+        message:
+          d.reason === "duplicate_name"
+            ? `params[${d.index}].name repeats an earlier param's name`
+            : d.reason === "not_an_object"
+              ? `params[${d.index}] must be an object with a name`
+              : d.key
+                ? `params[${d.index}] needs "name" (got "key": "${d.key}") — declare it as { "name": "${d.key}", "type": "text" }`
+                : `params[${d.index}] needs a "name"`,
+      });
+    }
+  });
+
 export const playbookDefinitionSchema = z.object({
   name: z.string().min(1).max(500),
   description: z.string().optional(),
   goalTemplate: z.string().min(1).max(5000),
-  params: z.array(jsonRecord).optional(),
+  params: playbookParamsInputSchema.optional(),
   inputStrategy: jsonRecord.optional(),
   channelSpec: jsonRecord.optional(),
   expectedOutputs: z.array(playbookExpectedOutputSchema).optional(),

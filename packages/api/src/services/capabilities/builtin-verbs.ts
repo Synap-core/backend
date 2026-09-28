@@ -20,6 +20,7 @@
  */
 
 import { z } from "zod";
+import { playbookParamsInputSchema } from "../../schemas/playbook-definition.js";
 import { TRPCError } from "@trpc/server";
 // Static, NOT part of the dynamic `submit-capture-graph` import below: it is a
 // pure helper, and tests that `vi.mock` that module would otherwise stub the
@@ -3156,6 +3157,15 @@ const playbookUpdateParams = z
     name: z.string().min(1).max(500).optional(),
     description: z.string().max(5000).optional(),
     goalTemplate: z.string().min(1).max(5000).optional(),
+    /**
+     * REPLACES the declared param list. Each entry is `{ name, type?, label?,
+     * required?, default?, options? }` — `name`, not `key`. The ONE write
+     * schema (`playbookParamsInputSchema`, shared with `playbooks.create` /
+     * `.update`), so an entry the run-time reader would drop is refused here —
+     * at propose time, not after approval. Pair it with a `goalTemplate` that
+     * reads each as `{name}` in the same call.
+     */
+    params: playbookParamsInputSchema.optional(),
     /** `{ profileSlug }` — validated against the live profiles by the door. */
     subjectProfile: z.record(z.string(), z.unknown()).optional(),
     /** REPLACES the stage list. Shape validated by `playbookStagesSchema`. */
@@ -3198,6 +3208,7 @@ const playbookUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
     ...(input.goalTemplate !== undefined
       ? { goalTemplate: input.goalTemplate }
       : {}),
+    ...(input.params !== undefined ? { params: input.params } : {}),
     ...(input.subjectProfile !== undefined
       ? { subjectProfile: input.subjectProfile }
       : {}),

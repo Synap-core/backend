@@ -283,3 +283,46 @@ describe("JSON-Schema dialect — declines to judge, never false-rejects", () =>
     ).toMatchObject({ status: "invalid" });
   });
 });
+
+describe("a STRICT builtin schema refuses an undeclared key (the handler would throw on approval)", () => {
+  const PB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  it("playbook.update (strict) + an undeclared key → invalid, `unrecognized` names it", () => {
+    const check = checkVerbParameters(
+      { kind: "builtin", name: "playbook.update" },
+      { playbookId: PB, owner: "me" }
+    );
+    expect(check.status).toBe("invalid");
+    if (check.status !== "invalid") return;
+    expect(check.repair.unrecognized).toEqual(["owner"]);
+    expect(describeParameterRepair("playbook.update", check.repair)).toContain(
+      "owner is not accepted by this verb"
+    );
+  });
+
+  it("a NON-strict builtin still only REPORTS an extra key (the header's rule holds)", () => {
+    const schema = BUILTIN_VERB_PARAM_SCHEMAS["entity.delete"] as unknown as {
+      _zod: { def: { catchall?: { _zod?: { def?: { type?: string } } } } };
+    };
+    // Non-vacuity: entity.delete really is non-strict (no `never` catchall).
+    expect(schema._zod.def.catchall?._zod?.def?.type).not.toBe("never");
+    const check = checkVerbParameters(
+      { kind: "builtin", name: "entity.delete" },
+      { entityId: PB, extra: 1 }
+    );
+    expect(check).toEqual({ status: "ok", unknown: ["extra"] });
+  });
+
+  it("a schema refinement's own message rides in `hints`", () => {
+    const check = checkVerbParameters(
+      { kind: "builtin", name: "playbook.update" },
+      { playbookId: PB, params: [{ key: "task" }] }
+    );
+    expect(check.status).toBe("invalid");
+    if (check.status !== "invalid") return;
+    expect(check.repair.missing).toContain("params.0.name");
+    expect(check.repair.hints?.[0]).toContain(
+      'needs "name" (got "key": "task")'
+    );
+  });
+});

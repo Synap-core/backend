@@ -73,6 +73,7 @@ import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
 import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
 import {
   playbookDefinitionSchema,
+  playbookParamsInputSchema,
   playbookExecutorSchema,
   playbookStatusSchema,
   playbookScopeSchema,
@@ -323,7 +324,8 @@ export const updateInputSchema = z.object({
   name: z.string().min(1).max(500).optional(),
   description: z.string().optional(),
   goalTemplate: z.string().min(1).max(5000).optional(),
-  params: z.array(jsonRecord).optional(),
+  /** REPLACES the param list — see `playbookParamsInputSchema`. */
+  params: playbookParamsInputSchema.optional(),
   inputStrategy: jsonRecord.optional(),
   channelSpec: jsonRecord.optional(),
   /** See `playbookExpectedOutputSchema` — `ask` is parsed, the rest loose. */

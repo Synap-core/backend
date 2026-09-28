@@ -32,6 +32,12 @@
  *   4. A message REGEX, last: `requires parameter "X"` is thrown as a plain
  *      `Error` by `create-from-definition`, and that one shape is by far the
  *      most common repairable failure on the pod.
+ *   5. A DUCK-TYPED Zod error (`name: "ZodError"` + `issues[]`) — a builtin
+ *      verb handler's own `.parse()` throwing on approval. Measured
+ *      2026-09-28: proposal 612cb32d (`playbook.update` with an undeclared
+ *      `params` key) failed as `unknown` / "an internal error occurred". It is
+ *      `validation`, and the sentence names the offending FIELDS (paths and
+ *      rejected key names, clamped to the identifier charset — never values).
  *
  * Unrecognised ⇒ `"unknown"`. Never a guess dressed as a classification.
  */
@@ -155,6 +161,46 @@ function messageOf(err: unknown): string {
 }
 
 /** Every `requires parameter "X"` name in the message, deduped and bounded. */
+/** Zod's issue list, recognised by SHAPE (it may have crossed a hop). */
+function zodIssuesOf(
+  err: unknown
+): Array<{ path?: unknown; keys?: unknown }> | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as { name?: unknown; issues?: unknown };
+  return e.name === "ZodError" && Array.isArray(e.issues)
+    ? (e.issues as Array<{ path?: unknown; keys?: unknown }>)
+    : undefined;
+}
+
+/**
+ * The FIELD names a Zod error is about: each issue's path (`params.0.name`)
+ * and, for a strict object's `unrecognized_keys`, the rejected keys. Names
+ * only — each clamped to {@link SAFE_PARAM_NAME}, never a value.
+ */
+export function zodFieldNames(err: unknown): string[] {
+  const out: string[] = [];
+  const push = (name: string) => {
+    if (
+      SAFE_PARAM_NAME.test(name) &&
+      !out.includes(name) &&
+      out.length < MAX_PARSED_MISSING_FIELDS
+    ) {
+      out.push(name);
+    }
+  };
+  for (const issue of zodIssuesOf(err) ?? []) {
+    const path = Array.isArray(issue.path) ? issue.path.map(String) : [];
+    if (Array.isArray(issue.keys)) {
+      for (const k of issue.keys) {
+        if (typeof k === "string") push([...path, k].join("."));
+      }
+    } else if (path.length > 0) {
+      push(path.join("."));
+    }
+  }
+  return out;
+}
+
 export function missingFieldsFromMessage(message: string): string[] {
   const out: string[] = [];
   const push = (raw: string, wasQuoted: boolean) => {
@@ -262,6 +308,10 @@ export function classifyThrownFailure(err: unknown): ProposalFailureMeta {
   // 4. regex fallback — only consulted when nothing above classified it
   const regexMissing = missingFieldsFromMessage(message);
 
+  // 5. a handler's own Zod parse
+  const zodClass: FailureErrorClass | undefined =
+    zodIssuesOf(err) !== undefined ? "validation" : undefined;
+
   // Precedence: an explicit declaration (1, 2) beats an inferred one; the
   // REGEX outranks the tRPC code because `missing_field` is strictly sharper
   // than the `validation` a BAD_REQUEST would otherwise yield, and it carries
@@ -271,6 +321,7 @@ export function classifyThrownFailure(err: unknown): ProposalFailureMeta {
     duckClass ??
     (regexMissing.length > 0 ? "missing_field" : undefined) ??
     trpcClass ??
+    zodClass ??
     "unknown";
 
   const missingFields =
@@ -350,8 +401,15 @@ function rawFailureSentence(err: unknown, meta: ProposalFailureMeta): string {
       const more = fields.length > 5 ? ` and ${fields.length - 5} more` : "";
       return `Couldn't apply — missing ${named}${more}.`;
     }
-    case "validation":
-      return "Couldn't apply — some of the details aren't valid.";
+    case "validation": {
+      const fields = zodFieldNames(err);
+      if (fields.length === 0) {
+        return "Couldn't apply — some of the details aren't valid.";
+      }
+      const named = fields.slice(0, 5).join(", ");
+      const more = fields.length > 5 ? ` and ${fields.length - 5} more` : "";
+      return `Couldn't apply — these details aren't valid: ${named}${more}.`;
+    }
     case "conflict":
       return "Couldn't apply — it conflicts with something that changed.";
     case "auth":

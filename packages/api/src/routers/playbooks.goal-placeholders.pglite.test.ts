@@ -64,6 +64,7 @@ vi.mock("@synap/events", () => ({ emitSideEffects: async () => {} }));
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { playbooksRouter } from "./playbooks.js";
+import { BUILTIN_VERBS } from "../services/capabilities/builtin-verbs.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -239,5 +240,53 @@ describe("playbooks.update refuses only what the patch introduces", () => {
       caller().update({ id: STORED, params: [] } as never)
     );
     expect(msg).toContain("{area}");
+  });
+});
+
+/**
+ * The repair the founder asked for on AI Dev Session — add the `task` param
+ * AND respell `{{task}}` as `{task}` — in ONE call, through the router AND
+ * through the `playbook.update` verb's handler (what an approved capability
+ * run replays). Before 2026-09-28 the verb had no `params` field at all.
+ */
+describe("the one-call repair: declare params + rewrite the goal", () => {
+  const FIXED = 'Run the dev task "{task}" as a staged work session';
+  const PARAMS = [{ name: "task", type: "text", required: true }];
+
+  async function stored() {
+    const { rows } = await q(
+      `select goal_template, params from playbooks where id = $1`,
+      [STORED]
+    );
+    return rows[0] as { goal_template: string; params: unknown };
+  }
+
+  it("playbooks.update accepts it and stores both", async () => {
+    const r = (await caller().update({
+      id: STORED,
+      goalTemplate: FIXED,
+      params: PARAMS,
+    } as never)) as { status: string };
+    expect(r.status).toBe("updated");
+    expect(await stored()).toEqual({ goal_template: FIXED, params: PARAMS });
+  });
+
+  it("the playbook.update verb handler passes params through", async () => {
+    await BUILTIN_VERBS["playbook.update"]!(
+      { playbookId: STORED, goalTemplate: FIXED, params: PARAMS },
+      { userId: OWNER, workspaceId: WS } as never
+    );
+    expect(await stored()).toEqual({ goal_template: FIXED, params: PARAMS });
+  });
+
+  it("a params entry keyed `key` is refused by the router, naming the fix", async () => {
+    const err = await caller()
+      .update({ id: STORED, params: [{ key: "task" }] } as never)
+      .then(
+        () => null,
+        (e: { code?: string; message?: string }) => e
+      );
+    expect(err?.code).toBe("BAD_REQUEST");
+    expect(err?.message).toContain('needs \\"name\\"');
   });
 });

@@ -371,7 +371,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "REVISE an existing playbook via the governed playbooks.update path (checkPermissionOrPropose). Patch semantics: omit what you are not changing; stages/criteria REPLACE the list when sent. `subjectProfile` ({ profileSlug }) is validated against the live profiles and a dangling slug is REFUSED — this is the door that repairs a playbook pointing at a kind that no longer exists. Returns the updated playbook or { status: 'proposed', proposalId }.",
+        "REVISE an existing playbook via the governed playbooks.update path (checkPermissionOrPropose). Patch semantics: omit what you are not changing; stages/criteria/params REPLACE the list when sent. `params` entries are { name, type?, label?, required?, default?, options? } — `name`, not `key`; reference each in goalTemplate as {name} (a {{name}} or undeclared {name} is REFUSED). `subjectProfile` ({ profileSlug }) is validated against the live profiles and a dangling slug is REFUSED — this is the door that repairs a playbook pointing at a kind that no longer exists. Returns the updated playbook or { status: 'proposed', proposalId }.",
       parameters: {
         type: "object",
         required: ["playbookId"],
@@ -380,6 +380,24 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           name: { type: "string" },
           description: { type: "string" },
           goalTemplate: { type: "string" },
+          params: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["name"],
+              properties: {
+                name: { type: "string" },
+                type: {
+                  type: "string",
+                  enum: ["text", "number", "entity", "choice", "boolean"],
+                },
+                label: { type: "string" },
+                required: { type: "boolean" },
+                options: { type: "array", items: { type: "string" } },
+                default: {},
+              },
+            },
+          },
           subjectProfile: { type: "object" },
           stages: { type: "array", items: { type: "object" } },
           criteria: { type: "array", items: { type: "object" } },
