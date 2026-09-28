@@ -201,6 +201,10 @@
       "types": "./dist/landed/index.d.ts",
       "import": "./dist/landed/index.js"
     },
+    "./activity": {
+      "types": "./dist/activity/index.d.ts",
+      "import": "./dist/activity/index.js"
+    },
     "./space-brief": {
       "types": "./dist/space-brief/index.d.ts",
       "import": "./dist/space-brief/index.js"
