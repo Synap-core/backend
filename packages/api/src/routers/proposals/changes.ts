@@ -78,6 +78,34 @@ export function buildProposalChanges(
     measureDrift?: boolean;
   } = {}
 ): ProposalReviewChange[] {
+  // ── Space brief edit (`workspace/update_brief`) ─────────────────────────
+  // The door (`services/space-brief-door.ts`) records the per-field diff it
+  // computed from the stored brief, so the card shows each brief field that
+  // changes with its before → after — not the opaque patch/brief bags the
+  // generic fallback would emit. Labels go through the vocabulary door.
+  if (data.operation === "update_brief" && Array.isArray(data.changes)) {
+    return (data.changes as Array<Record<string, unknown>>).flatMap((c) => {
+      if (typeof c?.field !== "string") return [];
+      const before = c.before;
+      const after = c.after;
+      return [
+        {
+          path: `onboarding.${c.field}`,
+          label: humanizeToken(c.field),
+          operation:
+            before === undefined
+              ? ("create" as const)
+              : after === undefined
+                ? ("delete" as const)
+                : ("update" as const),
+          before,
+          after,
+          valueType: valueTypeOf(after ?? before),
+        },
+      ];
+    });
+  }
+
   const changes: ProposalReviewChange[] = [];
   const operation =
     changeType === "delete"

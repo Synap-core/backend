@@ -75,8 +75,8 @@ const WRITER = /\.(?:update|insert)\(\s*(?:schema\.)?workspaces\s*\)/g;
  */
 const CLASSIFIED: Record<string, { sites: number; why: string }> = {
   "packages/database/src/repositories/workspace-repository.ts": {
-    sites: 5,
-    why: "THE door: create/update/mergeSettings strip the key (update carries the stored value over); setExposurePolicy is the one writer; setPrimarySurface is a jsonb_set on layout.",
+    sites: 6,
+    why: "THE door: create/update/mergeSettings strip the key (update carries the stored value over); setExposurePolicy is the one writer; setPrimarySurface is a jsonb_set on layout; replaceSpaceBrief is `settings || {onboarding, onboardingSeed}` (fixed code-literal keys, never the policy).",
   },
   // Key-targeted SQL: `settings || '{<fixed key>: …}'` or jsonb_set on a
   // fixed path — the key written is a code literal, never the policy.
@@ -201,7 +201,7 @@ describe("settings.exposurePolicy — one writer", () => {
     expect([..."db.update(workspaces)".matchAll(WRITER)]).toHaveLength(1);
     expect(
       found.get("packages/database/src/repositories/workspace-repository.ts")
-    ).toBe(5);
+    ).toBe(6);
   });
 
   it("every workspaces-row writer is classified, with its exact site count", () => {

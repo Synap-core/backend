@@ -557,6 +557,53 @@ export function registerWorkspaceExecutors(): void {
         return { success: true, primaryId: inner.id };
       }
 
+      // The NARROW brief door (`services/space-brief-door.ts`). Replays the
+      // PATCH against the brief as it is NOW (compare-and-set), never the
+      // `brief.after` snapshot the reviewer saw — a field someone changed
+      // since the proposal was filed and the patch does not name survives.
+      if (inner.operation === "update_brief") {
+        const membership = await getWorkspaceMembership(
+          db,
+          targetWorkspaceId,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const { spaceBriefPatchSchema, applySpaceBriefPatchNow } =
+          await import("../../../services/space-brief-door.js");
+        const patch = spaceBriefPatchSchema.safeParse(inner.patch);
+        if (!patch.success) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Space brief proposal carries an invalid patch",
+          });
+        }
+        await applySpaceBriefPatchNow(targetWorkspaceId, patch.data, userId);
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId: targetWorkspaceId };
+      }
+
       if (inner.operation === "set_primary_surface") {
         const parsedSurface = workspaceRuntimePrimarySurfaceSchema
           .nullable()

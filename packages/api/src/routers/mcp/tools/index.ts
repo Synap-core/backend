@@ -3546,6 +3546,34 @@ export const tools = {
         },
       },
       {
+        name: "synap_update_space_brief",
+        annotations: {
+          title: "Edit space brief",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Change a Space's brief (how agents work there: purpose, persona, anchors, what to collect). Only the fields you name change; null removes one. Governed: an agent always proposes, with a before/after the owner reviews — `proposed` is success.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: { type: "string", description: "Workspace UUID" },
+            brief: {
+              type: "object",
+              description:
+                "Fields to change: purpose, framing (persona), goal, doneWhen (strings); openingQuestions (string[]); expertise {starters,blindSpots,bar}; collect [{profileSlug,what,cardinality?,keyFields?,min?}]; anchors [{profileSlug,role:root|context,entityId?,limit?}]; fetch [{profileSlug?,query?,note?}]. null removes a field.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why, in the person's words — shown to the reviewer. One line.",
+            },
+          },
+          required: ["workspaceId", "brief"],
+        },
+      },
+      {
         name: "synap_move_entities",
         annotations: {
           title: "Move entities to space",

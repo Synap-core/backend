@@ -27,6 +27,7 @@ import {
   archivedUsesTargetRemovable,
 } from "../../../utils/project-workspace.js";
 import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
+import { updateSpaceBriefGoverned } from "../../../services/space-brief-door.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserMemberWorkspaceIds } from "../../hub-protocol/rest/_shared.js";
 import { checkLinkEndpointsVisible } from "../../hub-protocol/rest/link-endpoint-visibility.js";
@@ -813,6 +814,28 @@ export const workspaceHandlers: McpHandlerMap = {
         workspaceId,
         name,
         description,
+      })
+    );
+  },
+  synap_update_space_brief: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const workspaceId = args.workspaceId;
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      return ok({ error: "workspaceId is required" });
+    }
+    if (!args.brief || typeof args.brief !== "object") {
+      return ok({ error: "brief is required: the fields to change" });
+    }
+    return ok(
+      await updateSpaceBriefGoverned({
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? null,
+        workspaceId,
+        patch: args.brief,
+        reasoning: readReasoning(args),
       })
     );
   },

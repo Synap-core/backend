@@ -107,6 +107,7 @@ export const TOOL_GROUPS = {
     "synap_list_workspaces",
     "synap_create_workspace",
     "synap_update_workspace",
+    "synap_update_space_brief",
     "synap_archive_workspace",
     "synap_declare_workspace_source",
     "synap_list_projects",
