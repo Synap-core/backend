@@ -262,7 +262,9 @@ describe("resolveRunUnitState — a run's status wears the unit mark", () => {
     expect(resolveRunUnitState("failed").state).toBe("failed");
     expect(resolveRunUnitState("running").state).toBe("working");
     expect(resolveRunUnitState("completed").state).toBe("done");
-    expect(resolveRunUnitState("blocked_by_policy").state).toBe("done");
+    // A rule refused the effect: blocked on the rule — not failed, not done,
+    // not your turn.
+    expect(resolveRunUnitState("blocked_by_policy").state).toBe("blocked");
   });
 
   it("an unknown or absent status is unmeasured, never calm", () => {

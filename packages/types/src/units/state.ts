@@ -246,8 +246,9 @@ export const RUN_STATUS_WAITING_ON_YOU = "waiting_on_you";
 /**
  * A RUN's lifecycle status (`automation_runs` / `playbook_runs` / the unified
  * runs read) as a unit-state input — so a run wears the same mark a session
- * does. `waiting_on_you` is your turn (`needs_you`), never a failure; an
- * unknown or absent status is `unmeasured`, never a guess at calm.
+ * does. `waiting_on_you` is your turn (`needs_you`), never a failure;
+ * `blocked_by_policy` is `blocked` (a rule stopped it); an unknown or absent
+ * status is `unmeasured`, never a guess at calm.
  */
 export function unitStateInputOfRunStatus(
   status: string | null | undefined
@@ -261,11 +262,16 @@ export function unitStateInputOfRunStatus(
     case "pending":
     case "queued":
       return { running: true };
+    // A governance rule refused the run's effect. Not a failure (nothing
+    // broke), not done (the effect never landed), not your turn (there is no
+    // answer owed): it is BLOCKED ON A RULE — "waiting on X is not waiting on
+    // you". Settled here once; every surface reads it through this mapping.
+    case "blocked_by_policy":
+      return { blockedBy: "policy" };
     case "completed":
     case "success":
     case "cancelled":
     case "skipped":
-    case "blocked_by_policy":
       return { terminal: true };
     default:
       return { unreadable: true };
