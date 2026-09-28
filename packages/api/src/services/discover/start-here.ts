@@ -231,6 +231,9 @@ export async function buildStartHere(p: {
     topKinds,
     actions,
     learnMore: { skill: p.learnMoreSkill },
+    // ROUTING (founder, 2026-09-28): product problems go to the Synap TEAM via
+    // the CP MCP `report_to_synap` tool (synap-control-plane-api
+    // lib/agent-tickets.ts); only what THIS user must act on is a `finding`.
     // THE INSTRUCTION LIVES IN THE POD, NOT IN A PROMPT. This session produced
     // findings only because a human framed the session as dogfooding; an agent
     // doing ordinary work hits the same walls and says nothing, because nothing
@@ -238,15 +241,18 @@ export async function buildStartHere(p: {
     // instead, findings arrive only on the days someone remembers to ask —
     // which is the failure this is escaping.
     beforeYouFinish:
-      "If something in Synap itself broke, was missing, or cost you a wasted " +
-      "call — file it as a `finding` entity before you finish, with VERBATIM " +
-      "evidence (the exact error string, the exact failing input, the exact " +
-      "receipt line). Never summarise the evidence: a summary is worthless in " +
-      "three weeks, a verbatim payload is a ticket. Before filing, dedupe " +
-      "against ALL open findings — `startHere.openFindings.items` is the " +
-      "BLOCKER page only (`openTotal` is how many are open at any severity), " +
-      "so list the rest with the entity-listing tool this door exposes " +
-      '(`profileSlug: "finding"`) rather than treating those items as the ' +
-      "whole set. Findings are deduped by hand today.",
+      "Before you finish, report what got in your way — routed by WHO must " +
+      "act. (1) Synap ITSELF broke, was missing, cost you a wasted call or a " +
+      "workaround, or you have an idea for the product: that is for the Synap " +
+      "team — call `report_to_synap` on the Synap Control Plane connector " +
+      "(no connector? tell the user what to report). (2) Something about THIS " +
+      "user's data or setup — duplicates, missing grants or keys, their " +
+      "config: that is theirs — file a `finding` entity here. Either way " +
+      "quote VERBATIM evidence (the exact error string, failing input, " +
+      "receipt line): a summary is worthless in three weeks. Before filing a " +
+      "`finding`, dedupe against ALL open findings — " +
+      "`startHere.openFindings.items` is the BLOCKER page only (`openTotal` " +
+      "counts every severity), so list the rest with the entity-listing tool " +
+      'this door exposes (`profileSlug: "finding"`).',
   };
 }
