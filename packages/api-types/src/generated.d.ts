@@ -11293,6 +11293,14 @@ export type NextRungVia = "governance_rule";
  * surface says "in every space" when `reach` is `pod`.
  */
 export type NextRungReach = "space" | "pod";
+/**
+ * A card an ACTIVE rule already covers: the offer is withdrawn and this names
+ * the rule, so a surface shows "Already a rule" as a DOOR to it.
+ * `governanceRules.nextRungs` rows carry `covered: NextRungCovered | null`.
+ */
+export interface NextRungCovered {
+	ruleId: string;
+}
 /** One step up, and the config that grants it. */
 export interface NextRungOffer {
 	from: TrustRung;
@@ -11329,7 +11337,7 @@ export interface NextRungProjection {
 	 * withdrawn (`offer: null`) and this names the rule, so a surface shows
 	 * "Already a rule" as a DOOR to it. `null` when nothing covers the card.
 	 */
-	coveredByRuleId: string | null;
+	covered: NextRungCovered | null;
 }
 export type FileNextRungResult = {
 	outcome: "created";
