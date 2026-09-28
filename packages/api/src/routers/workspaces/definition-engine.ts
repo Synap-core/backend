@@ -679,6 +679,12 @@ export const definitionEngineProcedures = {
                 })
               )
               .optional(),
+            /**
+             * Template rules (package `rules[]`) → `applyTemplateRules` via the
+             * shared applier. Declared so the typed body carries them;
+             * untrusted — `readTemplateRules` is the one parser.
+             */
+            rules: z.array(z.unknown()).optional(),
           })
           .passthrough(),
         packageSlug: z.string().optional(),
@@ -861,6 +867,9 @@ export const definitionEngineProcedures = {
                     pkg.capabilities as CreateDefinitionPostWorkspaceSlice["capabilities"],
                   actionPlacements:
                     pkg.actionPlacements as CreateDefinitionPostWorkspaceSlice["actionPlacements"],
+                  // The pinned workspace-templates type predates `rules`; the
+                  // resolved body carries them (CP cache or bundle).
+                  rules: (pkg as { rules?: unknown[] }).rules,
                   // The rename the old cast erased.
                   flowAutomations:
                     pkg.automations as CreateDefinitionPostWorkspaceSlice["flowAutomations"],
@@ -1549,7 +1558,8 @@ export const definitionEngineProcedures = {
             postBody.capabilities?.length ||
             postBody.loops?.length ||
             postBody.automations?.length ||
-            postBody.actionPlacements?.length
+            postBody.actionPlacements?.length ||
+            postBody.rules?.length
           );
           // A1 parity: the reconcile-existing and compose-overlay branches
           // above both summarize `applyPackagePostWorkspace`'s per-item result
@@ -1837,6 +1847,11 @@ export const definitionEngineProcedures = {
               })
             )
             .optional(),
+          /**
+           * Template rules — without this field zod STRIPS them (this object
+           * is not passthrough), so a reconcile could never converge rules.
+           */
+          rules: z.array(z.unknown()).optional(),
         }),
       })
     )
@@ -1874,7 +1889,8 @@ export const definitionEngineProcedures = {
         (input.definition.capabilities?.length ||
           input.definition.playbooks?.length ||
           input.definition.flowAutomations?.length ||
-          input.definition.actionPlacements?.length)
+          input.definition.actionPlacements?.length ||
+          input.definition.rules?.length)
       ) {
         try {
           // Same builder as the create/compose branches — reconcile definitions

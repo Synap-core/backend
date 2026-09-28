@@ -353,9 +353,11 @@ export interface PackagePostWorkspaceBody {
   /**
    * Rules the template installs in this space (package `rules[]`) — applied
    * by `applyTemplateRules` through the one rule door. See
-   * `services/rules/template-rules.ts`.
+   * `services/rules/template-rules.ts`. Carried UNTRUSTED (`unknown[]`) on
+   * every door, like the CP publish schema: `readTemplateRules` is the one
+   * parser, and it drops a malformed entry instead of failing the install.
    */
-  rules?: Array<{ key: string; intent: string; sentence?: unknown }>;
+  rules?: unknown[];
   projectId?: string;
 }
 

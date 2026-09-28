@@ -65,6 +65,8 @@ export interface CreateDefinitionPostWorkspaceSlice {
   flowAutomations?: PackagePostWorkspaceBody["automations"];
   capabilities?: PackagePostWorkspaceBody["capabilities"];
   actionPlacements?: PackagePostWorkspaceBody["actionPlacements"];
+  /** Template rules — forwarded verbatim; `applyTemplateRules` parses them. */
+  rules?: PackagePostWorkspaceBody["rules"];
 }
 
 /**
@@ -132,6 +134,7 @@ export function buildPostWorkspaceBodyFromDefinition(
       ? [{ definition: loopDef as unknown as Record<string, unknown> }]
       : undefined,
     actionPlacements: definition.actionPlacements,
+    rules: definition.rules,
   };
 }
 

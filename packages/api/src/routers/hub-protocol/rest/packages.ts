@@ -395,6 +395,11 @@ export const PackageApplySchema = z.object({
   // to the rows this apply just created. Declared here (not stripped) so the
   // Hub install path carries them, at parity with the tRPC door.
   actionPlacements: z.array(ActionPlacementSchema).optional(),
+  // Template rules (package `rules[]`) → `applyTemplateRules` via the shared
+  // applier. Undeclared, zod STRIPPED them and a Hub install never got its
+  // rules. Untrusted on purpose (same as the CP schema): `readTemplateRules`
+  // is the one parser and drops malformed entries rather than 400 the install.
+  rules: z.array(z.unknown()).optional(),
   // Template-composition dependencies — resolved BEFORE the workspace step.
   // Mirrors TemplateDependency in @synap-core/workspace-templates verbatim.
   dependencies: z
