@@ -335,6 +335,82 @@ describe("buildSpaceBrief", () => {
     expect(Object.keys(brief).at(-1)).toBe("more");
   });
 
+  it("a Brand-Library-shaped brief keeps its persona and every kind inside the 2 KB cap", async () => {
+    // Field LENGTHS measured from synap-app `brand-library.yaml` (2026-09-28):
+    // framing 372, starters 280/300/297, blindSpots 272/275/241, bar 238,
+    // 5 collect rows (what 68/87/64/24/46), 10 owned kinds (desc 77–109).
+    // Built through the real assembly from the real YAML it lands at 1987 B
+    // and keeps the persona; at the old 1536 B cap it shed the persona AND
+    // every kind description — the voice the template declares never arrived.
+    const prose = (n: number) => "y".repeat(n);
+    const kindDesc = [89, 77, 79, 109, 91, 101, 92, 90, 96, 99];
+    const slugs = [
+      "brand-identity",
+      "brand-color",
+      "brand-font",
+      "brand-asset",
+      "brand-reference",
+      "brand-token-set",
+      "brand-voice-guide",
+      "brand-rule",
+      "brand-template",
+      "brand-component",
+    ];
+    h.ranked = slugs.map((slug, i) =>
+      row(slug, {
+        workspaceId: WS,
+        entityCount: 4,
+        description: prose(kindDesc[i]!),
+      })
+    );
+    h.playbooks = [];
+    const brief = await build({
+      ...brandLibrary,
+      settings: {
+        onboarding: {
+          goal: prose(180),
+          framing: prose(372),
+          expertise: {
+            starters: [prose(280), prose(300), prose(297)],
+            blindSpots: [prose(272), prose(275), prose(241)],
+            bar: prose(238),
+          },
+          collect: [
+            ["brand-identity", 68],
+            ["brand-voice-guide", 87],
+            ["brand-rule", 64],
+            ["brand-color", 24],
+            ["brand-font", 46],
+          ].map(([profileSlug, n]) => ({
+            profileSlug,
+            what: prose(n as number),
+            cardinality: "few",
+          })),
+        },
+      },
+    });
+    expect(briefBytes(brief)).toBeLessThanOrEqual(BRIEF_BUDGET_BYTES);
+    // Non-vacuity: it WAS over budget, so the ladder ran — and stopped
+    // before the persona.
+    expect(brief.trimmed).toEqual([
+      "expertise.starters",
+      "expertise.blindSpots",
+      "collect.what",
+      "expertise",
+      "collect",
+      "keyKinds.description:60",
+    ]);
+    // The persona arrives (capped at the prose cap), and every kind keeps prose.
+    expect(brief.persona).toHaveLength(240);
+    const kinds = brief.keyKinds as Array<{
+      slug: string;
+      description?: string;
+    }>;
+    expect(kinds.every((k) => (k.description?.length ?? 0) === 60)).toBe(true);
+    expect((brief.keyKinds as unknown[]).length).toBe(10);
+    expect(BRIEF_BUDGET_BYTES).toBe(2048);
+  });
+
   it("a small brief is untrimmed, and a name that only restates the slug is omitted", async () => {
     const brief = await build();
     expect(brief.trimmed).toBeUndefined();

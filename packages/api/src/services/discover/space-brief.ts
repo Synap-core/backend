@@ -50,8 +50,12 @@ export const BRIEF_PLAYBOOK_CAP = 8;
  * template. Over budget, sections are shed in `TRIM_LADDER` order and NAMED in
  * `trimmed` — the full onboarding spec stays one call away (orient
  * detail:'full').
+ *
+ * 2 KB (founder decision, 2026-09-28; was 1536). Measured through this
+ * assembly from the real templates: Brand Library 1987 B, keeping its persona
+ * (at 1536 it shed the persona and every kind description); CRM 1956 B.
  */
-export const BRIEF_BUDGET_BYTES = 1536;
+export const BRIEF_BUDGET_BYTES = 2048;
 
 interface Unavailable {
   status: "unavailable";
