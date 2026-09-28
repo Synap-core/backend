@@ -181,6 +181,108 @@ export interface Signal {
    * re-derive the lifetime from a table it does not own.
    */
   lifetimeHours?: number | null;
+  /**
+   * WHICH block this row belongs to on a needs-you page. `session:<id>` for
+   * everything a session owes the person (its owed slots, its draft-asks row),
+   * `proposal-cluster:<fingerprint>` for a cluster, else `null`. The union
+   * emits rows sharing a key CONTIGUOUSLY ({@link orderNeedsYou}), so a
+   * surface draws a group header exactly where the key changes and never
+   * re-groups on its own.
+   */
+  groupKey: string | null;
+  /**
+   * `older` when `occurredAt` is more than {@link OLDER_AFTER_MS} ago, else
+   * `recent`. Computed HERE, once, so every surface folds the same rows under
+   * "Older" — a client that measured age itself would fold by its own clock.
+   */
+  ageBucket: SignalAgeBucket;
+  /**
+   * How many unread notifications this row folds — the same `(type, target)`
+   * raised N times is ONE row with `repeatCount: N` ({@link foldNotifications}).
+   * 1 on every other kind: a cluster says its size through `count`, and an
+   * owed slot or a draft is never a repeat of anything.
+   */
+  repeatCount: number;
+}
+
+/**
+ * FIELD CLASSIFICATION for {@link Signal} itself — the same compile-time floor
+ * the owed-slot projection carries below. A new `Signal` field must be
+ * classified as UNIVERSAL (every producer, every kind, sets it — a surface may
+ * read it unguarded) or KIND-SPECIFIC (present on some kinds only — a surface
+ * must guard it), or the build stops. `groupKey`, `ageBucket` and
+ * `repeatCount` are universal because every surface folds and groups on them.
+ */
+const UNIVERSAL_SIGNAL_FIELDS = [
+  "id",
+  "kind",
+  "title",
+  "count",
+  "occurredAt",
+  "target",
+  "category",
+  "groupKey",
+  "ageBucket",
+  "repeatCount",
+] as const satisfies ReadonlyArray<keyof Signal>;
+
+const KIND_SPECIFIC_SIGNAL_FIELDS = [
+  "blockedReason",
+  "why",
+  "claimedDone",
+  "sessionGoal",
+  "slotKind",
+  "criterionKey",
+  "slotRef",
+  "ask",
+  "class",
+  "lifetimeHours",
+] as const satisfies ReadonlyArray<keyof Signal>;
+
+type _SignalFieldsClassified =
+  Exclude<
+    keyof Signal,
+    (typeof UNIVERSAL_SIGNAL_FIELDS)[number]
+  > extends (typeof KIND_SPECIFIC_SIGNAL_FIELDS)[number]
+    ? true
+    : never;
+const _signalFieldsClassified: _SignalFieldsClassified = true;
+void _signalFieldsClassified;
+
+/**
+ * Every universal field is REQUIRED on the type — a universal field declared
+ * optional would let a producer omit it while the classification claims every
+ * producer sets it.
+ */
+type _UniversalAreRequired =
+  Pick<Signal, (typeof UNIVERSAL_SIGNAL_FIELDS)[number]> extends Required<
+    Pick<Signal, (typeof UNIVERSAL_SIGNAL_FIELDS)[number]>
+  >
+    ? true
+    : never;
+const _universalAreRequired: _UniversalAreRequired = true;
+void _universalAreRequired;
+
+/** The universal fields, exported for the tests that prove every producer sets them. */
+export const SIGNAL_UNIVERSAL_FIELDS: readonly (keyof Signal)[] =
+  UNIVERSAL_SIGNAL_FIELDS;
+
+/** See {@link Signal.ageBucket}. */
+export type SignalAgeBucket = "recent" | "older";
+
+/** A needs-you row older than this folds under "Older" (7 days). */
+export const OLDER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The age bucket of an instant, against `now`. Pure. */
+export function ageBucketOf(occurredAt: Date, now: Date): SignalAgeBucket {
+  return now.getTime() - occurredAt.getTime() > OLDER_AFTER_MS
+    ? "older"
+    : "recent";
+}
+
+/** The block key every row a session owes shares. */
+export function sessionGroupKey(sessionId: string): string {
+  return `session:${sessionId}`;
 }
 
 /**
@@ -272,7 +374,10 @@ function viewFromActions(
 
 /** One cluster → one signal. Title via the vocabulary SSOT, imperative mood
  *  (the card describes what approving it WILL do, not what happened). */
-export function signalFromCluster(cluster: ProposalCluster): Signal {
+export function signalFromCluster(
+  cluster: ProposalCluster,
+  now: Date = new Date()
+): Signal {
   const sampleId = cluster.sampleProposalIds[0] ?? null;
   return {
     id: `cluster:${cluster.fingerprint}`,
@@ -294,20 +399,63 @@ export function signalFromCluster(cluster: ProposalCluster): Signal {
     // (proposalType + targetType are both fingerprint inputs).
     class: cluster.class,
     lifetimeHours: cluster.lifetimeHours,
+    groupKey: `proposal-cluster:${cluster.fingerprint}`,
+    ageBucket: ageBucketOf(cluster.latestAt, now),
+    repeatCount: 1,
   };
 }
 
-/** One unread notification → one signal. */
-export function signalFromNotification(row: NotificationSignalInput): Signal {
+/**
+ * One unread notification → one signal. `repeatCount` is how many rows it
+ * stands for (see {@link foldNotifications}); `count` says the same thing,
+ * because "how many underlying things" is exactly the folded rows.
+ */
+export function signalFromNotification(
+  row: NotificationSignalInput,
+  now: Date = new Date(),
+  repeatCount = 1
+): Signal {
   return {
     id: `notification:${row.id}`,
     kind: "notification",
     title: row.title,
-    count: 1,
+    count: repeatCount,
     occurredAt: row.createdAt,
     target: targetFromNotification(row.sourceType, row.sourceId, row.actions),
     category: row.category,
+    groupKey: null,
+    ageBucket: ageBucketOf(row.createdAt, now),
+    repeatCount,
   };
+}
+
+/**
+ * Fold unread notifications per `(type, target)`: the same news about the
+ * same object, raised N times, is ONE row carrying the NEWEST instance and
+ * `repeatCount: N`. A row with no `sourceId` has no target to fold on and
+ * stays its own row — two targetless rows of one type are not provably the
+ * same news. Pure; the list and the count both fold through here, so a folded
+ * row counts once in the badge exactly as it lists once.
+ */
+export function foldNotifications(
+  rows: readonly NotificationSignalInput[]
+): Array<{ row: NotificationSignalInput; repeatCount: number }> {
+  const folds = new Map<
+    string,
+    { row: NotificationSignalInput; repeatCount: number }
+  >();
+  for (const r of rows) {
+    const key = r.sourceId
+      ? `${r.type ?? ""}\u0000${r.sourceType}\u0000${r.sourceId}`
+      : `row\u0000${r.id}`;
+    const seen = folds.get(key);
+    if (!seen) folds.set(key, { row: r, repeatCount: 1 });
+    else {
+      seen.repeatCount += 1;
+      if (r.createdAt.getTime() > seen.row.createdAt.getTime()) seen.row = r;
+    }
+  }
+  return [...folds.values()];
 }
 
 /**
@@ -456,8 +604,8 @@ function owedInstant(owedSince: string): Date {
  * PROJECTED:
  *   sessionId   → `target.id` and the fold key (one row per draft)
  *   sessionGoal → the work named in `title`, and `sessionGoal`
- *   owedSince   → `occurredAt` = the draft's OLDEST ask, so it sorts among
- *                 owed slots by the same age-is-severity rule
+ *   owedSince   → `occurredAt` = the draft's NEWEST ask — its last activity,
+ *                 the key the one newest-first order sorts on
  *   label       → counted (`count` = asks on the draft); each label is the
  *                 fold's unit, never shown on the row
  *
@@ -517,7 +665,10 @@ export interface DraftAsksInput {
  * are the same number. `id` keys on the session, so a draft stays one row as
  * asks come and go.
  */
-export function signalsFromDraftAsks(input: DraftAsksInput): Signal[] {
+export function signalsFromDraftAsks(
+  input: DraftAsksInput,
+  now: Date = new Date()
+): Signal[] {
   const bySession = new Map<string, OwedSlotSignalInput[]>();
   for (const slot of input.slots) {
     const list = bySession.get(slot.sessionId);
@@ -525,9 +676,9 @@ export function signalsFromDraftAsks(input: DraftAsksInput): Signal[] {
     else bySession.set(slot.sessionId, [slot]);
   }
   return [...bySession].map(([sessionId, slots]) => {
-    const oldest = slots
+    const newest = slots
       .map((s) => owedInstant(s.owedSince))
-      .reduce((a, b) => (b.getTime() < a.getTime() ? b : a));
+      .reduce((a, b) => (b.getTime() > a.getTime() ? b : a));
     const goal = slots.find((s) => s.sessionGoal)?.sessionGoal ?? null;
     return {
       id: `draft:${sessionId}`,
@@ -538,18 +689,16 @@ export function signalsFromDraftAsks(input: DraftAsksInput): Signal[] {
         slots.length
       ),
       count: slots.length,
-      occurredAt: oldest,
+      occurredAt: newest,
       target: { kind: "session", id: sessionId },
       // Agent-originated, like the owed slots it folds.
       category: "ai",
       ...(goal ? { sessionGoal: goal } : {}),
+      groupKey: sessionGroupKey(sessionId),
+      ageBucket: ageBucketOf(newest, now),
+      repeatCount: 1,
     };
   });
-}
-
-/** The two kinds that sit on the OWED side of the page: things the person owes. */
-function isOwedSide(signal: Signal): boolean {
-  return signal.kind === "owed-slot" || signal.kind === "draft-asks";
 }
 
 /**
@@ -568,13 +717,17 @@ function isOwedSide(signal: Signal): boolean {
  * It is not a domain token, so it must not be run through the vocabulary — and
  * it must certainly not be `charAt(0).toUpperCase()`'d at this call site.
  */
-export function signalFromOwedSlot(row: OwedSlotSignalInput): Signal {
+export function signalFromOwedSlot(
+  row: OwedSlotSignalInput,
+  now: Date = new Date()
+): Signal {
+  const occurredAt = owedInstant(row.owedSince);
   return {
     id: `slot:${row.sessionId}:${normalizeExpectedLabel(row.label) ?? ""}`,
     kind: "owed-slot",
     title: row.label,
     count: 1,
-    occurredAt: owedInstant(row.owedSince),
+    occurredAt,
     target: { kind: "session", id: row.sessionId },
     // Agent-originated work, so `ai` — the same category the registry gives
     // agent completions. Deliberately NOT `governance`: that category means a
@@ -596,6 +749,9 @@ export function signalFromOwedSlot(row: OwedSlotSignalInput): Signal {
     ...(row.criterionKey ? { criterionKey: row.criterionKey } : {}),
     ...(row.ref ? { slotRef: row.ref } : {}),
     ...(row.ask ? { ask: row.ask } : {}),
+    groupKey: sessionGroupKey(row.sessionId),
+    ageBucket: ageBucketOf(occurredAt, now),
+    repeatCount: 1,
   };
 }
 
@@ -718,17 +874,18 @@ function pointerStillNeedsYou(
  * suggestion decays, so newest first is the right order.
  */
 export function unionSuggestions(
-  notifications: NotificationSignalInput[]
+  notifications: NotificationSignalInput[],
+  now: Date = new Date()
 ): Signal[] {
   return partitionNotifications(notifications, [])
-    .suggestions.map(signalFromNotification)
+    .suggestions.map((r) => signalFromNotification(r, now))
     .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
 }
 
 /**
- * The `needs-you` union: owed slots, then clusters + deduped unread
- * notifications. Pure — feed it the three doors' rows and it decides membership
- * and order.
+ * The `needs-you` union: owed slots, draft-asks rows, clusters and deduped,
+ * folded unread notifications — ONE list in ONE order ({@link orderNeedsYou}).
+ * Pure — feed it the doors' rows and it decides membership and order.
  *
  * ── OWED SLOTS FOLD ONLY A SESSION POINTER, NEVER "ANY ROW ABOUT THE SESSION" ─
  * Until 2026-09-25 this said the block door creates no notification, so there
@@ -743,15 +900,12 @@ export function unionSuggestions(
  * unblock notification. That is separate news, and it stays. See
  * {@link dedupeNotifications}.
  *
- * ── ORDERING: OWED SLOTS FIRST, OLDEST FIRST ────────────────────────────────
- * The rest of the tray is newest-first because a proposal decays — a fresh one
- * is the live one. An owed slot NEVER expires (that is the whole point of the
- * absent `lifetimeHours`), so for it age IS severity: a deliverable nobody has
- * closed in three weeks is the most urgent row on the board, not the least. The
- * two orderings are therefore opposite, which is why the group is sorted
- * separately and concatenated rather than merged on `occurredAt` — one sort
- * comparator cannot express both and would bury exactly the rows this feature
- * exists to surface.
+ * ── ORDERING: NEWEST FIRST ACROSS EVERY KIND (W2 "calm", 2026-09-28) ─────────
+ * Owed slots used to sort FIRST and OLDEST-first ("age is severity"), so a
+ * fortnight-old owed slot outranked a decision filed today and the fresh work
+ * was buried under a pile nobody would clear. The founder reversed it: one
+ * newest-first order across kinds, a session's rows kept together, and
+ * anything older than a week folded under "Older" — see {@link orderNeedsYou}.
  */
 export function unionNeedsYou(args: {
   clusters: ProposalCluster[];
@@ -767,70 +921,68 @@ export function unionNeedsYou(args: {
    * list and the badge fold the same drafts.
    */
   draftAsks?: DraftAsksInput;
+  /** The clock `ageBucket` is measured against. Absent ⇒ now. */
+  now?: Date;
 }): Signal[] {
+  const now = args.now ?? new Date();
   const draftSlots = args.draftAsks?.slots ?? [];
-  const owed = [
-    ...args.owedSlots.map(signalFromOwedSlot),
-    ...(args.draftAsks ? signalsFromDraftAsks(args.draftAsks) : []),
-  ].sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
-  const rest = [
-    ...args.clusters.map(signalFromCluster),
-    ...dedupeNotifications(args.notifications, args.clusters, {
+  const notifications = foldNotifications(
+    dedupeNotifications(args.notifications, args.clusters, {
       // A draft's `session.needs_you` pointer folds into its draft row, the
       // same way an owed slot's does — one entry per session.
       owedSessionIds: owedSessionIdsOf([...args.owedSlots, ...draftSlots]),
       openQuestionSessionIds: args.openQuestionSessionIds,
-    }).map(signalFromNotification),
-  ].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
-  return [...owed, ...rest];
+    })
+  );
+  return orderNeedsYou([
+    ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
+    ...(args.draftAsks ? signalsFromDraftAsks(args.draftAsks, now) : []),
+    ...args.clusters.map((c) => signalFromCluster(c, now)),
+    ...notifications.map((f) =>
+      signalFromNotification(f.row, now, f.repeatCount)
+    ),
+  ]);
+}
+
+/** Newest first; ties broken by id so the order is total and stable. */
+function newestFirst(a: Signal, b: Signal): number {
+  return (
+    b.occurredAt.getTime() - a.occurredAt.getTime() ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
 }
 
 /**
- * How many rows of the page are RESERVED for decisions (clusters +
- * notifications) when there are that many to show.
+ * THE needs-you order. Pure.
  *
- * THE BUG THIS EXISTS FOR. `unionNeedsYou` puts every owed slot first — correct,
- * and settled: an owed slot never expires, so age is severity and the oldest
- * blocker is the most urgent row on the board. But the page was then a single
- * `slice(0, limit)` across the concatenation, which makes the two sources share
- * ONE cap: an UNBOUNDED, never-decaying source ahead of a bounded, decaying one.
- * At 37 live owed slots against a limit of 50 the browser already showed nothing
- * but owed slots; past 50 the pending-proposal queue is UNREACHABLE from the
- * tray while the badge keeps counting it. A queue you are told about and cannot
- * open is worse than one that is merely long.
+ *   1. `recent` rows first, then every `older` row — the "Older" fold is a
+ *      suffix, so a surface can cut it off without re-sorting.
+ *   2. Inside each bucket, rows sharing a `groupKey` form ONE contiguous
+ *      block, placed at its NEWEST row's position; rows inside a block are
+ *      newest first. A row with no `groupKey` is a block of one.
+ *   3. Blocks are ordered newest first across ALL kinds. A decision filed
+ *      today outranks a slot owed for two weeks.
  *
- * The ordering is untouched — owed slots still come first, oldest first, and a
- * reserved row is not a re-ordering. Only the CUT changes: each source keeps a
- * floor inside the page, so neither can evict the other entirely.
- *
- * WHY 10. The browser tray renders 7 rows without scrolling, so 10 guarantees
- * the whole visible tray cannot be one source plus a scroll to reach the other.
- * It is a floor, never an allocation: with fewer than 10 decisions the unused
- * rows go straight back to owed slots, and with none the page is all owed.
+ * A session whose rows straddle the week boundary appears as one block in
+ * `recent` and one in `older` — the age rule outranks the grouping rule, as
+ * the contract states ("recent first; older after, in the same order rules").
  */
-export const RESERVED_DECISION_ROWS = 10;
-
-/**
- * Page the union so neither source can starve the other. Pure.
- *
- * Splits on the signal's OWN `kind` rather than taking the two lists again —
- * the caller must not be able to page a different set from the one it ordered,
- * and re-deriving membership here would be a second answer to "what is an owed
- * slot". The reserve is capped at HALF the page so a small `limit` cannot
- * invert the settled ordering: at `limit: 1` the one row is still the oldest
- * blocker, not a proposal.
- */
-export function pageNeedsYou(signals: Signal[], limit: number): Signal[] {
-  const owed = signals.filter(isOwedSide);
-  const rest = signals.filter((s) => !isOwedSide(s));
-  const reserved = Math.min(
-    RESERVED_DECISION_ROWS,
-    Math.floor(limit / 2),
-    rest.length
-  );
-  const owedTake = Math.min(owed.length, Math.max(0, limit - reserved));
-  const restTake = Math.min(rest.length, Math.max(0, limit - owedTake));
-  return [...owed.slice(0, owedTake), ...rest.slice(0, restTake)];
+export function orderNeedsYou(signals: readonly Signal[]): Signal[] {
+  const out: Signal[] = [];
+  for (const bucket of ["recent", "older"] as const) {
+    const blocks = new Map<string, Signal[]>();
+    for (const s of signals) {
+      if (s.ageBucket !== bucket) continue;
+      const key = s.groupKey ?? `row:${s.id}`;
+      const block = blocks.get(key);
+      if (block) block.push(s);
+      else blocks.set(key, [s]);
+    }
+    const sorted = [...blocks.values()].map((b) => b.sort(newestFirst));
+    sorted.sort((a, b) => newestFirst(a[0]!, b[0]!));
+    for (const b of sorted) out.push(...b);
+  }
+  return out;
 }
 
 /**
@@ -930,7 +1082,9 @@ export function countNeedsYou(args: {
     owedSessionIds: owedSessionIdsOf([...args.owedSlots, ...draftSlots]),
     openQuestionSessionIds: args.openQuestionSessionIds,
   });
-  const notifications = buckets.needsYou.length;
+  // Folded, like the list: the same news raised N times is ONE row there, so
+  // it is one here — the badge must equal the number of rows it stands for.
+  const notifications = foldNotifications(buckets.needsYou).length;
   const blocked = args.owedSlots.length;
   const review = args.reviewSessions ?? 0;
   // The SAME fold the list renders, counted — never a second rule.

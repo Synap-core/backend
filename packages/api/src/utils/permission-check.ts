@@ -67,6 +67,8 @@ import {
   resolveObjectNounPlural,
   humanizeToken,
 } from "@synap-core/types/vocabulary";
+import { buildProjectFilingSummary } from "../services/projects/project-filing-summary.js";
+import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import {
   isLikelyUUID,
   isCompositeProposalData,
@@ -2579,6 +2581,12 @@ export function buildProposalSummary(
   action: string,
   data: Record<string, unknown>
 ): string {
+  // A slug-idempotent define that CHANGES an existing kind/role's name,
+  // description, icon or default values — "Update Role "X": description",
+  // never the generic "Create Kind" of the define door it rides.
+  if (subjectType === "profile" && data.updateExistingProfile === true) {
+    return buildDescriptiveProfileUpdateSummary(data);
+  }
   // focus_session lifecycle close — human-readable "Complete session …"
   if (
     subjectType === "focus_session" &&
@@ -2593,6 +2601,38 @@ export function buildProposalSummary(
         ? data.targetName
         : undefined);
     return goal ? `Complete session "${goal}"` : "Complete focus session";
+  }
+  // focus_session TRACK FILING (adopt existing work into a step). Checked
+  // BEFORE the project branch: a filing that also sets the project names the
+  // project as a consequence of the track, not as the headline. Names are the
+  // display-only fields `updateFocusSession` carries; a stage with no name
+  // humanizes through the vocabulary, never leaks as a key.
+  if (
+    subjectType === "focus_session" &&
+    action === "update" &&
+    "trackId" in data
+  ) {
+    const goal =
+      typeof data.goal === "string" && data.goal.trim() ? data.goal : null;
+    const what = goal
+      ? `"${goal}"`
+      : resolveObjectNoun("session").toLowerCase();
+    if (data.trackId === null) return `Unfile ${what} from its track`;
+    const track =
+      typeof data.trackName === "string" && data.trackName.trim()
+        ? data.trackName
+        : `a ${resolveObjectNoun("track").toLowerCase()}`;
+    const step =
+      typeof data.stageName === "string" && data.stageName.trim()
+        ? data.stageName
+        : typeof data.trackStage === "string" && data.trackStage
+          ? humanizeToken(data.trackStage)
+          : null;
+    const project =
+      typeof data.trackProjectName === "string" && data.trackProjectName.trim()
+        ? ` (and into project "${data.trackProjectName}")`
+        : "";
+    return `File ${what} into ${track}${step ? ` · ${step}` : ""}${project}`;
   }
   // focus_session FILING — which project a session belongs to is the person's
   // call, so the title must say it is a move and name WHERE, not the generic
@@ -2698,6 +2738,11 @@ export function buildProposalSummary(
   // raw id in the body). Archive/restore add the rules they pause.
   const spaceSentence = buildSpaceOpSummary(subjectType, action, data);
   if (spaceSentence) return spaceSentence;
+
+  // PROJECT FILING (file / un-file existing records) names a count, a kind
+  // and a project — see `services/projects/project-filing-summary.ts`.
+  const filingSentence = buildProjectFilingSummary(subjectType, action, data);
+  if (filingSentence) return filingSentence;
 
   // Vocabulary SSOT — NOT a call-site capitalisation (`.claude/rules/vocabulary.md`
   // forbids `charAt(0).toUpperCase()` on a domain token by name), and NOT the

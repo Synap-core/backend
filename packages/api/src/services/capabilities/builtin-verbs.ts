@@ -3705,6 +3705,44 @@ const profileProposeRetireHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * property_def.propose_retire — retire a FIELD through
+ * `propertyDefsRouter.proposeRetire`. The field twin of
+ * `profile.propose_retire`, with the same structural guarantee: the procedure
+ * files a PENDING proposal unconditionally (or refuses when the field still
+ * holds values) and has NO execute branch. Its floor is
+ * `assertPropertyDefSchemaWrite` on the LOADED def (who may FILE). Unlike the
+ * kind verb it needs no acting workspace: a global or base def lives in none,
+ * and authority is read from the row. The hard-delete twin
+ * (`propertyDefs.delete`) is deliberately not projected.
+ */
+const propertyDefProposeRetireParams = z
+  .object({
+    propertyDefId: z.string().uuid(),
+    /** Shown to the reviewer on the retirement proposal. */
+    reason: z.string().max(2000).optional(),
+  })
+  .strict();
+
+const propertyDefProposeRetireHandler: BuiltinVerbHandler = async (
+  params,
+  ctx
+) => {
+  const input = propertyDefProposeRetireParams.parse(params);
+  const { propertyDefsRouter } = await import("../../routers/property-defs.js");
+  const caller = propertyDefsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    agentUserId: ctx.agentUserId,
+  } as unknown as Context);
+  return caller.proposeRetire({
+    id: input.propertyDefId,
+    ...(input.reason !== undefined ? { reason: input.reason } : {}),
+  });
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -3794,6 +3832,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "playbook.archive": playbookArchiveHandler,
   "skill.update_rule": skillUpdateRuleHandler,
   "profile.propose_retire": profileProposeRetireHandler,
+  "property_def.propose_retire": propertyDefProposeRetireHandler,
 };
 
 /**
@@ -3858,6 +3897,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "playbook.archive": playbookArchiveParams,
   "skill.update_rule": skillUpdateRuleParams,
   "profile.propose_retire": profileProposeRetireParams,
+  "property_def.propose_retire": propertyDefProposeRetireParams,
 };
 
 /**

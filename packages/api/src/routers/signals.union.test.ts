@@ -203,23 +203,23 @@ function owed(over: Partial<OwedSlotSignalInput> = {}): OwedSlotSignalInput {
 }
 
 describe("owed slots in the needs-you union", () => {
-  it("sorts owed slots ABOVE every cluster and notification, however fresh", () => {
-    // The tray is newest-first everywhere else. An owed slot never expires, so
-    // it must not be ranked by recency against rows that do — a three-week-old
-    // obligation belongs above a proposal filed a minute ago.
+  it("a fresh decision outranks a slot owed for two weeks (newest first across kinds)", () => {
+    // W2 calm (2026-09-28) reversed "owed first, oldest first": a fortnight-old
+    // owed slot used to outrank a decision filed today. One order now.
     const signals = unionNeedsYou({
       clusters: [cluster({ latestAt: new Date("2026-09-08T23:59:00Z") })],
       notifications: [notif({ createdAt: new Date("2026-09-08T23:58:00Z") })],
-      owedSlots: [owed({ owedSince: "2026-08-15T00:00:00Z" })],
+      owedSlots: [owed({ owedSince: "2026-08-25T00:00:00Z" })],
+      now: new Date("2026-09-09T00:00:00Z"),
     });
     expect(signals.map((s) => s.kind)).toEqual([
-      "owed-slot",
       "proposal-cluster",
       "notification",
+      "owed-slot",
     ]);
   });
 
-  it("orders owed slots OLDEST first — the opposite of the rest of the tray", () => {
+  it("orders owed slots NEWEST first, like every other row", () => {
     const signals = unionNeedsYou({
       clusters: [],
       notifications: [],
@@ -228,11 +228,12 @@ describe("owed slots in the needs-you union", () => {
         owed({ sessionId: "s-old", owedSince: "2026-07-04T00:00:00Z" }),
         owed({ sessionId: "s-mid", owedSince: "2026-08-01T00:00:00Z" }),
       ],
+      now: new Date("2026-09-08T00:00:00Z"),
     });
     expect(signals.map((s) => s.target?.id)).toEqual([
-      "s-old",
-      "s-mid",
       "s-new",
+      "s-mid",
+      "s-old",
     ]);
   });
 
@@ -270,7 +271,11 @@ describe("owed slots in the needs-you union", () => {
       ],
       owedSlots: [owed({ sessionId: "sess-1" })],
     });
-    expect(signals.map((s) => s.kind)).toEqual(["owed-slot", "notification"]);
+    // Both survive; their relative order is the recency rule's business.
+    expect(signals.map((s) => s.kind).sort()).toEqual([
+      "notification",
+      "owed-slot",
+    ]);
   });
 
   it("addresses the session and ids through the ONE casefold", () => {
@@ -295,10 +300,8 @@ describe("owed slots in the needs-you union", () => {
   });
 
   it("sorts an unstamped slot as the OLDEST, never as now", () => {
-    // `projectOwedSlots` writes "0000-00-00" for a slot that predates the
-    // `owedSince` invariant. `new Date(...)` of that is an Invalid Date whose
-    // getTime() is NaN, and NaN loses every sort comparison silently — the
-    // anomaly would sink instead of surfacing.
+    // The sentinel maps to the epoch — never NaN (which loses every sort
+    // comparison silently) and never "now" (which would fake it fresh).
     const signals = unionNeedsYou({
       clusters: [],
       notifications: [],
@@ -307,8 +310,9 @@ describe("owed slots in the needs-you union", () => {
         owed({ sessionId: "s-unstamped", owedSince: "0000-00-00" }),
       ],
     });
-    expect(signals[0].target?.id).toBe("s-unstamped");
-    expect(Number.isNaN(signals[0].occurredAt.getTime())).toBe(false);
+    expect(signals.at(-1)!.target?.id).toBe("s-unstamped");
+    expect(signals.at(-1)!.occurredAt.getTime()).toBe(0);
+    expect(signals.at(-1)!.ageBucket).toBe("older");
   });
 
   it("counts owed slots into the total AND breaks them out as `blocked`", () => {

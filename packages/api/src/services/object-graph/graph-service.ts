@@ -71,7 +71,15 @@ import {
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import type { EntityConnection } from "./entity-connections.js";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildRequestFromProposal,
+  type Proposal,
+} from "@synap-core/types/proposals";
+import {
+  proposalDisplaySummary,
+  proposalPayloadTargetName,
+} from "../../routers/proposals/display.js";
+import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
 
 /**
  * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
@@ -967,6 +975,8 @@ export async function getTemporalNeighbors(
         id: proposals.id,
         proposalType: proposals.proposalType,
         targetType: proposals.targetType,
+        targetId: proposals.targetId,
+        data: proposals.data,
         status: proposals.status,
         workspaceId: proposals.workspaceId,
         sessionId: proposals.sessionId,
@@ -984,6 +994,7 @@ export async function getTemporalNeighbors(
           )
         )
       );
+    const names = await proposalNeighborNames(proposalRows, userId);
     for (const p of proposalRows) {
       // Pre-0241 rows carry no `events.session_id`; the proposal itself often
       // does, so it is the second (older) route to the same session.
@@ -991,13 +1002,9 @@ export async function getTemporalNeighbors(
       out.push({
         kind: "proposal",
         id: p.id,
-        // NEVER a hand-written label map — the one vocabulary door. Past mood:
-        // this is history, something that already happened to the object.
-        name: buildObjectActionTitle({
-          action: p.proposalType,
-          objectKind: p.targetType,
-          mood: "past",
-        }),
+        // The proposal's OWN display name (the one its row leads with) — never
+        // a bare verb ("Graph", "Created") that names no object.
+        name: names.get(p.id)!,
         subtype: p.status,
         subtypes: [p.status],
         workspaceId: p.workspaceId,
@@ -1034,6 +1041,50 @@ export async function getTemporalNeighbors(
   }
 
   return out;
+}
+
+/**
+ * The display name of each proposal neighbour — the SAME sentence the
+ * proposal's own row leads with (`proposalDisplaySummary`, the name door the
+ * proposal read doors use), so a "came from" row says what the decision did to
+ * what, instead of a bare verb.
+ *
+ * Naming reads the proposal's CONTENT, so this is a proposal read door and runs
+ * the rows through `redactUnreadableSessionTargets` first (owner-only reader):
+ * a proposal about a session the viewer cannot read is named by the vocabulary
+ * placeholder, never by the goal copied into its payload.
+ */
+async function proposalNeighborNames(
+  rows: ReadonlyArray<{
+    id: string;
+    proposalType: string;
+    targetType: string;
+    targetId: string | null;
+    data: unknown;
+    workspaceId: string | null;
+  }>,
+  userId: string
+): Promise<Map<string, string>> {
+  const readable = await redactUnreadableSessionTargets([...rows], { userId });
+  const names = new Map<string, string>();
+  for (const row of readable) {
+    const request = buildRequestFromProposal(row as unknown as Proposal);
+    const payload =
+      request.data && typeof request.data === "object"
+        ? (request.data as Record<string, unknown>)
+        : undefined;
+    const slug = payload?.profileSlug ?? payload?.type;
+    names.set(
+      row.id,
+      proposalDisplaySummary({
+        proposalType: row.proposalType,
+        request,
+        targetName: proposalPayloadTargetName(request),
+        profileSlug: typeof slug === "string" && slug ? slug : undefined,
+      })
+    );
+  }
+  return names;
 }
 
 /**
@@ -1087,6 +1138,8 @@ export async function getReceiptNeighbors(
       id: proposals.id,
       proposalType: proposals.proposalType,
       targetType: proposals.targetType,
+      targetId: proposals.targetId,
+      data: proposals.data,
       status: proposals.status,
       workspaceId: proposals.workspaceId,
       sessionId: proposals.sessionId,
@@ -1110,11 +1163,7 @@ export async function getReceiptNeighbors(
     {
       kind: "proposal",
       id: receipt.id,
-      name: buildObjectActionTitle({
-        action: receipt.proposalType,
-        objectKind: receipt.targetType,
-        mood: "past",
-      }),
+      name: (await proposalNeighborNames([receipt], userId)).get(receipt.id)!,
       subtype: receipt.status,
       subtypes: [receipt.status],
       workspaceId: receipt.workspaceId,

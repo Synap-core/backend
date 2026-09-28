@@ -72,6 +72,10 @@ import { resolveProposalAttention } from "@synap-core/types/proposals/attention"
 import { isSessionStartChange } from "@synap-core/types/proposals/intent";
 import { revertableForRow } from "./revert.js";
 import {
+  capabilityRunEntityId,
+  withEntityVerbRunTitle,
+} from "./capability-run-display.js";
+import {
   isCompositeProposalData,
   isRequestShapedProposalData,
   buildRequestFromProposal,
@@ -465,6 +469,8 @@ export async function enrichProposalsForDisplay(
       .filter(isLikelyUUID),
     ...relationEndpointIds,
     ...(linkEndpointIdsByType.get("entity") ?? []),
+    // A core entity-verb RUN names its object in `parameters.entityId`.
+    ...rows.map(capabilityRunEntityId),
   ]);
   /**
    * DOCUMENT titles — the target type with no path to a name at all.
@@ -1206,7 +1212,16 @@ export async function enrichProposalsForDisplay(
   };
 
   return rows.map((row, idx) => {
-    const request = requests[idx]!;
+    // Legacy "Run entity.delete" rows re-derive to the action on the object,
+    // named through the SAME floored + lens-scoped entity map as every title.
+    const request = withEntityVerbRunTitle(row, requests[idx]!, (entityId) => {
+      const meta = entityById.get(entityId);
+      if (!meta) return undefined;
+      if (meta.workspaceId !== null && meta.workspaceId !== row.workspaceId) {
+        return undefined;
+      }
+      return { kind: meta.type, name: meta.title ?? meta.preview ?? null };
+    });
     const rowSetup = setups.get(row.id);
     const payload =
       request.data && typeof request.data === "object"
@@ -1296,52 +1311,15 @@ export async function enrichProposalsForDisplay(
     const approverName = approverRow
       ? displayNameForUser(approverRow)
       : undefined;
-    // ── A GENERIC STORED SUMMARY LOSES TO A DERIVATION THAT NAMES THE OBJECT ──
-    // `request.summary ?? buildFallbackTitle(...)` meant the stored string ALWAYS
-    // won, forever. Two rows on the founder's pod (2026-09-03) carry
-    // `summary: "Create entity"` while their own `operations[]` carry
-    // `title: "Raycast V1 focus lens (product decision Focus A)"` — everything
-    // needed to name the object was in the payload; nothing looked, because a
-    // string was present. The producer has since been fixed
-    // (`buildProposalSummary` reads `operations[]`), but a stored summary is
-    // durable: those rows would read "Create entity" for the rest of their life.
-    //
-    // The test is `summaryNamesTheObject` — derived from the vocabulary door, NOT
-    // a blocklist of strings. A summary made only of this proposal's own action
-    // verb and kind noun carries no object identity, so a derivation that DOES
-    // name the object is strictly more informative and wins. Anything else — a
-    // human-written summary, the JOIN-gate sentence, a rule's intent — carries a
-    // word the derivation could not have produced and is kept untouched.
-    const compositeLabel = labelFromOperations(
-      (payload as { operations?: unknown } | undefined)?.operations
-    );
-    const derivedName = targetName ?? compositeLabel?.objectName;
-    const derivedSummary = withRemainder(
-      buildFallbackTitle({
-        changeType: request.changeType,
-        proposalType: row.proposalType,
-        profileSlug: profileSlug ?? compositeLabel?.objectKind,
-        targetType: request.targetType,
-        targetName: derivedName,
-      }),
-      compositeLabel?.extraCount ?? 0
-    );
-    const storedSummary = request.summary;
-    const summary =
-      storedSummary &&
-      // Only ever REPLACED by something strictly richer: the stored string must
-      // name no object AND the derivation must name one.
-      !(
-        derivedName &&
-        !summaryNamesTheObject(storedSummary, {
-          changeType: request.changeType,
-          proposalType: row.proposalType,
-          profileSlug: profileSlug ?? compositeLabel?.objectKind,
-          targetType: request.targetType,
-        })
-      )
-        ? storedSummary
-        : derivedSummary;
+    // The ONE proposal display name — shared with the object graph's "came
+    // from" rows (`graph-service`), so a lineage row and this proposal's own
+    // row can never name the same decision two ways.
+    const summary = proposalDisplaySummary({
+      proposalType: row.proposalType,
+      request,
+      targetName,
+      profileSlug,
+    });
 
     // MF2: bind the workspace-scoped resolver to THIS proposal's workspace lens
     // so an endpoint/facet in another workspace can never leak its title/props.
@@ -2152,6 +2130,101 @@ function titleFieldOverrideValue(
   const field = TITLE_FIELD_OVERRIDES[targetType];
   if (!field) return undefined;
   return stringProp(payload, field);
+}
+
+/**
+ * THE display name of a proposal — the sentence every proposal row leads with
+ * (`review.summary`, which the client's `presentation.title` reads first).
+ *
+ * ONE derivation for every door that names a proposal: the proposal read doors
+ * (`enrichProposalsForDisplay`) and the object graph's "came from" neighbours
+ * (`graph-service` temporal + receipt rows), which used to name a decision by
+ * its bare verb ("Graph", "Created") while the proposal's own row said what it
+ * did to what.
+ *
+ * ── A GENERIC STORED SUMMARY LOSES TO A DERIVATION THAT NAMES THE OBJECT ──
+ * `request.summary ?? buildFallbackTitle(...)` meant the stored string ALWAYS
+ * won, forever. Two rows on the founder's pod (2026-09-03) carry
+ * `summary: "Create entity"` while their own `operations[]` carry
+ * `title: "Raycast V1 focus lens (product decision Focus A)"` — everything
+ * needed to name the object was in the payload; nothing looked, because a
+ * string was present. The producer has since been fixed
+ * (`buildProposalSummary` reads `operations[]`), but a stored summary is
+ * durable: those rows would read "Create entity" for the rest of their life.
+ *
+ * The test is `summaryNamesTheObject` — derived from the vocabulary door, NOT
+ * a blocklist of strings. A summary made only of this proposal's own action
+ * verb and kind noun carries no object identity, so a derivation that DOES
+ * name the object is strictly more informative and wins. Anything else — a
+ * human-written summary, the JOIN-gate sentence, a rule's intent — carries a
+ * word the derivation could not have produced and is kept untouched.
+ *
+ * `targetName` / `profileSlug` are what the caller could resolve (the read
+ * door joins entities/documents; the graph passes what the payload carries).
+ * Callers MUST pass rows already through `redactUnreadableSessionTargets` —
+ * the summary quotes session content otherwise.
+ */
+export function proposalDisplaySummary(params: {
+  proposalType: string;
+  request: Pick<
+    UpdateRequest,
+    "summary" | "changeType" | "targetType" | "data"
+  >;
+  targetName?: string;
+  profileSlug?: string;
+}): string {
+  const { proposalType, request, targetName, profileSlug } = params;
+  const payload =
+    request.data && typeof request.data === "object"
+      ? (request.data as Record<string, unknown>)
+      : undefined;
+  const compositeLabel = labelFromOperations(
+    (payload as { operations?: unknown } | undefined)?.operations
+  );
+  const derivedName = targetName ?? compositeLabel?.objectName;
+  const derivedSummary = withRemainder(
+    buildFallbackTitle({
+      changeType: request.changeType,
+      proposalType,
+      profileSlug: profileSlug ?? compositeLabel?.objectKind,
+      targetType: request.targetType,
+      targetName: derivedName,
+    }),
+    compositeLabel?.extraCount ?? 0
+  );
+  const storedSummary = request.summary;
+  return storedSummary &&
+    // Only ever REPLACED by something strictly richer: the stored string must
+    // name no object AND the derivation must name one.
+    !(
+      derivedName &&
+      !summaryNamesTheObject(storedSummary, {
+        changeType: request.changeType,
+        proposalType,
+        profileSlug: profileSlug ?? compositeLabel?.objectKind,
+        targetType: request.targetType,
+      })
+    )
+    ? storedSummary
+    : derivedSummary;
+}
+
+/**
+ * The target name a proposal's OWN payload carries — no join. What a door that
+ * does not batch-join entities/documents (the object graph) can name.
+ */
+export function proposalPayloadTargetName(
+  request: Pick<UpdateRequest, "targetName" | "targetType" | "data">
+): string | undefined {
+  const payload =
+    request.data && typeof request.data === "object"
+      ? (request.data as Record<string, unknown>)
+      : undefined;
+  return (
+    request.targetName ??
+    titleFieldOverrideValue(request.targetType, payload) ??
+    displayLabelFromRecord(payload)
+  );
 }
 
 /**

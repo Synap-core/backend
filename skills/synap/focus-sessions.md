@@ -4,7 +4,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Sessions are the default — you never have to ask.** Every write you make is grouped into a session automatically: yours if you started one, otherwise one opened for you (a _receipt_, closed on its own once idle and reviewed). Nothing is ever refused for lacking a session.
 
-**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of yours were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one.
+**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one. Grouping is per conversation: another conversation's session is joined only by passing its id as `sessionId`.
 
 **Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 

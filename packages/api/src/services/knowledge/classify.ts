@@ -232,7 +232,16 @@ export function classifySubstrates(
    * above all ROLE profiles — nameable by the enumerative gate. See
    * `namesCatalogProfile`.
    */
-  catalog?: ProfileCatalogEntry[]
+  catalog?: ProfileCatalogEntry[],
+  /**
+   * `projectLens`: the caller narrowed recall to a project. The procedural
+   * store (`knowledge_keys`) has NO project column — every row is a pod-wide
+   * runbook — so under a project lens none of its rows is "in" the project.
+   * It then runs only when the query is explicitly procedural (a cue), never
+   * unconditionally: a business question asked inside a project must not be
+   * answered with engineering runbooks (X1, GRP ask).
+   */
+  opts?: { projectLens?: boolean }
 ): SubstrateRoute {
   const q = ` ${query.toLowerCase()} `;
   const tokenSet = new Set(tokenize(query));
@@ -279,7 +288,8 @@ export function classifySubstrates(
   //
   // Episodic stays cue-gated: it is user-narrative recall ("what did I…"), and
   // firing it on every query changes what an untargeted question returns.
-  const substrates: SubstrateKind[] = ["semantic", "procedural"];
+  const substrates: SubstrateKind[] = ["semantic"];
+  if (procedural || !opts?.projectLens) substrates.push("procedural");
   if (structured) substrates.push("structured");
   if (episodic) substrates.push("episodic");
 

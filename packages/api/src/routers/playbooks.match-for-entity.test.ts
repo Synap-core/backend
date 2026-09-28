@@ -53,11 +53,14 @@ vi.mock("@synap/database", async (importOriginal) => {
     eq: vi.fn((column, value) => ({ eq: [column, value] })),
     isNull: vi.fn((column) => ({ isNull: column })),
     desc: vi.fn((column) => ({ desc: column })),
-    drizzleSql: vi.fn(
-      (strings: TemplateStringsArray, ...values: unknown[]) => ({
+    // `.raw` too: a module-load `drizzleSql.raw` (owed-outputs.ts, reached via
+    // triage.ts since d7d2d102) crashed this whole suite at import.
+    drizzleSql: Object.assign(
+      vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
         sql: strings.join("?"),
         values,
-      })
+      })),
+      { raw: vi.fn((s: string) => ({ raw: s })) }
     ),
   };
 });
@@ -132,6 +135,8 @@ describe("playbooks.matchForEntity", () => {
       {
         id: "pb-1",
         name: "Produce content from this idea",
+        scope: "session",
+        templateKind: "Work template",
         goalTemplate: "Produce content for {{platform}} from {{subject}}",
         subjectProfileSlug: "post",
         params: [{ key: "platform", type: "string" }],
@@ -203,6 +208,8 @@ describe("playbooks.matchForEntity", () => {
       {
         id: "pb-lead",
         name: "Enrich this lead",
+        scope: "session",
+        templateKind: "Work template",
         goalTemplate: "Enrich {{subject}}",
         subjectProfileSlug: "lead",
         params: [],
@@ -300,6 +307,8 @@ describe("playbooks.matchForEntity", () => {
       {
         id: "pb-2",
         name: "Legacy playbook",
+        scope: "session",
+        templateKind: "Work template",
         goalTemplate: "Do the thing",
         params: [],
         executor: "is-agent",
@@ -421,5 +430,43 @@ describe("playbooks.matchForEntity", () => {
         ]),
       })
     );
+  });
+
+  // X1: a project lens lifts the TRACK template above its session twin.
+  it("with a projectId, a track template ranks above its same-name session twin, rows carry the template kind", async () => {
+    const rows = [
+      {
+        id: "pb-twin",
+        name: "GRP Business Model Interrogation",
+        goalTemplate: "Interrogate the business model GRP",
+        scope: "session",
+        subjectProfile: null,
+      },
+      {
+        id: "pb-track",
+        name: "Business Model (GRP)",
+        goalTemplate: "Run GRP",
+        scope: "project",
+        subjectProfile: null,
+      },
+    ];
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => selectChain(rows)) });
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const plain = await caller.matchForEntity({
+      workspaceId: WORKSPACE,
+      intentText: "GRP business model interrogation",
+    });
+    expect(plain.map((r) => r.id)).toEqual(["pb-twin", "pb-track"]);
+
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => selectChain(rows)) });
+    const lensed = await caller.matchForEntity({
+      workspaceId: WORKSPACE,
+      intentText: "GRP business model interrogation",
+      projectId: "00000000-0000-4000-8000-0000000000aa",
+    });
+    expect(lensed.map((r) => [r.id, r.scope, r.templateKind])).toEqual([
+      ["pb-track", "project", "Track template"],
+      ["pb-twin", "session", "Work template"],
+    ]);
   });
 });

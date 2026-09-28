@@ -4,6 +4,8 @@ import { ProposalStatus } from "@synap/database/schema";
 import { unlinkProjectFromWorkspace } from "../../../utils/project-workspace.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import { approveProjectFiling } from "./project-filing.js";
+import { isProjectUnfilePayload } from "../../../services/projects/project-filing-summary.js";
 
 /**
  * Approve-executor for `link/delete`.
@@ -22,13 +24,17 @@ import { reportApproved } from "./shared.js";
  * Never the approver, never anything in the payload. A row with no subject has
  * no owner to floor on and is refused.
  *
+ * The second door is project UN-FILING (`entity --belongs_to_project-->
+ * project`, batched), dispatched to `executors/project-filing.ts`.
+ *
  * Any other link shape is refused: there is no governed door that files one, and
  * a raw edge delete with no endpoint floor is exactly what this must not become.
  */
 export function registerLinkExecutors(): void {
   registerProposalExecutor({
     key: "link/delete",
-    async execute({ proposal, userId, input, deps }) {
+    async execute(args) {
+      const { proposal, userId, input, deps } = args;
       const refuse = (why: string) =>
         new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -37,6 +43,12 @@ export function registerLinkExecutors(): void {
 
       const raw = (proposal.data ?? {}) as Record<string, unknown>;
       const inner = (raw.data ?? raw) as Record<string, unknown>;
+      // UN-FILING records from a project (`services/projects/file-entities.ts`,
+      // remove): the entity --belongs_to_project--> project edges, replayed
+      // through the same re-floored apply the direct path runs.
+      if (isProjectUnfilePayload("link", "delete", inner)) {
+        return approveProjectFiling(args, true);
+      }
       if (
         inner.linkType !== "uses" ||
         inner.fromType !== "project" ||

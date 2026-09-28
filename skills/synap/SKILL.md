@@ -41,17 +41,17 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 > Canonical source — the MCP `instructions` field is derived from this file and composed with live grounding under ONE 2 KB budget (pinned by `instructions-budget.test.ts`). Most important first. Depth belongs in a skill, never here.
 
-You are connected to the user's Synap pod, the source of truth about their life, work and people. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).
+The user's Synap pod: source of truth for their life, work and people. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).
 
 1. **Recall first.** Before answering about the user's world or creating, `ask` (no duplicates).
-2. **Capture after.** A durable fact, decision, person or task: `capture`; about the user: `remember_fact`. No private scratchpad.
-3. **Orient once.** `orient` briefs you: pending review (raise first), open sessions, kinds, actions.
-4. **Work in a session.** `start_session` or resume (playbook `templateId`); 2-5 `criteria`; advance `currentStage`; person-only: `owner:'human'` outputs + `blockedReason`, then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
-5. **Declare scope; never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe: filing shares entities with project members.
+2. **Capture after.** A durable fact, decision, person, task: `capture`; about the user: `remember_fact`. No private scratchpad.
+3. **Orient once.** `orient`: pending review (raise first), open sessions, kinds, actions.
+4. **Work in a session.** `start_session` or resume (playbook `templateId`); project method = TRACK: `list_tracks`, else `start_track`; steps `start_stage_session`; `advance_track` only with the user; 2-5 `criteria`; advance `currentStage`; person-only: `owner:'human'` outputs + `blockedReason`, then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
+5. **Never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe.
 6. **`proposed` is success**, queued for review. Keep going; never retry.
-7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or space. **Extend first** (facet, overlay, parent); never a twin. New area: skill `from-intent`.
+7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role, space. **Extend first** (facet, overlay, parent); never a twin.
 
-Depth via `load_skill`: `system/synap/concepts`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`.
+Depth via `load_skill`: `system/synap/concepts`, `focus-sessions`, `from-intent` (new area), `escalation-ladder`, `writes`, `catalog`.
 
 ---
 
@@ -75,6 +75,10 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | **Role**      | role profile + facet    | which hat does it wear?              | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin      |
 
 Doors: `start_track`, `start_stage_session`, `start_session`, `create_rule`, `attach_facet`.
+
+Work a method on a project: `list_tracks` → none? `list_playbooks` (scope project = track template) → `start_track`; each step `start_stage_session`; never `advance_track` without the user. Detail: `from-intent`.
+
+Existing work can be filed into a step with `update_session` `trackId`/`trackStage` (proposed; the session keeps its space).
 
 ---
 
@@ -251,6 +255,8 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 ### 2c. A new kind of work inside a project → a TRACK
 
 A **track** runs a track template (a playbook with `scope: "project"`) inside ONE project; a project runs several (Business model, Content, Build). It pins its template version and has re-enterable steps (`stages`). A track owns no workspace: each step names the domain it works in (today its session lands in the project's home workspace). Work that repeats inside a track is an open-ended step plus a Rule that starts work into it each cycle. Definitions: `concepts`.
+
+**Asked to work a method on a project** ("run the business-model track on X"): `synap_list_tracks` for the project → none? `synap_list_playbooks` (`scope: "project"` = track template) → `synap_start_track`; work each step with `synap_start_stage_session`; never `synap_advance_track` without the user.
 
 | The user needs…                               | Do this                                                                                                                                      |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1487,11 +1493,14 @@ When you have something to _show_ the user — a list of leads, a summary, a com
 
 ### 3. Promote a good cell to a renderer — recurring presentation
 
-When a cell is a _good, recurring way to present a whole entity type or step_ — e.g. every `bookmark`'s detail view, every `lead`'s list row — promote it with `promote_cell_to_renderer`:
+Every kind already has a built-in card — the readable-first default nobody has to ask for (a brand-new user kind even gets one AUTOMATICALLY, built from its schema). Don't reach for this move by default; reach for it when the user explicitly asks for a different look and a cell has already proven it once.
 
-- Pick the `profileSlug` (the entity type), the `slot` (`list` | `detail` | `dashboard`), and the `cellKey` from `create_cell`.
-- This is **governed**: for you it returns `{ status: "proposed", proposalId }`. That is the point — you author the renderer, the user reviews and curates it before it becomes every entity's view. Surface the proposal plainly ("I've proposed this as the detail view for bookmarks — review it when you like"), don't treat it as a failure.
-- Use `scope: "pod"` only when the presentation should apply in every workspace; default to workspace scope.
+When a cell is a _good, recurring way to present a whole entity type or step_ — e.g. every `bookmark`'s small card, every `lead`'s list row — promote it with `promote_cell_to_renderer`:
+
+- Pick the `profileSlug` (the entity type), the `slot` (`list` | `card` | `detail` | `dashboard` — `card` is the small embeddable block; most "change how X looks" requests mean this one, not `detail`), and the `cellKey` from `create_cell`.
+- This is **governed**: for you it returns `{ status: "proposed", proposalId }`. That is the point — you author the renderer, the user reviews and curates it before it becomes every entity's view. Surface the proposal plainly ("I've proposed this as the card for bookmarks — review it when you like"), don't treat it as a failure.
+- Use `scope: "pod"` only when the presentation should apply in every workspace; default to workspace scope. Bind PER KIND — never as a blanket replacement for every kind's card.
+- Once it lands, tell the user where to find or revert it: **"⋯ → Customize display"** on that kind's page.
 
 ### 4. Promote a finished session to a template — recurring process
 
@@ -1904,7 +1913,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Sessions are the default — you never have to ask.** Every write you make is grouped into a session automatically: yours if you started one, otherwise one opened for you (a _receipt_, closed on its own once idle and reviewed). Nothing is ever refused for lacking a session.
 
-**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of yours were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one.
+**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one. Grouping is per conversation: another conversation's session is joined only by passing its id as `sessionId`.
 
 **Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
@@ -2394,6 +2403,12 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 | User asks for a specific chart type, map, 3D scene, or custom layout   | Generate a ViewFrame widget   |
 | User says "show X as a [funnel / heatmap / treemap / scatter / globe]" | Generate a ViewFrame widget   |
 
+### Default vs. generated — never the reflex, always the explicit ask
+
+Every kind already renders as a familiar, kind-shaped card — its built-in `entity-card` (small block) / `entity-detail` (full page) / `entity-profile` (dashboard) renderer. That built-in is the DEFAULT for everyone, including brand-new user-defined kinds (which get an automatic card built from the schema — no generation needed). **Never generate a frame renderer as a kind's default presentation.** Generate one ONLY when the user explicitly asks for a custom look — a specific chart type, a redesigned card, a bespoke layout — and bind it PER KIND (one profile's one renderer slot), never as a blanket replacement for every kind. The sandbox's egress holes (see Security below) are still open, so treat "generate a view/card" as a deliberate, scoped request, not something to reach for by default.
+
+After binding, tell the user where the result lives: **"⋯ → Customize display"** on that kind's page (Renderer Studio itself now lives in Builder mode / Settings, not a designer mode you build). That is the one place a human reverts it or picks something else — never invent a second, agent-only way to switch it back.
+
 ### What ViewFrame Is
 
 - A sandboxed iframe that renders **one ES module** that default-exports a React component (or plain JS)
@@ -2401,7 +2416,7 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
   `deps` map, but the current Hub `cells/define` persistence path does not yet
   retain that map, so external runtime dependencies are not a reliable contract.
 - The host injects a `SynapWidget` bridge for data access and shell actions
-- Security: `sandbox="allow-scripts allow-modals allow-popups"`, no `allow-same-origin`, no cookies, no pod token
+- Security: `sandbox="allow-scripts allow-modals"` — no `allow-popups`, no `allow-same-origin`, no cookies, no pod token
 
 ### Authoring contract
 
@@ -2416,7 +2431,7 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 
 **Use `POST /api/hub/cells/define` — this is the canonical Hub Protocol path for AI-generated cells.**
 
-It is idempotent (upserts on typeKey), pod-global by default (no workspaceId needed), and immediately available across all of the user's workspaces without any proposal step.
+It is idempotent (upserts on typeKey) and pod-global by default (no workspaceId needed). **It IS governed for agent callers** — `POST /cells/define` runs `checkPermissionOrPropose({ resource: "cell", action: "define", trustLevel: "generated" })`; a `status: "proposed"` response is the normal outcome for AI-generated renderer source, not an error — surface `reviewUrl` and keep going. Only an operator-initiated define auto-applies.
 
 ```
 POST /api/hub/cells/define

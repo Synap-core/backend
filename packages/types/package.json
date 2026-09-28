@@ -137,6 +137,10 @@
       "types": "./dist/proposals/attention.d.ts",
       "import": "./dist/proposals/attention.js"
     },
+    "./proposals/capability-run": {
+      "types": "./dist/proposals/capability-run.d.ts",
+      "import": "./dist/proposals/capability-run.js"
+    },
     "./text": {
       "types": "./dist/text/index.d.ts",
       "import": "./dist/text/index.js"
@@ -184,6 +188,10 @@
     "./capture": {
       "types": "./dist/capture/index.d.ts",
       "import": "./dist/capture/index.js"
+    },
+    "./connections": {
+      "types": "./dist/connections/index.d.ts",
+      "import": "./dist/connections/index.js"
     },
     "./ask": {
       "types": "./dist/ask/index.d.ts",

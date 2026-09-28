@@ -10,6 +10,12 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 | User asks for a specific chart type, map, 3D scene, or custom layout   | Generate a ViewFrame widget   |
 | User says "show X as a [funnel / heatmap / treemap / scatter / globe]" | Generate a ViewFrame widget   |
 
+### Default vs. generated — never the reflex, always the explicit ask
+
+Every kind already renders as a familiar, kind-shaped card — its built-in `entity-card` (small block) / `entity-detail` (full page) / `entity-profile` (dashboard) renderer. That built-in is the DEFAULT for everyone, including brand-new user-defined kinds (which get an automatic card built from the schema — no generation needed). **Never generate a frame renderer as a kind's default presentation.** Generate one ONLY when the user explicitly asks for a custom look — a specific chart type, a redesigned card, a bespoke layout — and bind it PER KIND (one profile's one renderer slot), never as a blanket replacement for every kind. The sandbox's egress holes (see Security below) are still open, so treat "generate a view/card" as a deliberate, scoped request, not something to reach for by default.
+
+After binding, tell the user where the result lives: **"⋯ → Customize display"** on that kind's page (Renderer Studio itself now lives in Builder mode / Settings, not a designer mode you build). That is the one place a human reverts it or picks something else — never invent a second, agent-only way to switch it back.
+
 ### What ViewFrame Is
 
 - A sandboxed iframe that renders **one ES module** that default-exports a React component (or plain JS)
@@ -17,7 +23,7 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
   `deps` map, but the current Hub `cells/define` persistence path does not yet
   retain that map, so external runtime dependencies are not a reliable contract.
 - The host injects a `SynapWidget` bridge for data access and shell actions
-- Security: `sandbox="allow-scripts allow-modals allow-popups"`, no `allow-same-origin`, no cookies, no pod token
+- Security: `sandbox="allow-scripts allow-modals"` — no `allow-popups`, no `allow-same-origin`, no cookies, no pod token
 
 ### Authoring contract
 
@@ -32,7 +38,7 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 
 **Use `POST /api/hub/cells/define` — this is the canonical Hub Protocol path for AI-generated cells.**
 
-It is idempotent (upserts on typeKey), pod-global by default (no workspaceId needed), and immediately available across all of the user's workspaces without any proposal step.
+It is idempotent (upserts on typeKey) and pod-global by default (no workspaceId needed). **It IS governed for agent callers** — `POST /cells/define` runs `checkPermissionOrPropose({ resource: "cell", action: "define", trustLevel: "generated" })`; a `status: "proposed"` response is the normal outcome for AI-generated renderer source, not an error — surface `reviewUrl` and keep going. Only an operator-initiated define auto-applies.
 
 ```
 POST /api/hub/cells/define

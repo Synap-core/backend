@@ -60,15 +60,24 @@ export function isBuiltinRelationType(slug: string): boolean {
   );
 }
 
+/**
+ * A def's label read from the TARGET's side (`uiHints.inverseLabel`, e.g.
+ * works_at → "Employs"), or null. The one reader — every listing door that
+ * reports a relation type projects it through here.
+ */
+export function readInverseLabel(uiHints: unknown): string | null {
+  const value = (uiHints as { inverseLabel?: unknown } | null | undefined)
+    ?.inverseLabel;
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 function toEffective(def: RelationDef): EffectiveRelationType {
-  const hints = (def.uiHints ?? {}) as { inverseLabel?: unknown };
   return {
     slug: def.slug,
     displayName: def.displayName,
     description: def.description ?? null,
     isDirectional: def.isDirectional,
-    inverseLabel:
-      typeof hints.inverseLabel === "string" ? hints.inverseLabel : null,
+    inverseLabel: readInverseLabel(def.uiHints),
     workspaceId: def.workspaceId ?? null,
   };
 }

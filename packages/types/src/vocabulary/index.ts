@@ -202,6 +202,11 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   move: { imperative: "Move", past: "Moved" },
   rename: { imperative: "Rename", past: "Renamed" },
   grant_access: { imperative: "Share", past: "Shared" },
+  // Filing EXISTING records into a project (`project/file_entities`) and
+  // taking them back out (a `belongs_to_project` link delete). One verb pair
+  // for the act a person names "filing"; never "Link"/"Delete".
+  file_entities: { imperative: "File", past: "Filed" },
+  unfile_entities: { imperative: "Unfile", past: "Unfiled" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
   // these keys resolve the full proposal types. They are NOT bare "approve":

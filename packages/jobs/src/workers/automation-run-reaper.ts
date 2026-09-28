@@ -25,6 +25,7 @@ import {
   drizzleSql,
   automationRuns,
   focusSessions,
+  owedSlotExistsIn,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { postRunSummary } from "../utils/post-run-summary.js";
@@ -108,9 +109,45 @@ export const RUN_NOT_DELAY_SUSPENDED = drizzleSql`NOT EXISTS (
     )
 )`;
 
+/**
+ * The run's own session (`metadata.automationRunId`, where `openRunSession`
+ * stamps it) still owes the person an open slot — THE owed predicate the
+ * needs-you tray counts with. Such a run is not orphaned: it is WAITING ON
+ * THE PERSON, and force-failing it put a phantom failure in the health count
+ * while the ask it was waiting on stayed live (census §3d).
+ */
+export const RUN_SESSION_OWES_HUMAN = drizzleSql`EXISTS (
+  SELECT 1 FROM focus_sessions owing
+  WHERE owing.metadata->>'automationRunId' = ${automationRuns.id}::text
+    AND ${owedSlotExistsIn(drizzleSql.raw("owing.expected_outputs"))}
+)`;
+
+/** A run past the stale window that no delay step is holding. */
+const RUN_IS_STALE = and(
+  eq(automationRuns.status, "running"),
+  drizzleSql`${automationRuns.startedAt} < now() - (${REAPER_STALE_MINUTES}::int * interval '1 minute')`,
+  RUN_NOT_DELAY_SUSPENDED
+);
+
 /** Called by the cron scheduler every ~5 minutes. */
 export async function handleAutomationRunReaper(): Promise<void> {
   try {
+    // 0. A stale run whose session owes the person is WAITING ON YOU, not
+    //    failed (W2 calm). Marked before the fail sweep, so the sweep below
+    //    (status = 'running') can never reach it. Its session is left open —
+    //    no close, no timeout narration. No `completedAt`: it did not finish.
+    const waiting = await db
+      .update(automationRuns)
+      .set({ status: "waiting_on_you" })
+      .where(and(RUN_IS_STALE, RUN_SESSION_OWES_HUMAN))
+      .returning({ id: automationRuns.id });
+    if (waiting.length > 0) {
+      logger.info(
+        { waiting: waiting.length },
+        "Automation run reaper marked runs waiting on the person"
+      );
+    }
+
     // 1. Finalize stale running runs that are not delay-suspended. The cutoff is
     //    computed in SQL (int * interval) so no Date param is bound — postgres.js
     //    3.4.8 crashes on Date/object Bind params on the pod image.
@@ -121,13 +158,7 @@ export async function handleAutomationRunReaper(): Promise<void> {
         errorMessage: STALE_RUN_ERROR_MESSAGE,
         completedAt: new Date(),
       })
-      .where(
-        and(
-          eq(automationRuns.status, "running"),
-          drizzleSql`${automationRuns.startedAt} < now() - (${REAPER_STALE_MINUTES}::int * interval '1 minute')`,
-          RUN_NOT_DELAY_SUSPENDED
-        )
-      )
+      .where(RUN_IS_STALE)
       .returning({ id: automationRuns.id });
 
     if (reaped.length === 0) {

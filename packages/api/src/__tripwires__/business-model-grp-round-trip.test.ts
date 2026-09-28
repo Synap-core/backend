@@ -10,6 +10,12 @@
  * createFromDefinition input, which REQUIRES `displayName` on every profile: a
  * reference that dropped it would be refused at the browser install door.
  *
+ * Also: the nine GRP seed questions (Génération / Rémunération / Partage,
+ * founder decision A 2026-09-28) and their rests_on edges survive both parses
+ * with titles, pillar tags and refs intact — the adoption key is the title, so
+ * a door that reshaped it would seed a duplicate set. The adoption itself runs
+ * through the real helper in services/compose-overlay.seeds.pglite.test.ts.
+ *
  * What this does NOT execute: the applier/reconcile writes (the round-trip
  * tripwire covers the applier path for grants with the same schema).
  */
@@ -114,6 +120,56 @@ describe("business-model.yaml (canonical GRP) — dry-run parse at every door", 
       ),
     };
     expect(createInputSchema.safeParse(broken).success).toBe(false);
+  });
+
+  it("the nine G·R·P seeds + their rests_on edges survive the Hub and tRPC parses verbatim", async () => {
+    type Seed = {
+      title: string;
+      profileSlug: string;
+      properties?: { tags?: string[] };
+    };
+    type Rel = { sourceRef: string; targetRef: string; type: string };
+    const seedsOf = (d: Record<string, unknown>) =>
+      ((d.seedEntities ?? d.suggestedEntities) as Seed[] | undefined) ?? [];
+    const source = await pkg("business-model");
+    const want = seedsOf(source);
+    expect(want).toHaveLength(9);
+    expect(want.some((s) => /^GRP #/.test(s.title))).toBe(false);
+    const pillars = want.map((s) =>
+      s.properties?.tags?.find((t) =>
+        ["generation", "remuneration", "sharing"].includes(t)
+      )
+    );
+    expect(pillars.filter((p) => p === "generation")).toHaveLength(3);
+    expect(pillars.filter((p) => p === "remuneration")).toHaveLength(3);
+    expect(pillars.filter((p) => p === "sharing")).toHaveLength(3);
+    const rels = source.suggestedRelations as Rel[];
+    expect(rels.length).toBeGreaterThan(0);
+
+    const hub = PackageApplySchema.parse(source) as Record<string, unknown>;
+    const trpc = (
+      trpcInput().parse({ definition: await wsDef("business-model") }) as {
+        definition: Record<string, unknown>;
+      }
+    ).definition;
+    for (const [door, parsed] of [
+      ["Hub", hub],
+      ["tRPC", trpc],
+    ] as const) {
+      expect(
+        seedsOf(parsed).map((s) => [s.title, s.properties?.tags]),
+        door
+      ).toEqual(want.map((s) => [s.title, s.properties?.tags]));
+      const titles = new Set(seedsOf(parsed).map((s) => s.title));
+      const parsedRels = parsed.suggestedRelations as Rel[];
+      expect(parsedRels, door).toEqual(rels);
+      for (const r of parsedRels) {
+        expect(
+          titles.has(r.sourceRef) && titles.has(r.targetRef),
+          `${door}: ${r.sourceRef}`
+        ).toBe(true);
+      }
+    }
   });
 
   it("role REFERENCES pass the tRPC door (displayName kept) for crm / business-developer / ecosystem", async () => {

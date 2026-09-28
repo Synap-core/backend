@@ -92,6 +92,8 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 
 A **track** runs a track template (a playbook with `scope: "project"`) inside ONE project; a project runs several (Business model, Content, Build). It pins its template version and has re-enterable steps (`stages`). A track owns no workspace: each step names the domain it works in (today its session lands in the project's home workspace). Work that repeats inside a track is an open-ended step plus a Rule that starts work into it each cycle. Definitions: `concepts`.
 
+**Asked to work a method on a project** ("run the business-model track on X"): `synap_list_tracks` for the project → none? `synap_list_playbooks` (`scope: "project"` = track template) → `synap_start_track`; work each step with `synap_start_stage_session`; never `synap_advance_track` without the user.
+
 | The user needs…                               | Do this                                                                                                                                      |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | a **method** in an existing project           | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track`  |

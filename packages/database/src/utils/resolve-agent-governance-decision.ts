@@ -16,6 +16,10 @@ import {
   PROPOSE_REASON,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
+import {
+  resolveAgentPosture,
+  type AgentPostureName,
+} from "@synap/governance-policy/postures";
 import { filterUncoveredActions } from "./floor-covered-actions.js";
 import { settingsMirrorCreatedBy } from "./governance-rule-provenance.js";
 import {
@@ -633,6 +637,146 @@ export async function syncAutoApproveRules(
       }))
     );
   });
+}
+
+/**
+ * Apply a NAMED posture (`@synap/governance-policy/postures`) to one agent —
+ * THE writer behind `PATCH /agent-users/:id/governance { posture }` and the
+ * new-agent default (D2). Not a second store: it writes ordinary rows into
+ * `governance_rules` (agent-scoped, pod scope, `verdict` auto | propose — the
+ * store's own enum) and the agent's `writesRequireProposal` dial, and stamps
+ * `agentMetadata.governancePosture` so a reader (`synap init`) can tell a
+ * configured agent from an untouched one.
+ *
+ * REPLACE semantics over the SAME row set `syncAutoApproveRules` owns (the
+ * settings-mirror rows: action target, no `source_proposal_id`), so a later
+ * autoApproveFor PATCH replaces a posture and vice versa. A human-approved
+ * widening (`source_proposal_id` set) is never touched.
+ *
+ * ONE transaction for rules + dial + marker. Order matters for the failure
+ * case: a new agent is inserted STRICT (`writesRequireProposal: true`) and only
+ * this commit loosens it, so a failed apply leaves the agent proposing
+ * everything — never auto-approving an update without its `propose` rule.
+ */
+export async function applyAgentPosture(input: {
+  db: DbHandle;
+  agentUserId: string;
+  posture: AgentPostureName;
+  /** The acting human — stored namespaced like every settings-mirror row. */
+  createdBy: string;
+}): Promise<{ posture: AgentPostureName; writesRequireProposal: boolean }> {
+  const { db, agentUserId, createdBy } = input;
+  const posture = resolveAgentPosture(input.posture);
+  const autos = Array.from(
+    new Set(filterUncoveredActions(posture.autoApproveFor))
+  );
+  const proposes = Array.from(new Set(posture.proposeFor));
+  const marker = JSON.stringify({
+    writesRequireProposal: posture.writesRequireProposal,
+    governancePosture: posture.name,
+  });
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(governanceRules)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          isNull(governanceRules.revokedAt),
+          isNull(governanceRules.sourceProposalId),
+          eq(governanceRules.targetKind, "action"),
+          eq(governanceRules.principalKind, "agent"),
+          eq(governanceRules.agentUserId, agentUserId),
+          eq(governanceRules.scopeKind, "pod")
+        )
+      );
+    const rows = [
+      ...autos.map((p) => ({ targetPattern: p, verdict: "auto" as const })),
+      ...proposes.map((p) => ({
+        targetPattern: p,
+        verdict: "propose" as const,
+      })),
+    ];
+    if (rows.length > 0) {
+      await tx.insert(governanceRules).values(
+        rows.map((r) => ({
+          principalKind: "agent" as const,
+          agentUserId,
+          scopeKind: "pod" as const,
+          targetKind: "action" as const,
+          targetPattern: r.targetPattern,
+          verdict: r.verdict,
+          createdBy: settingsMirrorCreatedBy(createdBy),
+        }))
+      );
+    }
+    await tx
+      .update(users)
+      .set({
+        agentMetadata: sql`coalesce(${users.agentMetadata}, '{}'::jsonb) || ${marker}::jsonb`,
+      })
+      .where(and(eq(users.id, agentUserId), eq(users.userType, "agent")));
+  });
+  return {
+    posture: posture.name,
+    writesRequireProposal: posture.writesRequireProposal,
+  };
+}
+
+/** What `GET /agent-users/:id/governance` returns (null ⇒ no such agent). */
+export interface AgentGovernanceState {
+  /** The named posture last applied, or null (custom / never set). */
+  posture: AgentPostureName | null;
+  writesRequireProposal: boolean;
+  /** Active agent-scoped, pod-scope action rules (this agent's own). */
+  rules: Array<{ pattern: string; verdict: "auto" | "propose" }>;
+  /**
+   * Has anyone ever set this agent's governance? A posture marker, any own
+   * rule, or `writesRequireProposal` explicitly off. `synap init` reads this
+   * before writing, so re-running it never overwrites a choice.
+   */
+  configured: boolean;
+}
+
+/** The read half of {@link applyAgentPosture}. */
+export async function readAgentGovernance(input: {
+  db: DbHandle;
+  agentUserId: string;
+}): Promise<AgentGovernanceState | null> {
+  const { db, agentUserId } = input;
+  const [agent] = await db
+    .select({ agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(and(eq(users.id, agentUserId), eq(users.userType, "agent")))
+    .limit(1);
+  if (!agent) return null;
+  const meta = (agent.agentMetadata ?? {}) as Partial<AgentMetadata>;
+  const rows = await db
+    .select({
+      pattern: governanceRules.targetPattern,
+      verdict: governanceRules.verdict,
+    })
+    .from(governanceRules)
+    .where(
+      and(
+        isNull(governanceRules.revokedAt),
+        eq(governanceRules.targetKind, "action"),
+        eq(governanceRules.principalKind, "agent"),
+        eq(governanceRules.agentUserId, agentUserId),
+        eq(governanceRules.scopeKind, "pod")
+      )
+    );
+  const rules = rows.map((r) => ({ pattern: r.pattern, verdict: r.verdict }));
+  const posture = meta.governancePosture ?? null;
+  return {
+    posture,
+    writesRequireProposal: meta.writesRequireProposal === true,
+    rules,
+    configured:
+      posture !== null ||
+      rules.length > 0 ||
+      meta.writesRequireProposal === false,
+  };
 }
 
 export interface ResolveOriginTrustInput {

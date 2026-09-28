@@ -105,6 +105,9 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // Project membership is a SCOPE CHANGE: it widens that user's read floor
   // across every workspace the project exposes (`exposureMemberWhere`).
   "projectMember/create",
+  // Filing EXISTING records into a project mints `belongs_to_project`, which
+  // exposes each record to every project member (`exposureMemberWhere`).
+  "project/file_entities",
   // Reserved-but-unbuilt in ADMIN_ACTIONS_RESERVED. Listed for the same reason
   // that list keeps them: a door that ships tomorrow inherits the lane on day
   // one rather than arriving classified as ordinary object work.

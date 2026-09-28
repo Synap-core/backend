@@ -95,6 +95,8 @@ export interface ProjectOutputItem {
   /** Artifact lifecycle, when an artifact row backs this output. */
   state?: SessionOutput["state"];
   producedBy?: SessionOutput["producedBy"];
+  /** An `entity` output's kind — see `SessionOutput.entityProfile`. */
+  entityProfile?: SessionOutput["entityProfile"];
 }
 
 export interface ProjectOutputsResult {
@@ -198,6 +200,7 @@ export async function listProjectOutputs(
         createdAt: new Date(o.producedAt).toISOString(),
         ...(o.state ? { state: o.state } : {}),
         ...(o.producedBy ? { producedBy: o.producedBy } : {}),
+        ...(o.entityProfile ? { entityProfile: o.entityProfile } : {}),
       });
     }
   }

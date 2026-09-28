@@ -51,7 +51,16 @@
  * the invariant), so that is a property of the system, not a hope.
  */
 
-import { db, focusSessions, and, eq, drizzleSql } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  and,
+  eq,
+  drizzleSql,
+  OWED_SLOT_CLAUSES,
+  owedSlotPredicateSql,
+  owedSlotWhere,
+} from "@synap/database";
 import type { SQL } from "@synap/database";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -59,51 +68,24 @@ import { sessionScopeConditions } from "./session-scope.js";
 import { notTriagePendingWhere, triagePendingWhere } from "./triage.js";
 
 /**
- * SQL: sessions carrying at least one slot that is still owed by the human.
+ * THE owed-slot predicate — `OWED_SLOT_CLAUSES` (the clause SET, as data),
+ * `owedSlotWhere()` (sessions holding at least one owed slot) and the shared
+ * fragment the ORDER BY composes — now lives in `@synap/database`
+ * (`utils/owed-slot-predicate.ts`), re-exported here unchanged.
  *
- * The `jsonb_typeof` guard is the same one `identity-resolution-service.ts`
- * carries in production: `jsonb_array_elements` ERRORS on a non-array value, and
- * `expected_outputs` is untyped JSONB that a legacy row can hold anything in.
- */
-/**
- * THE owed-slot predicate, as DATA — the clause SET, not a spelling.
- *
- * ⚠️ This existed as the same three lines typed out inside BOTH SQL builders,
+ * ⚠️ It existed as the same three lines typed out inside BOTH SQL builders,
  * and the suite asserted them with `toContain`. Membership is not completeness:
  * adding `AND slot->>'kind' = 'doc'` to both builders narrowed the pod-wide
  * "blocked on you" read to documents — hiding every other blocked slot from the
- * one screen that exists to show them — and all 23 tests stayed GREEN. Verified
- * by applying exactly that mutation.
+ * one screen that exists to show them — and all 23 tests stayed GREEN. So the
+ * clauses are a value both builders compose, and the guard asserts the SET.
  *
- * Two things changed. The clauses are a value both builders compose, so the
- * WHERE and the ORDER BY can no longer hold different predicates by drift. And
- * the guard asserts the SET — a fourth clause fails the count — rather than
- * asserting that three particular strings appear somewhere in it.
+ * It MOVED (W2 calm, 2026-09-28) because the reapers in `@synap/jobs` — which
+ * cannot import this package — must refuse to close or stale a session the
+ * person still owes, by the SAME predicate this read counts with. A copy in
+ * jobs would be how the two disagree.
  */
-export const OWED_SLOT_CLAUSES = [
-  "slot->>'owner' = 'human'",
-  "slot->>'status' IS DISTINCT FROM 'done'",
-  "slot->>'retiredAt' IS NULL",
-] as const;
-
-/**
- * The three clauses as ONE SQL fragment, so the WHERE and the ORDER BY cannot
- * hold different predicates — they now share a value, not a convention.
- */
-const owedSlotPredicateSql = drizzleSql.raw(
-  OWED_SLOT_CLAUSES.join("\n      AND ")
-);
-
-export function owedSlotWhere(): SQL {
-  return drizzleSql`EXISTS (
-    SELECT 1 FROM jsonb_array_elements(
-      CASE WHEN jsonb_typeof(${focusSessions.expectedOutputs}) = 'array'
-           THEN ${focusSessions.expectedOutputs}
-           ELSE '[]'::jsonb END
-    ) AS slot
-    WHERE ${owedSlotPredicateSql}
-  )`;
-}
+export { OWED_SLOT_CLAUSES, owedSlotWhere };
 
 /**
  * SQL: an index-usable POSITIVE PREFILTER, and nothing more.

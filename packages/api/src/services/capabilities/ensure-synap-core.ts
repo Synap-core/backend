@@ -559,6 +559,21 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "property_def.propose_retire",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Propose RETIRING a field (a property definition) via propertyDefs.proposeRetire — including global and base fields no other door can remove. Like profile.propose_retire it has no execute branch: it files a PENDING retirement proposal unconditionally, for anyone, or is REFUSED while the field still holds values (move or clear them first; no data migration is offered). Authority is read from the field's own row: a space overlay needs editor+ of that space, a kind's base field needs that kind's schema writer, a global field needs a pod admin. On approval the definition is deleted.",
+      parameters: {
+        type: "object",
+        required: ["propertyDefId"],
+        properties: {
+          propertyDefId: { type: "string", format: "uuid" },
+          reason: { type: "string" },
+        },
+      },
+    },
+    {
       name: "entity.delete",
       kind: "builtin",
       scope: "pod",

@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./postures": {
+      "types": "./dist/postures.d.ts",
+      "import": "./dist/postures.js"
     }
   },
   "scripts": {

@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../services/workspace-ops-doors.js", () => ({
+  fileIntoProjectDoor: vi.fn(async () => ({ status: "filed" })),
   archiveWorkspaceDoor: vi.fn(
     async (_a: unknown, input: Record<string, unknown>) => {
       h.archiveCalls.push(input);

@@ -162,6 +162,17 @@ export type NotificationNeedsYouRole =
  */
 export const SESSION_ATTENTION_DEDUPE_WINDOW_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * The window for types that fire once per RUN or per SYNC about the same
+ * target — `automation.notification`, `connector.sync.failed` (W2 calm,
+ * census §3c): one row per (user, type, target) per day. A step that runs
+ * every five minutes, or a sync that fails every hour, is one piece of news
+ * until the person reads it; once the day has passed and the row is still
+ * unread, the next one REFRESHES that row rather than stacking a second
+ * (`NotificationService.create`, the 0281 guard).
+ */
+export const NOTIFICATION_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -350,6 +361,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     titleTemplate: "{{connectorName}} sync failed",
     bodyTemplate: "{{errorMessage}}",
     defaultChannels: ["in_app", "os"],
+    // The producer keys the group on the connector (its target); a failing
+    // sync is one row a day, not one per attempt.
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
     actions: [
       {
         id: "settings",
@@ -494,6 +508,10 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    // The producer (`steps/output.ts`) always keys the group on the
+    // automation + its target, so a step that fires every run is one row a
+    // day per target, not one per run.
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
   },
   {
     // An automation the system flipped to status='error' has silently stopped
@@ -1095,14 +1113,32 @@ export function getNotificationDef(type: string): NotificationDef | undefined {
 }
 
 /**
+ * Types whose producer was DELIBERATELY retired. Their legacy unread rows are
+ * news nobody will ever act on, so they are `"informational"` — out of
+ * needs-you, still in the bell's history. Named, never inferred: an unknown
+ * type NOT on this list stays an `"item"` (below), because a type we cannot
+ * classify might still be an ask.
+ *
+ * - `session.room_update` — an agent's plain room update produces no
+ *   notification at all (founder decision F, 2026-09-25); migration 0281
+ *   marks its open rows read.
+ */
+export const RETIRED_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
+  "session.room_update",
+]);
+
+/**
  * The needs-you role of a notification type — its registry row's `needsYou`,
- * `"item"` when the row omits it. An unknown type (a legacy row whose
- * definition was retired) is also an `"item"`: an unread row nobody can
- * classify stays visible rather than silently dropping out of the count.
+ * `"item"` when the row omits it. A RETIRED type
+ * ({@link RETIRED_NOTIFICATION_TYPES}) is `"informational"`. Any other unknown
+ * type is an `"item"`: an unread row nobody can classify stays visible rather
+ * than silently dropping out of the count.
  */
 export function needsYouRole(
   type: string | undefined
 ): NotificationNeedsYouRole {
   if (!type) return "item";
-  return NOTIFICATION_REGISTRY_MAP.get(type)?.needsYou ?? "item";
+  const def = NOTIFICATION_REGISTRY_MAP.get(type);
+  if (def) return def.needsYou ?? "item";
+  return RETIRED_NOTIFICATION_TYPES.has(type) ? "informational" : "item";
 }

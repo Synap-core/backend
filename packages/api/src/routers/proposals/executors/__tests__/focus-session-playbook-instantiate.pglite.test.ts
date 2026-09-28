@@ -251,7 +251,7 @@ describe("approved playbook instantiate = the direct instantiate row", () => {
     ).rejects.toThrow(/not visible/);
   });
 
-  it("a second materialization at the same id writes ZERO rows (the receipt's zero)", async () => {
+  it("a second materialization at the same id writes nothing and links the existing row", async () => {
     const { targetId } = await execute("focus_session/create", {
       playbookId: PLAYBOOK,
       goal: "CRM hygiene",
@@ -262,7 +262,13 @@ describe("approved playbook instantiate = the direct instantiate row", () => {
       { playbookId: PLAYBOOK, goal: "CRM hygiene · twin" },
       targetId
     );
-    expect((result as { effect: { rows: number } }).effect.rows).toBe(0);
+    // X1: the claim sees the row already at `targetId` and LINKS to it — the
+    // receipt still says nothing was written (`applied: "none"`), and now also
+    // names the row the approval landed on.
+    expect(result).toMatchObject({
+      primaryId: targetId,
+      effect: { applied: "none" },
+    });
   });
 });
 

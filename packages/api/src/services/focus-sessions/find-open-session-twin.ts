@@ -85,6 +85,34 @@ export interface SessionTwinMatch {
 
 const NONE: SessionTwinMatch = { exact: null, candidates: [] };
 
+/**
+ * THE advisory-lock key both session create doors take around "ask the twin
+ * question, then insert" — `createFocusSession` (direct) and the
+ * `focus_session/create` approve executor (proposed). Same scope rule as the
+ * matcher above. One key, derived here, so the two doors serialize against
+ * EACH OTHER: a lock only one door takes is how the 2026-09-13 pair (executor
+ * insert + direct create 214ms later) got through both twin checks.
+ */
+export function sessionTwinLockKey(input: {
+  userId: string;
+  goal: string;
+  workspaceId: string | null;
+  projectId: string | null;
+  parentSessionId: string | null;
+  trackId?: string | null;
+  trackStage?: string | null;
+}): string {
+  const scopeKey =
+    (input.parentSessionId
+      ? `parent:${input.parentSessionId}`
+      : input.projectId
+        ? `project:${input.projectId}`
+        : `workspace:${input.workspaceId ?? ""}`) +
+    // M3: the twin scope includes the track stage, so the lock does too.
+    (input.trackId ? `|track:${input.trackId}:${input.trackStage ?? ""}` : "");
+  return `session-twin|${input.userId}|${scopeKey}|${normalizeGoal(input.goal).toLowerCase()}`;
+}
+
 export async function findOpenSessionTwin(
   input: FindOpenSessionTwinInput
 ): Promise<SessionTwinMatch> {

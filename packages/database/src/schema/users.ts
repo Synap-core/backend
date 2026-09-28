@@ -7,6 +7,7 @@
  * - Kratos remains source of truth for authentication
  */
 
+import type { AgentPostureName } from "@synap/governance-policy/postures";
 import { pgTable, text, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { workspaces, workspaceMembers } from "./workspaces.js";
@@ -23,6 +24,15 @@ export interface AgentMetadata {
   isPersonalAgent?: boolean;
   parentAgentId?: string;
   writesRequireProposal?: boolean;
+  /**
+   * The named governance posture last applied to this agent
+   * (`@synap/governance-policy/postures`), written ONLY by
+   * `applyAgentPosture`. Absent ⇒ never set by name (untouched, or a custom
+   * autoApproveFor list — which clears it). A marker for readers (`synap init`
+   * reads before it writes), never a decision input: the decision store is
+   * `governance_rules`.
+   */
+  governancePosture?: AgentPostureName;
   /**
    * @deprecated RETIRED as a write target (Governance Convergence, contract
    * phase). NO write surface persists this anymore — the per-agent auto-approve
@@ -58,6 +68,19 @@ export interface AgentMetadata {
    * project placement abstains where workspace placement defaults.
    */
   focusProjectId?: string;
+  /**
+   * PER-CONVERSATION focus, keyed by the conversation's client key
+   * (`clientKeyForApiKey`, `key:<id>|conv:<id>`). A conversation-scoped request
+   * reads and writes ONLY its own entry — never the two agent-wide fields above
+   * (those are the KEY-scope focus, option A), so one conversation's
+   * `set_project_focus` can no longer pin every other conversation on the same
+   * agent key. `null` = explicitly cleared. Entries idle 30 days are pruned on
+   * write. Same declaration rules as the agent-wide fields.
+   */
+  conversationFocus?: Record<
+    string,
+    { workspaceId?: string | null; projectId?: string | null; at: string }
+  >;
   /** Reserved for the enforced (hard read+write scope) follow-on wave; only
    * "advisory" is implemented today — the field exists so a future "enforced"
    * value doesn't require another migration. */

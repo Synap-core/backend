@@ -49,8 +49,8 @@ import { extractProposalName } from "../services/proposals/fingerprint.js";
 import {
   unionNeedsYou,
   unionSuggestions,
-  pageNeedsYou,
   countNeedsYou,
+  ageBucketOf,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
   type Signal,
@@ -377,12 +377,15 @@ export const signalsRouter = router({
           // The SAME door `focusSessions.owed` exposes, through `createCaller`
           // like the other two halves — so the owner floor and the lens
           // application (`sessionScopeConditions`) are the ones Wave A already
-          // shipped, not a second derivation living in this file.
+          // shipped, not a second derivation living in this file. Read at the
+          // COUNT's cap, not the page's: the union orders newest-first across
+          // kinds and then cuts, so both doors must order the same population
+          // or the badge counts rows the list could never reach.
           isOwedNarrowable(input)
             ? focusSessionsRouter.createCaller(ctx).owed({
                 workspaceId: floorLens(input.workspaceId),
                 ...(input.projectId ? { projectId: input.projectId } : {}),
-                limit: input.limit,
+                limit: OWED_SCAN_LIMIT,
                 excludeDrafts: true,
               })
             : Promise.resolve([]),
@@ -403,11 +406,11 @@ export const signalsRouter = router({
             await openQuestionSessionIdsFor(notificationRows),
           draftAsks: drafts.draftAsks,
         });
-        // Paged through `pageNeedsYou`, never a bare slice: owed slots are an
-        // unbounded, never-expiring source sitting FIRST, so one shared cap let
-        // them evict the entire pending-proposal queue from the tray while the
-        // badge went on counting it.
-        return { signals: pageNeedsYou(signals, input.limit) };
+        // A plain cut of the ONE order. The per-source reserve this used to
+        // apply (`pageNeedsYou`) existed because owed slots sorted FIRST and
+        // could evict every decision; newest-first across kinds removed that
+        // starvation, and a reserve would now re-order the page.
+        return { signals: signals.slice(0, input.limit) };
       }
 
       // ── history: past events merged with decided proposals ──────────────
@@ -441,6 +444,7 @@ export const signalsRouter = router({
         listDecidedProposals(ctx, input, input.limit, before),
       ]);
 
+      const now = new Date();
       const eventSignals: Signal[] = events.map((e) => ({
         id: `event:${e.id}`,
         kind: "event" as const,
@@ -454,6 +458,9 @@ export const signalsRouter = router({
             ? { kind: e.subjectType, id: e.subjectId }
             : null,
         category: "data",
+        groupKey: null,
+        ageBucket: ageBucketOf(e.timestamp, now),
+        repeatCount: 1,
       }));
 
       const merged = [...eventSignals, ...decided].sort(
@@ -623,5 +630,10 @@ async function listDecidedProposals(
     occurredAt: r.decidedAt as Date,
     target: { kind: "proposal", id: r.id },
     category: "governance",
+    groupKey: null,
+    // `new Date(...)`: a raw-SQL aggregate may arrive as a string from the
+    // driver; bucketing must not depend on which.
+    ageBucket: ageBucketOf(new Date(r.decidedAt as Date), new Date()),
+    repeatCount: 1,
   }));
 }

@@ -1785,6 +1785,14 @@ export const GATE_WRITE_DOORS = {
   "profile/renderer.set": "gate",
   "project/create": "gate",
   "project/delete": "gate",
+  // File EXISTING entities into a project (`projects.fileEntities`, MCP
+  // `synap_file_into_project`). Minting `belongs_to_project` exposes each
+  // record to every project member, so it is an ACCESS decision
+  // (`proposal-class.ts` ACCESS_DOORS) and the door passes `forcePropose` — an
+  // agent always proposes. Un-filing is `link/delete` (DESTRUCTIVE floor).
+  // Replayed on approval by `routers/proposals/executors/project-filing.ts`
+  // through the same `linkEntityToProject`, re-floored on the owner.
+  "project/file_entities": "gate",
   "project/instantiate_from_playbook": "gate",
   // Session → project. Its OWN door, not `project/create`: the two are
   // materialized by different executors (create takes a name; this takes a
@@ -1933,6 +1941,10 @@ export const DIRECT_PROPOSAL_DOORS = {
   // Pod hygiene (D5/D7/D9): filed directly, never through the gate; approval is
   // always a human step.
   "profile/retire": "direct",
+  // A FIELD's retirement (`services/pod-hygiene/retire-property-def.ts`): same
+  // policy as `profile/retire` — always a pending proposal, for anyone; the
+  // approval half re-runs the preflight and deletes the def.
+  "property_def/retire": "direct",
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",

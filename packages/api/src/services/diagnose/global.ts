@@ -28,7 +28,11 @@ import {
   ownAgentUserFilter,
   authoredByUser,
 } from "../agent-identity-service.js";
-import { listRuns, listRunGroups } from "../runs/index.js";
+import {
+  listRuns,
+  listRunGroups,
+  RECENT_FAILURE_WINDOW_DAYS,
+} from "../runs/index.js";
 import {
   collapseProposalsToClusters,
   type ClusterInputRow,
@@ -195,19 +199,30 @@ export function summarizeGlobalHealth(
     },
   });
 
-  // Failed flows — degraded if any flow has a failure.
+  // Failing flows — degraded if any flow failed in the last 7 days (W2 calm).
+  // `failedFlows` is already windowed at the source (`recentFailedCount`), so
+  // the health number is DISTINCT FLOWS failing now — never lifetime runs, which
+  // read "339 failing" for one flow that broke in June.
   const failedTotal = signals.failedFlows.reduce(
     (s, f) => s + f.failedCount,
     0
   );
+  const failingFlows = signals.failedFlows.length;
   sections.push({
     key: "failed_flows",
-    status: signals.failedFlows.length > 0 ? "degraded" : "ok",
+    status: failingFlows > 0 ? "degraded" : "ok",
     headline:
-      signals.failedFlows.length > 0
-        ? `${failedTotal} failed run(s) across ${signals.failedFlows.length} flow(s)`
-        : "No failed flows",
-    detail: { flows: signals.failedFlows.slice(0, 10), failedTotal },
+      failingFlows > 0
+        ? `${failingFlows} flow(s) failing in the last ${RECENT_FAILURE_WINDOW_DAYS} days`
+        : `No flow failed in the last ${RECENT_FAILURE_WINDOW_DAYS} days`,
+    detail: {
+      flows: signals.failedFlows.slice(0, 10),
+      /** THE health number: distinct flows with a failed run in the window. */
+      failingFlows,
+      /** Failed runs inside the window, summed over those flows. */
+      failedTotal,
+      windowDays: RECENT_FAILURE_WINDOW_DAYS,
+    },
   });
 
   // Review backlog — attention when non-empty; degraded when it's gone stale.
@@ -554,18 +569,25 @@ export async function diagnoseGlobal(params: {
     ageHours: r.ageHours,
   }));
 
+  // Windowed at the source (W2 calm): a flow is failing iff it failed in the
+  // last RECENT_FAILURE_WINDOW_DAYS; `failedCount` here is that window's count.
   const failedFlows = groups
-    .filter((g) => g.failedCount > 0)
+    .filter((g) => g.recentFailedCount > 0)
     .map((g) => ({
       flowName: g.flowName,
-      failedCount: g.failedCount,
+      failedCount: g.recentFailedCount,
       hasRunning: g.hasRunning,
     }));
-  // Chat has no flowId group — surface failed chat as one synthetic "Chat" row.
-  if (failedChatRuns.length > 0) {
+  // Chat has no flowId group — surface failed chat as one synthetic "Chat" row,
+  // windowed the same way.
+  const failureCutoff = now - RECENT_FAILURE_WINDOW_DAYS * 24 * HOUR_MS;
+  const recentFailedChat = failedChatRuns.filter(
+    (r) => new Date(r.startedAt).getTime() > failureCutoff
+  );
+  if (recentFailedChat.length > 0) {
     failedFlows.push({
       flowName: "Chat",
-      failedCount: failedChatRuns.length,
+      failedCount: recentFailedChat.length,
       hasRunning: runningRuns.some((r) => r.flowType === "chat"),
     });
   }

@@ -32,6 +32,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       return { linked: true, suspendedIntentRecorded: false };
     },
     db: {
+      // X1: the executor's claim runs in a transaction on the same handle.
+      transaction: async (fn: (tx: unknown) => unknown) =>
+        fn((await import("@synap/database")).db),
+      execute: async () => undefined,
       select: () => {
         // Two reads go through this chain: the proposal status (awaited at
         // `.where`) and the executor's open-twin lookup (`.orderBy().limit()`),
@@ -42,6 +46,8 @@ vi.mock("@synap/database", async (importOriginal) => {
           where: () =>
             Object.assign(Promise.resolve([{ status: "pending" }]), {
               orderBy: () => ({ limit: async () => [] }),
+              // The claim's "row already at targetId?" read — none here.
+              limit: async () => [],
             }),
         };
         return b;

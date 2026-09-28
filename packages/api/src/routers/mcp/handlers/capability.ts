@@ -25,6 +25,7 @@ import {
 } from "@synap/database";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import { defineProfile } from "../../hub-protocol/define-profile.js";
+import { proposePropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
 import {
   ok,
   requireScope,
@@ -35,6 +36,25 @@ import {
 } from "./shared.js";
 
 export const capabilityHandlers: McpHandlerMap = {
+  // Governed FIELD retirement — the same door as capability verb
+  // `property_def.propose_retire` / tRPC `propertyDefs.proposeRetire`: always
+  // a pending proposal, or a refusal while the field holds values.
+  synap_retire_field: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const propertyDefId = args.propertyDefId;
+    if (typeof propertyDefId !== "string" || !propertyDefId) {
+      return ok({ error: "propertyDefId is required" });
+    }
+    return ok(
+      await proposePropertyDefRetire({
+        userId,
+        propertyDefId,
+        agentUserId: agentUserId ?? null,
+        reason: readReasoning(args),
+      })
+    );
+  },
   synap_define_role: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
       toolName,

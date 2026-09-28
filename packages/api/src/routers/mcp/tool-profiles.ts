@@ -98,6 +98,7 @@ export const TOOL_GROUPS = {
     "synap_define_kind",
     "synap_define_role",
     "synap_grant_profile_access",
+    "synap_retire_field",
   ],
   /** Spaces, projects and focus. */
   spaces: [
@@ -113,6 +114,7 @@ export const TOOL_GROUPS = {
     "synap_create_project",
     "synap_update_project",
     "synap_project_use_workspace",
+    "synap_file_into_project",
     "synap_export_project_pack",
   ],
   /** Tracks: multi-stage work over time. */

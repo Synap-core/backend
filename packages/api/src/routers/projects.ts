@@ -39,6 +39,7 @@ import {
 import { getProjectPath } from "../services/projects/project-path.js";
 import { createProjectGoverned } from "../services/projects/create-project.js";
 import { updateProjectGoverned } from "../services/projects/update-project.js";
+import { fileEntitiesGoverned } from "../services/projects/file-entities.js";
 import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
@@ -544,6 +545,38 @@ export const projectsRouter = router({
       }
       return { status: "updated" };
     }),
+
+  /**
+   * FILE existing records into this project — or, with `remove`, take them
+   * back out. The ONE governed door (`services/projects/file-entities.ts`),
+   * shared with Hub REST `POST /projects/:projectId/file` and MCP
+   * `synap_file_into_project`: project visible + every record writable by the
+   * caller, then the gate (`project/file_entities` with forcePropose; un-file
+   * is `link/delete`), one proposal for the whole batch.
+   */
+  fileEntities: podProcedure
+    .input(
+      z.object({
+        projectId: z.string().uuid(),
+        entityIds: z.array(z.string().uuid()).min(1).max(500),
+        /** true = un-file (remove the belongs_to_project edges). */
+        remove: z.boolean().optional(),
+        /** Shown to the reviewer when the gate files a proposal. */
+        reasoning: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) =>
+      fileEntitiesGoverned({
+        userId: ctx.userId,
+        // Attribution: without it an agent's filing reads as the owner's own
+        // and executes. The gate also reads the ambient acting agent.
+        agentUserId: ctx.agentUserId ?? undefined,
+        projectId: input.projectId,
+        entityIds: input.entityIds,
+        remove: input.remove === true,
+        reasoning: input.reasoning,
+      })
+    ),
 
   /**
    * The automations enrolled in this project — tier 3 under tier 1.

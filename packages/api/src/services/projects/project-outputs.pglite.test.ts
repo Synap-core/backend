@@ -69,6 +69,9 @@ import {
   sessionEvaluations,
   podMembers,
   projectMembers,
+  profiles,
+  channels,
+  channelMembers,
 } from "@synap/database";
 import { sessionNeedsYou, tallyNeedsYou } from "@synap-core/types/units";
 import { AccessContext } from "../../access/index.js";
@@ -113,6 +116,7 @@ const TRACK = randomUUID();
 const PLAYBOOK = randomUUID();
 const AUTOMATION = randomUUID();
 const ENTITY = randomUUID();
+const DECISION_PROFILE = randomUUID();
 const FILED_ENTITY = randomUUID();
 
 const S = {
@@ -212,6 +216,10 @@ beforeAll(async () => {
     sessionEvaluations,
     podMembers,
     projectMembers,
+    profiles,
+    // The operator door's roster branch (`sessionReadableWhere`) reads these.
+    channels,
+    channelMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -237,9 +245,15 @@ beforeAll(async () => {
      values ($1, $2, $3, 'Business model', '{"stages":[]}'::jsonb, '1', null, 'active', '{}'::jsonb, now(), now())`,
     [TRACK, PROJECT, USER]
   );
+  // The produced entity is a DECISION (a profile row with its own display
+  // name + icon) — the kind every Produced card must be able to name.
   await q(
-    `insert into entities (id, user_id, title) values ($1, $2, 'Pricing sheet'), ($3, $2, 'Filed, not produced')`,
-    [ENTITY, USER, FILED_ENTITY]
+    `insert into profiles (id, slug, display_name, ui_hints) values ($1, 'decision', 'Decision', '{"icon":"Gavel"}'::jsonb)`,
+    [DECISION_PROFILE]
+  );
+  await q(
+    `insert into entities (id, user_id, title, type, profile_id) values ($1, $2, 'Pricing sheet', 'decision', $4), ($3, $2, 'Filed, not produced', 'note', null)`,
+    [ENTITY, USER, FILED_ENTITY, DECISION_PROFILE]
   );
 
   await session(S.w1, {
@@ -351,6 +365,50 @@ describe("projects.outputs (P1 + P2)", () => {
     expect(r.items.find((i) => i.sessionId === S.rt)!.trackStage).toBeNull();
     expect(r.nextCursor).toBeNull();
     expect(r.truncated).toBe(false);
+  });
+
+  it("an entity output carries its KIND through every door (service, tRPC projects + session, Hub)", async () => {
+    const want = { slug: "decision", displayName: "Decision", icon: "Gavel" };
+    const r = (await listProjectOutputs({
+      access: access(),
+      projectId: PROJECT,
+      limit: 50,
+    }))!;
+    const entity = r.items.find((i) => i.ref.id === ENTITY)!;
+    expect(entity.entityProfile).toEqual(want);
+    // Non-entities carry no kind — never a guessed one.
+    for (const i of r.items.filter((i) => i.kind !== "entity")) {
+      expect(i.entityProfile).toBeUndefined();
+    }
+    const trpcItems = (
+      await projectsRouter
+        .createCaller({ db, authenticated: true, userId: USER } as never)
+        .outputs({ projectId: PROJECT })
+    ).items;
+    expect(trpcItems.find((i) => i.ref.id === ENTITY)!.entityProfile).toEqual(
+      want
+    );
+    const session = await focusSessionsRouter
+      .createCaller({ db, authenticated: true, userId: USER } as never)
+      .outputs({ sessionId: S.w1 });
+    expect(
+      session.outputs.find((o) => o.refId === ENTITY)!.entityProfile
+    ).toEqual(want);
+    const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    app.use("/*", async (c, next) => {
+      c.set("userId", USER);
+      c.set("scopes", ["hub-protocol.read"]);
+      await next();
+    });
+    registerProjectsRoutes(app);
+    const body = (await (
+      await app.request(`/projects/${PROJECT}/outputs`)
+    ).json()) as {
+      items: Array<{ ref: { id: string }; entityProfile?: unknown }>;
+    };
+    expect(body.items.find((i) => i.ref.id === ENTITY)!.entityProfile).toEqual(
+      want
+    );
   });
 
   it("BOUNDED: scans the most recently active sessions only, and says so with `truncated`", async () => {

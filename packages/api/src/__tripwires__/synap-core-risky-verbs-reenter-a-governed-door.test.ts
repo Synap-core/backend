@@ -720,6 +720,16 @@ const REENTRY_CLASS: Record<string, Classification> = {
       "who may FILE, not what executes. The hard-delete twin " +
       "(profilesRouter.delete) is deliberately not projected as a verb.",
   },
+  "property_def.propose_retire": {
+    ungated:
+      "propertyDefsRouter.proposeRetire has NO execute branch to gate: it " +
+      "calls proposePropertyDefRetire, which files a PENDING proposal " +
+      "unconditionally for every caller (or refuses while the field holds " +
+      "values). Same shape as profile.propose_retire: its floor " +
+      "(assertPropertyDefSchemaWrite on the LOADED def) governs who may FILE, " +
+      "and the approval half re-runs preflight + floor on the approver. The " +
+      "hard-delete twin (propertyDefsRouter.delete) is not projected.",
+  },
   "view.update": {
     ungated:
       "viewsRouter.update carries no checkPermissionOrPropose (views.ts gates " +

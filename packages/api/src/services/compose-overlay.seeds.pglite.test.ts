@@ -10,6 +10,11 @@
  * `applyDefinition` create-mode seeded the compose base WITHOUT a key (every
  * re-run duplicated the nine GRP questions).
  *
+ * The seeds are the Génération / Rémunération / Partage set (founder decision
+ * A, 2026-09-28), whose live rows are POD-LEVEL (workspace_id NULL, never
+ * stamped to Foundation). The live-shape case below inserts exactly that and
+ * asserts the real helper adopts all nine by title.
+ *
  * Stubbed: the schema reconcile (`reconcileWorkspaceFromDefinition` — not what
  * this is about), the ledger write, the write gate, the event bus.
  * What this CANNOT see: production Postgres constraints (tables are generated
@@ -94,6 +99,25 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 let definition: Record<string, unknown>;
 let seedTitles: string[];
+let seedRelations: Array<{ sourceRef: string; targetRef: string }>;
+
+/**
+ * The founder's live pod-level GRP questions (read 2026-09-28, pod
+ * antoinesrvt, all workspace_id NULL). Pinned HERE, independently of the
+ * template, so a template title that drifts from the live row is caught by the
+ * adoption assertion instead of silently seeding a second set.
+ */
+const LIVE_POD_LEVEL_GRP_TITLES = [
+  "Porteur — what does the founder bring that cannot be hired, and what does the venture require of them personally?",
+  "Value proposition — for whom is this indispensable, and what do they stop doing once they have it?",
+  "Value fabrication — what is the chain that actually produces the value, and which link do we own?",
+  "Revenue sources — who pays, for which unit, and why that unit rather than another?",
+  "Volume and pricing — what volume at what price clears the cost base, and is that volume reachable in this market?",
+  "Performance — which number tells us the model works, and what observation would falsify it?",
+  "Stakeholders — who must say yes for this to exist, and what does each of them need in return?",
+  "Conventions — which rules bind us, who enforces them, and which are mandatory rather than advisory?",
+  "Ecosystem — what does the venture give back, and what breaks if we extract without returning?",
+];
 
 async function newWorkspace(): Promise<string> {
   const ws = randomUUID();
@@ -168,12 +192,39 @@ beforeAll(async () => {
   const seeds = (definition.seedEntities ?? definition.suggestedEntities) as
     Array<{ profileSlug: string; title: string }> | undefined;
   seedTitles = (seeds ?? []).map((s) => s.title);
+  seedRelations = (definition.suggestedRelations ?? []) as typeof seedRelations;
 }, 60_000);
 
 describe("composeOntoBaseWorkspace — overlay seeds adopt, never duplicate", () => {
-  it("the real business-model overlay carries the nine GRP questions (non-vacuity)", () => {
+  it("the real business-model overlay carries the nine G·R·P questions (non-vacuity)", () => {
     expect(seedTitles).toHaveLength(9);
-    expect(seedTitles.every((t) => /^GRP #\d: /.test(t))).toBe(true);
+    expect(seedTitles.some((t) => /^GRP #/.test(t))).toBe(false);
+    expect(seedRelations.length).toBeGreaterThan(0);
+  });
+
+  it("the live pod-level set (workspace_id NULL) is ADOPTED by title: zero entities written", async () => {
+    const ws = await newWorkspace();
+    for (const t of LIVE_POD_LEVEL_GRP_TITLES) await insertQuestion(U, null, t);
+    const before = await counts();
+
+    const res = await install(ws);
+    expect(res.seeds?.errors).toEqual([]);
+    expect(res.seeds?.entitiesCreated).toBe(0);
+    expect(res.seeds?.entitiesAdopted).toBe(9);
+    const after = await counts();
+    expect(after.entities).toBe(before.entities);
+    // Every seeded rests_on edge lands between the ADOPTED live rows.
+    expect(after.relations - before.relations).toBe(seedRelations.length);
+    const orphan = await q<{ n: number }>(
+      `select count(*)::int as n from relations r
+         where r.user_id = $1
+           and (r.source_entity_id not in (select id from entities where user_id=$1 and workspace_id is null)
+             or r.target_entity_id not in (select id from entities where user_id=$1 and workspace_id is null))`,
+      [U]
+    );
+    expect(orphan.rows[0]!.n).toBe(0);
+    await q(`delete from relations where user_id = $1`, [U]);
+    await q(`delete from entities where user_id = $1`, [U]);
   });
 
   it("installing twice onto a Foundation that already holds the questions writes ZERO entities", async () => {
@@ -193,8 +244,15 @@ describe("composeOntoBaseWorkspace — overlay seeds adopt, never duplicate", ()
     expect(first.seeds?.errors).toEqual([]);
     const afterFirst = await counts();
     expect(afterFirst.entities).toBe(before.entities);
-    // The 7 seeded rests_on edges among the adopted live questions.
-    expect(afterFirst.relations - before.relations).toBe(7);
+    // Every seeded rests_on edge among the adopted questions, minus those that
+    // name the user-deleted one (skipped, not re-created).
+    const deleted = seedTitles[8]!;
+    const expectedEdges = seedRelations.filter(
+      (r) => r.sourceRef !== deleted && r.targetRef !== deleted
+    ).length;
+    expect(expectedEdges).toBeGreaterThan(0);
+    expect(expectedEdges).toBeLessThan(seedRelations.length);
+    expect(afterFirst.relations - before.relations).toBe(expectedEdges);
 
     const second = await install(ws);
     expect(second.seeds?.entitiesCreated).toBe(0);

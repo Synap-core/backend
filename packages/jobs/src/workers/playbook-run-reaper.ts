@@ -35,6 +35,7 @@ import {
   drizzleSql,
   playbookRuns,
   focusSessions,
+  sessionOwesHumanWhere,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { closeSessionViaDoor } from "../utils/session-close.js";
@@ -71,9 +72,33 @@ export const RUN_SESSION_NOT_ACTIVE = drizzleSql`NOT EXISTS (
     AND fs.updated_at > now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')
 )`;
 
+/** A running run past the window whose session shows no recent activity. */
+const RUN_IS_STALE = and(
+  eq(playbookRuns.status, "running"),
+  drizzleSql`${playbookRuns.startedAt} < now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')`,
+  RUN_SESSION_NOT_ACTIVE
+);
+
 /** Called by the cron scheduler every ~30 minutes. */
 export async function handlePlaybookRunReaper(): Promise<void> {
   try {
+    // 0. A quiet run whose session owes the person is WAITING ON YOU, not
+    //    orphaned (W2 calm): a session waiting on the person is quiet by
+    //    definition, so `RUN_SESSION_NOT_ACTIVE` alone read it as dead. Marked
+    //    first so the fail sweep (status = 'running') can never reach it; its
+    //    session is left open. No `completedAt`: it did not finish.
+    const waiting = await db
+      .update(playbookRuns)
+      .set({ status: "waiting_on_you" })
+      .where(and(RUN_IS_STALE, sessionOwesHumanWhere(playbookRuns.sessionId)))
+      .returning({ id: playbookRuns.id });
+    if (waiting.length > 0) {
+      logger.info(
+        { waiting: waiting.length },
+        "Playbook run reaper marked runs waiting on the person"
+      );
+    }
+
     // 1. Force-fail stale running runs whose session is no longer active.
     const reaped = await db
       .update(playbookRuns)
@@ -82,13 +107,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
         error: STALE_RUN_ERROR_MESSAGE,
         completedAt: new Date(),
       })
-      .where(
-        and(
-          eq(playbookRuns.status, "running"),
-          drizzleSql`${playbookRuns.startedAt} < now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')`,
-          RUN_SESSION_NOT_ACTIVE
-        )
-      )
+      .where(RUN_IS_STALE)
       .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
 
     if (reaped.length === 0) {

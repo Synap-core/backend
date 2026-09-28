@@ -18,3 +18,7 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | **Role**      | role profile + facet    | which hat does it wear?              | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin      |
 
 Doors: `start_track`, `start_stage_session`, `start_session`, `create_rule`, `attach_facet`.
+
+Work a method on a project: `list_tracks` → none? `list_playbooks` (scope project = track template) → `start_track`; each step `start_stage_session`; never `advance_track` without the user. Detail: `from-intent`.
+
+Existing work can be filed into a step with `update_session` `trackId`/`trackStage` (proposed; the session keeps its space).

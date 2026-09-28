@@ -6,6 +6,8 @@
  *   rename             → `workspacesRouter.update`         (ADMIN floor)
  *   move entities      → `entitiesRouter.moveToWorkspace`  (per-entity gate)
  *   grant kind access  → `profilesRouter.grantAccess`      (ADMIN floor)
+ *   file into project  → `projectsRouter.fileEntities`     (ACCESS: agent proposes;
+ *                         un-file = link/delete, DESTRUCTIVE floor)
  *
  * NOTHING is re-implemented here: every guard, gate, audit row and side effect
  * lives in the router procedure, and each door only builds the caller context
@@ -23,6 +25,7 @@ import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js
 import { workspacesRouter } from "../routers/workspaces.js";
 import { entitiesRouter } from "../routers/entities.js";
 import { profilesRouter } from "../routers/profiles.js";
+import { projectsRouter } from "../routers/projects.js";
 
 /** Who is acting — the fields every Hub / MCP door already has in hand. */
 export interface WorkspaceOpsActor {
@@ -129,6 +132,28 @@ export async function grantProfileAccessDoor(
   return profilesRouter.createCaller(ctx).grantAccess({
     profileId: input.profileId,
     targetWorkspaceId: input.targetWorkspaceId,
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+  });
+}
+
+/**
+ * File existing records into a project (or, with `remove`, un-file them). One
+ * proposal for the whole batch when an agent acts.
+ */
+export async function fileIntoProjectDoor(
+  actor: WorkspaceOpsActor,
+  input: {
+    projectId: string;
+    entityIds: string[];
+    remove?: boolean;
+    reasoning?: string;
+  }
+) {
+  const ctx = await callerCtx(actor, null);
+  return projectsRouter.createCaller(ctx).fileEntities({
+    projectId: input.projectId,
+    entityIds: input.entityIds,
+    ...(input.remove === true ? { remove: true } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
   });
 }

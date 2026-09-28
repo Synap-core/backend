@@ -55,24 +55,29 @@ describe("isFacetVisibleForLens", () => {
     ).toBe(false);
   });
 
-  // ── Wave 2 (Membership → Visibility) — the pod-shared widening ────────────
-  it("shows another POD MEMBER's pod-wide facet (pod-wide IS the share signal)", () => {
+  // ── Decision B (2026-09-27) — shared only via a role granted to my space ──
+  const SHARED = new Set(["role-client"]);
+  it("shows another user's pod-wide facet ONLY when its role is shared with the viewer", () => {
+    const facet = {
+      workspaceId: null,
+      userId: "someone-else",
+      profileId: "role-client",
+    };
+    expect(isFacetVisibleForLens(facet, null, viewerId, SHARED)).toBe(true);
+    expect(isFacetVisibleForLens(facet, "workspace-a", viewerId, SHARED)).toBe(
+      true
+    );
+    // Pod membership alone (no granted role) shares nothing.
+    expect(isFacetVisibleForLens(facet, null, viewerId, new Set())).toBe(false);
+    // A role NOT granted to the viewer's spaces stays hidden.
     expect(
       isFacetVisibleForLens(
-        { workspaceId: null, userId: "someone-else" },
+        { ...facet, profileId: "role-other" },
         null,
         viewerId,
-        true
+        SHARED
       )
-    ).toBe(true);
-    expect(
-      isFacetVisibleForLens(
-        { workspaceId: null, userId: "someone-else" },
-        "workspace-a",
-        viewerId,
-        true
-      )
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("pod membership does NOT widen the WORKSPACE lens — a foreign workspace facet stays hidden", () => {
@@ -81,7 +86,7 @@ describe("isFacetVisibleForLens", () => {
         { workspaceId: "workspace-a", userId: "someone-else" },
         "workspace-b",
         viewerId,
-        true
+        new Set(["role-client"])
       )
     ).toBe(false);
     // …nor does it leak a workspace-scoped facet into the POD lens.
@@ -90,7 +95,7 @@ describe("isFacetVisibleForLens", () => {
         { workspaceId: "workspace-a", userId: "someone-else" },
         null,
         viewerId,
-        true
+        new Set(["role-client"])
       )
     ).toBe(false);
   });

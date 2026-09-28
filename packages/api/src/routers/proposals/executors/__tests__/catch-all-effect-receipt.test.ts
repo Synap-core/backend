@@ -618,13 +618,18 @@ describe("(6) focus_session/create — the reference effect receipt", () => {
   it("builds `rows` from the INSERT's own .returning(), not from a boolean", () => {
     // Two branches feed `insertedSessions`, and each is a statement's own
     // `.returning()`: the ad-hoc insert here, and — for a playbook instantiate —
-    // `instantiateSessionRow`'s conflict-safe insert (its zero-row outcome is
-    // asserted behaviourally in focus-session-playbook-instantiate.pglite.test.ts).
+    // `instantiateSessionRow`'s conflict-safe insert. (X1: the ad-hoc insert
+    // runs on the claim transaction — `database` is the tx handle — and its
+    // rows ride out as `claimed.rows`; a re-apply at the same id is now LINKED
+    // by the claim, asserted in focus-session-playbook-instantiate.pglite.test.ts.)
     expect(src).toMatch(
-      /const insertProposedSession = async \(\) => \{[\s\S]*?return db\s*\.insert\(focusSessions\)[\s\S]*?\.returning\(\);/
+      /const insertProposedSession = async \([\s\S]*?\) => \{[\s\S]*?return database\s*\.insert\(focusSessions\)[\s\S]*?\.returning\(\);/
     );
     expect(src).toMatch(
-      /const insertedSessions =[\s\S]*?\? await instantiateApprovedPlaybook\([\s\S]*?: await insertProposedSession\(\);/
+      /rows: isPlaybookRun\s*\?\s*\[\]\s*:\s*await insertProposedSession\(t, correlationHolder\)/
+    );
+    expect(src).toMatch(
+      /const insertedSessions = isPlaybookRun\s*\? await instantiateApprovedPlaybook\([\s\S]*?: claimed\.rows;/
     );
     expect(src).toMatch(/return row \? \[row\] : \[\];/);
     expect(src).toMatch(/rows:\s*insertedSessions\.length/);

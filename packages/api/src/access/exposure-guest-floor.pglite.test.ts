@@ -224,9 +224,25 @@ beforeAll(async () => {
       [id, owner, ws, doc]
     );
   }
+  // Decision B (2026-09-27): S is shared only with pod members in a space its
+  // ROLE is granted to — M and GP are members of SHARE_WS, which holds the grant.
+  const SHARED_ROLE = randomUUID();
+  const SHARE_WS = randomUUID();
   await q(
-    `insert into entity_facets (id, entity_id, workspace_id, deleted_at) values ($1,$2,null,null)`,
-    [randomUUID(), S]
+    `insert into profiles (id, slug, display_name, profile_kind, scope) values ($1,'client','Client','role','shared')`,
+    [SHARED_ROLE]
+  );
+  await q(
+    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    [SHARED_ROLE, SHARE_WS]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'viewer'),($4,$2,$5,'viewer')`,
+    [randomUUID(), SHARE_WS, M, randomUUID(), GP]
+  );
+  await q(
+    `insert into entity_facets (id, entity_id, profile_id, workspace_id, deleted_at) values ($1,$2,$3,null,null)`,
+    [randomUUID(), S, SHARED_ROLE]
   );
   await q(
     `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type) values ($1,$2,$3,$4,$5,'belongs_to_project')`,

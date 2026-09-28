@@ -92,14 +92,17 @@ describe("registry needsYou roles in the union", () => {
     expect(count([row("session.needs_you")], new Set())).toBe(0);
   });
 
-  it("an unknown or missing type is an ordinary item — including the retired session.room_update", () => {
+  it("an unknown or missing type is an ordinary item", () => {
     expect(needsYouRole("retired.type")).toBe("item");
     expect(needsYouRole(undefined)).toBe("item");
-    expect(needsYouRole("session.room_update")).toBe("item");
     expect(count([row("retired.type")], new Set())).toBe(1);
-    // It is no longer produced (its row was removed with its producer), so
-    // this is a proof it fell back to "item", not that it still fires.
-    expect(count([row("session.room_update")], new Set())).toBe(1);
+  });
+
+  it("a DELIBERATELY retired type (session.room_update) is informational — it never counts or lists", () => {
+    // W2 calm: legacy unread rows of a retired producer inflated the badge
+    // forever. Named in RETIRED_NOTIFICATION_TYPES, never inferred.
+    expect(needsYouRole("session.room_update")).toBe("informational");
+    expect(count([row("session.room_update")], new Set())).toBe(0);
   });
 
   it("list and count agree on the same population", () => {

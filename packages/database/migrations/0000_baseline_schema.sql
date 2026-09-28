@@ -2458,6 +2458,7 @@ CREATE TABLE IF NOT EXISTS "notifications" (
   "workspace_url" text,
   "actions"       jsonb DEFAULT '[]',
   "group_key"     text,
+  "dedupe_key"    text,
   "status"        text  NOT NULL DEFAULT 'unread',
   "read_at"       timestamp with time zone,
   "expires_at"    timestamp with time zone,
@@ -2478,6 +2479,7 @@ ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "source_id" text;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "workspace_url" text;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "actions" jsonb DEFAULT '[]';
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "group_key" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "dedupe_key" text;  -- 0281 (open-row dedupe guard)
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'unread';
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "read_at" timestamp with time zone;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
@@ -2497,6 +2499,11 @@ CREATE INDEX IF NOT EXISTS "notifs_source_idx"
 CREATE INDEX IF NOT EXISTS "notifs_unread_user_workspace_idx"
   ON "notifications" ("user_id", "workspace_id")
   WHERE "status" = 'unread';
+
+-- At most ONE open row per (user, windowed dedupe key) (migration 0281).
+CREATE UNIQUE INDEX IF NOT EXISTS "notifs_open_dedupe_key_uq"
+  ON "notifications" ("user_id", "dedupe_key")
+  WHERE "dedupe_key" IS NOT NULL AND "status" IN ('unread', 'snoozed');
 
 -- Partial index for waking due snoozes / listing snoozed items (migration 0226).
 CREATE INDEX IF NOT EXISTS "notifs_snoozed_until_idx"

@@ -4,8 +4,16 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, inArray } from "@synap/database";
-import { syncAutoApproveRules } from "@synap/database/agent-governance";
+import {
+  syncAutoApproveRules,
+  applyAgentPosture,
+  readAgentGovernance,
+} from "@synap/database/agent-governance";
 import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
+import {
+  AGENT_POSTURE_NAMES,
+  isAgentPostureName,
+} from "@synap/governance-policy/postures";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
 import {
   loadAgentPresence,
@@ -249,11 +257,67 @@ export function registerAgentUsersRoutes(app: HubHono): void {
   });
 
   /**
+   * GET /agent-users/:agentUserId/governance
+   *
+   * The read half of the PATCH below — `{ posture, writesRequireProposal,
+   * rules, configured }` (`readAgentGovernance`). `synap init` reads it before
+   * it writes, so re-running init never overwrites a posture someone chose.
+   * Same authz as the PATCH: the agent's creator or a pod admin.
+   */
+  app.get("/agent-users/:agentUserId/governance", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const agentUserId = requireUuidParam(c, "agentUserId");
+    if (agentUserId instanceof Response) return agentUserId;
+    if (!agentUserId) return c.json({ error: "agentUserId is required" }, 400);
+    try {
+      const { users } = await import("@synap/database/schema");
+      const [agentUser] = await db
+        .select({ createdByUserId: users.createdByUserId })
+        .from(users)
+        .where(and(eq(users.id, agentUserId), eq(users.userType, "agent")))
+        .limit(1);
+      if (!agentUser) return c.json({ error: "Agent not found" }, 404);
+      const callerId = c.get("userId") as string;
+      if (
+        agentUser.createdByUserId !== callerId &&
+        !(await isPodAdmin(callerId))
+      ) {
+        return c.json(
+          {
+            error:
+              "Only the agent's creator or a pod admin can read agent governance",
+          },
+          403
+        );
+      }
+      const state = await readAgentGovernance({ db, agentUserId });
+      if (!state) return c.json({ error: "Agent not found" }, 404);
+      return c.json({ agentUserId, ...state });
+    } catch (err) {
+      logger.error(
+        { err, agentUserId },
+        "GET /agent-users/:agentUserId/governance failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
    * PATCH /agent-users/:agentUserId/governance
    *
-   * Set per-agent governance — autoApproveFor + writesRequireProposal.
-   * Authz: agent's creator (`users.createdByUserId ===` effective userId) OR
-   * pod admin (`isPodAdmin`). Anyone else → 403.
+   * Set per-agent governance — EITHER a named `posture` (resolved server-side,
+   * `@synap/governance-policy/postures`, so no client re-states an action
+   * list) OR the legacy `autoApproveFor` + `writesRequireProposal` pair. Not
+   * both. Authz: agent's creator (`users.createdByUserId ===` effective
+   * userId) OR pod admin (`isPodAdmin`). Anyone else → 403.
    */
   app.patch("/agent-users/:agentUserId/governance", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -277,6 +341,26 @@ export function registerAgentUsersRoutes(app: HubHono): void {
     // leaves the mirrored rules untouched. It is NO LONGER persisted into the
     // `agent_metadata` JSONB — `governance_rules` is the one decision store.
     const hasAutoApproveFor = body?.autoApproveFor !== undefined;
+    const posture = body?.posture;
+    if (posture !== undefined) {
+      if (!isAgentPostureName(posture)) {
+        return c.json(
+          {
+            error: `posture must be one of: ${AGENT_POSTURE_NAMES.join(", ")}`,
+          },
+          400
+        );
+      }
+      if (hasAutoApproveFor || body?.writesRequireProposal !== undefined) {
+        return c.json(
+          {
+            error:
+              "Send either a posture or autoApproveFor/writesRequireProposal, not both",
+          },
+          400
+        );
+      }
+    }
     if (
       hasAutoApproveFor &&
       (!Array.isArray(body!.autoApproveFor) ||
@@ -341,6 +425,16 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         );
       }
 
+      if (posture !== undefined && isAgentPostureName(posture)) {
+        const applied = await applyAgentPosture({
+          db,
+          agentUserId,
+          posture,
+          createdBy: callerId,
+        });
+        return c.json({ ok: true, agentUserId, ...applied });
+      }
+
       const existingMeta = (agentUser.agentMetadata ?? {}) as Record<
         string,
         unknown
@@ -352,6 +446,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       // `governance_rules` (mirrored below).
       const persistedMeta: Record<string, unknown> = { ...existingMeta };
       delete persistedMeta.autoApproveFor;
+      // A hand-set list is no longer the named posture it may have replaced.
+      if (hasAutoApproveFor) delete persistedMeta.governancePosture;
       const writesRequireProposal = body?.writesRequireProposal ?? false;
       persistedMeta.writesRequireProposal = writesRequireProposal;
 

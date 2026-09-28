@@ -9,7 +9,6 @@
 import { describe, it, expect } from "vitest";
 import {
   countNeedsYou,
-  pageNeedsYou,
   signalsFromDraftAsks,
   unionNeedsYou,
   type DraftAsksInput,
@@ -62,8 +61,12 @@ describe("draft-asks signal", () => {
       target: { kind: "session", id: DRAFT },
       sessionGoal: "Ship billing",
     });
-    // Oldest ask is the row's age (age = severity, like an owed slot).
-    expect(row!.occurredAt.toISOString()).toBe("2026-09-27T09:00:00.000Z");
+    // The NEWEST ask is the row's time — its last activity, the key the one
+    // newest-first order sorts on (W2 calm; it was the oldest while owed rows
+    // sorted oldest-first).
+    expect(row!.occurredAt.toISOString()).toBe("2026-09-27T10:00:00.000Z");
+    expect(row!.groupKey).toBe(`session:${DRAFT}`);
+    expect(row!.repeatCount).toBe(1);
     // One row stands for N asks: no single ask's disclosure rides on it.
     expect(row).not.toHaveProperty("ask");
     expect(row).not.toHaveProperty("why");
@@ -123,18 +126,15 @@ describe("draft-asks signal", () => {
     expect(countNeedsYou(args).needsYou).toBe(1);
   });
 
-  it("pages on the OWED side, oldest first among owed slots", () => {
+  it("sorts with every other row by recency — its newest ask outranks an older slot", () => {
     const owed = slot("s-2", "Sign contract", "2026-09-27T08:00:00.000Z");
     const all = unionNeedsYou({
       ...base,
       owedSlots: [owed],
       draftAsks: TWO_ASKS,
+      now: new Date("2026-09-28T00:00:00.000Z"),
     });
-    expect(all.map((s) => s.kind)).toEqual(["owed-slot", "draft-asks"]);
-    expect(pageNeedsYou(all, 2).map((s) => s.kind)).toEqual([
-      "owed-slot",
-      "draft-asks",
-    ]);
+    expect(all.map((s) => s.kind)).toEqual(["draft-asks", "owed-slot"]);
   });
 
   it("truncation of the draft scan makes the count a floor", () => {

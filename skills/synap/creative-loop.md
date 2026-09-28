@@ -22,11 +22,14 @@ When you have something to _show_ the user — a list of leads, a summary, a com
 
 ### 3. Promote a good cell to a renderer — recurring presentation
 
-When a cell is a _good, recurring way to present a whole entity type or step_ — e.g. every `bookmark`'s detail view, every `lead`'s list row — promote it with `promote_cell_to_renderer`:
+Every kind already has a built-in card — the readable-first default nobody has to ask for (a brand-new user kind even gets one AUTOMATICALLY, built from its schema). Don't reach for this move by default; reach for it when the user explicitly asks for a different look and a cell has already proven it once.
 
-- Pick the `profileSlug` (the entity type), the `slot` (`list` | `detail` | `dashboard`), and the `cellKey` from `create_cell`.
-- This is **governed**: for you it returns `{ status: "proposed", proposalId }`. That is the point — you author the renderer, the user reviews and curates it before it becomes every entity's view. Surface the proposal plainly ("I've proposed this as the detail view for bookmarks — review it when you like"), don't treat it as a failure.
-- Use `scope: "pod"` only when the presentation should apply in every workspace; default to workspace scope.
+When a cell is a _good, recurring way to present a whole entity type or step_ — e.g. every `bookmark`'s small card, every `lead`'s list row — promote it with `promote_cell_to_renderer`:
+
+- Pick the `profileSlug` (the entity type), the `slot` (`list` | `card` | `detail` | `dashboard` — `card` is the small embeddable block; most "change how X looks" requests mean this one, not `detail`), and the `cellKey` from `create_cell`.
+- This is **governed**: for you it returns `{ status: "proposed", proposalId }`. That is the point — you author the renderer, the user reviews and curates it before it becomes every entity's view. Surface the proposal plainly ("I've proposed this as the card for bookmarks — review it when you like"), don't treat it as a failure.
+- Use `scope: "pod"` only when the presentation should apply in every workspace; default to workspace scope. Bind PER KIND — never as a blanket replacement for every kind's card.
+- Once it lands, tell the user where to find or revert it: **"⋯ → Customize display"** on that kind's page.
 
 ### 4. Promote a finished session to a template — recurring process
 

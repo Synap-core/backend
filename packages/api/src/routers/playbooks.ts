@@ -80,6 +80,11 @@ import {
 } from "../schemas/playbook-definition.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
+import {
+  preferTrackTemplates,
+  templateKindFields,
+  wantsTrackTemplate,
+} from "../services/playbooks/template-kind.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   checkPermissionOrPropose,
@@ -1435,6 +1440,13 @@ export const playbooksRouter = router({
          * on its own when `profileSlug` is omitted.
          */
         intentText: z.string().max(2000).optional(),
+        /**
+         * The caller works inside this project. Never a filter — it only
+         * lifts a TRACK template (scope project) above its own session twin
+         * (`preferTrackTemplates`). An intent naming "project"/"track" does
+         * the same.
+         */
+        projectId: z.string().uuid().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1511,12 +1523,22 @@ export const playbooksRouter = router({
       });
 
       const MATCH_LIMIT = 20;
-      return ranked
+      // Scope + its noun ride on every row; under a project/track signal a
+      // track template sorts above its session twin (`template-kind.ts`).
+      const scoped = ranked
         .filter((r) => r.signals.length > 0)
+        .map((r) => ({
+          ...r,
+          name: r.candidate.row.name,
+          ...templateKindFields(r.candidate.row.scope),
+        }));
+      return preferTrackTemplates(scoped, wantsTrackTemplate(input))
         .slice(0, MATCH_LIMIT)
-        .map(({ candidate, score, reason, signals }) => ({
+        .map(({ candidate, score, reason, signals, scope, templateKind }) => ({
           id: candidate.row.id,
           name: candidate.row.name,
+          scope,
+          templateKind,
           goalTemplate: candidate.row.goalTemplate,
           subjectProfileSlug: candidate.subjectProfileSlug,
           // The DECLARATION (name/type/required/options/default), so a caller

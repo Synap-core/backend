@@ -43,6 +43,7 @@ import {
 } from "../utils/permission-check.js";
 import { setProfileRenderer } from "../services/profiles/set-profile-renderer.js";
 import { mergeApplicableKinds } from "../utils/merge-applicable-kinds.js";
+import { diffDescriptiveProfileFields } from "../services/profiles/profile-descriptive-update.js";
 import {
   RENDERER_SCOPES,
   type RendererSlot,
@@ -391,57 +392,115 @@ export const profilesRouter = router({
         // Slug-idempotent WIDEN: define_role on an existing role merges
         // applicableKinds (hats on any kind). Never shrinks. NULL stored
         // allowlist already means any kind — nothing to add.
-        if (
+        const widen =
           existing.profileKind === "role" &&
           input.applicableKinds &&
           input.applicableKinds.length > 0
-        ) {
-          const { next, widened } = mergeApplicableKinds(
-            existing.applicableKinds,
-            input.applicableKinds
-          );
-          if (widened && next) {
-            const perm = await checkPermissionOrPropose({
-              userId: ctx.userId,
-              agentUserId: input.agentUserId,
-              workspaceId: ctx.workspaceId,
-              subjectType: "profile",
-              action: "create",
-              source: input.source,
-              reasoning: input.reasoning,
-              data: {
-                id: existing.id,
-                slug: existing.slug,
-                displayName: existing.displayName,
-                profileKind: "role",
-                applicableKinds: next,
-                widenApplicableKinds: true,
-              },
-            });
-            if ("denied" in perm && perm.denied) {
-              throw new TRPCError({
-                code: "FORBIDDEN",
-                message: perm.reason,
-              });
-            }
-            if ("proposalId" in perm) {
-              return {
-                profile: existing,
-                existing: true,
-                widened: true,
-                status: "proposed" as const,
-                message: proposedMessageFor(
-                  perm.proposalType,
-                  "Role applicableKinds widen proposed for review"
-                ),
-                proposalId: perm.proposalId,
-              };
-            }
-            const updated = await profileRepo.update(existing.id, {
-              applicableKinds: next,
-            });
-            return { profile: updated, existing: true, widened: true };
+            ? mergeApplicableKinds(
+                existing.applicableKinds,
+                input.applicableKinds
+              )
+            : { next: null, widened: false };
+        const widened = widen.widened && !!widen.next;
+        // Slug-idempotent DESCRIBE: a CHANGED name / description / icon /
+        // default values on an existing kind or role is a governed update
+        // through this same door (`profile-descriptive-update.ts`). Absent or
+        // equal fields change nothing, so the common re-declare files nothing.
+        const descriptive = diffDescriptiveProfileFields(
+          {
+            displayName: existing.displayName,
+            uiHints: existing.uiHints as Record<string, unknown> | null,
+            defaultValues: existing.defaultValues as Record<
+              string,
+              unknown
+            > | null,
+          },
+          {
+            displayName: input.displayName,
+            uiHints: input.uiHints,
+            defaultValues: input.defaultValues,
           }
+        );
+        const describes = descriptive.changed.length > 0;
+        if (widened || describes) {
+          // Same ownership floor as `profiles.update` — checked NOW, and again
+          // as the approver when the approved proposal replays this door.
+          if (
+            describes &&
+            profileOwnershipRequirement(existing).kind !== "pod-admin"
+          ) {
+            await assertProfileSchemaWrite(db, ctx.userId, existing, {
+              level: "editor",
+              actingWorkspaceId: ctx.workspaceId,
+            });
+          }
+          const perm = await checkPermissionOrPropose({
+            userId: ctx.userId,
+            agentUserId: input.agentUserId,
+            workspaceId: ctx.workspaceId,
+            subjectType: "profile",
+            action: "create",
+            source: input.source,
+            reasoning: input.reasoning,
+            data: {
+              id: existing.id,
+              slug: existing.slug,
+              displayName:
+                descriptive.patch.displayName ?? existing.displayName,
+              profileKind: existing.profileKind ?? "kind",
+              ...(widened
+                ? { applicableKinds: widen.next, widenApplicableKinds: true }
+                : {}),
+              ...(describes
+                ? {
+                    // Replayed by the `profile/create` executor into THIS
+                    // branch: the merged uiHints / the caller's default values
+                    // re-diff to the same patch as the approver.
+                    ...(descriptive.patch.uiHints
+                      ? { uiHints: descriptive.patch.uiHints }
+                      : {}),
+                    ...(input.defaultValues && descriptive.patch.defaultValues
+                      ? { defaultValues: input.defaultValues }
+                      : {}),
+                    updateExistingProfile: true,
+                    changedFields: descriptive.changed,
+                    previousDisplayName: existing.displayName,
+                  }
+                : {}),
+            },
+          });
+          if ("denied" in perm && perm.denied) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: perm.reason,
+            });
+          }
+          if ("proposalId" in perm) {
+            return {
+              profile: existing,
+              existing: true,
+              ...(widened ? { widened: true } : {}),
+              ...(describes ? { changedFields: descriptive.changed } : {}),
+              status: "proposed" as const,
+              message: proposedMessageFor(
+                perm.proposalType,
+                describes
+                  ? `Update of ${descriptive.changed.join(", ")} on the existing ${existing.profileKind === "role" ? "role" : "kind"} "${existing.slug}" proposed for review`
+                  : "Role applicableKinds widen proposed for review"
+              ),
+              proposalId: perm.proposalId,
+            };
+          }
+          const updated = await profileRepo.update(existing.id, {
+            ...(widened ? { applicableKinds: widen.next! } : {}),
+            ...descriptive.patch,
+          });
+          return {
+            profile: updated,
+            existing: true,
+            ...(widened ? { widened: true } : {}),
+            ...(describes ? { changedFields: descriptive.changed } : {}),
+          };
         }
         return { profile: existing, existing: true };
       }

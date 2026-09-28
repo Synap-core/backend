@@ -26,6 +26,8 @@ import { ProfileRepository } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { applyAgentWorkspacePreset } from "../../../utils/agent-workspace-preset.js";
 import { sql as drizzleSql } from "drizzle-orm";
+import { AccessContext } from "../../../access/index.js";
+import { readWorkspaceEntityStats } from "../../../services/workspace-stats.js";
 import {
   templateHealthFor,
   resolveLatestVersionsBySlug,
@@ -527,28 +529,16 @@ export function registerWorkspacesRoutes(app: HubHono): void {
               .from(workspaces)
               .where(inArray(workspaces.id, wsIds))
           : Promise.resolve([]),
-        wsIds.length > 0
-          ? db
-              .select({
-                workspaceId: entities.workspaceId,
-                count: drizzleSql<number>`cast(count(*) as integer)`,
-              })
-              .from(entities)
-              .where(
-                and(
-                  inArray(entities.workspaceId, wsIds),
-                  isNull(entities.deletedAt)
-                )
-              )
-              .groupBy(entities.workspaceId)
-          : Promise.resolve([]),
+        // The ONE per-space count (services/workspace-stats.ts), floored by
+        // the access layer — the same number Settings → Spaces shows.
+        readWorkspaceEntityStats(AccessContext.agent({ userId }), wsIds),
         db
           .select({ count: drizzleSql<number>`cast(count(*) as integer)` })
           .from(entities)
           .where(and(isNull(entities.workspaceId), isNull(entities.deletedAt))),
       ]);
       const entityCountByWorkspace = new Map(
-        countRows.map((row) => [row.workspaceId, row.count])
+        [...countRows].map(([id, stats]) => [id, stats.entityCount])
       );
       const podEntityCount = podCountRows[0]?.count ?? 0;
 

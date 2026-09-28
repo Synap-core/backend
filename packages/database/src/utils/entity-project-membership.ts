@@ -29,7 +29,7 @@
  * `@synap/database`; the inline and the canonical definition were identical by
  * luck, not by construction.)
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { relations } from "../schema/relations.js";
 import { createLogger } from "@synap-core/core";
 import { projects } from "../schema/projects.js";
@@ -42,7 +42,15 @@ import type { getDb } from "../client-pg.js";
 export const BELONGS_TO_PROJECT = "belongs_to_project";
 
 export type LinkEntityToProjectResult =
-  { linked: true } | { linked: false; reason: "project_not_found" };
+  | {
+      linked: true;
+      /**
+       * Whether THIS call wrote the edge — the insert's own RETURNING, never
+       * inferred. `false` = it already existed (the unique index deduped it).
+       */
+      created: boolean;
+    }
+  | { linked: false; reason: "project_not_found" };
 
 /**
  * Stamp `entity --belongs_to_project--> project`. The project is a row in the
@@ -111,7 +119,7 @@ export async function linkEntityToProject(
     return { linked: false, reason: "project_not_found" };
   }
 
-  await db
+  const inserted = await db
     .insert(relations)
     .values({
       userId: args.userId,
@@ -120,7 +128,35 @@ export async function linkEntityToProject(
       targetEntityId: args.projectId,
       type: BELONGS_TO_PROJECT,
     })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ id: relations.id });
 
-  return { linked: true };
+  return { linked: true, created: inserted.length > 0 };
+}
+
+/**
+ * Remove `entity --belongs_to_project--> project` for each given entity — the
+ * inverse of {@link linkEntityToProject}, and the ONE delete path for the edge.
+ *
+ * No authority check here, deliberately symmetric with the link: the caller
+ * (the governed filing door, `services/projects/file-entities.ts` in the API)
+ * floors the project and every entity on the acting owner BEFORE calling. The
+ * returned ids are the DELETE's own RETURNING — `[]` means nothing was filed.
+ */
+export async function unlinkEntitiesFromProject(
+  db: Awaited<ReturnType<typeof getDb>>,
+  args: { entityIds: readonly string[]; projectId: string }
+): Promise<{ removedIds: string[] }> {
+  if (args.entityIds.length === 0) return { removedIds: [] };
+  const removed = await db
+    .delete(relations)
+    .where(
+      and(
+        eq(relations.type, BELONGS_TO_PROJECT),
+        eq(relations.targetEntityId, args.projectId),
+        inArray(relations.sourceEntityId, [...args.entityIds])
+      )
+    )
+    .returning({ id: relations.id });
+  return { removedIds: removed.map((r) => r.id) };
 }

@@ -1557,6 +1557,14 @@ export const focusSessionsRouter = router({
          * `loadVisibleProject`, the same check the agent door applies.
          */
         projectId: z.string().uuid().nullable().optional(),
+        /**
+         * ADOPT the session into a track step, or UNFILE it from its track
+         * with an explicit `null`. Resolved by `resolveSessionTrackFiling` —
+         * the same rules as the MCP and Hub doors and the approval replay.
+         */
+        trackId: z.string().uuid().nullable().optional(),
+        /** The step key the track pinned. Absent ⇒ the track's current stage. */
+        trackStage: z.string().min(1).max(120).nullable().optional(),
         /** WHOLESALE replace of the session's binary acceptance criteria. */
         criteria: sessionCriteriaSchema.optional(),
         /**
@@ -1650,6 +1658,18 @@ export const focusSessionsRouter = router({
 
       const { id: _id, ...patch } = input;
 
+      // TRACK FILING — the ONE resolution (throws the refusal as a TRPCError).
+      const trackFilingModule =
+        await import("../services/tracks/session-track-filing.js");
+      const trackFiling = trackFilingModule.hasTrackFilingPatch(patch)
+        ? await trackFilingModule.resolveSessionTrackFiling({
+            session: existing,
+            patch: { trackId: patch.trackId, trackStage: patch.trackStage },
+            projectId: patch.projectId,
+            actor: { userId: ctx.userId },
+          })
+        : undefined;
+
       // Build only the fields that were supplied
       const set: Partial<typeof focusSessions.$inferInsert> = {
         updatedAt: new Date(),
@@ -1685,6 +1705,7 @@ export const focusSessionsRouter = router({
         set.subjectEntityId = patch.subjectEntityId;
       // `undefined` leaves the filing; `null` unfiles.
       if (patch.projectId !== undefined) set.projectId = patch.projectId;
+      if (trackFiling) Object.assign(set, trackFiling.set);
       if (patch.criteria !== undefined) set.criteria = patch.criteria;
       // The session's own phase snapshot. Assigned, not merged: unlike
       // `expectedOutputs` (whose slots carry server-owned delegation and owed
@@ -1729,6 +1750,7 @@ export const focusSessionsRouter = router({
           if (patch.subjectEntityId !== undefined)
             extra.subjectEntityId = patch.subjectEntityId;
           if (patch.projectId !== undefined) extra.projectId = patch.projectId;
+          if (trackFiling) Object.assign(extra, trackFiling.set);
           if (patch.expectedOutputs !== undefined)
             extra.expectedOutputs = mergeExpectedOutputs(
               (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
@@ -1760,6 +1782,15 @@ export const focusSessionsRouter = router({
         .set(set)
         .where(eq(focusSessions.id, input.id))
         .returning();
+
+      if (trackFiling && updated) {
+        await trackFilingModule.stampTrackFilingUses({
+          filing: trackFiling,
+          sessionWorkspaceId: updated.workspaceId ?? null,
+          projectId: updated.projectId ?? null,
+          userId: ctx.userId,
+        });
+      }
 
       // ── STAGE ADVANCE ─────────────────────────────────────────────────────
       // ONE door owns the `stage_changed` fan-out AND the human stage gate

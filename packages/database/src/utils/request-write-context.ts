@@ -175,30 +175,68 @@ export function isDerivedSession(
   return !!sessionId && sessionId === getDerivedSessionId();
 }
 
-// ═══ Concern: CALLING CLIENT (C1) ═════════════════════════════════════════════
+// ═══ Concern: CALLING CLIENT (C1) — the CONVERSATION, not the key ════════════
 //
 // Session-first attribution groups a client's writes into ITS session — never
-// into the newest session another client (or the person) opened. The MCP door
-// is stateless (no Mcp-Session-Id) and the Hub has no connection either, so the
-// one stable per-client fact at every key-auth door is the KEY: one claude.ai
-// connector, one `synap init` agent key, one CLI profile each authenticate with
-// their own. Entered at those doors; read by the session resolver and the
-// receipt packager several layers below.
+// into the newest session another client (or the person) opened. "Client" is
+// the CONVERSATION: every Claude Code tab on this machine authenticates with
+// the SAME `synap init` agent key, so a key-only client poured N concurrent
+// conversations into one session and one shared project focus (live: session
+// 670f401a, 2026-09-28). Entered at the key-auth doors; read by the session
+// resolver, the receipt packager and the focus door several layers below.
 //
 // NOT entered for the IS's `is_internal` key: one key serves every channel, so
 // it would pour all of the IS's conversations into one session. IS writes group
-// by their channel (`actingChannelId`) instead.
+// by their channel (`actingChannelId`, `channel:<id>`) instead.
+
+/** Separator between the key and the conversation inside a client key. */
+const CONVERSATION_SEP = "|conv:";
 
 /**
- * The client key for a validated API key: `key:<id>`, or undefined for the
- * IS's shared `is_internal` key (see above). MCP and Hub REST share the value,
- * so an agent key used from both doors is one client.
+ * A client-supplied conversation id, or undefined when unusable. The MCP
+ * transport id is visible ASCII (0x21–0x7E) by spec; the cap keeps a hostile
+ * value out of JSONB keys and lock names.
  */
-export function clientKeyForApiKey(key: {
-  id: string;
-  keyType?: string | null;
-}): string | undefined {
-  return key.keyType === "is_internal" ? undefined : `key:${key.id}`;
+export function normalizeConversationId(
+  raw: string | null | undefined
+): string | undefined {
+  const v = raw?.trim();
+  return v && v.length <= 128 && /^[\x21-\x7E]+$/.test(v) ? v : undefined;
+}
+
+/**
+ * THE client-identity resolver — every key-auth door (MCP, Hub REST) calls it.
+ * Precedence:
+ *   1. `is_internal` key ⇒ undefined (the IS groups by channel, see above).
+ *   2. a conversation id ⇒ `key:<id>|conv:<conversationId>` — CONVERSATION
+ *      scope. MCP: the Streamable-HTTP `Mcp-Session-Id` the pod mints at
+ *      `initialize` and the client echoes on every request. (No Hub REST / CLI /
+ *      Raycast header carries one today; the CLI names its session explicitly
+ *      with `X-Session-Id` per Claude tab instead.)
+ *   3. otherwise ⇒ `key:<id>` — KEY scope (option A): a write joins a session
+ *      only when it names one, else the key's own AUTO-OPENED session, never a
+ *      session some conversation on the key STARTED; focus stays per-agent.
+ * MCP and Hub REST share the value, so one conversation is one client on both.
+ */
+export function clientKeyForApiKey(
+  key: { id: string; keyType?: string | null },
+  conversationId?: string | null
+): string | undefined {
+  if (key.keyType === "is_internal") return undefined;
+  const conv = normalizeConversationId(conversationId);
+  return conv ? `key:${key.id}${CONVERSATION_SEP}${conv}` : `key:${key.id}`;
+}
+
+/**
+ * Whether a client key identifies ONE conversation (`…|conv:…`, or an IS
+ * `channel:` — a channel is a conversation) or only a KEY/agent shared by
+ * every conversation on it (`key:<id>`, `agent:<id>`). Key scope is option A.
+ */
+export function clientKeyScope(clientKey: string): "conversation" | "key" {
+  return clientKey.includes(CONVERSATION_SEP) ||
+    clientKey.startsWith("channel:")
+    ? "conversation"
+    : "key";
 }
 
 /** Run `fn` with the calling client recorded; `undefined` enters no scope. */

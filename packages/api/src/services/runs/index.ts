@@ -242,9 +242,15 @@ type AutomationRunStatus =
   | "failed"
   | "cancelled"
   | "skipped"
-  | "blocked_by_policy";
+  | "blocked_by_policy"
+  | "waiting_on_you";
 type PlaybookRunStatusValue =
-  "running" | "completed" | "failed" | "proposed" | "cancelled";
+  | "running"
+  | "completed"
+  | "failed"
+  | "proposed"
+  | "cancelled"
+  | "waiting_on_you";
 type FocusSessionStatus =
   | "active"
   | "paused"
@@ -263,6 +269,7 @@ function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
     case "cancelled":
     case "skipped":
     case "blocked_by_policy":
+    case "waiting_on_you":
       return [status];
     case "proposed":
       return []; // automation_runs has no "proposed"
@@ -278,6 +285,8 @@ function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
     // A run RELEASED by its session (`follow-playbook.ts` detach). Filterable
     // like any other: it is a real row with a real end, not an absence.
     case "cancelled":
+    // W2 calm: the reaper found the run quiet, its session owing the person.
+    case "waiting_on_you":
       return [status];
     case "skipped":
     case "blocked_by_policy":
@@ -302,7 +311,8 @@ function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
     case "proposed":
     case "skipped":
     case "blocked_by_policy":
-      return []; // focus_sessions is never "proposed"/"skipped"/"blocked_by_policy"
+    case "waiting_on_you":
+      return []; // focus_sessions is never "proposed"/"skipped"/"blocked_by_policy"/"waiting_on_you"
   }
 }
 
@@ -339,6 +349,7 @@ function chatStatusValues(status: RunStatus): ChatTurnStatusValue[] {
     case "proposed":
     case "skipped":
     case "blocked_by_policy":
+    case "waiting_on_you":
       return []; // chat_turns has none of these
   }
 }
@@ -1584,6 +1595,13 @@ function withinRecentRuns(
   );
 }
 
+/**
+ * The window a failure counts as CURRENT for health (W2 calm): "failing" =
+ * distinct flows with a failed run in the last 7 days, never lifetime runs.
+ * Lifetime stays on `failedCount` for the drill-down.
+ */
+export const RECENT_FAILURE_WINDOW_DAYS = 7;
+
 async function groupAutomationRuns(
   userId: string,
   workspaceId: string | undefined,
@@ -1619,6 +1637,7 @@ async function groupAutomationRuns(
       // needs-attention 'failed' rollup alongside genuine failures (the run-detail
       // surface renders the two with distinct calm/red tones).
       failedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy')))::int`,
+      recentFailedCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} in ('failed', 'blocked_by_policy') and coalesce(${automationRuns.completedAt}, ${automationRuns.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${automationRuns.status} = 'running')`,
       runningCount: drizzleSql<number>`(count(*) filter (where ${automationRuns.status} = 'running'))::int`,
       ...durationAggregates(automationRuns),
@@ -1665,6 +1684,7 @@ async function groupAutomationRuns(
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
+    recentFailedCount: r.recentFailedCount ?? 0,
     runningCount: r.runningCount,
     durationSampleCount: r.durationSampleCount,
     medianDurationMs: roundMs(r.medianDurationMs),
@@ -1704,6 +1724,7 @@ async function groupPlaybookRuns(
       runCount: drizzleSql<number>`count(*)::int`,
       completedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'completed'))::int`,
       failedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed'))::int`,
+      recentFailedCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'failed' and coalesce(${playbookRuns.completedAt}, ${playbookRuns.startedAt}) > now() - (${RECENT_FAILURE_WINDOW_DAYS}::int * interval '1 day')))::int`,
       hasRunning: drizzleSql<boolean>`bool_or(${playbookRuns.status} = 'running')`,
       runningCount: drizzleSql<number>`(count(*) filter (where ${playbookRuns.status} = 'running'))::int`,
       ...durationAggregates(playbookRuns),
@@ -1750,6 +1771,7 @@ async function groupPlaybookRuns(
     hasRunning: r.hasRunning ?? false,
     completedCount: r.completedCount,
     failedCount: r.failedCount,
+    recentFailedCount: r.recentFailedCount ?? 0,
     runningCount: r.runningCount,
     durationSampleCount: r.durationSampleCount,
     medianDurationMs: roundMs(r.medianDurationMs),

@@ -252,3 +252,15 @@ export type {
   HubStartStageSessionResult,
   FocusSessionTrackScope,
 } from "./tracks.js";
+
+// Space operations — archive/restore/rename a space, move entities, share a kind
+export type {
+  HubSpaceOpProposed,
+  HubPausedAutomationRef,
+  HubArchiveWorkspaceResult,
+  HubRenameWorkspaceResult,
+  MoveEntitiesInput,
+  HubMoveEntitiesResult,
+  GrantProfileAccessInput,
+  HubGrantProfileAccessResult,
+} from "./space-ops.js";

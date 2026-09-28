@@ -31,6 +31,21 @@ import {
   workspaces,
   type getDb,
 } from "@synap/database";
+import { isPodAdmin } from "./workspace-role.js";
+
+/**
+ * Who may archive or restore a space: its OWNER, or a pod admin. The ONE rule,
+ * read by the `workspaces.archive` door AND by the stats read that opens an
+ * archived space's counts (`services/workspace-stats.ts`) — so the people who
+ * can preview a restore are exactly the people who can run it.
+ */
+export async function canArchiveWorkspace(
+  workspace: { ownerId: string | null },
+  userId: string
+): Promise<boolean> {
+  if (workspace.ownerId === userId) return true;
+  return isPodAdmin(userId);
+}
 
 /** The metadata key an archive stamps on each automation it pauses. */
 export const PAUSED_BY_WORKSPACE_ARCHIVE_KEY = "pausedByWorkspaceArchive";

@@ -159,13 +159,19 @@ describe("ask router", () => {
     expect(searchFullTextMock).toHaveBeenCalledWith(
       "how to deploy",
       "user-1",
-      5
+      5,
+      expect.objectContaining({ minMatchedTerms: 2 })
     );
   });
 
   it("uses the pinned workspace lens for procedural search when provided", async () => {
     await ask({ ...baseParams, workspaceId: "ws-9", query: "how to deploy" });
-    expect(searchFullTextMock).toHaveBeenCalledWith("how to deploy", "ws-9", 5);
+    expect(searchFullTextMock).toHaveBeenCalledWith(
+      "how to deploy",
+      "ws-9",
+      5,
+      expect.objectContaining({ minMatchedTerms: 2 })
+    );
   });
 
   it("propagates limit to every routed store", async () => {
@@ -176,7 +182,8 @@ describe("ask router", () => {
     expect(searchFullTextMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      3
+      3,
+      expect.anything()
     );
     expect(searchFactsMock).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 3 })
@@ -211,5 +218,48 @@ describe("ask router", () => {
     // No retrieval ran → no answers, nothing degraded.
     expect(r.answers).toEqual([]);
     expect(r.degraded).toEqual([]);
+  });
+});
+
+// ── X1: procedural lane under a project lens + relevance floor ─────────────
+// The GRP business-model ask, lensed to the project, answered with six
+// engineering runbooks: knowledge_keys has no project column, so the lane
+// cannot be narrowed — it must not run uncued inside a project.
+describe("ask router — procedural lane vs project lens (X1)", () => {
+  it("a business query with a project lens does not search engineering notes", async () => {
+    const r = await ask({
+      ...baseParams,
+      projectId: "872bbecc-0000-4000-8000-000000000000",
+      query: "what is the revenue model for the business",
+    });
+    expect(searchFullTextMock).not.toHaveBeenCalled();
+    expect(r.routedTo).toEqual(["semantic"]);
+    expect(r.answers.map((a) => a.substrate)).toEqual(["semantic"]);
+    // Semantic still receives the project lens.
+    expect(retrieveMock.mock.calls[0]![0]).toMatchObject({
+      projectId: "872bbecc-0000-4000-8000-000000000000",
+    });
+  });
+
+  it("an explicit how-to under a project lens still reaches the runbooks", async () => {
+    const r = await ask({
+      ...baseParams,
+      projectId: "872bbecc-0000-4000-8000-000000000000",
+      query: "how to deploy the backend",
+    });
+    expect(searchFullTextMock).toHaveBeenCalledTimes(1);
+    expect(r.primary).toBe("procedural");
+  });
+
+  it("the procedural search asks for ≥2 content-term matches, ignoring function words", async () => {
+    await ask({ ...baseParams, query: "the revenue model" });
+    const opts = searchFullTextMock.mock.calls[0]![3] as {
+      minMatchedTerms: number;
+      ignoreTerms: ReadonlySet<string>;
+    };
+    expect(opts.minMatchedTerms).toBe(2);
+    expect(opts.ignoreTerms.has("the")).toBe(true);
+    expect(opts.ignoreTerms.has("what")).toBe(true);
+    expect(opts.ignoreTerms.has("revenue")).toBe(false);
   });
 });

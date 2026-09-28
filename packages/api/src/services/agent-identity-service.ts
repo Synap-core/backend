@@ -23,8 +23,13 @@ import {
   EventRepository,
   ApiKeyRepository,
   type ApiKeyScope,
+  drizzleSql,
+  getRequestClientKey,
+  clientKeyScope,
 } from "@synap/database";
 import { agents, users } from "@synap/database/schema";
+import { applyAgentPosture } from "@synap/database/agent-governance";
+import { DEFAULT_NEW_AGENT_POSTURE } from "@synap/governance-policy/postures";
 import type { AgentMetadata, ApiKeyToolProfile } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -187,6 +192,64 @@ export function authoredByUser(userId: string): SQL {
 }
 
 /**
+ * WHOSE focus a set/read touches. `conversation` = this conversation only
+ * (`agentMetadata.conversationFocus[<client key>]`); `agent` = shared by every
+ * conversation on the agent's key — option A, used only when the door knows no
+ * conversation (see `clientKeyForApiKey`). Sharing a focus across two
+ * conversations stays possible, deliberately: set the same focus in each.
+ */
+export type FocusScope = "conversation" | "agent";
+
+/** The reply fields a focus door returns, so the caller knows who shares it. */
+export function focusScopeReply(scope: FocusScope): {
+  focusScope: FocusScope;
+  focusScopeNote: string;
+} {
+  return {
+    focusScope: scope,
+    focusScopeNote:
+      scope === "conversation"
+        ? "Applies to this conversation only."
+        : "Applies to every conversation on this agent key (this door carries no conversation id).",
+  };
+}
+
+/** Idle conversation-focus entries older than this are pruned on write. */
+const CONVERSATION_FOCUS_TTL_DAYS = 30;
+
+/** The request's conversation client key, or undefined (key scope). */
+function focusConversationKey(): string | undefined {
+  const key = getRequestClientKey();
+  return key && clientKeyScope(key) === "conversation" ? key : undefined;
+}
+
+/**
+ * Merge `patch` into this conversation's focus entry in ONE statement (the
+ * row lock serializes concurrent conversations — a read-modify-write here
+ * would let one conversation's set erase another's), pruning idle entries.
+ */
+async function setConversationFocus(
+  agentUserId: string,
+  conversationKey: string,
+  patch: { workspaceId?: string | null; projectId?: string | null }
+): Promise<void> {
+  const entry = JSON.stringify({ ...patch, at: new Date().toISOString() });
+  const meta = drizzleSql`coalesce(${users.agentMetadata}, jsonb_build_object('agentType', 'unknown', 'createdByUserId', ${agentUserId}::text))`;
+  const all = drizzleSql`coalesce(${meta} -> 'conversationFocus', '{}'::jsonb)`;
+  await db
+    .update(users)
+    .set({
+      agentMetadata: drizzleSql`jsonb_set(${meta}, '{conversationFocus}', (
+        select coalesce(jsonb_object_agg(e.k, e.v), '{}'::jsonb)
+        from jsonb_each(${all} || jsonb_build_object(${conversationKey}::text,
+          coalesce(${all} -> ${conversationKey}::text, '{}'::jsonb) || ${entry}::jsonb)) as e(k, v)
+        where (e.v ->> 'at')::timestamptz > now() - (${CONVERSATION_FOCUS_TTL_DAYS}::int * interval '1 day')
+      ))`,
+    })
+    .where(eq(users.id, agentUserId));
+}
+
+/**
  * WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2 (advisory slice).
  *
  * Read the agent-user's live runtime workspace focus (`agentMetadata.focusWorkspaceId`).
@@ -204,6 +267,8 @@ export async function getAgentFocusWorkspaceId(
     .where(eq(users.id, agentUserId))
     .limit(1);
   const meta = row?.agentMetadata as AgentMetadata | null | undefined;
+  const conv = focusConversationKey();
+  if (conv) return meta?.conversationFocus?.[conv]?.workspaceId ?? null;
   return meta?.focusWorkspaceId ?? null;
 }
 
@@ -219,7 +284,12 @@ export async function getAgentFocusWorkspaceId(
 export async function setAgentFocusWorkspace(
   agentUserId: string,
   workspaceId: string | null
-): Promise<void> {
+): Promise<FocusScope> {
+  const conv = focusConversationKey();
+  if (conv) {
+    await setConversationFocus(agentUserId, conv, { workspaceId });
+    return "conversation";
+  }
   const [row] = await db
     .select({ agentMetadata: users.agentMetadata })
     .from(users)
@@ -241,6 +311,7 @@ export async function setAgentFocusWorkspace(
     .update(users)
     .set({ agentMetadata: next })
     .where(eq(users.id, agentUserId));
+  return "agent";
 }
 
 /**
@@ -260,6 +331,8 @@ export async function getAgentFocusProjectId(
     .where(eq(users.id, agentUserId))
     .limit(1);
   const meta = row?.agentMetadata as AgentMetadata | null | undefined;
+  const conv = focusConversationKey();
+  if (conv) return meta?.conversationFocus?.[conv]?.projectId ?? null;
   return meta?.focusProjectId ?? null;
 }
 
@@ -281,7 +354,12 @@ export async function getAgentFocusProjectId(
 export async function setAgentFocusProject(
   agentUserId: string,
   projectId: string | null
-): Promise<void> {
+): Promise<FocusScope> {
+  const conv = focusConversationKey();
+  if (conv) {
+    await setConversationFocus(agentUserId, conv, { projectId });
+    return "conversation";
+  }
   const [row] = await db
     .select({ agentMetadata: users.agentMetadata })
     .from(users)
@@ -301,6 +379,7 @@ export async function setAgentFocusProject(
     .update(users)
     .set({ agentMetadata: next })
     .where(eq(users.id, agentUserId));
+  return "agent";
 }
 
 /**
@@ -483,6 +562,28 @@ export async function findOrCreateServiceAgentUser(opts: {
       { agentUserId, agentType, createdByUserId: creatorId },
       "findOrCreateServiceAgentUser: created agent user for creator×type"
     );
+    // D2 (founder, 2026-09-28): a NEW bring-your-own agent starts on
+    // `create-with-undo` — creates auto-approve with Undo, everything else
+    // proposes. Only on the INSERT branch (existing agents keep their posture)
+    // and only for BYOA agents (`cli`: setup/agent, OAuth, redeem, named
+    // agents); an IS roster sync keeps the strict default. Inserted STRICT
+    // above and loosened here in one transaction, so a failure here leaves the
+    // agent proposing everything — logged, never thrown: the agent exists.
+    if ((opts.createdVia ?? "cli") === "cli") {
+      try {
+        await applyAgentPosture({
+          db,
+          agentUserId,
+          posture: DEFAULT_NEW_AGENT_POSTURE,
+          createdBy: creatorId,
+        });
+      } catch (err) {
+        logger?.warn(
+          { err, agentUserId },
+          "findOrCreateServiceAgentUser: default posture not applied — agent stays strict"
+        );
+      }
+    }
     return { agentUserId, email };
   } catch (err) {
     // DB firewall: unique (created_by_user_id, agent_type) for service agents

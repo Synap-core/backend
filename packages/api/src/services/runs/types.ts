@@ -57,7 +57,11 @@ export type RunStatus =
   // refused (agent-produced trigger → human-owned automation → producer ladder /
   // policy floor blocked the THEN-action). A calm governance OUTCOME, not a
   // transport failure. Only automation_runs produces it today.
-  | "blocked_by_policy";
+  | "blocked_by_policy"
+  // 'waiting_on_you' (W2 calm) — a run the reaper found past its window with
+  // its session still owing the person an open slot. Not failed, not running:
+  // waiting on the human. automation_runs and playbook_runs produce it.
+  | "waiting_on_you";
 
 /** One run, ledger-agnostic. */
 export interface UnifiedRun {
@@ -132,8 +136,14 @@ export interface RunGroup {
   hasRunning: boolean;
   /** Runs that completed. */
   completedCount: number;
-  /** Runs that failed. */
+  /** Runs that failed (lifetime — the drill-down number). */
   failedCount: number;
+  /**
+   * Runs that failed within the last `RECENT_FAILURE_WINDOW_DAYS` (7) days —
+   * the HEALTH number (W2 calm). A flow is "failing" iff this is > 0; a flow
+   * that failed 271 times in June and has run clean since is not failing now.
+   */
+  recentFailedCount: number;
   /** Runs still running. */
   runningCount: number;
   /**

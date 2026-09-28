@@ -1067,6 +1067,10 @@ export const automationRuns = pgTable(
         "cancelled",
         "skipped",
         "blocked_by_policy",
+        // 'waiting_on_you' (W2 calm) — the run reaper found this run past its
+        // window with its session still owing the person an open slot: not
+        // orphaned, not failed — waiting on the human. Same TS-only widening.
+        "waiting_on_you",
       ],
     })
       .notNull()

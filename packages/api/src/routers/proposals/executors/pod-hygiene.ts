@@ -2,6 +2,7 @@
  * Pod hygiene approval halves:
  *
  *   profile/retire           soft-retire a kind after re-running its preflight
+ *   property_def/retire      delete a field after re-running its preflight
  *   profile/merge            the retire refusal's merge suggestion, applied by
  *                            the conversions engine (pod admin only)
  *   pod_hygiene/cleanup_pack apply the APPROVED items of a pack through the
@@ -36,6 +37,7 @@ import {
   applyProfileRetire,
   type MergeSuggestion,
 } from "../../../services/pod-hygiene/retire-profile.js";
+import { applyPropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
 import {
   registerProposalExecutor,
   type ProposalExecutorArgs,
@@ -349,6 +351,35 @@ export function registerPodHygieneExecutors(): void {
                 rows: 1,
                 ids: [profileId],
                 subject: "profiles",
+              }
+            : { applied: "none", reason: result.reason },
+      };
+    },
+  });
+
+  registerProposalExecutor({
+    key: "property_def/retire",
+    async execute(args): Promise<ProposalExecutorResult> {
+      if (await alreadyApproved(args.input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const propertyDefId = args.proposal.targetId;
+      const result = await applyPropertyDefRetire({
+        propertyDefId,
+        approverUserId: args.userId,
+        sourceProposalId: args.input.proposalId,
+      });
+      await markApproved(args);
+      return {
+        success: true,
+        primaryId: propertyDefId,
+        effect:
+          result.applied === "verified"
+            ? {
+                applied: "verified",
+                rows: result.deletedIds.length,
+                ids: result.deletedIds,
+                subject: "property_defs",
               }
             : { applied: "none", reason: result.reason },
       };

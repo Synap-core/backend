@@ -29,16 +29,15 @@ const DECLARES_GOAL_TEMPLATE = /\bgoalTemplate\s*:\s*z\s*\.\s*(string|coerce)/g;
 
 /**
  * Allowed, each for a stated reason. Patch/update schemas are all-optional
- * PATCHES of an existing row, not definitions; the Hub create door is a narrow
- * single-playbook authoring surface (it carries scope + stages).
+ * PATCHES of an existing row, not definitions. The Hub `POST /playbooks` door
+ * (+ MCP create_playbook) was the last exception; it now `.pick`s the ONE
+ * schema (2026-09-28) — its hand copy stripped `params` and `criteria`.
  */
 const ALLOWED: Record<string, string> = {
   "schemas/playbook-definition.ts": "the canonical definition",
   "routers/playbooks.ts": "updateInputSchema — a PATCH (all optional)",
   "services/capabilities/builtin-verbs.ts":
     "playbook.update verb — a strict PATCH",
-  "routers/hub-protocol/rest/playbooks.ts":
-    "POST /playbooks (+ MCP create_playbook via playbook-doors) — narrow authoring door with OpenAPI descriptions; carries scope + stages. Converting it is a follow-up (it lacks params/criteria/expectedOutputs).",
 };
 
 function scan(): Map<string, number> {

@@ -27,7 +27,6 @@ import {
   eq,
   and,
   desc,
-  inArray,
   workspaces,
   workspaceMembers,
   podMembers,
@@ -65,9 +64,12 @@ import { mcpServersProcedures } from "./workspaces/mcp-servers.js";
 import { listProjectsUsingWorkspace } from "../utils/project-workspace.js";
 import { podVisibleWorkspaceWhere } from "../utils/user-visible-where.js";
 import {
+  canArchiveWorkspace,
   setWorkspaceArchived,
   type ArchivedAutomationRef,
 } from "../utils/workspace-archive.js";
+import { AccessContext } from "../access/index.js";
+import { readSpaceStats } from "../services/workspace-stats.js";
 
 export { isPodReadableWorkspace } from "./workspaces/helpers.js";
 
@@ -287,6 +289,22 @@ const coreProcedures = {
         a.name.localeCompare(b.name)
       );
     }),
+
+  /**
+   * Per-space size + activity (founder decisions 3B + 2C) — a SEPARATE lazy
+   * read so the ~70 `workspaces.list` consumers never pay the GROUP BY; only
+   * Settings → Spaces asks. One row per listable space: `entityCount`,
+   * `lastActivityAt` (last entity change) and, on an archived space,
+   * `pausedRuleCount` (what a restore leaves paused).
+   *
+   * A `protectedProcedure`, NOT `workspaceProcedure`: the latter refuses an
+   * archived space outright. Archived rows appear only to the people who may
+   * restore them (owner / pod admin) and carry COUNTS only — no content read
+   * inside an archived space is opened. Definition + floor: `workspace-stats.ts`.
+   */
+  stats: protectedProcedure.query(async ({ ctx }) =>
+    readSpaceStats(ctx.userId, AccessContext.from(ctx))
+  ),
 
   /**
    * Whether the caller is a pod member — a single `pod_members` existence
@@ -934,26 +952,9 @@ const coreProcedures = {
         });
       }
 
-      // Authorization: workspace owner OR pod admin.
-      const isOwner = workspace.ownerId === ctx.userId;
-      let isPodAdmin = false;
-      if (!isOwner) {
-        const podAdminWs = await db.query.workspaces.findFirst({
-          where: eq(workspaces.systemSlug, "pod-admin"),
-          columns: { id: true },
-        });
-        if (podAdminWs) {
-          const membership = await db.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.workspaceId, podAdminWs.id),
-              eq(workspaceMembers.userId, ctx.userId),
-              inArray(workspaceMembers.role, ["admin", "owner"])
-            ),
-          });
-          isPodAdmin = !!membership;
-        }
-      }
-      if (!isOwner && !isPodAdmin) {
+      // Authorization: workspace owner OR pod admin — the ONE rule, shared
+      // with the stats read that previews a restore (`canArchiveWorkspace`).
+      if (!(await canArchiveWorkspace(workspace, ctx.userId))) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message:
@@ -1246,6 +1247,7 @@ export const workspacesRouter = router({
   create: coreProcedures.create,
   list: coreProcedures.list,
   isPodMember: coreProcedures.isPodMember,
+  stats: coreProcedures.stats,
   get: coreProcedures.get,
   update: coreProcedures.update,
   setPrimarySurface: coreProcedures.setPrimarySurface,

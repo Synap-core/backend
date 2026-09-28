@@ -33,6 +33,7 @@ import { checkLinkEndpointsVisible } from "../../hub-protocol/rest/link-endpoint
 import {
   setAgentFocusWorkspace,
   setAgentFocusProject,
+  focusScopeReply,
 } from "../../../services/agent-identity-service.js";
 import { workspacesRouter } from "../../workspaces.js";
 import { matchFocusTarget, isClearFocusArg } from "./focus-target-match.js";
@@ -40,6 +41,7 @@ import { projectsRouter } from "../../projects.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import {
   archiveWorkspaceDoor,
+  fileIntoProjectDoor,
   grantProfileAccessDoor,
   moveEntitiesDoor,
   renameWorkspaceDoor,
@@ -86,9 +88,10 @@ export const workspaceHandlers: McpHandlerMap = {
     }
     const raw = typeof args.workspace === "string" ? args.workspace.trim() : "";
     if (raw === "" || /^(none|clear|null)$/i.test(raw)) {
-      await setAgentFocusWorkspace(agentUserId, null);
+      const scope = await setAgentFocusWorkspace(agentUserId, null);
       return ok({
         status: "cleared",
+        ...focusScopeReply(scope),
         message:
           "Workspace focus cleared — writes will resolve their own placement again.",
       });
@@ -160,9 +163,10 @@ export const workspaceHandlers: McpHandlerMap = {
       });
     }
 
-    await setAgentFocusWorkspace(agentUserId, resolved.id);
+    const scope = await setAgentFocusWorkspace(agentUserId, resolved.id);
     return ok({
       status: "focused",
+      ...focusScopeReply(scope),
       workspaceId: resolved.id,
       workspaceName: resolved.name,
       message: `Focused on ${resolved.name} — new writes will land there until you clear it.`,
@@ -204,9 +208,10 @@ export const workspaceHandlers: McpHandlerMap = {
     }
     const raw = typeof args.project === "string" ? args.project.trim() : "";
     if (isClearFocusArg(raw)) {
-      await setAgentFocusProject(agentUserId, null);
+      const scope = await setAgentFocusProject(agentUserId, null);
       return ok({
         status: "cleared",
+        ...focusScopeReply(scope),
         message:
           "Project focus cleared — writes stop declaring a project (placement abstains again).",
       });
@@ -243,9 +248,10 @@ export const workspaceHandlers: McpHandlerMap = {
       });
     }
 
-    await setAgentFocusProject(agentUserId, match.target.id);
+    const scope = await setAgentFocusProject(agentUserId, match.target.id);
     return ok({
       status: "focused",
+      ...focusScopeReply(scope),
       projectId: match.target.id,
       projectName: match.target.name,
       message: `Focused on project ${match.target.name} — writes that don't pin their own project will declare it until you clear it.`,
@@ -814,6 +820,27 @@ export const workspaceHandlers: McpHandlerMap = {
         entityIds,
         workspaceId,
         reason: readReasoning(args),
+      })
+    );
+  },
+  synap_file_into_project: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const projectId = args.projectId;
+    const entityIds = Array.isArray(args.entityIds)
+      ? args.entityIds.filter((v): v is string => typeof v === "string")
+      : [];
+    if (typeof projectId !== "string" || !projectId || entityIds.length === 0) {
+      return ok({ error: "projectId and entityIds (non-empty) are required" });
+    }
+    return ok(
+      await fileIntoProjectDoor(opsActor(ctx), {
+        projectId,
+        entityIds,
+        remove: args.remove === true,
+        reasoning: readReasoning(args),
       })
     );
   },

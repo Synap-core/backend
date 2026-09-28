@@ -125,6 +125,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "dedup_hash",
     addedBy: "0208_proposals_dedup_hash.sql",
   },
+  // notifications — the open-row dedupe key (0281). Its partial unique index
+  // is the race guard behind the registry's dedupe window; if the column is
+  // missing, every windowed notification insert throws.
+  {
+    table: "notifications",
+    column: "dedupe_key",
+    addedBy: "0281_notifications_open_dedupe_key.sql",
+  },
   // proposals — structured rejection cause code (0232). App-level enum
   // (PROPOSAL_REJECTION_REASONS in @synap-core/types), free-text
   // `rejection_reason` stays; the reject door persists this alongside it.

@@ -21,13 +21,15 @@
  *           GET  /mcp   — SSE stream for server-initiated messages
  *           DELETE /mcp — End session
  *
- * Transport: WebStandardStreamableHTTPServerTransport (SDK 1.29.0, stateless mode)
+ * Transport: WebStandardStreamableHTTPServerTransport (SDK 1.29.0, stateless mode;
+ *           `initialize` mints an Mcp-Session-Id used as the CONVERSATION id)
  * Auth is checked before handing off to the SDK transport.
  *
  * All write tools go through checkPermissionOrPropose() — same governance as
  * any other Hub Protocol caller.
  */
 
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -405,7 +407,8 @@ mcpHttpApp.get("/", async (c) => {
  * Auth is validated here before the SDK sees the request. On auth failure we
  * return a JSON-RPC error directly so MCP clients surface a useful message.
  *
- * Each request gets its own transport instance (stateless mode — no session ID).
+ * Each request gets its own transport instance (stateless mode; the
+ * Mcp-Session-Id minted at initialize is read as the conversation id only).
  */
 mcpHttpApp.post("/", async (c) => {
   // ── 1. Auth ──────────────────────────────────────────────────────────────
@@ -434,11 +437,6 @@ mcpHttpApp.post("/", async (c) => {
   // A new server + transport per request is correct for stateless mode.
   // The SDK server already has all tool/resource/prompt handlers registered
   // via createMCPServer() — we only replace the transport layer.
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless — no Mcp-Session-Id header
-    enableJsonResponse: true, // prefer SSE when client accepts it, fall back to JSON otherwise
-  });
-
   // Pre-parse body so the transport doesn't have to consume the stream twice.
   let parsedBody: unknown;
   try {
@@ -453,6 +451,25 @@ mcpHttpApp.post("/", async (c) => {
       { status: 400 }
     );
   }
+
+  // THE CONVERSATION IDENTITY. The transport stays stateless, but `initialize`
+  // MINTS an `Mcp-Session-Id` (the SDK stamps it on the response), which the
+  // client MUST echo on every later request of that connection — one Claude
+  // Code tab, one claude.ai chat connection. A stateless transport never
+  // validates it (SDK 1.29 `validateSession` returns early), so nothing is
+  // held in memory and no request is refused for lacking one; we READ it as
+  // the conversation half of the client key (`clientKeyForApiKey`). Without it
+  // (an older client, a pre-deploy connection) the key alone is the client:
+  // option A.
+  const isInitialize =
+    (parsedBody as { method?: string } | null)?.method === "initialize";
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: isInitialize ? () => randomUUID() : undefined,
+    enableJsonResponse: true, // prefer SSE when client accepts it, fall back to JSON otherwise
+  });
+  const conversationId = isInitialize
+    ? undefined
+    : c.req.header("mcp-session-id");
 
   // Agent-key identity remap — via the ONE door `resolveKeyIdentity`
   // (access/key-identity.ts), mirroring the Hub REST auth middleware. The DATA
@@ -510,8 +527,6 @@ mcpHttpApp.post("/", async (c) => {
   // (it lands in the server's `instructions`). Fetch it ONLY for initialize — a
   // tools/call request would otherwise pay 2 DB queries for instructions no one
   // re-reads. (Stateless mode rebuilds the server per request, hence the gate.)
-  const isInitialize =
-    (parsedBody as { method?: string } | null)?.method === "initialize";
   const grounding = isInitialize
     ? await buildGrounding(effectiveUserId)
     : undefined;
@@ -545,11 +560,11 @@ mcpHttpApp.post("/", async (c) => {
   await server.connect(transport);
 
   // Request write facts: D8 probe key, D6 agent principal, C1 calling client
-  // (the key — the one stable per-client fact on a stateless transport; it is
-  // what keeps two agents' writes out of each other's sessions).
+  // (key + conversation — what keeps two conversations' writes and focus out
+  // of each other's, even on one shared agent key).
   return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
     runWithActingAgent(agentUserId, () =>
-      runWithClientKey(clientKeyForApiKey(keyRecord), () =>
+      runWithClientKey(clientKeyForApiKey(keyRecord, conversationId), () =>
         transport.handleRequest(c.req.raw, { parsedBody })
       )
     )

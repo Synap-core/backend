@@ -142,8 +142,17 @@ export const readProcs = {
       })
     )
     .query(async ({ input, ctx }) => {
+      // An ABSENT header (`ctx.workspaceId` null — every Hub/MCP forwarder that
+      // was given no lens) is "no lens", NOT the explicit pod-wide-only `null`
+      // `resolveFacetVisibilityScope` reserves for `input.workspaceId: null`.
+      // Passing it through floored the FACET half at base-only facets while the
+      // entity half used the full user floor, so every workspace-lensed role
+      // (grp-interrogation in Foundation) vanished from an unlensed
+      // get_entities(facetSlug) and its rows lost their facetSlugs (X1).
       const lensWorkspaceId =
-        input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
+        input.workspaceId !== undefined
+          ? input.workspaceId
+          : (ctx.workspaceId ?? undefined);
       const facetVisibilityScope = await resolveFacetVisibilityScope(
         ctx.userId,
         input.projectId ? undefined : lensWorkspaceId
@@ -331,8 +340,17 @@ export const readProcs = {
         (input.includePodWide === undefined &&
           (podScopeKindFilter ||
             Boolean(input.facetSlug || input.facetProfileId)));
+      // An ABSENT header (`ctx.workspaceId` null — every Hub/MCP forwarder that
+      // was given no lens) is "no lens", NOT the explicit pod-wide-only `null`
+      // `resolveFacetVisibilityScope` reserves for `input.workspaceId: null`.
+      // Passing it through floored the FACET half at base-only facets while the
+      // entity half used the full user floor, so every workspace-lensed role
+      // (grp-interrogation in Foundation) vanished from an unlensed
+      // get_entities(facetSlug) and its rows lost their facetSlugs (X1).
       const lensWorkspaceId =
-        input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
+        input.workspaceId !== undefined
+          ? input.workspaceId
+          : (ctx.workspaceId ?? undefined);
       const facetVisibilityScope = await resolveFacetVisibilityScope(
         ctx.userId,
         input.projectId ? undefined : lensWorkspaceId
@@ -746,9 +764,10 @@ export const readProcs = {
       })
     )
     .query(async ({ input, ctx }) => {
+      // Absent header = no lens (see `list`): `undefined`, never `null`.
       const facetVisibilityScope = await resolveFacetVisibilityScope(
         ctx.userId,
-        ctx.workspaceId
+        ctx.workspaceId ?? undefined
       );
       // Floor: every search result must belong to the caller. This prevents
       // pod-personal entities (workspaceId IS NULL) that belong to OTHER users

@@ -11,7 +11,15 @@
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { getDb, eq, and, desc, artifacts } from "@synap/database";
+import {
+  getDb,
+  eq,
+  and,
+  desc,
+  inArray,
+  artifacts,
+  entities,
+} from "@synap/database";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import type { Lens } from "../access/context.js";
@@ -19,6 +27,11 @@ import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { emitHubRealtimeEvent } from "../utils/domain-event-bridge.js";
 import type { Artifact } from "@synap/database/schema";
 import { SESSION_ARTIFACT_KINDS } from "../services/focus-sessions/record-session-artifact.js";
+import { UUID_RE } from "../services/focus-sessions/session-metadata.js";
+import {
+  resolveEntityProfileRefs,
+  type EntityProfileRef,
+} from "../services/profiles/entity-profile-refs.js";
 
 // ── Shared input schemas ────────────────────────────────────────────────────
 
@@ -89,7 +102,37 @@ export async function queryArtifacts(
     .orderBy(desc(artifacts.createdAt))
     .limit(input.limit);
 
-  return rows;
+  // An `entity` artifact's KIND, so the desk card names it ("Decision", not
+  // "Entity"). The entity read carries the caller's OWN entity floor (no lens:
+  // the user floor, never wider) — `artifacts.create` does not floor `refId`,
+  // so an unreadable entity simply gets no kind.
+  const entityIds = [
+    ...new Set(
+      rows
+        .filter((r) => r.kind === "entity" && r.refId && UUID_RE.test(r.refId))
+        .map((r) => r.refId as string)
+    ),
+  ];
+  if (entityIds.length === 0) return rows;
+  const entityRows = await database
+    .select({
+      id: entities.id,
+      type: entities.type,
+      profileId: entities.profileId,
+    })
+    .from(entities)
+    .where(
+      and(
+        inArray(entities.id, entityIds),
+        scopedDb(AccessContext.from(ctx)).predicate(entities)
+      )
+    );
+  const kinds = await resolveEntityProfileRefs(database, entityRows);
+  return rows.map((r): Artifact & { entityProfile?: EntityProfileRef } => {
+    const entityProfile =
+      r.kind === "entity" && r.refId ? kinds.get(r.refId) : undefined;
+    return entityProfile ? { ...r, entityProfile } : r;
+  });
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────

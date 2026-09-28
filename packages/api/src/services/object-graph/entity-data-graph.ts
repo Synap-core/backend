@@ -7,8 +7,14 @@
  * read needs a tRPC caller ctx, so it lives in its own seam that both surfaces —
  * the REST `/graph` route and the MCP `synap_get_graph` / `get_entity` tools —
  * import, instead of each re-implementing the same getConnections → fold (the
- * duplication a review flagged). Best-effort: the entity-data half is additive,
- * so any failure yields [] rather than blanking the whole graph.
+ * duplication a review flagged).
+ *
+ * A FAILED read THROWS — it is never folded into `[]`. An empty neighbour list
+ * says "this entity is tied to nothing", and a reader cannot tell that apart
+ * from "the read broke" (CLAUDE.md: an empty result and a failed read are
+ * different facts). Callers that want the graph to be best-effort decide so
+ * themselves (`synap_get_entity` already catches and omits the graph; the REST
+ * route answers with an error status).
  */
 
 import { createLogger } from "@synap-core/core";
@@ -63,13 +69,9 @@ export async function entityDataNeighbors(
     });
     return connectionsToNeighbors(result.connections);
   } catch (err) {
-    // The entity-data half is additive — a failure degrades to [] rather than
-    // blanking the whole graph. But LOG it: a silent catch here once hid a scope
-    // bug (mcp.* not translated) that made the agent's graph look empty.
-    logger.warn(
-      { err, entityId },
-      "entityDataNeighbors failed — degraded to []"
-    );
-    return [];
+    // LOG, then rethrow: a silent `[]` here once hid a scope bug (mcp.* not
+    // translated) that made the agent's graph look empty.
+    logger.warn({ err, entityId }, "entityDataNeighbors failed");
+    throw err;
   }
 }

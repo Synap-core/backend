@@ -21,6 +21,11 @@
  * this is the inversion instead.
  */
 
+import { db, and, eq, focusSessions, owedSlotWhere } from "@synap/database";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "session-close" });
+
 /** Structural mirror of api's `CompleteFocusSessionResult` (no import — cycle). */
 export interface SessionCloseResult {
   session: { id: string; status: string };
@@ -68,5 +73,31 @@ export async function closeSessionViaDoor(
       "Session closer not registered — apps/api must call registerSessionCloser() at boot"
     );
   }
+  // W2 calm: every caller of this door is an AUTOMATIC close (the three
+  // reapers and the executor's end-of-run close). None may close a session
+  // that still owes the person something — the session stays open (status
+  // unchanged) so the ask stays live where the person will answer it. A
+  // person's own close goes through the api door directly, never through here.
+  if (await sessionOwesHuman(input.sessionId)) {
+    logger.info(
+      { sessionId: input.sessionId },
+      "Automatic close skipped — the session still owes the person an open slot"
+    );
+    return null;
+  }
   return sessionCloser(input);
+}
+
+/**
+ * Does this session still owe the person an open slot? THE owed predicate
+ * (`owedSlotWhere`, @synap/database) — the same one the needs-you tray
+ * counts with, so a session is never closed while the tray still shows it.
+ */
+export async function sessionOwesHuman(sessionId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(and(eq(focusSessions.id, sessionId), owedSlotWhere()))
+    .limit(1);
+  return !!row;
 }

@@ -184,9 +184,27 @@ beforeAll(async () => {
     `insert into entities (id, user_id, workspace_id, title, document_id) values ($1,$2,null,'Shared note',$3),($4,$2,null,'Unshared note',$5)`,
     [SHARED_ENTITY, OWNER, SHARED_BODY_DOC, DETACHED_ENTITY, DETACHED_BODY_DOC]
   );
+  // Decision B (2026-09-27): a pod-wide facet shares only with a pod member in
+  // a space its ROLE is granted to — so the facets wear a shared role granted
+  // to SHARE_WS, of which POD_MEMBER is a member (row-level proof of the
+  // not-granted case lives in access/shared-role-visibility.pglite.test.ts).
+  const SHARED_ROLE = randomUUID();
+  const SHARE_WS = randomUUID();
   await q(
-    `insert into entity_facets (id, entity_id, workspace_id, deleted_at) values ($1,$2,null,null),($3,$4,null,now())`,
-    [randomUUID(), SHARED_ENTITY, randomUUID(), DETACHED_ENTITY]
+    `insert into profiles (id, slug, display_name, profile_kind, scope) values ($1,'client','Client','role','shared')`,
+    [SHARED_ROLE]
+  );
+  await q(
+    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    [SHARED_ROLE, SHARE_WS]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'viewer')`,
+    [randomUUID(), SHARE_WS, POD_MEMBER]
+  );
+  await q(
+    `insert into entity_facets (id, entity_id, profile_id, workspace_id, deleted_at) values ($1,$2,$5,null,null),($3,$4,$5,null,now())`,
+    [randomUUID(), SHARED_ENTITY, randomUUID(), DETACHED_ENTITY, SHARED_ROLE]
   );
 }, 60_000);
 

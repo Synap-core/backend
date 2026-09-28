@@ -1260,6 +1260,14 @@ export interface UpdateFocusSessionInput {
   criteria?: HubSessionCriterion[];
   followPlaybookId?: string | null;
   followStageKey?: string | null;
+  /**
+   * ADOPT this session into a track step (UUID from `listTracks`); `null`
+   * unfiles it from its track. Always a proposal for an agent; the session
+   * must be in the track's project (a session with none is filed into it).
+   */
+  trackId?: string | null;
+  /** The step key the track pinned. Omitted ⇒ the track's current step. */
+  trackStage?: string | null;
   agentUserId?: string;
   reasoning?: string;
 }
@@ -1320,6 +1328,18 @@ export type UpdateFocusSessionResult =
       blockGuidelines?: unknown;
       follow?: unknown;
       nudges?: HubSessionNudges;
+      /**
+       * What a `trackId`/`trackStage` did. `domainNote` = the step names
+       * another domain; the session was filed where it is, not moved.
+       */
+      trackFiling?: {
+        trackId: string | null;
+        trackStage: string | null;
+        trackName: string | null;
+        stageName: string | null;
+        usesStamped: boolean;
+        domainNote?: string;
+      };
     });
 
 /** Input for POST /api/hub/focus-sessions/:id/complete. */

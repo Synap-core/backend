@@ -26,6 +26,10 @@ import { entityPropertyIndex } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
+import {
+  proposePropertyDefRetire,
+  resolvePropertyDefSchemaOwner,
+} from "../services/pod-hygiene/retire-property-def.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "property-defs-router" });
@@ -303,26 +307,13 @@ export const propertyDefsRouter = router({
       //   • base def on a profile        → that profile's owner (a system
       //                                    kind's base def ⇒ pod admin);
       //   • global def (no profile)      → pod admin.
-      let defOwner: { workspaceId?: string | null; userId?: string | null } =
-        {};
-      if (existing.workspaceId) {
-        defOwner = { workspaceId: existing.workspaceId };
-      } else if (existing.profileId) {
-        const owningProfile = await new ProfileRepository(db).getById(
-          existing.profileId
-        );
-        if (!owningProfile) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: `Profile not found for property definition: ${input.id}`,
-          });
-        }
-        defOwner = owningProfile;
-      }
-      await assertProfileSchemaWrite(db, ctx.userId, defOwner, {
-        level: "editor",
-        actingWorkspaceId: null,
-      });
+      // The owner derivation is shared with the governed retirement below.
+      await assertProfileSchemaWrite(
+        db,
+        ctx.userId,
+        await resolvePropertyDefSchemaOwner(db, existing),
+        { level: "editor", actingWorkspaceId: null }
+      );
 
       // Check for slug conflict if slug is being changed.
       // Look up an exact replacement — same profile_id + same workspace_id
@@ -355,6 +346,46 @@ export const propertyDefsRouter = router({
       );
 
       return { propertyDef: updated };
+    }),
+
+  /**
+   * PROPOSE retiring a field (pod hygiene, mirrors `profiles.proposeRetire`).
+   * Never writes the def: it files a `property_def/retire` proposal a human
+   * approves — for a human caller too — or REFUSES when the field still holds
+   * values. Reaches global and profile-base defs (which `delete` below denies
+   * to everyone) under the same authority `update` applies. On approval the
+   * def is deleted (no soft-delete column exists for defs).
+   */
+  proposeRetire: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        reason: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const existing = await new PropertyDefRepository(db).getById(input.id);
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Property definition not found: ${input.id}`,
+        });
+      }
+      // The schema-write gate on the LOADED row, before anything is filed —
+      // the same authority `update` passes (and the service re-asserts it).
+      await assertProfileSchemaWrite(
+        db,
+        ctx.userId,
+        await resolvePropertyDefSchemaOwner(db, existing),
+        { level: "editor", actingWorkspaceId: null }
+      );
+      return proposePropertyDefRetire({
+        userId: ctx.userId,
+        propertyDefId: input.id,
+        agentUserId: ctx.agentUserId ?? null,
+        reason: input.reason,
+      });
     }),
 
   /**

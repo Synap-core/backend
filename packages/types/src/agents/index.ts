@@ -11,6 +11,13 @@
  * Node alike.
  */
 
+/**
+ * The one command that connects a person's own agents (Claude Code, Codex,
+ * Cursor…) to their pod. Every surface that invites them to connect shows this
+ * exact string, so the copy cannot drift from what the CLI accepts.
+ */
+export const AGENT_CONNECT_COMMAND = "npx @synap-core/cli init";
+
 /** The slice of an `agentUsers.list` row this rule reads. */
 export interface AgentPresenceLike {
   id: string;
@@ -24,21 +31,21 @@ export interface AgentPresenceLike {
 
 export type AgentConnection =
   /** No agent has ever called the pod (or the pod has no agents at all). */
-  | { kind: 'never' }
+  | { kind: "never" }
   /**
    * The pod has agents but does not report when they were last seen (a pod
    * older than the `lastSeenAt` field). NOT "never": nobody measured it.
    */
-  | { kind: 'unmeasured' }
+  | { kind: "unmeasured" }
   /** At least one agent has; `agent` is the one seen most recently. */
   | {
-      kind: 'seen';
+      kind: "seen";
       agent: { id: string; name: string | null; lastSeenAt: Date };
       /** How many OTHER agents have also been seen. */
       others: number;
     };
 
-function seenAt(value: AgentPresenceLike['lastSeenAt']): Date | null {
+function seenAt(value: AgentPresenceLike["lastSeenAt"]): Date | null {
   if (value == null) return null;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -54,7 +61,7 @@ function seenAt(value: AgentPresenceLike['lastSeenAt']): Date | null {
  * would be a calm, wrong screen.
  */
 export function resolveAgentConnection(
-  rows: readonly AgentPresenceLike[],
+  rows: readonly AgentPresenceLike[]
 ): AgentConnection {
   let latest: { row: AgentPresenceLike; at: Date } | null = null;
   let seenCount = 0;
@@ -65,11 +72,12 @@ export function resolveAgentConnection(
     if (!latest || at.getTime() > latest.at.getTime()) latest = { row, at };
   }
   if (!latest) {
-    const measured = rows.length === 0 || rows.some((row) => 'lastSeenAt' in row);
-    return measured ? { kind: 'never' } : { kind: 'unmeasured' };
+    const measured =
+      rows.length === 0 || rows.some((row) => "lastSeenAt" in row);
+    return measured ? { kind: "never" } : { kind: "unmeasured" };
   }
   return {
-    kind: 'seen',
+    kind: "seen",
     agent: { id: latest.row.id, name: latest.row.name, lastSeenAt: latest.at },
     others: seenCount - 1,
   };

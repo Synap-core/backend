@@ -28,6 +28,7 @@ import {
   focusSessions,
   AGENT_PROPOSAL_PACKAGE_MARKER,
   RECEIPT_IDLE_WINDOW_HOURS,
+  owedSlotWhere,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { closeSessionViaDoor } from "../utils/session-close.js";
@@ -45,10 +46,17 @@ export const REAPER_STALE_HOURS = 24;
  * off `updated_at` (bumped by every real touch — progress/stage/goal/output/
  * metadata patch), NEVER `started_at`, or a long-running-but-actively-worked
  * session would be wrongly reaped on age alone.
+ *
+ * NEVER a session that still owes the person something (W2 calm). A session
+ * waiting on the person is QUIET by definition — silence is the person's, not
+ * an abandoned agent's — so `updated_at` alone read "waiting on you" as
+ * "dead" and staled it while its slot stayed in the needs-you tray (census
+ * §3d). The owed predicate is THE one the tray counts with.
  */
 export const SESSION_IS_STALE = and(
   drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
-  drizzleSql`${focusSessions.updatedAt} < now() - (${REAPER_STALE_HOURS}::int * interval '1 hour')`
+  drizzleSql`${focusSessions.updatedAt} < now() - (${REAPER_STALE_HOURS}::int * interval '1 hour')`,
+  drizzleSql`NOT ${owedSlotWhere()}`
 );
 
 /**
@@ -66,7 +74,9 @@ export const RECEIPT_IS_DONE = and(
   drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
   drizzleSql`${focusSessions.metadata} ->> 'kind' = ${AGENT_PROPOSAL_PACKAGE_MARKER}`,
   drizzleSql`${focusSessions.updatedAt} < now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour')`,
-  drizzleSql`NOT EXISTS (select 1 from proposals p where p.session_id = ${focusSessions.id} and (p.status = 'pending' or p.created_at > now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour')))`
+  drizzleSql`NOT EXISTS (select 1 from proposals p where p.session_id = ${focusSessions.id} and (p.status = 'pending' or p.created_at > now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour')))`,
+  // Nothing left to review INCLUDES nothing the person still owes (W2 calm).
+  drizzleSql`NOT ${owedSlotWhere()}`
 );
 
 /** Most receipts closed per tick — each close runs the full door. */

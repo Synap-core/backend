@@ -6,6 +6,7 @@
  *   PATCH /workspaces/:workspaceId           { name?, description? }
  *   POST  /entities/move                     { entityIds[], workspaceId, reason? }
  *   POST  /profiles/grant-access             { profileId, targetWorkspaceId, workspaceId?, reasoning? }
+ *   POST  /projects/:projectId/file          { entityIds[], remove?, reasoning? }
  *
  * Thin: each route validates the wire shape, resolves the acting user, and
  * forwards to `services/workspace-ops-doors.ts` — which forwards to the
@@ -17,6 +18,7 @@ import { z } from "zod";
 import type { Context } from "hono";
 import {
   archiveWorkspaceDoor,
+  fileIntoProjectDoor,
   grantProfileAccessDoor,
   moveEntitiesDoor,
   renameWorkspaceDoor,
@@ -169,6 +171,39 @@ export function registerWorkspaceOpsRoutes(app: HubHono): void {
       return c.json(result, 200);
     } catch (err) {
       return failure(c, err, "entity move");
+    }
+  });
+
+  app.post("/projects/:projectId/file", async (c) => {
+    const a = await actorFor(c);
+    if (!a.ok) return a.res;
+    const projectId = c.req.param("projectId") ?? "";
+    if (!isUuid(projectId)) {
+      return c.json({ error: "projectId must be a UUID" }, 400);
+    }
+    const read = await readJsonBody(c);
+    if (!read.ok) return read.res;
+    const parsed = z
+      .object({
+        entityIds: z.array(z.string().uuid()).min(1).max(500),
+        remove: z.boolean().optional(),
+        reasoning,
+      })
+      .safeParse(read.body);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.issues },
+        400
+      );
+    }
+    try {
+      const result = await fileIntoProjectDoor(a.actor, {
+        projectId,
+        ...parsed.data,
+      });
+      return jsonGoverned(c, result);
+    } catch (err) {
+      return failure(c, err, "project file");
     }
   });
 

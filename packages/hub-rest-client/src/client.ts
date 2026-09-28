@@ -278,6 +278,14 @@ import type {
   StartStageSessionInput,
   StartTrackInput,
 } from "./tracks.js";
+import type {
+  GrantProfileAccessInput,
+  HubArchiveWorkspaceResult,
+  HubGrantProfileAccessResult,
+  HubMoveEntitiesResult,
+  HubRenameWorkspaceResult,
+  MoveEntitiesInput,
+} from "./space-ops.js";
 
 export interface HubRestClientConfig {
   /** Pod URL, e.g. https://my-pod.synap.live */
@@ -2639,6 +2647,60 @@ export class HubRestClient {
       "POST",
       `/api/hub/tracks/${encodeURIComponent(trackId)}/stages/${encodeURIComponent(stageKey)}/sessions`,
       body
+    );
+  }
+
+  // ─── Space operations (the Hub rest/workspace-ops.ts routes, R8a) ─────────
+  //
+  // Thin wrappers — every guard, floor and audit row lives in the governed
+  // tRPC procedure the route forwards to. An agent key gets `status:
+  // "proposed"` (202): a SUCCESS, queued for review.
+
+  /**
+   * Archive a space (hides it, PAUSES its space-scoped automations) — or, with
+   * `restore`, un-archive it (restore re-enables nothing). DESTRUCTIVE.
+   */
+  async archiveWorkspace(
+    workspaceId: string,
+    options?: { restore?: boolean; reasoning?: string }
+  ): Promise<HubArchiveWorkspaceResult> {
+    const verb = options?.restore ? "restore" : "archive";
+    return this.request<HubArchiveWorkspaceResult>(
+      "POST",
+      `/api/hub/workspaces/${encodeURIComponent(workspaceId)}/${verb}`,
+      options?.reasoning ? { reasoning: options.reasoning } : {}
+    );
+  }
+
+  /** Rename / re-describe a space. Settings are deliberately not editable. */
+  async renameWorkspace(
+    workspaceId: string,
+    input: { name?: string; description?: string }
+  ): Promise<HubRenameWorkspaceResult> {
+    return this.request<HubRenameWorkspaceResult>(
+      "PATCH",
+      `/api/hub/workspaces/${encodeURIComponent(workspaceId)}`,
+      input
+    );
+  }
+
+  /** Move entities into another space — per entity: moved | proposed | error. */
+  async moveEntities(input: MoveEntitiesInput): Promise<HubMoveEntitiesResult> {
+    return this.request<HubMoveEntitiesResult>(
+      "POST",
+      "/api/hub/entities/move",
+      input
+    );
+  }
+
+  /** Let another space see and use a SHARED kind. Widens visibility. */
+  async grantProfileAccess(
+    input: GrantProfileAccessInput
+  ): Promise<HubGrantProfileAccessResult> {
+    return this.request<HubGrantProfileAccessResult>(
+      "POST",
+      "/api/hub/profiles/grant-access",
+      input
     );
   }
 }

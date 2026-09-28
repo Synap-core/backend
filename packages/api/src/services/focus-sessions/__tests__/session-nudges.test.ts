@@ -188,6 +188,8 @@ describe("computeSessionNudges", () => {
       name: `P${i}`,
       score: 5 - i,
       reason: "You mentioned x",
+      scope: "session" as const,
+      templateKind: "Work template",
     }));
     const n = computeSessionNudges({
       session: session(),

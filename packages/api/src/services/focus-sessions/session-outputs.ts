@@ -44,6 +44,10 @@ import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { UUID_RE } from "./session-metadata.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import {
+  resolveEntityProfileRefs,
+  type EntityProfileRef,
+} from "../profiles/entity-profile-refs.js";
 
 /**
  * One thing a session produced. `id` is the STABLE join coordinate
@@ -63,6 +67,12 @@ export interface SessionOutput {
   refId: string;
   title: string;
   icon?: string;
+  /**
+   * An `entity` output's KIND (profile slug + display name + icon), so a card
+   * says "Decision" rather than "Entity". Absent for non-entities and for an
+   * entity the title read did not find.
+   */
+  entityProfile?: EntityProfileRef;
   /** Artifact lifecycle, when an artifact row backs this output. */
   state?: "working" | "kept" | "swept";
   producedAt: Date;
@@ -138,6 +148,8 @@ export interface JoinSessionOutputsInput {
   proposals: JoinProposalRow[];
   /** Live titles by `<kind>:<refId>`; absent ⇒ the artifact's own title stands. */
   titles: Map<string, string>;
+  /** Entity kinds by `entity:<refId>`; absent ⇒ the output carries no kind. */
+  entityProfiles?: Map<string, EntityProfileRef>;
 }
 
 /**
@@ -182,6 +194,10 @@ export function joinSessionOutputs(
   const byExpectedLabel = new Map<string, string>();
   /** The reverse: coordinate → the label its artifact claimed. */
   const labelClaimOf = new Map<string, string>();
+  const profileOf = (id: string) => {
+    const entityProfile = input.entityProfiles?.get(id);
+    return entityProfile ? { entityProfile } : {};
+  };
 
   for (const a of input.artifacts) {
     const refId = artifactRefId(a);
@@ -201,6 +217,7 @@ export function joinSessionOutputs(
       kind: normalizeObjectKind(a.kind),
       refId,
       title: input.titles.get(id) ?? a.title,
+      ...profileOf(id),
       state: a.state,
       producedAt: a.createdAt,
       ...(a.originKind === "agent"
@@ -227,6 +244,7 @@ export function joinSessionOutputs(
       kind: normalizeObjectKind(p.toType),
       refId: p.toId,
       title: input.titles.get(id) ?? p.toId,
+      ...profileOf(id),
       producedAt: p.createdAt,
       source: ["produced_edge"],
     });
@@ -412,7 +430,7 @@ export async function listOutputsForSessions(
         .where(inArray(proposals.id, proposalIds))
     : [];
 
-  const titles = await resolveTitles(database, [
+  const { titles, entityProfiles } = await resolveTitles(database, [
     ...artifactRows.map((a) => ({
       kind: a.kind,
       refId: artifactRefId(a as JoinArtifactRow),
@@ -436,6 +454,7 @@ export async function listOutputsForSessions(
         // proposal, so another session's rows can never match a lookup here.
         proposals: proposalRows,
         titles,
+        entityProfiles,
       })
     );
   }
@@ -470,7 +489,8 @@ function readExpectedLabel(props: unknown): string | null {
 
 /**
  * Live titles for every referenced object, FIVE queries total (one per backing
- * table) — never one per output. Keyed by the same `<kind>:<refId>` coordinate
+ * table) — never one per output — plus ONE profiles read for the entities'
+ * kinds (`resolveEntityProfileRefs`, skipped when no entity names a profile). Keyed by the same `<kind>:<refId>` coordinate
  * the join uses. A kind with no backing table here (cell, url) simply has no
  * entry and keeps the artifact's own title.
  *
@@ -484,7 +504,10 @@ function readExpectedLabel(props: unknown): string | null {
 async function resolveTitles(
   database: typeof db,
   refs: Array<{ kind: string; refId: string }>
-): Promise<Map<string, string>> {
+): Promise<{
+  titles: Map<string, string>;
+  entityProfiles: Map<string, EntityProfileRef>;
+}> {
   const byKind = new Map<string, Set<string>>();
   for (const r of refs) {
     const kind = normalizeObjectKind(r.kind);
@@ -507,7 +530,12 @@ async function resolveTitles(
     await Promise.all([
       entityIds.length
         ? database
-            .select({ id: entities.id, title: entities.title })
+            .select({
+              id: entities.id,
+              title: entities.title,
+              type: entities.type,
+              profileId: entities.profileId,
+            })
             .from(entities)
             .where(inArray(entities.id, entityIds))
         : Promise.resolve([]),
@@ -544,5 +572,13 @@ async function resolveTitles(
   for (const r of viewRows) titles.set(`view:${r.id}`, r.name);
   for (const r of automationRows) titles.set(`automation:${r.id}`, r.name);
   for (const r of playbookRows) titles.set(`playbook:${r.id}`, r.name);
-  return titles;
+
+  const entityProfiles = new Map<string, EntityProfileRef>();
+  for (const [id, ref] of await resolveEntityProfileRefs(
+    database,
+    entityRows
+  )) {
+    entityProfiles.set(`entity:${id}`, ref);
+  }
+  return { titles, entityProfiles };
 }

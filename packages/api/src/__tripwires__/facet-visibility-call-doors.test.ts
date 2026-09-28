@@ -80,7 +80,8 @@ describe("facet visibility call doors", () => {
 
   // A pod-member reviewer must see a legitimately pod-shared facet's live
   // state in a proposal diff — `isFacetVisibleForLens` fails CLOSED to the
-  // owner floor unless its 4th `viewerIsPodMember` arg is threaded through. If
+  // owner floor unless its 4th `viewerSharedRoleIds` arg (decision B: the
+  // roles shared with the viewer, from `resolveViewerSharedRoleIds`) is threaded through. If
   // either proposals.ts call site regresses to the 3-arg form, a pod-member
   // reviewing someone else's pod-shared facet update silently loses the
   // before-state (under-render, not a leak — but still the bug this guards).
@@ -88,7 +89,7 @@ describe("facet visibility call doors", () => {
   // Wave 5 router-decomposition (2026-08-12) moved `enrichProposalsForDisplay`
   // (the only caller of `isFacetVisibleForLens`) from routers/proposals.ts
   // into routers/proposals/display.ts — a path re-key, not a behavior change.
-  it("threads viewerIsPodMember into both proposals display isFacetVisibleForLens call sites", () => {
+  it("threads viewerSharedRoleIds into both proposals display isFacetVisibleForLens call sites", () => {
     const proposalsDisplay = read(
       "packages/api/src/routers/proposals/display.ts"
     );
@@ -98,7 +99,7 @@ describe("facet visibility call doors", () => {
 
     expect(callSites.length).toBeGreaterThanOrEqual(2);
     for (const call of callSites) {
-      expect(call[1]).toContain("viewerIsPodMember");
+      expect(call[1]).toContain("viewerSharedRoleIds");
     }
   });
 });

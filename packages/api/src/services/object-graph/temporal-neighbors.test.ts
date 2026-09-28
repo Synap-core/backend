@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   eventRows: [] as Record<string, unknown>[],
   proposalRows: [] as Record<string, unknown>[],
   sessionRows: [] as Record<string, unknown>[],
+  entityRows: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -52,6 +53,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         if (table === actual.events) return chain(h.eventRows);
         if (table === actual.proposals) return chain(h.proposalRows);
         if (table === actual.focusSessions) return chain(h.sessionRows);
+        if (table === actual.entities) return chain(h.entityRows);
         return chain([]);
       },
     }),
@@ -65,6 +67,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import {
   getTemporalNeighbors,
+  getReceiptNeighbors,
   mergeNeighbors,
   type GraphNeighbor,
 } from "./graph-service.js";
@@ -84,6 +87,7 @@ beforeEach(() => {
   h.eventRows = [];
   h.proposalRows = [];
   h.sessionRows = [];
+  h.entityRows = [];
 });
 
 describe("getTemporalNeighbors", () => {
@@ -130,12 +134,10 @@ describe("getTemporalNeighbors", () => {
       via: "governed",
       subtype: "approved",
     });
-    // Title comes from the vocabulary door in PAST mood — this is history, not
-    // a button. A hand-written label map here would be the fork the vocabulary
-    // SSOT exists to prevent. `entity` is the generic base kind, which the
-    // vocabulary suppresses on purpose ("Updated entity" says nothing), so the
-    // verb stands alone here.
-    expect(proposal?.name).toBe("Updated");
+    // Named by the proposal's OWN display door (`proposalDisplaySummary`),
+    // never a bare verb. A row with no payload at all still gets the door's
+    // fallback — the vocabulary's verb — never an id or an empty string.
+    expect(proposal?.name).toBe("Update");
 
     expect(out.find((n) => n.kind === "session")).toMatchObject({
       id: SESSION_ID,
@@ -345,5 +347,152 @@ describe("the floors a fake DB cannot exercise", () => {
   it("bounds the scan and the neighbour fan-out", () => {
     expect(fn).toContain("TEMPORAL_EVENT_SCAN_LIMIT");
     expect(fn).toContain("TEMPORAL_NEIGHBOR_CAP");
+  });
+});
+
+/**
+ * "Came from" names — W6a (2026-09-28). A proposal neighbour used to be named
+ * `buildObjectActionTitle(proposalType, targetType)`: a composite plan read
+ * "Graph", a create read "Created" — a verb with no object, beside a kind noun
+ * the row already shows. It must read what the proposal's own row reads.
+ * Rows below are WIRE-shaped (`proposals.data` as producers store it).
+ */
+describe("getTemporalNeighbors — proposal names come from the proposal's display door", () => {
+  const nameFor = async (row: Record<string, unknown>) => {
+    h.eventRows = [
+      { proposalId: PROPOSAL_ID, sessionId: null, timestamp: new Date() },
+    ];
+    h.proposalRows = [
+      {
+        id: PROPOSAL_ID,
+        status: "approved",
+        workspaceId: WORKSPACE_ID,
+        sessionId: null,
+        targetId: ENTITY_ID,
+        ...row,
+      },
+    ];
+    const out = await getTemporalNeighbors(
+      OWNER,
+      "entity",
+      ENTITY_ID,
+      NO_FACET_SCOPE,
+      WORKSPACE_ID
+    );
+    return out.find((n) => n.kind === "proposal")?.name;
+  };
+
+  it("a composite plan names the object it created, not the verb 'Graph'", async () => {
+    const name = await nameFor({
+      proposalType: "graph",
+      targetType: "entity",
+      data: {
+        changeType: "create",
+        summary: "Create entity",
+        operations: [
+          {
+            op: "create_entity",
+            profileSlug: "note",
+            title: "Raycast V1 focus lens",
+          },
+          { op: "create_relation" },
+        ],
+      },
+    });
+    expect(name).not.toBe("Graph");
+    expect(name).toContain("Raycast V1 focus lens");
+    expect(name).toContain("+ 1 more");
+  });
+
+  it("a stored summary that names the object is the name, verbatim", async () => {
+    expect(
+      await nameFor({
+        proposalType: "create",
+        targetType: "entity",
+        data: {
+          changeType: "create",
+          targetType: "entity",
+          summary: 'Create Task "Renew the Acme contract"',
+          data: { profileSlug: "task", title: "Renew the Acme contract" },
+        },
+      })
+    ).toBe('Create Task "Renew the Acme contract"');
+  });
+
+  it("a create with no stored summary is named from its payload title", async () => {
+    const name = await nameFor({
+      proposalType: "create",
+      targetType: "entity",
+      data: {
+        changeType: "create",
+        targetType: "entity",
+        data: { profileSlug: "person", title: "Ada Lovelace" },
+      },
+    });
+    expect(name).not.toBe("Created");
+    expect(name).toContain("Ada Lovelace");
+  });
+
+  it("matches the proposal read door's summary for the same row", async () => {
+    // Sameness with `enrichProposalsForDisplay`'s own derivation — they share
+    // ONE function, so a lineage row and the proposal page never disagree.
+    const { proposalDisplaySummary } =
+      await import("../../routers/proposals/display.js");
+    const { buildRequestFromProposal } =
+      await import("@synap-core/types/proposals");
+    const row = {
+      id: PROPOSAL_ID,
+      proposalType: "graph",
+      targetType: "entity",
+      targetId: ENTITY_ID,
+      workspaceId: WORKSPACE_ID,
+      data: {
+        changeType: "create",
+        operations: [
+          { op: "create_entity", profileSlug: "company", title: "Acme" },
+        ],
+      },
+    };
+    const expected = proposalDisplaySummary({
+      proposalType: row.proposalType,
+      request: buildRequestFromProposal(row as never),
+      profileSlug: undefined,
+      targetName: undefined,
+    });
+    expect(await nameFor(row)).toBe(expected);
+  });
+});
+
+describe("getReceiptNeighbors — the receipt row carries the same display name", () => {
+  it("names the entity's source proposal by its display door, not 'Created'", async () => {
+    h.entityRows = [{ sourceProposalId: PROPOSAL_ID }];
+    h.proposalRows = [
+      {
+        id: PROPOSAL_ID,
+        proposalType: "create",
+        targetType: "entity",
+        targetId: ENTITY_ID,
+        status: "approved",
+        workspaceId: WORKSPACE_ID,
+        sessionId: null,
+        sourceMessageId: null,
+        agentUserId: null,
+        data: {
+          changeType: "create",
+          targetType: "entity",
+          data: { profileSlug: "company", title: "Acme Corp" },
+        },
+      },
+    ];
+    const out = await getReceiptNeighbors(
+      OWNER,
+      "entity",
+      ENTITY_ID,
+      NO_FACET_SCOPE,
+      WORKSPACE_ID
+    );
+    const receipt = out.find((n) => n.kind === "proposal");
+    expect(receipt?.name).not.toBe("Created");
+    expect(receipt?.name).toContain("Acme Corp");
   });
 });

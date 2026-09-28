@@ -33,7 +33,14 @@ export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * row would grade a playbook for a person's change of mind.
  */
 export type PlaybookRunStatus =
-  "running" | "completed" | "failed" | "proposed" | "cancelled";
+  | "running"
+  | "completed"
+  | "failed"
+  | "proposed"
+  | "cancelled"
+  // W2 calm: the reaper found the run quiet with its session still owing the
+  // person an open slot — waiting on the human, never force-failed.
+  | "waiting_on_you";
 
 export const playbookRuns = pgTable(
   "playbook_runs",
@@ -51,7 +58,14 @@ export const playbookRuns = pgTable(
       .$type<PlaybookRunExecutorRef>()
       .notNull(),
     status: text("status", {
-      enum: ["running", "completed", "failed", "proposed", "cancelled"],
+      enum: [
+        "running",
+        "completed",
+        "failed",
+        "proposed",
+        "cancelled",
+        "waiting_on_you",
+      ],
     })
       .$type<PlaybookRunStatus>()
       .notNull()

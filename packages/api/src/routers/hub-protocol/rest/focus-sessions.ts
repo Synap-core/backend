@@ -43,6 +43,7 @@ import {
 import { createLinks } from "../../../services/links/links-service.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
+import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import type { SessionCriterion } from "@synap/playbooks";
 import {
@@ -330,6 +331,11 @@ const UpdateBodySchema = z.object({
   followStageKey: z.string().min(1).nullable().optional(),
   /** @see UpdateSessionParams.params — only with followPlaybookId. */
   params: z.record(z.string(), z.unknown()).optional(),
+  // ADOPT the session into a track step; `null` unfiles it from its track.
+  // Resolved by `resolveSessionTrackFiling` (the MCP/tRPC doors' rule), and an
+  // agent's filing is always a proposal.
+  trackId: z.string().uuid().nullable().optional(),
+  trackStage: z.string().min(1).max(120).nullable().optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
 });
@@ -494,10 +500,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     method: "get",
     path: "/focus-sessions",
     tags: ["FocusSessions"],
-    summary: "List focus sessions for a workspace",
+    summary: "List focus sessions for a workspace or a project",
+    description:
+      "Scope by `workspaceId` (membership-checked), `projectId` (the project " +
+      "must be visible to the caller — `loadVisibleProject`, the same floor " +
+      "every project read and filing write uses), or both. At least one is " +
+      "required. Rows are always floored at the sessions the caller can read.",
     request: {
       query: z.object({
-        workspaceId: uuidQueryParam,
+        workspaceId: uuidQueryParam.optional(),
+        projectId: uuidQueryParam.optional(),
         status: z.enum([...SESSION_STATUSES, "all"]).optional(),
         // Triage lens. Default here is `all` (agent-facing door); `default`
         // hides agent/automation-originated sessions not yet accepted by a
@@ -522,6 +534,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       200: { description: "Sessions", schema: z.array(FocusSessionWireSchema) },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Project not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -843,25 +856,50 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   // Hono is first-match.
 
   /**
-   * GET /focus-sessions?workspaceId=...&status=...&limit=...
+   * GET /focus-sessions?workspaceId=...&projectId=...&status=...&limit=...
+   *
+   * `workspaceId` OR `projectId` (or both). A project lens alone is how the
+   * CLI / an agent lists a project's sessions — project sessions often carry
+   * NO workspace (X1: "workspaceId is required" refused a project-only read
+   * the MCP door already answered).
    */
   app.get("/focus-sessions", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
 
-    const workspaceIdParam = c.req.query("workspaceId");
-    if (!workspaceIdParam) {
-      return c.json({ error: "workspaceId is required" }, 400);
+    const workspaceIdParam = c.req.query("workspaceId") || undefined;
+    const projectIdParam = c.req.query("projectId") || undefined;
+    if (!workspaceIdParam && !projectIdParam) {
+      return c.json({ error: "workspaceId or projectId is required" }, 400);
     }
-    // Validate the caller is a member of the requested workspace and bind the
-    // acting user. Without this the read scoped by a caller-supplied workspaceId
-    // ALONE with no userId floor — exposing every member's private sessions in
-    // any workspace id an agent key chose to pass (cross-user + cross-workspace).
+    // Validate the caller is a member of the requested workspace (when one is
+    // named) and bind the acting user. Without this the read scoped by a
+    // caller-supplied workspaceId ALONE with no userId floor — exposing every
+    // member's private sessions in any workspace id an agent key chose to
+    // pass (cross-user + cross-workspace).
     const acting = await resolveActingContext(c, {
       workspaceId: workspaceIdParam,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (projectIdParam) {
+      if (!isUuid(projectIdParam)) {
+        return c.json(
+          { error: `projectId is not a valid id: ${projectIdParam}` },
+          400
+        );
+      }
+      // The ONE project visibility floor (`loadVisibleProject`) — never a
+      // second rule. The session floor below still applies; this turns a
+      // project the caller cannot see into an honest 404 rather than a calm
+      // empty list.
+      if (!(await loadVisibleProject(db, projectIdParam, acting.userId))) {
+        return c.json(
+          { error: `No project ${projectIdParam} you can access` },
+          404
+        );
+      }
+    }
 
     const statusRaw = c.req.query("status") ?? "all";
     const limitRaw = parseInt(c.req.query("limit") ?? "20", 10);
@@ -911,7 +949,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // `subjectEntityId`. See `session-list-conditions.ts`.
       const conditions = sessionListConditions({
         userId: acting.userId,
-        scope: { workspaceLens: workspaceIdParam, projectLens: undefined },
+        scope: {
+          workspaceLens: workspaceIdParam,
+          projectLens: projectIdParam,
+        },
         status,
         lens,
         kind,
@@ -1251,6 +1292,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         }
       }
 
+      // Step 2c: TRACK FILING, resolved before the membrane (a refusal is the
+      // caller's 400/404, never a proposal that explodes at approval).
+      const trackFilingModule =
+        await import("../../../services/tracks/session-track-filing.js");
+      const trackFiling = trackFilingModule.hasTrackFilingPatch(patch)
+        ? await trackFilingModule.resolveSessionTrackFiling({
+            session: existing,
+            patch: { trackId: patch.trackId, trackStage: patch.trackStage },
+            actor: { userId },
+          })
+        : undefined;
+
       // Step 3: governance membrane. On the capture path (X-Capture: 1) attribute
       // the write to the seeded Capture agent so focus_session.update auto-approves;
       // a body-supplied agentUserId still wins, and a non-capture caller keeps its
@@ -1270,6 +1323,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         action: "update",
         source: "intelligence",
         reasoning: patch.reasoning,
+        // Filing into a track is the person's call when an agent does it.
+        ...(trackFiling ? { forcePropose: true } : {}),
         data: {
           id,
           goal: patch.goal !== undefined ? patch.goal : existing.goal,
@@ -1314,6 +1369,22 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           // Same reason as `followPlaybookId` above: without this the answers
           // would land on the direct path and vanish on the approved one.
           ...(patch.params !== undefined ? { params: patch.params } : {}),
+          // Carried (re-resolved by the executor); names are display only.
+          ...(trackFiling
+            ? {
+                trackId: trackFiling.set.trackId,
+                trackStage: trackFiling.set.trackStage,
+                ...(trackFiling.trackName
+                  ? { trackName: trackFiling.trackName }
+                  : {}),
+                ...(trackFiling.stageName
+                  ? { stageName: trackFiling.stageName }
+                  : {}),
+                ...(trackFiling.projectName
+                  ? { trackProjectName: trackFiling.projectName }
+                  : {}),
+              }
+            : {}),
         },
       });
 
@@ -1413,6 +1484,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (patch.subjectEntityId !== undefined)
         set.subjectEntityId = patch.subjectEntityId;
       if (patch.criteria !== undefined) set.criteria = patch.criteria;
+      if (trackFiling) Object.assign(set, trackFiling.set);
       // Shallow-merge the metadata bag into the existing row metadata (additive).
       if (patch.metadata !== undefined) {
         const existingMeta =
@@ -1437,6 +1509,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         .set(set)
         .where(eq(focusSessions.id, id))
         .returning();
+
+      const usesStamped =
+        trackFiling && updated
+          ? await trackFilingModule.stampTrackFilingUses({
+              filing: trackFiling,
+              sessionWorkspaceId: updated.workspaceId ?? null,
+              projectId: updated.projectId ?? null,
+              userId,
+            })
+          : false;
 
       // Roster append through the ONE append door (row-locked, idempotent).
       // AFTER the row update on purpose: `agentIds` and `addAgentId` may both be
@@ -1579,6 +1661,21 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // structure merged. Without it the caller must infer an attach from a
         // `playbookId` that appeared, and can never see a release's note.
         ...(follow ? { follow } : {}),
+        // Which track/step it landed in; `domainNote` = filed, not moved.
+        ...(trackFiling
+          ? {
+              trackFiling: {
+                trackId: trackFiling.set.trackId,
+                trackStage: trackFiling.set.trackStage,
+                trackName: trackFiling.trackName,
+                stageName: trackFiling.stageName,
+                usesStamped,
+                ...(trackFiling.domainNote
+                  ? { domainNote: trackFiling.domainNote }
+                  : {}),
+              },
+            }
+          : {}),
       });
     } catch (err) {
       // A WRITE-AUTHORITY refusal is a CALLER error, not a server fault. The

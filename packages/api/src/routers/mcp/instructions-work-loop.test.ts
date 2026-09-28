@@ -86,6 +86,27 @@ describe("MCP instructions teach the session work loop", () => {
     expect(text).toContain("your own chat may repeat them");
   });
 
+  it("teaches TRACKS at the door: a project's method is found, started and stepped through its own tools", () => {
+    // GRP agent-XP diagnosis 2026-09-28: the connector exposed every track
+    // tool, but the always-on field never said "track" — so an agent asked to
+    // run a method on a project started a free session (or the superseded
+    // session-scoped twin) instead. The track path lives in the WORK reflex.
+    const work = text.split("\n").find((l) => l.startsWith("4. ")) ?? "";
+    expect(work).toContain("TRACK");
+    for (const token of [
+      "`list_tracks`",
+      "`start_track`",
+      "`start_stage_session`",
+      "`advance_track` only with the user",
+    ]) {
+      expect(work).toContain(token);
+    }
+    // Find before start: an existing track is resumed, never duplicated.
+    expect(work.indexOf("`list_tracks`")).toBeLessThan(
+      work.indexOf("`start_track`")
+    );
+  });
+
   it("grades BEFORE completing — the order is the rule", () => {
     expect(text.indexOf("`evaluate_session`")).toBeLessThan(
       text.indexOf("`complete_session`")

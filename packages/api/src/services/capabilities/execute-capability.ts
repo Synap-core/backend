@@ -47,6 +47,12 @@ import {
 } from "@synap/database";
 import { randomUUID } from "crypto";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import {
+  capabilityRunReasoning,
+  describeEntityVerbRun,
+  entityVerbRunTarget,
+  type EntityVerbRunSubject,
+} from "@synap-core/types/proposals/capability-run";
 
 /**
  * A one-line, human-readable description of a proposed capability run.
@@ -62,9 +68,19 @@ import { resolveObjectNoun } from "@synap-core/types/vocabulary";
  */
 export function describeCapabilityRun(
   verbId: string | null,
-  parameters: Record<string, unknown>
+  parameters: Record<string, unknown>,
+  /**
+   * A core ENTITY verb run (`entity.delete`, `entity.update`) is titled as the
+   * action on its object — `Delete Question "GRP #3"` — not "Run entity.delete".
+   * The subject is resolved by the caller, FLOORED to what the proposer may see
+   * (`resolveEntityVerbRunSubject`); absent, the title still names the action.
+   */
+  entitySubject?: EntityVerbRunSubject | null
 ): string {
   if (!verbId) return "Run capability";
+
+  const entityRun = entityVerbRunTarget(verbId, parameters);
+  if (entityRun) return describeEntityVerbRun(entityRun.action, entitySubject);
 
   if (verbId === "market.install") {
     const slug = typeof parameters.slug === "string" ? parameters.slug : null;
@@ -110,6 +126,7 @@ import {
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import { resolveEntityVerbRunSubject } from "./capability-run-subject.js";
 import {
   proposeCapabilityEnable,
   type CapabilityEnableOffer,
@@ -715,7 +732,21 @@ export async function executeCapability(input: {
         //
         // Built from the payload that is already here — nothing new is stored
         // and `summary` is in VOLATILE_DEDUP_KEYS, so dedup is unaffected.
-        summary: describeCapabilityRun(verbId ?? null, parameters ?? {}),
+        summary: describeCapabilityRun(
+          verbId ?? null,
+          parameters ?? {},
+          await resolveEntityVerbRunSubject(
+            entityVerbRunTarget(verbId ?? null, parameters ?? {}),
+            userId
+          )
+        ),
+        // WHY — the run door has no top-level `reasoning`, so an agent's reason
+        // rides in `parameters`; hoisted to where the review card reads it
+        // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
+        // never splits identical runs.
+        ...(capabilityRunReasoning(parameters)
+          ? { reasoning: capabilityRunReasoning(parameters) }
+          : {}),
         // Carry the 1-of-N connection selector so an APPROVED run resolves the
         // same connection the original call intended (see runResolvedSkill).
         connectionSelector: input.connectionSelector ?? null,

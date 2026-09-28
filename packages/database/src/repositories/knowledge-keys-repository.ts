@@ -318,15 +318,41 @@ export class KnowledgeKeysRepository {
   async searchFullText(
     query: string,
     workspaceId?: string,
-    limit: number = 10
+    limit: number = 10,
+    /**
+     * Relevance floor for natural-language recall (`ask`'s procedural lane).
+     * Omitted ⇒ today's behaviour (any one term matches), so the keyword door
+     * `GET /knowledge/search` is unchanged.
+     *
+     * THE RULE (X1, documented because it is a choice): drop `ignoreTerms`
+     * (function + question words), dedupe, then a row must match at least
+     * `min(minMatchedTerms, <content terms>)` DISTINCT terms. One term in the
+     * query ⇒ one must match; two or more ⇒ two must. Chosen over rarity
+     * weighting because it needs no corpus statistics and is explainable in
+     * one line: a single shared common word ("model", "project") no longer
+     * pulls an unrelated runbook into a business question, which is exactly
+     * how six engineering notes answered the GRP business-model ask.
+     */
+    options?: {
+      minMatchedTerms?: number;
+      ignoreTerms?: ReadonlySet<string>;
+    }
   ): Promise<KnowledgeKeyRow[]> {
     // Build safe tsquery from terms (strip anything that could be SQL injection)
-    const safeTerms = query
+    const rawTerms = query
       .trim()
       .split(/\s+/)
       .filter(Boolean)
       .map((t) => t.replace(/[^a-zA-Z0-9àâçéèêëîïôûùüÿñæœÁÉÍÓÚáéíóú]/g, ""))
       .filter(Boolean);
+    const ignore = options?.ignoreTerms;
+    const safeTerms = ignore
+      ? [
+          ...new Set(
+            rawTerms.map((t) => t.toLowerCase()).filter((t) => !ignore.has(t))
+          ),
+        ]
+      : rawTerms;
 
     if (safeTerms.length === 0) return [];
 
@@ -341,6 +367,19 @@ export class KnowledgeKeysRepository {
     const conditions: ReturnType<typeof and>[] = [
       sql`${sql.raw("to_tsvector('simple', value)")} @@ ${tsquery}`,
     ];
+
+    const required = Math.min(options?.minMatchedTerms ?? 1, safeTerms.length);
+    if (required > 1) {
+      // Count DISTINCT query terms the row matches. Terms are the sanitized
+      // alphanumerics above — same trust basis as the `sql.raw` tsquery.
+      const matched = safeTerms
+        .map(
+          (t) =>
+            `(to_tsvector('simple', value) @@ to_tsquery('simple', '${t}:*'::text))::int`
+        )
+        .join(" + ");
+      conditions.push(sql`${sql.raw(`(${matched})`)} >= ${required}`);
+    }
 
     const ws = wsCondition(workspaceId);
     if (ws) conditions.push(ws);

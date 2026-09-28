@@ -14,6 +14,7 @@ import { z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
+import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 import {
   createPlaybookDoor,
   listPlaybooksDoor,
@@ -53,36 +54,54 @@ const ListPlaybooksQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
 });
 
-const CreatePlaybookBodySchema = z.object({
-  workspaceId: z.string().uuid().describe("The playbook's home workspace."),
-  name: z.string().min(1).max(500),
-  goalTemplate: z
-    .string()
-    .min(1)
-    .describe("May contain {{param}} placeholders."),
-  description: z.string().optional(),
-  stages: z.array(z.record(z.string(), z.unknown())).optional(),
-  status: PlaybookStatusSchema.optional().describe("Defaults to active."),
-  subjectProfile: z
-    .record(z.string(), z.unknown())
-    .optional()
-    .describe(
+/**
+ * POST /playbooks body — DERIVED from the ONE playbook definition schema
+ * (`schemas/playbook-definition.ts`), never re-declared: a hand-written copy
+ * here carried `scope` + `stages` but silently stripped `params` and
+ * `criteria`, so an agent-authored METHOD could declare no onboarding at all.
+ * Only the door's own fields (write home, overlap override, attribution) are
+ * added; `.describe()` decorates the picked definition fields for OpenAPI.
+ */
+const CreatePlaybookBodySchema = playbookDefinitionSchema
+  .pick({
+    name: true,
+    goalTemplate: true,
+    description: true,
+    stages: true,
+    status: true,
+    subjectProfile: true,
+    scope: true,
+    params: true,
+    criteria: true,
+  })
+  .extend({
+    workspaceId: z.string().uuid().describe("The playbook's home workspace."),
+    goalTemplate: playbookDefinitionSchema.shape.goalTemplate.describe(
+      "May contain {{param}} placeholders."
+    ),
+    status: playbookDefinitionSchema.shape.status.describe(
+      "Defaults to active."
+    ),
+    subjectProfile: playbookDefinitionSchema.shape.subjectProfile.describe(
       "The kind this playbook runs ON, e.g. { profileSlug: 'crm-lead' }. A profileSlug that resolves to no profile is refused."
     ),
-  forceCreate: z
-    .boolean()
-    .optional()
-    .describe(
-      "Only after a CONFLICT naming an overlapping playbook. Creates anyway."
-    ),
-  scope: z
-    .enum(["session", "project"])
-    .optional()
-    .describe(
+    scope: playbookDefinitionSchema.shape.scope.describe(
       "session (default) = a template for one focus session; project = a METHOD a project runs as a track."
     ),
-  agentUserId: z.string().optional(),
-});
+    params: playbookDefinitionSchema.shape.params.describe(
+      "Declared params [{ name, label?, type: text|number|entity|choice|boolean, options?, default?, required? }]. Makes a method self-onboarding: a required param left unanswered when a track starts becomes a question owed to the person."
+    ),
+    criteria: playbookDefinitionSchema.shape.criteria.describe(
+      "Binary acceptance criteria [{ key, statement, required?, check: { kind, ... }, stageKey? }] every instantiated session is graded against."
+    ),
+    forceCreate: z
+      .boolean()
+      .optional()
+      .describe(
+        "Only after a CONFLICT naming an overlapping playbook. Creates anyway."
+      ),
+    agentUserId: z.string().optional(),
+  });
 
 const RunPlaybookBodySchema = z.object({
   workspaceId: z
@@ -305,7 +324,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
   /**
    * POST /playbooks
    * Body: { workspaceId, name, goalTemplate, description?, stages?, status?,
-   *         subjectProfile?, forceCreate?, scope?, agentUserId? }
+   *         subjectProfile?, forceCreate?, scope?, params?, criteria?,
+   *         agentUserId? }
    */
   app.post("/playbooks", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -336,6 +356,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
             : {}),
           ...(body.forceCreate ? { forceCreate: true } : {}),
           ...(body.scope ? { scope: body.scope } : {}),
+          ...(body.params ? { params: body.params } : {}),
+          ...(body.criteria ? { criteria: body.criteria } : {}),
         }
       );
       return renderOutcome(c, outcome);
@@ -348,7 +370,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
    * PATCH /playbooks/:id
    * Body: { agentUserId?, source?, reasoning?, name?, description?, goalTemplate?,
    *         params?, inputStrategy?, channelSpec?, expectedOutputs?, stages?,
-   *         subjectProfile?, schedule?, executor?, status?, scope? }
+   *         criteria?, subjectProfile?, schedule?, executor?, status?, scope? }
    *
    * Governed mirror of `playbooks.update` — the door the
    * analyzer persona uses to submit an evidence-backed definition diff. Never
@@ -391,6 +413,12 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         // Validated for real by `playbooks.update`'s `playbookStagesSchema`
         // (category required, keys unique) — this only types the untyped body.
         stages: body.stages as PlaybookStageInput[] | undefined,
+        // Validated for real by `playbooks.update`'s `sessionCriteriaSchema`.
+        // It was dropped here, so a Hub caller could revise a method's params
+        // but never its acceptance criteria.
+        criteria: body.criteria as Parameters<
+          typeof caller.playbooks.update
+        >[0]["criteria"],
         subjectProfile: body.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: body.schedule as string | number | boolean | null | undefined,

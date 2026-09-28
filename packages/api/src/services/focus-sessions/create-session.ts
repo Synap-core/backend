@@ -17,7 +17,7 @@ import {
   and,
   drizzleSql,
   findClientSession,
-  normalizeGoal,
+  clientKeyScope,
   recordSessionSpawn,
   resolveSessionProjectPlacement,
   isProbeWriteContext,
@@ -63,6 +63,7 @@ import {
 } from "./session-blocked-by.js";
 import {
   findOpenSessionTwin,
+  sessionTwinLockKey,
   type SessionTwinCandidate,
 } from "./find-open-session-twin.js";
 import { paramOwedSlots } from "./param-slots.js";
@@ -467,11 +468,14 @@ export async function createFocusSession(
 
   // ADOPTION — the gate already auto-opened a session for this client (its
   // first write arrived before it started one). Starting now must not leave two
-  // rows for one piece of work: that session becomes this one.
-  const adoptId = clientKey
-    ? ((await findClientSession(userId, clientKey, { onlyAutoOpened: true }))
-        ?.id ?? null)
-    : null;
+  // rows for one piece of work: that session becomes this one. Only for a
+  // CONVERSATION-scoped client: a key-scoped one's auto-opened session may hold
+  // other conversations' writes, which a new goal must never sweep up.
+  const adoptId =
+    clientKey && clientKeyScope(clientKey) === "conversation"
+      ? ((await findClientSession(userId, clientKey, { onlyAutoOpened: true }))
+          ?.id ?? null)
+      : null;
 
   // VISIBILITY FLOOR for any `ref` a declared slot carries — the SAME
   // `isOutputRefVisible` the attach-output and update doors apply, and BEFORE
@@ -669,16 +673,18 @@ export async function createFocusSession(
       if (open) return { deduped: open, session: undefined };
     }
     if (lockTwins) {
-      const scopeKey =
-        (parentSessionId
-          ? `parent:${parentSessionId}`
-          : projectId
-            ? `project:${projectId}`
-            : `workspace:${workspaceId ?? ""}`) +
-        // M3: the twin scope includes the track stage, so the lock does too.
-        (trackId ? `|track:${trackId}:${trackStage ?? ""}` : "");
+      // The key is shared with the approve executor (`sessionTwinLockKey`),
+      // so a direct create and an approval of the same work serialize.
       await tx.execute(
-        drizzleSql`select pg_advisory_xact_lock(hashtext(${`session-twin|${userId}|${scopeKey}|${normalizeGoal(goal).toLowerCase()}`}))`
+        drizzleSql`select pg_advisory_xact_lock(hashtext(${sessionTwinLockKey({
+          userId,
+          goal,
+          workspaceId,
+          projectId,
+          parentSessionId,
+          trackId,
+          trackStage,
+        })}))`
       );
       const raced = await findOpenSessionTwin({
         userId,

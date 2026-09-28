@@ -6,6 +6,7 @@ import {
   jsonb,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
@@ -97,6 +98,11 @@ export const notifications = pgTable(
     // Grouping — same groupKey → collapse in bell panel
     groupKey: text("group_key"),
 
+    // The OPEN-row dedupe key (migration 0281): a windowed type's resolved
+    // groupKey, NULL for every other type. At most one unread/snoozed row per
+    // (user, key) — see `idxOpenDedupeKey`.
+    dedupeKey: text("dedupe_key"),
+
     // State
     status: text("status", {
       enum: [
@@ -133,6 +139,13 @@ export const notifications = pgTable(
     idxUnreadUserWorkspace: index("notifs_unread_user_workspace_idx")
       .on(t.userId, t.workspaceId)
       .where(sql`${t.status} = 'unread'`),
+    // Race guard behind the registry dedupe window (migration 0281):
+    // NotificationService inserts ON CONFLICT on exactly this target.
+    idxOpenDedupeKey: uniqueIndex("notifs_open_dedupe_key_uq")
+      .on(t.userId, t.dedupeKey)
+      .where(
+        sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('unread', 'snoozed')`
+      ),
     // Grouping queries
     idxGroupKey: index("notifs_group_key_idx").on(t.groupKey, t.workspaceId),
     // Source lookup (e.g. find notification for a proposal)

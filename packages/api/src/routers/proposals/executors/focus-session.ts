@@ -42,7 +42,10 @@ import {
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
-import { findOpenSessionTwin } from "../../../services/focus-sessions/find-open-session-twin.js";
+import {
+  findOpenSessionTwin,
+  sessionTwinLockKey,
+} from "../../../services/focus-sessions/find-open-session-twin.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import {
   normalizeSessionTitle,
@@ -178,87 +181,6 @@ export function registerFocusSessionExecutors(): void {
         }
       }
 
-      // THE SAME TWIN QUESTION the direct door asks (`createFocusSession`),
-      // before this door inserts. Live, every duplicate pair was THIS insert
-      // plus a direct create of the same goal ms later: two doors, no shared
-      // answer. The proposal's correlation id is asked first (a retry of the
-      // same chain), then the open same-goal + same-scope twin. A hit LINKS the
-      // approval to the existing row — nothing is inserted, no edge or channel
-      // is written, and the receipt names the linked id (`primaryId`).
-      //
-      // A proposal's correlation id groups a whole request CHAIN, which can file
-      // several sessions. So the holder of that id is a twin only when it is
-      // the same user AND the same goal — a sibling on the chain is not a retry.
-      // `focus_sessions.correlation_id` is unique, so a sibling's id is not
-      // stamped again (the insert would hit the index and write nothing).
-      const correlationId = proposal.correlationId ?? null;
-      const correlationHolder = correlationId
-        ? await db.query.focusSessions.findFirst({
-            where: eq(focusSessions.correlationId, correlationId),
-          })
-        : undefined;
-      const retryOfThisChain =
-        correlationHolder &&
-        correlationHolder.userId === userId &&
-        normalizeGoal(correlationHolder.goal) === normalizeGoal(goal)
-          ? correlationHolder
-          : undefined;
-      const twin =
-        retryOfThisChain ??
-        (
-          await findOpenSessionTwin({
-            userId,
-            goal,
-            workspaceId: proposal.workspaceId,
-            projectId: proposal.projectId,
-            parentSessionId:
-              typeof innerData.parentSessionId === "string"
-                ? innerData.parentSessionId
-                : null,
-            templateId:
-              typeof innerData.templateId === "string"
-                ? innerData.templateId
-                : null,
-            ...(approvedTrackId
-              ? {
-                  track: {
-                    trackId: approvedTrackId,
-                    trackStage: approvedTrackStage,
-                  },
-                }
-              : {}),
-          })
-        ).exact;
-      if (twin) {
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return {
-          success: true,
-          primaryId: twin.id,
-          linked: 1,
-          effect: {
-            applied: "none",
-            reason:
-              `An open session with the same goal and scope already exists ` +
-              `(${twin.id}); the approval linked to it instead of inserting a second.`,
-          },
-        };
-      }
-
       // CRITERIA, parsed like the update path (a bad list is dropped and
       // reported on `refusals`), then merged with a template's own exactly as
       // the direct create does (`mergeCriteria`: the proposer's first, a
@@ -299,15 +221,24 @@ export function registerFocusSessionExecutors(): void {
         }
       }
 
-      const insertProposedSession = async () => {
+      // Read BEFORE the claim transaction below: every statement inside it
+      // runs on the transaction's own connection.
+      const plainCriteria =
+        typeof innerData.playbookId === "string"
+          ? []
+          : mergeCriteria(
+              ownCriteria,
+              await visibleTemplateCriteria(
+                innerData.templateId,
+                proposal.workspaceId
+              )
+            );
+      const insertProposedSession = async (
+        database: typeof db,
+        correlationHolder: unknown
+      ) => {
         const title = storedTitle(innerData.title);
-        const criteria = mergeCriteria(
-          ownCriteria,
-          await visibleTemplateCriteria(
-            innerData.templateId,
-            proposal.workspaceId
-          )
-        );
+        const criteria = plainCriteria;
         const metadata: Record<string, unknown> = {
           // A playbook-instantiate proposal (routers/playbooks.ts) carries the
           // rendered goalTemplate as `prompt` alongside the title in `goal` —
@@ -326,7 +257,7 @@ export function registerFocusSessionExecutors(): void {
             ? { [RUN_PARAMS_METADATA_KEY]: trackParamValues }
             : {}),
         };
-        return db
+        return database
           .insert(focusSessions)
           .values({
             // id = proposal.targetId so any link built at propose time resolves.
@@ -385,27 +316,170 @@ export function registerFocusSessionExecutors(): void {
           .returning();
       };
 
+      // ── THE CLAIM (X1) ─────────────────────────────────────────────────
+      // Live (2026-09-13): ONE approved start-session proposal left two
+      // sessions 214ms apart — the executor's row and a direct create of the
+      // same goal. Both doors asked the twin question, but only the direct door
+      // asked it under a lock, so the approval could pass its check while the
+      // other insert was in flight. Now, in ONE transaction:
+      //   1. a claim on the PROPOSAL ID — a second apply of this proposal waits
+      //      here, then finds the first apply's row at `targetId` and links to
+      //      it instead of reporting a zero-row "write";
+      //   2. the SAME twin lock the direct door takes (`sessionTwinLockKey`),
+      //      so an approval and a direct create of the same work serialize and
+      //      the second one sees the first one's row;
+      //   3. the twin question and the insert, on the transaction.
+      // Template / playbook runs are never twins (the matcher returns none for
+      // them), so they take the claim but not the twin lock — same rule as the
+      // direct door's `lockTwins`.
+      const correlationId = proposal.correlationId ?? null;
+      const isPlaybookRun = typeof innerData.playbookId === "string";
+      const claimed = await db.transaction(async (tx) => {
+        const t = tx as unknown as typeof db;
+        await tx.execute(
+          drizzleSql`select pg_advisory_xact_lock(hashtext(${`proposal-apply|${input.proposalId}`}))`
+        );
+        const [atTarget] = await t
+          .select()
+          .from(focusSessions)
+          .where(eq(focusSessions.id, proposal.targetId))
+          .limit(1);
+        if (atTarget) {
+          return { twin: atTarget, correlationHolder: undefined, rows: [] };
+        }
+        if (!isPlaybookRun && typeof innerData.templateId !== "string") {
+          await tx.execute(
+            drizzleSql`select pg_advisory_xact_lock(hashtext(${sessionTwinLockKey(
+              {
+                userId,
+                goal,
+                workspaceId: proposal.workspaceId,
+                projectId: proposal.projectId,
+                parentSessionId:
+                  typeof innerData.parentSessionId === "string"
+                    ? innerData.parentSessionId
+                    : null,
+                trackId: approvedTrackId,
+                trackStage: approvedTrackStage,
+              }
+            )}))`
+          );
+        }
+        // THE SAME TWIN QUESTION the direct door asks (`createFocusSession`),
+        // before this door inserts. Live, every duplicate pair was THIS insert
+        // plus a direct create of the same goal ms later: two doors, no shared
+        // answer. The proposal's correlation id is asked first (a retry of the
+        // same chain), then the open same-goal + same-scope twin. A hit LINKS the
+        // approval to the existing row — nothing is inserted, no edge or channel
+        // is written, and the receipt names the linked id (`primaryId`).
+        //
+        // A proposal's correlation id groups a whole request CHAIN, which can file
+        // several sessions. So the holder of that id is a twin only when it is
+        // the same user AND the same goal — a sibling on the chain is not a retry.
+        // `focus_sessions.correlation_id` is unique, so a sibling's id is not
+        // stamped again (the insert would hit the index and write nothing).
+        const correlationHolder = correlationId
+          ? await t.query.focusSessions.findFirst({
+              where: eq(focusSessions.correlationId, correlationId),
+            })
+          : undefined;
+        const retryOfThisChain =
+          correlationHolder &&
+          correlationHolder.userId === userId &&
+          normalizeGoal(correlationHolder.goal) === normalizeGoal(goal)
+            ? correlationHolder
+            : undefined;
+        const twin =
+          retryOfThisChain ??
+          (
+            await findOpenSessionTwin({
+              database: t,
+              userId,
+              goal,
+              workspaceId: proposal.workspaceId,
+              projectId: proposal.projectId,
+              parentSessionId:
+                typeof innerData.parentSessionId === "string"
+                  ? innerData.parentSessionId
+                  : null,
+              templateId:
+                typeof innerData.templateId === "string"
+                  ? innerData.templateId
+                  : null,
+              ...(approvedTrackId
+                ? {
+                    track: {
+                      trackId: approvedTrackId,
+                      trackStage: approvedTrackStage,
+                    },
+                  }
+                : {}),
+            })
+          ).exact;
+        if (twin) return { twin, correlationHolder, rows: [] };
+        return {
+          twin: undefined,
+          correlationHolder,
+          rows: isPlaybookRun
+            ? []
+            : await insertProposedSession(t, correlationHolder),
+        };
+      });
+      const twin = claimed.twin;
+      if (twin) {
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return {
+          success: true,
+          primaryId: twin.id,
+          linked: 1,
+          effect: {
+            applied: "none",
+            reason:
+              `An open session with the same goal and scope already exists ` +
+              `(${twin.id}); the approval linked to it instead of inserting a second.`,
+          },
+        };
+      }
+
       // A PLAYBOOK INSTANTIATE (routers/playbooks.ts `instantiate`, proposed
       // path) materializes through the direct path's own body — playbookId,
       // first stage, the playbook's outputs, the subject, the derived title and
       // the `instantiated_from` edge — at the prospective id. The plain insert
-      // below knew none of that, so an approved instantiate landed as an
+      // knew none of that, so an approved instantiate landed as an
       // untemplated ad-hoc session.
-      const insertedSessions =
-        typeof innerData.playbookId === "string"
-          ? await instantiateApprovedPlaybook({
-              playbookId: innerData.playbookId,
-              sessionId: proposal.targetId,
-              correlationId: correlationHolder ? null : correlationId,
-              workspaceId: proposal.workspaceId,
-              projectId: proposal.projectId,
-              trackId: approvedTrackId,
-              trackStage: approvedTrackStage,
-              userId,
-              innerData,
-              ownCriteria,
-            })
-          : await insertProposedSession();
+      //
+      // It runs AFTER the claim (its body reads and writes on its own
+      // connection); its fixed id (`proposal.targetId`) already makes a second
+      // apply write nothing.
+      const insertedSessions = isPlaybookRun
+        ? await instantiateApprovedPlaybook({
+            playbookId: innerData.playbookId as string,
+            sessionId: proposal.targetId,
+            correlationId: claimed.correlationHolder ? null : correlationId,
+            workspaceId: proposal.workspaceId,
+            projectId: proposal.projectId,
+            trackId: approvedTrackId,
+            trackStage: approvedTrackStage,
+            userId,
+            innerData,
+            ownCriteria,
+          })
+        : claimed.rows;
 
       // ── THE EFFECT RECEIPT (reference conversion — template for the rest) ──
       // `insertedSessions` is what POSTGRES returned for THIS statement, not a
@@ -733,6 +807,43 @@ export function registerFocusSessionExecutors(): void {
           set.projectId = innerData.projectId;
         }
 
+        // TRACK FILING (adopt into a step). Carried by `updateFocusSession`'s
+        // gate payload; RE-RESOLVED here through the same door the direct
+        // write uses, so a track archived, unshared or re-pinned since the
+        // proposal is refused instead of written.
+        let trackFiling:
+          | Awaited<
+              ReturnType<
+                typeof import("../../../services/tracks/session-track-filing.js").resolveSessionTrackFiling
+              >
+            >
+          | undefined;
+        if ("trackId" in innerData || "trackStage" in innerData) {
+          const { resolveSessionTrackFiling, trackFilingRefusal } =
+            await import("../../../services/tracks/session-track-filing.js");
+          const asPatch = (v: unknown) =>
+            v === null ? null : typeof v === "string" ? v : undefined;
+          try {
+            trackFiling = await resolveSessionTrackFiling({
+              session,
+              patch: {
+                trackId: asPatch(innerData.trackId),
+                trackStage: asPatch(innerData.trackStage),
+              },
+              projectId: asPatch(innerData.projectId),
+              actor: { userId },
+            });
+          } catch (err) {
+            const reason = trackFilingRefusal(err);
+            if (reason === null) throw err;
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Cannot file this session into the track: ${reason}`,
+            });
+          }
+          Object.assign(set, trackFiling.set);
+        }
+
         // DELIVERABLES. Carried into the gate payload by both proposing doors
         // and, until 2026-09-08, applied by NEITHER: the field set above was
         // hand-listed as status/progress/goal/currentStage, so approving a
@@ -786,6 +897,17 @@ export function registerFocusSessionExecutors(): void {
           .set(set)
           .where(eq(focusSessions.id, sessionId))
           .returning();
+
+        if (trackFiling && updated) {
+          const { stampTrackFilingUses } =
+            await import("../../../services/tracks/session-track-filing.js");
+          await stampTrackFilingUses({
+            filing: trackFiling,
+            sessionWorkspaceId: updated.workspaceId ?? null,
+            projectId: updated.projectId ?? null,
+            userId,
+          });
+        }
 
         // FOLLOW / RELEASE A PLAYBOOK. Carried into the gate payload by all
         // three proposing doors, so it is applied HERE in the same hunk — a

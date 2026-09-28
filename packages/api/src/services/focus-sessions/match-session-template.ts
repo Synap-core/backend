@@ -28,6 +28,10 @@ import { db, playbooks, eq, and, desc } from "@synap/database";
 import { scopedDb } from "../../access/scoped-db.js";
 import { AccessContext } from "../../access/context.js";
 import { rankRouteCandidates } from "../routing/suggest-routes.js";
+import {
+  templateKindFields,
+  type PlaybookScope,
+} from "../playbooks/template-kind.js";
 
 /** How many ranked candidates ride back on a start. */
 const CANDIDATES_MAX = 5;
@@ -41,6 +45,10 @@ export interface PlaybookCandidate {
   score: number;
   /** Why it matched, in words ("You mentioned “report”"). */
   reason: string;
+  /** `project` = a method run as a TRACK; `session` = one sitting of work. */
+  scope: PlaybookScope;
+  /** The user noun for that scope ("Track template" / "Work template"). */
+  templateKind: string;
 }
 
 /**
@@ -103,6 +111,7 @@ export async function matchSessionTemplate(
       text: [p.description, p.goalTemplate, ...stageNames(p.stages)],
       subjectProfileSlug: null,
       description: p.description ?? undefined,
+      scope: p.scope,
     })),
   }).filter((r) => r.signals.some((s) => s.type === "intent"));
 
@@ -112,6 +121,7 @@ export async function matchSessionTemplate(
       name: r.candidate.name,
       score: r.score,
       reason: r.reason,
+      ...templateKindFields(r.candidate.scope),
     })),
     optOut: TEMPLATE_OPT_OUT,
   };

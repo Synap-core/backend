@@ -41,6 +41,13 @@ import {
 } from "../retrieval/understand-query.js";
 import type { RetrievalVerdict } from "../retrieval/grade.js";
 import { classifySubstrates, type SubstrateKind } from "./classify.js";
+import { COMMON_STOPWORDS, QUESTION_WORDS } from "../retrieval/stopwords.js";
+
+/** Words that never count toward the procedural lane's matched-term floor. */
+const PROCEDURAL_IGNORED_TERMS: ReadonlySet<string> = new Set([
+  ...COMMON_STOPWORDS,
+  ...QUESTION_WORDS,
+]);
 import { structuredLookup } from "./structured.js";
 
 /**
@@ -192,7 +199,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     // named by the enumerative gate. Without it `classifySubstrates` only knows
     // 9 hardcoded kinds, so "list our clients" never reached the structured lane
     // and answered "you have no clients" over a pod holding 20 client facets.
-  } = classifySubstrates(query, catalog);
+  } = classifySubstrates(query, catalog, { projectLens: Boolean(projectId) });
 
   // PARSE-ONLY: understanding + glass-box routing, NO retrieval. understandQuery
   // is pure + deterministic — the same call retrieve() makes internally — so
@@ -227,12 +234,21 @@ export async function ask(params: AskParams): Promise<AskResult> {
   // knowledge_keys has no user column; scope to the user's namespace (workspaceId
   // slot), matching GET /knowledge/search — `undefined` would read UNFILTERED
   // across every user/workspace on the pod.
+  //
+  // Relevance floor (X1): content terms only, and ≥2 of them must match when
+  // the query has ≥2 — see `searchFullText`'s `options` for the rule. A single
+  // shared common word no longer surfaces an unrelated runbook.
+  //
+  // Project lens: `knowledge_keys` has no project column (pod-wide runbooks by
+  // construction), so it cannot be narrowed — `classifySubstrates` therefore
+  // keeps the lane only for an explicitly procedural ask under a project lens.
   const proceduralP = substrates.includes("procedural")
     ? settle(
         knowledgeKeysRepository.searchFullText(
           query,
           workspaceId ?? userId,
-          limit
+          limit,
+          { minMatchedTerms: 2, ignoreTerms: PROCEDURAL_IGNORED_TERMS }
         )
       )
     : Promise.resolve(null);

@@ -74,6 +74,7 @@ describe("renderer slot/scope enum parity", () => {
     for (const rel of [
       "routers/hub-protocol/profiles.ts",
       "routers/profiles.ts",
+      "routers/mcp/tools/index.ts",
     ]) {
       expect(
         handListedEnums(src(rel)),
@@ -82,34 +83,17 @@ describe("renderer slot/scope enum parity", () => {
     }
   });
 
-  /**
-   * HELD BY A CONCURRENT SESSION — the MCP tool schema could not be edited in
-   * this wave (`packages/api/src/routers/mcp/tools/index.ts` was dirty in the
-   * shared working tree). Its `slot` enum is still the 3-member literal, so
-   * `card` remains unreachable from MCP alone.
-   *
-   * This is HONEST UNDER-CONVERGENCE, not a stamp: nothing claims MCP converged,
-   * and this test PINS the exact literal that is there — so if anyone edits it
-   * to anything other than the derived form, the pin fails and they are sent to
-   * the real fix. The required diff, verbatim:
-   *
-   *   -              enum: ["list", "detail", "dashboard"],
-   *   +              enum: [...RENDERER_SLOTS],
-   *   -              enum: ["workspace", "pod"],
-   *   +              enum: [...RENDERER_SCOPES],
-   *
-   * plus `import { RENDERER_SCOPES, RENDERER_SLOTS } from
-   * "../../../services/profiles/renderer-slots.js";`, and widening
-   * `build.ts`'s cast from `"list" | "detail" | "dashboard"` to `RendererSlot`.
-   * Delete this test and add the file to the derived-doors list above once done.
-   */
-  it("MCP tool schema is a KNOWN un-derived door (pinned, not certified)", () => {
+  it("the MCP tool schema derives both enums instead of listing members (previously HONEST UNDER-CONVERGENCE — see git blame)", () => {
     const source = src("routers/mcp/tools/index.ts");
-    const derived = source.includes("enum: [...RENDERER_SLOTS]");
-    if (derived) return; // Someone did the real fix — retire this test.
-    expect(
-      source,
-      "MCP slot enum changed without being derived — apply the diff in this test's docblock"
-    ).toContain('enum: ["list", "detail", "dashboard"]');
+    expect(source).toContain("enum: [...RENDERER_SLOTS]");
+    expect(source).toContain("enum: [...RENDERER_SCOPES]");
+    expect(source).not.toContain('enum: ["list", "detail", "dashboard"]');
+    expect(source).not.toContain('enum: ["workspace", "pod"]');
+  });
+
+  it("the MCP build handler widens its slot/scope cast off the 3-member literal", () => {
+    const source = src("routers/mcp/handlers/build.ts");
+    expect(source).not.toContain('"list" | "detail" | "dashboard"');
+    expect(source).toContain("as RendererSlot");
   });
 });

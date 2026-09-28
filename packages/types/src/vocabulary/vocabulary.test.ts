@@ -115,6 +115,13 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("profile.grant_access", "past")).toBe("Shared");
   });
 
+  it("names project filing in both moods (humanize would read 'File entities')", () => {
+    expect(resolveActionLabel("file_entities", "imperative")).toBe("File");
+    expect(resolveActionLabel("project.file_entities", "past")).toBe("Filed");
+    expect(resolveActionLabel("unfile_entities", "imperative")).toBe("Unfile");
+    expect(resolveActionLabel("unfile_entities", "past")).toBe("Unfiled");
+  });
+
   it("keeps imperative and past DISTINCT (they were an accidental fork)", () => {
     // event-renderer said "Created"; ProposalChrome said "Create". Both right.
     expect(resolveActionLabel("create", "imperative")).toBe("Create");

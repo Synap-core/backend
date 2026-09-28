@@ -15,14 +15,7 @@
  *   - Neither path triggers the other's sync hook
  */
 
-import {
-  getDb,
-  drizzleSql,
-  eq,
-  and,
-  isNotNull,
-  EXPOSURE_GRANT_RELATION_TYPE,
-} from "@synap/database";
+import { getDb, drizzleSql, eq, and, isNotNull } from "@synap/database";
 import {
   propertyDefs,
   relations,
@@ -31,6 +24,7 @@ import {
   PropertyValueType,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { EXPOSURE_RELATION_TYPES } from "./project-scope.js";
 
 const logger = createLogger({ module: "property-relation-sync" });
 
@@ -87,9 +81,17 @@ export async function syncPropertyToRelations(
   for (const propDef of syncableDefs) {
     const relTypeSlug = relDefSlugMap.get(propDef.relationDefId!);
     if (!relTypeSlug) continue;
-    // A property must never mint or drop the exposure edge: that would share a
-    // record with a project's guests (or unshare it) without the share door.
-    if (relTypeSlug === EXPOSURE_GRANT_RELATION_TYPE) continue;
+    // A property must never mint or drop ANY exposure edge — `visible_to`
+    // (would share a record with a project's guests without the share door) or
+    // `belongs_to_project` (would file a record into a project, exposing it to
+    // every project member, without `linkEntityToProject`'s existence and
+    // visibility checks or the governed filing door). The set is IMPORTED, never
+    // re-listed, so a third exposure type is skipped here by existing.
+    //
+    // The PROPERTY VALUE itself is left as written: it is plain data and grants
+    // nothing. Filing is `projects.fileEntities` / MCP `synap_file_into_project`.
+    if ((EXPOSURE_RELATION_TYPES as readonly string[]).includes(relTypeSlug))
+      continue;
 
     const oldValue = (oldProperties[propDef.slug] as string) ?? null;
     const newValue = (newProperties[propDef.slug] as string) ?? null;

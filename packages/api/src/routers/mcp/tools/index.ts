@@ -29,6 +29,12 @@ import {
 } from "@synap-core/types/renderables";
 const CREATABLE_VIEW_TYPE_KEYS = CREATABLE_VIEW_DEFINITIONS.map((d) => d.key);
 import { ABSTRACT_VERBS, PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+// The renderer `slot`/`scope` wire vocabularies — DERIVED, never hand-listed
+// (see renderer-slot-enum-parity.tripwire.test.ts).
+import {
+  RENDERER_SCOPES,
+  RENDERER_SLOTS,
+} from "../../../services/profiles/renderer-slots.js";
 // The catalog names `synap_find` accepts — SPREAD from the service that owns
 // them, never re-typed, so a fourth catalog cannot be advertised without
 // existing (and vice versa). Same idiom as ABSTRACT_VERBS above.
@@ -829,7 +835,7 @@ export const tools = {
             sessionId: {
               type: "string",
               description:
-                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error.",
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
             },
             forceCreate: {
               type: "boolean",
@@ -954,7 +960,7 @@ export const tools = {
             sessionId: {
               type: "string",
               description:
-                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error.",
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
             },
             expectedLabel: {
               type: "string",
@@ -1567,7 +1573,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work that advances one of a project's METHODS is born inside its track: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work that advances one of a project's METHODS is born inside its track: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this (another conversation's session is joined only by passing its id as `sessionId`); calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1738,7 +1744,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` makes this session a run of that playbook and merges in its criteria + deliverables; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), track step (`trackId` + `trackStage` ADOPT existing work into a track step — always a proposal; trackId null unfiles), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` makes this session a run of that playbook and merges in its criteria + deliverables; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1785,6 +1791,16 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "FILE this session into a project (its UUID from synap_list_projects), or pass null to UNFILE it; omit to leave it alone. Always filed as a PROPOSAL the person approves — which project work belongs to is their call, so suggest it, never assume it. REFUSED if the project is not one you can see.",
+            },
+            trackId: {
+              type: ["string", "null"],
+              description:
+                "ADOPT this existing session into a TRACK (its UUID from synap_list_tracks), or pass null to UNFILE it from its track; omit to leave it alone. Always a PROPOSAL the person approves. The session must be in the track's project; a session with no project is filed into it. The session is never moved to another space.",
+            },
+            trackStage: {
+              type: ["string", "null"],
+              description:
+                "The track STEP to file it at — a stage key the track pinned (synap_list_tracks). Omit for the track's current step. REFUSED if the track does not declare it.",
             },
             expectedOutputs: {
               type: "array",
@@ -2274,7 +2290,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as a profile's renderer for a slot (list | detail | dashboard). Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = per-workspace overlay; scope 'pod' = profile system default. Never promote a speculative or unproven one-off.",
+          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as a profile's renderer for a slot (list | detail | card | dashboard). Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = per-workspace overlay; scope 'pod' = profile system default. Never promote a speculative or unproven one-off.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2284,8 +2300,9 @@ export const tools = {
             },
             slot: {
               type: "string",
-              enum: ["list", "detail", "dashboard"],
-              description: "Which renderer slot to set.",
+              enum: [...RENDERER_SLOTS],
+              description:
+                "Which renderer slot to set. 'card' = the entity's small embeddable block (this is the ONLY door that reaches it besides Renderer Studio in Builder mode — most personalization requests from a user are this slot, not 'detail').",
             },
             cellKey: {
               type: "string",
@@ -2298,7 +2315,7 @@ export const tools = {
             },
             scope: {
               type: "string",
-              enum: ["workspace", "pod"],
+              enum: [...RENDERER_SCOPES],
               description:
                 "'workspace' (default) = per-workspace overlay; 'pod' = profile system default. Workspace scope requires workspaceId.",
             },
@@ -2390,7 +2407,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). When profileSlug is omitted, every active visible playbook is a candidate (ranked by intentText). When present, kind/facet matches AND playbooks with no subject (e.g. Plan Next Content) stay in the pool.",
+          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Track template') is a method a project runs as a TRACK — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). When profileSlug is omitted, every active visible playbook is a candidate (ranked by intentText). When present, kind/facet matches AND playbooks with no subject (e.g. Plan Next Content) stay in the pool.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2414,6 +2431,11 @@ export const tools = {
               description:
                 "What the user said they want. Sufficient on its own — ranks the candidates (never filters) and each result carries `score` and a human-readable `reason`. Show the reason when you suggest a playbook; never run one without the user's confirmation.",
             },
+            projectId: {
+              type: "string",
+              description:
+                "Optional project you are working in. Never filters — it ranks a track template (scope project) above its same-name session twin.",
+            },
           },
           required: [],
         },
@@ -2427,7 +2449,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may contain {{param}} placeholders. Pass scope: "project" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default "session" is a template for one focus session. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may contain {{param}} placeholders. Pass scope: "project" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default "session" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts (goalTemplate/stage goals read them as {{name}}). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.',
         inputSchema: {
           type: "object",
           properties: {
@@ -2509,6 +2531,42 @@ export const tools = {
               description:
                 "What the playbook instantiates. 'session' (default): a template for ONE bounded focus session. 'project': a METHOD a project runs as a track (synap_start_track) — its stages are the project's long-running phases.",
             },
+            params: {
+              type: "array",
+              description:
+                "What the method needs to know. A required param left unanswered when synap_start_track runs becomes a question owed to the person (answer later with synap_set_track_params); optional ones fall back to their default.",
+              items: {
+                type: "object",
+                properties: {
+                  name: {
+                    type: "string",
+                    description: "Key, read as {{name}} in goal templates.",
+                  },
+                  label: {
+                    type: "string",
+                    description: "The question as the person sees it.",
+                  },
+                  type: {
+                    type: "string",
+                    enum: ["text", "number", "entity", "choice", "boolean"],
+                  },
+                  options: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "The choices, for type 'choice'.",
+                  },
+                  default: { description: "Used when unanswered." },
+                  required: { type: "boolean" },
+                },
+                required: ["name", "type"],
+              },
+            },
+            criteria: {
+              type: "array",
+              description:
+                "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
+              items: { type: "object" },
+            },
           },
           required: ["name", "goalTemplate"],
         },
@@ -2539,7 +2597,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Pin your runtime workspace focus so every subsequent write (create/update/capture) with no explicit workspaceId lands there — the 'use the CRM workspace until I say otherwise' scenario. ADVISORY: a call that DOES pass an explicit workspaceId still overrides the focus; reads are unaffected. Sticky across calls until cleared. Pass `workspace` as a name (matched against your workspaces) or an id; omit it (or pass 'none'/'clear') to clear the focus.",
+          "Pin your runtime workspace focus so every subsequent write (create/update/capture) with no explicit workspaceId lands there — the 'use the CRM workspace until I say otherwise' scenario. ADVISORY: a call that DOES pass an explicit workspaceId still overrides the focus; reads are unaffected. Sticky in THIS conversation until cleared — another conversation keeps its own (set the same focus there to share it); the reply's `focusScope` says which. Pass `workspace` as a name (matched against your workspaces) or an id; omit it (or pass 'none'/'clear') to clear the focus.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2562,7 +2620,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "DECLARE which project you are working on, so writes that don't pin their own project file into it — the 'everything I do now is for the Apollo migration' scenario. Sticky across calls until cleared. A call that passes an explicit projectId still wins. Filing into a project GRANTS ACCESS to it, so this is a DECLARATION only: the project is verified to exist and be visible to you at set time, and nothing infers a project from what you write. Pass `project` as a name (matched against the projects you can see) or an id; omit it (or pass 'none'/'clear') to clear the focus.",
+          "DECLARE which project you are working on, so writes that don't pin their own project file into it — the 'everything I do now is for the Apollo migration' scenario. Sticky in THIS conversation until cleared — another conversation keeps its own (set the same focus there to share it); the reply's `focusScope` says which. A call that passes an explicit projectId still wins. Filing into a project GRANTS ACCESS to it, so this is a DECLARATION only: the project is verified to exist and be visible to you at set time, and nothing infers a project from what you write. Pass `project` as a name (matched against the projects you can see) or an id; omit it (or pass 'none'/'clear') to clear the focus.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2941,7 +2999,7 @@ export const tools = {
             sessionId: {
               type: "string",
               description:
-                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess (mis-grouping a write is worse than not grouping it), and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error.",
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess (mis-grouping a write is worse than not grouping it), and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
             },
           },
           // No `required`: the payload is a gradient — `text` OR `entities[]`
@@ -3400,6 +3458,43 @@ export const tools = {
         },
       },
       {
+        name: "synap_file_into_project",
+        annotations: {
+          title: "File into project",
+          readOnlyHint: false,
+          // `remove: true` un-files — MCP hints describe the worst case.
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "File EXISTING records into a project (entity --belongs_to_project--> project), so the project's members see them. Use this — not link_entities (refused for this edge) and not a projectId property (it files nothing). You must be able to write every record; one refused record refuses the batch. Always a proposal for an agent, one for the whole batch — `proposed` is success, surface reviewUrl. remove:true un-files them instead.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            projectId: {
+              type: "string",
+              description: "Project UUID (from synap_list_projects).",
+            },
+            entityIds: {
+              type: "array",
+              items: { type: "string" },
+              description: "Entity UUIDs to file (1-500).",
+            },
+            remove: {
+              type: "boolean",
+              description:
+                "true = UN-FILE these records from the project. Default false = file.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why they belong to this project, in the person's words — shown to the reviewer. One line.",
+            },
+          },
+          required: ["projectId", "entityIds"],
+        },
+      },
+      {
         name: "synap_archive_workspace",
         annotations: {
           title: "Archive space",
@@ -3477,6 +3572,32 @@ export const tools = {
             },
           },
           required: ["entityIds", "workspaceId"],
+        },
+      },
+      {
+        name: "synap_retire_field",
+        annotations: {
+          title: "Retire field",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Propose RETIRING a field (a property definition) — including a kind's base field or a global field, which nothing else can remove. Always a proposal, for anyone: `proposed` is success, never a direct delete. REFUSED while the field still holds values (the answer lists them; move or clear them first). Find ids with synap_list_profiles. On approval the definition is deleted.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            propertyDefId: {
+              type: "string",
+              description: "Property definition UUID.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why this field should go — shown to the reviewer. One line.",
+            },
+          },
+          required: ["propertyDefId"],
         },
       },
       {

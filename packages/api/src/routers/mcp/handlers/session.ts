@@ -765,6 +765,20 @@ export const sessionHandlers: McpHandlerMap = {
         : typeof args.projectId === "string"
           ? { projectId: args.projectId }
           : {}),
+      // ADOPT into a track step, NARROWED like `projectId`: `null` unfiles, a
+      // string files, anything else leaves it. The rules (visible track, pinned
+      // stage, same project) and the always-propose rule for an agent live in
+      // `updateFocusSession` → `resolveSessionTrackFiling`.
+      ...(args.trackId === null
+        ? { trackId: null }
+        : typeof args.trackId === "string" && args.trackId.trim()
+          ? { trackId: args.trackId.trim() }
+          : {}),
+      ...(args.trackStage === null
+        ? { trackStage: null }
+        : typeof args.trackStage === "string" && args.trackStage.trim()
+          ? { trackStage: args.trackStage.trim() }
+          : {}),
       // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
       // re-typed inline shape: an inline copy silently narrows what this door
       // believes a slot is, which is how the per-door shapes drifted in the
@@ -845,6 +859,9 @@ export const sessionHandlers: McpHandlerMap = {
           ...(result.followRefusal
             ? { followRefusal: result.followRefusal }
             : {}),
+          // Which track/step it landed in, and — when the step names another
+          // domain — that the session was filed where it is, not moved.
+          ...(result.trackFiling ? { trackFiling: result.trackFiling } : {}),
           ...(nudges ? { nudges } : {}),
         });
       }

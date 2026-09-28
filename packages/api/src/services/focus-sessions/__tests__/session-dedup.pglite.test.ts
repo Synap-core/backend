@@ -340,6 +340,69 @@ describe("session dedup — one open session per goal + scope", () => {
     });
   });
 
+  // X1 — the claim. Live 2026-09-13: ONE approved proposal (c7cbbfdc) left
+  // two sessions 214ms apart (executor row origin=agent + direct create
+  // origin=human). The executor now claims the proposal id and takes the
+  // direct door's twin lock, in one transaction with its twin check + insert.
+  //
+  // What PGlite can and cannot show: it is ONE connection, so the two racers
+  // are serialized by its transaction mutex, not by `pg_advisory_xact_lock`.
+  // These tests therefore prove the check+insert are INSIDE one transaction
+  // (the negative control — the pre-claim executor — interleaves and fails
+  // them); the advisory lock's cross-connection behaviour needs real Postgres.
+  describe("focus_session/create executor — concurrent applies (X1)", () => {
+    async function fileProposal(goal: string) {
+      const proposalId = randomUUID();
+      const targetId = randomUUID();
+      const data = { goal };
+      await q(
+        `insert into proposals (id, status, proposal_type, target_type, target_id, data, created_at, updated_at)
+         values ($1, 'pending', 'create', 'focus_session', $2, $3::jsonb, now(), now())`,
+        [proposalId, targetId, JSON.stringify({ data })]
+      );
+      const apply = () =>
+        proposalExecRegistry.resolveExact("focus_session/create")!.execute({
+          proposal: {
+            id: proposalId,
+            targetId,
+            workspaceId: null,
+            projectId: null,
+            subjectUserId: USER,
+            correlationId: null,
+            data: { data },
+            targetType: "focus_session",
+            proposalType: "create",
+          },
+          payload: null,
+          userId: USER,
+          input: { proposalId },
+          ctx: {},
+          deps: {
+            emitProposalReviewed: () => undefined,
+            reportProposalOutcome: () => undefined,
+          },
+        } as never) as Promise<{ primaryId?: string }>;
+      return { targetId, apply };
+    }
+
+    it("a concurrent double-apply of ONE proposal creates one session, both applies name it", async () => {
+      const { targetId, apply } = await fileProposal("Define the offer");
+      const [a, b] = await Promise.all([apply(), apply()]);
+      expect(await countByGoal("Define the offer")).toBe(1);
+      expect(a.primaryId).toBe(targetId);
+      expect(b.primaryId).toBe(targetId);
+    });
+
+    it("an approval racing a direct create of the same goal leaves ONE session", async () => {
+      const { apply } = await fileProposal("Define the ICP");
+      await Promise.all([
+        apply(),
+        createFocusSession({ userId: USER, goal: "Define the ICP" }),
+      ]);
+      expect(await countByGoal("Define the ICP")).toBe(1);
+    });
+  });
+
   describe("connected plan — session step with a pre-existing twin", () => {
     it("links the existing session (no throw) and never lists it for compensation", async () => {
       const existing = await seed({ goal: "Draft offer", projectId: PROJECT });

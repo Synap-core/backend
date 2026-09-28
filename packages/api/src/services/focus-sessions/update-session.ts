@@ -126,6 +126,16 @@ export interface UpdateFocusSessionParams {
    */
   projectId?: string | null;
   /**
+   * ADOPT this session into a TRACK step, or UNFILE it from its track with an
+   * explicit `null`. Resolved by `resolveSessionTrackFiling` (the track must be
+   * visible and not archived; the session's project must be the track's — a
+   * session with NO project is filed into the track's project). An AGENT's
+   * filing is always a proposal, exactly like `projectId`.
+   */
+  trackId?: string | null;
+  /** The step (a key the track pinned). Absent ⇒ the track's current stage. */
+  trackStage?: string | null;
+  /**
    * WHOLESALE replace of the session's binary acceptance criteria (an ad-hoc
    * session declaring its contract, or retuning it). Validated against
    * `sessionCriteriaSchema` — max 12, unique keys. Evaluations already
@@ -209,6 +219,21 @@ export type UpdateFocusSessionResult =
        * Absent when there was no `followPlaybookId` or when it landed.
        */
       followRefusal?: string;
+      /**
+       * What a `trackId`/`trackStage` in the patch did — present only when the
+       * patch carried one. `domainNote` says the step names another domain and
+       * the session was filed where it is, not moved.
+       */
+      trackFiling?: {
+        trackId: string | null;
+        trackStage: string | null;
+        trackName: string | null;
+        stageName: string | null;
+        /** Set when filing also placed the session in the track's project. */
+        projectId?: string;
+        usesStamped: boolean;
+        domainNote?: string;
+      };
     };
 
 type OutputItem = ExpectedOutput;
@@ -1108,6 +1133,29 @@ export async function updateFocusSession(
     filingProjectName = project.name;
   }
 
+  // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
+  // same reason as the floors above: a track the caller cannot see, a stage it
+  // did not pin or a cross-project filing is refused to the caller, never
+  // laundered into a proposal.
+  const { hasTrackFilingPatch, resolveSessionTrackFiling, trackFilingRefusal } =
+    await import("../tracks/session-track-filing.js");
+  let trackFiling:
+    Awaited<ReturnType<typeof resolveSessionTrackFiling>> | undefined;
+  if (hasTrackFilingPatch(params)) {
+    try {
+      trackFiling = await resolveSessionTrackFiling({
+        session: existing,
+        patch: { trackId: params.trackId, trackStage: params.trackStage },
+        projectId: params.projectId,
+        actor: { userId, agentUserId },
+      });
+    } catch (err) {
+      const reason = trackFilingRefusal(err);
+      if (reason === null) throw err;
+      return { status: "denied", reason };
+    }
+  }
+
   // Governance membrane — AI callers route through proposals (same gate the
   // Hub PATCH /focus-sessions/:id and synap_complete_session use). Always carry
   // goal (for proposal summary / targetName) plus every intended mutation so
@@ -1123,7 +1171,9 @@ export async function updateFocusSession(
     source: "intelligence",
     // Filing is always reviewed when an agent does it (honoured on the AI
     // paths only — a person filing their own session is never forced).
-    ...(params.projectId !== undefined ? { forcePropose: true } : {}),
+    ...(params.projectId !== undefined || trackFiling
+      ? { forcePropose: true }
+      : {}),
     data: {
       id: sessionId,
       // Always include goal so summaries resolve even when goal is not changing.
@@ -1164,6 +1214,25 @@ export async function updateFocusSession(
       // Display only — the proposal title names WHICH project (the executor
       // applies `projectId` and ignores this).
       ...(filingProjectName ? { projectName: filingProjectName } : {}),
+      // TRACK FILING — carried so approval applies it (the executor
+      // RE-resolves it). `null` (unfile) must survive. The names are display
+      // only: the proposal title says WHICH track and step, and — when filing
+      // also sets the project — which project.
+      ...(trackFiling
+        ? {
+            trackId: trackFiling.set.trackId,
+            trackStage: trackFiling.set.trackStage,
+            ...(trackFiling.trackName
+              ? { trackName: trackFiling.trackName }
+              : {}),
+            ...(trackFiling.stageName
+              ? { stageName: trackFiling.stageName }
+              : {}),
+            ...(trackFiling.projectName
+              ? { trackProjectName: trackFiling.projectName }
+              : {}),
+          }
+        : {}),
       // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
       // `focus_session/update` executor re-applies it on approval, so the
       // PROPOSED path is not a silent no-op. `null` is the RELEASE and must
@@ -1221,6 +1290,7 @@ export async function updateFocusSession(
     set.subjectEntityId = params.subjectEntityId;
   // `undefined` leaves the filing; `null` unfiles.
   if (params.projectId !== undefined) set.projectId = params.projectId;
+  if (trackFiling) Object.assign(set, trackFiling.set);
   if (params.criteria !== undefined) set.criteria = params.criteria;
 
   // Roster append goes through the ONE append door, which owns its own row lock
@@ -1352,6 +1422,34 @@ export async function updateFocusSession(
     }
   }
 
+  // The project now lists the space its adopted work lives in (one `uses` door).
+  let trackFilingOutcome:
+    | NonNullable<
+        Extract<UpdateFocusSessionResult, { status: "updated" }>["trackFiling"]
+      >
+    | undefined;
+  if (trackFiling) {
+    const { stampTrackFilingUses } =
+      await import("../tracks/session-track-filing.js");
+    const usesStamped = await stampTrackFilingUses({
+      filing: trackFiling,
+      sessionWorkspaceId: updated.workspaceId ?? null,
+      projectId: updated.projectId ?? null,
+      userId,
+    });
+    trackFilingOutcome = {
+      trackId: trackFiling.set.trackId,
+      trackStage: trackFiling.set.trackStage,
+      trackName: trackFiling.trackName,
+      stageName: trackFiling.stageName,
+      ...(trackFiling.set.projectId
+        ? { projectId: trackFiling.set.projectId }
+        : {}),
+      usesStamped,
+      ...(trackFiling.domainNote ? { domainNote: trackFiling.domainNote } : {}),
+    };
+  }
+
   // After the write: a guideline annotates the block, it never gates it.
   const blockGuidelines = await guidanceForBlockedSlots({
     userId,
@@ -1381,5 +1479,6 @@ export async function updateFocusSession(
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),
+    ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
   };
 }

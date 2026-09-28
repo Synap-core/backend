@@ -29,6 +29,7 @@ import {
   eq,
   gte,
   isNull,
+  drizzleSql,
   eventRepository,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -314,6 +315,54 @@ export function pushTarget(
   return undefined;
 }
 
+/**
+ * The row's `groupKey`: the caller's, else `<scope>:<type>:<groupBy value>`
+ * when the registry names a `groupBy` field the data carries. `<scope>` is the
+ * workspace id, or `pod` for a POD-WIDE row — which until W2 got no key at
+ * all, so a windowed type raised pod-wide was never deduped (census §3c).
+ * Pure.
+ */
+export function resolveNotificationGroupKey(
+  def: Pick<NotificationDef, "groupBy">,
+  input: Pick<
+    CreateNotificationInput,
+    "groupKey" | "workspaceId" | "type" | "data"
+  >
+): string | undefined {
+  if (input.groupKey) return input.groupKey;
+  if (!def.groupBy) return undefined;
+  const groupVal = input.data[def.groupBy];
+  if (!groupVal) return undefined;
+  return `${input.workspaceId ?? "pod"}:${input.type}:${groupVal}`;
+}
+
+/**
+ * The OPEN-row dedupe key (`notifications.dedupe_key`, migration 0281): the
+ * groupKey of a type that declares a dedupe window, else nothing. Only a type
+ * whose groupKey IS its identity may be constrained — `proposal.created`
+ * shares one key across an agent's whole run and must never be. Pure.
+ */
+export function resolveNotificationDedupeKey(
+  def: Pick<NotificationDef, "dedupeWindowMs">,
+  groupKey: string | undefined
+): string | undefined {
+  return def.dedupeWindowMs && groupKey ? groupKey : undefined;
+}
+
+/** Postgres `unique_violation` (23505), however the driver surfaced it. */
+function isUniqueViolation(err: unknown): boolean {
+  let cursor: unknown = err;
+  for (
+    let depth = 0;
+    cursor && typeof cursor === "object" && depth < 4;
+    depth++
+  ) {
+    if ((cursor as { code?: unknown }).code === "23505") return true;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -333,14 +382,8 @@ export const NotificationService = {
     const title = interpolate(def.titleTemplate, input.data);
     const body = interpolate(def.bodyTemplate, input.data);
 
-    // Resolve group key if registry specifies groupBy field
-    let groupKey: string | undefined = input.groupKey;
-    if (!groupKey && def.groupBy && input.workspaceId) {
-      const groupVal = input.data[def.groupBy];
-      if (groupVal) {
-        groupKey = `${input.workspaceId}:${input.type}:${groupVal}`;
-      }
-    }
+    const groupKey = resolveNotificationGroupKey(def, input);
+    const dedupeKey = resolveNotificationDedupeKey(def, groupKey);
 
     try {
       // ── Routing enforcement ────────────────────────────────────────────
@@ -437,12 +480,11 @@ export const NotificationService = {
       // Checked HERE, before the insert, because the row is what a push is made
       // from: suppressing the interruption alone would still leave N identical
       // rows stacking up in the bell, and suppressing after the insert would
-      // race with itself. There is no unique index to lean on — the insert has
-      // no `onConflict` target and `groupKey` is not unique (it must not be:
-      // `proposal.created` shares one key across an agent's whole run) — so
-      // this is a read-then-write, and two truly simultaneous events could both
-      // pass it. That is the honest limit: it collapses a STORM into one
-      // notification, it is not a mutual exclusion.
+      // race with itself. `groupKey` itself is not unique (it must not be:
+      // `proposal.created` shares one key across an agent's whole run), so
+      // this read alone is a read-then-write two simultaneous events could
+      // both pass. The insert below closes that race on `dedupe_key` — set
+      // ONLY for windowed types — with a partial unique index (0281).
       if (def.dedupeWindowMs) {
         if (!groupKey) {
           logger.warn(
@@ -475,25 +517,69 @@ export const NotificationService = {
         }
       }
 
-      const [row] = await db
-        .insert(notifications)
-        .values({
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          type: input.type,
-          category: def.category as NotificationCategory,
-          priority: def.priority as NotificationPriority,
-          title,
-          body,
-          icon: def.icon ?? undefined,
-          sourceType: input.sourceType,
-          sourceId: input.sourceId ?? undefined,
-          workspaceUrl: input.workspaceUrl ?? undefined,
-          actions: def.actions ?? [],
-          groupKey: groupKey ?? undefined,
-          expiresAt: input.expiresAt ?? undefined,
-        })
-        .returning({ id: notifications.id });
+      const inserting = db.insert(notifications).values({
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+        type: input.type,
+        category: def.category as NotificationCategory,
+        priority: def.priority as NotificationPriority,
+        title,
+        body,
+        icon: def.icon ?? undefined,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId ?? undefined,
+        workspaceUrl: input.workspaceUrl ?? undefined,
+        actions: def.actions ?? [],
+        groupKey: groupKey ?? undefined,
+        dedupeKey: dedupeKey ?? undefined,
+        expiresAt: input.expiresAt ?? undefined,
+      });
+      // THE RACE GUARD (migration 0281). The read above collapses a storm; the
+      // partial unique index makes the collapse hold under concurrency — at
+      // most one OPEN row per (user, dedupeKey). An insert that loses to an
+      // open row (SQLSTATE 23505) becomes a REFRESH of that row, gated on the
+      // window in SQL: a repeat whose window ELAPSED while the old row sat
+      // unread re-raises it (content + created_at — it moves to the top, never
+      // a second row); a repeat INSIDE the window (the racing twin that
+      // slipped past the read) updates nothing and is suppressed exactly as
+      // the read would have. A plain insert + catch rather than ON CONFLICT so
+      // a database without the index (a harness, a pod mid-migration) still
+      // writes the notification instead of failing every windowed type.
+      // No Date bind — postgres.js 3.4.8 crashes on it on the pod image.
+      let row: { id: string } | undefined;
+      try {
+        [row] = await inserting.returning({ id: notifications.id });
+      } catch (err) {
+        if (!dedupeKey || !def.dedupeWindowMs || !isUniqueViolation(err))
+          throw err;
+        [row] = await db
+          .update(notifications)
+          .set({
+            title,
+            body,
+            icon: def.icon ?? null,
+            sourceType: input.sourceType,
+            sourceId: input.sourceId ?? null,
+            workspaceUrl: input.workspaceUrl ?? null,
+            actions: def.actions ?? [],
+            createdAt: drizzleSql`now()`,
+          })
+          .where(
+            and(
+              eq(notifications.userId, input.userId),
+              eq(notifications.dedupeKey, dedupeKey),
+              drizzleSql`${notifications.status} IN ('unread', 'snoozed')`,
+              drizzleSql`${notifications.createdAt} < now() - (${def.dedupeWindowMs}::bigint * interval '1 millisecond')`
+            )
+          )
+          .returning({ id: notifications.id });
+        if (!row) {
+          logger.debug(
+            { type: input.type, dedupeKey },
+            "Notification suppressed — an open row holds this dedupe key inside the window"
+          );
+        }
+      }
 
       if (!row) return undefined;
 

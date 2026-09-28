@@ -114,7 +114,14 @@ import * as schema from "@synap/database/schema";
 import {
   resolveOrCreateAgentProposalSession,
   runWithClientKey,
+  clientKeyForApiKey,
 } from "@synap/database";
+import {
+  getAgentFocusProjectId,
+  getAgentFocusWorkspaceId,
+  setAgentFocusProject,
+  setAgentFocusWorkspace,
+} from "../../agent-identity-service.js";
 import { resolveWorkSession } from "../resolve-work-session.js";
 import { createFocusSession } from "../create-session.js";
 import { matchSessionTemplate } from "../match-session-template.js";
@@ -159,6 +166,12 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 const USER = "user-1";
 const AGENT = "agent-1";
+/**
+ * A "client" is a CONVERSATION: two conversations sharing ONE agent key `K`
+ * (every Claude Code tab on a machine shares the `synap init` key).
+ */
+const CONV_A = "key:K|conv:A";
+const CONV_B = "key:K|conv:B";
 
 async function session(opts: {
   goal?: string;
@@ -303,24 +316,24 @@ describe("resolveWorkSession precedence", () => {
   it("two clients, each with its own open session → each resolves to its own", async () => {
     const mine = await session({
       origin: "agent",
-      metadata: { clientKey: "key:A" },
+      metadata: { clientKey: CONV_A },
     });
     const theirs = await session({
       origin: "agent",
-      metadata: { clientKey: "key:B" },
+      metadata: { clientKey: CONV_B },
     });
     expect(
-      (await resolveWorkSession({ userId: USER, clientKey: "key:A" })).sessionId
+      (await resolveWorkSession({ userId: USER, clientKey: CONV_A })).sessionId
     ).toBe(mine);
     expect(
-      (await resolveWorkSession({ userId: USER, clientKey: "key:B" })).sessionId
+      (await resolveWorkSession({ userId: USER, clientKey: CONV_B })).sessionId
     ).toBe(theirs);
   });
 
   it("unbound client + ONE unclaimed open work session → that one", async () => {
     const human = await session({ origin: "human" });
-    await session({ origin: "agent", metadata: { clientKey: "key:B" } });
-    const r = await resolveWorkSession({ userId: USER, clientKey: "key:A" });
+    await session({ origin: "agent", metadata: { clientKey: CONV_B } });
+    const r = await resolveWorkSession({ userId: USER, clientKey: CONV_A });
     expect(r).toMatchObject({
       sessionId: human,
       source: "unclaimed",
@@ -331,7 +344,7 @@ describe("resolveWorkSession precedence", () => {
   it("unbound client + TWO unclaimed open work sessions → no guess", async () => {
     await session({ origin: "human", goal: "one" });
     await session({ origin: "human", goal: "two" });
-    const r = await resolveWorkSession({ userId: USER, clientKey: "key:A" });
+    const r = await resolveWorkSession({ userId: USER, clientKey: CONV_A });
     expect(r.sessionId).toBeUndefined();
     expect(r).toMatchObject({ source: "none", unclaimedOpenCount: 2 });
   });
@@ -346,7 +359,7 @@ describe("resolveWorkSession precedence", () => {
     });
     clientReadFails.on = true;
     try {
-      const r = await resolveWorkSession({ userId: USER, clientKey: "key:A" });
+      const r = await resolveWorkSession({ userId: USER, clientKey: CONV_A });
       expect(r.sessionId).toBeUndefined();
       expect(r).toMatchObject({ source: "none", unclaimedOpenCount: null });
     } finally {
@@ -355,11 +368,11 @@ describe("resolveWorkSession precedence", () => {
   });
 
   it("an explicit, owned handle wins over the client's own session", async () => {
-    await session({ origin: "agent", metadata: { clientKey: "key:A" } });
+    await session({ origin: "agent", metadata: { clientKey: CONV_A } });
     const named = await session({ origin: "human", goal: "named" });
     const r = await resolveWorkSession({
       userId: USER,
-      clientKey: "key:A",
+      clientKey: CONV_A,
       explicitSessionId: named,
     });
     expect(r).toMatchObject({ sessionId: named, source: "explicit" });
@@ -368,13 +381,13 @@ describe("resolveWorkSession precedence", () => {
 
 describe("start_session adopts the auto-opened session (never a duplicate)", () => {
   it("auto-open then start → adopted, ONE row, no longer a receipt", async () => {
-    const auto = await receipt("key:A", "Create task Buy milk");
+    const auto = await receipt(CONV_A, "Create task Buy milk");
     const result = await createFocusSession({
       userId: USER,
       agentUserId: AGENT,
       title: "Grocery run",
       goal: "Plan the week's groceries",
-      clientKey: "key:A",
+      clientKey: CONV_A,
     });
     expect(result.status).toBe("created");
     if (result.status !== "created") return;
@@ -386,7 +399,7 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
     expect(all[0].metadata.kind).toBeUndefined();
     expect(all[0].metadata.autoOpened).toBeUndefined();
     expect(all[0].metadata).toMatchObject({
-      clientKey: "key:A",
+      clientKey: CONV_A,
       titleSource: "agent",
     });
   });
@@ -397,7 +410,7 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
     // opened it. With no explicit title the derived name goes, so lists fall
     // back to the new goal until the titler names it.
     const auto = await receipt(
-      "key:A",
+      CONV_A,
       "Create knowledge The Research pack is enabled"
     );
     const before = (await rows())[0];
@@ -406,7 +419,7 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
       userId: USER,
       agentUserId: AGENT,
       goal: "Research competitor Notion and compare them to us",
-      clientKey: "key:A",
+      clientKey: CONV_A,
     });
     if (result.status !== "created") throw new Error(result.status);
     expect(result.session.id).toBe(auto);
@@ -415,7 +428,7 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
   });
 
   it("adoption KEEPS a name a person or agent chose", async () => {
-    const auto = await receipt("key:A", "Create task Buy milk");
+    const auto = await receipt(CONV_A, "Create task Buy milk");
     await q(
       `update focus_sessions set title = $2, metadata = metadata || '{"titleSource":"human"}'::jsonb where id = $1`,
       [auto, "Groceries, named by me"]
@@ -424,7 +437,7 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
       userId: USER,
       agentUserId: AGENT,
       goal: "Plan the week's groceries",
-      clientKey: "key:A",
+      clientKey: CONV_A,
     });
     if (result.status !== "created") throw new Error(result.status);
     expect(result.session.title).toBe("Groceries, named by me");
@@ -432,19 +445,266 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
   });
 
   it("another client's auto-opened session is never adopted", async () => {
-    const other = await receipt("key:B", "Create task");
+    const other = await receipt(CONV_B, "Create task");
     const result = await createFocusSession({
       userId: USER,
       agentUserId: AGENT,
       goal: "My own work",
-      clientKey: "key:A",
+      clientKey: CONV_A,
     });
     if (result.status !== "created") throw new Error(result.status);
     expect(result.adopted).toBeUndefined();
     expect(result.session.id).not.toBe(other);
-    expect(result.session.metadata).toMatchObject({ clientKey: "key:A" });
+    expect(result.session.metadata).toMatchObject({ clientKey: CONV_A });
   });
 });
+
+describe("the CONVERSATION is the client, not the key (founder rule, 2026-09-28)", () => {
+  // Live defect: every Claude Code tab authenticates with the same `synap init`
+  // key, so a key-only client filed one conversation's writes into the session
+  // another conversation had started (670f401a). Two AIs may share a session
+  // only DELIBERATELY — by naming it.
+  const KEY_ONLY = "key:K";
+
+  it("two conversations on one key → two separate auto-opened sessions", async () => {
+    const a = await receipt(CONV_A, "Create task Buy milk");
+    const b = await receipt(CONV_B, "Create task Buy milk");
+    expect(a).toBeTruthy();
+    expect(b).not.toBe(a);
+    expect(
+      (await resolveWorkSession({ userId: USER, clientKey: CONV_A })).sessionId
+    ).toBe(a);
+    expect(
+      (await resolveWorkSession({ userId: USER, clientKey: CONV_B })).sessionId
+    ).toBe(b);
+  });
+
+  it("the request door composes key + MCP conversation id into the client", async () => {
+    const inConv = (conv: string | undefined) =>
+      runWithClientKey(clientKeyForApiKey({ id: "K" }, conv), () =>
+        resolveOrCreateAgentProposalSession({
+          userId: USER,
+          agentUserId: AGENT,
+          goal: "write",
+        })
+      );
+    const a = await inConv("mcp-session-a");
+    const b = await inConv("mcp-session-b");
+    expect(b).not.toBe(a);
+    const keys = (await rows()).map((r) => r.metadata.clientKey).sort();
+    expect(keys).toEqual([
+      "key:K|conv:mcp-session-a",
+      "key:K|conv:mcp-session-b",
+    ]);
+    // A value outside visible ASCII is no conversation id (option A), never a key part.
+    expect(clientKeyForApiKey({ id: "K" }, "bad id")).toBe(KEY_ONLY);
+    expect(clientKeyForApiKey({ id: "K", keyType: "is_internal" }, "c")).toBe(
+      undefined
+    );
+  });
+
+  it("a session conversation A STARTED is never joined by conversation B on the same key", async () => {
+    const started = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "A's own work",
+      clientKey: CONV_A,
+    });
+    if (started.status !== "created") throw new Error(started.status);
+    const r = await resolveWorkSession({ userId: USER, clientKey: CONV_B });
+    expect(r.sessionId).toBeUndefined();
+    expect(r.source).toBe("none");
+    // …and B's first write opens B's own session, not A's.
+    const bWrite = await receipt(CONV_B, "Create note");
+    expect(bWrite).not.toBe(started.session.id);
+  });
+
+  it("an explicit sessionId joins another conversation's session — deliberate sharing", async () => {
+    const started = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "Shared on purpose",
+      clientKey: CONV_A,
+    });
+    if (started.status !== "created") throw new Error(started.status);
+    const r = await resolveWorkSession({
+      userId: USER,
+      clientKey: CONV_B,
+      explicitSessionId: started.session.id,
+    });
+    expect(r).toMatchObject({
+      sessionId: started.session.id,
+      source: "explicit",
+    });
+  });
+
+  describe("no conversation id → option A", () => {
+    it("a session STARTED under the bare key is not joined without naming it", async () => {
+      const started = await session({
+        origin: "agent",
+        goal: "started by some conversation on K",
+        metadata: { clientKey: KEY_ONLY },
+      });
+      const r = await resolveWorkSession({ userId: USER, clientKey: KEY_ONLY });
+      expect(r.sessionId).toBeUndefined();
+      // The packager opens the key's OWN auto session instead.
+      const w = await receipt(KEY_ONLY, "Create task");
+      expect(w).not.toBe(started);
+      expect((await rows()).find((x) => x.id === w)?.metadata).toMatchObject({
+        autoOpened: true,
+        clientKey: KEY_ONLY,
+      });
+    });
+
+    it("the key's own AUTO-OPENED session is still joined", async () => {
+      const auto = await receipt(KEY_ONLY, "Create task");
+      const r = await resolveWorkSession({ userId: USER, clientKey: KEY_ONLY });
+      expect(r).toMatchObject({
+        sessionId: auto,
+        source: "client",
+        autoOpened: true,
+      });
+    });
+
+    it("never guesses the person's one unclaimed session (rung 3 is skipped)", async () => {
+      await session({ origin: "human", goal: "the person's only session" });
+      const r = await resolveWorkSession({ userId: USER, clientKey: KEY_ONLY });
+      expect(r.sessionId).toBeUndefined();
+      expect(r).toMatchObject({ source: "none", unclaimedOpenCount: null });
+    });
+
+    it("start_session does NOT adopt the key's auto-opened session (it may hold other conversations' writes)", async () => {
+      const auto = await receipt(KEY_ONLY, "Create task Buy milk");
+      const result = await createFocusSession({
+        userId: USER,
+        agentUserId: AGENT,
+        goal: "Plan the week's groceries",
+        clientKey: KEY_ONLY,
+      });
+      if (result.status !== "created") throw new Error(result.status);
+      expect(result.adopted).toBeUndefined();
+      expect(result.session.id).not.toBe(auto);
+    });
+  });
+});
+
+describe("focus is per CONVERSATION (set_project_focus / set_workspace_focus)", () => {
+  const AGENT_USER = "agent-focus-1";
+  const inConv = <T>(conv: string | undefined, fn: () => Promise<T>) =>
+    runWithClientKey(conv, fn);
+  const meta = async () =>
+    (
+      await q<{ agent_metadata: Record<string, unknown> | null }>(
+        `select agent_metadata from users where id = $1`,
+        [AGENT_USER]
+      )
+    ).rows[0]?.agent_metadata;
+
+  beforeEach(async () => {
+    await q(`delete from users where id = $1`, [AGENT_USER]);
+    await q(
+      `insert into users (id, email, agent_metadata) values ($1, $2, $3::jsonb)`,
+      [
+        AGENT_USER,
+        `${AGENT_USER}@example.test`,
+        JSON.stringify({ agentType: "claude-code", createdByUserId: USER }),
+      ]
+    );
+  });
+
+  it("one conversation's project focus never pins another conversation on the same key", async () => {
+    expect(
+      await inConv(CONV_A, () => setAgentFocusProject(AGENT_USER, "P-1"))
+    ).toBe("conversation");
+    expect(await inConv(CONV_A, () => getAgentFocusProjectId(AGENT_USER))).toBe(
+      "P-1"
+    );
+    expect(
+      await inConv(CONV_B, () => getAgentFocusProjectId(AGENT_USER))
+    ).toBeNull();
+    await inConv(CONV_B, () => setAgentFocusProject(AGENT_USER, "P-2"));
+    expect(await inConv(CONV_A, () => getAgentFocusProjectId(AGENT_USER))).toBe(
+      "P-1"
+    );
+    expect(await inConv(CONV_B, () => getAgentFocusProjectId(AGENT_USER))).toBe(
+      "P-2"
+    );
+    // The agent-wide (option A) field is untouched.
+    expect((await meta())?.focusProjectId).toBeUndefined();
+    expect(
+      await inConv(undefined, () => getAgentFocusProjectId(AGENT_USER))
+    ).toBeNull();
+  });
+
+  it("workspace + project focus of one conversation are one entry; clearing is per conversation", async () => {
+    await inConv(CONV_A, () => setAgentFocusWorkspace(AGENT_USER, "W-1"));
+    await inConv(CONV_A, () => setAgentFocusProject(AGENT_USER, "P-1"));
+    await inConv(CONV_B, () => setAgentFocusWorkspace(AGENT_USER, "W-2"));
+    expect(
+      await inConv(CONV_A, () => getAgentFocusWorkspaceId(AGENT_USER))
+    ).toBe("W-1");
+    await inConv(CONV_A, () => setAgentFocusWorkspace(AGENT_USER, null));
+    expect(
+      await inConv(CONV_A, () => getAgentFocusWorkspaceId(AGENT_USER))
+    ).toBeNull();
+    expect(await inConv(CONV_A, () => getAgentFocusProjectId(AGENT_USER))).toBe(
+      "P-1"
+    );
+    expect(
+      await inConv(CONV_B, () => getAgentFocusWorkspaceId(AGENT_USER))
+    ).toBe("W-2");
+    // Other agentMetadata survives the merge.
+    expect(await meta()).toMatchObject({ agentType: "claude-code" });
+  });
+
+  it("no conversation id → the agent-wide focus (option A), labelled 'agent', and a conversation does not inherit it", async () => {
+    expect(
+      await inConv(KEY_ONLY_FOCUS, () =>
+        setAgentFocusProject(AGENT_USER, "P-9")
+      )
+    ).toBe("agent");
+    expect((await meta())?.focusProjectId).toBe("P-9");
+    expect(
+      await inConv(KEY_ONLY_FOCUS, () => getAgentFocusProjectId(AGENT_USER))
+    ).toBe("P-9");
+    expect(
+      await inConv(CONV_A, () => getAgentFocusProjectId(AGENT_USER))
+    ).toBeNull();
+  });
+
+  it("sharing a focus stays possible — deliberately, by setting it in each conversation", async () => {
+    await inConv(CONV_A, () => setAgentFocusProject(AGENT_USER, "P-S"));
+    await inConv(CONV_B, () => setAgentFocusProject(AGENT_USER, "P-S"));
+    expect(await inConv(CONV_A, () => getAgentFocusProjectId(AGENT_USER))).toBe(
+      "P-S"
+    );
+    expect(await inConv(CONV_B, () => getAgentFocusProjectId(AGENT_USER))).toBe(
+      "P-S"
+    );
+  });
+
+  it("idle conversation entries are pruned on write", async () => {
+    await q(
+      `update users set agent_metadata = agent_metadata || $2::jsonb where id = $1`,
+      [
+        AGENT_USER,
+        JSON.stringify({
+          conversationFocus: {
+            "key:K|conv:OLD": {
+              projectId: "P-old",
+              at: new Date(Date.now() - 40 * 864e5).toISOString(),
+            },
+          },
+        }),
+      ]
+    );
+    await inConv(CONV_A, () => setAgentFocusProject(AGENT_USER, "P-1"));
+    const cf = (await meta())?.conversationFocus as Record<string, unknown>;
+    expect(Object.keys(cf)).toEqual([CONV_A]);
+  });
+});
+
+const KEY_ONLY_FOCUS = "key:K";
 
 describe("twin dedup under the lock", () => {
   it("two concurrent starts of the same goal (different case) → ONE row", async () => {

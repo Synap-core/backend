@@ -7,10 +7,15 @@
  *      `X-Session-Id`). Ownership-checked; a handle that is not the caller's is
  *      DROPPED and reported, never promoted and never an error.
  *   2. CLIENT — the session bound to THIS client (`findClientSession`, keyed on
- *      the request's client key): one it started itself, else the one the
- *      governance gate auto-opened for it while that is still in its window.
+ *      the request's client key = the CONVERSATION, `clientKeyForApiKey`): one
+ *      it started itself, else the one the governance gate auto-opened for it
+ *      while that is still in its window. A KEY-scoped client (option A: the
+ *      door knows no conversation) only ever gets the key's auto-opened one.
  *   3. UNCLAIMED — exactly ONE open WORK session that no client has claimed (a
- *      session the person opened). More than one ⇒ NO guess.
+ *      session the person opened). More than one ⇒ NO guess. SKIPPED for a
+ *      key-scoped client: with no conversation to tell callers apart, every
+ *      conversation on the key would land in it (option A = named or own
+ *      auto-opened only).
  *   4. none. The write path then auto-opens at the governance gate
  *      (`resolveOrCreateAgentProposalSession` via `checkPermissionOrPropose`,
  *      grouped by the same client key), so a tool call that ends up writing
@@ -34,6 +39,7 @@ import {
   drizzleSql,
   findClientSession,
   getRequestClientKey,
+  clientKeyScope,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
@@ -176,6 +182,11 @@ export async function resolveWorkSession(
       logger.warn({ err, clientKey }, "client session lookup failed");
       return { source: "none", unclaimedOpenCount: null };
     }
+  }
+
+  // Option A: a key shared by several conversations never guesses rung 3.
+  if (clientKey && clientKeyScope(clientKey) === "key") {
+    return { source: "none", unclaimedOpenCount: null };
   }
 
   let unclaimed: Array<{ id: string }>;

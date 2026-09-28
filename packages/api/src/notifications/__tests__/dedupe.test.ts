@@ -29,10 +29,16 @@ const {
   dedupeHits,
   whereArgs,
   tz,
+  insertedValues,
+  mockUpdateReturning,
 } = vi.hoisted(() => ({
   mockEmitChatEvent: vi.fn(),
   mockPrefs: vi.fn(),
   mockInsertReturning: vi.fn(),
+  /** Every `.values()` row the insert was given. */
+  insertedValues: [] as Array<Record<string, unknown>>,
+  /** The refresh UPDATE's `.returning()` (the 0281 race guard). */
+  mockUpdateReturning: vi.fn(),
   mockSendExpoPush: vi.fn(),
   dedupeHits: [] as unknown[][],
   /** Every `.where()` argument the dedupe lookup built, for non-vacuity. */
@@ -51,7 +57,15 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: {
       query: { notificationPreferences: { findFirst: mockPrefs } },
-      insert: () => ({ values: () => ({ returning: mockInsertReturning }) }),
+      insert: () => ({
+        values: (v: Record<string, unknown>) => {
+          insertedValues.push(v);
+          return { returning: mockInsertReturning };
+        },
+      }),
+      update: () => ({
+        set: () => ({ where: () => ({ returning: mockUpdateReturning }) }),
+      }),
       select: (cols?: Record<string, unknown>) => {
         // `recipientTimezone` and the dedupe lookup share `db.select`. They are
         // told apart by the columns asked for, so a timezone read can never
@@ -83,6 +97,8 @@ vi.mock("@synap/events", () => ({
 import {
   NotificationService,
   localHourMinute,
+  resolveNotificationGroupKey,
+  resolveNotificationDedupeKey,
 } from "../NotificationService.js";
 import { getNotificationDef } from "../registry.js";
 
@@ -120,6 +136,8 @@ beforeEach(() => {
   mockInsertReturning.mockResolvedValue([{ id: "row-1" }]);
   dedupeHits.length = 0;
   whereArgs.length = 0;
+  insertedValues.length = 0;
+  mockUpdateReturning.mockResolvedValue([]);
   tz.value = "UTC";
 });
 
@@ -178,17 +196,95 @@ describe("NotificationService.create — dedupe", () => {
   });
 
   it("(e) a deduped type with NO resolvable groupKey is written, not silently dropped", async () => {
-    // `groupBy: 'sessionId'` needs a workspaceId to build the fallback key, so
-    // a pod-wide escalation with no explicit key has none. "Cannot identify
+    // No explicit key and no `groupBy` value in the data. "Cannot identify
     // this" must not become "suppress this" — an un-dedupable notification is
     // still news.
     const id = await NotificationService.create(
-      escalation({ groupKey: undefined, workspaceId: null })
+      escalation({
+        groupKey: undefined,
+        workspaceId: null,
+        data: { sessionTitle: "Ship it", criterionStatement: "x", attempts: 2 },
+      })
     );
 
     expect(id).toBe("row-1");
     expect(mockSendExpoPush).toHaveBeenCalledTimes(1);
     expect(whereArgs).toHaveLength(0);
+    expect(insertedValues[0]!.dedupeKey).toBeUndefined();
+  });
+
+  it("(e2) a POD-WIDE row gets a group key — windowed types dedupe pod-wide too (W2)", async () => {
+    // Until W2 the fallback key needed a workspaceId, so a pod-wide windowed
+    // type was never deduped at all.
+    expect(
+      resolveNotificationGroupKey(
+        { groupBy: "sessionId" },
+        { type: DEDUPED, workspaceId: null, data: { sessionId: SESSION } }
+      )
+    ).toBe(`pod:${DEDUPED}:${SESSION}`);
+    dedupeHits.push([{ id: "earlier-pod-row" }]);
+    const id = await NotificationService.create(
+      escalation({ groupKey: undefined, workspaceId: null })
+    );
+    expect(id).toBeUndefined();
+    expect(whereArgs).toHaveLength(1);
+  });
+});
+
+describe("NotificationService.create — the 0281 open-row guard", () => {
+  it("a windowed type stamps dedupe_key = its groupKey; a non-windowed type never does", async () => {
+    expect(resolveNotificationDedupeKey({ dedupeWindowMs: 1 }, "k")).toBe("k");
+    expect(
+      resolveNotificationDedupeKey({ dedupeWindowMs: undefined }, "k")
+    ).toBeUndefined();
+
+    dedupeHits.push([]);
+    await NotificationService.create(escalation());
+    expect(insertedValues[0]!.dedupeKey).toBe(`${DEDUPED}:${SESSION}`);
+
+    await NotificationService.create({
+      type: NOT_DEDUPED,
+      userId: USER,
+      workspaceId: WORKSPACE,
+      sourceType: "proposal",
+      sourceId: "44444444-4444-4444-8444-444444444444",
+      groupKey: `${WORKSPACE}:proposal.created:agent-1`,
+      data: { proposalType: "entity.create", description: "Create ACME" },
+    });
+    expect(insertedValues[1]!.dedupeKey).toBeUndefined();
+  });
+
+  it("losing the insert race to an open row inside the window → no second row, no push", async () => {
+    dedupeHits.push([]); // both racers' reads saw nothing
+    mockInsertReturning.mockRejectedValueOnce(
+      Object.assign(new Error("dup"), { code: "23505" })
+    );
+    mockUpdateReturning.mockResolvedValueOnce([]); // window not elapsed
+    const id = await NotificationService.create(escalation());
+    expect(id).toBeUndefined();
+    expect(mockUpdateReturning).toHaveBeenCalledTimes(1);
+    expect(mockSendExpoPush).not.toHaveBeenCalled();
+  });
+
+  it("an open row OUTSIDE the window is refreshed (re-raised), not duplicated", async () => {
+    dedupeHits.push([]);
+    mockInsertReturning.mockRejectedValueOnce(
+      Object.assign(new Error("dup"), { cause: { code: "23505" } })
+    );
+    mockUpdateReturning.mockResolvedValueOnce([{ id: "open-row" }]);
+    const id = await NotificationService.create(escalation());
+    expect(id).toBe("open-row");
+    expect(mockSendExpoPush).toHaveBeenCalledTimes(1);
+  });
+
+  it("any OTHER insert error is not mistaken for a dedupe hit", async () => {
+    dedupeHits.push([]);
+    mockInsertReturning.mockRejectedValueOnce(
+      Object.assign(new Error("boom"), { code: "42P01" })
+    );
+    const id = await NotificationService.create(escalation());
+    expect(id).toBeUndefined();
+    expect(mockUpdateReturning).not.toHaveBeenCalled();
   });
 
   it("(f) a MUTED category short-circuits before the lookup — prefs still outrank dedupe", async () => {

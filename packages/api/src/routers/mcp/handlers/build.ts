@@ -15,9 +15,13 @@ import { toolError } from "../tool-errors.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { toViewDigest, VIEWS_DIGEST_NOTE } from "./read-lean.js";
-import { resolveProposalId } from "../../hub-protocol/rest/_shared.js";
+import { isUuid, resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { CONTENT_KINDS } from "@synap/database/schema";
+import type {
+  RendererSlot,
+  RendererScope,
+} from "../../../services/profiles/renderer-slots.js";
 import { getDb } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import {
@@ -201,10 +205,10 @@ export const buildHandlers: McpHandlerMap = {
       userId,
       workspaceId: args.workspaceId as string | undefined,
       profileSlug: args.profileSlug as string,
-      slot: args.slot as "list" | "detail" | "dashboard",
+      slot: args.slot as RendererSlot,
       cellKey: args.cellKey as string,
       props: args.props as Record<string, unknown> | undefined,
-      scope: args.scope as "workspace" | "pod" | undefined,
+      scope: args.scope as RendererScope | undefined,
       ...(agentUserId ? { agentUserId } : {}),
       // `profiles.setRenderer` has declared `reasoning` since it was written
       // and forwards it into the gate; this door never sent one.
@@ -331,6 +335,11 @@ export const buildHandlers: McpHandlerMap = {
       ...(typeof args.intentText === "string" && args.intentText.trim()
         ? { intentText: args.intentText.slice(0, 2000) }
         : {}),
+      // Project altitude (explicit, or the URL lens) — lifts a track template
+      // above its session twin; never filters.
+      ...(typeof args.projectId === "string" && isUuid(args.projectId)
+        ? { projectId: args.projectId }
+        : {}),
     });
     // Only reshape in the AMBIGUOUS case (auto-picked among several member
     // workspaces) — the explicit-workspaceId and resolved-entity-workspace
@@ -369,6 +378,20 @@ export const buildHandlers: McpHandlerMap = {
       // silently dropped into a session playbook.
       ...(typeof args.scope === "string"
         ? { scope: args.scope as "session" | "project" }
+        : {}),
+      // A method's onboarding: declared params (a required one unanswered at
+      // track start becomes a question owed to the person) and criteria.
+      // Passed through untyped — `playbooks.create` validates both with the
+      // ONE definition schema, so a malformed list is refused, never dropped.
+      ...(args.params !== undefined
+        ? { params: args.params as Record<string, unknown>[] }
+        : {}),
+      ...(args.criteria !== undefined
+        ? {
+            criteria: args.criteria as Parameters<
+              typeof createPlaybookDoor
+            >[1]["criteria"],
+          }
         : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);

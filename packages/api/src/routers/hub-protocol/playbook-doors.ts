@@ -16,6 +16,7 @@ import { getDb, entities, focusSessions, eq } from "@synap/database";
 
 import { withReviewUrl } from "./proposal-response.js";
 import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
+import type { PlaybookDefinition } from "../../schemas/playbook-definition.js";
 import { playbooksRouter } from "../playbooks.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 
@@ -108,6 +109,17 @@ export async function createPlaybookDoor(
      * (0272). Without this, no agent door could create the thing a track runs.
      */
     scope?: "session" | "project";
+    /**
+     * The method's DECLARED params — what makes an agent-authored method
+     * self-onboarding: a `required` param left unanswered when a track starts
+     * becomes a question owed to the person (`resolveTrackParams` → the owed
+     * param slot). Typed from the ONE definition schema and validated for real
+     * by `playbooks.create`; before this, no agent door could carry them, so
+     * every agent-authored method asked nobody anything.
+     */
+    params?: PlaybookDefinition["params"];
+    /** Binary acceptance criteria (`sessionCriteriaSchema`, validated by `playbooks.create`). */
+    criteria?: PlaybookDefinition["criteria"];
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -142,6 +154,8 @@ export async function createPlaybookDoor(
     ...(input.subjectProfile ? { subjectProfile: input.subjectProfile } : {}),
     ...(input.forceCreate ? { forceCreate: true } : {}),
     ...(input.scope ? { scope: input.scope } : {}),
+    ...(input.params !== undefined ? { params: input.params } : {}),
+    ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }

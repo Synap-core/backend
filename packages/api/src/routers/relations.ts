@@ -97,6 +97,7 @@ import { inheritRelationWorkspaceId } from "../lib/relation-workspace-inherit.js
 import {
   isBuiltinRelationType,
   listEffectiveRelationTypes,
+  readInverseLabel,
   unknownRelationTypeMessage,
 } from "../utils/relation-types.js";
 import {
@@ -413,6 +414,9 @@ export const relationsRouter = router({
     const types = defs.map((def) => ({
       type: def.slug,
       label: def.displayName,
+      // Read from the TARGET's side ("Employs" for works_at) — stored on the
+      // def, and the one word the connections rule needs for incoming edges.
+      inverseLabel: readInverseLabel(def.uiHints),
       description: def.description ?? "",
       directionality: def.isDirectional
         ? ("unidirectional" as const)

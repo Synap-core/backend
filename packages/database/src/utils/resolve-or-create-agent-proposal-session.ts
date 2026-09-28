@@ -26,7 +26,10 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { openRunSession } from "./open-run-session.js";
-import { getRequestClientKey } from "./request-write-context.js";
+import {
+  clientKeyScope,
+  getRequestClientKey,
+} from "./request-write-context.js";
 
 /** The receipt marker (read by the session-kind projection in @synap/api). */
 export const AGENT_PROPOSAL_PACKAGE_MARKER = "agent-proposal-package";
@@ -105,6 +108,11 @@ export interface ClientSession {
  * auto-opened for it; an auto-opened one only counts while it is inside its
  * activity window. `onlyAutoOpened` narrows to the latter (start_session's
  * adoption lookup).
+ *
+ * KEY-scoped clients (option A — no conversation id, see `clientKeyForApiKey`)
+ * are ALWAYS narrowed to auto-opened: a STARTED session stamped `key:<id>`
+ * belongs to one of the many conversations sharing that key, and joining it
+ * without naming it is the accidental sharing this rule forbids.
  */
 export async function findClientSession(
   userId: string,
@@ -112,6 +120,8 @@ export async function findClientSession(
   opts: { onlyAutoOpened?: boolean; database?: Pick<typeof db, "select"> } = {}
 ): Promise<ClientSession | null> {
   const database = opts.database ?? db;
+  const onlyAutoOpened =
+    opts.onlyAutoOpened === true || clientKeyScope(clientKey) === "key";
   const autoOpened = sql`coalesce((${focusSessions.metadata} ->> 'autoOpened')::boolean, false)`;
   const rows = await database
     .select({ id: focusSessions.id, autoOpened: sql<boolean>`${autoOpened}` })
@@ -121,7 +131,7 @@ export async function findClientSession(
         eq(focusSessions.userId, userId),
         inArray(focusSessions.status, [...CLIENT_SESSION_STATUSES]),
         sql`${focusSessions.metadata} ->> 'clientKey' = ${clientKey}`,
-        opts.onlyAutoOpened ? sql`${autoOpened}` : undefined,
+        onlyAutoOpened ? sql`${autoOpened}` : undefined,
         // An auto-opened session is the client's CURRENT one only while it saw
         // activity inside the window; one it started itself stays bound until
         // it is closed.

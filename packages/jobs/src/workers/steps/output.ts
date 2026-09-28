@@ -621,11 +621,13 @@ export async function executeOutputStep(
       const body = (config.body ?? config.message) as string | undefined;
       const title = (config.title ?? "Automation notification") as string;
       const entityId = config.entityId as string | undefined;
+      // ALWAYS a key (W2 calm): the registry dedupes this type per
+      // (user, type, target) per day, and a row with no key cannot be
+      // deduped at all — a step firing every run stacked one row per run.
+      // The target is the linked entity, else the automation itself.
       const groupKey =
         (config.groupKey as string | undefined) ??
-        (entityId
-          ? `automation.${automationContext.automationId}.${entityId}`
-          : undefined);
+        `automation.${automationContext.automationId}.${entityId ?? "self"}`;
 
       if (config.category !== undefined || config.priority !== undefined) {
         logger.warn(
