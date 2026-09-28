@@ -11975,6 +11975,110 @@ export type SessionInteractionsSection = {
  * read through {@link sessionReadableWhere}.
  */
 export type SessionViewerRole = "owner" | "member";
+declare const LANDED_DECISION_STATES: readonly [
+	"applied",
+	"approved",
+	"auto_approved",
+	"pending",
+	"reverted"
+];
+export type LandedDecisionState = (typeof LANDED_DECISION_STATES)[number];
+/**
+ * WHO made the object. An agent is named when the pod could name it; an
+ * agent-produced output with no attributable agent (an artifact that only
+ * recorded `originKind: agent`) carries `id: null` rather than a guess.
+ * A legacy row with no provenance reads as the owner — a HUMAN — never as an
+ * agent (`entities.createdByKind` NULL = human, per its schema comment).
+ */
+export type LandedActor = {
+	kind: "agent";
+	id: string | null;
+	name: string | null;
+} | {
+	kind: "human";
+	id: string;
+	name: string | null;
+	isViewer: boolean;
+};
+export interface LandedEntityProfile {
+	slug: string;
+	displayName: string | null;
+	icon: string | null;
+}
+export interface LandedObjectRef {
+	kind: string;
+	id: string;
+}
+export interface LandedDecision {
+	state: LandedDecisionState;
+	/** The proposal (receipt or decided proposal) behind the state, when one exists. */
+	proposalId: string | null;
+	/** The person who reviewed it — present on `approved`/`reverted` when recorded. */
+	decidedBy: {
+		id: string;
+		name: string | null;
+	} | null;
+	/** When it was decided (ISO), when recorded. */
+	decidedAt: string | null;
+}
+export interface LandedObjectRow {
+	/**
+	 * Stable row key: `<sessionId>|<kind>:<refId>` for a produced object (the
+	 * `projects.outputs` key), `proposal:<proposalId>` for a pending one.
+	 */
+	id: string;
+	/** Normalized object kind (`entity`, `document`, `view`, …). */
+	kind: string;
+	title: string;
+	/**
+	 * The DOOR. A produced object opens itself; a PENDING row's door is its
+	 * proposal (`{ kind: "proposal" }`) — the object does not exist yet.
+	 */
+	ref: LandedObjectRef;
+	/** An `entity` row's kind ("Person", "Company"), when known. */
+	entityProfile?: LandedEntityProfile;
+	/** When it landed — or, for `pending`, when it was proposed (ISO). */
+	createdAt: string;
+	actor: LandedActor;
+	/** The session it came from — the provenance door. */
+	session: {
+		id: string;
+		title: string;
+	};
+	decision: LandedDecision;
+}
+export interface LandedObjectsPage {
+	items: LandedObjectRow[];
+	/** Pass back as `cursor` for the next (older) page; `null` = no more. */
+	nextCursor: string | null;
+	/**
+	 * More sessions matched than one read scans: the least recently active
+	 * sessions' outputs are missing from every page — reported, never silent.
+	 */
+	truncated: boolean;
+}
+/** What a settled session produced — the Landed card's "12 leads · 1 doc". */
+export interface SessionOutputsSummary {
+	count: number;
+	/**
+	 * Counts per DISPLAY kind, largest first: an entity counts under its profile
+	 * (`key` = the profile slug, so "12 leads"), anything else under its object
+	 * kind (`key` = the kind).
+	 */
+	byKind: Array<{
+		key: string;
+		kind: string;
+		entityProfile?: LandedEntityProfile;
+		count: number;
+	}>;
+	/** The most recently produced object — the card's lead line and door. */
+	top: {
+		kind: string;
+		title: string;
+		ref: LandedObjectRef;
+		entityProfile?: LandedEntityProfile;
+	} | null;
+}
 /** The kinds a session can be converted INTO. */
 export type ConversionKind = "playbook" | "project";
 /** The receipt every conversion verb returns. Frontend renders it verbatim. */
@@ -17549,6 +17653,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				targetType?: "entity" | "automation" | "skill" | "playbook" | "document" | "view" | "profile" | "whiteboard" | undefined;
 				targetId?: string | undefined;
+				subject?: {
+					kind: "entity" | "document";
+					id: string;
+				} | undefined;
 				proposalIds?: string[] | undefined;
 				threadId?: string | undefined;
 				correlationId?: string | undefined;
@@ -32457,6 +32565,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: SessionKind;
 			} & SessionParticipants & {
 				verdict?: SessionVerdict;
+			} & {
+				lastAgentActivityAt: Date | null;
 			} & Partial<SessionEdges> & Partial<SessionOutputDependencies> & {
 				nextMove?: ContinuationNextMove;
 				unitFacts?: SessionUnitCounts;
@@ -32519,6 +32629,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} & SessionParticipants & {
 					verdict?: SessionVerdict;
 				} & {
+					lastAgentActivityAt: Date | null;
+				} & {
 					viewerRole: SessionViewerRole;
 				})[];
 				pagination: {
@@ -32528,6 +32640,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					offset: number;
 				};
 			};
+			meta: object;
+		}>;
+		landed: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				since: string;
+				workspaceId?: string | string[] | null | undefined;
+				projectId?: string | string[] | null | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				outputsSummary: SessionOutputsSummary;
+				title: string | null;
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				correlationId: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+				metadata: unknown;
+				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				subjectEntityId: string | null;
+				startedAt: Date;
+				playbookId: string | null;
+				expectedOutputs: unknown;
+				stages: unknown;
+				criteria: unknown;
+				projectId: string | null;
+				trackId: string | null;
+				trackStage: string | null;
+				origin: "automation" | "playbook" | "human" | "agent" | null;
+				goal: string;
+				templateId: string | null;
+				channelId: string | null;
+				progress: number | null;
+				currentStage: string | null;
+				agentIds: string[] | null;
+				closedAt: Date | null;
+				verificationReport: unknown;
+				parentSessionId: string | null;
+				triage: TriageProjection;
+				kind: SessionKind;
+				participants: SessionParticipant[];
+				verdict?: SessionVerdict;
+				lastAgentActivityAt: Date | null;
+				viewerRole: SessionViewerRole;
+			}[];
 			meta: object;
 		}>;
 		addBlocker: import("@trpc/server").TRPCMutationProcedure<{
@@ -35345,6 +35503,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				proposalId?: undefined;
 			};
+			meta: object;
+		}>;
+	}>>;
+	outputs: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		landed: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+				projectId?: string | undefined;
+				since?: string | undefined;
+				actor?: "agents" | "all" | "me" | undefined;
+				cursor?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: LandedObjectsPage;
 			meta: object;
 		}>;
 	}>>;
