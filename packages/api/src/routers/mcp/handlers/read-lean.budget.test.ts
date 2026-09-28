@@ -277,6 +277,42 @@ describe("synap_list_profiles — default digest fits the budget", () => {
   });
 });
 
+describe("synap_list_profiles — relation groups under a workspace lens", () => {
+  it("globals stay in the null group whatever lens is requested; the workspace group lists only what it adds", async () => {
+    const ws = WS[3]!;
+    const lean = await call("synap_list_profiles", { workspaceId: ws });
+    const groups = lean.json.relationTypes as Array<{
+      workspaceId: string | null;
+      slugs: string[];
+    }>;
+    // 20 of the 22 globals are OVERRIDDEN in this workspace — the case that
+    // emptied the null group live.
+    expect(groups.find((g) => g.workspaceId === null)?.slugs).toEqual(
+      [...POD_SLUGS].sort()
+    );
+    expect(groups.find((g) => g.workspaceId === ws)?.slugs).toEqual(
+      wsOwnSlugs(3).sort()
+    );
+    expect(groups).toHaveLength(2);
+
+    // Full keeps one row per (lens, slug): every global row is still there.
+    const full = await call("synap_list_profiles", {
+      workspaceId: ws,
+      detail: "full",
+    });
+    const rows = full.json.relationTypes as Array<{
+      slug: string;
+      workspaceId: string | null;
+    }>;
+    expect(
+      rows
+        .filter((r) => r.workspaceId === null)
+        .map((r) => r.slug)
+        .sort()
+    ).toEqual([...POD_SLUGS].sort());
+  });
+});
+
 describe("synap_get_entities — default lean rows fit the budget", () => {
   it("non-vacuity: detail:'full' exceeds the budget and carries nulls, systemData and untruncated bodies", async () => {
     const full = await call("synap_get_entities", {

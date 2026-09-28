@@ -586,7 +586,13 @@ export const readHandlers: McpHandlerMap = {
         userId,
         workspaceId: wsId,
       });
-      const relationTypes = await relationTypesFor([wsId]);
+      // BOTH lenses: the pod-wide base layer (`null`) AND the workspace's own
+      // defs. Reading the workspace lens alone returned every overridden
+      // global row tagged with the workspace, so the digest's pod-wide group
+      // came back EMPTY (`{workspaceId:null, slugs:[]}`) and the workspace
+      // group claimed all 24 globals as its own — live on Brand Library,
+      // 2026-09-28, against this tool's own note that null = valid everywhere.
+      const relationTypes = await relationTypesFor([null, wsId]);
       if (wantFull) return ok({ ...result, ...relationTypes });
       const profiles = Array.isArray(result)
         ? result
