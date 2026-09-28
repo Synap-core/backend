@@ -1065,9 +1065,15 @@ export async function proposalNeighborNames(
     data: unknown;
     workspaceId: string | null;
   }>,
-  userId: string
+  userId: string,
+  /** `roster`: honour the session roster branch — a HUMAN door passes
+   *  `rosterReadFor(ctx)`; default owner-only (decision D1). */
+  opts: { roster?: boolean } = {}
 ): Promise<Map<string, string>> {
-  const readable = await redactUnreadableSessionTargets([...rows], { userId });
+  const readable = await redactUnreadableSessionTargets([...rows], {
+    userId,
+    roster: opts.roster ?? false,
+  });
   const names = new Map<string, string>();
   for (const row of readable) {
     const request = buildRequestFromProposal(row as unknown as Proposal);

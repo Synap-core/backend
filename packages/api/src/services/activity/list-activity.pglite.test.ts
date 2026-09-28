@@ -84,6 +84,11 @@ const S_STR = randomUUID();
 // A track in PROJ: S_OPEN is filed in it, and S_TRK is a tracked RUN session
 // (playbook-minted, no playbook_runs row) — the project path's population.
 const TRACK = randomUUID();
+// The stranger's session in W1 whose ROOM seats USER (a human roster seat),
+// and a proposal ABOUT it that carries its name — readable to USER by roster.
+const S_SHARED = randomUUID();
+const CH_SHARED = randomUUID();
+const P_SHARED = randomUUID();
 const S_TRK = randomUUID();
 const E_ADA = randomUUID();
 const P_AUTO = randomUUID();
@@ -251,6 +256,24 @@ beforeAll(async () => {
     randomUUID(),
     S_TRK,
   ]);
+  await session(S_SHARED, {
+    user: STRANGER,
+    goal: "Shared launch plan",
+    status: "active",
+    started: 12,
+  });
+  await q(`update focus_sessions set channel_id = $1 where id = $2`, [
+    CH_SHARED,
+    S_SHARED,
+  ]);
+  await q(
+    `insert into channels (id, context_object_type, context_object_id) values ($1,'focus_session',$2)`,
+    [CH_SHARED, S_SHARED]
+  );
+  await q(
+    `insert into channel_members (id, channel_id, member_id, member_kind) values ($1,$2,$3,'human')`,
+    [randomUUID(), CH_SHARED, USER]
+  );
   await session(S_DONE, {
     goal: "Tidy inbox",
     status: "closed",
@@ -321,6 +344,17 @@ beforeAll(async () => {
     targetType: "focus_session",
     targetId: S_OPEN,
     at: ago(59),
+  });
+  await proposal({
+    id: P_SHARED,
+    status: "pending",
+    targetType: "focus_session",
+    targetId: S_SHARED,
+    proposalType: "update",
+    at: ago(11),
+    agent: STRANGER_AGENT,
+    subject: STRANGER,
+    data: { targetName: "Shared launch plan" },
   });
   for (const [i, id] of TIE.entries()) {
     await proposal({ id, status: "auto_approved", at: TIE_AT[i]! });
@@ -508,6 +542,15 @@ describe("activity.list — one ledger through the real door", () => {
     expect(ids((await list({ limit: 100 })).items)).toContain(
       `session:${S_TRK}`
     );
+  });
+
+  it("a roster member reads a shared session's real name in a proposal title", async () => {
+    const { items } = await list({ limit: 100 });
+    const row = items.find((r) => r.id === `proposal:${P_SHARED}`)!;
+    expect(row).toBeDefined();
+    expect(row.title).toContain("Shared launch plan");
+    // The session itself is readable through the roster too — same rule.
+    expect(ids(items)).toContain(`session:${S_SHARED}`);
   });
 
   it("decided = the decisions a person made", async () => {

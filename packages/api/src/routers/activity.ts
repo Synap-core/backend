@@ -42,6 +42,17 @@ export const activityRouter = router({
   /**
    * What happened, newest first. Every filter only narrows; a failed read
    * throws (never an empty page).
+   *
+   * Deliberately NOT rows (decided 2026-09-28):
+   *   - an auto-approved `focus_session` receipt — the session's own
+   *     lifecycle row already says it started / closed, once;
+   *   - automation runs under any actor filter (a rule is neither an agent
+   *     nor you) or a project / track filter (a rule is filed in neither).
+   * A proposal filed in a colleague's session in a shared workspace IS a row
+   * (the proposal floor admits it), but its session door is `null` unless the
+   * viewer may read that session (decision D1). A proposal ABOUT a session
+   * is titled through the same roster-aware read rule, so a roster member
+   * sees a shared session's real name and anyone else the placeholder.
    */
   list: protectedProcedure
     .input(

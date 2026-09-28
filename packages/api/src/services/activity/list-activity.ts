@@ -737,7 +737,7 @@ async function enrich(
   ]);
 
   const titles = proposalRows.length
-    ? await proposalNeighborNames(proposalRows, viewer)
+    ? await proposalNeighborNames(proposalRows, viewer, { roster: q.roster })
     : new Map<string, string>();
   const proposalById = new Map(proposalRows.map((p) => [p.id, p]));
   const userById = new Map(userRows.map((u) => [u.id, u]));
