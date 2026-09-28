@@ -65,6 +65,9 @@ import {
 /** Workspaces named individually before collapsing to a summary count. */
 const GROUNDING_WS_LIMIT = 12;
 
+/** Appended to "…and N more" when it fits: where each space's purpose is. */
+export const ORIENT_POINTER = " — `orient` lists each space's purpose";
+
 /**
  * Build a LIVE grounding snapshot for the authed user so the MCP `instructions`
  * arrive pre-grounded (the model knows the user's pod shape without having to
@@ -119,7 +122,16 @@ export function formatGrounding(
       .join("; ");
     const more = hidden > 0 ? `${n > 0 ? " " : ""}…and ${hidden} more` : "";
     // "Spaces" is the user's word (concepts.md, N1); `workspaceId` is the param.
-    const out = `${projPart}Spaces (workspaceId), busiest first: ${list}${more}.${emptyNote}${rules}`;
+    const render = (tail: string) =>
+      `${projPart}Spaces (workspaceId), busiest first: ${list}${more}${tail}.${emptyNote}${rules}`;
+    // Where the hidden spaces' purposes are — ONLY when it costs no named
+    // space: a live id outranks a pointer (live pod 2026-09-28: 4 B spare, so
+    // the pointer would have cost Brand Library its line).
+    if (hidden > 0) {
+      const pointed = render(ORIENT_POINTER);
+      if (Buffer.byteLength(pointed) <= maxBytes) return pointed;
+    }
+    const out = render("");
     if (Buffer.byteLength(out) <= maxBytes) return out;
   }
   return "";

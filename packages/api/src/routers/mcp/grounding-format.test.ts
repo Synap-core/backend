@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { formatGrounding } from "./http-handler.js";
+import { formatGrounding, ORIENT_POINTER } from "./http-handler.js";
+import { groundingBudgetBytes } from "./index.js";
 
 const ws = (id: string, name: string, n: number) => ({ id, name, n });
 
@@ -102,6 +103,63 @@ describe("formatGrounding", () => {
     expect(out).toMatch(/…and \d+ more/);
     // The write rule survives the cut — it is what the model applies to the ids.
     expect(out).toMatch(/For WRITES pass kind\/profile/);
+  });
+
+  it("points at orient for the hidden spaces' purposes when it fits", () => {
+    const many = Array.from({ length: 15 }, (_, i) =>
+      ws(`id-${i}`, `WS${i}`, 15 - i)
+    );
+    const out = formatGrounding("", many);
+    expect(out).toContain("…and 3 more — `orient` lists each space's purpose.");
+    // Nothing hidden, nothing to point at.
+    expect(formatGrounding("", many.slice(0, 5))).not.toContain(ORIENT_POINTER);
+  });
+
+  it("never trades a named space for the pointer — the live pod keeps Brand Library", () => {
+    // Shape of the founder's pod (2026-09-28): 4 projects, 14 spaces, real
+    // uuid-length ids. At the real budget the 3 busiest fit with 4 B spare;
+    // the pointer would have cost the third its line.
+    const projPart =
+      "Projects (commitments): Ethical Fashion Pre-Sale Venture, Launch The Architech, Dogfood plan review, Synap. ";
+    const names = [
+      "Builder",
+      "CRM",
+      "Brand Library",
+      "Radar",
+      "Foundation",
+      "Marketing",
+      "Finance",
+      "Agent Fleet",
+      "Synap Dev",
+      "Content Studio",
+      "Research",
+      "Life OS",
+      "Networking",
+      "Operations",
+    ];
+    const counts = [1171, 41, 39, 20, 12, 8, 5, 3, 2, 1, 0, 0, 0, 0];
+    const pod = names.map((name, i) =>
+      ws(
+        `${String(i).padStart(8, "0")}-86b3-4c52-a153-ae06ece2c54e`,
+        name,
+        counts[i]!
+      )
+    );
+    const budget = groundingBudgetBytes();
+    const out = formatGrounding(projPart, pod, budget);
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(budget);
+    expect(out).toContain("Brand Library (00000002-");
+    expect(out).toContain("…and 11 more.");
+    expect(out).not.toContain(ORIENT_POINTER);
+    // Non-vacuity: with exactly the pointer's bytes more, it IS emitted
+    // (a fourth space's line is longer, so it still does not fit).
+    const roomy = formatGrounding(
+      projPart,
+      pod,
+      Buffer.byteLength(out) + Buffer.byteLength(ORIENT_POINTER)
+    );
+    expect(roomy).toContain("Brand Library (00000002-");
+    expect(roomy).toContain(`…and 11 more${ORIENT_POINTER}.`);
   });
 
   it("returns empty (dropped, not truncated) when not even the rules fit", () => {
