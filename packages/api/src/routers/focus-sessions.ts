@@ -50,7 +50,16 @@ import {
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
 } from "../services/focus-sessions/session-statuses.js";
-import { listSessionOutputs } from "../services/focus-sessions/session-outputs.js";
+import {
+  listSessionOutputs,
+  listOutputsForSessions,
+} from "../services/focus-sessions/session-outputs.js";
+import { attachLastAgentActivity } from "../services/focus-sessions/agent-activity.js";
+import {
+  LANDED_SESSION_STATUSES,
+  LANDED_SINCE_MAX,
+  summarizeSessionOutputs,
+} from "@synap-core/types/landed";
 import { readSessionUsage } from "../services/focus-sessions/session-usage.js";
 import {
   recordSessionArtifact,
@@ -455,7 +464,11 @@ async function projectSessionRows(
   // `attachSessionVerdicts`), same unconditional contract as participants.
   const { attachSessionVerdicts } =
     await import("../services/focus-sessions/evaluations/record.js");
-  return attachSessionVerdicts(withParticipants);
+  const withVerdicts = await attachSessionVerdicts(withParticipants);
+  // LIVENESS — when an agent last did anything here (a proposal filed into
+  // the session, a post in its room). Two grouped reads for the page, same
+  // unconditional contract as participants; see `agent-activity.ts`.
+  return attachLastAgentActivity(withVerdicts, requireUserId(userId));
 }
 
 // ── Router ─────────────────────────────────────────────────────────────────
@@ -468,7 +481,10 @@ async function projectSessionRows(
 type SessionListRow = FocusSession & { parentSessionId: string | null } & {
   triage: TriageProjection;
   kind: SessionKind;
-} & SessionParticipants & { verdict?: SessionVerdict } & Partial<SessionEdges> &
+} & SessionParticipants & { verdict?: SessionVerdict } & {
+    /** When an agent last acted in this session (`agent-activity.ts`); null = never. */
+    lastAgentActivityAt: Date | null;
+  } & Partial<SessionEdges> &
   Partial<SessionOutputDependencies> & {
     nextMove?: ContinuationNextMove;
     /** Present with `nextMove: true` — the counts a state mark reads. */
@@ -723,6 +739,75 @@ export const focusSessionsRouter = router({
         ),
         pagination,
       };
+    }),
+
+  /**
+   * LANDED — the sessions that SETTLED since a moment, each as its RESULT
+   * (relay Home "Landed since you looked", browser Home "Landed today").
+   *
+   * The selection is `landedSince` (`@synap-core/types/landed`) applied in
+   * SQL: status in `LANDED_SESSION_STATUSES` (closed / failed / cancelled —
+   * failures are results too), settle clock `coalesce(closed_at, updated_at)`
+   * at or after `since`, newest settled first, capped at `LANDED_SINCE_MAX`.
+   * The population is the path's (work + tracked runs, default triage lens) —
+   * the same one `outputs.landed` scans, so a landed session's objects and the
+   * session itself come from one set.
+   *
+   * Rows are `browse`'s (`projectSessionRows`: participants, verdict,
+   * `lastAgentActivityAt`, viewerRole) PLUS `outputsSummary` — counts by kind
+   * and the newest object, from the SAME three-ledger join
+   * (`listOutputsForSessions`) the Produced board reads, batched for the page.
+   * It is attached HERE and not in `projectSessionRows` because the join costs
+   * eight reads and only a SETTLED session's product is the point of the row;
+   * `list` is polled every 30s by four surfaces.
+   */
+  landed: protectedProcedure
+    .input(
+      z.object({
+        since: z.string().datetime({ offset: true }),
+        workspaceId: ScopeFilterShape.workspaceId,
+        projectId: ScopeFilterShape.projectId,
+        limit: z.number().int().min(1).max(LANDED_SINCE_MAX).default(LANDED_SINCE_MAX),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      // Absent workspace = the whole floor, like `signals` — a landing band
+      // carries no lens chip, so the active-workspace header must not narrow it.
+      const scope = resolveScope(ctx, {
+        ...input,
+        workspaceId: input.workspaceId === undefined ? [] : input.workspaceId,
+      });
+      const settledAt = drizzleSql`coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt})`;
+      const rows = await db
+        .select()
+        .from(focusSessions)
+        .where(
+          and(
+            ...sessionListConditions({
+              userId: ctx.userId,
+              scope,
+              status: [...LANDED_SESSION_STATUSES],
+              lens: "default",
+              kind: "work",
+              includeTrackedRuns: true,
+              roster: rosterReadFor(ctx),
+            }),
+            drizzleSql`${settledAt} >= ${input.since}::timestamptz`
+          )
+        )
+        .orderBy(desc(settledAt), desc(focusSessions.id))
+        .limit(input.limit);
+      const viewer = requireUserId(ctx.userId);
+      const [projected, outputs] = await Promise.all([
+        projectSessionRows(rows, ctx.userId),
+        listOutputsForSessions(db, rows),
+      ]);
+      return projected.map((r) => ({
+        ...withViewerRole(r, viewer),
+        outputsSummary: summarizeSessionOutputs(
+          outputs.get(r.id)?.outputs ?? []
+        ),
+      }));
     }),
 
   /**

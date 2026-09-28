@@ -34,6 +34,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { db, focusSessions, projects, and, desc, eq } from "@synap/database";
+import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { scopedDb, type AccessContext } from "../../access/index.js";
 import {
@@ -133,26 +134,34 @@ function newerFirst(a: Key, b: Key): number {
   return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 }
 
-/** Returns `null` when the project does not exist or the caller cannot see it. */
-export async function listProjectOutputs(
-  query: ProjectOutputsQuery
-): Promise<ProjectOutputsResult | null> {
-  const database = query.database ?? db;
-  const scoped = scopedDb(query.access);
-  const limit = Math.max(1, Math.min(query.limit, PROJECT_OUTPUTS_MAX_LIMIT));
-  const after = query.cursor ? decodeCursor(query.cursor) : null;
-
-  const [project] = await database
-    .select({ id: projects.id })
-    .from(projects)
-    .where(and(eq(projects.id, query.projectId), scoped.predicate(projects)))
-    .limit(1);
-  if (!project) return null;
-
-  // SESSION-KIND-LENS-EXEMPT: returns outputs, never a session row; the session set is projectPathConditions (kind + triage lens applied in SQL).
+/**
+ * THE SCAN — the one fetch every outputs door runs: the floored session set
+ * named by `where` (most recently ACTIVE first, bounded by
+ * {@link PROJECT_OUTPUTS_SESSION_SCAN}), joined through
+ * `listOutputsForSessions`, projected to one item per produced object.
+ *
+ * `where` MUST already carry the session visibility floor — the callers pass
+ * `sessionListConditions` (which starts from `sessionReadableWhere`) plus
+ * `scopedDb(access).predicate(focusSessions)`. The id set is the authorization
+ * for every ledger read behind it (`listOutputsForSessions`' contract).
+ *
+ * Shared by `projects.outputs` (the project's path population) and
+ * `outputs.landed` (the pod-wide population) so the two cannot join, title or
+ * key an output differently.
+ */
+export async function scanSessionOutputs(
+  database: typeof db,
+  where: Array<SQL | undefined>
+): Promise<{
+  items: ProjectOutputItem[];
+  sessions: ScannedSession[];
+  truncated: boolean;
+}> {
+  // SESSION-KIND-LENS-EXEMPT: returns outputs, never a session row; the session set is the caller's sessionListConditions (kind + triage lens applied in SQL).
   const scanned = await database
     .select({
       id: focusSessions.id,
+      userId: focusSessions.userId,
       title: focusSessions.title,
       goal: focusSessions.goal,
       trackId: focusSessions.trackId,
@@ -160,35 +169,18 @@ export async function listProjectOutputs(
       expectedOutputs: focusSessions.expectedOutputs,
     })
     .from(focusSessions)
-    .where(
-      and(
-        ...projectPathConditions({
-          userId: query.access.userId,
-          projectId: query.projectId,
-          workspaceIds: query.workspaceIds,
-          lens: "default",
-          // Same door rule as the registry's session predicate: a HUMAN door
-          // also reads sessions whose room roster seats the caller.
-          roster: query.access.actor === "operator",
-        }),
-        scoped.predicate(focusSessions),
-        ...(query.trackId ? [eq(focusSessions.trackId, query.trackId)] : []),
-        ...(query.trackStage
-          ? [eq(focusSessions.trackStage, query.trackStage)]
-          : [])
-      )
-    )
+    .where(and(...where))
     .orderBy(desc(focusSessions.updatedAt), desc(focusSessions.id))
     .limit(PROJECT_OUTPUTS_SESSION_SCAN + 1);
   const truncated = scanned.length > PROJECT_OUTPUTS_SESSION_SCAN;
   const sessions = scanned.slice(0, PROJECT_OUTPUTS_SESSION_SCAN);
 
   const joined = await listOutputsForSessions(database, sessions);
-  const all: ProjectOutputItem[] = [];
+  const items: ProjectOutputItem[] = [];
   for (const s of sessions) {
     const sessionTitle = resolveSessionTitle(s);
     for (const o of joined.get(s.id)?.outputs ?? []) {
-      all.push({
+      items.push({
         id: `${s.id}|${o.id}`,
         kind: o.kind,
         title: o.title,
@@ -204,9 +196,36 @@ export async function listProjectOutputs(
       });
     }
   }
+  return {
+    items,
+    sessions: sessions.map((s) => ({
+      id: s.id,
+      userId: s.userId,
+      title: resolveSessionTitle(s),
+    })),
+    truncated,
+  };
+}
 
-  const keyOf = (i: ProjectOutputItem): Key => ({ at: i.createdAt, id: i.id });
-  const ordered = all
+/** One session the scan read — enough for a provenance door. */
+export interface ScannedSession {
+  id: string;
+  userId: string;
+  title: string;
+}
+
+/**
+ * Newest-first keyset paging over already-projected items (`createdAt` then
+ * `id`), with the opaque cursor every outputs door speaks.
+ */
+export function pageNewestFirst<T extends { createdAt: string; id: string }>(
+  items: readonly T[],
+  cursor: string | undefined,
+  limit: number
+): { items: T[]; nextCursor: string | null } {
+  const after = cursor ? decodeCursor(cursor) : null;
+  const keyOf = (i: T): Key => ({ at: i.createdAt, id: i.id });
+  const ordered = [...items]
     .sort((a, b) => newerFirst(keyOf(a), keyOf(b)))
     .filter((i) => !after || newerFirst(after, keyOf(i)) < 0);
   const page = ordered.slice(0, limit);
@@ -215,6 +234,41 @@ export async function listProjectOutputs(
     items: page,
     nextCursor:
       ordered.length > limit && last ? encodeCursor(keyOf(last)) : null,
-    truncated,
   };
+}
+
+/** Returns `null` when the project does not exist or the caller cannot see it. */
+export async function listProjectOutputs(
+  query: ProjectOutputsQuery
+): Promise<ProjectOutputsResult | null> {
+  const database = query.database ?? db;
+  const scoped = scopedDb(query.access);
+  const limit = Math.max(1, Math.min(query.limit, PROJECT_OUTPUTS_MAX_LIMIT));
+  // Refuse a bad cursor before any read.
+  if (query.cursor) decodeCursor(query.cursor);
+
+  const [project] = await database
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, query.projectId), scoped.predicate(projects)))
+    .limit(1);
+  if (!project) return null;
+
+  const { items, truncated } = await scanSessionOutputs(database, [
+    ...projectPathConditions({
+      userId: query.access.userId,
+      projectId: query.projectId,
+      workspaceIds: query.workspaceIds,
+      lens: "default",
+      // Same door rule as the registry's session predicate: a HUMAN door
+      // also reads sessions whose room roster seats the caller.
+      roster: query.access.actor === "operator",
+    }),
+    scoped.predicate(focusSessions),
+    ...(query.trackId ? [eq(focusSessions.trackId, query.trackId)] : []),
+    ...(query.trackStage
+      ? [eq(focusSessions.trackStage, query.trackStage)]
+      : []),
+  ]);
+  return { ...pageNewestFirst(items, query.cursor, limit), truncated };
 }

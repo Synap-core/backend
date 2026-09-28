@@ -58,6 +58,10 @@ import {
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
+import {
+  PROPOSAL_SUBJECT_KINDS,
+  proposalSubjectCondition,
+} from "../services/proposals/object-subject.js";
 import { markProposalNotificationsActioned } from "../notifications/mark-proposal-notifications-actioned.js";
 import { assertReviewedRevision } from "../utils/reviewed-revision.js";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -352,6 +356,19 @@ export const proposalsRouter = router({
         targetType: z.enum(LIST_TARGET_TYPES).optional(),
         targetId: z.string().optional(),
         /**
+         * Every proposal ABOUT this object: those targeting it PLUS the one
+         * that created it (its `source_proposal_id`), which a composite or a
+         * body-document create files under another target id. Use this for
+         * an object's Lineage "Decided by" — see
+         * `services/proposals/object-subject.ts`.
+         */
+        subject: z
+          .object({
+            kind: z.enum(PROPOSAL_SUBJECT_KINDS),
+            id: z.string().uuid(),
+          })
+          .optional(),
+        /**
          * Resolve a bounded notification batch through the normal list path.
          * This remains a filter only: workspace/user visibility predicates are
          * still applied below before any proposal can be returned.
@@ -429,6 +446,10 @@ export const proposalsRouter = router({
 
       if (input.targetId) {
         conditions.push(eq(proposals.targetId, input.targetId));
+      }
+
+      if (input.subject) {
+        conditions.push(await proposalSubjectCondition(input.subject));
       }
 
       if (input.proposalIds && input.proposalIds.length > 0) {

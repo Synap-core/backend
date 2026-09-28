@@ -80,6 +80,7 @@ import { runsRouter } from "./routers/runs.js";
 import { workflowsRouter } from "./routers/workflows.js";
 import { artifactsRouter } from "./routers/artifacts.js";
 import { projectsRouter } from "./routers/projects.js";
+import { outputsRouter } from "./routers/outputs.js";
 import { tracksRouter } from "./routers/tracks.js";
 import { automationsRouter } from "./routers/automations.js";
 import { knowledgeRouter } from "./routers/knowledge.js";
@@ -187,6 +188,7 @@ export const coreRouter = router({
   workflows: workflowsRouter,
   artifacts: artifactsRouter,
   projects: projectsRouter,
+  outputs: outputsRouter,
   tracks: tracksRouter,
   onboarding: onboardingRouter,
   diagnose: diagnoseRouter,
