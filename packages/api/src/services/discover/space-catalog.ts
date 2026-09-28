@@ -31,6 +31,7 @@ import {
   isNull,
 } from "@synap/database";
 import { getUserMemberWorkspaceIds } from "../../routers/hub-protocol/rest/_shared.js";
+import { readSpaceBrief } from "@synap-core/types/space-brief";
 import { spacePurposeLine } from "./space-brief.js";
 import { loadEntityUsage } from "./usage-aggregate.js";
 
@@ -63,17 +64,11 @@ export function toSpaceCandidate(
   },
   ownedKinds: readonly string[]
 ): SpaceCandidate {
-  const settings = (row.settings ?? {}) as Record<string, unknown>;
-  const onboarding = (settings.onboarding ?? {}) as Record<string, unknown>;
-  const collect = Array.isArray(onboarding.collect)
-    ? (onboarding.collect as Array<Record<string, unknown>>).flatMap((c) =>
-        typeof c?.profileSlug === "string" && c.profileSlug
-          ? [c.profileSlug]
-          : []
-      )
-    : [];
-  const purpose = spacePurposeLine(row.description, onboarding);
-  const persona = oneLine(onboarding.framing, SPACE_PERSONA_LINE_CAP);
+  // THE reader — malformed parts read as absent.
+  const brief = readSpaceBrief(row.settings);
+  const collect = (brief?.collect ?? []).map((c) => c.profileSlug);
+  const purpose = spacePurposeLine(row.description, brief);
+  const persona = oneLine(brief?.framing, SPACE_PERSONA_LINE_CAP);
   return {
     workspaceId: row.id,
     name: row.name,
@@ -198,9 +193,10 @@ export async function suggestSpacesForKinds(
       matches: top.flatMap(([id, kinds]) => {
         const row = rowById.get(id);
         if (!row) return [];
-        const onboarding = (row.settings as Record<string, unknown> | null)
-          ?.onboarding;
-        const purpose = spacePurposeLine(row.description, onboarding);
+        const purpose = spacePurposeLine(
+          row.description,
+          readSpaceBrief(row.settings)
+        );
         return [
           {
             workspaceId: id,

@@ -181,7 +181,12 @@ beforeEach(() => {
       description: null,
       settings: {
         workspaceSubtype: "foundation",
-        onboarding: { goal: "Capture the strategic DNA.", steps: ["a", "b"] },
+        onboarding: {
+          goal: "Capture the strategic DNA.",
+          openingQuestions: ["a", "b"],
+          // Not a brief field: the one reader drops it (never half-trusted).
+          steps: ["x"],
+        },
       },
       workspaceType: "foundation",
     },
@@ -277,7 +282,9 @@ describe("detail:'full' still carries everything light drops", () => {
     // Per-workspace profiles + the FULL onboarding spec (not just `goal`).
     expect(full.workspaces.every((w) => Array.isArray(w.profiles))).toBe(true);
     const foundation = full.workspaces.find((w) => w.id === "ws-onboard")!;
-    expect(foundation.onboarding?.steps).toEqual(["a", "b"]);
+    expect(foundation.onboarding?.openingQuestions).toEqual(["a", "b"]);
+    // Read through THE reader: a key that is not a brief field never rides.
+    expect(foundation.onboarding).not.toHaveProperty("steps");
 
     // …and full is not nagged with the light-mode explanation.
     expect(full.note).not.toMatch(/profile-listing tool/i);

@@ -40,8 +40,11 @@ import {
   inArray,
   drizzleSql,
   profileSlugScopeCondition,
-  type OnboardingSpec,
 } from "@synap/database";
+import {
+  readSpaceBrief,
+  type SpaceBrief,
+} from "@synap-core/types/space-brief";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
 import {
@@ -76,7 +79,7 @@ import {
   buildSpaceBrief,
   resolveSpacePurpose,
   spacePurposeLine,
-  type SpaceBrief,
+  type BuiltSpaceBrief,
 } from "./space-brief.js";
 
 export type DiscoverDetail = "light" | "full";
@@ -286,13 +289,6 @@ export interface DiscoverParams extends DiscoverOptions {
 }
 
 /**
- * The stored onboarding spec as orient passes it through: the canonical
- * `OnboardingSpec` (package-definition.ts), every field optional because light
- * trims it to `{ goal }`, and open to keys a template adds beyond the type.
- */
-type OrientOnboarding = Partial<OnboardingSpec> & { [k: string]: unknown };
-
-/**
  * A profile in the orient sample. Carries the Kind + Facets discriminator so an
  * agent can tell a primary type (kind) from an attachable role (facet) at
  * orient time, before it lists profiles or creates entities.
@@ -324,8 +320,11 @@ interface DiscoverWorkspace {
    * Listed anyway: a type is a property, not a filter. Absent = accepts.
    */
   acceptsEntities?: false;
-  /** light: `{ goal }` only; full: the whole onboarding interview spec. */
-  onboarding?: OrientOnboarding;
+  /**
+   * The stored brief, read through THE reader (`readSpaceBrief`): light
+   * carries `{ goal }` only; full, the whole normalized brief.
+   */
+  onboarding?: SpaceBrief;
   /**
    * When-to-use for this domain. Full detail uses workspace.description;
    * light uses description or onboarding.goal so agents place work without
@@ -366,7 +365,7 @@ interface DiscoverResult {
    * that live there, its playbooks) — present only when orient was called
    * with a workspaceId. See `space-brief.ts`.
    */
-  brief?: SpaceBrief | { status: "unavailable" };
+  brief?: BuiltSpaceBrief | { status: "unavailable" };
   me: { userId: string; scopes: string[] };
   detail: DiscoverDetail;
   projects: DiscoverProject[];
@@ -740,15 +739,13 @@ export async function discover(
           // Empty-but-MEANINGFUL: a fresh template install carries an
           // onboarding spec — it is empty because it is waiting for the user,
           // and that is exactly the domain an agent should be told about.
-          const settings = (w.settings ?? {}) as Record<string, unknown>;
-          if (settings.onboarding) return true;
+          if (readSpaceBrief(w.settings)) return true;
           hiddenEmptyWorkspaces++;
           return false;
         })
         .map((w) => {
           const settings = (w.settings ?? {}) as Record<string, unknown>;
-          const onboarding = settings.onboarding as
-            OrientOnboarding | undefined;
+          const onboarding = readSpaceBrief(settings) ?? undefined;
           const domain =
             (settings.workspaceSubtype as string | undefined) ??
             w.workspaceType ??

@@ -67,7 +67,7 @@ import {
   BRIEF_BUDGET_BYTES,
   BRIEF_PLAYBOOK_CAP,
   resolveSpacePurpose,
-  type SpaceBrief,
+  type BuiltSpaceBrief,
 } from "./space-brief.js";
 
 const WS = "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01";
@@ -137,7 +137,7 @@ const build = (workspace: Record<string, unknown> = brandLibrary) =>
     scopes: ["mcp.read"],
     workspaceId: WS,
     workspace: workspace as never,
-  }) as Promise<SpaceBrief>;
+  }) as Promise<BuiltSpaceBrief>;
 
 beforeEach(() => {
   rank = 0;
@@ -411,6 +411,69 @@ describe("buildSpaceBrief", () => {
     expect(BRIEF_BUDGET_BYTES).toBe(2048);
   });
 
+  it("the playbook LIST is shed before purpose, persona, the root anchor and the kinds", async () => {
+    const prose = (n: number) => "z".repeat(n);
+    h.ranked = Array.from({ length: 8 }, (_, i) =>
+      row(`kind-${i}`, { workspaceId: WS, entityCount: 1, description: prose(90) })
+    );
+    h.playbooks = Array.from({ length: 8 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-00000000000${i}`,
+      name: `A long playbook name number ${i} ${prose(60)}`,
+      description: prose(118),
+      workspaceId: WS,
+    }));
+    const brief = await build({
+      ...brandLibrary,
+      settings: {
+        onboarding: {
+          purpose: prose(230),
+          framing: prose(372),
+          anchors: [
+            { profileSlug: "kind-0", role: "root", entityId: "e-root" },
+            { profileSlug: "kind-1", role: "context", limit: 5 },
+          ],
+          rules: [{ key: "rule-a", ruleId: "r1" }, { key: "rule-b" }],
+        },
+      },
+    });
+    expect(briefBytes(brief)).toBeLessThanOrEqual(BRIEF_BUDGET_BYTES);
+    // Non-vacuity: the list really was shed, its total kept.
+    expect(brief.trimmed).toContain("playbooks.items");
+    expect(brief.playbooks).toEqual({ total: 8 });
+    expect(brief.purpose).toHaveLength(230);
+    expect(brief.persona).toBeDefined();
+    expect(brief.anchors?.root).toEqual({ kind: "kind-0", entityId: "e-root" });
+    const kinds = brief.keyKinds as Array<{ description?: string }>;
+    expect(kinds).toHaveLength(8);
+    // Kind prose was not touched: the list went first.
+    expect(kinds.every((k) => k.description?.length === 90)).toBe(true);
+  });
+
+  it("W3 steady-state fields arrive: purpose outranks the description, anchors, rule keys", async () => {
+    const brief = await build({
+      ...brandLibrary,
+      settings: {
+        onboarding: {
+          ...brandLibrary.settings.onboarding,
+          purpose: "Read the brand before generating anything.",
+          anchors: [
+            { profileSlug: "brand-identity", role: "root", entityId: "e1" },
+            { profileSlug: "brand-rule", role: "context" },
+            { profileSlug: "brand-rule", role: "context" },
+            { profileSlug: "", role: "root" },
+          ],
+          rules: [{ key: "brand-store-typed", ruleId: "r1" }, { nokey: 1 }],
+        },
+      },
+    });
+    expect(brief.purpose).toBe("Read the brand before generating anything.");
+    expect(brief.anchors).toEqual({
+      root: { kind: "brand-identity", entityId: "e1" },
+      context: ["brand-rule"],
+    });
+    expect(brief.rules).toEqual(["brand-store-typed"]);
+  });
+
   it("a small brief is untrimmed, and a name that only restates the slug is omitted", async () => {
     const brief = await build();
     expect(brief.trimmed).toBeUndefined();
@@ -431,5 +494,9 @@ describe("resolveSpacePurpose — one rule for orient, the brief and diagnose", 
       "The goal."
     );
     expect(resolveSpacePurpose(null, undefined)).toBeNull();
+    // The brief's steady-state purpose precedes the interview goal.
+    expect(
+      resolveSpacePurpose(null, { purpose: " The purpose. ", goal: "g" })
+    ).toBe("The purpose.");
   });
 });

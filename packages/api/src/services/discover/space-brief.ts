@@ -13,8 +13,8 @@
  * ONE assembly, served by every door that pins a space (`set_workspace_focus`,
  * `orient` with a workspaceId). It reuses the doors orient already reads
  * through: the workspace row's authored purpose (`resolveSpacePurpose`, the same
- * rule orient's workspace DTO and diagnose apply), the template-declared
- * `settings.onboarding` spec (`package-definition.ts` `OnboardingSpec`), the
+ * rule orient's workspace DTO and diagnose apply), the stored brief read
+ * through THE reader (`readSpaceBrief`, `@synap-core/types/space-brief`), the
  * lens-ranked profile listing (`readRankedLensProfiles`, shared with
  * `startHere.topKinds`), and the ONE playbook list door.
  *
@@ -31,6 +31,11 @@ import {
   and,
   isNotNull,
 } from "@synap/database";
+import {
+  briefPurpose,
+  normalizeSpaceBrief,
+  readSpaceBrief,
+} from "@synap-core/types/space-brief";
 import type { HubProtocolCaller } from "../../routers/hub-protocol/rest/_shared.js";
 import { resolveProfileDescription } from "../../utils/profile-presentation.js";
 import { profileDisplayName, type RankedProfile } from "./profile-ranking.js";
@@ -51,9 +56,14 @@ export const BRIEF_PLAYBOOK_CAP = 8;
  * `trimmed` — the full onboarding spec stays one call away (orient
  * detail:'full').
  *
- * 2 KB (founder decision, 2026-09-28; was 1536). Measured through this
- * assembly from the real templates: Brand Library 1987 B, keeping its persona
- * (at 1536 it shed the persona and every kind description); CRM 1956 B.
+ * 2 KB (founder decision, 2026-09-28; was 1536). Re-measured with W3's
+ * steady-state fields (purpose, anchors, rule refs) through this assembly
+ * from the REAL templates (worst case: every template kind owned, every
+ * template playbook active, root anchor resolved, every rule installed) —
+ * `space-brief.templates.test.ts` asserts all 26 briefed templates fit:
+ * Brand Library 2024 B (sheds starters, blind spots, collect prose; keeps
+ * purpose, persona, anchors, rule keys, every kind's prose), CRM 1789 B,
+ * largest content-studio 2030 B.
  */
 export const BRIEF_BUDGET_BYTES = 2048;
 
@@ -71,13 +81,34 @@ export interface SpaceBriefKind {
   description?: string;
 }
 
-export interface SpaceBrief {
+/**
+ * The BUILT brief — the compact briefing an agent receives when it pins a
+ * space (`set_workspace_focus`, pinned `orient`). Not the stored brief: that
+ * is `SpaceBrief` in `@synap-core/types/space-brief`, read through
+ * `readSpaceBrief`; this is assembled FROM it plus live reads (kinds,
+ * playbooks), capped at `BRIEF_BUDGET_BYTES`.
+ */
+export interface BuiltSpaceBrief {
   workspaceId: string;
   name: string;
-  /** Authored description, else the onboarding goal. */
+  /**
+   * The brief's steady-state `purpose` (what an agent entering the space is
+   * told every time), else the authored description, else the onboarding
+   * goal. Lists of spaces keep the row ladder (`resolveSpacePurpose`).
+   */
   purpose?: string;
   /** `onboarding.framing` — the voice/expertise to adopt here. */
   persona?: string;
+  /**
+   * What to read first. `root` = THE entity this space is about (its id once
+   * the pod resolved it, else the kind to read); `context` = kinds to read too.
+   */
+  anchors?: {
+    root?: { kind: string; entityId?: string };
+    context?: string[];
+  };
+  /** Keys of the rules this space's template installed (the brief's refs). */
+  rules?: string[];
   expertise?: { starters?: string[]; blindSpots?: string[]; bar?: string };
   /** What this space wants filled: kind + what to capture. */
   collect?: Array<{ kind: string; what?: string; cardinality?: string }>;
@@ -87,7 +118,8 @@ export interface SpaceBrief {
   keyKindsTotal?: number;
   playbooks?:
     | {
-        items: Array<{ id: string; name: string; description?: string }>;
+        /** Shed (total kept) before purpose, persona, root anchor and kinds. */
+        items?: Array<{ id: string; name: string; description?: string }>;
         total: number;
       }
     | Unavailable;
@@ -129,17 +161,18 @@ export function resolveAuthoredDescription(
 }
 
 /**
- * A space's REAL purpose: its authored description, else its onboarding goal —
- * never a rendering of another field.
+ * A space's REAL purpose: its authored description, else the brief's purpose
+ * (steady-state `purpose`, else interview `goal` — `briefPurpose`) — never a
+ * rendering of another field. `onboarding` is the RAW stored brief; it is
+ * read through the one normalizer.
  */
 export function resolveSpacePurpose(
   description: unknown,
   onboarding: unknown
 ): string | null {
-  const goal = (onboarding as { goal?: unknown } | undefined)?.goal;
   return (
     resolveAuthoredDescription(description) ||
-    (typeof goal === "string" && goal.trim()) ||
+    briefPurpose(normalizeSpaceBrief(onboarding)) ||
     null
   );
 }
@@ -240,7 +273,7 @@ async function readSpacePlaybooks(p: {
   userId: string;
   scopes: string[];
   workspaceId: string;
-}): Promise<SpaceBrief["playbooks"]> {
+}): Promise<BuiltSpaceBrief["playbooks"]> {
   try {
     const { listPlaybooksDoor } =
       await import("../../routers/hub-protocol/playbook-doors.js");
@@ -276,7 +309,10 @@ export const briefBytes = (b: unknown): number =>
  * brief's reason to exist (the agent that filed brand assets as `file` lacked
  * exactly them), so they go LAST, and only their prose before their names.
  */
-const shortenKindDescriptions = (b: SpaceBrief, cap: number): boolean => {
+const shortenKindDescriptions = (
+  b: BuiltSpaceBrief,
+  cap: number
+): boolean => {
   const k = b.keyKinds;
   if (!Array.isArray(k)) return false;
   let changed = false;
@@ -289,7 +325,7 @@ const shortenKindDescriptions = (b: SpaceBrief, cap: number): boolean => {
   return changed;
 };
 
-const TRIM_LADDER: Array<[string, (b: SpaceBrief) => boolean]> = [
+const TRIM_LADDER: Array<[string, (b: BuiltSpaceBrief) => boolean]> = [
   [
     "expertise.starters",
     (b) => !!b.expertise?.starters && (delete b.expertise.starters, true),
@@ -308,7 +344,7 @@ const TRIM_LADDER: Array<[string, (b: SpaceBrief) => boolean]> = [
     "playbooks.description",
     (b) => {
       const pb = b.playbooks;
-      if (!pb || "status" in pb || !pb.items.some((i) => i.description))
+      if (!pb || "status" in pb || !pb.items?.some((i) => i.description))
         return false;
       pb.items.forEach((i) => delete i.description);
       return true;
@@ -317,15 +353,33 @@ const TRIM_LADDER: Array<[string, (b: SpaceBrief) => boolean]> = [
   ["expertise", (b) => !!b.expertise && (delete b.expertise, true)],
   // keyKinds already follow collect's order; the list itself is the cheap half.
   ["collect", (b) => !!b.collect && (delete b.collect, true)],
+  [
+    "anchors.context",
+    (b) => !!b.anchors?.context && (delete b.anchors.context, true),
+  ],
+  // Rule keys name rules the pod already applies; a list call re-reads them.
+  ["rules", (b) => !!b.rules && (delete b.rules, true)],
+  // The playbook LIST goes before purpose, persona, the root anchor and the
+  // kinds (founder order 2026-09-28): its `total` stays, so the agent knows
+  // to call list_playbooks.
+  [
+    "playbooks.items",
+    (b) => {
+      const pb = b.playbooks;
+      if (!pb || "status" in pb || !pb.items) return false;
+      delete pb.items;
+      return true;
+    },
+  ],
   ["keyKinds.description:60", (b) => shortenKindDescriptions(b, 60)],
   ["persona", (b) => !!b.persona && (delete b.persona, true)],
 ];
 
 /** Shed sections until the brief fits; the last resort drops list tails. */
 export function fitBrief(
-  brief: SpaceBrief,
+  brief: BuiltSpaceBrief,
   budget = BRIEF_BUDGET_BYTES
-): SpaceBrief {
+): BuiltSpaceBrief {
   const b = structuredClone(brief);
   const trimmed: string[] = [];
   const size = () => briefBytes({ ...b, trimmed });
@@ -343,12 +397,6 @@ export function fitBrief(
       delete described[described.length - 1]!.description;
       if (!trimmed.includes("keyKinds.description"))
         trimmed.push("keyKinds.description");
-      continue;
-    }
-    const pb = b.playbooks;
-    if (pb && !("status" in pb) && pb.items.length > 1) {
-      pb.items.pop();
-      if (!trimmed.includes("playbooks.items")) trimmed.push("playbooks.items");
       continue;
     }
     const k = b.keyKinds;
@@ -391,7 +439,7 @@ export async function buildSpaceBrief(p: {
   workspace?: SpaceBriefWorkspaceRow;
   /** The lens listing, when the caller already started reading it. */
   ranked?: Promise<Array<RankedProfile<LensProfile>>>;
-}): Promise<SpaceBrief | Unavailable> {
+}): Promise<BuiltSpaceBrief | Unavailable> {
   let row = p.workspace;
   try {
     if (!row) {
@@ -411,29 +459,20 @@ export async function buildSpaceBrief(p: {
   }
   if (!row) return UNAVAILABLE;
 
-  const settings = (row.settings ?? {}) as Record<string, unknown>;
-  const onboarding = (settings.onboarding ?? {}) as Record<string, unknown>;
-  const collectRaw = Array.isArray(onboarding.collect)
-    ? (onboarding.collect as Array<Record<string, unknown>>)
-    : [];
-  const collect = collectRaw.flatMap((c) => {
-    if (typeof c?.profileSlug !== "string" || !c.profileSlug) return [];
+  // THE reader: malformed parts read as absent, never half-trusted.
+  const stored = readSpaceBrief(row.settings) ?? {};
+  const collect = (stored.collect ?? []).map((c) => {
     const what = line(c.what, BRIEF_LINE_CAP);
-    const cardinality =
-      typeof c.cardinality === "string" ? c.cardinality : undefined;
-    return [
-      {
-        kind: c.profileSlug,
-        ...(what ? { what } : {}),
-        ...(cardinality ? { cardinality } : {}),
-      },
-    ];
+    return {
+      kind: c.profileSlug,
+      ...(what ? { what } : {}),
+      ...(c.cardinality ? { cardinality: c.cardinality } : {}),
+    };
   });
 
-  const exp = (onboarding.expertise ?? {}) as Record<string, unknown>;
-  const starters = lines(exp.starters, BRIEF_PROSE_CAP);
-  const blindSpots = lines(exp.blindSpots, BRIEF_PROSE_CAP);
-  const bar = line(exp.bar, BRIEF_PROSE_CAP);
+  const starters = lines(stored.expertise?.starters, BRIEF_PROSE_CAP);
+  const blindSpots = lines(stored.expertise?.blindSpots, BRIEF_PROSE_CAP);
+  const bar = line(stored.expertise?.bar, BRIEF_PROSE_CAP);
   const expertise =
     starters || blindSpots || bar
       ? {
@@ -442,6 +481,32 @@ export async function buildSpaceBrief(p: {
           ...(bar ? { bar } : {}),
         }
       : undefined;
+
+  const rootAnchor = stored.anchors?.find((a) => a.role === "root");
+  const contextKinds = [
+    ...new Set(
+      (stored.anchors ?? [])
+        .filter((a) => a.role === "context")
+        .map((a) => a.profileSlug)
+    ),
+  ];
+  const anchors =
+    rootAnchor || contextKinds.length
+      ? {
+          ...(rootAnchor
+            ? {
+                root: {
+                  kind: rootAnchor.profileSlug,
+                  ...(rootAnchor.entityId
+                    ? { entityId: rootAnchor.entityId }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(contextKinds.length ? { context: contextKinds } : {}),
+        }
+      : undefined;
+  const rules = stored.rules?.map((r) => r.key);
 
   const [keyKinds, playbooks] = await Promise.all([
     (async () => {
@@ -473,16 +538,22 @@ export async function buildSpaceBrief(p: {
   ]);
 
   const purpose = line(
-    resolveSpacePurpose(row.description, onboarding),
+    stored.purpose ??
+      resolveSpacePurpose(
+        row.description,
+        (row.settings as { onboarding?: unknown } | null)?.onboarding
+      ),
     BRIEF_PROSE_CAP
   );
-  const persona = line(onboarding.framing, BRIEF_PROSE_CAP);
+  const persona = line(stored.framing, BRIEF_PROSE_CAP);
 
   return fitBrief({
     workspaceId: row.id,
     name: row.name,
     ...(purpose ? { purpose } : {}),
     ...(persona ? { persona } : {}),
+    ...(anchors ? { anchors } : {}),
+    ...(rules?.length ? { rules } : {}),
     ...(expertise ? { expertise } : {}),
     ...(collect.length ? { collect } : {}),
     ...("status" in keyKinds
