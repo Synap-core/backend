@@ -301,3 +301,42 @@ describe("listRunTracks — measured track record per flow", () => {
     expect(groups.some((g) => g.flowId === PB_HIDDEN)).toBe(false);
   });
 });
+
+describe("recentFailedCount — the HEALTH number is windowed (W2 calm)", () => {
+  it("a flow is failing only if it failed in the last 7 days; lifetime stays on failedCount", async () => {
+    const AU_RECENT = randomUUID();
+    const AU_OLD = randomUUID();
+    for (const [id, name] of [
+      [AU_RECENT, "Recent breaker"],
+      [AU_OLD, "Broke in June"],
+    ])
+      await h.client!.query(
+        `insert into automations (id, name) values ($1, $2)`,
+        [id, name]
+      );
+    const failedDaysAgo = (automationId: string, days: number) =>
+      h.client!.query(
+        `insert into automation_runs (id, automation_id, workspace_id, status, started_at, completed_at)
+         values (gen_random_uuid(), $1, null, 'failed', now() - ($2::int * interval '1 day'), now() - ($2::int * interval '1 day'))`,
+        [automationId, days]
+      );
+    await failedDaysAgo(AU_RECENT, 1);
+    await failedDaysAgo(AU_RECENT, 8);
+    await failedDaysAgo(AU_OLD, 8);
+    await failedDaysAgo(AU_OLD, 40);
+
+    const map = await listRunTracks({
+      userId: USER,
+      playbookIds: [],
+      automationIds: [AU_RECENT, AU_OLD],
+    });
+    expect(map.get(`automation:${AU_RECENT}`)).toMatchObject({
+      failedCount: 2,
+      recentFailedCount: 1,
+    });
+    expect(map.get(`automation:${AU_OLD}`)).toMatchObject({
+      failedCount: 2,
+      recentFailedCount: 0,
+    });
+  });
+});

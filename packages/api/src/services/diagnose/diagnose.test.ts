@@ -222,6 +222,31 @@ describe("summarizeGlobalHealth", () => {
     expect(report.sections.every((s) => s.status === "ok")).toBe(true);
   });
 
+  it("the failing number is DISTINCT FLOWS in the window, not runs (W2 calm)", () => {
+    const report = summarizeGlobalHealth(
+      {
+        ...clean,
+        failedFlows: [
+          {
+            flowName: "New Contact Enrichment",
+            failedCount: 271,
+            hasRunning: false,
+          },
+          { flowName: "Daily briefing", failedCount: 2, hasRunning: false },
+        ],
+      },
+      { workspaceId: null }
+    );
+    const section = report.sections.find((s) => s.key === "failed_flows")!;
+    expect(section.status).toBe("degraded");
+    expect(section.headline).toBe("2 flow(s) failing in the last 7 days");
+    expect(section.detail).toMatchObject({
+      failingFlows: 2,
+      failedTotal: 273,
+      windowDays: 7,
+    });
+  });
+
   it("rolls up to degraded when a run is stuck", () => {
     const report = summarizeGlobalHealth(
       {

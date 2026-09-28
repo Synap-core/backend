@@ -34,7 +34,7 @@ function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
     targetLabel: "Acme Corp",
     // Derived through the ONE door, never hand-written: a fixture that pins
     // its own class values would keep passing after the real classifier moved.
-    ...proposalClassFields(proposalType, targetType),
+    ...proposalClassFields(proposalType, targetType, null),
     count: 3,
     sampleProposalIds: ["prop-1", "prop-2", "prop-3"],
     sources: [],
@@ -430,7 +430,7 @@ describe("signal targets", () => {
     );
     expect(ephemeral.class).toBe("ephemeral");
     expect(ephemeral.lifetimeHours).toBe(
-      proposalClassFields("capability.run", "capability").lifetimeHours
+      proposalClassFields("capability.run", "capability", null).lifetimeHours
     );
 
     // A never-expiring class carries an explicit null, not an absent field.
