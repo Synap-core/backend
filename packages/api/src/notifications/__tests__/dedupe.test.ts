@@ -186,6 +186,8 @@ describe("NotificationService.create — dedupe", () => {
       sourceId: "44444444-4444-4444-8444-444444444444",
       groupKey: `${WORKSPACE}:proposal.created:agent-1`,
       data: { proposalType: "entity.create", description: "Create ACME" },
+      // A BLOCKING proposal — the only kind that pushes since W8.
+      push: { facts: { proposalBlocksOpenSession: true } },
     });
 
     expect(id).toBe("row-1");
@@ -250,6 +252,8 @@ describe("NotificationService.create — the 0281 open-row guard", () => {
       sourceId: "44444444-4444-4444-8444-444444444444",
       groupKey: `${WORKSPACE}:proposal.created:agent-1`,
       data: { proposalType: "entity.create", description: "Create ACME" },
+      // A BLOCKING proposal — the only kind that pushes since W8.
+      push: { facts: { proposalBlocksOpenSession: true } },
     });
     expect(insertedValues[1]!.dedupeKey).toBeUndefined();
   });

@@ -216,6 +216,8 @@ describe("push tap target — the payload carries {kind,id}", () => {
       sourceType: "proposal",
       sourceId: "44444444-4444-4444-8444-444444444444",
       data: { proposalType: "entity.create", description: "Create ACME Corp" },
+      // Only a BLOCKING proposal pushes (W8, `@synap-core/types/push`).
+      push: { facts: { proposalBlocksOpenSession: true } },
     });
     const data = pushData();
     expect(data.deepLink).toBe(

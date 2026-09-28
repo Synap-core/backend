@@ -41,6 +41,25 @@ import {
   resolveEffectivePrefs,
   shadowingWorkspaceIds,
 } from "../notifications/preference-scope.js";
+import {
+  PUSH_CATEGORIES,
+  effectivePushCategories,
+  isPushClockTime,
+  morningBriefAt,
+  type PushPrefs,
+} from "@synap-core/types/push";
+import {
+  readPushPrefs,
+  writePushPrefs,
+} from "../notifications/push-prefs.js";
+
+/** What a phone's push settings render — every category, effective state. */
+function pushPrefsView(prefs: PushPrefs) {
+  return {
+    categories: effectivePushCategories(prefs),
+    morningBriefAt: morningBriefAt(prefs),
+  };
+}
 
 /**
  * Flip any DUE snoozes (snoozedUntil now past) back to `unread` for this user,
@@ -450,6 +469,57 @@ export const notifCenterRouter = router({
       .returning({ id: notificationPreferences.id });
     return { success: true, cleared: deleted.length > 0 };
   }),
+
+  // ── Push categories (W8) ────────────────────────────────────────────────
+  //
+  // `protectedProcedure`: push categories are PERSON-scoped (their pod-wide
+  // row), not workspace-scoped — see `notifications/push-prefs.ts`. The floor
+  // is `ctx.userId`: a person reads and writes only their own row. An agent
+  // key is refused on the write: how the person is interrupted is theirs.
+
+  /**
+   * Every push category with its effective state (`enabled`, `explicit` = the
+   * person set it, `defaultOn`, `level`) and the morning-brief time. Defaults
+   * come from `@synap-core/types/push`. A failed read THROWS (isError) — it is
+   * never answered with the defaults.
+   */
+  pushPrefs: protectedProcedure.query(async ({ ctx }) =>
+    pushPrefsView(await readPushPrefs(requireUserId(ctx.userId)))
+  ),
+
+  /**
+   * Turn push categories on/off and/or set the morning-brief time. Sparse and
+   * merged in SQL: categories not named are left as stored.
+   */
+  setPushPrefs: protectedProcedure
+    .input(
+      z
+        .object({
+          categories: z
+            .record(z.enum(PUSH_CATEGORIES), z.boolean())
+            .optional(),
+          morningBriefAt: z
+            .string()
+            .refine(isPushClockTime, "Expected HH:MM (24h)")
+            .optional(),
+        })
+        .refine(
+          (v) =>
+            (v.categories && Object.keys(v.categories).length > 0) ||
+            v.morningBriefAt !== undefined,
+          { message: "Nothing to change." }
+        )
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can change their push settings.",
+        });
+      }
+      const prefs = await writePushPrefs(requireUserId(ctx.userId), input);
+      return pushPrefsView(prefs);
+    }),
 
   // ── Push devices ────────────────────────────────────────────────────────
   //

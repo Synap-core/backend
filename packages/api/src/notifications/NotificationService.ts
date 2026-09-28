@@ -40,6 +40,17 @@ import { emitSideEffects } from "@synap/events";
 import { getNotificationDef } from "./registry.js";
 import { sendExpoPush } from "./expo-push.js";
 import { openLink } from "../utils/deep-links.js";
+import {
+  pushEnvelope,
+  type PushFacts,
+  type PushPayloadExtras,
+  type PushQuickAnswer,
+} from "@synap-core/types/push";
+import {
+  decidePush,
+  derivePushFacts,
+  readPushPrefs,
+} from "./push-decision.js";
 import type { DeliveryChannel, NotificationDef } from "./registry.js";
 import type {
   NotificationCategory,
@@ -99,6 +110,21 @@ export interface CreateNotificationInput {
    * the destination is NOT what the registry action says.
    */
   target?: { kind: string; id: string; view?: string };
+
+  /**
+   * What only the PRODUCER knows about the push (`@synap-core/types/push`):
+   * `facts` for `classifyPush` (omit ⇒ the pod derives them, see
+   * `derivePushFacts`), the owed `slot` beside a `kind: "owed"` target, the
+   * lock-screen `quickAnswer`, and the iOS `threadId` that stacks a session's
+   * pushes. All optional; a type that sets none pushes exactly as before,
+   * subject to its category.
+   */
+  push?: {
+    facts?: PushFacts;
+    slot?: string;
+    quickAnswer?: PushQuickAnswer | null;
+    threadId?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -668,14 +694,59 @@ export const NotificationService = {
 
       const target = pushTarget(def, input);
 
+      // ── Is the push EARNED? (`push-decision.ts`) ─────────────────────
+      // The transport above says `os` may be used; the push contract says
+      // whether this notification deserves it. Decided in its own try: the
+      // row is already persisted and the bell already told, so a failed read
+      // here costs the interruption (logged), never the notification.
+      let pushCategory: PushPayloadExtras["pushCategory"] | null = null;
+      if (channels.has("os")) {
+        try {
+          const [facts, pushPrefs] = await Promise.all([
+            input.push?.facts ?? derivePushFacts(input),
+            readPushPrefs(input.userId),
+          ]);
+          const decision = decidePush({
+            type: input.type,
+            typeRule: rules[input.type],
+            facts,
+            prefs: pushPrefs,
+          });
+          if (!decision.push) {
+            channels.delete("os");
+            logger.debug(
+              { type: input.type, reason: decision.reason },
+              "Push not earned — in-app only"
+            );
+          } else {
+            pushCategory = decision.category;
+          }
+        } catch (err) {
+          channels.delete("os");
+          logger.warn(
+            { err, type: input.type, notificationId: row.id },
+            "Push decision failed — push skipped (notification persisted)"
+          );
+        }
+      }
+
       if (channels.has("os")) {
         // Native push. Deliberately NOT awaited — Expo is a third-party HTTP
         // hop and `create()` is called from write paths that must not wait on
         // it. `sendExpoPush` never throws; the `.catch` is belt-and-braces.
+        const quickAnswer = input.push?.quickAnswer ?? undefined;
         void sendExpoPush({
           userId: input.userId,
           title,
           body,
+          // A FORCED push of an unclassified type (a per-type rule) keeps the
+          // pre-W8 envelope: no level, default sound.
+          ...(pushCategory
+            ? pushEnvelope(pushCategory, {
+                threadId: input.push?.threadId,
+                quickAnswer,
+              })
+            : {}),
           data: {
             notificationId: row.id,
             type: input.type,
@@ -703,6 +774,11 @@ export const NotificationService = {
             // additive: the `{kind,id}` branch of the same router, which had no
             // producer until now. See `pushTarget()`.
             ...(target ?? {}),
+            // W8 extras (`PushPayloadExtras`) — additive, an older relay
+            // ignores them and keeps routing on `kind`/`id`.
+            ...(pushCategory ? { pushCategory } : {}),
+            ...(input.push?.slot ? { slot: input.push.slot } : {}),
+            ...(quickAnswer ? { quickAnswer } : {}),
           },
         }).catch((err) =>
           logger.warn({ err, notificationId: row.id }, "Push send failed")

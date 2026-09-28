@@ -138,6 +138,11 @@ export type PushTypeRule = PushCategory | "blocking-proposal" | null;
 export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // An agent is stopped until you answer.
   "session.needs_you": "blocking-ask",
+  // The grade is now the person's to make and the work waits on it. Its
+  // producer files the owed slot WITHOUT a `session.needs_you`, so this row IS
+  // that ask's only push (design-relay §5.2 wants it folded into the ask; until
+  // the producer does that, dropping it would leave the escalation silent).
+  "session.criterion_escalated": "blocking-ask",
   "proposal.created": "blocking-proposal",
   "ai_request.vault_access": "decision-blocking",
   "ai_request.terminal_exec": "decision-blocking",
@@ -158,8 +163,6 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "connector.sync.failed": null,
   "inbox.mention": null,
   "chat.room_member_added": null,
-  // Folds into the needs-you ask it escalates; the ask is the push.
-  "session.criterion_escalated": null,
 };
 
 /** The category a notification pushes under, or `null` (do not push). */

@@ -27,6 +27,12 @@
 import { db, focusSessions, eq } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import type { Ask } from "@synap-core/types/ask";
+import {
+  blockingAskTarget,
+  quickAnswerFor,
+  type PushTarget,
+} from "@synap-core/types/push";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { isOwedSlot } from "./owed-outputs.js";
@@ -94,6 +100,39 @@ export function summarizeOwedSlots(slots: readonly ExpectedOutput[]): string {
   return `${clip(head)}${rest.length > 0 ? ` (+${rest.length} more)` : ""}`;
 }
 
+/**
+ * Where the push lands and what can be answered from the lock screen, for the
+ * slots this write newly owed. ONE fresh slot ⇒ the ask itself
+ * (`/owed/<sessionId>?slot=<label>`) and, when its ask allows, a quick answer
+ * bound to the ask's fingerprint. Several ⇒ the session (no slot is guessed,
+ * and no quick answer: the push would answer one of N silently). Pure.
+ */
+export function needsYouPush(
+  sessionId: string,
+  fresh: readonly ExpectedOutput[]
+): {
+  target: Extract<PushTarget, { kind: "owed" | "session" }>;
+  slot?: string;
+  quickAnswer: ReturnType<typeof quickAnswerFor>;
+} {
+  const target = blockingAskTarget(
+    sessionId,
+    fresh.map((o) => o.label)
+  ) as Extract<PushTarget, { kind: "owed" | "session" }>;
+  if (target.kind !== "owed") return { target, quickAnswer: null };
+  return {
+    target,
+    slot: target.slot,
+    // `SlotAsk` is the compile-time mutual mirror of `Ask` (see
+    // update-session.ts), and the fingerprint is computed from the same
+    // stored shape the answer door re-reads.
+    quickAnswer: quickAnswerFor(
+      { sessionId, label: target.slot },
+      (fresh[0]?.ask ?? null) as Ask | null
+    ),
+  };
+}
+
 type Reason =
   | { kind: "slots"; before: unknown; after: unknown }
   | { kind: "question"; text: string; channelId: string };
@@ -124,8 +163,9 @@ export async function notifySessionNeedsYou(p: {
   try {
     let summary: string;
     let slotCount = 0;
+    let fresh: ExpectedOutput[] = [];
     if (p.reason.kind === "slots") {
-      const fresh = newlyOwedSlots(
+      fresh = newlyOwedSlots(
         Array.isArray(p.reason.before)
           ? (p.reason.before as ExpectedOutput[])
           : [],
@@ -153,6 +193,8 @@ export async function notifySessionNeedsYou(p: {
     });
     if (!session) return false;
 
+    const push = fresh.length > 0 ? needsYouPush(session.id, fresh) : null;
+
     const id = await NotificationService.create({
       type: SESSION_NEEDS_YOU_NOTIFICATION_TYPE,
       // The session's OWNER — for an agent key that is its operator.
@@ -163,6 +205,19 @@ export async function notifySessionNeedsYou(p: {
       // and the push tap both read `sourceId` as the object id).
       sourceId: session.id,
       groupKey: sessionNeedsYouGroupKey(session.id),
+      // The push lands on the ASK when one slot is owed (the in-app row keeps
+      // its registry action: open the session). A room question keeps the
+      // session target the registry derives.
+      ...(push
+        ? {
+            target: { kind: push.target.kind, id: push.target.id },
+            push: {
+              slot: push.slot,
+              quickAnswer: push.quickAnswer,
+              threadId: session.id,
+            },
+          }
+        : { push: { threadId: session.id } }),
       data: {
         sessionId: session.id,
         sessionTitle: resolveSessionTitle(session),

@@ -185,6 +185,10 @@ export const notificationPreferences = pgTable(
     // Sound preference
     soundEnabled: boolean("sound_enabled").default(true),
 
+    // Per-person push categories — the sparse `PushPrefs` shape
+    // (`@synap-core/types/push`). Read from the POD-WIDE row only (0289).
+    pushPrefs: jsonb("push_prefs").notNull().default({}),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

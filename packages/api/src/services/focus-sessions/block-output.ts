@@ -230,6 +230,10 @@ export async function blockExpectedOutput(
           owner: "human",
           blockedReason: params.blockedReason,
           ...(params.why?.trim() ? { why: params.why.trim() } : {}),
+          // The ask as stamped: the push builds its lock-screen quick answer
+          // (and the fingerprint it answers against) from it. Without it a
+          // typed ask pushed as a bare "open the app".
+          ...(params.ask ? { ask: params.ask } : {}),
         },
       ],
     },

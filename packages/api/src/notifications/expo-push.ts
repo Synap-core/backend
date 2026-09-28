@@ -55,6 +55,15 @@ export interface ExpoPushInput {
   body: string;
   /** Delivered to the app as the notification's `data` payload (deep-link etc.). */
   data?: Record<string, unknown>;
+  /**
+   * Expo push message fields set from the push category (`pushEnvelope`,
+   * `@synap-core/types/push`). Omitted ⇒ Expo's defaults, as before W8.
+   */
+  interruptionLevel?: "time-sensitive" | "active" | "passive";
+  threadId?: string;
+  categoryId?: string;
+  /** `null` ⇒ silent (a passive push). Omitted ⇒ `"default"`. */
+  sound?: "default" | null;
 }
 
 interface ExpoTicket {
@@ -114,7 +123,12 @@ async function postBatch(
         to,
         title: input.title,
         body: input.body,
-        sound: "default",
+        sound: input.sound === undefined ? "default" : input.sound,
+        ...(input.interruptionLevel
+          ? { interruptionLevel: input.interruptionLevel }
+          : {}),
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.categoryId ? { categoryId: input.categoryId } : {}),
         ...(input.data ? { data: input.data } : {}),
       }))
     ),

@@ -63,6 +63,9 @@ function baseInput(overrides: Record<string, unknown> = {}) {
     sourceType: "proposal" as const,
     sourceId: "44444444-4444-4444-8444-444444444444",
     data: { proposalType: "entity.create", description: "Create ACME Corp" },
+    // A BLOCKING proposal — the only kind that pushes since W8. These are
+    // TRANSPORT tests; whether a push is earned is `push-decision.test.ts`.
+    push: { facts: { proposalBlocksOpenSession: true } },
     ...overrides,
   };
 }

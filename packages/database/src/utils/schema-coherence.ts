@@ -133,6 +133,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "dedupe_key",
     addedBy: "0281_notifications_open_dedupe_key.sql",
   },
+  // notification_preferences — per-person push categories (0289). The
+  // producer reads it on every os-channel notification; missing, every push
+  // decision throws and falls back to the non-fatal catch (no notification).
+  {
+    table: "notification_preferences",
+    column: "push_prefs",
+    addedBy: "0289_notification_preferences_push_prefs.sql",
+  },
   // proposals — structured rejection cause code (0232). App-level enum
   // (PROPOSAL_REJECTION_REASONS in @synap-core/types), free-text
   // `rejection_reason` stays; the reject door persists this alongside it.
