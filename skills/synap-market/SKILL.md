@@ -257,9 +257,13 @@ Two packs on one project = install each with the same `--project <id>`. Each
 lands its own workspaces; both link to the project. Only ONE `compose`
 dependency is allowed per package, at every level.
 
-**Onboarding comes with the workspaces.** A workspace package's `onboarding`
-(`goal`, `framing`, `collect`, `openingQuestions`, `doneWhen`, `expertise`) is
-stored on that workspace's `settings.onboarding`. The `onboard` skill runs the
+**The brief comes with the workspaces.** A workspace package's `onboarding` is
+the space's BRIEF — steady state (`purpose`, `framing`, `expertise`, `anchors`,
+`fetch`) plus its onboarding mode (`goal`, `collect`, `openingQuestions`,
+`doneWhen`) — stored on that workspace's `settings.onboarding`; the package's
+top-level `rules[]` install as the space's rules. A template update reaches an
+installed space without overwriting what its owner edited (conflicts are
+reported), and `synap_update_space_brief` proposes a change. The `onboard` skill runs the
 interview when a lens is empty; for a project spanning several workspaces it
 sets up one workspace's slice at a time, each entity filed into the project.
 There is no project-level recipe — the recipe always lives on a workspace. A

@@ -231,9 +231,9 @@ reference earlier data).
 For each newly created workspace:
 
 1. Switch scope to it (`synap use <workspaceId>` or pass workspaceId).
-2. Run the `onboard` skill — it reads that workspace's `settings.onboarding`
-   (declared by its template) and runs an adaptive interview to collect the
-   right structured data.
+2. Run the `onboard` skill — it reads that workspace's brief
+   (`settings.onboarding`, declared by its template) and runs an adaptive
+   interview to collect the right structured data.
 3. Finish that workspace, tell the user what's captured, then move to the next.
 
 Don't dump all interviews at once. One workspace, complete it, then the next.
