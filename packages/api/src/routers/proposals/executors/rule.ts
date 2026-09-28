@@ -63,7 +63,7 @@ export function registerRuleExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { readRuleScope } =
+      const { readRuleScope, readRuleSeed } =
         await import("../../../services/rules/index.js");
       const { readExpiresAt } =
         await import("../../../services/rules/expiry.js");
@@ -112,6 +112,12 @@ export function registerRuleExecutors(): void {
             )
           : [],
         auditSource: "proposal_approval",
+        // Template provenance: an approved template rule is stamped exactly
+        // like a direct one, or the next template reconcile could not find it
+        // by its key and would install it a second time.
+        ...(readRuleSeed(innerData.seed)
+          ? { seed: readRuleSeed(innerData.seed)! }
+          : {}),
       });
 
       if (result.status === "denied") {
@@ -207,7 +213,7 @@ export function registerRuleExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { readRuleScope } =
+      const { readRuleScope, readRuleSeed } =
         await import("../../../services/rules/index.js");
       const { readExpiresAt } =
         await import("../../../services/rules/expiry.js");
@@ -256,6 +262,10 @@ export function registerRuleExecutors(): void {
             )
           : [],
         auditSource: "proposal_approval",
+        // A template restamp rides the payload (see the create replay above).
+        ...(readRuleSeed(innerData.seed)
+          ? { seed: readRuleSeed(innerData.seed)! }
+          : {}),
       });
 
       if (result.status === "not_found") {

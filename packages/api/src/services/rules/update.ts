@@ -73,6 +73,7 @@ import {
   unlinkRuleBehaviours,
   type RuleRouting,
   type RuleScope,
+  type RuleSeed,
 } from "./index.js";
 import { normalizeExpiresAt } from "./expiry.js";
 import { compileRuleSentence, type RuleCompileFailure } from "./compile.js";
@@ -124,6 +125,13 @@ export interface UpdateRuleGovernedInput {
    */
   draft?: boolean;
   auditSource?: string;
+  /**
+   * A NEW template stamp — set only by the template-rule applier when it
+   * updates a rule its owner never touched. Absent ⇒ the stored seed is
+   * carried forward UNCHANGED, which is what makes an owner's edit visible to
+   * the next reconcile (its fields no longer hash to the seed).
+   */
+  seed?: RuleSeed;
 }
 
 export type UpdateRuleGovernedResult =
@@ -315,6 +323,7 @@ export async function updateRuleGoverned(
       // and quietly keep the behaviour the author asked to delete.
       ...(input.sentence === null ? { clearSentence: true } : {}),
       ...(input.auditSource ? { auditSource: input.auditSource } : {}),
+      ...(input.seed ? { seed: input.seed } : {}),
     },
   });
 
@@ -487,6 +496,11 @@ export async function updateRuleGoverned(
     routing,
     ...(sentenceInput !== undefined && sentenceInput !== null
       ? { sentence: sentenceInput }
+      : {}),
+    // Template provenance survives every edit — dropping it would make the
+    // next template reconcile miss the rule and install it a second time.
+    ...((input.seed ?? existing.seed)
+      ? { seed: (input.seed ?? existing.seed)! }
       : {}),
   });
   // `createdAt` is the RULE's birthday, not this edit's. `buildRuleMetadata`

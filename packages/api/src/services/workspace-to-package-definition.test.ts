@@ -469,4 +469,62 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
       })
     ).rejects.toThrow(/workspace view not found/);
   });
+
+  it("exports the space brief as a TEMPLATE (no instance ids) and its rules as package rules", async () => {
+    workspaceRow.ref.current = {
+      id: "ws-1",
+      name: "Brand",
+      settings: {
+        onboarding: {
+          purpose: "The brand's source of truth.",
+          anchors: [
+            {
+              profileSlug: "brand-identity",
+              role: "root",
+              seedRef: "Brand",
+              entityId: "e-1",
+            },
+          ],
+          rules: [{ key: "assets-first", ruleId: "r-1" }],
+        },
+      },
+    };
+    rowsByTable.set(sentinel.skills, [
+      {
+        metadata: {
+          rule: {
+            intent: "Use approved assets first.",
+            seed: { template: "brand-library", key: "assets-first", hash: "h" },
+            scope: { kind: "workspace" },
+            behaviours: [],
+          },
+        },
+      },
+      {
+        metadata: {
+          rule: {
+            intent: "Never use stock photos",
+            scope: { kind: "workspace" },
+          },
+        },
+      },
+      { metadata: {} },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.onboarding).toEqual({
+      purpose: "The brand's source of truth.",
+      anchors: [
+        { profileSlug: "brand-identity", role: "root", seedRef: "Brand" },
+      ],
+    });
+    expect(def.rules).toEqual([
+      { key: "assets-first", intent: "Use approved assets first." },
+      { key: "never-use-stock-photos", intent: "Never use stock photos" },
+    ]);
+  });
 });

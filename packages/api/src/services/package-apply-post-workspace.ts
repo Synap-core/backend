@@ -7,7 +7,7 @@
  * must run the same steps so agent package install is never a silent partial.
  *
  * Steps: enroll acting agent → capabilities → automations → playbooks → loops
- * → optional project INDEX (`project --uses--> workspace`) + seed entity links.
+ * → cells → action placements → template rules → optional project INDEX (`project --uses--> workspace`) + seed entity links.
  */
 
 import {
@@ -350,6 +350,12 @@ export interface PackagePostWorkspaceBody {
    * rows this apply just created. See {@link ActionPlacement}.
    */
   actionPlacements?: ActionPlacement[];
+  /**
+   * Rules the template installs in this space (package `rules[]`) — applied
+   * by `applyTemplateRules` through the one rule door. See
+   * `services/rules/template-rules.ts`.
+   */
+  rules?: Array<{ key: string; intent: string; sentence?: unknown }>;
   projectId?: string;
 }
 
@@ -963,6 +969,46 @@ async function applyPackagePostWorkspaceInner(
       throw new Error(
         `Failed to apply action placements: ${(e as Error).message}`
       );
+    }
+  }
+
+  // ── Template rules (→ rule rows via the ONE rule door) ──────────────────
+  // Each declared rule becomes a workspace-scoped rule through
+  // `createRuleGoverned`, stamped `metadata.rule.seed` for the three-way
+  // template reconcile; the brief records refs (`onboarding.rules`). Per-rule
+  // outcomes are REPORTED, never thrown — a refused rule does not unmake the
+  // install, and it must not read as installed either.
+  if (body.rules?.length && workspaceId) {
+    try {
+      let templateSlug = body._meta?.slug;
+      if (!templateSlug) {
+        const { db, workspaces, eq } = await import("@synap/database");
+        const [ws] = await db
+          .select({ packageSlug: workspaces.packageSlug })
+          .from(workspaces)
+          .where(eq(workspaces.id, workspaceId))
+          .limit(1);
+        templateSlug = ws?.packageSlug ?? undefined;
+      }
+      if (!templateSlug) {
+        result.rules = {
+          status: "skipped",
+          message:
+            "template rules need the package identity (_meta.slug) to be stamped — none was given",
+        };
+      } else {
+        const { applyTemplateRules } =
+          await import("./rules/template-rules.js");
+        result.rules = await applyTemplateRules({
+          workspaceId,
+          userId,
+          ...(agentUserId ? { agentUserId } : {}),
+          templateSlug,
+          rules: body.rules,
+        });
+      }
+    } catch (e) {
+      result.rules = { status: "error", message: (e as Error).message };
     }
   }
 

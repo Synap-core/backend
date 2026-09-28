@@ -183,7 +183,39 @@ export interface RuleMetadata {
    * "matched nothing".
    */
   sentence?: unknown;
+  /**
+   * TEMPLATE PROVENANCE — present only on a rule a space's template installed
+   * (package `rules[]`). The three-way marker the template-rule reconcile
+   * compares (`./template-rules.ts`): `hash` is the hash of exactly the fields
+   * the applier wrote (`intent` + `sentence`), so a stored rule whose fields
+   * still hash to it is untouched and may take a template update, and one that
+   * does not was edited by its owner and is never overwritten.
+   */
+  seed?: RuleSeed;
   createdAt: string;
+}
+
+/** See {@link RuleMetadata.seed}. */
+export interface RuleSeed {
+  /** The template (package slug) that installed the rule. */
+  template: string;
+  /** The template's stable key for the rule (`SpaceTemplateRule.key`). */
+  key: string;
+  /** Hash of the applier-written fields when last written. */
+  hash: string;
+}
+
+/** Re-validate a stored seed blob — stored JSONB is data. */
+export function readRuleSeed(raw: unknown): RuleSeed | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<RuleSeed>;
+  if (
+    typeof r.template !== "string" ||
+    typeof r.key !== "string" ||
+    typeof r.hash !== "string"
+  )
+    return null;
+  return { template: r.template, key: r.key, hash: r.hash };
 }
 
 /**
@@ -240,6 +272,9 @@ export function readRuleMetadata(
     // prose is what agents need, and it must survive a bad sentence.
     ...(candidate.sentence !== undefined && candidate.sentence !== null
       ? { sentence: candidate.sentence }
+      : {}),
+    ...(readRuleSeed(candidate.seed)
+      ? { seed: readRuleSeed(candidate.seed)! }
       : {}),
     createdAt: candidate.createdAt ?? new Date(0).toISOString(),
   };
@@ -299,6 +334,8 @@ export function buildRuleMetadata(input: {
   routing?: RuleRouting;
   /** The authored sentence, stored so the rule stays replayable. */
   sentence?: unknown;
+  /** Template provenance + three-way marker (template-installed rules only). */
+  seed?: RuleSeed;
   now?: Date;
 }): RuleMetadata {
   const expiresAt = normalizeExpiresAt(input.expiresAt);
@@ -319,6 +356,7 @@ export function buildRuleMetadata(input: {
     ...(input.sentence !== undefined && input.sentence !== null
       ? { sentence: input.sentence }
       : {}),
+    ...(input.seed ? { seed: input.seed } : {}),
     createdAt: (input.now ?? new Date()).toISOString(),
   };
 }

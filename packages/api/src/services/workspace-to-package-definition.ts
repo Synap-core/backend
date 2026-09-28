@@ -31,6 +31,8 @@
  *     inline capability shape to reconstruct losslessly).
  */
 
+import { readSpaceBrief } from "@synap-core/types/space-brief";
+import { RULE_CATEGORY, readRuleMetadata } from "./rules/index.js";
 import {
   getDb,
   db,
@@ -112,8 +114,19 @@ export async function workspaceToPackageDefinition(opts: {
   // `settings` (icon lives on `_meta` for a PUBLISHED template, `domain` is a
   // column with no PackageDefinition field) — an author sets them at publish
   // time. `_meta.slug`/`version` above are the stable provenance we can recover.
-  if (settings.onboarding)
-    def.onboarding = settings.onboarding as PackageDefinition["onboarding"];
+  // The brief, as a TEMPLATE: through the one reader, minus what is this
+  // pod's instance data — rule refs (the rules export as rule rows, not as
+  // brief fields) and anchors' resolved entity ids (a template names its
+  // anchor by kind or seedRef; an id means nothing on another pod).
+  const brief = readSpaceBrief(settings);
+  if (brief) {
+    const { rules: _refs, anchors, ...templateBrief } = brief;
+    const portableAnchors = anchors?.map(({ entityId: _id, ...a }) => a);
+    def.onboarding = {
+      ...templateBrief,
+      ...(portableAnchors?.length ? { anchors: portableAnchors } : {}),
+    };
+  }
   if (settings.profileEntityBentoTemplates)
     def.profileEntityBentoTemplates = settings.profileEntityBentoTemplates;
   // NOTE: settings.actionPlacements are emitted at the END — stored placements
@@ -443,6 +456,46 @@ export async function workspaceToPackageDefinition(opts: {
       playbookRowToPackagePlaybook(p, grantsByPlaybook[p.id])
     );
   }
+
+  // ── Rules (workspace-scoped rule rows → package `rules[]`) ──────────────
+  // The inverse of `applyTemplateRules`: a template rule keeps its seed key
+  // (so a re-publish converges on the same rows); a rule the owner wrote gets
+  // a key derived from its intent. Inactive rows stay behind.
+  const ruleRows = await db
+    .select({ metadata: skillsTable.metadata })
+    .from(skillsTable)
+    .where(
+      and(
+        eq(skillsTable.workspaceId, workspaceId),
+        eq(skillsTable.category, RULE_CATEGORY),
+        eq(skillsTable.status, "active")
+      )
+    );
+  const ruleKeys = new Set<string>();
+  const rules: NonNullable<PackageDefinition["rules"]> = [];
+  for (const row of ruleRows) {
+    const meta = readRuleMetadata(row.metadata as Record<string, unknown>);
+    if (!meta) continue;
+    const base =
+      meta.seed?.key ??
+      (meta.intent
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .split("-")
+        .filter(Boolean)
+        .slice(0, 6)
+        .join("-") ||
+        "rule");
+    let key = base;
+    for (let n = 2; ruleKeys.has(key); n++) key = `${base}-${n}`;
+    ruleKeys.add(key);
+    rules.push({
+      key,
+      intent: meta.intent,
+      ...(meta.sentence !== undefined ? { sentence: meta.sentence } : {}),
+    });
+  }
+  if (rules.length > 0) def.rules = rules;
 
   // ── Capabilities (containers → templateKey) ─────────────────────────────
   const capabilityRows = await db

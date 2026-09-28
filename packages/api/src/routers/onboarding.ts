@@ -27,6 +27,10 @@ import type {
 import { podProcedure, router } from "../trpc.js";
 import { normalizeToolName } from "@synap-core/types/tools";
 import {
+  isInterviewBrief,
+  readSpaceBrief,
+} from "@synap-core/types/space-brief";
+import {
   recordToolDemand,
   type RecordToolDemandResult,
 } from "../services/tool-demand/record-tool-demand.js";
@@ -723,9 +727,11 @@ export const onboardingRouter = router({
       ]);
 
       const meaningfulEntityCount = Number(countRow[0]?.value ?? 0);
-      const onboardingRecipe = workspaceContext?.settings.onboarding;
+      // The space brief, through its ONE reader. Onboarding is the brief's
+      // INTERVIEW mode — a steady-state brief (purpose only) has no recipe.
+      const onboardingRecipe = readSpaceBrief(workspaceContext?.settings);
       const collectionSlugs = new Set(
-        onboardingRecipe?.collect.map((item) => item.profileSlug) ?? []
+        onboardingRecipe?.collect?.map((item) => item.profileSlug) ?? []
       );
       const completedCollectionCount = new Set(
         profileRows
@@ -747,7 +753,7 @@ export const onboardingRouter = router({
         meaningfulEntityCount,
         configuredCollectionCount: collectionSlugs.size,
         completedCollectionCount,
-        hasOnboardingRecipe: onboardingRecipe !== undefined,
+        hasOnboardingRecipe: isInterviewBrief(onboardingRecipe),
         hasPrimarySurface,
         primarySurfaceKind: primarySurfaceKind ?? null,
       };

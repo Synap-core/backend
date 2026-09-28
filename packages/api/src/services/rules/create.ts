@@ -33,6 +33,7 @@ import {
   type RuleBehaviourRecord,
   type RuleRouting,
   type RuleScope,
+  type RuleSeed,
 } from "./index.js";
 import { normalizeExpiresAt } from "./expiry.js";
 import { compileRuleSentence, type RuleCompileFailure } from "./compile.js";
@@ -101,6 +102,12 @@ export interface CreateRuleGovernedInput {
   automationIds?: string[];
   /** Folded into the gate payload for observability. */
   auditSource?: string;
+  /**
+   * Template provenance (`metadata.rule.seed`) — set ONLY by the template-rule
+   * applier (`./template-rules.ts`). Rides the proposal payload so an approved
+   * template rule is stamped exactly like a direct one.
+   */
+  seed?: RuleSeed;
 }
 
 /**
@@ -337,6 +344,7 @@ export async function createRuleGoverned(
       // reviewer saw and the replay could not reproduce.
       ...(compiled || draft ? { sentence: input.sentence } : {}),
       ...(input.auditSource ? { auditSource: input.auditSource } : {}),
+      ...(input.seed ? { seed: input.seed } : {}),
     },
   });
 
@@ -469,6 +477,7 @@ export async function createRuleGoverned(
     // the rule you had not trusted yet, and not for the one that had been
     // running for a month.
     ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
+    ...(input.seed ? { seed: input.seed } : {}),
   });
 
   // COMPENSATION for the ordering below. The automation is created BEFORE the

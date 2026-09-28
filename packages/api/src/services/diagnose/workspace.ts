@@ -37,6 +37,7 @@
  * SAYS so rather than shipping a quadratic scan.
  */
 
+import { briefPurpose, readSpaceBrief } from "@synap-core/types/space-brief";
 import { db, and, eq, workspaces } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { loadEntityUsage } from "../discover/usage-aggregate.js";
@@ -377,7 +378,10 @@ async function loadLandscape(
   const rows: WorkspaceLandscapeRow[] = wsRows.map((w) => {
     const bucket = byWs.get(w.id);
     const settings = (w.settings ?? {}) as Record<string, unknown>;
-    const onboarding = settings.onboarding as { goal?: unknown } | undefined;
+    // The ONE brief reader. A brief "identifies" the space when it states
+    // what the space is for (steady-state purpose, or the interview goal) —
+    // a brief holding only rule refs does not.
+    const brief = readSpaceBrief(settings);
     const desc = resolveAuthoredDescription(w.description);
     return {
       id: w.id,
@@ -385,9 +389,8 @@ async function loadLandscape(
       domain: w.domain ?? null,
       workspaceType: w.workspaceType ?? null,
       description: desc,
-      onboardingGoal:
-        typeof onboarding?.goal === "string" ? onboarding.goal : null,
-      hasOnboarding: Boolean(onboarding),
+      onboardingGoal: brief?.goal ?? null,
+      hasOnboarding: briefPurpose(brief) !== null,
       entityCount: bucket?.count ?? 0,
       profileSlugs: [...(bucket?.slugs ?? [])].sort(),
       lastActivityAt: bucket?.last ? bucket.last.toISOString() : null,
