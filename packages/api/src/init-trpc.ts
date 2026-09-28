@@ -34,6 +34,10 @@ export const t = initTRPC.context<Context>().create({
     const captureQuestionStatus = (
       error.cause as { captureQuestionStatus?: unknown } | undefined
     )?.captureQuestionStatus;
+    // A typed refusal names its machine code the same way (`reasonCode`, e.g.
+    // `NO_NEXT_RUNG` — read by `isNoNextRungError`, @synap-core/types).
+    const reasonCode = (error.cause as { reasonCode?: unknown } | undefined)
+      ?.reasonCode;
 
     return {
       ...shape,
@@ -45,6 +49,7 @@ export const t = initTRPC.context<Context>().create({
         ...(typeof captureQuestionStatus === "string"
           ? { captureQuestionStatus }
           : {}),
+        ...(typeof reasonCode === "string" ? { reasonCode } : {}),
       },
     };
   },

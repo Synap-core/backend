@@ -110,6 +110,94 @@ export async function assertProposalVisibleTo(
 }
 
 /**
+ * THE SAME RULE as {@link assertProposalVisibleTo}, for a BATCH: which of
+ * `proposalIds` may `userId` see? In a fixed number of queries (proposals,
+ * pod-admin, the caller's editor+ memberships, the agents' creators) instead
+ * of one gate call per id. Missing and forbidden ids are both simply absent —
+ * a batch reader must not tell them apart either.
+ *
+ * Kept byte-for-byte in step with the single gate by a PARITY test
+ * (`proposal-visibility.batch-parity.pglite.test.ts`) that runs both over the
+ * same fixtures; a change to one rule without the other fails it. (A parity
+ * guard proves sameness, not correctness — the single gate's own suites own
+ * that.)
+ */
+export async function visibleProposalIds(
+  proposalIds: readonly string[],
+  userId: string,
+  opts?: { db?: Database }
+): Promise<Set<string>> {
+  const database = opts?.db ?? defaultDb;
+  const ids = [...new Set(proposalIds)];
+  const visible = new Set<string>();
+  if (ids.length === 0) return visible;
+  const rows = await database
+    .select({
+      id: proposals.id,
+      workspaceId: proposals.workspaceId,
+      data: proposals.data,
+      agentUserId: proposals.agentUserId,
+    })
+    .from(proposals)
+    .where(inArray(proposals.id, ids));
+  if (rows.length === 0) return visible;
+  if (await isPodAdmin(userId)) {
+    for (const r of rows) visible.add(r.id);
+    return visible;
+  }
+  const workspaceIds = [
+    ...new Set(rows.map((r) => r.workspaceId).filter((w): w is string => !!w)),
+  ];
+  const editorOf = new Set<string>();
+  if (workspaceIds.length > 0) {
+    const memberships = await database
+      .select({
+        workspaceId: workspaceMembers.workspaceId,
+        role: workspaceMembers.role,
+      })
+      .from(workspaceMembers)
+      .where(
+        and(
+          inArray(workspaceMembers.workspaceId, workspaceIds),
+          eq(workspaceMembers.userId, userId)
+        )
+      );
+    for (const m of memberships) {
+      if (["owner", "admin", "editor"].includes(m.role)) {
+        editorOf.add(m.workspaceId);
+      }
+    }
+  }
+  const agentIds = [
+    ...new Set(
+      rows
+        .filter((r) => !r.workspaceId && r.agentUserId)
+        .map((r) => r.agentUserId as string)
+    ),
+  ];
+  const ownedAgents = new Set<string>();
+  if (agentIds.length > 0) {
+    const agents = await database
+      .select({ id: users.id, createdByUserId: users.createdByUserId })
+      .from(users)
+      .where(inArray(users.id, agentIds));
+    for (const a of agents) {
+      if (a.createdByUserId === userId) ownedAgents.add(a.id);
+    }
+  }
+  for (const r of rows) {
+    if (r.workspaceId) {
+      if (editorOf.has(r.workspaceId)) visible.add(r.id);
+      continue;
+    }
+    const data = r.data as Record<string, unknown> | null;
+    if (data?.sourceId === userId) visible.add(r.id);
+    else if (r.agentUserId && ownedAgents.has(r.agentUserId)) visible.add(r.id);
+  }
+  return visible;
+}
+
+/**
  * Throw unless `userId` may COMMENT on the proposal `proposalId` (founder
  * decision 2026-09-27): the visibility gate above (editor+), OR the caller can
  * read the session the proposal belongs to — its `session_id` (the run it was

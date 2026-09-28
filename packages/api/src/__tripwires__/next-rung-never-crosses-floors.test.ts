@@ -9,8 +9,15 @@
  * reason code the ladder classifies as out of reach, even a reversible card
  * gets none.
  *
- * WHAT IT DOES NOT COVER: the WHO-grants gate (next-rung.pglite.test.ts) and
- * the engine ordering itself (governance-policy trust-ladder-reach.test.ts).
+ * WHAT IT DOES NOT COVER, stated: it proves the WIRING — the door asks the
+ * engine's own classes (`isReversibleWrite`, `nonWidenableFloorFor`) and
+ * refuses what they refuse — NOT that the CLASSIFICATION is right. A door
+ * wrongly marked `reversible` in `REVERSIBILITY_DOOR_CLASS` would get an offer
+ * here and this suite would stay green (the expected set is derived from the
+ * same table). The classification's own guards are policy.test.ts /
+ * reversible-default.test.ts; the reason-code reach is
+ * governance-policy trust-ladder-reach.test.ts; who may grant is
+ * next-rung.pglite.test.ts.
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -36,7 +43,9 @@ function card(eventKey: string, governanceReason: string | null = null) {
     workspaceId: null,
     agentUserId: "agent-1",
     governanceReason,
-    data: {},
+    // A known kind, as a create carries it, so the kind rule (PROFILED_SUBJECTS)
+    // is not what refuses here — the floors are.
+    data: { data: { profileSlug: "note" } },
   });
 }
 

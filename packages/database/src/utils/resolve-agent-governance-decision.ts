@@ -200,8 +200,11 @@ interface GovernanceRuleCandidate {
 /**
  * Target-match score for one candidate row against the write being resolved,
  * or `undefined` if the row's target does not match at all (not a candidate).
- * Higher = more specific: exact action ON a profile (4) > exact action /
- * exact capability (3) > profile (2) > glob action (1) > bare "*" catch-all (0). `matchesActionPattern` (the same
+ * Higher = more specific: exact action / exact capability (3) > profile (2) >
+ * glob action (1) > bare "*" catch-all (0). An EXACT action rule that also
+ * names a profile scores 3 too (it only narrows WHICH writes match, never how
+ * strongly), so between it and a plain exact rule the NEWEST wins — a later
+ * posture takes back an older grant, a later grant outranks an older posture. `matchesActionPattern` (the same
  * matcher every `autoApproveFor` glob check uses) only recognizes exact and
  * "<subject>.*" globs — NOT a bare "*" — so the catch-all case is handled
  * explicitly here.
@@ -231,17 +234,18 @@ function scoreRuleTarget(
       : undefined;
   }
   if (rule.targetKind === "action") {
-    // An ACTION rule that also names a profile (the trust ladder's narrowest
-    // grant, `nextRungRuleDraft`: agent × action × profile) matches ONLY that
-    // action on that profile, and outranks a bare exact-action rule (4 > 3).
-    // Before this, an action rule ignored `targetProfile`. governanceRules.create
-    // nulls it and the scanners never set it; a `settings.update` spec could
-    // carry one, and now narrows to exactly what its author wrote.
-    if (rule.targetProfile) {
-      return rule.targetPattern === eventKey &&
-        profileSlug != null &&
-        rule.targetProfile === profileSlug
-        ? 4
+    // An EXACT action rule that also names a profile (the trust ladder's
+    // narrowest grant, `nextRungRuleDraft`: agent × action × profile) matches
+    // ONLY that action on that profile — it can only NARROW. Same score as a
+    // plain exact rule (3): the profile never makes a rule STRONGER, so an
+    // older grant never outranks a newer `propose` of equal specificity (ties
+    // go to the newest). A NON-exact pattern (`entity.*`, `*`) keeps the old
+    // behaviour and IGNORES the profile: narrowing a broad `propose` rule
+    // would LOOSEN it (let a broader `auto` rule execute). Tripwire:
+    // `profile-rule-narrows.tripwire.test.ts`.
+    if (rule.targetProfile && rule.targetPattern === eventKey) {
+      return profileSlug != null && rule.targetProfile === profileSlug
+        ? 3
         : undefined;
     }
     if (rule.targetPattern === "*") return 0;

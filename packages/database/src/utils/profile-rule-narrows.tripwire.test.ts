@@ -10,6 +10,13 @@
  *     matches — and it never matches another profile, nor a write the gate
  *     saw no profile for. Uses `draftRuleMatchesWrite`, the SAME scorer
  *     rung 2.8 ranks with.
+ *  1b. NEVER LOOSENS: a profile on a NON-exact pattern (`entity.*`, `*`) is
+ *     IGNORED — the rule matches exactly what it matched before profiles
+ *     narrowed anything — because narrowing a broad `propose` rule would let a
+ *     broader `auto` rule execute. Checked for match-sets AND for a live
+ *     `propose` rule against a broader `auto` one.
+ *  1c. NEVER STRONGER: an exact auto rule with a profile scores the same as a
+ *     plain exact rule, so a NEWER `propose` of equal specificity always wins.
  *  2. BELOW EVERY FLOOR: for every event-keyed floor (derived from the
  *     engine's own lists) and every context floor, a profile-scoped `auto`
  *     rule that WINS `resolveGovernanceRule` still leaves `decideAgentPolicy`
@@ -114,6 +121,62 @@ describe("a profile on an action rule only narrows", () => {
       }
     }
     expect(matched).toBeGreaterThan(50);
+  });
+
+  it("NEVER LOOSENS: a profile on a non-exact pattern changes nothing (auto and propose)", () => {
+    let compared = 0;
+    for (const pattern of ["entity.*", "document.*", "*"]) {
+      for (const verdict of ["auto", "propose"] as const) {
+        for (const ruleProfile of PROFILES) {
+          const narrow = { ...profileRule(pattern, ruleProfile), verdict };
+          const { targetProfile: _p, ...bare } = narrow;
+          for (const writeKey of [...REVERSIBLE_EVENT_KEYS, ...FLOORED_KEYS]) {
+            for (const writeProfile of [...PROFILES, null]) {
+              const write = { ...split(writeKey), agentUserId: AGENT, profileSlug: writeProfile };
+              expect(
+                draftRuleMatchesWrite(narrow, write),
+                `${pattern}/${ruleProfile} on ${writeKey}/${writeProfile}`
+              ).toBe(draftRuleMatchesWrite(bare, write));
+              compared++;
+            }
+          }
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(1000);
+  });
+
+  it("NEVER LOOSENS, live: a broad propose rule with a profile still beats a broader auto rule on EVERY kind", async () => {
+    for (const writeProfile of [...PROFILES, "deal"]) {
+      const match = await resolveGovernanceRule({
+        db: dbReturning([
+          { id: "tighten", principalKind: "agent", scopeKind: "pod", targetKind: "action", targetPattern: "entity.*", targetProfile: "person", verdict: "propose", createdAt: new Date("2026-09-01") },
+          { id: "broad-auto", principalKind: "any", scopeKind: "pod", targetKind: "action", targetPattern: "*", targetProfile: null, verdict: "auto", createdAt: new Date("2026-09-20") },
+        ]),
+        agentUserId: AGENT,
+        subjectType: "entity",
+        action: "update",
+        profileSlug: writeProfile,
+      });
+      expect(match?.ruleId, writeProfile).toBe("tighten");
+    }
+  });
+
+  it("NEVER STRONGER: a newer propose of equal specificity beats an older profile-scoped auto", async () => {
+    for (const key of REVERSIBLE_EVENT_KEYS) {
+      const { subjectType, action } = split(key);
+      const match = await resolveGovernanceRule({
+        db: dbReturning([
+          { id: "old-grant", principalKind: "agent", scopeKind: "pod", targetKind: "action", targetPattern: key, targetProfile: "note", verdict: "auto", createdAt: new Date("2026-09-01") },
+          { id: "new-posture", principalKind: "agent", scopeKind: "pod", targetKind: "action", targetPattern: key, targetProfile: null, verdict: "propose", createdAt: new Date("2026-09-20") },
+        ]),
+        agentUserId: AGENT,
+        subjectType,
+        action,
+        profileSlug: "note",
+      });
+      expect(match?.verdict, key).toBe("propose");
+    }
   });
 
   it("BELOW EVERY FLOOR: a winning profile-scoped auto rule never lifts a floor", async () => {

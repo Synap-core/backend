@@ -11,9 +11,10 @@ import {
  * not a label:
  *   1. it matches ONLY that action on that profile (never the same action on
  *      another kind, never a write the gate saw no profile for);
- *   2. it OUTRANKS a broader propose rule at the same principal/scope — a
- *      posture's agent × exact-action `propose` row — or the offer would store a
- *      rule that never fires.
+ *   2. against a posture's agent × exact-action `propose` row it is EQUAL
+ *      specificity (the profile never strengthens a rule), so the NEWEST wins:
+ *      a grant made after the posture fires; a posture set after the grant
+ *      takes it back.
  * Fake db: the candidate rows are returned as if the SQL had already filtered
  * principal/scope (same convention as resolve-agent-governance-decision.test.ts).
  */
@@ -83,29 +84,23 @@ describe("action × profile rule", () => {
     ).toBe(false);
   });
 
-  it("outranks an OLDER-or-newer agent × exact-action propose rule (a posture)", async () => {
-    const posture = row({
-      id: "posture",
-      targetPattern: "entity.update",
-      verdict: "propose",
-      // Newer than the grant: specificity must win, not recency.
-      createdAt: new Date("2026-09-20T00:00:00Z"),
-    });
-    const grant = row({
-      id: "grant",
-      targetPattern: "entity.update",
-      targetProfile: "note",
-      verdict: "auto",
-    });
-    const match = await resolveGovernanceRule({
-      db: dbReturning([posture, grant]),
-      agentUserId: "agent-1",
-      subjectType: "entity",
-      action: "update",
-      profileSlug: "note",
-    });
-    expect(match?.ruleId).toBe("grant");
-    expect(match?.verdict).toBe("auto");
+  it("a grant made AFTER a posture fires; a posture set AFTER a grant takes it back", async () => {
+    const older = new Date("2026-09-01T00:00:00Z");
+    const newer = new Date("2026-09-20T00:00:00Z");
+    const resolve = (postureAt: Date, grantAt: Date) =>
+      resolveGovernanceRule({
+        db: dbReturning([
+          row({ id: "posture", targetPattern: "entity.update", verdict: "propose", createdAt: postureAt }),
+          row({ id: "grant", targetPattern: "entity.update", targetProfile: "note", verdict: "auto", createdAt: grantAt }),
+        ]),
+        agentUserId: "agent-1",
+        subjectType: "entity",
+        action: "update",
+        profileSlug: "note",
+      });
+    expect((await resolve(older, newer))?.ruleId).toBe("grant");
+    // A newer propose rule is NEVER outranked by an older auto of equal specificity.
+    expect((await resolve(newer, older))?.ruleId).toBe("posture");
   });
 
   it("leaves the posture in charge of every other profile", async () => {

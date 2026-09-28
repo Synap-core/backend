@@ -81,6 +81,12 @@ import {
 } from "@synap/governance-policy";
 import type { RequestShapedProposalData } from "@synap-core/types/proposals";
 import { governanceRulesRouter } from "../../../routers/governance-rules.js";
+import { notifyProposalCreatedOrdered } from "../../../notifications/notify-proposal-created-ordered.js";
+import { t } from "../../../init-trpc.js";
+import {
+  NO_NEXT_RUNG_CODE,
+  isNoNextRungError,
+} from "@synap-core/types/trust-ladder";
 import type { Context } from "../../../types/context.js";
 
 type Database = typeof DatabaseHandle;
@@ -162,13 +168,16 @@ async function pending(o: {
   profileSlug?: string;
   governanceReason?: string | null;
   status?: string;
+  /** Absent ⇒ the shared space; `null` ⇒ a pod-wide (spaceless) write. */
+  workspaceId?: string | null;
 }): Promise<string> {
   const id = randomUUID();
+  const ws = o.workspaceId === undefined ? WS : o.workspaceId;
   const envelope = {
     requestId: randomUUID(),
     source: "ai",
     sourceId: OWNER,
-    workspaceId: WS,
+    workspaceId: ws,
     targetType: "entity",
     targetId: randomUUID(),
     changeType: o.action as RequestShapedProposalData["changeType"],
@@ -182,7 +191,7 @@ async function pending(o: {
      values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)`,
     [
       id,
-      WS,
+      ws,
       o.status ?? "pending",
       o.action,
       o.subjectType,
@@ -279,13 +288,14 @@ async function nextWriteVerdict(action: string, profileSlug: string) {
 
 describe("proposeNextRung — the owner on their own agent's card", () => {
   it("writes the narrowest auto rule, and the NEXT write of that kind acts; others still propose", async () => {
-    // The agent is on the ask-first posture: an agent × entity.update propose rule.
-    await insertRule({ targetPattern: "entity.update", verdict: "propose" });
-    expect(await nextWriteVerdict("update", "note")).toBe("propose");
+    // The agent is on the ask-first posture: an agent × entity.create propose rule.
+    await insertRule({ targetPattern: "entity.create", verdict: "propose" });
+    expect(await nextWriteVerdict("create", "note")).toBe("propose");
 
+    // A create carries its kind in the gate data — the kind the grant names.
     const cardId = await pending({
       subjectType: "entity",
-      action: "update",
+      action: "create",
       profileSlug: "note",
       governanceReason: "GOVERNANCE_RULE",
     });
@@ -297,7 +307,9 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
       from: "propose",
       to: "do_tell",
       via: "governance_rule",
+      reach: "space",
     });
+    expect(rungs[0]!.coveredByRuleId).toBeNull();
 
     const result = await caller(OWNER).proposeNextRung({
       itemRef: { kind: "proposal", id: cardId },
@@ -317,7 +329,7 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
       scope_kind: "workspace",
       workspace_id: WS,
       target_kind: "action",
-      target_pattern: "entity.update",
+      target_pattern: "entity.create",
       target_profile: "note",
       verdict: "auto",
       source_proposal_id: cardId,
@@ -325,9 +337,16 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
     });
 
     // THE SEAM: the engine reads the rule the click wrote.
-    expect(await nextWriteVerdict("update", "note")).toBe("execute");
+    expect(await nextWriteVerdict("create", "note")).toBe("execute");
     // Narrowest: the posture still governs every other kind.
-    expect(await nextWriteVerdict("update", "person")).toBe("propose");
+    expect(await nextWriteVerdict("create", "person")).toBe("propose");
+
+    // The read withdraws the offer and names the covering rule (a door).
+    const after = await caller(OWNER).nextRungs({ proposalIds: [cardId] });
+    expect(after.rungs[0]!.offer).toBeNull();
+    expect(after.rungs[0]!.coveredByRuleId).toBe(
+      (result as { ruleId: string }).ruleId
+    );
 
     // Idempotent: a second click writes nothing new.
     const again = await caller(OWNER).proposeNextRung({
@@ -378,6 +397,38 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
   });
 });
 
+describe("proposeNextRung — an update names no kind, so it is refused (never every kind)", () => {
+  it("a realistic entity UPDATE card (no profile in the gate data) gets no offer and a typed refusal", async () => {
+    const cardId = await pending({
+      subjectType: "entity",
+      action: "update",
+      governanceReason: "GOVERNANCE_RULE",
+    });
+    const { rungs } = await caller(OWNER).nextRungs({ proposalIds: [cardId] });
+    expect(rungs[0]!.rung).toBe("propose");
+    expect(rungs[0]!.offer).toBeNull();
+    const err = await caller(OWNER)
+      .proposeNextRung({ itemRef: { kind: "proposal", id: cardId } })
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+    // The formatter lifts the typed code the apps read (`isNoNextRungError`).
+    const shape = t._config.errorFormatter({
+      shape: { message: "", code: -32600, data: { code: "PRECONDITION_FAILED", httpStatus: 412 } },
+      error: err as never,
+      type: "mutation",
+      path: "governanceRules.proposeNextRung",
+      input: undefined,
+      ctx: undefined,
+    } as never) as { data: Record<string, unknown> };
+    expect(isNoNextRungError(shape)).toBe(true);
+    expect(shape.data.reasonCode).toBe(NO_NEXT_RUNG_CODE);
+    expect(await ruleCount()).toBe(0);
+  });
+});
+
 describe("proposeNextRung — never past a floor", () => {
   it("refuses a destructive, a disruptive, a scope-change and a declined card, and writes nothing", async () => {
     const cards = [
@@ -416,7 +467,7 @@ describe("proposeNextRung — who grants", () => {
   it("a member who can see the card but does not own the agent files a proposal for the owner", async () => {
     const cardId = await pending({
       subjectType: "entity",
-      action: "update",
+      action: "create",
       profileSlug: "note",
     });
     const result = await caller(MEMBER).proposeNextRung({
@@ -446,11 +497,41 @@ describe("proposeNextRung — who grants", () => {
       scopeKind: "workspace",
       workspaceId: WS,
       targetKind: "action",
-      targetPattern: "entity.update",
+      targetPattern: "entity.create",
       targetProfile: "note",
       verdict: "auto",
       nextRungFromProposalId: cardId,
     });
+    // The owner's line is in words, never the event key.
+    const line = (
+      notifyProposalCreatedOrdered as unknown as {
+        mock: { calls: Array<[{ podWide: { description: string } | null }]> };
+      }
+    ).mock.calls.at(-1)![0].podWide!.description;
+    expect(line).not.toMatch(/entity\./);
+    expect(line).toMatch(/note/i);
+  });
+
+  it("the OWNER on a pod-wide card without pod-admin rights gets needs_admin, never 'sent to the owner'", async () => {
+    const cardId = await pending({
+      subjectType: "entity",
+      action: "create",
+      profileSlug: "note",
+      workspaceId: null,
+    });
+    const { rungs } = await caller(OWNER).nextRungs({ proposalIds: [cardId] });
+    expect(rungs[0]!.offer?.reach).toBe("pod");
+    const result = await caller(OWNER).proposeNextRung({
+      itemRef: { kind: "proposal", id: cardId },
+    });
+    expect(result.outcome).toBe("needs_admin");
+    expect(await ruleCount()).toBe(0);
+    const line = (
+      notifyProposalCreatedOrdered as unknown as {
+        mock: { calls: Array<[{ podWide: { description: string } | null }]> };
+      }
+    ).mock.calls.at(-1)![0].podWide!.description;
+    expect(line).toMatch(/in every space/);
   });
 
   it("an outsider cannot see the card: omitted from the read, refused on the write", async () => {

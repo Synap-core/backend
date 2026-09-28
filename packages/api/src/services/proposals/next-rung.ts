@@ -40,13 +40,18 @@ import {
   nextRungRuleDraft,
   proposalEventKey,
   resolveTrustRung,
+  NO_NEXT_RUNG_CODE,
   type NextRungOffer,
   type TrustRung,
 } from "@synap-core/types/trust-ladder";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 
 /** The exact `governanceRules.create`-shaped rule a grant writes. */
 type GovernanceRuleDraft = ReturnType<typeof nextRungRuleDraft>;
-import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
+import {
+  assertProposalVisibleTo,
+  visibleProposalIds,
+} from "../../utils/proposal-visibility.js";
 import { applyGovConfigChange } from "./gov-config.js";
 import { notifyProposalCreatedOrdered } from "../../notifications/notify-proposal-created-ordered.js";
 
@@ -139,6 +144,12 @@ export interface NextRungProjection {
   offer: NextRungOffer | null;
   /** The exact rule accepting the offer writes; `null` when there is no offer. */
   rule: GovernanceRuleDraft | null;
+  /**
+   * An ACTIVE rule already says exactly what the offer would: the offer is
+   * withdrawn (`offer: null`) and this names the rule, so a surface shows
+   * "Already a rule" as a DOOR to it. `null` when nothing covers the card.
+   */
+  coveredByRuleId: string | null;
 }
 
 /**
@@ -159,6 +170,18 @@ export function projectNextRung(row: NextRungRow): NextRungProjection {
   };
   const rung = resolveTrustRung(item);
   const eventKey = proposalEventKey(row);
+  // The kind the GATE saw (never one looked up afterwards): an entity grant
+  // without it would cover every kind, so the leaf refuses it
+  // (`PROFILED_SUBJECTS`). NB an entity UPDATE carries a profile only when it
+  // changes the type — which is force-proposed (a floor) — so updates get no
+  // offer until the gate is given the entity's own type (open, see the W7
+  // review report).
+  const profileSlug = gateProfileSlug(row);
+  // The scope is the proposal's own workspace: the gate governed the write in
+  // exactly that workspace (for an entity, its HOME space — `mutate.ts`
+  // `governanceWorkspaceId = existing.workspaceId`), so it is the narrowest
+  // scope that still FIRES. `null` ⇒ the gate saw no space ⇒ pod reach, which
+  // the offer states (`reach: "pod"`) instead of applying silently.
   const offer =
     nonWidenableFloorFor(eventKey) === null
       ? nextRung({
@@ -166,6 +189,8 @@ export function projectNextRung(row: NextRungRow): NextRungProjection {
           agentUserId: row.agentUserId,
           governanceReason: row.governanceReason,
           reversible: isReversibleWrite(eventKey),
+          profileSlug,
+          workspaceId: row.workspaceId,
         })
       : null;
   return {
@@ -179,9 +204,10 @@ export function projectNextRung(row: NextRungRow): NextRungProjection {
             agentUserId: row.agentUserId,
             workspaceId: row.workspaceId,
             eventKey,
-            profileSlug: gateProfileSlug(row),
+            profileSlug,
           })
         : null,
+    coveredByRuleId: null,
   };
 }
 
@@ -197,10 +223,12 @@ const ROW_COLUMNS = {
 };
 
 /**
- * The ladder for each card the caller can SEE. A proposal the caller may not
- * see is OMITTED — the same answer as one that does not exist (telling them
- * the id is real is the leak, smaller). Visibility is `assertProposalVisibleTo`,
- * the SSOT every proposal-binding path uses.
+ * The ladder for each card the caller can SEE, in a FIXED number of queries
+ * whatever the batch size. A proposal the caller may not see is OMITTED — the
+ * same answer as one that does not exist. Visibility is `visibleProposalIds`,
+ * the batch form of `assertProposalVisibleTo` (kept in step by a parity test).
+ * A card an active rule already covers has its offer WITHDRAWN and names the
+ * rule (`coveredByRuleId`).
  */
 export async function readNextRungs(params: {
   userId: string;
@@ -208,18 +236,91 @@ export async function readNextRungs(params: {
 }): Promise<NextRungProjection[]> {
   const ids = [...new Set(params.proposalIds)].slice(0, NEXT_RUNG_BATCH_MAX);
   if (ids.length === 0) return [];
+  const visible = await visibleProposalIds(ids, params.userId);
+  if (visible.size === 0) return [];
   const rows = (await db
     .select(ROW_COLUMNS)
     .from(proposals)
-    .where(inArray(proposals.id, ids))) as NextRungRow[];
-  const out: NextRungProjection[] = [];
-  for (const row of await resolveGrantedByRule(rows)) {
-    try {
-      await assertProposalVisibleTo(row.id, params.userId);
-    } catch {
-      continue;
-    }
-    out.push(projectNextRung(row));
+    .where(inArray(proposals.id, [...visible]))) as NextRungRow[];
+  const projections = (await resolveGrantedByRule(rows)).map(projectNextRung);
+  const covering = await findCoveringRules(
+    projections.flatMap((p) => (p.rule ? [p.rule] : []))
+  );
+  return projections.map((p) => {
+    const ruleId = p.rule ? covering.get(ruleKey(p.rule)) : undefined;
+    return ruleId
+      ? { ...p, offer: null, rule: null, coveredByRuleId: ruleId }
+      : p;
+  });
+}
+
+/** The identity of a drafted rule — what "already covered" compares. */
+function ruleKey(rule: GovernanceRuleDraft): string {
+  return [
+    rule.agentUserId ?? "",
+    rule.scopeKind,
+    rule.workspaceId ?? "",
+    rule.targetPattern,
+    rule.targetProfile ?? "",
+  ].join("\u0000");
+}
+
+/**
+ * ACTIVE agent-scoped `auto` action rules that say exactly what each draft
+ * would — ONE query for the whole batch (the drafts' agents), matched in
+ * memory by {@link ruleKey}. Returns draft key → covering rule id.
+ */
+async function findCoveringRules(
+  drafts: readonly GovernanceRuleDraft[]
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const agentIds = [
+    ...new Set(drafts.map((d) => d.agentUserId).filter((a): a is string => !!a)),
+  ];
+  if (agentIds.length === 0) return out;
+  const rows = await db
+    .select({
+      id: governanceRules.id,
+      agentUserId: governanceRules.agentUserId,
+      scopeKind: governanceRules.scopeKind,
+      workspaceId: governanceRules.workspaceId,
+      targetPattern: governanceRules.targetPattern,
+      targetProfile: governanceRules.targetProfile,
+    })
+    .from(governanceRules)
+    .where(
+      and(
+        isNull(governanceRules.revokedAt),
+        or(
+          isNull(governanceRules.expiresAt),
+          gt(governanceRules.expiresAt, new Date())
+        ),
+        eq(governanceRules.principalKind, "agent"),
+        inArray(governanceRules.agentUserId, agentIds),
+        eq(governanceRules.targetKind, "action"),
+        eq(governanceRules.verdict, "auto")
+      )
+    );
+  const byKey = new Map<string, string>();
+  for (const r of rows) {
+    byKey.set(
+      ruleKey({
+        principalKind: "agent",
+        agentUserId: r.agentUserId ?? undefined,
+        scopeKind: r.scopeKind,
+        ...(r.workspaceId ? { workspaceId: r.workspaceId } : {}),
+        targetKind: "action",
+        targetPattern: r.targetPattern,
+        ...(r.targetProfile ? { targetProfile: r.targetProfile } : {}),
+        verdict: "auto",
+        sourceProposalId: "",
+      }),
+      r.id
+    );
+  }
+  for (const d of drafts) {
+    const hit = byKey.get(ruleKey(d));
+    if (hit) out.set(ruleKey(d), hit);
   }
   return out;
 }
@@ -242,42 +343,42 @@ export async function loadVisibleNextRungRow(
   return resolved!;
 }
 
-/** An ACTIVE rule that already says exactly what the draft would. */
-async function findCoveringRule(
-  rule: GovernanceRuleDraft
-): Promise<string | null> {
-  const [hit] = await db
-    .select({ id: governanceRules.id })
-    .from(governanceRules)
-    .where(
-      and(
-        isNull(governanceRules.revokedAt),
-        or(
-          isNull(governanceRules.expiresAt),
-          gt(governanceRules.expiresAt, new Date())
-        ),
-        eq(governanceRules.principalKind, "agent"),
-        eq(governanceRules.agentUserId, rule.agentUserId!),
-        eq(governanceRules.scopeKind, rule.scopeKind),
-        rule.workspaceId
-          ? eq(governanceRules.workspaceId, rule.workspaceId)
-          : isNull(governanceRules.workspaceId),
-        eq(governanceRules.targetKind, "action"),
-        eq(governanceRules.targetPattern, rule.targetPattern),
-        rule.targetProfile
-          ? eq(governanceRules.targetProfile, rule.targetProfile)
-          : isNull(governanceRules.targetProfile),
-        eq(governanceRules.verdict, "auto")
-      )
-    )
-    .limit(1);
-  return hit?.id ?? null;
-}
-
 export type FileNextRungResult =
   | { outcome: "created"; ruleId: string; offer: NextRungOffer }
   | { outcome: "already_covered"; ruleId: string; offer: NextRungOffer }
-  | { outcome: "proposed"; proposalId: string; offer: NextRungOffer };
+  | { outcome: "proposed"; proposalId: string; offer: NextRungOffer }
+  | { outcome: "needs_admin"; proposalId: string; offer: NextRungOffer };
+
+/**
+ * The typed refusal: `error.data.reasonCode = NO_NEXT_RUNG` (the tRPC error
+ * formatter lifts `cause.reasonCode`), read by `isNoNextRungError`; the
+ * message keeps the pinned `NO_NEXT_RUNG:` prefix for older clients.
+ */
+function noNextRung(detail: string): TRPCError {
+  return new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: `${NO_NEXT_RUNG_CODE}: ${detail}`,
+    cause: Object.assign(new Error(NO_NEXT_RUNG_CODE), {
+      reasonCode: NO_NEXT_RUNG_CODE,
+    }),
+  });
+}
+
+/**
+ * The owner's review line, in the vocabulary's words — "Next time, let it
+ * update notes and tell you?" — never a raw event key.
+ */
+export function nextRungRequestLine(rule: GovernanceRuleDraft): string {
+  const dot = rule.targetPattern.lastIndexOf(".");
+  const subject = rule.targetPattern.slice(0, dot);
+  const action = rule.targetPattern.slice(dot + 1);
+  const what = buildObjectActionTitle({
+    action,
+    objectKind: rule.targetProfile ?? subject,
+  }).toLowerCase();
+  const where = rule.scopeKind === "pod" ? " in every space" : "";
+  return `Next time, let this agent ${what}${where} and tell you?`;
+}
 
 /**
  * Accept the next-rung offer on one card.
@@ -299,15 +400,13 @@ export async function fileNextRung(params: {
 }): Promise<FileNextRungResult> {
   const projection = projectNextRung(params.row);
   if (!projection.offer || !projection.rule) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        "NO_NEXT_RUNG: this item has no next rung to grant (a floor routed it, the write cannot be undone, it was declined, or no agent made it).",
-    });
+    throw noNextRung(
+      "this item has no next rung to grant (a floor routed it, the write cannot be undone, its kind is unknown, it was declined, or no agent made it)."
+    );
   }
   const { offer, rule } = projection;
 
-  const covering = await findCoveringRule(rule);
+  const covering = (await findCoveringRules([rule])).get(ruleKey(rule));
   if (covering) {
     return { outcome: "already_covered", ruleId: covering, offer };
   }
@@ -352,11 +451,13 @@ export async function fileNextRung(params: {
     .limit(1);
   const owner = agent?.createdByUserId;
   if (!owner) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "NO_NEXT_RUNG: the agent has no owner to decide this.",
-    });
+    throw noNextRung("the agent has no owner to decide this.");
   }
+  // The caller IS the owner and still may not grant it (a pod-wide rule needs
+  // a pod admin): the same pending settings.update, which only a pod admin can
+  // approve — reported as `needs_admin`, never "sent to the agent's owner" to
+  // the owner themselves.
+  const callerIsOwner = owner === params.userId;
   const { proposal, deduped } = await insertPendingProposal({
     workspaceId: null,
     targetType: "settings",
@@ -378,7 +479,7 @@ export async function fileNextRung(params: {
       : {
           proposalId: proposal.id,
           proposalType: "settings.update",
-          description: `Next time, let this agent do "${rule.targetPattern}" and tell you?`,
+          description: nextRungRequestLine(rule),
           agentUserId: rule.agentUserId!,
         },
     sideEffect: {
@@ -391,5 +492,9 @@ export async function fileNextRung(params: {
       },
     },
   });
-  return { outcome: "proposed", proposalId: proposal.id, offer };
+  return {
+    outcome: callerIsOwner ? "needs_admin" : "proposed",
+    proposalId: proposal.id,
+    offer,
+  };
 }
