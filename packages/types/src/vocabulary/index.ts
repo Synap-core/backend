@@ -1206,7 +1206,7 @@ export const TRUST_RUNG_LABELS: Readonly<
   ask: { name: "Asks you", offer: "Ask me first" },
   propose: { name: "Proposes", offer: "Next time, prepare it for me to decide" },
   do_tell: { name: "Does it, tells you", offer: "Next time, do it and tell me" },
-  quiet: { name: "Just does it", offer: "Next time, just do it" },
+  quiet: { name: "Just does it", offer: "Always let it do this" },
 };
 
 /** A rung's words in one mood; an unknown rung humanizes rather than leaks. */

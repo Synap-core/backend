@@ -3,33 +3,40 @@
  * and what the next step up would be (V1 F5, W7: "agents need you less every
  * week").
  *
- * Four rungs, lowest trust first:
+ * Four rungs, lowest trust first (founder's proactive model, 2026-09-28):
  *
- *   ask      — the agent cannot go on without the person: a slot handed to
- *              them (`ExpectedOutput.owner === 'human'`, the typed `ask`).
- *   propose  — the agent did the work and the person decides: a proposal
- *              (pending, or one a person already settled).
- *   do_tell  — the agent acted and TOLD the person: an `auto_approved` receipt
- *              in the "on your behalf" feed (attention `notice`), with Undo.
- *   quiet    — the agent just does it: an `auto_approved` receipt nobody is
- *              told about (attention `history` — today only session
- *              bookkeeping lands here).
+ *   ask      — "Ask me": a prepared question — a slot handed to the person
+ *              (`ExpectedOutput.owner === 'human'`, the typed `ask`, carrying
+ *              what the agent looked at).
+ *   propose  — "Propose": the change is ready, one tap approves it — a
+ *              proposal (pending, or one a person already settled).
+ *   do_tell  — "Do + tell": the agent acted, the person sees it in Activity
+ *              with Undo — an `auto_approved` receipt NO standing rule of the
+ *              person's decided (the pod default "reversible writes act", or a
+ *              default whitelist).
+ *   quiet    — "Just do it": a RULE visible in Settings — an `auto_approved`
+ *              receipt a specific `governance_rules` row decided (never the
+ *              pod default's `@reversible` class row).
  *
- * The ladder INVENTS NO STATE. Every rung is read off fields already on the
- * wire (a slot's `owner`; a proposal's `status` / `proposalType` /
- * `targetType`, through the ONE attention rule `resolveProposalAttention`).
+ * The ladder INVENTS NO STATE. Every rung is read off fields already stored
+ * (a slot's `owner`; a proposal's `status` / `proposalType` / `targetType`,
+ * through the ONE attention rule `resolveProposalAttention`; a receipt's
+ * `_autoApprove.governanceRuleId`, resolved by the server into
+ * {@link TrustLadderItem} `grantedByRule`). A session-bookkeeping receipt (the
+ * agent keeping its own session record, attention `history`) sits on NO rung:
+ * it is not work done for the person.
  *
- * ## The next rung is a grant, and only one step of it is grantable today
+ * ## The next rung is a grant — and ask → propose is not grantable yet
  *
- * {@link NEXT_RUNG_VIA} says which config expresses each step. Only
- * propose → do_tell has one: an agent-scoped `auto` row in `governance_rules`,
- * resolved at rung 2.8 of the ONE engine (`decideAgentPolicy`). The other two
- * steps have NO config that expresses them yet, so {@link nextRung} offers
- * nothing there rather than a button that does nothing:
- *   - ask → propose: "stop asking me this" has no stored form (a param slot
- *     could pin its param on a playbook/track — not built).
- *   - do_tell → quiet: "act without telling me" needs a rule whose receipts
- *     skip the `notice` tier — not built (founder decision pending).
+ * {@link NEXT_RUNG_VIA} says which config expresses each step. propose →
+ * do_tell and do_tell → quiet are both the SAME config: the narrowest
+ * agent-scoped `auto` row in `governance_rules` ({@link nextRungRuleDraft}),
+ * resolved at rung 2.8 of the ONE engine (`decideAgentPolicy`). From a pending
+ * card it lets the next one act (with Undo); from a do+tell receipt it turns
+ * the default's permission into the person's own named rule in Settings.
+ * ask → propose has NO stored config ("stop asking me this" — a param slot
+ * could pin its param on a playbook/track; not built), so {@link nextRung}
+ * offers nothing there rather than a button that does nothing.
  *
  * ## Why the floors are an INPUT here, not a list
  *
@@ -89,7 +96,15 @@ export function rungAbove(rung: TrustRung): TrustRung | null {
  */
 export type TrustLadderItem =
   | { kind: "slot"; owner?: string | null }
-  | ({ kind: "proposal" } & ProposalAttentionInput);
+  | ({
+      kind: "proposal";
+      /**
+       * SERVER-RESOLVED, receipts only: a specific `governance_rules` row
+       * (not the pod default's `@reversible` class row) executed this write —
+       * `_autoApprove.governanceRuleId` looked up. Absent ⇒ not a rule grant.
+       */
+      grantedByRule?: boolean | null;
+    } & ProposalAttentionInput);
 
 /** Statuses that are the propose rung whatever a person later said. */
 const PROPOSE_STATUSES: ReadonlySet<string> = new Set([
@@ -105,19 +120,19 @@ const PROPOSE_STATUSES: ReadonlySet<string> = new Set([
  * The rung an item sits on, or `null` when it sits on none.
  *
  * `null` for: an agent-owned slot; a status this build does not know (a newer
- * server than client — never guessed); and `reverted`, which the status alone
- * cannot place (an Undo applies to a receipt AND to an approved proposal).
+ * server than client — never guessed); `reverted`, which the status alone
+ * cannot place (an Undo applies to a receipt AND to an approved proposal); and
+ * a session-bookkeeping receipt (not work done for the person).
  */
 export function resolveTrustRung(item: TrustLadderItem): TrustRung | null {
   if (item.kind === "slot") return item.owner === "human" ? "ask" : null;
   const status = item.status ?? "";
   if (PROPOSE_STATUSES.has(status)) return "propose";
   if (status !== "auto_approved") return null;
-  // The ONE attention rule decides told vs not told — never re-derived here.
-  const attention = resolveProposalAttention(item);
-  if (attention === "notice") return "do_tell";
-  if (attention === "history") return "quiet";
-  return null;
+  // The ONE attention rule says whether this is work for the person at all —
+  // bookkeeping is demoted to `history` there, never re-derived here.
+  if (resolveProposalAttention(item) !== "notice") return null;
+  return item.grantedByRule === true ? "quiet" : "do_tell";
 }
 
 // ─── What each step is granted through ──────────────────────────────────────
@@ -134,7 +149,7 @@ export type NextRungVia = "governance_rule";
 export const NEXT_RUNG_VIA = {
   ask: null,
   propose: "governance_rule",
-  do_tell: null,
+  do_tell: "governance_rule",
   quiet: null,
 } as const satisfies Record<TrustRung, NextRungVia | null>;
 
@@ -232,7 +247,8 @@ export interface NextRungOffer {
  * expresses the step yet ({@link NEXT_RUNG_VIA}); or the grant could never
  * fire / must never be offered:
  *   - a proposal the person REJECTED, withdrawn, expired or failed — a "no"
- *     is not a reason to trust more;
+ *     is not a reason to trust more (propose is offered from `pending` and
+ *     `approved` only; do+tell from the `auto_approved` receipt itself);
  *   - no acting agent;
  *   - the write is not reversible (or reversibility is unknown);
  *   - a floor routed it ({@link ruleCanReachReason}).
@@ -243,10 +259,15 @@ export function nextRung(input: NextRungInput): NextRungOffer | null {
   const to = rungAbove(from);
   const via = NEXT_RUNG_VIA[from];
   if (!to || !via) return null;
-  // `via === "governance_rule"` ⇒ the item is a proposal (only `propose` has it).
+  // `via === "governance_rule"` ⇒ the item is a proposal (a slot is `ask`).
   if (input.item.kind !== "proposal") return null;
   const status = input.item.status ?? "";
-  if (status !== "pending" && status !== "approved") return null;
+  if (
+    from === "propose"
+      ? status !== "pending" && status !== "approved"
+      : status !== "auto_approved"
+  )
+    return null;
   if (!input.agentUserId) return null;
   if (input.reversible !== true) return null;
   if (!ruleCanReachReason(input.governanceReason)) return null;

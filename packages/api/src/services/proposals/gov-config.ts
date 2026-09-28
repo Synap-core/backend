@@ -65,6 +65,10 @@ export interface SettingsUpdateProposalData {
   agentName?: string | null;
   currentLimit?: number;
   pendingCount?: number;
+  // DISPLAY-ONLY lineage, written by the trust ladder's `proposeNextRung`
+  // (`services/proposals/next-rung.ts`) when the caller may not grant the rule
+  // themselves: the card the next rung was asked for from. Never read here.
+  nextRungFromProposalId?: string;
 }
 
 /** The store-specific fields, sans the `store`/`op` discriminator. */

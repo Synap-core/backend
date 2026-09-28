@@ -48,15 +48,21 @@ describe("resolveTrustRung", () => {
     }
   });
 
-  it("an auto-approved receipt is do+tell when told, quiet when not (the attention rule)", () => {
-    expect(
-      resolveTrustRung({
-        kind: "proposal",
-        status: "auto_approved",
-        proposalType: "entity.create",
-        targetType: "entity",
-      })
-    ).toBe("do_tell");
+  it("a receipt is do+tell under the default, quiet under the person's own rule", () => {
+    const receipt = {
+      kind: "proposal" as const,
+      status: "auto_approved",
+      proposalType: "entity.create",
+      targetType: "entity",
+    };
+    expect(resolveTrustRung(receipt)).toBe("do_tell");
+    expect(resolveTrustRung({ ...receipt, grantedByRule: false })).toBe(
+      "do_tell"
+    );
+    expect(resolveTrustRung({ ...receipt, grantedByRule: true })).toBe("quiet");
+  });
+
+  it("session bookkeeping sits on no rung (the attention rule demotes it)", () => {
     expect(
       resolveTrustRung({
         kind: "proposal",
@@ -64,7 +70,7 @@ describe("resolveTrustRung", () => {
         proposalType: "focus_session.update",
         targetType: "focus_session",
       })
-    ).toBe("quiet");
+    ).toBeNull();
   });
 
   it("reverted and unknown statuses are never guessed onto a rung", () => {
@@ -126,7 +132,25 @@ describe("nextRung", () => {
     }
   });
 
-  it("offers nothing where no config expresses the step yet (ask → propose, do+tell → quiet) or at the top", () => {
+  it("a do+tell receipt offers just-do-it through the same narrowest rule", () => {
+    const receipt = pending({
+      item: {
+        kind: "proposal",
+        status: "auto_approved",
+        proposalType: "entity.create",
+        targetType: "entity",
+      },
+    });
+    expect(nextRung(receipt)).toEqual({
+      from: "do_tell",
+      to: "quiet",
+      via: "governance_rule",
+    });
+    expect(nextRung({ ...receipt, reversible: false })).toBeNull();
+    expect(nextRung({ ...receipt, agentUserId: null })).toBeNull();
+  });
+
+  it("offers nothing where no config expresses the step (ask → propose), at the top, or on bookkeeping", () => {
     expect(nextRung({ item: { kind: "slot", owner: "human" } })).toBeNull();
     expect(
       nextRung(
@@ -136,6 +160,7 @@ describe("nextRung", () => {
             status: "auto_approved",
             proposalType: "entity.create",
             targetType: "entity",
+            grantedByRule: true,
           },
         })
       )
@@ -155,7 +180,7 @@ describe("nextRung", () => {
     expect(NEXT_RUNG_VIA).toEqual({
       ask: null,
       propose: "governance_rule",
-      do_tell: null,
+      do_tell: "governance_rule",
       quiet: null,
     });
   });
@@ -227,7 +252,7 @@ describe("the words", () => {
       expect(TRUST_RUNG_LABELS[rung].offer.length, rung).toBeGreaterThan(0);
     }
     expect(resolveTrustRungLabel("do_tell")).toBe("Does it, tells you");
-    expect(resolveTrustRungLabel("quiet", "offer")).toBe("Next time, just do it");
+    expect(resolveTrustRungLabel("quiet", "offer")).toBe("Always let it do this");
     expect(resolveTrustRungLabel("some_rung")).toBe("Some rung");
   });
 });

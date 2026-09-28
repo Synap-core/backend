@@ -53,6 +53,13 @@ import {
   secrets,
 } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import {
+  NEXT_RUNG_BATCH_MAX,
+  fileNextRung,
+  loadVisibleNextRungRow,
+  projectNextRung,
+  readNextRungs,
+} from "../services/proposals/next-rung.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
 import {
   activeRulePredicate,
@@ -634,6 +641,67 @@ export const governanceRulesRouter = router({
       return { rule };
     }),
 
+  /**
+   * THE TRUST LADDER, read: for each card (a proposal the caller can see), the
+   * rung it sits on, the next-rung offer (or `null`), and the exact rule
+   * accepting it would write. Projected here because only the server may read
+   * the engine's reversibility class — `@synap-core/types/trust-ladder`.
+   * An id the caller cannot see is omitted, like one that does not exist.
+   */
+  nextRungs: protectedProcedure
+    .input(
+      z.object({
+        proposalIds: z.array(z.string().uuid()).max(NEXT_RUNG_BATCH_MAX),
+      })
+    )
+    .query(async ({ ctx, input }) => ({
+      rungs: await readNextRungs({
+        userId: ctx.userId,
+        proposalIds: input.proposalIds,
+      }),
+    })),
+  /**
+   * THE TRUST LADDER, write: accept a card's next rung ("Next time, do it and
+   * tell me"). Writes the NARROWEST rule (agent × workspace × exact action ×
+   * profile, `auto`) — never past a floor, never on an irreversible write
+   * (refused PRECONDITION_FAILED `NO_NEXT_RUNG`).
+   *
+   * WHO GRANTS: exactly the gate `create` applies (`assertCanManageRule`). A
+   * caller who passes it — the agent's owner acting on their own card, or a pod
+   * admin — IS the approver, so the rule is written now (`created`). Anyone
+   * else who can see the card files a pending `settings.update` for the
+   * agent's owner (`proposed`). An identical active rule answers
+   * `already_covered`. Humans only: a Kratos `protectedProcedure`, never on
+   * the agent (Hub/MCP) doors — an agent does not widen its own lane.
+   */
+  proposeNextRung: protectedProcedure
+    .input(
+      z.object({
+        itemRef: z.object({
+          kind: z.literal("proposal"),
+          id: z.string().uuid(),
+        }),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const row = await loadVisibleNextRungRow(ctx.userId, input.itemRef.id);
+      const { rule } = projectNextRung(row);
+      let mayGrant = false;
+      if (rule) {
+        try {
+          await assertCanManageRule(ctx.userId, {
+            scopeKind: rule.scopeKind,
+            workspaceId: rule.workspaceId ?? null,
+            principalKind: rule.principalKind,
+            agentUserId: rule.agentUserId ?? null,
+          });
+          mayGrant = true;
+        } catch (err) {
+          if (!(err instanceof TRPCError) || err.code !== "FORBIDDEN") throw err;
+        }
+      }
+      return fileNextRung({ userId: ctx.userId, row, mayGrant });
+    }),
   /**
    * Revoke a rule (soft — sets revokedAt). Gated identically to `create`:
    * whoever could have created this rule may undo it.

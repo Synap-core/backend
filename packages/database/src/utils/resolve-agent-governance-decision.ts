@@ -200,8 +200,8 @@ interface GovernanceRuleCandidate {
 /**
  * Target-match score for one candidate row against the write being resolved,
  * or `undefined` if the row's target does not match at all (not a candidate).
- * Higher = more specific: exact action / exact capability (3) > profile (2) >
- * glob action (1) > bare "*" catch-all (0). `matchesActionPattern` (the same
+ * Higher = more specific: exact action ON a profile (4) > exact action /
+ * exact capability (3) > profile (2) > glob action (1) > bare "*" catch-all (0). `matchesActionPattern` (the same
  * matcher every `autoApproveFor` glob check uses) only recognizes exact and
  * "<subject>.*" globs — NOT a bare "*" — so the catch-all case is handled
  * explicitly here.
@@ -231,6 +231,19 @@ function scoreRuleTarget(
       : undefined;
   }
   if (rule.targetKind === "action") {
+    // An ACTION rule that also names a profile (the trust ladder's narrowest
+    // grant, `nextRungRuleDraft`: agent × action × profile) matches ONLY that
+    // action on that profile, and outranks a bare exact-action rule (4 > 3).
+    // Before this, an action rule ignored `targetProfile`. governanceRules.create
+    // nulls it and the scanners never set it; a `settings.update` spec could
+    // carry one, and now narrows to exactly what its author wrote.
+    if (rule.targetProfile) {
+      return rule.targetPattern === eventKey &&
+        profileSlug != null &&
+        rule.targetProfile === profileSlug
+        ? 4
+        : undefined;
+    }
     if (rule.targetPattern === "*") return 0;
     if (rule.targetPattern === eventKey) return 3;
     if (matchesActionPattern(eventKey, [rule.targetPattern])) return 1;
