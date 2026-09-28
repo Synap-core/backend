@@ -40,7 +40,7 @@
  *   • Views are find-or-create-by-name (the create path blind-inserts → would
  *     duplicate every run); bento/flow views are skipped here (bento dashboards
  *     have their own idempotent `ensureProfileBento` path).
- *   • Settings (capabilities/subtype/purpose/visibility) are merged additively.
+ *   • Settings (capabilities/subtype/visibility) are merged additively.
  *
  * `dryRun: true` computes the full diff without writing — use it to preview.
  */

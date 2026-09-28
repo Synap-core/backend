@@ -587,6 +587,10 @@ const coreProcedures = {
         input.id,
         {
           name: input.name || undefined,
+          // Blank clears (null); absent leaves it untouched.
+          ...(input.description !== undefined
+            ? { description: input.description.trim() || null }
+            : {}),
           settings: settingsToPersist || undefined,
         },
         ctx.userId

@@ -42,6 +42,11 @@ export interface CreateWorkspaceInput {
 
 export interface UpdateWorkspaceInput {
   name?: string;
+  /**
+   * `undefined` = untouched; `null` = cleared. Missing from this type until
+   * 2026-09-28, so every re-describe door answered "updated" and wrote nothing.
+   */
+  description?: string | null;
   settings?: Record<string, unknown>;
 }
 
@@ -119,6 +124,7 @@ export class WorkspaceRepository extends BaseRepository<
       .update(workspaces)
       .set({
         name: data.name,
+        description: data.description,
         // REPLACE semantics, except `exposurePolicy` (server-owned): dropped
         // from the incoming blob and carried over from the STORED row, in one
         // atomic statement, so a settings round-trip can neither plant nor
