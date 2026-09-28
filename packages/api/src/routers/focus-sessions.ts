@@ -59,6 +59,7 @@ import {
   LANDED_SESSION_STATUSES,
   LANDED_SINCE_MAX,
   summarizeSessionOutputs,
+  type SessionLiveness,
 } from "@synap-core/types/landed";
 import { readSessionUsage } from "../services/focus-sessions/session-usage.js";
 import {
@@ -464,11 +465,7 @@ async function projectSessionRows(
   // `attachSessionVerdicts`), same unconditional contract as participants.
   const { attachSessionVerdicts } =
     await import("../services/focus-sessions/evaluations/record.js");
-  const withVerdicts = await attachSessionVerdicts(withParticipants);
-  // LIVENESS — when an agent last did anything here (a proposal filed into
-  // the session, a post in its room). Two grouped reads for the page, same
-  // unconditional contract as participants; see `agent-activity.ts`.
-  return attachLastAgentActivity(withVerdicts, requireUserId(userId));
+  return attachSessionVerdicts(withParticipants);
 }
 
 // ── Router ─────────────────────────────────────────────────────────────────
@@ -481,10 +478,7 @@ async function projectSessionRows(
 type SessionListRow = FocusSession & { parentSessionId: string | null } & {
   triage: TriageProjection;
   kind: SessionKind;
-} & SessionParticipants & { verdict?: SessionVerdict } & {
-    /** When an agent last acted in this session (`agent-activity.ts`); null = never. */
-    lastAgentActivityAt: Date | null;
-  } & Partial<SessionEdges> &
+} & SessionParticipants & { verdict?: SessionVerdict } & Partial<SessionEdges> &
   Partial<SessionOutputDependencies> & {
     nextMove?: ContinuationNextMove;
     /** Present with `nextMove: true` — the counts a state mark reads. */
@@ -754,7 +748,9 @@ export const focusSessionsRouter = router({
    * session itself come from one set.
    *
    * Rows are `browse`'s (`projectSessionRows`: participants, verdict,
-   * `lastAgentActivityAt`, viewerRole) PLUS `outputsSummary` — counts by kind
+   * viewerRole) PLUS `lastAgentActivityAt` (liveness — attached here and on
+   * `get` only, never on the 30s-polled `list`/`browse`) PLUS
+   * `outputsSummary` — counts by kind
    * and the newest object, from the SAME three-ledger join
    * (`listOutputsForSessions`) the Produced board reads, batched for the page.
    * It is attached HERE and not in `projectSessionRows` because the join costs
@@ -799,7 +795,9 @@ export const focusSessionsRouter = router({
         .limit(input.limit);
       const viewer = requireUserId(ctx.userId);
       const [projected, outputs] = await Promise.all([
-        projectSessionRows(rows, ctx.userId),
+        projectSessionRows(rows, ctx.userId).then((r) =>
+          attachLastAgentActivity(r, viewer)
+        ),
         listOutputsForSessions(db, rows),
       ]);
       return projected.map((r) => ({
@@ -1288,8 +1286,29 @@ export const focusSessionsRouter = router({
         userId: requireUserId(ctx.userId),
         roster,
       });
+      // Liveness — when an agent last acted here (`agent-activity.ts`). A
+      // SECTION of the detail page, so it degrades like the continuation's
+      // sections: a failed read is `unavailable`, never folded into `null`
+      // ("no agent ever acted") and never allowed to take the page down.
+      let liveness: SessionLiveness;
+      try {
+        const [live] = await attachLastAgentActivity(
+          [row],
+          requireUserId(ctx.userId)
+        );
+        liveness = {
+          status: "ok",
+          lastAgentActivityAt: live!.lastAgentActivityAt,
+        };
+      } catch {
+        liveness = {
+          status: "unavailable",
+          reason: "When an agent last acted here could not be read.",
+        };
+      }
       return withParentSessionId({
         ...staffed,
+        liveness,
         // `owner` | `member` — a member reads, never writes (decision C).
         viewerRole: withViewerRole(row, requireUserId(ctx.userId)).viewerRole,
         triage: projectTriage(row),

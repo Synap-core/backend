@@ -23,18 +23,22 @@
  *     row was materialized from one, otherwise the earliest proposal on that
  *     target filed AT OR BEFORE the object's own `createdAt` (the auto-approve
  *     receipt is minted before the write; any later proposal on the target is
- *     an edit, not the creation). Mapped by `resolveLandedDecision`.
- *   - PENDING rows: a PENDING proposal filed into one of the scanned sessions
- *     whose target does not exist yet — a proposed creation. It is "To review"
- *     (`decision.state = 'pending'`), its door is the proposal, and it is
- *     never counted as landed.
+ *     an edit, not the creation) — `findCreatingProposals`, the ONE derivation
+ *     `proposals.list({ subject })` pins too. Mapped by `resolveLandedDecision`;
+ *     a creating proposal the viewer cannot see is `unknown`, and nothing of
+ *     it (status, agent, reviewer) is read. `changeCount` is the undo's reach.
+ *   - PENDING: a PENDING proposal filed into one of the scanned sessions whose
+ *     target does not exist yet — a proposed creation. Never landed: it rides
+ *     in `pending` ({ count, ≤3 samples }), apart from the paged `items`, so
+ *     the surface shows ONE "N to review ›" row.
  *
  * ── VISIBILITY ──────────────────────────────────────────────────────────────
  * Sessions: `sessionListConditions` (starts from `sessionReadableWhere`) AND
  * `scopedDb(access).predicate(focusSessions)` — the same floors the project
- * door applies. Proposals: read only BY the floored session ids or the
- * floored outputs' target ids, AND through `userVisibleWhere` — the predicate
- * every other proposal read (`attachSessionParticipants`) applies.
+ * door applies. Pending proposals: read BY the floored session ids AND through
+ * `userVisibleWhere` — the predicate every other proposal read applies.
+ * Creating proposals: read by the floored outputs' ids, UNfloored, carrying
+ * `visible` = that same predicate — so a hidden one reads `unknown`.
  *
  * ── BOUNDS ──────────────────────────────────────────────────────────────────
  * The scan reads the {@link PROJECT_OUTPUTS_SESSION_SCAN} most recently active
@@ -57,8 +61,10 @@ import {
   users,
 } from "@synap/database";
 import {
+  LANDED_PENDING_SAMPLES,
   matchesLandedActor,
   resolveLandedDecision,
+  type LandedDecisionState,
   type LandedActor,
   type LandedActorFilter,
   type LandedObjectRow,
@@ -72,6 +78,11 @@ import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { displayNameForUser } from "../../routers/proposals/helper-functions.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 import { UUID_RE } from "../focus-sessions/session-metadata.js";
+import {
+  findCreatingProposals,
+  type CreatingProposal,
+  type CreatingProposalQuery,
+} from "../proposals/object-subject.js";
 import {
   PROJECT_OUTPUTS_MAX_LIMIT,
   pageNewestFirst,
@@ -97,7 +108,7 @@ export interface LandedOutputsQuery {
 }
 
 /** The kinds whose rows carry provenance columns this door reads. */
-const PROVENANCE_KINDS = new Set(["entity", "document"]);
+const PROVENANCE_KINDS = ["entity", "document"] as const;
 
 interface ObjectProvenance {
   userId: string;
@@ -108,16 +119,14 @@ interface ObjectProvenance {
   createdAt: Date;
 }
 
-interface ProposalFact {
+/** A PENDING proposed creation — the only proposal read that needs `data`. */
+interface PendingFact {
   id: string;
-  status: string;
   targetType: string;
   targetId: string;
   agentUserId: string | null;
   proposedByUserId: string | null;
   sessionId: string | null;
-  reviewedBy: string | null;
-  reviewedAt: Date | null;
   createdAt: Date;
   data: unknown;
 }
@@ -176,13 +185,27 @@ export async function listLandedOutputs(
       (sinceMs === null || Date.parse(r.createdAt) >= sinceMs) &&
       matchesLandedActor(r.actor, actorFilter)
   );
-  return { ...pageNewestFirst(filtered, query.cursor, limit), truncated };
+  // Pending creations are NOT landed: they ride apart, as a count plus the
+  // newest few, for ONE "N to review ›" row — never mixed into the page.
+  const landed = filtered.filter((r) => r.decision.state !== "pending");
+  const pending = filtered
+    .filter((r) => r.decision.state === "pending")
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return {
+    ...pageNewestFirst(landed, query.cursor, limit),
+    pending: {
+      count: pending.length,
+      samples: pending.slice(0, LANDED_PENDING_SAMPLES),
+    },
+    truncated,
+  };
 }
 
 /**
  * Actor + decision for every scanned output, plus the pending rows — in a
- * FIXED number of queries (objects ×2, proposals ×2, pending-target existence
- * ×2, users ×1), never one per row.
+ * FIXED number of queries (objects ×2, pending ×1, pending-target existence
+ * ×2, creating proposals ×2, users ×1), never one per row. Only the pending
+ * read selects `proposals.data` (its title lives there).
  */
 export async function attachLandedProvenance(
   database: typeof db,
@@ -205,9 +228,6 @@ export async function attachLandedProvenance(
   ];
   const entityIds = idsOf("entity");
   const documentIds = idsOf("document");
-  const targetIds = [
-    ...new Set(items.map((i) => i.ref.id).filter((id) => UUID_RE.test(id))),
-  ];
 
   const [entityRows, documentRows, pendingRows] = await Promise.all([
     entityIds.length
@@ -240,7 +260,16 @@ export async function attachLandedProvenance(
       : Promise.resolve([]),
     sessionIds.length
       ? database
-          .select(proposalFactColumns)
+          .select({
+            id: proposals.id,
+            targetType: proposals.targetType,
+            targetId: proposals.targetId,
+            agentUserId: proposals.agentUserId,
+            proposedByUserId: proposals.proposedByUserId,
+            sessionId: proposals.sessionId,
+            createdAt: proposals.createdAt,
+            data: proposals.data,
+          })
           .from(proposals)
           .where(
             and(
@@ -250,91 +279,46 @@ export async function attachLandedProvenance(
               userVisibleWhere(proposals.workspaceId, viewer)
             )
           )
-      : Promise.resolve([] as ProposalFact[]),
+      : Promise.resolve([] as PendingFact[]),
   ]);
 
   const provenance = new Map<string, ObjectProvenance>();
   for (const r of entityRows) provenance.set(coord("entity", r.id), r);
   for (const r of documentRows) provenance.set(coord("document", r.id), r);
 
-  // Creating proposals: by the stamped lineage, and by target for the
-  // receipt path (inline writes stamp no `sourceProposalId`).
-  const sourceIds = [
-    ...new Set(
-      [...provenance.values()]
-        .map((p) => p.sourceProposalId)
-        .filter((id): id is string => Boolean(id))
-    ),
-  ];
+  // THE creating proposal per output (`findCreatingProposals`, the same
+  // derivation `proposals.list({ subject })` pins). Bound = the object's own
+  // creation; an output with no object row is bounded by when it was produced.
+  const creatingQueries = new Map<string, CreatingProposalQuery>();
+  for (const item of items) {
+    if (!UUID_RE.test(item.ref.id) || creatingQueries.has(item.ref.id)) continue;
+    const obj = provenance.get(coord(item.kind, item.ref.id));
+    creatingQueries.set(item.ref.id, {
+      id: item.ref.id,
+      sourceProposalId: obj?.sourceProposalId ?? null,
+      bound: obj?.createdAt ?? new Date(item.createdAt),
+    });
+  }
   const pendingTargets = [
     ...new Set(
       pendingRows.map((p) => p.targetId).filter((id) => UUID_RE.test(id))
     ),
   ];
-  const [targetProposals, sourceProposals, liveEntities, liveDocuments] =
-    await Promise.all([
-      targetIds.length
-        ? database
-            .select(proposalFactColumns)
-            .from(proposals)
-            .where(
-              and(
-                inArray(proposals.targetId, targetIds),
-                userVisibleWhere(proposals.workspaceId, viewer)
-              )
-            )
-        : Promise.resolve([] as ProposalFact[]),
-      sourceIds.length
-        ? database
-            .select(proposalFactColumns)
-            .from(proposals)
-            .where(
-              and(
-                inArray(proposals.id, sourceIds),
-                userVisibleWhere(proposals.workspaceId, viewer)
-              )
-            )
-        : Promise.resolve([] as ProposalFact[]),
-      pendingTargets.length
-        ? database
-            .select({ id: entities.id })
-            .from(entities)
-            .where(inArray(entities.id, pendingTargets))
-        : Promise.resolve([]),
-      pendingTargets.length
-        ? database
-            .select({ id: documents.id })
-            .from(documents)
-            .where(inArray(documents.id, pendingTargets))
-        : Promise.resolve([]),
-    ]);
-
-  const proposalById = new Map<string, ProposalFact>();
-  for (const p of [...sourceProposals, ...targetProposals]) {
-    proposalById.set(p.id, p);
-  }
-  const byTarget = new Map<string, ProposalFact[]>();
-  for (const p of targetProposals) {
-    const key = coord(p.targetType, p.targetId);
-    const list = byTarget.get(key) ?? [];
-    list.push(p);
-    byTarget.set(key, list);
-  }
-
-  /** The proposal that CREATED this object, when governance recorded one. */
-  const creatingProposal = (
-    item: ProjectOutputItem,
-    obj: ObjectProvenance | undefined
-  ): ProposalFact | undefined => {
-    if (obj?.sourceProposalId) {
-      const stamped = proposalById.get(obj.sourceProposalId);
-      if (stamped) return stamped;
-    }
-    const bound = (obj?.createdAt ?? new Date(item.createdAt)).getTime();
-    return (byTarget.get(coord(item.kind, item.ref.id)) ?? [])
-      .filter((p) => p.status !== "pending" && p.createdAt.getTime() <= bound)
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
-  };
+  const [creating, liveEntities, liveDocuments] = await Promise.all([
+    findCreatingProposals(database, [...creatingQueries.values()], viewer),
+    pendingTargets.length
+      ? database
+          .select({ id: entities.id })
+          .from(entities)
+          .where(inArray(entities.id, pendingTargets))
+      : Promise.resolve([]),
+    pendingTargets.length
+      ? database
+          .select({ id: documents.id })
+          .from(documents)
+          .where(inArray(documents.id, pendingTargets))
+      : Promise.resolve([]),
+  ]);
 
   const live = new Set([
     ...liveEntities.map((r) => r.id),
@@ -344,18 +328,29 @@ export async function attachLandedProvenance(
     (p) => p.sessionId && sessionById.has(p.sessionId) && !live.has(p.targetId)
   );
 
-  // Resolve every person / agent named anywhere on the page in ONE read.
   type Draft = {
     row: Omit<LandedObjectRow, "actor" | "decision">;
     actor: { kind: "agent" | "human"; id: string | null };
-    proposal: ProposalFact | undefined;
+    decision: {
+      state: LandedDecisionState;
+      proposalId: string | null;
+      reviewedBy: string | null;
+      reviewedAt: Date | null;
+      changeCount: number | null;
+    };
   };
   const drafts: Draft[] = [];
   for (const item of items) {
     const session = sessionById.get(item.sessionId);
     if (!session) continue;
     const obj = provenance.get(coord(item.kind, item.ref.id));
-    const proposal = creatingProposal(item, obj);
+    const found = creating.get(item.ref.id);
+    // A creating proposal the viewer cannot see is an UNKNOWN decision, and
+    // NOTHING of it is read: not its status, not its agent, not its reviewer.
+    const seen = found?.visible ? found : undefined;
+    const state = found
+      ? resolveLandedDecision(found.status, { visible: found.visible })
+      : resolveLandedDecision(null);
     drafts.push({
       row: {
         id: item.id,
@@ -366,8 +361,14 @@ export async function attachLandedProvenance(
         createdAt: item.createdAt,
         session: { id: session.id, title: session.title },
       },
-      actor: resolveActor({ proposal, obj, item, session }),
-      proposal,
+      actor: resolveActor({ proposal: seen, obj, item, session }),
+      decision: {
+        state,
+        proposalId: seen?.id ?? null,
+        reviewedBy: seen?.reviewedBy ?? null,
+        reviewedAt: seen?.reviewedAt ?? null,
+        changeCount: seen?.changeCount ?? null,
+      },
     });
   }
   for (const p of proposedCreations) {
@@ -378,20 +379,27 @@ export async function attachLandedProvenance(
         kind: normalizeObjectKind(p.targetType),
         title: proposedTitle(p),
         ref: { kind: "proposal", id: p.id },
-        createdAt: p.createdAt.toISOString(),
+        createdAt: new Date(p.createdAt).toISOString(),
         session: { id: session.id, title: session.title },
       },
       actor: p.agentUserId
         ? { kind: "agent", id: p.agentUserId }
         : { kind: "human", id: p.proposedByUserId ?? session.userId },
-      proposal: p,
+      decision: {
+        state: "pending",
+        proposalId: p.id,
+        reviewedBy: null,
+        reviewedAt: null,
+        changeCount: null,
+      },
     });
   }
 
+  // Resolve every person / agent named anywhere on the page in ONE read.
   const nameIds = [
     ...new Set(
       drafts.flatMap((d) =>
-        [d.actor.id, d.proposal?.reviewedBy].filter((id): id is string =>
+        [d.actor.id, d.decision.reviewedBy].filter((id): id is string =>
           Boolean(id)
         )
       )
@@ -415,10 +423,10 @@ export async function attachLandedProvenance(
     }
   }
 
-  return drafts.map(({ row, actor, proposal }) => {
-    const state = resolveLandedDecision(proposal?.status);
+  return drafts.map(({ row, actor, decision }) => {
     const decided =
-      proposal?.reviewedBy && (state === "approved" || state === "reverted");
+      decision.reviewedBy &&
+      (decision.state === "approved" || decision.state === "reverted");
     const landedActor: LandedActor =
       actor.kind === "agent"
         ? {
@@ -436,43 +444,31 @@ export async function attachLandedProvenance(
       ...row,
       actor: landedActor,
       decision: {
-        state,
-        proposalId: proposal?.id ?? null,
+        state: decision.state,
+        proposalId: decision.proposalId,
         decidedBy: decided
           ? {
-              id: proposal!.reviewedBy!,
-              name: nameById.get(proposal!.reviewedBy!) ?? null,
+              id: decision.reviewedBy!,
+              name: nameById.get(decision.reviewedBy!) ?? null,
             }
           : null,
         decidedAt:
-          decided && proposal!.reviewedAt
-            ? proposal!.reviewedAt.toISOString()
+          decided && decision.reviewedAt
+            ? decision.reviewedAt.toISOString()
             : null,
+        changeCount: decision.changeCount,
       },
     };
   });
 }
 
-const proposalFactColumns = {
-  id: proposals.id,
-  status: proposals.status,
-  targetType: proposals.targetType,
-  targetId: proposals.targetId,
-  agentUserId: proposals.agentUserId,
-  proposedByUserId: proposals.proposedByUserId,
-  sessionId: proposals.sessionId,
-  reviewedBy: proposals.reviewedBy,
-  reviewedAt: proposals.reviewedAt,
-  createdAt: proposals.createdAt,
-  data: proposals.data,
-};
-
 /**
  * WHO made it, in evidence order. A legacy row with no provenance is the
- * owner's (a human), never an agent's.
+ * owner's (a human), never an agent's. An INVISIBLE creating proposal is
+ * never read here (`proposal` is undefined for it).
  */
 function resolveActor(input: {
-  proposal: ProposalFact | undefined;
+  proposal: CreatingProposal | undefined;
   obj: ObjectProvenance | undefined;
   item: ProjectOutputItem;
   session: ScannedSession;
@@ -489,11 +485,14 @@ function resolveActor(input: {
   // ledger's `originKind` is the next positive evidence…
   if (item.producedBy === "agent") return { kind: "agent", id: null };
   // …and with none at all, the row is its owner's — a human, never an agent.
-  return { kind: "human", id: obj ? (obj.createdByUserId ?? obj.userId) : session.userId };
+  return {
+    kind: "human",
+    id: obj ? (obj.createdByUserId ?? obj.userId) : session.userId,
+  };
 }
 
 /** The proposed object's name, through the shared proposal-name resolver. */
-function proposedTitle(p: ProposalFact): string {
+function proposedTitle(p: PendingFact): string {
   const data =
     p.data && typeof p.data === "object"
       ? (p.data as Record<string, unknown>)

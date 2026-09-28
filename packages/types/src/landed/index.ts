@@ -500,3 +500,12 @@ export function resolveOutputsResultLine(
 export interface SessionAgentActivity {
   lastAgentActivityAt: Date | string | null;
 }
+
+/**
+ * The same fact on `focusSessions.get`, as a SECTION of the detail page: a
+ * failed read is `unavailable` — never `null` (which means "no agent acted")
+ * and never an error that takes the whole page down.
+ */
+export type SessionLiveness =
+  | { status: "ok"; lastAgentActivityAt: Date | string | null }
+  | { status: "unavailable"; reason: string };

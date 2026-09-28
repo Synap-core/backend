@@ -60,6 +60,7 @@ import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
 import {
   PROPOSAL_SUBJECT_KINDS,
+  findCreatingProposalId,
   proposalSubjectCondition,
 } from "../services/proposals/object-subject.js";
 import { markProposalNotificationsActioned } from "../notifications/mark-proposal-notifications-actioned.js";
@@ -543,12 +544,34 @@ export const proposalsRouter = router({
         conditions.push(lt(proposals.createdAt, new Date(input.cursor)));
       }
 
-      const rows = await db.query.proposals.findMany({
+      const pageRows = await db.query.proposals.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,
         orderBy: [desc(proposals.createdAt), desc(proposals.id)],
         limit: input.limit + 1,
         offset: input.cursor ? 0 : input.offset,
       });
+
+      // SUBJECT ⇒ the CREATING proposal is PINNED on the first page, whatever
+      // the limit: newest-first paging otherwise drops the one row Lineage's
+      // "Decided by" exists to show once the object has had `limit` edits.
+      // Same derivation as the Landed row (`findCreatingProposalId`), fetched
+      // through the SAME conditions — so the pin adds no reach, and a
+      // `status` filter that excludes it still excludes it.
+      const pinnedId =
+        input.subject && !input.cursor && !input.offset
+          ? await findCreatingProposalId(
+              db,
+              input.subject,
+              requireUserId(ctx.userId)
+            )
+          : null;
+      const pinned =
+        pinnedId && !pageRows.some((r) => r.id === pinnedId)
+          ? await db.query.proposals.findFirst({
+              where: and(...conditions, eq(proposals.id, pinnedId)),
+            })
+          : undefined;
+      const rows = pinned ? [...pageRows, pinned] : pageRows;
 
       // Enrich each proposal with a pre-formed `request` object and resolved
       // display metadata. Eve/Studio can render useful labels without leaking
@@ -558,7 +581,16 @@ export const proposalsRouter = router({
         roster: rosterReadFor(ctx),
       });
 
-      const { items, pagination } = buildPaginatedResponse(enriched, input);
+      // Page over the PAGE rows only; the pin rides after them, outside the
+      // limit, so it can never push a real row off the page or be sliced away.
+      const pinnedEnriched = pinned
+        ? enriched.filter((e) => e.id === pinned.id)
+        : [];
+      const { items: pageItems, pagination } = buildPaginatedResponse(
+        pinned ? enriched.filter((e) => e.id !== pinned.id) : enriched,
+        input
+      );
+      const items = [...pageItems, ...pinnedEnriched];
 
       // viewerCanReview — per proposal, "may this viewer APPROVE this row?",
       // decided by the SHARED ladder (`computeCanReviewApprovalFromFacts`) that

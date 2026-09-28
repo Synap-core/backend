@@ -1,6 +1,7 @@
 /**
- * Session LIVENESS — `lastAgentActivityAt`, projected onto every session list
- * row (`projectSessionRows`: `list`, `browse`, `landed`).
+ * Session LIVENESS — `lastAgentActivityAt`, on `focusSessions.landed` and
+ * `focusSessions.get` ONLY. Not on `list` / `browse`: those are polled every
+ * 30s by four surfaces and nothing there reads it.
  *
  * "Is an agent still doing anything in here?" is answered from the two places
  * agent work leaves evidence on a session:
@@ -15,7 +16,7 @@
  * The later of the two, or `null` when neither exists (never the session's own
  * `updatedAt`, which a human's edit or the reaper also moves).
  *
- * BATCH: two grouped reads for the whole page, never one per row. Proposals go
+ * BATCH: two reads for the whole page, never one per row. Proposals go
  * through `userVisibleWhere` — the same predicate `attachSessionParticipants`
  * applies to the same rows. Messages are read only by the rooms of sessions the
  * caller already read through the session floor.
@@ -28,6 +29,8 @@ import {
   inArray,
   isNotNull,
   max,
+  desc,
+  channels,
   messages,
   MessageAuthorType,
   proposals,
@@ -56,6 +59,20 @@ export async function attachLastAgentActivity<T extends LiveSession>(
     ),
   ];
 
+  /** The newest agent post in the outer row's room (correlated on `channels.id`). */
+  const latestAgentPost = database
+    .select({ at: messages.timestamp })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.channelId, channels.id),
+        eq(messages.authorType, MessageAuthorType.AI_AGENT)
+      )
+    )
+    .orderBy(desc(messages.timestamp))
+    .limit(1)
+    .as("latest_agent_post");
+
   const [byProposal, byMessage] = await Promise.all([
     database
       .select({
@@ -71,17 +88,17 @@ export async function attachLastAgentActivity<T extends LiveSession>(
         )
       )
       .groupBy(proposals.sessionId),
+    // Per room, the NEWEST agent post: a LATERAL `ORDER BY timestamp DESC
+    // LIMIT 1` walks `messages_channel_timestamp_idx` backwards and stops at
+    // the first `ai_agent` row. A grouped `max()` with the author filter could
+    // not use that index as an ordered scan and read every message in every
+    // room on the page.
     channelIds.length
       ? database
-          .select({ channelId: messages.channelId, at: max(messages.timestamp) })
-          .from(messages)
-          .where(
-            and(
-              inArray(messages.channelId, channelIds),
-              eq(messages.authorType, MessageAuthorType.AI_AGENT)
-            )
-          )
-          .groupBy(messages.channelId)
+          .select({ channelId: channels.id, at: latestAgentPost.at })
+          .from(channels)
+          .crossJoinLateral(latestAgentPost)
+          .where(inArray(channels.id, channelIds))
       : Promise.resolve([]),
   ]);
 
