@@ -11710,6 +11710,34 @@ export interface NotificationCatalogue {
 	withheldProducerlessCount: number;
 }
 export type PreferenceScope = "pod" | "workspace";
+declare const PUSH_CATEGORIES: readonly [
+	"blocking-ask",
+	"decision-blocking",
+	"work-broke",
+	"mention",
+	"system"
+];
+export type PushCategory = (typeof PUSH_CATEGORIES)[number];
+/**
+ * How hard a push interrupts.
+ *   `interruptive` — sound, banner, breaks through Focus when time-sensitive.
+ *   `passive`      — lands silently in the notification list.
+ */
+export type PushLevel = "interruptive" | "passive";
+/** The iOS `interruptionLevel` Expo forwards (Expo push message field). */
+export type PushInterruptionLevel = "time-sensitive" | "active" | "passive";
+export interface PushCategoryPolicy {
+	/** On unless the person turns it off (`true`), or opt-in (`false`). */
+	defaultOn: boolean;
+	level: PushLevel;
+	interruptionLevel: PushInterruptionLevel;
+}
+export interface EffectivePushCategory extends PushCategoryPolicy {
+	category: PushCategory;
+	enabled: boolean;
+	/** `true` when the person set it; `false` when it is the default. */
+	explicit: boolean;
+}
 /**
  * Broker trust diagnostics — WHY a Control-Plane-brokered pod can or cannot
  * broker connections, as non-secret facts.
@@ -20634,6 +20662,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reason?: string | undefined;
 			};
 			output: CaptureStructureAgainResult;
+			meta: object;
+		}>;
+		giveToAgent: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				captureId: string;
+				agentUserId?: string | undefined;
+			};
+			output: {
+				status: "given";
+				sessionId: string;
+				deduped: boolean;
+				agent: {
+					id: string;
+					name: string | null;
+					lastSeenAt: string | null;
+				} | null;
+				delivery: "on_check_in";
+				line: string;
+			};
 			meta: object;
 		}>;
 	}>>;
@@ -30945,6 +30992,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				quietHoursEnd: string | null;
 				routingRules: unknown;
 				soundEnabled: boolean | null;
+				pushPrefs: unknown;
 			} | null;
 			meta: object;
 		}>;
@@ -30970,6 +31018,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				success: boolean;
 				cleared: boolean;
+			};
+			meta: object;
+		}>;
+		pushPrefs: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				categories: EffectivePushCategory[];
+			};
+			meta: object;
+		}>;
+		setPushPrefs: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				categories: Record<"system" | "mention" | "blocking-ask" | "decision-blocking" | "work-broke", boolean>;
+			};
+			output: {
+				categories: EffectivePushCategory[];
 			};
 			meta: object;
 		}>;
@@ -34625,6 +34689,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				sessionId: string;
 				expectedLabel: string;
+				askFingerprint?: string | undefined;
 			};
 			output: {
 				ok: true;
