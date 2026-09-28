@@ -116,6 +116,8 @@ describe("synap_set_workspace_focus (DB-backed)", () => {
     const parsed = JSON.parse(text);
     expect(parsed.status).toBe("focused");
     expect(parsed.workspaceId).toBe(wsAId);
+    // The space brief rides on the focus reply (content: space-brief.test.ts).
+    expect(parsed.brief.workspaceId).toBe(wsAId);
 
     expect(await getAgentFocusWorkspaceId(agentUserId)).toBe(wsAId);
   });
@@ -209,6 +211,7 @@ describe("synap_set_workspace_focus (DB-backed)", () => {
     const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
     const parsed = JSON.parse(text);
     expect(parsed.status).toBe("cleared");
+    expect(parsed).not.toHaveProperty("brief");
     expect(await getAgentFocusWorkspaceId(agentUserId)).toBeNull();
   });
 

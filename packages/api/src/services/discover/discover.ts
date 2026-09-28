@@ -40,6 +40,7 @@ import {
   inArray,
   drizzleSql,
   profileSlugScopeCondition,
+  type OnboardingSpec,
 } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
@@ -66,7 +67,16 @@ import {
   isDomainHomeWorkspace,
   type WorkspaceHomeSignals,
 } from "../../lib/routing-candidates.js";
-import { buildStartHere, type PendingReviewState } from "./start-here.js";
+import {
+  buildStartHere,
+  readRankedLensProfiles,
+  type PendingReviewState,
+} from "./start-here.js";
+import {
+  buildSpaceBrief,
+  resolveSpacePurpose,
+  type SpaceBrief,
+} from "./space-brief.js";
 
 export type DiscoverDetail = "light" | "full";
 
@@ -274,10 +284,12 @@ export interface DiscoverParams extends DiscoverOptions {
   authScopes: string[];
 }
 
-interface OnboardingSpec {
-  goal?: string;
-  [k: string]: unknown;
-}
+/**
+ * The stored onboarding spec as orient passes it through: the canonical
+ * `OnboardingSpec` (package-definition.ts), every field optional because light
+ * trims it to `{ goal }`, and open to keys a template adds beyond the type.
+ */
+type OrientOnboarding = Partial<OnboardingSpec> & { [k: string]: unknown };
 
 /**
  * A profile in the orient sample. Carries the Kind + Facets discriminator so an
@@ -312,7 +324,7 @@ interface DiscoverWorkspace {
    */
   acceptsEntities?: false;
   /** light: `{ goal }` only; full: the whole onboarding interview spec. */
-  onboarding?: OnboardingSpec;
+  onboarding?: OrientOnboarding;
   /**
    * When-to-use for this domain. Full detail uses workspace.description;
    * light uses description or onboarding.goal so agents place work without
@@ -348,6 +360,12 @@ export interface DiscoverTeamRoster {
 interface DiscoverResult {
   /** The briefing — first key on the wire, pending review first inside it. */
   startHere: StartHere;
+  /**
+   * The pinned space's brief (purpose, persona, expertise, collect, the kinds
+   * that live there, its playbooks) — present only when orient was called
+   * with a workspaceId. See `space-brief.ts`.
+   */
+  brief?: SpaceBrief | { status: "unavailable" };
   me: { userId: string; scopes: string[] };
   detail: DiscoverDetail;
   projects: DiscoverProject[];
@@ -728,7 +746,8 @@ export async function discover(
         })
         .map((w) => {
           const settings = (w.settings ?? {}) as Record<string, unknown>;
-          const onboarding = settings.onboarding as OnboardingSpec | undefined;
+          const onboarding = settings.onboarding as
+            OrientOnboarding | undefined;
           const domain =
             (settings.workspaceSubtype as string | undefined) ??
             w.workspaceType ??
@@ -738,10 +757,7 @@ export async function discover(
           // for zero information and read like an authored description (9 of
           // 14 live workspaces said "Domain: personal"); both full and light
           // now emit `description` only when there is a real one.
-          const authored =
-            (typeof w.description === "string" && w.description.trim()) ||
-            (typeof onboarding?.goal === "string" && onboarding.goal.trim()) ||
-            null;
+          const authored = resolveSpacePurpose(w.description, onboarding);
           const purpose = authored;
           const out: DiscoverWorkspace = {
             id: w.id,
@@ -924,7 +940,18 @@ export async function discover(
   // Who the user IS — the one thing orient never carried. Best-effort, same
   // rule as the roster: a failed read costs a prose block, never the map.
   // The briefing sections read in parallel with it.
-  const [who, startHere] = await Promise.all([
+  //
+  // A PINNED orient also carries the space brief (the caller chose the space,
+  // light included). Its `keyKinds` and `startHere.topKinds` read the SAME
+  // lens-ranked listing — one read, started here and shared.
+  const ranked = readRankedLensProfiles({ caller, userId, workspaceId });
+  // Each consumer surfaces its own failure; this only keeps a rejection that
+  // lands before they attach from reading as unhandled.
+  ranked.catch(() => undefined);
+  const pinnedRow = workspaceId
+    ? wsRaw.find((w) => w.id === workspaceId)
+    : undefined;
+  const [who, startHere, brief] = await Promise.all([
     buildWhoBlock(userId),
     buildStartHere({
       caller,
@@ -932,11 +959,23 @@ export async function discover(
       workspaceId,
       pending: pendingState,
       learnMoreSkill: ORIENT_LEARN_MORE_SKILL,
+      ranked,
     }),
+    workspaceId
+      ? buildSpaceBrief({
+          caller,
+          userId,
+          scopes: authScopes,
+          workspaceId,
+          ...(pinnedRow ? { workspace: pinnedRow } : {}),
+          ranked,
+        })
+      : Promise.resolve(undefined),
   ]);
 
   const result: DiscoverResult = {
     startHere,
+    ...(brief ? { brief } : {}),
     me: { userId, scopes: authScopes },
     detail,
     projects: projectsOut,

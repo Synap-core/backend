@@ -25,6 +25,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   workspaceRows: [] as Record<string, unknown>[],
+  rankedPromise: null as unknown,
+  startHereRanked: null as unknown,
+  briefCalls: [] as Array<Record<string, unknown>>,
   entityCountRows: [] as Record<string, unknown>[],
   observationRows: [] as Record<string, unknown>[],
   projectRows: [] as Record<string, unknown>[],
@@ -108,13 +111,28 @@ vi.mock("../team-roster-context.js", () => ({
 // The briefing's own sections have their own tests (`start-here.test.ts`,
 // `usage-aggregate.pglite.test.ts`); this file proves the lens map around it.
 vi.mock("./start-here.js", () => ({
-  buildStartHere: async (p: { learnMoreSkill: string }) => ({
+  readRankedLensProfiles: () => {
+    h.rankedPromise = Promise.resolve([]);
+    return h.rankedPromise;
+  },
+  buildStartHere: async (p: { learnMoreSkill: string; ranked?: unknown }) => ({
+    ...((h.startHereRanked = p.ranked), {}),
     pendingReview: { count: 0 },
     openSessions: { count: 0, countIsLowerBound: false },
     topKinds: [],
     actions: { count: 0, examples: [], lens: "pod" },
     learnMore: { skill: p.learnMoreSkill },
   }),
+}));
+
+// The brief's CONTENT has its own tests (`space-brief.test.ts`); this file
+// proves orient SERVES it when — and only when — a space is pinned.
+vi.mock("./space-brief.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./space-brief.js")>()),
+  buildSpaceBrief: async (p: Record<string, unknown>) => {
+    h.briefCalls.push(p);
+    return { workspaceId: p.workspaceId, name: "brief", more: "m" };
+  },
 }));
 
 import { discover } from "./discover.js";
@@ -171,6 +189,7 @@ beforeEach(() => {
   h.entityCountRows = [{ workspaceId: "ws-full", count: 901 }];
   h.observationRows = [];
   h.projectRows = [];
+  h.briefCalls = [];
 });
 
 describe("orient light — subtraction", () => {
@@ -371,5 +390,36 @@ describe("orient lists every workspace TYPE — a type is a property, not a filt
     expect(byId.get("ws-ops")?.domain).toBe("operational");
     // A domain home carries no flag (absent = accepts).
     expect(byId.get("ws-full")).not.toHaveProperty("acceptsEntities");
+  });
+});
+
+describe("orient pinned to a space serves its brief", () => {
+  it("light + workspaceId carries `brief`, built from the pinned row and the SAME lens listing startHere ranks", async () => {
+    const pinned = await discover({
+      caller,
+      userId: "u1",
+      authScopes: ["mcp.read"],
+      detail: "light",
+      workspaceId: "ws-onboard",
+    });
+    expect(pinned.brief).toEqual({
+      workspaceId: "ws-onboard",
+      name: "brief",
+      more: "m",
+    });
+    expect(Object.keys(pinned)[0]).toBe("startHere");
+    expect(h.briefCalls).toHaveLength(1);
+    const call = h.briefCalls[0]!;
+    expect(call.workspaceId).toBe("ws-onboard");
+    expect((call.workspace as { name: string }).name).toBe("Foundation");
+    // One read, shared — never a second listing for the brief.
+    expect(call.ranked).toBe(h.rankedPromise);
+    expect(h.startHereRanked).toBe(h.rankedPromise);
+  });
+
+  it("an unpinned orient carries no brief key at all", async () => {
+    const light = await run("light");
+    expect("brief" in light).toBe(false);
+    expect(h.briefCalls).toHaveLength(0);
   });
 });

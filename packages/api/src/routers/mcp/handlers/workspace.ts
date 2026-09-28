@@ -78,7 +78,7 @@ export const workspaceHandlers: McpHandlerMap = {
   synap_set_workspace_focus: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     if (!agentUserId) {
       return ok({
@@ -164,12 +164,25 @@ export const workspaceHandlers: McpHandlerMap = {
     }
 
     const scope = await setAgentFocusWorkspace(agentUserId, resolved.id);
+    // The space brief: pinning a space is the moment to learn what it is for
+    // and which KINDS live there. Without it the reply said only "Focused on
+    // Brand Library", and the agent went on to file brand assets as generic
+    // `file` entities (2026-09-28). The ONE builder orient also serves.
+    const { buildSpaceBrief } =
+      await import("../../../services/discover/space-brief.js");
+    const brief = await buildSpaceBrief({
+      caller,
+      userId,
+      scopes: apiKeyScopes,
+      workspaceId: resolved.id,
+    });
     return ok({
       status: "focused",
       ...focusScopeReply(scope),
       workspaceId: resolved.id,
       workspaceName: resolved.name,
       message: `Focused on ${resolved.name} — new writes will land there until you clear it.`,
+      brief,
     });
   },
   /**
