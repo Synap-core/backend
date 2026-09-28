@@ -119,7 +119,7 @@ describe("actor filter", () => {
 });
 
 describe("summarizeSessionOutputs", () => {
-  const lead = { slug: "lead", displayName: "Lead", icon: null };
+  const lead = { slug: "lead", displayName: "Lead", plural: "Leads", icon: null };
   it("counts entities by profile, others by kind; top = newest", () => {
     const s = summarizeSessionOutputs([
       { kind: "entity", refId: "e1", title: "Ada", producedAt: "2026-09-28T09:00:00Z", entityProfile: lead },

@@ -114,6 +114,7 @@ const P_COMP = randomUUID();
 const P_PEND = randomUUID();
 const P_PEND_TARGET = randomUUID();
 const P_EDIT = randomUUID();
+const COMPANY_PROFILE = randomUUID();
 
 async function session(
   id: string,
@@ -244,6 +245,11 @@ beforeAll(async () => {
   await proposal({ id: P_PEND, status: "pending", targetType: "entity", targetId: P_PEND_TARGET, proposalType: "create", mins: 31, sessionId: S.s1, agent: AGENT, data: { targetType: "entity", changeType: "create", requestId: "r1", data: { title: "Linear" } } });
   await proposal({ id: P_EDIT, status: "pending", targetType: "entity", targetId: E_AUTO, proposalType: "update", mins: 31, sessionId: S.s1, agent: AGENT });
 
+  // A CUSTOM kind with its own plural — the label both apps must render.
+  await q(
+    `insert into profiles (id, slug, display_name, plural, ui_hints) values ($1,'company','Company','Companies','{}'::jsonb)`,
+    [COMPANY_PROFILE]
+  );
   await q(
     `insert into entities (id, user_id, workspace_id, title, type, created_by_kind, created_by_user_id, agent_user_id, source_proposal_id, created_at, updated_at) values
       ($1,$2,$3,'Ada Lovelace','person','agent',$2,$4,null,$5,$5),
@@ -257,6 +263,7 @@ beforeAll(async () => {
       ($1,$2,$3,'My notes',$4,$4),($5,$2,$6,'CRM brief',$7,$7),($8,$9,$3,'Stranger doc',$10,$10)`,
     [D_MINE, USER, W1, ago(33), D_W2, W2, ago(6), D_STR, STRANGER, ago(4)]
   );
+  await q(`update entities set profile_id = $1 where id = $2`, [COMPANY_PROFILE, E_COMP]);
   await produced(S.s1, E_AUTO, 49);
   await produced(S.s1, E_COMP, 40);
   await artifact(S.s1, "document", D_MINE, "My notes", "user", 33);
@@ -307,6 +314,7 @@ describe("outputs.landed — objects that landed, pod-wide", () => {
     expect(row.decision.decidedBy).toEqual({ id: USER, name: "Antoine" });
     expect(row.decision.decidedAt).not.toBeNull();
     expect(row.actor).toEqual({ kind: "agent", id: AGENT, name: "Claude Code" });
+    expect(row.entityProfile).toMatchObject({ displayName: "Company", plural: "Companies" });
   });
 
   it("actor: a legacy no-provenance row is the owner (human, me); an unattributed agent artifact is an agent with no id", async () => {
@@ -386,6 +394,13 @@ describe("focusSessions.landed — sessions settled since, as their result", () 
       ["document", 1],
       ["person", 1],
     ]);
+    // The profile's OWN words ride on the group — singular and plural.
+    expect(s1.outputsSummary.byKind[0]!.entityProfile).toEqual({
+      slug: "company",
+      displayName: "Company",
+      plural: "Companies",
+      icon: null,
+    });
     expect(s1.outputsSummary.top).toMatchObject({ title: "My notes", ref: { kind: "document", id: D_MINE } });
     expect(rows.find((r) => r.id === S.s2)!.outputsSummary.count).toBe(1);
   });

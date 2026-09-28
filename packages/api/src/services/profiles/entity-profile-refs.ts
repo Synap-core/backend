@@ -18,6 +18,8 @@ export interface EntityProfileRef {
   slug: string;
   /** `profiles.display_name`, when the profile row was found. */
   displayName: string | null;
+  /** `profiles.plural` ("People" for Person), when the profile declares one. */
+  plural: string | null;
   /** `profiles.ui_hints.icon`, when set. */
   icon: string | null;
 }
@@ -42,6 +44,7 @@ export async function resolveEntityProfileRefs(
           id: profiles.id,
           slug: profiles.slug,
           displayName: profiles.displayName,
+          plural: profiles.plural,
           uiHints: profiles.uiHints,
         })
         .from(profiles)
@@ -57,6 +60,7 @@ export async function resolveEntityProfileRefs(
     out.set(r.id, {
       slug,
       displayName: p?.displayName || null,
+      plural: p?.plural || null,
       icon: typeof icon === "string" && icon.trim() ? icon.trim() : null,
     });
   }

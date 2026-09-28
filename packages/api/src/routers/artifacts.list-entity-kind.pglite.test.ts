@@ -105,11 +105,13 @@ describe("artifacts.list — an entity artifact names its KIND", () => {
     expect(by(MINE).entityProfile).toEqual({
       slug: "decision",
       displayName: "Decision",
+      plural: null,
       icon: "Gavel",
     });
     expect(by(BARE).entityProfile).toEqual({
       slug: "note",
       displayName: null,
+      plural: null,
       icon: null,
     });
     // The entity floor holds: a stranger's entity yields no kind.

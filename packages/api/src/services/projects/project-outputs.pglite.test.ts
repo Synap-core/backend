@@ -368,7 +368,12 @@ describe("projects.outputs (P1 + P2)", () => {
   });
 
   it("an entity output carries its KIND through every door (service, tRPC projects + session, Hub)", async () => {
-    const want = { slug: "decision", displayName: "Decision", icon: "Gavel" };
+    const want = {
+      slug: "decision",
+      displayName: "Decision",
+      plural: null,
+      icon: "Gavel",
+    };
     const r = (await listProjectOutputs({
       access: access(),
       projectId: PROJECT,
