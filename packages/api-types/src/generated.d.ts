@@ -11571,6 +11571,8 @@ export interface EntityProfileRef {
 	slug: string;
 	/** `profiles.display_name`, when the profile row was found. */
 	displayName: string | null;
+	/** `profiles.plural` ("People" for Person), when the profile declares one. */
+	plural: string | null;
 	/** `profiles.ui_hints.icon`, when set. */
 	icon: string | null;
 }
@@ -12000,9 +12002,16 @@ export type LandedActor = {
 	name: string | null;
 	isViewer: boolean;
 };
+/**
+ * An entity's KIND as the profile names it — the label both apps render
+ * ("3 Blog posts", "1 Lead") without a second lookup. `displayName` is the
+ * singular, `plural` the profile's own plural when it declares one; when
+ * either is null, fall back to `resolveObjectNoun` / `humanizeToken(slug)`.
+ */
 export interface LandedEntityProfile {
 	slug: string;
 	displayName: string | null;
+	plural: string | null;
 	icon: string | null;
 }
 export interface LandedObjectRef {
@@ -12063,7 +12072,10 @@ export interface SessionOutputsSummary {
 	/**
 	 * Counts per DISPLAY kind, largest first: an entity counts under its profile
 	 * (`key` = the profile slug, so "12 leads"), anything else under its object
-	 * kind (`key` = the kind).
+	 * kind (`key` = the kind). The LABEL of an entity group is its
+	 * `entityProfile.displayName` / `.plural` (the profile's own words, custom
+	 * profiles included); a non-entity group has no `entityProfile` and reads
+	 * through `resolveObjectNoun(kind)`.
 	 */
 	byKind: Array<{
 		key: string;
