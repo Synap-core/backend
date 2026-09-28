@@ -10902,6 +10902,12 @@ export interface AgentPresence {
 	activeKeys: number;
 	/** Keys minted and still awaiting the person's approval (inactive, not revoked, not expired). */
 	pendingKeys: number;
+	/**
+	 * Keys that existed and can no longer authenticate (revoked or expired). The
+	 * evidence `resolveAgentMark` needs before it may say "Disconnected" — an
+	 * agent that never held a key is a different fact ("No key yet").
+	 */
+	revokedKeys: number;
 }
 /**
  * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):

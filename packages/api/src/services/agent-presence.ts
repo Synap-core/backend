@@ -24,6 +24,12 @@ export interface AgentPresence {
   activeKeys: number;
   /** Keys minted and still awaiting the person's approval (inactive, not revoked, not expired). */
   pendingKeys: number;
+  /**
+   * Keys that existed and can no longer authenticate (revoked or expired). The
+   * evidence `resolveAgentMark` needs before it may say "Disconnected" — an
+   * agent that never held a key is a different fact ("No key yet").
+   */
+  revokedKeys: number;
 }
 
 export const NEVER_SEEN: AgentPresence = {
@@ -31,6 +37,7 @@ export const NEVER_SEEN: AgentPresence = {
   host: null,
   activeKeys: 0,
   pendingKeys: 0,
+  revokedKeys: 0,
 };
 
 export async function loadAgentPresence(
@@ -67,6 +74,8 @@ export async function loadAgentPresence(
     if (!r.revokedAt && !expired) {
       if (r.isActive) cur.activeKeys += 1;
       else cur.pendingKeys += 1;
+    } else {
+      cur.revokedKeys += 1;
     }
     out.set(r.userId, cur);
   }

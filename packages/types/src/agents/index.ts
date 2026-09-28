@@ -84,6 +84,178 @@ export function resolveAgentConnection(
 }
 
 // ---------------------------------------------------------------------------
+// Agent MARK — one agent's state as a mark (kind + tone + words), for every
+// surface that lists agents (browser Settings › Agents, relay Settings › AI &
+// agents). Before this rule each surface derived its own and they disagreed:
+// the same agent read "Disconnected" on the desktop and a green "Seen" on the
+// phone.
+// ---------------------------------------------------------------------------
+
+/**
+ * Seen more than this many days ago ⇒ `stale`: neutral, never healthy green.
+ * A week is one working cycle — an agent a person uses at all calls at least
+ * that often, so older silence is worth noticing, not yet an error.
+ */
+export const AGENT_STALE_AFTER_DAYS = 7;
+
+/** The slice of an `agentUsers.list` row the mark reads. */
+export interface AgentMarkRowLike extends AgentPresenceLike {
+  /** Raw instance label of the key last seen (`api_keys.instance_id`). */
+  host?: string | null;
+  /** Live keys. Absent on a pod older than V1 G3. */
+  activeKeys?: number;
+  /** Keys awaiting the person's approval. Absent on older pods. */
+  pendingKeys?: number;
+  /**
+   * Keys that existed and can no longer authenticate (revoked or expired).
+   * The ONLY evidence for "Disconnected". Absent on older pods ⇒ never claimed.
+   */
+  revokedKeys?: number;
+  /** The pod made this agent for itself (twin, capture, IS persona): no key to hold. */
+  builtIn?: boolean;
+}
+
+export type AgentMarkKind =
+  /** The pod's own agent — no key to connect, nothing to cut. */
+  | "builtIn"
+  /** Called the pod within `AGENT_STALE_AFTER_DAYS`. */
+  | "seen"
+  /** Called the pod, but longer ago than `AGENT_STALE_AFTER_DAYS`. */
+  | "stale"
+  /** Its only key awaits the person's approval — the person's move. */
+  | "approve"
+  /** A live key, and it has never called. */
+  | "waiting"
+  /** It had a key, the key was revoked or expired, and no live or pending one is left. */
+  | "disconnected"
+  /** It never had a key (nor a call): nothing has started. */
+  | "noKey"
+  /** The pod does not report presence (older pod): no mark at all. */
+  | "unmeasured";
+
+/** A tone token — each surface maps it to its own chip / dot. Never a colour. */
+export type AgentMarkTone = "success" | "warning" | "danger" | "neutral";
+
+export interface AgentMark {
+  kind: AgentMarkKind;
+  tone: AgentMarkTone;
+  /**
+   * The mark's words WITHOUT the time — `null` = no mark (unmeasured). When
+   * `seenAt` is set the surface appends its relative time ("Seen" + " 3m ago"):
+   * this package has no relative-time formatter, and value formatting is its
+   * own SSOT (`.claude/rules/vocabulary.md`), so the time clause is the one
+   * part each surface formats.
+   */
+  label: string | null;
+  /** ISO instant of the last call, or `null` (never / unmeasured / builtIn). */
+  seenAt: string | null;
+  /** Readable machine / client name (`humanizeAgentHost`), or `null`. */
+  host: string | null;
+  /** A live or pending key exists, so Disconnect is a real act. */
+  canDisconnect: boolean;
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
+/** A machine-minted id segment: long hex, or digits only. */
+const ID_RE = /^(?:[0-9a-f]{8,}|\d+)$/i;
+/** Transport prefixes a door stamps on an instance label; they name no machine. */
+const TRANSPORT_SEGMENTS = new Set(["mcp", "oauth", "hub", "cli", "key"]);
+
+/**
+ * An instance label as a person reads it. Labels are written by the door that
+ * minted the key — `mcp:<userId>:<podId>` (the claude.ai connector),
+ * `oauth:<clientId>:<userId>`, or whatever the CLI sent (a hostname). Keeps the
+ * readable segments (a machine or client name), drops ids and transport
+ * prefixes; `null` when nothing readable is left.
+ */
+export function humanizeAgentHost(
+  raw: string | null | undefined
+): string | null {
+  if (raw == null) return null;
+  const parts = raw
+    .split(/[:/|]/)
+    .map((p) => p.trim().replace(/\.local$/i, ""))
+    .filter(
+      (p) =>
+        p.length > 0 &&
+        !UUID_RE.test(p) &&
+        !ID_RE.test(p) &&
+        !TRANSPORT_SEGMENTS.has(p.toLowerCase())
+    );
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/**
+ * The ONE agent mark. Order of the rules, and why:
+ *  1. `builtIn` — key-based presence says nothing about the pod's own agents.
+ *  2. unmeasured — a pod that serves no `lastSeenAt` gets no mark, never a guess.
+ *  3. `approve` — no live key but one awaits approval: the person's move
+ *     outranks everything the agent did before.
+ *  4. no live key, a revoked/expired one on record ⇒ `disconnected`. Without
+ *     that evidence (field absent, or zero) it is never claimed.
+ *  5. seen ⇒ `seen`, or `stale` past `AGENT_STALE_AFTER_DAYS`.
+ *  6. never seen: a live key ⇒ `waiting` ("Waiting for first call"); no key at
+ *     all ⇒ `noKey` ("No key yet") — "Waiting for first call" there would
+ *     promise a call that cannot come, since there is no key to call with.
+ */
+export function resolveAgentMark(
+  row: AgentMarkRowLike | null | undefined,
+  now: number = Date.now()
+): AgentMark {
+  const host = humanizeAgentHost(row?.host);
+  const active = row?.activeKeys ?? 0;
+  const pending = row?.pendingKeys ?? 0;
+  const canDisconnect = !!row && !row.builtIn && active + pending > 0;
+  const mark = (
+    kind: AgentMarkKind,
+    tone: AgentMarkTone,
+    label: string | null,
+    seenAt: string | null = null
+  ): AgentMark => ({ kind, tone, label, seenAt, host, canDisconnect });
+
+  if (!row) return mark("unmeasured", "neutral", null);
+  if (row.builtIn) return { ...mark("builtIn", "neutral", "Built-in"), host: null };
+  const connection = resolveAgentConnection([row]);
+  if (connection.kind === "unmeasured") return mark("unmeasured", "neutral", null);
+  const seenAt =
+    connection.kind === "seen" ? connection.agent.lastSeenAt.toISOString() : null;
+
+  if (active === 0 && pending > 0) {
+    return mark("approve", "warning", "Key awaiting your approval", seenAt);
+  }
+  if (active === 0 && (row.revokedKeys ?? 0) > 0) {
+    return mark("disconnected", "danger", "Disconnected", seenAt);
+  }
+  if (connection.kind === "seen") {
+    const ageMs = now - connection.agent.lastSeenAt.getTime();
+    return ageMs > AGENT_STALE_AFTER_DAYS * 86_400_000
+      ? mark("stale", "neutral", "Seen", seenAt)
+      : mark("seen", "success", "Seen", seenAt);
+  }
+  if (active > 0) return mark("waiting", "neutral", "Waiting for first call");
+  return mark("noKey", "neutral", "No key yet");
+}
+
+/**
+ * The mark's full words, given the surface's relative rendering of `seenAt`
+ * ("3m ago"). Composition lives here so the two surfaces cannot word it
+ * differently: seen/stale ⇒ "Seen 3m ago"; any other mark with a last call ⇒
+ * "Disconnected · seen 3m ago"; otherwise the label alone. `null` = no mark.
+ */
+export function agentMarkText(
+  mark: AgentMark,
+  relativeSeen: (iso: string) => string
+): string | null {
+  if (mark.label == null) return null;
+  if (!mark.seenAt) return mark.label;
+  const rel = relativeSeen(mark.seenAt);
+  if (!rel) return mark.label;
+  if (mark.kind === "seen" || mark.kind === "stale") return `${mark.label} ${rel}`;
+  return `${mark.label} · seen ${rel}`;
+}
+
+// ---------------------------------------------------------------------------
 // Agent WRITE MODE — how an agent's writes land, as ONE rule + ONE sentence.
 // ---------------------------------------------------------------------------
 

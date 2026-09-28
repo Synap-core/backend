@@ -19,7 +19,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { loadAgentPresence, withAgentPresence } from "./agent-presence.js";
-import { resolveAgentConnection } from "@synap-core/types/agents";
+import {
+  resolveAgentConnection,
+  resolveAgentMark,
+} from "@synap-core/types/agents";
 
 const key = (over: Record<string, unknown>) => ({
   userId: "agent-a",
@@ -56,6 +59,7 @@ describe("agent presence", () => {
       host: "desktop",
       activeKeys: 2,
       pendingKeys: 1,
+      revokedKeys: 1,
     });
   });
 
@@ -69,6 +73,28 @@ describe("agent presence", () => {
     const p = (await loadAgentPresence(["agent-a"], now)).get("agent-a")!;
     expect(p.activeKeys).toBe(1);
     expect(p.pendingKeys).toBe(0);
+    // Both expired keys existed and can no longer call: evidence of a cut.
+    expect(p.revokedKeys).toBe(2);
+  });
+
+  it("an agent that never held a key reports revokedKeys 0 — never 'Disconnected'", async () => {
+    const [row] = await withAgentPresence([{ id: "agent-new" }]);
+    expect(row.revokedKeys).toBe(0);
+    expect(resolveAgentMark({ ...row, name: "Codex" }).kind).toBe("noKey");
+  });
+
+  it("a revoked key reaches the shared mark as Disconnected", async () => {
+    rows.push(
+      key({
+        isActive: false,
+        revokedAt: new Date("2026-09-28T08:00:00Z"),
+        lastUsedAt: new Date("2026-09-28T07:00:00Z"),
+      })
+    );
+    const [row] = await withAgentPresence([{ id: "agent-a" }]);
+    expect(resolveAgentMark({ ...row, name: "Codex" }).kind).toBe(
+      "disconnected"
+    );
   });
 
   it("no ids → no read", async () => {
