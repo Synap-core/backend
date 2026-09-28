@@ -160,7 +160,7 @@ export function ApproveForm({
             tone="success"
             icon={<Check className="h-6 w-6" strokeWidth={2.2} />}
             title="Approved"
-            message="You can close this tab — the CLI will continue automatically."
+            message="You can close this tab. Your terminal will carry on."
           />
         )}
 
@@ -232,7 +232,7 @@ export function Outcome({
   title,
   message,
 }: {
-  tone: "success" | "muted";
+  tone: "success" | "muted" | "warning" | "danger";
   icon: React.ReactNode;
   title: string;
   message: string;
@@ -240,7 +240,11 @@ export function Outcome({
   const ring =
     tone === "success"
       ? "bg-success/10 ring-success/20 text-success"
-      : "bg-foreground/[0.06] ring-foreground/15 text-foreground/60";
+      : tone === "warning"
+        ? "bg-warning/10 ring-warning/30 text-warning"
+        : tone === "danger"
+          ? "bg-danger/10 ring-danger/30 text-danger"
+          : "bg-foreground/[0.06] ring-foreground/15 text-foreground/60";
   return (
     <div className="flex flex-col items-center gap-3 py-6 text-center">
       <span

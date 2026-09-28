@@ -14,6 +14,7 @@
  */
 
 import { headers } from "next/headers";
+import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
 import { ApproveBatchForm } from "./ApproveBatchForm";
 
 interface ApproveAgentsPageProps {
@@ -36,7 +37,7 @@ export default async function ApproveAgentsPage({
         .map((k) => k.trim())
         .filter((k) => UUID_RE.test(k))
     ),
-  ].slice(0, 20);
+  ].slice(0, PENDING_APPROVAL_BATCH_MAX);
   const h = await headers();
   return (
     <ApproveBatchForm

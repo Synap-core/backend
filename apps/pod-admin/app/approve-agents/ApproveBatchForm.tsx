@@ -2,26 +2,42 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ReceiverShell } from "../_lib/receiver-shell";
-import { Button, CardBody, CardHeader } from "@heroui/react";
-import { Bot, Check, X } from "lucide-react";
+import { Button, CardBody, CardHeader, Skeleton } from "@heroui/react";
+import { AlertTriangle, Bot, Check, X } from "lucide-react";
+import { resolveServiceMark } from "@synap-core/types/service-marks";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { publicPodUrl } from "../../lib/public-pod-url";
 import { Outcome, Row } from "../approve-agent/[keyId]/ApproveForm";
 
+type KeyStatus = "pending" | "active" | "rejected" | "not_found" | "forbidden";
+
 interface PendingKey {
   keyId: string;
-  status: "pending" | "active" | "rejected" | "not_found" | "forbidden";
+  status: KeyStatus;
   keyName?: string;
   agentType?: string | null;
   agentName?: string | null;
   instanceId?: string | null;
 }
 
+/** `/approve-batch` per-key outcome (setup.ts). */
+type BatchOutcome =
+  "approved" | "already_active" | "rejected" | "not_found" | "forbidden";
+
+interface KeyResult {
+  key: PendingKey;
+  /** Status token resolved through the vocabulary door. */
+  token: string;
+  ok: boolean;
+}
+
 type Step =
   | { kind: "loading" }
-  | { kind: "ready"; keys: PendingKey[] }
-  | { kind: "working"; keys: PendingKey[] }
-  | { kind: "approved"; count: number }
-  | { kind: "error"; message: string; keys?: PendingKey[] };
+  | { kind: "load-error"; message: string }
+  | { kind: "ready" }
+  | { kind: "done"; action: "approve" | "reject"; results: KeyResult[] };
+
+type Busy = null | "approve" | "reject-all" | { rejecting: string };
 
 interface ApproveBatchFormProps {
   keyIds: string[];
@@ -29,13 +45,15 @@ interface ApproveBatchFormProps {
   identity?: string;
 }
 
-async function postJson(url: string, body: unknown): Promise<unknown> {
+const CLOSE_TAB = "You can close this tab. Your terminal will carry on.";
+
+async function postJson(url: string, body?: unknown): Promise<unknown> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // Cross-subdomain (pod-admin.<root> → pod.<root>) — send the Kratos cookie.
+    // Cross-subdomain (pod-admin.<root> → pod.<root>): send the Kratos cookie.
     credentials: "include",
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -46,31 +64,65 @@ async function postJson(url: string, body: unknown): Promise<unknown> {
   return data;
 }
 
+/**
+ * Product name for a key's agent: the service registry's name when the agent
+ * type is a known service, else the agent's own name, else the humanized type.
+ * Never a key id.
+ */
+function agentLabel(k: PendingKey): string {
+  const mark = resolveServiceMark(k.agentType, "mono");
+  if (mark.known) return mark.name;
+  if (k.agentName) return k.agentName;
+  if (k.agentType) return mark.name;
+  return "Agent";
+}
+
+/** A key's lookup status as a vocabulary token (`active` ⇒ connected). */
+function statusToken(status: KeyStatus): string {
+  if (status === "active") return "connected";
+  if (status === "forbidden") return "unavailable";
+  return status;
+}
+
+/** An approve-batch outcome as a vocabulary token. */
+function outcomeToken(outcome: BatchOutcome | undefined): string {
+  if (!outcome) return "failed";
+  if (outcome === "already_active") return "connected";
+  if (outcome === "forbidden") return "unavailable";
+  return outcome;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : "Something went wrong";
+}
+
 export function ApproveBatchForm({
   keyIds,
   podHost,
   identity,
 }: ApproveBatchFormProps) {
   const [step, setStep] = useState<Step>({ kind: "loading" });
+  const [keys, setKeys] = useState<PendingKey[]>([]);
+  const [busy, setBusy] = useState<Busy>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const podUrl = useMemo(() => publicPodUrl(), []);
 
   const load = useCallback(async () => {
     if (keyIds.length === 0) {
-      setStep({ kind: "error", message: "This link names no agent keys." });
+      setStep({ kind: "load-error", message: "This link names no agents." });
       return;
     }
     setStep({ kind: "loading" });
+    setActionError(null);
     try {
       const data = (await postJson(
         `${podUrl}/api/hub/setup/agent/pending/lookup`,
         { keyIds }
       )) as { keys: PendingKey[] };
-      setStep({ kind: "ready", keys: data.keys });
+      setKeys(data.keys);
+      setStep({ kind: "ready" });
     } catch (err) {
-      setStep({
-        kind: "error",
-        message: err instanceof Error ? err.message : "Something went wrong",
-      });
+      setStep({ kind: "load-error", message: errorMessage(err) });
     }
   }, [keyIds, podUrl]);
 
@@ -78,35 +130,90 @@ export function ApproveBatchForm({
     void load();
   }, [load]);
 
-  const pending =
-    step.kind === "ready" || step.kind === "working"
-      ? step.keys.filter((k) => k.status === "pending")
-      : [];
+  const pending = keys.filter((k) => k.status === "pending");
+  const allConnected =
+    keys.length > 0 && keys.every((k) => k.status === "active");
 
   const approveAll = useCallback(async () => {
-    if (step.kind !== "ready") return;
-    const keys = step.keys;
-    setStep({ kind: "working", keys });
+    const targets = keys.filter((k) => k.status === "pending");
+    if (targets.length === 0) return;
+    setBusy("approve");
+    setActionError(null);
     try {
       const data = (await postJson(
         `${podUrl}/api/hub/setup/agent/pending/approve-batch`,
-        {
-          keyIds: keys
-            .filter((k) => k.status === "pending")
-            .map((k) => k.keyId),
-        }
-      )) as { approved: number };
-      setStep({ kind: "approved", count: data.approved });
-    } catch (err) {
+        { keyIds: targets.map((k) => k.keyId) }
+      )) as {
+        approved: number;
+        results: Array<{ keyId: string; outcome: BatchOutcome }>;
+      };
+      const byId = new Map(data.results.map((r) => [r.keyId, r.outcome]));
       setStep({
-        kind: "error",
-        message: err instanceof Error ? err.message : "Something went wrong",
-        keys,
+        kind: "done",
+        action: "approve",
+        results: targets.map((key) => {
+          const outcome = byId.get(key.keyId);
+          return {
+            key,
+            token: outcomeToken(outcome),
+            ok: outcome === "approved" || outcome === "already_active",
+          };
+        }),
       });
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(null);
     }
-  }, [step, podUrl]);
+  }, [keys, podUrl]);
 
-  const busy = step.kind === "working";
+  const rejectOne = useCallback(
+    async (key: PendingKey): Promise<boolean> => {
+      try {
+        await postJson(
+          `${podUrl}/api/hub/setup/agent/pending/${key.keyId}/reject`
+        );
+        return true;
+      } catch (err) {
+        setActionError(`${agentLabel(key)}: ${errorMessage(err)}`);
+        return false;
+      }
+    },
+    [podUrl]
+  );
+
+  const rejectRow = useCallback(
+    async (key: PendingKey) => {
+      setBusy({ rejecting: key.keyId });
+      setActionError(null);
+      const ok = await rejectOne(key);
+      if (ok) {
+        setKeys((prev) =>
+          prev.map((k) =>
+            k.keyId === key.keyId ? { ...k, status: "rejected" } : k
+          )
+        );
+      }
+      setBusy(null);
+    },
+    [rejectOne]
+  );
+
+  const rejectAll = useCallback(async () => {
+    const targets = keys.filter((k) => k.status === "pending");
+    if (targets.length === 0) return;
+    setBusy("reject-all");
+    setActionError(null);
+    const results: KeyResult[] = [];
+    for (const key of targets) {
+      const ok = await rejectOne(key);
+      results.push({ key, token: ok ? "rejected" : "failed", ok });
+    }
+    setStep({ kind: "done", action: "reject", results });
+    setBusy(null);
+  }, [keys, rejectOne]);
+
+  const isBusy = busy !== null;
 
   return (
     <ReceiverShell podHost={podHost} identity={identity} width="sm">
@@ -133,80 +240,98 @@ export function ApproveBatchForm({
       </CardHeader>
 
       <CardBody className="flex flex-col gap-5 px-7 pb-7 pt-5">
-        {step.kind === "loading" && (
-          <p className="text-[13px] text-foreground/65">Loading…</p>
-        )}
+        {step.kind === "loading" && <KeyListSkeleton count={keyIds.length} />}
 
-        {(step.kind === "ready" || step.kind === "working") && (
-          <>
-            <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-              {step.keys.map((k) => (
-                <Row
-                  key={k.keyId}
-                  label={k.agentName ?? k.agentType ?? k.keyName ?? "Agent"}
-                  value={
-                    k.status === "pending"
-                      ? (k.instanceId ?? `${k.keyId.slice(0, 8)}…`)
-                      : k.status === "active"
-                        ? "Already connected"
-                        : k.status === "rejected"
-                          ? "Rejected"
-                          : k.status === "forbidden"
-                            ? "Not yours to approve"
-                            : "Not found"
-                  }
-                  mono={k.status === "pending" && !k.instanceId}
-                />
-              ))}
-            </div>
-            <Button
-              color="primary"
-              radius="md"
-              size="md"
-              className="font-medium"
-              isDisabled={busy || pending.length === 0}
-              isLoading={busy}
-              onPress={approveAll}
-              startContent={
-                busy ? undefined : <Check className="h-3.5 w-3.5" />
-              }
-            >
-              {pending.length === 0
-                ? "Nothing left to approve"
-                : `Approve ${pending.length === 1 ? "agent" : `all ${pending.length}`}`}
-            </Button>
-          </>
-        )}
-
-        {step.kind === "approved" && (
+        {step.kind === "ready" && allConnected && (
           <Outcome
             tone="success"
             icon={<Check className="h-6 w-6" strokeWidth={2.2} />}
-            title={
-              step.count === 1
-                ? "Agent connected"
-                : `${step.count} agents connected`
-            }
-            message="You can close this tab — the CLI will continue automatically."
+            title="Already connected"
+            message={CLOSE_TAB}
           />
         )}
 
-        {step.kind === "error" && (
-          <div className="flex flex-col gap-4">
-            <div className="flex items-start gap-2.5 rounded-lg bg-danger/10 px-3.5 py-3 ring-1 ring-inset ring-danger/30">
-              <X
-                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger"
-                strokeWidth={2.2}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-medium text-foreground">
-                  Couldn&apos;t process the request
-                </p>
-                <p className="mt-0.5 text-[12.5px] text-foreground/65">
-                  {step.message}
-                </p>
-              </div>
+        {step.kind === "ready" && !allConnected && (
+          <>
+            <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+              {keys.map((k) => (
+                <div key={k.keyId} className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <Row
+                      label={agentLabel(k)}
+                      value={
+                        k.status === "pending"
+                          ? (k.instanceId ?? "Waiting for you")
+                          : resolveStatusLabel(statusToken(k.status))
+                      }
+                    />
+                  </div>
+                  {k.status === "pending" && (
+                    <Button
+                      size="sm"
+                      variant="light"
+                      radius="md"
+                      className="min-w-0 px-2 text-foreground/65"
+                      aria-label={`Reject ${agentLabel(k)}`}
+                      isDisabled={isBusy}
+                      isLoading={
+                        typeof busy === "object" &&
+                        busy !== null &&
+                        busy.rejecting === k.keyId
+                      }
+                      onPress={() => void rejectRow(k)}
+                    >
+                      Reject
+                    </Button>
+                  )}
+                </div>
+              ))}
             </div>
+
+            {actionError && <Notice title={actionError} />}
+
+            <div className="flex gap-2.5">
+              <Button
+                color="primary"
+                radius="md"
+                size="md"
+                className="flex-1 font-medium"
+                isDisabled={isBusy || pending.length === 0}
+                isLoading={busy === "approve"}
+                onPress={() => void approveAll()}
+                startContent={
+                  busy === "approve" ? undefined : (
+                    <Check className="h-3.5 w-3.5" />
+                  )
+                }
+              >
+                {pending.length === 0
+                  ? "Nothing left to approve"
+                  : pending.length === 1
+                    ? "Approve agent"
+                    : `Approve all ${pending.length}`}
+              </Button>
+              {pending.length > 1 && (
+                <Button
+                  variant="flat"
+                  radius="md"
+                  size="md"
+                  isDisabled={isBusy}
+                  isLoading={busy === "reject-all"}
+                  onPress={() => void rejectAll()}
+                >
+                  Reject all
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+
+        {step.kind === "done" && <DoneOutcome step={step} />}
+
+        {step.kind === "load-error" && (
+          <div className="flex flex-col gap-4">
+            <Notice title="Couldn't load this request" detail={step.message} />
             {keyIds.length > 0 && (
               <Button
                 color="primary"
@@ -222,5 +347,102 @@ export function ApproveBatchForm({
         )}
       </CardBody>
     </ReceiverShell>
+  );
+}
+
+function DoneOutcome({ step }: { step: Extract<Step, { kind: "done" }> }) {
+  const okCount = step.results.filter((r) => r.ok).length;
+  const total = step.results.length;
+  const allOk = okCount === total;
+  const noneOk = okCount === 0;
+
+  const title =
+    step.action === "approve"
+      ? allOk
+        ? total === 1
+          ? "Agent connected"
+          : `${total} agents connected`
+        : noneOk
+          ? "No agents were connected"
+          : `${okCount} of ${total} agents connected`
+      : allOk
+        ? total === 1
+          ? "Agent rejected"
+          : `${total} agents rejected`
+        : `${okCount} of ${total} agents rejected`;
+
+  const tone = allOk
+    ? step.action === "approve"
+      ? "success"
+      : "muted"
+    : noneOk
+      ? "danger"
+      : "warning";
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Outcome
+        tone={tone}
+        icon={
+          allOk ? (
+            step.action === "approve" ? (
+              <Check className="h-6 w-6" strokeWidth={2.2} />
+            ) : (
+              <X className="h-6 w-6" strokeWidth={2.2} />
+            )
+          ) : (
+            <AlertTriangle className="h-6 w-6" strokeWidth={2.2} />
+          )
+        }
+        title={title}
+        message={allOk ? CLOSE_TAB : "Reload this page to try the rest again."}
+      />
+      <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+        {step.results.map((r) => (
+          <Row
+            key={r.key.keyId}
+            label={agentLabel(r.key)}
+            value={resolveStatusLabel(r.token)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Notice({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2.5 rounded-lg bg-danger/10 px-3.5 py-3 ring-1 ring-inset ring-danger/30"
+    >
+      <X
+        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger"
+        strokeWidth={2.2}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-medium text-foreground">{title}</p>
+        {detail && (
+          <p className="mt-0.5 text-[12.5px] text-foreground/65">{detail}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function KeyListSkeleton({ count }: { count: number }) {
+  return (
+    <div
+      aria-busy
+      aria-label="Loading agents"
+      className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+    >
+      {Array.from({ length: Math.max(1, Math.min(count, 4)) }).map((_, i) => (
+        <div key={i} className="flex items-center justify-between gap-4">
+          <Skeleton className="h-3 w-1/3 rounded-md" />
+          <Skeleton className="h-3 w-1/4 rounded-md" />
+        </div>
+      ))}
+    </div>
   );
 }

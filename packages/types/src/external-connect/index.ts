@@ -78,3 +78,11 @@ export const activateAddonSuccessSchema = z.object({
 });
 
 export type ActivateAddonSuccess = z.infer<typeof activateAddonSuccessSchema>;
+
+/**
+ * Most pending agent keys one approval request may carry. `synap init` mints one
+ * pending key per harness it finds and opens ONE approval page for all of them;
+ * the pod's `/setup/agent/pending/lookup` + `/approve-batch` doors and the
+ * pod-admin `/approve-agents` page all read this one number.
+ */
+export const PENDING_APPROVAL_BATCH_MAX = 20;
