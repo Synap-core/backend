@@ -23,6 +23,10 @@
 
 import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
 import {
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "../vocabulary/index.js";
+import {
   resolveUnitState,
   type UnitGlyph,
   type UnitStateView,
@@ -42,6 +46,10 @@ import {
  *                    still be undone (the Revert door).
  *   pending        — PROPOSED, not applied. "To review" — never landed.
  *   reverted       — it applied, then was undone.
+ *   unknown        — a creating proposal EXISTS but the viewer cannot see it
+ *                    (another member's workspace). Nobody measured how it
+ *                    landed for this viewer, so no decision is claimed —
+ *                    never "applied" by default.
  *
  * The first two are both "applied" in the spec's three-way reading; they are
  * kept apart because "who decided" is exactly what the Lineage row answers.
@@ -52,6 +60,7 @@ export const LANDED_DECISION_STATES = [
   "auto_approved",
   "pending",
   "reverted",
+  "unknown",
 ] as const;
 export type LandedDecisionState = (typeof LANDED_DECISION_STATES)[number];
 
@@ -66,8 +75,16 @@ export type LandedDecisionState = (typeof LANDED_DECISION_STATES)[number];
  * says something else was, as a matter of fact, applied.
  */
 export function resolveLandedDecision(
-  proposalStatus: string | null | undefined
+  proposalStatus: string | null | undefined,
+  opts: {
+    /**
+     * `false` when a creating proposal exists but the viewer's floor hides
+     * it. Its status is then unknowable to this viewer ⇒ `unknown`.
+     */
+    visible?: boolean;
+  } = {}
 ): LandedDecisionState {
+  if (opts.visible === false) return "unknown";
   switch (proposalStatus) {
     case "approved":
     case "partially_approved":
@@ -108,12 +125,23 @@ const DECISION_VIEWS: Record<
   },
   // A PERSON decided — the mark says so (glyph), success says it held.
   approved: { tone: "success", glyph: "person", landed: true, undoable: false },
-  auto_approved: { tone: "info", glyph: "check", landed: true, undoable: true },
+  // A RULE let the agent's write through: the agent's own mark (spark), in
+  // the calm info tone — never the same check an applied write wears.
+  auto_approved: { tone: "info", glyph: "spark", landed: true, undoable: true },
   // Same mark as a unit that `needs_review` — it is your judgement it waits on.
   pending: { tone: "primary", glyph: "scales", landed: false, undoable: false },
   reverted: {
     tone: "textMuted",
     glyph: "dashed-circle",
+    landed: true,
+    undoable: false,
+  },
+  // The object exists (it is in the session's outputs), so it landed; HOW it
+  // was decided is what this viewer cannot know — the neutral question mark,
+  // no undo, no decider.
+  unknown: {
+    tone: "textSecondary",
+    glyph: "question",
     landed: true,
     undoable: false,
   },
@@ -164,6 +192,14 @@ export interface LandedEntityProfile {
   icon: string | null;
 }
 
+/**
+ * The object kinds `proposals.list({ subject })` accepts — "every proposal
+ * ABOUT this object, including the one that created it". One declaration: the
+ * pod's zod enum and the browser's governance filter both read it.
+ */
+export const PROPOSAL_SUBJECT_KINDS = ["entity", "document"] as const;
+export type ProposalSubjectKind = (typeof PROPOSAL_SUBJECT_KINDS)[number];
+
 export interface LandedObjectRef {
   kind: string;
   id: string;
@@ -177,6 +213,13 @@ export interface LandedDecision {
   decidedBy: { id: string; name: string | null } | null;
   /** When it was decided (ISO), when recorded. */
   decidedAt: string | null;
+  /**
+   * How many objects that proposal created or changed. Undo reverts the WHOLE
+   * proposal, so a row from a composite create must say so ("Undo · 4
+   * changes") — undoing one row takes the other three with it. `null` when
+   * there is no proposal, or the viewer cannot see it.
+   */
+  changeCount: number | null;
 }
 
 export interface LandedObjectRow {
@@ -203,8 +246,20 @@ export interface LandedObjectRow {
   decision: LandedDecision;
 }
 
+/** At most this many pending rows ride along as samples. */
+export const LANDED_PENDING_SAMPLES = 3;
+
 export interface LandedObjectsPage {
+  /** What LANDED — never a pending row. Paged by the cursor. */
   items: LandedObjectRow[];
+  /**
+   * Proposed creations still waiting ("N to review ›" — one summary row that
+   * opens Needs you, never a wall above what landed). NOT paged: `count` is
+   * the whole set in the scanned sessions (same lens, `since`, actor filter),
+   * `samples` the newest {@link LANDED_PENDING_SAMPLES}. Each sample's door is
+   * its proposal (`ref.kind === "proposal"`).
+   */
+  pending: { count: number; samples: LandedObjectRow[] };
   /** Pass back as `cursor` for the next (older) page; `null` = no more. */
   nextCursor: string | null;
   /**
@@ -388,10 +443,59 @@ export function summarizeSessionOutputs(
   };
 }
 
+/** How many kinds the result line names before it says "+N more". */
+export const OUTPUTS_RESULT_KINDS_SHOWN = 2;
+
 /**
- * Liveness, on every session list row (`focusSessions.list` / `browse` /
- * `landed`): the last time an AGENT did something in the session — filed a
- * proposal into it, or posted in its room. `null` = no agent activity recorded.
+ * "12 leads" / "1 document": the count, then the kind's noun, lower-case.
+ * An entity group speaks the profile's OWN words (`displayName` singular,
+ * `plural`), custom profiles included; a missing word — and every
+ * non-entity group — falls back to the vocabulary noun of the group `key`
+ * (`resolveObjectNoun` / `resolveObjectNounPlural`, which knows "People").
+ */
+export function outputsCountPhrase(
+  group: SessionOutputsSummary["byKind"][number]
+): string {
+  const own =
+    group.count === 1
+      ? group.entityProfile?.displayName
+      : group.entityProfile?.plural;
+  const noun =
+    own?.trim() ||
+    (group.count === 1
+      ? resolveObjectNoun(group.key)
+      : resolveObjectNounPlural(group.key));
+  return `${group.count} ${noun.toLowerCase()}`;
+}
+
+/**
+ * THE result line of a landed session: "12 leads · 1 document · +3 more".
+ * At most {@link OUTPUTS_RESULT_KINDS_SHOWN} kinds are named (largest first,
+ * `byKind`'s order); "+N more" counts the OBJECTS in the kinds not named.
+ * `null` when nothing was produced — never "0 things", never estimated.
+ */
+export function resolveOutputsResultLine(
+  summary: SessionOutputsSummary | null | undefined
+): string | null {
+  if (!summary || summary.count <= 0 || summary.byKind.length === 0) {
+    return null;
+  }
+  const shown = summary.byKind
+    .slice(0, OUTPUTS_RESULT_KINDS_SHOWN)
+    .map(outputsCountPhrase);
+  const rest = summary.byKind
+    .slice(OUTPUTS_RESULT_KINDS_SHOWN)
+    .reduce((n, g) => n + g.count, 0);
+  return rest > 0
+    ? `${shown.join(" · ")} · +${rest} more`
+    : shown.join(" · ");
+}
+
+/**
+ * Liveness, on the session rows that read it (`focusSessions.landed` and
+ * `focusSessions.get` — NOT the 30s-polled `list` / `browse`): the last time an
+ * AGENT did something in the session — filed a proposal into it, or posted in
+ * its room. `null` = no agent activity recorded.
  */
 export interface SessionAgentActivity {
   lastAgentActivityAt: Date | string | null;

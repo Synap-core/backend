@@ -601,6 +601,10 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // a legacy row with no receipt) — the `applied` state of a landed object
   // (`@synap-core/types/landed`), beside `approved` / `auto_approved`.
   applied: "Applied",
+  // A landed object whose creating proposal the viewer cannot see
+  // (`@synap-core/types/landed` `unknown`): nobody measured the decision FOR
+  // THIS VIEWER, so it names no decision at all.
+  unknown: "Unknown",
   // NOT a `proposals.status` enum value, and deliberately so: partial approval
   // ships as per-item dispositions, the row keeps storing `approved`, and the
   // reviewer's per-item denials live in `data.dispositions`. It IS a real

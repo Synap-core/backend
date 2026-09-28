@@ -8,7 +8,10 @@ import {
   resolveLandedDecision,
   resolveLandedDecisionView,
   resolveLandedSessionState,
+  resolveOutputsResultLine,
   summarizeSessionOutputs,
+  PROPOSAL_SUBJECT_KINDS,
+  type SessionOutputsSummary,
   type LandedActor,
 } from "./index.js";
 import { STATUS_LABELS, resolveStatusLabel } from "../vocabulary/index.js";
@@ -97,6 +100,21 @@ describe("decision state", () => {
     expect(resolveLandedDecision("rejected")).toBe("applied");
   });
 
+  it("a creating proposal the viewer cannot see is UNKNOWN — never applied by default", () => {
+    expect(resolveLandedDecision("approved", { visible: false })).toBe("unknown");
+    expect(resolveLandedDecision(null, { visible: false })).toBe("unknown");
+    const v = resolveLandedDecisionView("unknown");
+    expect(v).toMatchObject({ tone: "textSecondary", glyph: "question", undoable: false });
+    expect(resolveStatusLabel(v.statusToken)).toBe("Unknown");
+    // No decider-flavoured mark: not a check, not a person.
+    expect(["check", "person"]).not.toContain(v.glyph);
+  });
+
+  it("every decision state wears a DISTINCT glyph (tone alone never carries the difference)", () => {
+    const glyphs = LANDED_DECISION_STATES.map((s) => resolveLandedDecisionView(s).glyph);
+    expect(new Set(glyphs).size).toBe(glyphs.length);
+  });
+
   it("pending is To review — never landed; only auto-approved offers undo", () => {
     for (const s of LANDED_DECISION_STATES) {
       const v = resolveLandedDecisionView(s);
@@ -149,5 +167,57 @@ describe("summarizeSessionOutputs", () => {
   });
   it("nothing produced is count 0 with no top — never estimated", () => {
     expect(summarizeSessionOutputs([])).toEqual({ count: 0, byKind: [], top: null });
+  });
+});
+
+describe("resolveOutputsResultLine — THE result line", () => {
+  const lead = { slug: "lead", displayName: "Lead", plural: "Leads", icon: null };
+  const blog = { slug: "blog_post", displayName: "Blog post", plural: "Blog entries", icon: null };
+  const noPlural = { slug: "recipe_card", displayName: "Recipe card", plural: null, icon: null };
+  const sum = (byKind: SessionOutputsSummary["byKind"]): SessionOutputsSummary => ({
+    count: byKind.reduce((n, g) => n + g.count, 0),
+    byKind,
+    top: null,
+  });
+
+  it("nothing produced → null", () => {
+    expect(resolveOutputsResultLine(null)).toBeNull();
+    expect(resolveOutputsResultLine(sum([]))).toBeNull();
+  });
+  it("one kind, singular and plural", () => {
+    expect(resolveOutputsResultLine(sum([{ key: "lead", kind: "entity", entityProfile: lead, count: 12 }]))).toBe("12 leads");
+    expect(resolveOutputsResultLine(sum([{ key: "document", kind: "document", count: 1 }]))).toBe("1 document");
+  });
+  it("two kinds", () => {
+    expect(
+      resolveOutputsResultLine(sum([
+        { key: "lead", kind: "entity", entityProfile: lead, count: 12 },
+        { key: "document", kind: "document", count: 1 },
+      ]))
+    ).toBe("12 leads · 1 document");
+  });
+  it("three+ kinds: two named, then +N more counting OBJECTS", () => {
+    expect(
+      resolveOutputsResultLine(sum([
+        { key: "lead", kind: "entity", entityProfile: lead, count: 12 },
+        { key: "document", kind: "document", count: 2 },
+        { key: "view", kind: "view", count: 2 },
+        { key: "person", kind: "entity", count: 1 },
+      ]))
+    ).toBe("12 leads · 2 documents · +3 more");
+  });
+  it("a custom profile speaks its OWN plural, not a pluralised slug", () => {
+    expect(resolveOutputsResultLine(sum([{ key: "blog_post", kind: "entity", entityProfile: blog, count: 3 }]))).toBe("3 blog entries");
+    expect(resolveOutputsResultLine(sum([{ key: "blog_post", kind: "entity", entityProfile: blog, count: 1 }]))).toBe("1 blog post");
+  });
+  it("a null plural falls back to the vocabulary plural of the key (curated: person → people)", () => {
+    expect(resolveOutputsResultLine(sum([{ key: "recipe_card", kind: "entity", entityProfile: noPlural, count: 2 }]))).toBe("2 recipe cards");
+    expect(resolveOutputsResultLine(sum([{ key: "person", kind: "entity", entityProfile: { slug: "person", displayName: "Person", plural: null, icon: null }, count: 3 }]))).toBe("3 people");
+  });
+});
+
+describe("PROPOSAL_SUBJECT_KINDS", () => {
+  it("is the entity + document pair the pod's subject filter accepts", () => {
+    expect([...PROPOSAL_SUBJECT_KINDS]).toEqual(["entity", "document"]);
   });
 });
