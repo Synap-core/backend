@@ -163,3 +163,38 @@ describe("diesWithSession", () => {
     expect(isSessionBoundDraft).toBe(isDocumentEditProposal);
   });
 });
+
+/**
+ * The live case, 2026-09-28: nine GRP question retirements, each an agent's
+ * `run_capability entity.delete`, pending since ~01:45Z. The row shape the
+ * sweep reads is `(proposalType, targetType, createdAt, data)`; `data.verbId`
+ * is what `execute-capability.ts` writes.
+ */
+describe("selectLapsedIds — capability runs on a durable object", () => {
+  const NOW = new Date("2026-09-30T12:00:00Z");
+  const run = (id: string, verbId: string | null): LapseCandidate => ({
+    id,
+    proposalType: "capability.run",
+    targetType: "capability",
+    createdAt: new Date("2026-09-28T01:45:00Z"),
+    data: {
+      skillId: "s1",
+      verbId,
+      parameters: { entityId: "00000000-0000-4000-8000-000000000001" },
+    },
+  });
+
+  it("a deletion request is never swept; an outbound call past 24h is", () => {
+    expect(
+      selectLapsedIds(
+        [
+          run("retire", "entity.delete"),
+          run("revise", "entity.update"),
+          run("send", "messaging.send"),
+          run("tool", null),
+        ],
+        NOW
+      )
+    ).toEqual(["send", "tool"]);
+  });
+});

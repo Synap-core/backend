@@ -237,6 +237,8 @@ export async function gatherSchemaHygieneSignal(params: {
       .select({
         proposalType: proposals.proposalType,
         targetType: proposals.targetType,
+        // The one payload key the class rule reads (`DURABLE_OBJECT_VERBS`).
+        runVerbId: drizzleSql<string | null>`${proposals.data}->>'verbId'`,
         createdAt: proposals.createdAt,
       })
       .from(proposals)
@@ -252,7 +254,9 @@ export async function gatherSchemaHygieneSignal(params: {
   ]);
 
   const objectWork = oldProposals.filter(
-    (p) => classifyProposal(p.proposalType, p.targetType) === "objectWork"
+    (p) =>
+      classifyProposal(p.proposalType, p.targetType, p.runVerbId) ===
+      "objectWork"
   );
   const oldest = objectWork.reduce<Date | null>((acc, p) => {
     const d = new Date(p.createdAt);

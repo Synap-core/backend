@@ -6,7 +6,11 @@
  * has a real execute bridge, is approved, and has a live required connection.
  */
 import { z } from "@hono/zod-openapi";
-import { ABSTRACT_VERBS, isAbstractVerb } from "@synap/database/schema";
+import { INTENT_SLUG_RE } from "@synap/database/schema";
+import {
+  intentError,
+  isKnownIntent,
+} from "../../../services/capabilities/intent-registry.js";
 import {
   listCapabilities,
   type ListCapabilitiesOptions,
@@ -73,7 +77,7 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
         // Vendor-independent ROUTING filter over the SAME rows — "which action
         // can send a message", without knowing `gmail_send`. Resolved by the
         // shared reverse index (`foldVerbsByIntent`), never a second lookup.
-        intent: z.enum(ABSTRACT_VERBS).optional(),
+        intent: z.string().regex(INTENT_SLUG_RE).optional(),
         limit: z.coerce.number().int().positive().max(100).optional(),
       }),
     },
@@ -116,13 +120,8 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
     // Reject an unknown intent at the door with the closed vocabulary named.
     // Silently ignoring it would answer a DIFFERENT question than was asked
     // (the whole action list, read as "these all send messages").
-    if (intentRaw !== undefined && !isAbstractVerb(intentRaw)) {
-      return c.json(
-        {
-          error: `Unknown intent "${intentRaw}". The vocabulary is closed: ${ABSTRACT_VERBS.join(", ")}`,
-        },
-        400
-      );
+    if (intentRaw !== undefined && !(await isKnownIntent(intentRaw))) {
+      return c.json({ error: intentError(intentRaw) }, 400);
     }
     const limitRaw = c.req.query("limit");
     const limit = limitRaw === undefined ? undefined : Number(limitRaw);

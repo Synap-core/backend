@@ -24,11 +24,11 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
+import { INTENT_SLUG_RE } from "@synap/database/schema";
 import {
-  ABSTRACT_VERBS,
-  isAbstractVerb,
-  type AbstractVerb,
-} from "@synap/database/schema";
+  intentError,
+  isKnownIntent,
+} from "../../../services/capabilities/intent-registry.js";
 import { rankByTerms } from "../../../utils/term-match.js";
 import { foldVerbsByIntent } from "../../../services/capabilities/capability-intent-index.js";
 import { reconcileCapabilitiesToTemplates } from "../../../services/capabilities/reconcile-capabilities-to-templates.js";
@@ -143,7 +143,7 @@ export const SkillDefSchema = z.object({
    * retry loop replay a schema error four times). Zod rejects it as a 400 with
    * the valid set named.
    */
-  intent: z.enum(ABSTRACT_VERBS).optional(),
+  intent: z.string().regex(INTENT_SLUG_RE).optional(),
   executionMode: z.enum(["sync", "async"]).optional(),
   timeoutSeconds: z.number().min(1).max(300).optional(),
   requires: z.array(z.string()).optional(),
@@ -382,7 +382,7 @@ async function containerIdsDeclaringIntent(
   userId: string,
   scopes: string[],
   workspaceId: string | null,
-  intent: AbstractVerb
+  intent: string
 ): Promise<Set<string>> {
   const wsIds = workspaceId
     ? [workspaceId]
@@ -437,14 +437,14 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       "tRPC `playbooks.capabilityRegistry.list` exposes. Requires " +
       "hub-protocol.read scope. Pass `workspaceId` to scope to one workspace; " +
       "OMIT it for the pod-wide read (all accessible workspaces + globals, deduped). " +
-      "Pass `intent` (a closed ABSTRACT_VERBS value) to keep only the capabilities " +
+      "Pass `intent` (a registry slug) to keep only the capabilities " +
       "declaring at least one verb with that vendor-independent routing intent — " +
       "applied AFTER the pod-wide merge, so a capability visible through two " +
       "workspaces is judged once. A verb declaring no intent never matches.",
     request: {
       query: z.object({
         workspaceId: z.string().uuid().optional(),
-        intent: z.enum(ABSTRACT_VERBS).optional(),
+        intent: z.string().regex(INTENT_SLUG_RE).optional(),
       }),
     },
     responses: {
@@ -483,13 +483,8 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     const intentRaw = c.req.query("intent")?.trim() || undefined;
     // Rejected at the door, never ignored: silently dropping an unknown filter
     // returns the WHOLE catalog under a question it did not answer.
-    if (intentRaw !== undefined && !isAbstractVerb(intentRaw)) {
-      return c.json(
-        {
-          error: `Unknown intent "${intentRaw}". The vocabulary is closed: ${ABSTRACT_VERBS.join(", ")}`,
-        },
-        400
-      );
+    if (intentRaw !== undefined && !(await isKnownIntent(intentRaw))) {
+      return c.json({ error: intentError(intentRaw) }, 400);
     }
 
     /**
@@ -584,7 +579,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       "(use the plain `/capabilities` list's `kind` filter for that axis). " +
       "Requires hub-protocol.read scope. Pass `workspaceId` to scope to one " +
       "workspace; OMIT it for the pod-wide read (all accessible workspaces + " +
-      "globals, deduped). Pass `intent` (a closed ABSTRACT_VERBS value) to keep " +
+      "globals, deduped). Pass `intent` (a registry slug) to keep " +
       "only the containers holding at least one MEMBER brick that declares that " +
       "vendor-independent routing intent — the intent lives on the verb, so the " +
       "match is resolved against the capability REGISTRY and mapped back through " +
@@ -594,7 +589,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       query: z.object({
         workspaceId: z.string().uuid().optional(),
         query: z.string().optional(),
-        intent: z.enum(ABSTRACT_VERBS).optional(),
+        intent: z.string().regex(INTENT_SLUG_RE).optional(),
         limit: z.coerce.number().int().positive().optional(),
       }),
     },
@@ -634,13 +629,8 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     const intentRaw = c.req.query("intent")?.trim() || undefined;
     // Rejected at the door, never ignored: silently dropping an unknown filter
     // returns the WHOLE catalog under a question it did not answer.
-    if (intentRaw !== undefined && !isAbstractVerb(intentRaw)) {
-      return c.json(
-        {
-          error: `Unknown intent "${intentRaw}". The vocabulary is closed: ${ABSTRACT_VERBS.join(", ")}`,
-        },
-        400
-      );
+    if (intentRaw !== undefined && !(await isKnownIntent(intentRaw))) {
+      return c.json({ error: intentError(intentRaw) }, 400);
     }
 
     const query = c.req.query("query")?.trim() || undefined;

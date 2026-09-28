@@ -539,6 +539,24 @@ export function registerFocusSessionExecutors(): void {
             lineageRefusals.push(
               `Parent session ${innerData.parentSessionId} was not linked (${spawn.reason}): it must exist and belong to the session's owner.`
             );
+          } else if (
+            typeof innerData.suspendedIntent === "string" &&
+            innerData.suspendedIntent.trim()
+          ) {
+            // Detour: the parent waits on this child. Direct write — this
+            // approval is the human decision, same as create-time blockers.
+            const reports = await addCreateTimeBlockers({
+              sessionId: innerData.parentSessionId,
+              blockerSessionIds: [created.id],
+              userId: proposal.subjectUserId as string,
+            });
+            for (const r of reports) {
+              if (r.status === "failed") {
+                lineageRefusals.push(
+                  `Parent was not blocked by this session (${r.reason})${r.message ? `: ${r.message}` : ""}.`
+                );
+              }
+            }
           }
         } catch (err) {
           logger.warn(

@@ -1,67 +1,74 @@
 /**
- * `create-with-undo` (D2) is DERIVED from the platform floor — these pin the
- * derivation, and prove a write key added to the floor joins the propose set
- * by existing. The end-to-end decisions (writer → store → resolver) are pinned
- * in @synap/database `agent-posture.pglite.test.ts`.
+ * `create-with-undo` is an OPTIONAL, STRICTER-ONLY per-agent preset on top of
+ * the pod default "reversible writes act" (`@reversible`). These pin its
+ * derivation from the reversibility class and that it can never loosen. The
+ * end-to-end decisions (writer → store → resolver, with and without the pod
+ * row) are pinned in @synap/database `agent-posture.pglite.test.ts`.
  */
 import { describe, it, expect } from "vitest";
-import { DEFAULT_AUTO_APPROVE, decideAgentPolicy } from "./index.js";
 import {
-  classifyFloorEntry,
-  resolveAgentPosture,
-  DEFAULT_NEW_AGENT_POSTURE,
-} from "./postures.js";
+  REVERSIBLE_EVENT_KEYS,
+  decideAgentPolicy,
+  isReversibleWrite,
+} from "./index.js";
+import { classifyFloorEntry, resolveAgentPosture } from "./postures.js";
 
-describe("create-with-undo", () => {
+describe("create-with-undo (stricter preset)", () => {
   const posture = resolveAgentPosture("create-with-undo");
 
-  it("is the new-agent default and does not require proposals wholesale", () => {
-    expect(DEFAULT_NEW_AGENT_POSTURE).toBe("create-with-undo");
-    expect(posture.writesRequireProposal).toBe(false);
+  it("never loosens: rung 5 stays strict and it widens nothing", () => {
+    expect(posture.writesRequireProposal).toBe(true);
+    expect(posture.autoApproveFor).toEqual([]);
   });
 
-  it("proposes every floor WRITE that is not a create — and only those", () => {
-    // Non-vacuity: the floor really carries non-create writes today.
+  it("proposes exactly the reversible writes that are edits — derived from the class", () => {
+    // Non-vacuity: the class really carries edits today.
     expect(posture.proposeFor).toEqual(
-      expect.arrayContaining(["entity.update", "facet.update", "facet.detach"])
+      expect.arrayContaining([
+        "entity.update",
+        "facet.update",
+        "facet.detach",
+        "document.update",
+      ])
     );
-    for (const p of DEFAULT_AUTO_APPROVE) {
-      const kind = classifyFloorEntry(p);
-      expect(posture.proposeFor.includes(p), p).toBe(kind === "write");
+    for (const k of REVERSIBLE_EVENT_KEYS) {
+      expect(posture.proposeFor.includes(k), k).toBe(
+        classifyFloorEntry(k) === "write"
+      );
     }
+    // It only ever takes back pod-default lanes, never names a disruptive key.
+    for (const k of posture.proposeFor)
+      expect(isReversibleWrite(k), k).toBe(true);
   });
 
-  it("never proposes a create, a read, or the agent's own session work", () => {
+  it("keeps creates and the agent's own orchestration on the direct lane", () => {
     for (const p of [
       "entity.create",
       "document.create",
       "relation.create",
       "facet.attach",
-      "entity.read",
-      "search.*",
-      "terminal.read_logs",
       "focus_session.update",
+      "playbook_run.update",
+      "track.update",
     ])
       expect(posture.proposeFor, p).not.toContain(p);
   });
 
-  it("a new non-create write on the floor would be proposed by existing (derived, not listed)", () => {
-    expect(classifyFloorEntry("widget.update")).toBe("write");
-    expect(classifyFloorEntry("widget.create")).toBe("create");
-  });
-
-  it("with its rule verdicts, the ENGINE agrees: creates execute, updates propose, deletes floor", () => {
-    const run = (subjectType: string, action: string) =>
-      decideAgentPolicy({
+  it("with the pod default AND the preset, the ENGINE agrees: creates execute, edits propose, deletes floor", () => {
+    const run = (subjectType: string, action: string) => {
+      const key = `${subjectType}.${action}`;
+      return decideAgentPolicy({
         subjectType,
         action,
         writesRequireProposal: posture.writesRequireProposal,
-        governanceRuleVerdict: posture.proposeFor.includes(
-          `${subjectType}.${action}`
-        )
+        // Most specific row wins: the agent's own propose row over the pod class row.
+        governanceRuleVerdict: posture.proposeFor.includes(key)
           ? "propose"
-          : undefined,
+          : isReversibleWrite(key)
+            ? "auto"
+            : undefined,
       }).verdict;
+    };
     expect(run("entity", "create")).toBe("execute");
     expect(run("entity", "update")).toBe("propose");
     expect(run("entity", "delete")).toBe("propose");

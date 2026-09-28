@@ -10,6 +10,11 @@
  * train reflexive approval, and an agent able to nominate its own class would
  * nominate the quiet one.
  *
+ * ONE payload read, bounded (2026-09-28): a capability run's `data.verbId` —
+ * the verb the approval executes, not prose — lifts a run that acts on a
+ * durable object out of `ephemeral` into `objectWork` (`DURABLE_OBJECT_VERBS`).
+ * It can only ever move a proposal toward NEVER expiring.
+ *
  * ── Measured, 660 pending on the team pod, 2026-09-02 ───────────────────────
  *   ephemeral   441  capability.run     median age 11.7d, ZERO under 24h
  *   curatorial  143  merge (entity)     median 19.0d
@@ -150,6 +155,84 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Capability verbs whose run ACTS ON A DURABLE OBJECT of the pod — a record, a
+ * document, a facet, a relation, a playbook, an automation, a view, a cell, a
+ * rule, a kind or a property definition.
+ *
+ * Why a run of one of these is NOT ephemeral: the `ephemeral` lifetime exists
+ * for an outbound call whose moment passes (a message send, a connector call).
+ * A request to delete a question, retire a kind or revise a playbook is exactly
+ * as reviewable next week as today — it is object work that happens to travel
+ * through the capability door. Filed as `ephemeral`, nine agent-requested GRP
+ * question retirements (`entity.delete`, 2026-09-28) were due to EXPIRE 24h
+ * later with nobody having decided them.
+ *
+ * THE RULE (derived, not chosen per verb): a builtin WRITE verb whose declared
+ * params name the existing object it acts on (`DURABLE_OBJECT_ID_PARAMS`), plus
+ * the `create` verb of the same object namespace. The tripwire
+ * `__tripwires__/durable-object-verbs.tripwire.test.ts` recomputes this set from
+ * `BUILTIN_VERBS` + `BUILTIN_VERB_PARAM_SCHEMAS` and fails on any difference, so
+ * a new `document.archive({ documentId })` joins by existing. It is a local
+ * literal because this module imports nothing (see `ACCESS_DOORS`).
+ *
+ * Read from `data.verbId` — the verb the approval EXECUTES, never agent prose.
+ * An agent can move a run only from `ephemeral` to `objectWork`, i.e. toward
+ * KEEPING the question, never toward a quieter lane.
+ */
+export const DURABLE_OBJECT_VERBS: ReadonlySet<string> = new Set([
+  "entity.create",
+  "entity.update",
+  "entity.delete",
+  "graph.link",
+  "document.create",
+  "document.update",
+  "entity_facet.attach",
+  "entity_facet.update",
+  "entity_facet.detach",
+  "playbook.update",
+  "playbook.archive",
+  "automation.update",
+  "automation.activate",
+  "automation.pause",
+  "view.update",
+  "cell.update",
+  "skill.update_rule",
+  "profile.propose_retire",
+  "property_def.propose_retire",
+]);
+
+/**
+ * The param keys that name an EXISTING durable object — the input of the
+ * `DURABLE_OBJECT_VERBS` rule. Deliberately absent: `channelId` (a send /
+ * post into a conversation is the moment-bound case), `boardId`, `projectId`
+ * / `workspaceId` (lenses, not the object acted on), external ids.
+ */
+export const DURABLE_OBJECT_ID_PARAMS: readonly string[] = [
+  "entityId",
+  "fromEntityId",
+  "documentId",
+  "facetId",
+  "playbookId",
+  "automationId",
+  "viewId",
+  "cellInstanceId",
+  "ruleId",
+  "profileId",
+  "propertyDefId",
+];
+
+/**
+ * The verb a capability-run proposal will execute (`data.verbId`), or null.
+ * Only `execute-capability.ts` writes it; skill runs and external-dispatch
+ * tool runs carry none and stay `ephemeral`.
+ */
+export function capabilityRunVerbId(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const v = (data as Record<string, unknown>).verbId;
+  return typeof v === "string" && v ? v : null;
+}
+
+/**
  * How long a class stays answerable once its context is gone, in hours.
  *
  * `null` = never expires. Only `ephemeral` has a lifetime, because only it has a
@@ -185,7 +268,12 @@ export const CLASS_LIFETIME_HOURS: Record<ProposalClass, number | null> = {
  */
 export function classifyProposal(
   proposalType: string,
-  targetType: string
+  targetType: string,
+  /**
+   * For a capability run only: the verb it executes (`capabilityRunVerbId`).
+   * Absent ⇒ the run is classed as an outbound call (`ephemeral`).
+   */
+  runVerbId?: string | null
 ): ProposalClass {
   // A capability run is an outbound call bound to a live session. The literal
   // is `CAPABILITY_RUN_PROPOSAL_TYPE`, which every producer imports; a tripwire
@@ -193,11 +281,16 @@ export function classifyProposal(
   // and this table can never drift — they did once (three producers, two
   // literals), and the class table silently filed most runs as objectWork,
   // which never expires.
+  //
+  // EXCEPT a run of a verb that acts on a durable object — that is object work
+  // travelling through the capability door (`DURABLE_OBJECT_VERBS`).
   if (
     proposalType === CAPABILITY_RUN_PROPOSAL_TYPE &&
     targetType === "capability"
   )
-    return "ephemeral";
+    return runVerbId && DURABLE_OBJECT_VERBS.has(runVerbId)
+      ? "objectWork"
+      : "ephemeral";
   // Governance meta-proposals are the policy lane, already rendered apart.
   // Checked BEFORE access so a `governance.widen_lane` — which does change who
   // may act — keeps the lane it already has. Widening a lane is a change to the
@@ -214,9 +307,12 @@ export function classifyProposal(
 /** Convenience: the lifetime for a proposal, or null when it never expires. */
 export function proposalLifetimeHours(
   proposalType: string,
-  targetType: string
+  targetType: string,
+  runVerbId?: string | null
 ): number | null {
-  return CLASS_LIFETIME_HOURS[classifyProposal(proposalType, targetType)];
+  return CLASS_LIFETIME_HOURS[
+    classifyProposal(proposalType, targetType, runVerbId)
+  ];
 }
 
 /**
@@ -241,8 +337,14 @@ export interface ProposalClassFields {
  */
 export function proposalClassFields(
   proposalType: string,
-  targetType: string
+  targetType: string,
+  /**
+   * REQUIRED (pass `capabilityRunVerbId(row.data)`, or `null` when the door
+   * has no payload): a read door that omitted it would show a durable-object
+   * run with the ephemeral countdown the expiry pass no longer applies.
+   */
+  runVerbId: string | null | undefined
 ): ProposalClassFields {
-  const cls = classifyProposal(proposalType, targetType);
+  const cls = classifyProposal(proposalType, targetType, runVerbId);
   return { class: cls, lifetimeHours: CLASS_LIFETIME_HOURS[cls] };
 }

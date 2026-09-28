@@ -215,7 +215,12 @@ const CreateBodySchema = z
      * children. Never a column, never a governance inherit.
      */
     parentSessionId: z.string().uuid().optional(),
-    /** One line describing what the PARENT was about to do, at push time. */
+    /**
+     * With parentSessionId, this child BLOCKS the parent. One line naming what
+     * the parent was about to do. Parent-only (no suspended intent) does not
+     * block. The edge is parent --blocked_by--> this session, written when the
+     * parent link lands.
+     */
     suspendedIntent: z.string().min(1).max(2000).optional(),
     /**
      * Sessions this one waits on — `session --blocked_by--> session` edges,

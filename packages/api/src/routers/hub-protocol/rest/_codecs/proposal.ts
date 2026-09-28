@@ -9,6 +9,7 @@
 import { z } from "@hono/zod-openapi";
 import {
   PROPOSAL_CLASSES,
+  capabilityRunVerbId,
   proposalClassFields,
 } from "../../../../services/proposals/proposal-class.js";
 import { projectProposalRowForViewer } from "../../../proposals/failure-projection.js";
@@ -217,7 +218,8 @@ export function withProposalClass<T extends Record<string, unknown>>(
     ...projectProposalRowForViewer(row),
     ...proposalClassFields(
       String(row.proposalType ?? ""),
-      String(row.targetType ?? "")
+      String(row.targetType ?? ""),
+      capabilityRunVerbId(row.data)
     ),
   };
 }
@@ -414,7 +416,8 @@ export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
     // see it after fetching the full payload cannot triage a queue.
     ...proposalClassFields(
       row.proposalType as string,
-      row.targetType as string
+      row.targetType as string,
+      capabilityRunVerbId(row.data)
     ),
     // FORWARDED, not derived. `setup` needs the template cache, the vault and
     // Nango — this projection is pure and cannot reach any of them. Its

@@ -1113,7 +1113,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work that advances one of a project's METHODS is born inside its track: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this (another conversation's session is joined only by passing its id as `sessionId`); calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work that advances one of a project's METHODS is born inside its track: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this (another conversation's session is joined only by passing its id as `sessionId`); calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1232,7 +1232,7 @@
           "suspendedIntent": {
             "type": "string",
             "maxLength": 400,
-            "description": "ONE line naming what you were about to do in the PARENT session when you pushed — recorded on the parent so popping back restates the goal instead of relying on memory. Only meaningful with parentSessionId."
+            "description": "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent."
           },
           "expectedOutputs": {
             "type": "array",
@@ -2695,7 +2695,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may contain {{param}} placeholders. Pass scope: \"project\" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default \"session\" is a template for one focus session. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.",
+      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may contain {{param}} placeholders. Pass scope: \"project\" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default \"session\" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts (goalTemplate/stage goals read them as {{name}}). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2780,6 +2780,48 @@
             "type": "string",
             "enum": ["session", "project"],
             "description": "What the playbook instantiates. 'session' (default): a template for ONE bounded focus session. 'project': a METHOD a project runs as a track (synap_start_track) — its stages are the project's long-running phases."
+          },
+          "params": {
+            "type": "array",
+            "description": "What the method needs to know. A required param left unanswered when synap_start_track runs becomes a question owed to the person (answer later with synap_set_track_params); optional ones fall back to their default.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Key, read as {{name}} in goal templates."
+                },
+                "label": {
+                  "type": "string",
+                  "description": "The question as the person sees it."
+                },
+                "type": {
+                  "type": "string",
+                  "enum": ["text", "number", "entity", "choice", "boolean"]
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The choices, for type 'choice'."
+                },
+                "default": {
+                  "description": "Used when unanswered."
+                },
+                "required": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["name", "type"]
+            }
+          },
+          "criteria": {
+            "type": "array",
+            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
+            "items": {
+              "type": "object"
+            }
           }
         },
         "required": ["name", "goalTemplate"]
@@ -4469,22 +4511,7 @@
           },
           "intent": {
             "type": "string",
-            "enum": [
-              "search_external",
-              "find_people",
-              "enrich_entity",
-              "fetch_record",
-              "list_records",
-              "send_message",
-              "request_connection",
-              "schedule_event",
-              "manage_file",
-              "generate_media",
-              "capture_into_pod",
-              "run_external_job",
-              "connect_account"
-            ],
-            "description": "Reverse lookup by ABSTRACT INTENT — what you want to DO, without knowing the vendor. Returns the concrete verb ids that serve it (pass one to synap_run_capability). Closed vocabulary: search_external | find_people | enrich_entity | fetch_record | list_records | send_message | request_connection | schedule_event | manage_file | generate_media | capture_into_pod | run_external_job | connect_account. Takes precedence over `query`/`kind`/`limit`. Not every installed verb declares an intent yet, so an empty result is not proof of absence — re-run without `intent` to scan the catalog."
+            "description": "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this."
           },
           "limit": {
             "type": "number",

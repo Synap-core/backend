@@ -68,6 +68,7 @@ import {
   humanizeToken,
 } from "@synap-core/types/vocabulary";
 import { buildProjectFilingSummary } from "../services/projects/project-filing-summary.js";
+import { buildTrackStartSummary } from "../services/tracks/track-start-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import {
   isLikelyUUID,
@@ -1301,6 +1302,30 @@ async function evaluatePermission(
         workspace: { id: workspaceId },
         requiredPermission,
       });
+
+      // DECISION 2a — a started track admits its agent into the track's step
+      // spaces, SCOPED to that track's sessions (`services/tracks/
+      // track-space-grant.ts`). Only a membership MISS by an agent is asked;
+      // admitted ⇒ skip the join and fall through to the governance ladder.
+      if (
+        !result.allowed &&
+        result.reason === "User is not a member of this workspace" &&
+        agentUserId &&
+        (await (
+          await import("../services/tracks/track-space-grant.js")
+        ).admittedByTrackSpaceGrant(db, {
+          userId,
+          agentUserId,
+          workspaceId,
+          requiredPermission,
+          subjectType,
+          action,
+          data,
+          sessionId,
+        }))
+      ) {
+        result.allowed = true;
+      }
 
       if (!result.allowed) {
         // PRODUCT DECISION ("agent asks to join"): an agent actor that is not yet
@@ -2738,6 +2763,10 @@ export function buildProposalSummary(
   // raw id in the body). Archive/restore add the rules they pause.
   const spaceSentence = buildSpaceOpSummary(subjectType, action, data);
   if (spaceSentence) return spaceSentence;
+
+  // TRACK START carrying a space grant (decision 2a) — the consent, stated.
+  const trackStartSentence = buildTrackStartSummary(subjectType, action, data);
+  if (trackStartSentence) return trackStartSentence;
 
   // PROJECT FILING (file / un-file existing records) names a count, a kind
   // and a project — see `services/projects/project-filing-summary.ts`.

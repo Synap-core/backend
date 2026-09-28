@@ -337,3 +337,18 @@ describe("governanceRules.revoke — a connection rule is the owner's consent", 
     expect(update).not.toHaveBeenCalled();
   });
 });
+
+describe("governanceRules.setReversibleDefault gating", () => {
+  it("a non-pod-admin cannot switch the pod default", async () => {
+    (db.query.workspaces as unknown as { findFirst: unknown }).findFirst =
+      async () => ({ id: POD_ADMIN_WS_ID });
+    setMembership(async () => undefined); // not a member of pod-admin ws
+    const transaction = vi.fn();
+    (db as unknown as { transaction: unknown }).transaction = transaction;
+
+    await expect(
+      caller(OUTSIDER_ID).setReversibleDefault({ enabled: false })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+});

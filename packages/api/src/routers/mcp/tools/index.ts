@@ -28,7 +28,7 @@ import {
   CREATABLE_VIEW_DEFINITIONS,
 } from "@synap-core/types/renderables";
 const CREATABLE_VIEW_TYPE_KEYS = CREATABLE_VIEW_DEFINITIONS.map((d) => d.key);
-import { ABSTRACT_VERBS, PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 // The renderer `slot`/`scope` wire vocabularies — DERIVED, never hand-listed
 // (see renderer-slot-enum-parity.tripwire.test.ts).
 import {
@@ -1573,7 +1573,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work that advances one of a project's METHODS is born inside its track: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this (another conversation's session is joined only by passing its id as `sessionId`); calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work that advances one of a project's METHODS is born inside its track: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this (another conversation's session is joined only by passing its id as `sessionId`); calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1663,7 +1663,7 @@ export const tools = {
               type: "string",
               maxLength: 400,
               description:
-                "ONE line naming what you were about to do in the PARENT session when you pushed — recorded on the parent so popping back restates the goal instead of relying on memory. Only meaningful with parentSessionId.",
+                "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent.",
             },
             expectedOutputs: {
               type: "array",
@@ -4044,20 +4044,12 @@ export const tools = {
             },
             intent: {
               type: "string",
-              // DECLARED as an enum, not merely described in prose: the
-              // vocabulary is closed, so the schema is the honest place to say
-              // so. Prose alone makes a caller parse the valid set out of a
-              // sentence and discover a typo as a runtime rejection; an enum
-              // constrains the call before it is made.
-              //
-              // SPREAD from the union rather than re-typed: a literal copy here
-              // would be a second definition of a closed vocabulary, and the
-              // parity tripwire would then only catch the drift AFTER someone
-              // shipped it. Same idiom this file already uses for
-              // USER_OBSERVATION_CATEGORIES and PROPOSAL_REJECTION_REASONS.
-              enum: [...ABSTRACT_VERBS],
+              // OPEN. The vocabulary is the capability_intents registry, seeded
+              // by ABSTRACT_VERBS. A static enum here would reject a slug the
+              // pod already stored, before the handler ever saw it. Unknown
+              // slugs are rejected at runtime by isKnownIntent.
               description:
-                "Reverse lookup by ABSTRACT INTENT — what you want to DO, without knowing the vendor. Returns the concrete verb ids that serve it (pass one to synap_run_capability). Closed vocabulary: search_external | find_people | enrich_entity | fetch_record | list_records | send_message | request_connection | schedule_event | manage_file | generate_media | capture_into_pod | run_external_job | connect_account. Takes precedence over `query`/`kind`/`limit`. Not every installed verb declares an intent yet, so an empty result is not proof of absence — re-run without `intent` to scan the catalog.",
+                "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this.",
             },
             limit: {
               type: "number",

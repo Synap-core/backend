@@ -89,8 +89,13 @@ export interface ConnectionGroup {
 }
 
 export interface ConnectionProvenance {
-  /** The capture this was made from (incoming `produced` edge from a capture). */
-  madeFrom: ConnectionItem | null;
+  /**
+   * EVERY capture this was made from (incoming `produced` edges from a
+   * capture), in input order, once per capture. An entity structured from two
+   * memos names both: hosts lead with `[0]` and say "+N" for the rest (a door
+   * to the full lineage) — never silently the first only. Empty when unknown.
+   */
+  madeFrom: ConnectionItem[];
   /** The session the work happened in. */
   inSession: ConnectionItem | null;
   /** Every provenance edge, in input order — the Why pane body. */
@@ -189,7 +194,7 @@ export function groupConnections(
   const keyFacts = new Set(input.keyFactIds ?? []);
 
   const provenance: ConnectionProvenance = {
-    madeFrom: null,
+    madeFrom: [],
     inSession: null,
     all: [],
   };
@@ -217,12 +222,13 @@ export function groupConnections(
       const item = toItem(n);
       provenance.all.push(item);
       if (
-        !provenance.madeFrom &&
         n.edgeType === PRODUCED_EDGE &&
         n.direction === "incoming" &&
         n.kind === CAPTURE_KIND
       ) {
-        provenance.madeFrom = item;
+        if (!provenance.madeFrom.some((c) => c.id === item.id)) {
+          provenance.madeFrom.push(item);
+        }
       } else if (
         !provenance.inSession &&
         n.kind === "session" &&

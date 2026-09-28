@@ -45,6 +45,7 @@ import {
   assertTrackTransition,
 } from "../../../services/tracks/tracks-service.js";
 import { trackRepository } from "../../../services/tracks/track-repo.js";
+import { readListedStepSpaces } from "../../../services/tracks/track-space-grant.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 
@@ -105,6 +106,13 @@ export function registerTrackExecutors(): void {
         ...(data.params && typeof data.params === "object"
           ? { params: data.params as Record<string, unknown> }
           : {}),
+        // Decision 2a: this approval IS the consent to the spaces the
+        // proposal listed, for the agent the proposal's COLUMN names.
+        approvedSpaceGrant: {
+          proposalId: input.proposalId,
+          agentUserId: proposal.agentUserId ?? null,
+          listedWorkspaceIds: readListedStepSpaces(data),
+        },
         actor: { userId },
       });
       assertApplied(result);

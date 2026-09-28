@@ -25,7 +25,11 @@
 
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
-import { proposalClassFields, type ProposalClass } from "./proposal-class.js";
+import {
+  capabilityRunVerbId,
+  proposalClassFields,
+  type ProposalClass,
+} from "./proposal-class.js";
 
 /**
  * The minimum a proposal row must expose to be fingerprinted. Mirrors the
@@ -340,6 +344,8 @@ interface ClusterAccumulator {
   fingerprint: string;
   proposalType: string;
   targetType: string;
+  /** A capability run's verb — one per cluster (runs cluster on the verb's skill id). */
+  runVerbId: string | null;
   targetLabel: string;
   count: number;
   sampleProposalIds: string[];
@@ -372,6 +378,7 @@ export function collapseProposalsToClusters(
         fingerprint,
         proposalType: row.proposalType,
         targetType: row.targetType,
+        runVerbId: capabilityRunVerbId(row.data),
         targetLabel: resolveTargetLabel(row),
         count: 0,
         sampleProposalIds: [],
@@ -427,7 +434,7 @@ export function collapseProposalsToClusters(
     proposalType: acc.proposalType,
     targetType: acc.targetType,
     targetLabel: acc.targetLabel,
-    ...proposalClassFields(acc.proposalType, acc.targetType),
+    ...proposalClassFields(acc.proposalType, acc.targetType, acc.runVerbId),
     count: acc.count,
     sampleProposalIds: acc.sampleProposalIds,
     sources: acc.sources,

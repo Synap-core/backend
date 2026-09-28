@@ -38,6 +38,7 @@ import { visibleSkillsWhere } from "../../services/skills/visibility.js";
 import { listRunTracks } from "../../services/runs/index.js";
 import type { RunGroup } from "../../services/runs/types.js";
 import {
+  capabilityRunVerbId,
   proposalClassFields,
   type ProposalClassFields,
 } from "../../services/proposals/proposal-class.js";
@@ -1489,7 +1490,11 @@ export async function enrichProposalsForDisplay(
       // `proposals.get` — and every surface over them — can render the
       // ephemeral countdown without a second call or a second copy of the
       // lifetime table. ONE door: `proposalClassFields`.
-      ...proposalClassFields(row.proposalType, row.targetType),
+      ...proposalClassFields(
+        row.proposalType,
+        row.targetType,
+        capabilityRunVerbId(row.data)
+      ),
       // SETUP — the manifest-derived gap, plus the SAME row payload with every
       // secret param value stripped. ONE door: `proposalSetupFields`. Spread
       // AFTER `projectProposalRowForViewer(row)` so its `data` override wins.

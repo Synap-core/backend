@@ -28,7 +28,7 @@ import {
   links,
   secrets,
 } from "@synap/database/schema";
-import type { AbstractVerb, CapabilityDefinition } from "@synap/playbooks";
+import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
@@ -137,11 +137,11 @@ export interface CapabilityCardVerb {
    * two places the applier writes it. `skills` has no `intent` column, so a card
    * verb can only carry it by that join.
    *
-   * ABSENT, never guessed: the vocabulary is closed and a legacy verb that
-   * declares no intent must stay out of every intent bucket (same rule as
-   * `foldVerbsByIntent`).
+   * ABSENT, never guessed: a legacy verb that declares no intent must stay out
+   * of every intent bucket (same rule as `foldVerbsByIntent`). The value is a
+   * registry slug, not a closed union.
    */
-  intent?: AbstractVerb;
+  intent?: string;
 }
 
 /** Extract parameter NAMES from a skill `parameters` blob (JSON-schema or flat). */
@@ -901,7 +901,7 @@ export async function buildCapabilityCatalog(
     // tools' verb catalogs. `ToolVerbCatalogEntry.id` IS the requiring skill's
     // name, which is exactly the `verbId` a card verb carries, so the join is
     // by that key and nothing else.
-    const intentByVerbId = new Map<string, AbstractVerb>();
+    const intentByVerbId = new Map<string, string>();
     for (const t of myTools) {
       for (const entry of t.capabilities ?? []) {
         if (entry?.intent) intentByVerbId.set(entry.id, entry.intent);

@@ -867,16 +867,15 @@ export function isBlockedFilesystemPath(path: string): boolean {
   return BLOCKED_FILESYSTEM_PATHS.some((re) => re.test(path));
 }
 
-/** Glob match for action patterns: exact, or "<subject>.*" prefix. */
+/**
+ * Glob match for action patterns: exact, "<subject>.*" prefix, or the
+ * {@link REVERSIBLE_CLASS_PATTERN} class (every easily-reversible write).
+ */
 export function matchesActionPattern(
   eventKey: string,
   patterns: readonly string[]
 ): boolean {
-  return patterns.some((pattern) =>
-    pattern.endsWith(".*")
-      ? eventKey.startsWith(pattern.slice(0, -1))
-      : eventKey === pattern
-  );
+  return findMatchingPattern(eventKey, patterns) !== undefined;
 }
 
 /**
@@ -890,9 +889,11 @@ export function findMatchingPattern(
   patterns: readonly string[]
 ): string | undefined {
   return patterns.find((pattern) =>
-    pattern.endsWith(".*")
-      ? eventKey.startsWith(pattern.slice(0, -1))
-      : eventKey === pattern
+    pattern === REVERSIBLE_CLASS_PATTERN
+      ? isReversibleWrite(eventKey)
+      : pattern.endsWith(".*")
+        ? eventKey.startsWith(pattern.slice(0, -1))
+        : eventKey === pattern
   );
 }
 
@@ -1658,6 +1659,153 @@ export function nonWidenableFloorFor(eventKey: string): string | null {
     governanceRuleVerdict: "auto",
   });
   return decided.verdict === "propose" ? (decided.reasonCode ?? null) : null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REVERSIBILITY — "easily reversible = direct; disruptive = proposal"
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * Founder decision (2026-09-28): by default an agent with access to a
+ * workspace/project ACTS DIRECTLY on anything easily reversible (create,
+ * update, link, attach, capture…) — each lands as an `auto_approved` receipt
+ * the person can undo — and only DISRUPTIVE writes become proposals.
+ *
+ * CLASSIFIED, not listed: every gate door is named here, so a new door nobody
+ * classified does not compile (the coverage-floor idiom). Fail-closed:
+ * `isReversibleWrite` answers `false` for any key that is not a door here.
+ *
+ * DERIVED CONSTRAINTS (policy.test.ts / reversible-default.test.ts): a door
+ * that any non-widenable floor catches is `disruptive` (the floors win anyway —
+ * the class must not claim what it cannot deliver), and no reversible door
+ * carries a DESTRUCTIVE verb.
+ *
+ * `disruptive` groups, for the reader:
+ *   scope   — widens who can see/act (members, shares, exposure, filing, keys)
+ *   egress  — a new ability to act outside the pod (tools, skills, capabilities)
+ *   gov     — changes how agents are governed or instructed (rules)
+ *   schema  — changes what the pod can hold (kinds, roles, fields, relation types)
+ *   struct  — changes what the pod does / how it is organised (explicit choice)
+ *   effect  — a side effect a person experiences (a message, a run, a shell)
+ *   destroy — delete / archive / merge (DESTRUCTIVE floor)
+ */
+export const REVERSIBILITY_DOOR_CLASS = {
+  "a2ai/join": "disruptive", // scope: an agent joins a room
+  "agent/updateCapabilities": "disruptive", // scope (ADMIN)
+  "aiProvider/create": "disruptive", // scope (ADMIN)
+  "aiProvider/delete": "disruptive", // destroy / ADMIN
+  "aiProvider/update": "disruptive", // scope (ADMIN)
+  "apiKey/create": "disruptive", // scope (ADMIN)
+  "apiKey/delete": "disruptive", // destroy / ADMIN
+  "apiKey/update": "disruptive", // scope: a credential
+  "artifact/create": "reversible",
+  "artifact/setState": "reversible",
+  "automation/activate": "disruptive", // struct (2.09)
+  "automation/create": "disruptive", // struct (2.09)
+  "automation/execute": "disruptive", // effect: runs steps now
+  "bento/arrange": "reversible",
+  "capability/attach": "disruptive", // egress
+  "capability/create": "disruptive", // egress
+  "capability/renderer.set": "disruptive", // struct: how a capability renders everywhere
+  "cell/create": "disruptive", // struct (2.09)
+  "cell/define": "disruptive", // struct (2.09)
+  "cell/update": "reversible", // config patch of an existing placement
+  "channel/bind": "disruptive", // scope: wires a room to a bridge
+  "channel/create_branch": "disruptive", // struct: a new room the person must see
+  "channel/create_external": "disruptive", // effect: an outside channel
+  "channel/merge_branch": "disruptive", // destroy (merge)
+  "channel/unbind": "disruptive", // scope
+  "command/execute": "disruptive", // effect: a shell (2.06)
+  "context/link": "reversible",
+  "document/create": "reversible",
+  "document/section_update": "reversible", // version history restores it
+  "document/session_narrative_update": "reversible",
+  "document/update": "reversible", // version history restores it
+  "entity/create": "reversible",
+  "entity/delete": "disruptive", // destroy
+  "entity/renderer.set": "reversible", // one record's view
+  "entity/update": "reversible", // kind/scope change is forcePropose'd (2.1)
+  "facet/attach": "reversible",
+  "facet/detach": "reversible", // soft-delete; re-attach recovers it
+  "facet/update": "reversible",
+  "focus_session/create": "reversible",
+  "focus_session/grant_capability": "disruptive", // egress
+  "focus_session/update": "reversible", // criteria are forcePropose'd (2.1)
+  "link/create": "reversible",
+  "link/delete": "disruptive", // destroy (and un-filing)
+  "playbook/archive": "disruptive", // destroy
+  "playbook/create": "disruptive", // struct (2.09)
+  "playbook/promote": "disruptive", // struct (2.09)
+  "playbook/run": "disruptive", // effect: starts a process that fans out
+  "playbook/update": "disruptive", // struct (2.09)
+  "playbook_run/update": "reversible", // run orchestration
+  "proactive/recap": "disruptive", // effect: a message is read, not undone
+  "profile/create": "disruptive", // schema (2.08)
+  "profile/grant_access": "disruptive", // scope (ADMIN)
+  "profile/renderer.set": "disruptive", // struct (2.09)
+  "project/create": "disruptive", // struct: a new commitment (explicit choice)
+  "project/delete": "disruptive", // destroy
+  "project/file_entities": "disruptive", // scope: exposes records to members
+  "project/instantiate_from_playbook": "disruptive", // struct
+  "project/spawn_from_session": "disruptive", // struct
+  "project/update": "disruptive", // one patch can archive it or move its home
+  "projectMember/create": "disruptive", // scope (ADMIN)
+  "property_def/create": "disruptive", // schema
+  "property_def/update": "disruptive", // schema
+  "relation/create": "reversible", // exposure edges ride relation/expose (ADMIN)
+  "relation/delete": "disruptive", // destroy
+  "relation/expose": "disruptive", // scope (ADMIN)
+  "relation/update": "reversible",
+  "relation_def/create": "disruptive", // schema
+  "role/create": "disruptive", // schema
+  "role/delete": "disruptive", // destroy
+  "role/update": "disruptive", // schema
+  "rule/create": "disruptive", // gov: a standing instruction to agents
+  "rule/update": "disruptive", // gov
+  "share/create": "disruptive", // scope (ADMIN)
+  "skill/create": "disruptive", // egress
+  "skill/delete": "disruptive", // destroy
+  "skill/update": "disruptive", // egress
+  "tool/create": "disruptive", // egress
+  "tool/delete": "disruptive", // destroy
+  "tool/update": "disruptive", // egress
+  "track/create": "disruptive", // struct: a new ongoing method on a project
+  "track/update": "reversible", // advance / params / status — orchestration
+  "view/create": "reversible",
+  "view/update": "reversible",
+  "whiteboard/place": "reversible",
+  "widget/register": "disruptive", // struct (2.09)
+  "workspace/adopt": "disruptive", // scope
+  "workspace/archive": "disruptive", // destroy
+  "workspace/configure_public_projection": "disruptive", // scope: public
+  "workspace/create": "disruptive", // struct (2.09)
+  "workspace/declare_source": "disruptive", // scope: a data edge
+  "workspace/delete": "disruptive", // destroy / ADMIN
+  "workspace/restore": "disruptive", // ADMIN
+  "workspace/update": "disruptive", // ADMIN
+  "workspaceMember/add": "disruptive", // scope (ADMIN)
+  "workspaceMember/remove": "disruptive", // scope (ADMIN)
+  "workspaceMember/updateRole": "disruptive", // scope (ADMIN)
+} as const satisfies Record<GateWriteDoor, "reversible" | "disruptive">;
+
+/** The `${subject}.${action}` event keys an agent may perform directly by default. */
+export const REVERSIBLE_EVENT_KEYS: readonly string[] = (
+  Object.keys(REVERSIBILITY_DOOR_CLASS) as GateWriteDoor[]
+)
+  .filter((door) => REVERSIBILITY_DOOR_CLASS[door] === "reversible")
+  .map((door) => door.replace("/", "."));
+
+/**
+ * The CLASS pattern a `governance_rules.target_pattern` may carry: it matches
+ * exactly the {@link REVERSIBLE_EVENT_KEYS}. The pod default is ONE row with
+ * this pattern (principal any, scope pod, verdict auto) — migration 0282,
+ * toggled from Settings. Ranked like a glob (specificity 1), so any more
+ * specific rule still wins, and every floor returns before rung 2.8.
+ */
+export const REVERSIBLE_CLASS_PATTERN = "@reversible";
+
+/** Is this event key an easily-reversible write? Fail-closed for unknown keys. */
+export function isReversibleWrite(eventKey: string): boolean {
+  return REVERSIBLE_EVENT_KEYS.includes(eventKey);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

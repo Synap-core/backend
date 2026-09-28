@@ -78,6 +78,8 @@ import { definitionEngineProcedures } from "../routers/workspaces/definition-eng
 import { buildPostWorkspaceBodyFromDefinition } from "../routers/workspaces/helpers.js";
 import { applyPackagePostWorkspace } from "../services/package-apply-post-workspace.js";
 import { createLoopFromDefinition } from "../services/loops/create-from-definition.js";
+import { CreatePlaybookBodySchema } from "../routers/hub-protocol/rest/playbooks.js";
+import { createPlaybookDoor } from "../routers/hub-protocol/playbook-doors.js";
 import { playbookRowToPackagePlaybook } from "../services/workspace-to-package-definition.js";
 import { createInputSchema } from "../routers/playbooks.js";
 import type { LoopDefinition } from "@synap/playbooks";
@@ -233,6 +235,31 @@ describe("playbook definition round trip — grants.yaml Grant Process", () => {
     expectMethod(lastCreate(), "/loops applier create");
   });
 
+  it("Hub POST /playbooks (+ MCP create_playbook) → shared door → playbooks.create", async () => {
+    // The single-playbook AGENT authoring door. Its body `.pick`s the ONE
+    // schema (2026-09-28); the hand copy it replaced stripped params/criteria.
+    const gp = grantProcess((await grantsPackage()).playbooks);
+    const body = CreatePlaybookBodySchema.parse({
+      ...gp,
+      workspaceId: "33333333-3333-4333-8333-333333333333",
+    });
+    expectMethod(body as Record<string, unknown>, "POST /playbooks parse");
+    await createPlaybookDoor(
+      { userId: USER, scopes: ["hub-protocol.write"] },
+      {
+        workspaceId: body.workspaceId,
+        name: body.name,
+        goalTemplate: body.goalTemplate,
+        stages: body.stages as never,
+        scope: body.scope,
+        params: body.params,
+        criteria: body.criteria,
+      }
+    );
+    expectMethod(lastCreate(), "POST /playbooks door create");
+    expect(lastCreate().params, "POST /playbooks: params").toEqual(gp.params);
+  });
+
   it("the router's own create input keeps them (playbooks.create)", async () => {
     const gp = grantProcess((await grantsPackage()).playbooks);
     expectMethod(
@@ -287,6 +314,7 @@ describe("playbook definition round trip — grants.yaml Grant Process", () => {
       "routers/hub-protocol/rest/loops.ts",
       "routers/workspaces/definition-engine.ts",
       "routers/hub-protocol/rest/packages.ts",
+      "routers/hub-protocol/rest/playbooks.ts",
       // defines the schemas themselves
       "schemas/playbook-definition.ts",
       // not a door: the template reconcile normalizes `desired` through the

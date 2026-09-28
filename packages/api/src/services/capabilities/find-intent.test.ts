@@ -22,9 +22,27 @@ import { TEMPLATE_OPT_OUT } from "../focus-sessions/match-session-template.js";
 
 const listCapabilities = vi.fn();
 const matchSessionTemplate = vi.fn();
+const listIntentSlugs = vi.fn(async () => [
+  "search_external",
+  "find_people",
+  "enrich_entity",
+  "fetch_record",
+  "list_records",
+  "send_message",
+  "request_connection",
+  "schedule_event",
+  "manage_file",
+  "generate_media",
+  "capture_into_pod",
+  "run_external_job",
+  "connect_account",
+]);
 
 vi.mock("./capability-registry.js", () => ({
   listCapabilities: (...a: unknown[]) => listCapabilities(...a),
+}));
+vi.mock("./intent-registry.js", () => ({
+  listIntentSlugs: () => listIntentSlugs(),
 }));
 vi.mock("../focus-sessions/match-session-template.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),

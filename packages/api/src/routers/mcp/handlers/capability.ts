@@ -289,20 +289,17 @@ export const capabilityHandlers: McpHandlerMap = {
     // caller knowing the vendor. Routing only: it returns CONCRETE verb ids,
     // which `synap_run_capability` then governs exactly as before.
     if (args.intent !== undefined) {
-      const { isAbstractVerb, ABSTRACT_VERBS } =
-        await import("@synap/database/schema");
-      if (!isAbstractVerb(args.intent)) {
-        return ok({
-          error:
-            `Unknown intent ${JSON.stringify(args.intent)}. The vocabulary is closed — ` +
-            `one of: ${ABSTRACT_VERBS.join(", ")}.`,
-        });
+      const { intentError, isKnownIntent } =
+        await import("../../../services/capabilities/intent-registry.js");
+      const intent = typeof args.intent === "string" ? args.intent : null;
+      if (intent === null || !(await isKnownIntent(intent))) {
+        return ok({ error: intentError(args.intent) });
       }
       const { capabilitiesByIntent } =
         await import("../../../services/capabilities/capability-intent-index.js");
       const matches = await capabilitiesByIntent(
         { workspaceId: wsId, userId },
-        args.intent
+        intent
       );
       return ok({
         intent: args.intent,

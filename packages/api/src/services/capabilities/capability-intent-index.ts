@@ -20,7 +20,6 @@
  * never widen what a caller may run.
  */
 
-import type { AbstractVerb } from "@synap/database/schema";
 import {
   listCapabilities,
   type CapabilityRegistryContext,
@@ -29,7 +28,7 @@ import {
 
 /** One verb that declares an intent, carried with the capability it lives on. */
 export interface IntentVerbMatch {
-  intent: AbstractVerb;
+  intent: string;
   /** The CONCRETE verb id to pass to `synap_run_capability` / executeCapability. */
   verbId: string;
   verbLabel: string;
@@ -57,8 +56,8 @@ export interface IntentVerbMatch {
  */
 export function foldVerbsByIntent(
   caps: RegistryCapability[]
-): Map<AbstractVerb, IntentVerbMatch[]> {
-  const byIntent = new Map<AbstractVerb, IntentVerbMatch[]>();
+): Map<string, IntentVerbMatch[]> {
+  const byIntent = new Map<string, IntentVerbMatch[]>();
   const seen = new Map<string, IntentVerbMatch>();
   for (const c of caps) {
     for (const v of c.verbs ?? []) {
@@ -101,7 +100,7 @@ export function foldVerbsByIntent(
  */
 export async function capabilitiesByIntent(
   ctx: CapabilityRegistryContext,
-  intent: AbstractVerb
+  intent: string
 ): Promise<IntentVerbMatch[]> {
   // `limit: null` — never slice before folding: a genuine match could be pushed
   // out of the window by duplicate rows of something else. Same reason the MCP
@@ -113,6 +112,6 @@ export async function capabilitiesByIntent(
 /** The full intent → verbs index under the caller's lens. */
 export async function intentIndex(
   ctx: CapabilityRegistryContext
-): Promise<Map<AbstractVerb, IntentVerbMatch[]>> {
+): Promise<Map<string, IntentVerbMatch[]>> {
   return foldVerbsByIntent(await listCapabilities(ctx, { limit: null }));
 }

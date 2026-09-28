@@ -6,8 +6,9 @@
  * agent after the posture is applied — never a check that rows exist.
  *
  * The baseline is a STRICT new agent (`writesRequireProposal: true`, how
- * `findOrCreateServiceAgentUser` inserts one): every write proposes. The
- * posture must loosen exactly the creates and nothing else.
+ * `findOrCreateServiceAgentUser` inserts one). The POD DEFAULT (`@reversible`
+ * row, migration 0282) is what lets it act on reversible writes; the posture
+ * is an optional stricter preset on top — it takes edits back, never loosens.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
@@ -130,13 +131,36 @@ const PROPOSES: Array<[string, string]> = [
   ["document", "delete"],
 ];
 
-describe("create-with-undo posture (D2)", () => {
-  it("baseline: a strict new agent proposes every create (the posture is what loosens it)", async () => {
+/** The pod default row (migration 0282): `@reversible`, any/pod, auto. */
+async function podDefaultOn() {
+  await pg.exec(`
+    INSERT INTO governance_rules (principal_kind, scope_kind, target_kind, target_pattern, verdict, created_by)
+    VALUES ('any', 'pod', 'action', '@reversible', 'auto', 'system:reversible-default');
+  `);
+}
+
+describe("create-with-undo — an optional STRICTER preset on the pod default", () => {
+  it("baseline: a strict agent with no pod default proposes every create", async () => {
     for (const [s, a] of CREATES)
       expect(await decide(s, a), `${s}.${a}`).toBe("propose");
   });
 
-  it("creates execute; updates, property defs, automations and deletes propose", async () => {
+  it("pod default ON, no posture: creates AND edits execute; disruptive writes propose", async () => {
+    await podDefaultOn();
+    for (const [s, a] of CREATES)
+      expect(await decide(s, a), `${s}.${a}`).toBe("execute");
+    expect(await decide("entity", "update")).toBe("execute");
+    expect(await decide("document", "update")).toBe("execute");
+    for (const [s, a] of [
+      ["property_def", "create"],
+      ["automation", "create"],
+      ["entity", "delete"],
+    ] as const)
+      expect(await decide(s, a), `${s}.${a}`).toBe("propose");
+  });
+
+  it("pod default ON + posture: creates execute; edits, property defs, automations and deletes propose", async () => {
+    await podDefaultOn();
     await applyAgentPosture({
       db,
       agentUserId: AGENT,
@@ -152,6 +176,17 @@ describe("create-with-undo posture (D2)", () => {
     expect(await decide("entity", "read")).toBe("execute");
   });
 
+  it("NEVER loosens: pod default OFF + posture ⇒ every write still proposes", async () => {
+    await applyAgentPosture({
+      db,
+      agentUserId: AGENT,
+      posture: "create-with-undo",
+      createdBy: HUMAN,
+    });
+    for (const [s, a] of [...CREATES, ...PROPOSES])
+      expect(await decide(s, a), `${s}.${a}`).toBe("propose");
+  });
+
   it("the read door reports the posture, and that it is configured", async () => {
     expect(
       (await readAgentGovernance({ db, agentUserId: AGENT }))!.configured
@@ -165,13 +200,14 @@ describe("create-with-undo posture (D2)", () => {
     const state = (await readAgentGovernance({ db, agentUserId: AGENT }))!;
     expect(state.posture).toBe("create-with-undo");
     expect(state.configured).toBe(true);
-    expect(state.writesRequireProposal).toBe(false);
+    expect(state.writesRequireProposal).toBe(true);
     expect(state.rules.length).toBeGreaterThan(0);
     expect(state.rules.every((r) => r.verdict === "propose")).toBe(true);
     expect(await readAgentGovernance({ db, agentUserId: HUMAN })).toBeNull();
   });
 
   it("REPLACE semantics: re-applying keeps one rule set; a later autoApproveFor list replaces it", async () => {
+    await podDefaultOn();
     await applyAgentPosture({
       db,
       agentUserId: AGENT,
@@ -202,7 +238,7 @@ describe("create-with-undo posture (D2)", () => {
     expect(after.rules).toEqual([
       { pattern: "relation.update", verdict: "auto" },
     ]);
-    // The posture's propose rules are gone with it — entity.update reverts to the floor.
+    // The posture's propose rules are gone with it — entity.update is back on the pod default.
     expect(await decide("entity", "update")).toBe("execute");
   });
 });

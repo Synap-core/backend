@@ -274,8 +274,8 @@ describe("agent-authored method → approved → track → owed question", () =>
 
     // 2. The person approves: the REAL executor replays the stored input.
     await q(
-      `insert into proposals (id, status, target_type, target_id, proposal_type, data, workspace_id) values ($1, 'pending', 'playbook', $1, 'create', $2::jsonb, $3)`,
-      [filed.proposalId, JSON.stringify({ data }), WS]
+      `insert into proposals (id, status, target_type, target_id, proposal_type, data, workspace_id) values ($1, 'pending', 'playbook', $2, 'create', $3::jsonb, $4)`,
+      [filed.proposalId, String(filed.proposalId), JSON.stringify({ data }), WS]
     );
     const executor = proposalExecRegistry.resolveExact("playbook/create")!;
     await executor.execute({

@@ -46,6 +46,7 @@ import {
   deriveToolVerbs,
   GRANT_DEFAULT_EXEC_MODE,
 } from "./create-from-definition.js";
+import { knownIntentSetFor } from "./intent-registry.js";
 import {
   capabilityDefinitionDrift,
   capabilityVerbCatalogDrift,
@@ -400,12 +401,16 @@ export async function reconcileCapabilitiesToTemplates(
       // an unknown intent makes this throw — caught by the per-container catch
       // below and reported as a conflict, which is the honest outcome.
       const projectedVerbs = new Map<string, ToolVerbCatalogEntry[]>();
+      const knownIntents = await knownIntentSetFor(
+        (cachedDef.skills ?? []).map((s) => (s as { intent?: unknown }).intent)
+      );
       for (const t of cachedDef.tools ?? []) {
         if (typeof t.name !== "string") continue;
         const verbs = deriveToolVerbs(
           t.name,
           cachedDef.skills ?? [],
-          GRANT_DEFAULT_EXEC_MODE
+          GRANT_DEFAULT_EXEC_MODE,
+          knownIntents
         );
         if (verbs.length > 0) projectedVerbs.set(t.name, verbs);
       }

@@ -137,6 +137,10 @@ describe("tripwire: DEFAULT_AUTO_APPROVE floor is never materialized as governan
         "packages/database/src/utils/connection-governance.ts",
         "packages/api/src/services/proposals/gov-config.ts",
         "packages/api/src/services/forms/form-service.ts",
+        // `setReversibleDefault` — the pod admin's Settings toggle. ONE row,
+        // pattern `@reversible` (a CLASS, never a floor entry): no action list
+        // to diff, createdBy = the admin (`user:<id>`).
+        "packages/database/src/utils/reversible-default.ts",
       ].map((p) => p.split("/").join(sep))
     );
 

@@ -218,6 +218,39 @@ describe("createFocusSession — title, parent and blockers at birth", () => {
     });
   });
 
+  it("a suspended intent blocks the parent on the child; a slice does not", async () => {
+    const parent = await seedSession(USER);
+    h.spawn = async () => ({ linked: true, suspendedIntentRecorded: true });
+    const detour = await createFocusSession({
+      userId: USER,
+      goal: "build the registry",
+      parentSessionId: parent,
+      suspendedIntent: "wire capture and publish",
+    });
+    expect(detour.status).toBe("created");
+    if (detour.status !== "created") return;
+    expect(detour.parentLink).toMatchObject({
+      status: "linked",
+      blocksParent: {
+        status: "linked",
+        blockerSessionId: detour.session.id,
+        inserted: 1,
+      },
+    });
+    expect(await blockedByEdges(parent)).toEqual([detour.session.id]);
+
+    const slice = await createFocusSession({
+      userId: USER,
+      goal: "a slice of the same goal",
+      parentSessionId: parent,
+    });
+    expect(slice.status).toBe("created");
+    if (slice.status !== "created") return;
+    expect(slice.parentLink).toMatchObject({ status: "linked" });
+    expect(slice.parentLink && "blocksParent" in slice.parentLink).toBe(false);
+    expect(await blockedByEdges(parent)).toEqual([detour.session.id]);
+  });
+
   it("writes blocked_by for an owned blocker and refuses a stranger's, per id", async () => {
     const mine = await seedSession(USER);
     const theirs = await seedSession(OTHER);

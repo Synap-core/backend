@@ -48,6 +48,7 @@ import {
   playbooks,
   projects,
   projectTracks,
+  users,
   drizzleSql,
 } from "@synap/database";
 import {
@@ -96,6 +97,12 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import {
+  TRACK_SPACE_GRANT_KEY,
+  endTrackSpaceGrant,
+  resolveTrackStepSpaces,
+  type TrackSpaceGrant,
+} from "./track-space-grant.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import {
   applyStageGate,
@@ -527,6 +534,18 @@ export interface StartTrackInput {
    * was filed under), so the approved row and its receipt name the same id.
    */
   id?: string;
+  /**
+   * ONLY the `track/create` approval replay passes it: the consent the person
+   * just gave (decision 2a). `agentUserId` is the proposing agent (the
+   * proposal's own column, never its payload); `listedWorkspaceIds` are the
+   * step spaces the proposal LISTED. The grant is the step spaces resolved
+   * now ∩ the listed ones — approval can never admit a space nobody read.
+   */
+  approvedSpaceGrant?: {
+    proposalId: string;
+    agentUserId: string | null;
+    listedWorkspaceIds: string[];
+  };
 }
 
 export type StartTrackResult = (
@@ -626,6 +645,27 @@ export async function startTrack(
 
   const trackName = input.name?.trim() || playbook.name;
   const trackId = input.id ?? randomUUID();
+
+  // DECISION 2a — the step spaces this track will work in (the SAME resolver
+  // `startStageSession` places each stage session with). An agent's start
+  // names them in its proposal, so approving the start IS consenting to let
+  // that agent work there for this track — and nowhere else, and no longer.
+  const stepSpaces = await resolveTrackStepSpaces(db, {
+    stages: playbook.stages,
+    projectId: project.id,
+    userId: actor.userId,
+  });
+  const spaceGrantConsent =
+    actor.agentUserId && stepSpaces.length > 0
+      ? {
+          agentUserId: actor.agentUserId,
+          agentName: await agentDisplayName(db, actor.agentUserId),
+          spaces: stepSpaces.map(({ workspaceId, name }) => ({
+            workspaceId,
+            name,
+          })),
+        }
+      : null;
   // Refused BEFORE governance, so a malformed answer is told to its author
   // rather than filed for a human to approve.
   const trackParams = input.params
@@ -652,6 +692,10 @@ export async function startTrack(
       // The answers ride the proposal; the replay re-validates them against
       // the method as it stands at approval.
       ...(Object.keys(trackParams).length > 0 ? { params: trackParams } : {}),
+      // The consent the summary states ("…and let <agent> work in …").
+      ...(spaceGrantConsent
+        ? { [TRACK_SPACE_GRANT_KEY]: spaceGrantConsent }
+        : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -686,6 +730,7 @@ export async function startTrack(
       // the first stage, so the gate is not consulted here.
       currentStage: firstStageKey(snapshot.stages),
       params: trackParams,
+      ...trackSpaceGrantMetadata(input, stepSpaces),
     },
     actor.userId
   );
@@ -727,6 +772,53 @@ export async function startTrack(
     playbook: playbookRef,
     missingDomains,
   };
+}
+
+/** The agent's name for the consent sentence — never its id. */
+async function agentDisplayName(
+  db: Awaited<ReturnType<typeof getDb>>,
+  agentUserId: string
+): Promise<string> {
+  const [row] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  return row?.name?.trim() || "the agent";
+}
+
+/**
+ * The grant stamped on a NEW track (decision 2a; see `track-space-grant.ts`).
+ * Approval replay ⇒ the proposing agent, resolved ∩ listed spaces. Direct
+ * agent start ⇒ that agent. A person's own start ⇒ any agent acting for them
+ * (`agentUserIds: null`). No step space ⇒ nothing stamped.
+ */
+function trackSpaceGrantMetadata(
+  input: StartTrackInput,
+  stepSpaces: ReadonlyArray<{ workspaceId: string }>
+): { metadata?: Record<string, unknown> } {
+  const approved = input.approvedSpaceGrant;
+  const resolved = stepSpaces.map((s) => s.workspaceId);
+  const workspaceIds = approved
+    ? resolved.filter((w) => approved.listedWorkspaceIds.includes(w))
+    : resolved;
+  if (workspaceIds.length === 0) return {};
+  const agentUserIds = approved
+    ? approved.agentUserId
+      ? [approved.agentUserId]
+      : null
+    : input.actor.agentUserId
+      ? [input.actor.agentUserId]
+      : null;
+  const grant: TrackSpaceGrant = {
+    operatorUserId: input.actor.userId,
+    agentUserIds,
+    workspaceIds,
+    grantedBy: input.actor.userId,
+    grantedAt: new Date().toISOString(),
+    ...(approved ? { proposalId: approved.proposalId } : {}),
+  };
+  return { metadata: { [TRACK_SPACE_GRANT_KEY]: grant } };
 }
 
 // ── writes on an existing track ─────────────────────────────────────────────
@@ -835,6 +927,11 @@ export async function applyTrackStatus(
       from: track.status,
       to: status,
       dropMetadataKey: CHECK_GATE_METADATA_KEY,
+      // Decision 2a: completing/archiving ENDS the track's space grant — a
+      // stamp, so a later reopen does not revive it.
+      ...(status === "completed" || status === "archived"
+        ? { metadataPatch: endTrackSpaceGrant(track.metadata, status) }
+        : {}),
     },
     userId
   );

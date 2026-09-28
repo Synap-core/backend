@@ -146,8 +146,11 @@ describe("door 1 — enrichProposalsForDisplay (proposals.list / proposals.get)"
     // Source scan, not a call: the function batch-joins entities/users/facets/
     // events and cannot run without a database. What must not silently
     // disappear is the SPREAD — so that is what is pinned.
-    expect(src).toContain(
-      "...proposalClassFields(row.proposalType, row.targetType)"
+    // The run's verb rides along (`DURABLE_OBJECT_VERBS`): without it this
+    // door would show a durable-object run the ephemeral countdown the expiry
+    // pass no longer applies.
+    expect(src).toMatch(
+      /\.\.\.proposalClassFields\(\s*row\.proposalType,\s*row\.targetType,\s*capabilityRunVerbId\(row\.data\)\s*\)/
     );
   });
 });
@@ -215,6 +218,48 @@ describe("projection parity — every proposal OUTPUT projection names class", (
           projection.body.includes("proposalClassShape") ||
           projection.body.includes("proposalClassFields")
       ).toBe(true);
+    });
+  }
+});
+
+/**
+ * A capability run that acts on a DURABLE OBJECT is `objectWork` at every
+ * door (2026-09-28). The discriminating pair: the SAME proposalType ×
+ * targetType, told apart only by `data.verbId` — so a door that forgot to pass
+ * the verb reads the durable run as `ephemeral` and fails here.
+ */
+describe("a durable-object capability run classifies objectWork at every pure door", () => {
+  const RUNS = [
+    {
+      verbId: "entity.delete",
+      parameters: { entityId: "00000000-0000-4000-8000-000000000001" },
+      cls: "objectWork",
+    },
+    {
+      verbId: "messaging.send",
+      parameters: { channelId: "c" },
+      cls: "ephemeral",
+    },
+  ] as const;
+  for (const { verbId, parameters, cls } of RUNS) {
+    const data = { verbId, parameters, skillId: "s1" };
+    it(`${verbId} → ${cls} (toProposalBasic, withProposalClass, clusters)`, () => {
+      const raw = {
+        id: "p1",
+        proposalType: "capability.run",
+        targetType: "capability",
+        targetId: `skill-${verbId}`,
+        status: "pending",
+        workspaceId: null,
+        data,
+      };
+      expect(toProposalBasic(raw).class).toBe(cls);
+      expect(withProposalClass(raw).class).toBe(cls);
+      const [cluster] = collapseProposalsToClusters([
+        { ...raw, createdAt: new Date(2026, 8, 28) },
+      ]);
+      expect(cluster?.class).toBe(cls);
+      expect(cluster?.lifetimeHours).toBe(CLASS_LIFETIME_HOURS[cls]);
     });
   }
 });

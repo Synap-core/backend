@@ -47,6 +47,7 @@ import {
 } from "@synap/database/schema";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import { ABSTRACT_VERBS, isAbstractVerb } from "@synap/database/schema";
+import { knownIntentSetFor } from "./intent-registry.js";
 import { invalidateMcpCache } from "../../routers/channels.js";
 import type {
   CapabilityDefinition,
@@ -712,6 +713,9 @@ export async function createCapabilityFromDefinition(
   const toolsCaller = toolsRouter.createCaller(ctx as never);
   const toolIdByName = new Map<string, string>();
   const createdTools: CreateCapabilityResult["created"]["tools"] = [];
+  const knownIntents = await knownIntentSetFor(
+    def.skills.map((s) => (s as { intent?: unknown }).intent)
+  );
   for (const t of def.tools) {
     const credentialRef =
       t.credentialRef && vaultByRef.has(t.credentialRef)
@@ -746,7 +750,8 @@ export async function createCapabilityFromDefinition(
       const verbs = deriveToolVerbs(
         t.name,
         def.skills,
-        GRANT_DEFAULT_EXEC_MODE
+        GRANT_DEFAULT_EXEC_MODE,
+        knownIntents
       );
       // `existingTool` was read long before this write; the re-apply re-reads
       // the row under its lock (a blind overwrite once reset runtime config such
@@ -799,7 +804,8 @@ export async function createCapabilityFromDefinition(
       const verbs = deriveToolVerbs(
         t.name,
         def.skills,
-        GRANT_DEFAULT_EXEC_MODE
+        GRANT_DEFAULT_EXEC_MODE,
+        knownIntents
       );
       if (verbs.length > 0) {
         await db
@@ -1499,18 +1505,19 @@ export function deriveVerbKind(s: CapabilitySkillDef): ToolVerbKind {
  * tool and the applier derives no catalog entry for prose.
  */
 function resolveVerbIntent(
-  s: CapabilitySkillDef
+  s: CapabilitySkillDef,
+  known?: ReadonlySet<string>
 ): ToolVerbCatalogEntry["intent"] {
   const raw = (s as { intent?: unknown }).intent;
   if (raw === undefined || raw === null) return undefined;
-  if (!isAbstractVerb(raw)) {
-    throw new Error(
-      `Capability skill "${s.name}" declares an unknown intent ${JSON.stringify(raw)}. ` +
-        `The intent vocabulary is CLOSED — use one of: ${ABSTRACT_VERBS.join(", ")}, ` +
-        `or omit the field entirely if none fits.`
-    );
+  if (typeof raw === "string" && (isAbstractVerb(raw) || known?.has(raw))) {
+    return raw;
   }
-  return raw;
+  throw new Error(
+    `Capability skill "${s.name}" declares an unknown intent ${JSON.stringify(raw)}. ` +
+      `Register it in capability_intents, or use one of the seed: ${ABSTRACT_VERBS.join(", ")}, ` +
+      `or omit the field entirely if none fits.`
+  );
 }
 
 /**
@@ -1523,12 +1530,13 @@ function resolveVerbIntent(
 export function deriveToolVerbs(
   toolName: string,
   skills: CapabilitySkillDef[],
-  govDefault: "auto" | "propose" | "dry-run"
+  govDefault: "auto" | "propose" | "dry-run",
+  known?: ReadonlySet<string>
 ): ToolVerbCatalogEntry[] {
   const verbs: ToolVerbCatalogEntry[] = [];
   for (const s of skills) {
     if (!s.requires?.includes(toolName)) continue;
-    const intent = resolveVerbIntent(s);
+    const intent = resolveVerbIntent(s, known);
     verbs.push({
       id: s.name,
       label: s.name,

@@ -20,7 +20,7 @@
 
 import { z } from "@hono/zod-openapi";
 
-import { ABSTRACT_VERBS } from "@synap/database/schema";
+import { INTENT_SLUG_RE } from "@synap/database/schema";
 import { buildCapabilityCatalog } from "../../../services/capabilities/capability-catalog.js";
 import { buildAutomationCatalog } from "../../../services/capabilities/automation-catalog.js";
 
@@ -84,7 +84,7 @@ const VerbSchema = z.object({
   // verb outside the closed vocabulary omits it rather than inventing one. A
   // field emitted by the builder but absent HERE is invisible to every generated
   // client, so the two must move together.
-  intent: z.enum(ABSTRACT_VERBS).optional(),
+  intent: z.string().regex(INTENT_SLUG_RE).optional(),
 });
 
 const InstallParamSchema = z.object({

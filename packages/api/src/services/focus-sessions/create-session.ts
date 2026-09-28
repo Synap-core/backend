@@ -188,6 +188,11 @@ export interface CreateFocusSessionParams {
    * "What were you about to do" — one line captured at SUSPENSION and written
    * onto the PARENT's `metadata.suspended`, so popping back restates the goal.
    * Only meaningful together with `parentSessionId`.
+   *
+   * This is the BLOCKER signal, not a note. When it is set and the parent
+   * link lands, the parent is `blocked_by` this child (`blocksParent` on
+   * `parentLink`). A child passed with `parentSessionId` alone is a slice of
+   * the same goal and does not block anyone.
    */
   suspendedIntent?: string | null;
   /**
@@ -242,6 +247,11 @@ export type CreateTimeParentLink =
       status: "linked";
       parentSessionId: string;
       suspendedIntentRecorded: boolean;
+      /**
+       * Present when `suspendedIntent` was set: the parent waits on this
+       * child. `null` when the write produced no report.
+       */
+      blocksParent?: CreateTimeBlockerReport | null;
     }
   | {
       status: "failed";
@@ -932,6 +942,39 @@ export async function createFocusSession(
             suspendedIntentRecorded: spawn.suspendedIntentRecorded,
           }
         : { status: "failed", parentSessionId, reason: spawn.reason };
+      // A detour (suspendedIntent) blocks the parent on this child. Same
+      // write door as a declared blocker, and NOT a second proposal: the
+      // session create already passed the gate, and `spawned_from` is written
+      // the same way. A slice (parent only, no suspended intent) does not block.
+      if (
+        parentLink.status === "linked" &&
+        typeof suspendedIntent === "string" &&
+        suspendedIntent.trim()
+      ) {
+        try {
+          const [report] = await addCreateTimeBlockers({
+            sessionId: parentSessionId,
+            blockerSessionIds: [sessionOut.id],
+            userId,
+          });
+          parentLink = { ...parentLink, blocksParent: report ?? null };
+        } catch (blockErr) {
+          logger.warn(
+            { err: blockErr, sessionId: sessionOut.id, parentSessionId },
+            "detour blocked_by edge failed — session and spawned_from kept"
+          );
+          parentLink = {
+            ...parentLink,
+            blocksParent: {
+              blockerSessionId: sessionOut.id,
+              status: "failed",
+              reason: "error",
+              message:
+                blockErr instanceof Error ? blockErr.message : String(blockErr),
+            },
+          };
+        }
+      }
     } catch (err) {
       logger.warn(
         { err, sessionId: sessionOut.id, parentSessionId },

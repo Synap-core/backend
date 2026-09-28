@@ -122,9 +122,13 @@ export type ToolVerbCatalogEntry = {
    * always additive — `id` is untouched (verb ids are persisted durably in
    * `capability_run_receipts.verb_id` and inside stored automation flows, so
    * re-keying them would corrupt live rows). A legacy entry with no `intent`
-   * reads exactly as before. Never an authorization axis — see `ABSTRACT_VERBS`.
+   * reads exactly as before. Never an authorization axis.
+   *
+   * A string, not the seed union. `ABSTRACT_VERBS` is the seed of
+   * `capability_intents`. A slug that is neither the seed nor a row is
+   * rejected at apply time.
    */
-  intent?: AbstractVerb;
+  intent?: string;
 };
 
 export const tools = pgTable(

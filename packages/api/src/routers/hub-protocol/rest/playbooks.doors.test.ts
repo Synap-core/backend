@@ -306,3 +306,67 @@ describe("PATCH /playbooks/:id — forwards every field the governed update take
     });
   });
 });
+
+/**
+ * A METHOD carries its own onboarding through Hub REST (2026-09-28). The POST
+ * body was a hand copy of the definition that stripped `params` + `criteria`;
+ * it now `.pick`s the ONE schema. PATCH forwarded `params` but dropped
+ * `criteria`. Asserted on what reaches the governance gate — the stored
+ * proposal data the approval replays.
+ */
+const PARAMS = [
+  { name: "funder", label: "Which funder?", type: "text", required: true },
+];
+const CRITERIA = [
+  {
+    key: "submitted",
+    statement: "The application was submitted",
+    check: { kind: "human" },
+  },
+];
+
+describe("params + criteria reach the gate from Hub REST", () => {
+  it("POST /playbooks carries declared params and criteria", async () => {
+    const { status } = await post(appAs(AGENT), "/playbooks", {
+      workspaceId: WS,
+      name: "Grant application",
+      goalTemplate: "Apply to {{funder}}",
+      scope: "project",
+      params: PARAMS,
+      criteria: CRITERIA,
+    });
+    expect(status).toBe(202);
+    expect(h.gateCalls[0]).toMatchObject({
+      subjectType: "playbook",
+      action: "create",
+      data: { scope: "project", params: PARAMS, criteria: CRITERIA },
+    });
+  });
+
+  it("POST /playbooks refuses a malformed criterion (400) — never strips it", async () => {
+    const { status, body } = await post(appAs(AGENT), "/playbooks", {
+      workspaceId: WS,
+      name: "Grant application",
+      goalTemplate: "Apply",
+      criteria: [
+        { key: "Not A Slug", statement: "x", check: { kind: "human" } },
+      ],
+    });
+    expect(status).toBe(400);
+    expect(String(body.error)).toContain("criteria");
+    expect(h.gateCalls).toHaveLength(0);
+  });
+
+  it("PATCH /playbooks/:id carries criteria", async () => {
+    const res = await appAs(AGENT).request(`/playbooks/${PB}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ params: PARAMS, criteria: CRITERIA }),
+    });
+    expect(res.status).toBe(200);
+    expect(h.gateCalls[0]).toMatchObject({
+      action: "update",
+      data: { id: PB, params: PARAMS, criteria: CRITERIA },
+    });
+  });
+});

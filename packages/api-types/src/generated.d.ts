@@ -3,14 +3,10 @@
 import { Column, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 
-/**
- * Users Table - Cache for Kratos Identity Data
- *
- * Purpose: Store Kratos identity data in Synap DB for performance
- * - Allows JOINs without calling Kratos API
- * - Can add Synap-specific fields (avatar, timezone)
- * - Kratos remains source of truth for authentication
- */
+declare const AGENT_POSTURE_NAMES: readonly [
+	"create-with-undo"
+];
+export type AgentPostureName = (typeof AGENT_POSTURE_NAMES)[number];
 export interface AgentMetadata {
 	agentType: string;
 	agentTemplate?: "twin" | "assistant" | "custom";
@@ -20,6 +16,15 @@ export interface AgentMetadata {
 	isPersonalAgent?: boolean;
 	parentAgentId?: string;
 	writesRequireProposal?: boolean;
+	/**
+	 * The named governance posture last applied to this agent
+	 * (`@synap/governance-policy/postures`), written ONLY by
+	 * `applyAgentPosture`. Absent ⇒ never set by name (untouched, or a custom
+	 * autoApproveFor list — which clears it). A marker for readers (`synap init`
+	 * reads before it writes), never a decision input: the decision store is
+	 * `governance_rules`.
+	 */
+	governancePosture?: AgentPostureName;
 	/**
 	 * @deprecated RETIRED as a write target (Governance Convergence, contract
 	 * phase). NO write surface persists this anymore — the per-agent auto-approve
@@ -3351,23 +3356,6 @@ export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * Dynamic bindings let ONE tool ("Email", "LinkedIn") run against many accounts.
  */
 export type ToolAuthBinding = "static" | "per_user" | "per_agent" | "per_entity";
-declare const ABSTRACT_VERBS: readonly [
-	"search_external",
-	"find_people",
-	"enrich_entity",
-	"fetch_record",
-	"list_records",
-	"send_message",
-	"request_connection",
-	"schedule_event",
-	"manage_file",
-	"generate_media",
-	"capture_into_pod",
-	"run_external_job",
-	"connect_account"
-];
-/** One value of the closed intent vocabulary — see `ABSTRACT_VERBS`. */
-export type AbstractVerb = (typeof ABSTRACT_VERBS)[number];
 /**
  * One verb in a Tool's structured capability catalog (the capability-matrix
  * axis). Kept in lock-step with `ToolVerb` in @synap/playbooks — re-declared here
@@ -3388,9 +3376,13 @@ export type ToolVerbCatalogEntry = {
 	 * always additive — `id` is untouched (verb ids are persisted durably in
 	 * `capability_run_receipts.verb_id` and inside stored automation flows, so
 	 * re-keying them would corrupt live rows). A legacy entry with no `intent`
-	 * reads exactly as before. Never an authorization axis — see `ABSTRACT_VERBS`.
+	 * reads exactly as before. Never an authorization axis.
+	 *
+	 * A string, not the seed union. `ABSTRACT_VERBS` is the seed of
+	 * `capability_intents`. A slug that is neither the seed nor a row is
+	 * rejected at apply time.
 	 */
-	intent?: AbstractVerb;
+	intent?: string;
 };
 declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "tools";
@@ -3637,7 +3629,7 @@ declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "tools";
 			dataType: "string";
 			columnType: "PgText";
-			data: "error" | "active" | "inactive";
+			data: "active" | "error" | "inactive";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4442,7 +4434,7 @@ export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * load-bearing, because the scorecard feeds governance widening and a `failed`
  * row would grade a playbook for a person's change of mind.
  */
-export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled";
+export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "waiting_on_you";
 declare const PROJECT_TRACK_STATUSES: readonly [
 	"active",
 	"paused",
@@ -4831,6 +4823,11 @@ export interface WorkspacePreflightReport {
 }
 export type PackageDependencyKind = "workspace" | "capability" | "skill" | "workflow" | "view" | "cell" | "automation";
 export type PackageDependencyRelation = "compose" | "require";
+export interface ReversibleDefaultState {
+	enabled: boolean;
+	/** The active row, so a surface can open it; null when off. */
+	ruleId: string | null;
+}
 /** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
 export type PropertyTargetUnresolvedReason = 
 /** The owning profile never entered `profileMap` (kind conflict → skipped). */
@@ -6872,7 +6869,6 @@ export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * the schema's `capabilities` column).
  */
 export type ToolVerbKind = "read" | "write" | "action";
-type AbstractVerb$1 = "search_external" | "find_people" | "enrich_entity" | "fetch_record" | "list_records" | "send_message" | "request_connection" | "schedule_event" | "manage_file" | "generate_media" | "capture_into_pod" | "run_external_job" | "connect_account";
 export interface ToolVerb {
 	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
 	id: string;
@@ -6897,10 +6893,10 @@ export interface ToolVerb {
 	 * can ask for "send a message" without knowing whether the pod has Gmail or
 	 * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
 	 * `capability_run_receipts.verb_id` and inside stored automation flows), and a
-	 * legacy catalog entry with no `intent` reads exactly as before. A verb that
-	 * fits none of the closed values leaves this unset rather than inventing one.
+	 * legacy catalog entry with no `intent` reads exactly as before. The value is
+	 * a registry slug. `AbstractVerb` is only the seed list.
 	 */
-	intent?: AbstractVerb$1;
+	intent?: string;
 }
 /** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
 export interface CredentialRequirement {
@@ -7566,7 +7562,7 @@ export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
  */
 export type FlowType = "automation" | "playbook" | "capture" | "capability" | "session" | "chat" | "agent_write";
 /** Normalised lifecycle across all ledgers. */
-export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped" | "blocked_by_policy";
+export type RunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "skipped" | "blocked_by_policy" | "waiting_on_you";
 /** One run, ledger-agnostic. */
 export interface UnifiedRun {
 	/** Run id (the ledger row id; the captureId for a capture run). */
@@ -7639,8 +7635,14 @@ export interface RunGroup {
 	hasRunning: boolean;
 	/** Runs that completed. */
 	completedCount: number;
-	/** Runs that failed. */
+	/** Runs that failed (lifetime — the drill-down number). */
 	failedCount: number;
+	/**
+	 * Runs that failed within the last `RECENT_FAILURE_WINDOW_DAYS` (7) days —
+	 * the HEALTH number (W2 calm). A flow is "failing" iff this is > 0; a flow
+	 * that failed 271 times in June and has run clean since is not failing now.
+	 */
+	recentFailedCount: number;
 	/** Runs still running. */
 	runningCount: number;
 	/**
@@ -7957,11 +7959,11 @@ export interface CapabilityCardVerb {
 	 * two places the applier writes it. `skills` has no `intent` column, so a card
 	 * verb can only carry it by that join.
 	 *
-	 * ABSENT, never guessed: the vocabulary is closed and a legacy verb that
-	 * declares no intent must stay out of every intent bucket (same rule as
-	 * `foldVerbsByIntent`).
+	 * ABSENT, never guessed: a legacy verb that declares no intent must stay out
+	 * of every intent bucket (same rule as `foldVerbsByIntent`). The value is a
+	 * registry slug, not a closed union.
 	 */
-	intent?: AbstractVerb$1;
+	intent?: string;
 }
 /** A template's INSTALL parameter — what the caller supplies to `apply` it. */
 export interface CapabilityCardInstallParam {
@@ -12090,6 +12092,11 @@ export type CreateTimeParentLink = {
 	status: "linked";
 	parentSessionId: string;
 	suspendedIntentRecorded: boolean;
+	/**
+	 * Present when `suspendedIntent` was set: the parent waits on this
+	 * child. `null` when the write produced no report.
+	 */
+	blocksParent?: CreateTimeBlockerReport | null;
 } | {
 	status: "failed";
 	parentSessionId: string;
@@ -16281,7 +16288,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "running" | "error" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -17033,7 +17040,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "running" | "error" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -17135,7 +17142,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "running" | "error" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -17251,7 +17258,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "running" | "error" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -26492,13 +26499,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -26536,13 +26543,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -26595,13 +26602,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -26632,13 +26639,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -26670,13 +26677,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -26709,13 +26716,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -26757,13 +26764,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -26931,13 +26938,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -26996,13 +27003,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -27054,13 +27061,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -27094,13 +27101,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
 					displayName: string;
 					isActive: boolean;
+					synonyms: string[] | null;
 					ownerId: string | null;
 					uiHints: unknown;
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
 					plural: string | null;
-					synonyms: string[] | null;
 					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
@@ -27919,6 +27926,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					note: string;
 				})[];
 			};
+			meta: object;
+		}>;
+		reversibleDefault: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				reversibleActions: readonly string[];
+				canManage: boolean;
+				enabled: boolean;
+				ruleId: string | null;
+			};
+			meta: object;
+		}>;
+		setReversibleDefault: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+			};
+			output: ReversibleDefaultState;
 			meta: object;
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -29875,6 +29899,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceUrl: string | null;
 					actions: unknown;
 					groupKey: string | null;
+					dedupeKey: string | null;
 					status: "read" | "dismissed" | "unread" | "actioned" | "snoozed";
 					readAt: Date | null;
 					expiresAt: Date | null;
@@ -31311,7 +31336,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggeredBy: string | null;
 					triggerEventId: string | null;
 					triggerPayload: Record<string, unknown>;
-					status: "running" | "completed" | "failed" | "cancelled" | "skipped" | "blocked_by_policy";
+					status: "running" | "completed" | "failed" | "cancelled" | "skipped" | "blocked_by_policy" | "waiting_on_you";
 					errorMessage: string | null;
 					stepsCompleted: number;
 					stepsFailed: number;
@@ -31338,7 +31363,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				run: {
 					id: string;
 					workspaceId: string | null;
-					status: "running" | "completed" | "failed" | "cancelled" | "skipped" | "blocked_by_policy";
+					status: "running" | "completed" | "failed" | "cancelled" | "skipped" | "blocked_by_policy" | "waiting_on_you";
 					errorMessage: string | null;
 					automationId: string;
 					subjectEntityId: string | null;

@@ -823,11 +823,27 @@ export async function executeCapability(input: {
     connectionSelector: input.connectionSelector ?? null,
     agentUserId: input.agentUserId ?? null,
   });
-  if (ran.kind !== "run")
+  if (ran.kind !== "run") {
+    if (ran.kind === "error") {
+      await recordDirectCapabilityRun({
+        correlationId: randomUUID(),
+        userId,
+        workspaceId,
+        skillId: skillRow.id,
+        verbId: verbId ?? null,
+        runResult: null,
+        sessionId: input.sessionId ?? null,
+        idempotencyKey: input.idempotencyKey,
+        observability: input.observability ?? "full",
+        outcome: "error",
+        error: ran.message,
+      });
+    }
     return attachConnectBlock(ran, skillRow, userId, {
       workspaceId,
       verbId: verbId ?? null,
     });
+  }
 
   // OBSERVABILITY (additive, best-effort). Until now a direct run returned
   // INLINE with no correlationId / event / recall — invisible to the runs feed
@@ -1161,6 +1177,21 @@ async function runDirectWriteVerbOnce(opts: {
         );
       }
     }
+    if (ran.kind === "error") {
+      await recordDirectCapabilityRun({
+        correlationId: randomUUID(),
+        userId: opts.userId,
+        workspaceId: opts.workspaceId,
+        skillId: opts.skillRow.id,
+        verbId: opts.verbId,
+        runResult: null,
+        sessionId: opts.sessionId ?? null,
+        idempotencyKey: opts.idempotencyKey,
+        observability: "full",
+        outcome: "error",
+        error: ran.message,
+      });
+    }
     return ran;
   }
 
@@ -1272,6 +1303,9 @@ async function recordDirectCapabilityRun(opts: {
   idempotencyKey?: string;
   /** `"mirror"` keeps the event and skips the recall deposit — see `executeCapability`. */
   observability: "full" | "mirror";
+  /** Set on a provider failure. Success events omit it, as they always have. */
+  outcome?: "error";
+  error?: string;
 }): Promise<void> {
   const label = opts.verbId ?? opts.skillId;
 
@@ -1287,6 +1321,7 @@ async function recordDirectCapabilityRun(opts: {
       kind: "capability_run",
       skillId: opts.skillId,
       verbId: opts.verbId,
+      ...(opts.outcome ? { outcome: opts.outcome, error: opts.error } : {}),
       // The CALLER's declared key only — the derived content hash is an internal
       // dedup artifact, not a handle anyone passed in (the proposed branch
       // stores it under the same condition).
@@ -1310,7 +1345,7 @@ async function recordDirectCapabilityRun(opts: {
   // Best-effort: an embedding/index failure must not undo the delivered run.
   // A mirror read is a page of third-party data, not something the user did:
   // no fact, no embedding call.
-  if (opts.observability === "mirror") return;
+  if (opts.observability === "mirror" || opts.outcome === "error") return;
   try {
     const fact = `Ran capability "${label}" → ${JSON.stringify(opts.runResult).slice(0, 1000)}`;
     let embedding: number[];

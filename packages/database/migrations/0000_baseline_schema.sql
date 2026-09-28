@@ -4743,3 +4743,15 @@ CREATE TRIGGER trg_session_evaluations_changed_notify
   AFTER INSERT OR UPDATE OR DELETE ON session_evaluations
   FOR EACH ROW
   EXECUTE FUNCTION synap_notify_session_ledger_changed();
+
+-- Capability intents (0283). What a tool does is a row. The seed matches
+-- ABSTRACT_VERBS. Effect stays closed: read | write | act.
+CREATE TABLE IF NOT EXISTS "capability_intents" (
+  "slug"       text        PRIMARY KEY,
+  "effect"     text        NOT NULL,
+  "statement"  text        NOT NULL,
+  "synonyms"   text[]      NOT NULL DEFAULT '{}',
+  "created_at" timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "capability_intents_effect_check" CHECK ("effect" IN ('read', 'write', 'act')),
+  CONSTRAINT "capability_intents_slug_check" CHECK ("slug" ~ '^[a-z][a-z0-9_]{0,63}$')
+);

@@ -50,6 +50,7 @@ export * from "./intelligence-commands.js";
 export * from "./command-runs.js";
 // At-most-once receipt for a DIRECT-run WRITE/external capability verb (0219).
 export * from "./capability-run-receipts.js";
+export * from "./capability-intents.js";
 
 // NEW: Workspace system
 export * from "./workspaces.js";

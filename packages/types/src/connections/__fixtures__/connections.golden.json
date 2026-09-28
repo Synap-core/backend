@@ -1,0 +1,1026 @@
+{
+  "$comment": "Shared relay<->web sameness table for the connections section. Inputs are WIRE-shaped (graph.getObjectGraph neighbours, relations.listTypes rows, kind-card model facts, effective property defs); expected = the leaf output. Each surface runs ITS OWN adapters over the inputs and must reproduce expected unchanged. Regenerate only with the leaf: connections.golden.test.ts pins expected to the leaf.",
+  "groupRows": [
+    {
+      "name": "person page: labels from this side, provenance split, key fact + property twin dropped, untyped last",
+      "neighbors": [
+        {
+          "id": "acme",
+          "name": "Acme",
+          "kind": "entity",
+          "subtype": "company",
+          "subtypes": [
+            "company"
+          ],
+          "edgeType": "works_at",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "id": "acme",
+          "name": "Acme",
+          "kind": "entity",
+          "subtype": "company",
+          "subtypes": [
+            "company"
+          ],
+          "edgeType": "employer",
+          "direction": "outgoing",
+          "via": "property"
+        },
+        {
+          "id": "bob",
+          "name": "Bob",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "reports_to",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "carol",
+          "name": "Carol",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "mentors",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "t1",
+          "name": "Plan",
+          "kind": "entity",
+          "subtype": "task",
+          "subtypes": [
+            "task"
+          ],
+          "edgeType": "relates_to",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "id": "t2",
+          "name": "Ship",
+          "kind": "entity",
+          "subtype": "task",
+          "subtypes": [
+            "task"
+          ],
+          "edgeType": "relates_to",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "proj",
+          "name": "Launch",
+          "kind": "entity",
+          "subtype": "project",
+          "subtypes": [
+            "project"
+          ],
+          "edgeType": "projectId",
+          "direction": "outgoing",
+          "via": "property"
+        },
+        {
+          "id": "misc",
+          "name": "Loose note",
+          "kind": "entity",
+          "subtype": "note",
+          "subtypes": [
+            "note"
+          ],
+          "edgeType": "",
+          "direction": "outgoing",
+          "via": "links"
+        },
+        {
+          "id": "cap-1",
+          "name": "Voice memo",
+          "kind": "capture",
+          "subtype": null,
+          "subtypes": [],
+          "edgeType": "produced",
+          "direction": "incoming",
+          "via": "links"
+        },
+        {
+          "id": "sess-1",
+          "name": "Onboarding",
+          "kind": "session",
+          "subtype": null,
+          "subtypes": [],
+          "edgeType": "produced_in",
+          "direction": "outgoing",
+          "via": "produced-in"
+        },
+        {
+          "id": "prop-1",
+          "name": "Create person",
+          "kind": "proposal",
+          "subtype": null,
+          "subtypes": [],
+          "edgeType": "governed",
+          "direction": "incoming",
+          "via": "governed"
+        }
+      ],
+      "relationTypes": [
+        {
+          "type": "works_at",
+          "label": "Works at",
+          "inverseLabel": "Employs",
+          "directionality": "unidirectional",
+          "description": "",
+          "category": "custom",
+          "source": "workspace"
+        },
+        {
+          "type": "reports_to",
+          "label": "Reports to",
+          "inverseLabel": null,
+          "directionality": "unidirectional"
+        },
+        {
+          "type": "relates_to",
+          "label": "Related to",
+          "inverseLabel": null,
+          "directionality": "bidirectional"
+        },
+        {
+          "type": "mentors",
+          "label": "Mentors",
+          "inverseLabel": null
+        }
+      ],
+      "keyFactIds": [
+        "proj"
+      ],
+      "expected": {
+        "provenance": {
+          "madeFrom": [
+            {
+              "id": "cap-1",
+              "name": "Voice memo",
+              "kind": "capture",
+              "graphKind": "capture",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            }
+          ],
+          "inSession": {
+            "id": "sess-1",
+            "name": "Onboarding",
+            "kind": "session",
+            "graphKind": "session",
+            "edgeType": "produced_in",
+            "direction": "outgoing",
+            "via": "produced-in"
+          },
+          "all": [
+            {
+              "id": "cap-1",
+              "name": "Voice memo",
+              "kind": "capture",
+              "graphKind": "capture",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            },
+            {
+              "id": "sess-1",
+              "name": "Onboarding",
+              "kind": "session",
+              "graphKind": "session",
+              "edgeType": "produced_in",
+              "direction": "outgoing",
+              "via": "produced-in"
+            },
+            {
+              "id": "prop-1",
+              "name": "Create person",
+              "kind": "proposal",
+              "graphKind": "proposal",
+              "edgeType": "governed",
+              "direction": "incoming",
+              "via": "governed"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "key": "mentors:incoming",
+            "label": "Mentors",
+            "edgeType": "mentors",
+            "direction": "incoming",
+            "reversed": true,
+            "items": [
+              {
+                "id": "carol",
+                "name": "Carol",
+                "kind": "person",
+                "graphKind": "entity",
+                "edgeType": "mentors",
+                "direction": "incoming",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          },
+          {
+            "key": "reports_to:incoming",
+            "label": "Reports to",
+            "edgeType": "reports_to",
+            "direction": "incoming",
+            "reversed": true,
+            "items": [
+              {
+                "id": "bob",
+                "name": "Bob",
+                "kind": "person",
+                "graphKind": "entity",
+                "edgeType": "reports_to",
+                "direction": "incoming",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          },
+          {
+            "key": "works_at:outgoing",
+            "label": "Works at",
+            "edgeType": "works_at",
+            "direction": "outgoing",
+            "reversed": false,
+            "items": [
+              {
+                "id": "acme",
+                "name": "Acme",
+                "kind": "company",
+                "graphKind": "entity",
+                "edgeType": "works_at",
+                "direction": "outgoing",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          },
+          {
+            "key": "relates_to:both",
+            "label": "Related to",
+            "edgeType": "relates_to",
+            "direction": "both",
+            "reversed": false,
+            "items": [
+              {
+                "id": "t1",
+                "name": "Plan",
+                "kind": "task",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "outgoing",
+                "via": "relations"
+              },
+              {
+                "id": "t2",
+                "name": "Ship",
+                "kind": "task",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "incoming",
+                "via": "relations"
+              }
+            ],
+            "total": 2
+          },
+          {
+            "key": ":outgoing",
+            "label": "Also linked",
+            "edgeType": "",
+            "direction": "outgoing",
+            "reversed": false,
+            "items": [
+              {
+                "id": "misc",
+                "name": "Loose note",
+                "kind": "note",
+                "graphKind": "entity",
+                "edgeType": "",
+                "direction": "outgoing",
+                "via": "links"
+              }
+            ],
+            "total": 1
+          }
+        ],
+        "total": 6
+      }
+    },
+    {
+      "name": "company page: incoming works_at reads the inverse label; people rank first; cap keeps total",
+      "neighbors": [
+        {
+          "id": "p1",
+          "name": "Person p1",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "works_at",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "p2",
+          "name": "Person p2",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "works_at",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "p3",
+          "name": "Person p3",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "works_at",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "p4",
+          "name": "Person p4",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "works_at",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "p5",
+          "name": "Person p5",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "works_at",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "p6",
+          "name": "Person p6",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "works_at",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "p7",
+          "name": "Person p7",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "works_at",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "id": "d1",
+          "name": "Big deal",
+          "kind": "entity",
+          "subtype": "deal",
+          "subtypes": [
+            "deal"
+          ],
+          "edgeType": "relates_to",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "id": "d2",
+          "name": "Small deal",
+          "kind": "entity",
+          "subtype": "deal",
+          "subtypes": [
+            "deal"
+          ],
+          "edgeType": "relates_to",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "id": "d3",
+          "name": "Mid deal",
+          "kind": "entity",
+          "subtype": "deal",
+          "subtypes": [
+            "deal"
+          ],
+          "edgeType": "relates_to",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "id": "x1",
+          "name": "Gadget",
+          "kind": "entity",
+          "subtype": "widget",
+          "subtypes": [
+            "widget"
+          ],
+          "edgeType": "unknown_tie",
+          "direction": "outgoing",
+          "via": "relations"
+        }
+      ],
+      "relationTypes": [
+        {
+          "type": "works_at",
+          "label": "Works at",
+          "inverseLabel": "Employs",
+          "directionality": "unidirectional",
+          "description": "",
+          "category": "custom",
+          "source": "workspace"
+        },
+        {
+          "type": "reports_to",
+          "label": "Reports to",
+          "inverseLabel": null,
+          "directionality": "unidirectional"
+        },
+        {
+          "type": "relates_to",
+          "label": "Related to",
+          "inverseLabel": null,
+          "directionality": "bidirectional"
+        },
+        {
+          "type": "mentors",
+          "label": "Mentors",
+          "inverseLabel": null
+        }
+      ],
+      "keyFactIds": [],
+      "cap": 5,
+      "expected": {
+        "provenance": {
+          "madeFrom": [],
+          "inSession": null,
+          "all": []
+        },
+        "groups": [
+          {
+            "key": "works_at:incoming",
+            "label": "Employs",
+            "edgeType": "works_at",
+            "direction": "incoming",
+            "reversed": false,
+            "items": [
+              {
+                "id": "p1",
+                "name": "Person p1",
+                "kind": "person",
+                "graphKind": "entity",
+                "edgeType": "works_at",
+                "direction": "incoming",
+                "via": "relations"
+              },
+              {
+                "id": "p2",
+                "name": "Person p2",
+                "kind": "person",
+                "graphKind": "entity",
+                "edgeType": "works_at",
+                "direction": "incoming",
+                "via": "relations"
+              },
+              {
+                "id": "p3",
+                "name": "Person p3",
+                "kind": "person",
+                "graphKind": "entity",
+                "edgeType": "works_at",
+                "direction": "incoming",
+                "via": "relations"
+              },
+              {
+                "id": "p4",
+                "name": "Person p4",
+                "kind": "person",
+                "graphKind": "entity",
+                "edgeType": "works_at",
+                "direction": "incoming",
+                "via": "relations"
+              },
+              {
+                "id": "p5",
+                "name": "Person p5",
+                "kind": "person",
+                "graphKind": "entity",
+                "edgeType": "works_at",
+                "direction": "incoming",
+                "via": "relations"
+              }
+            ],
+            "total": 7
+          },
+          {
+            "key": "relates_to:both",
+            "label": "Related to",
+            "edgeType": "relates_to",
+            "direction": "both",
+            "reversed": false,
+            "items": [
+              {
+                "id": "d1",
+                "name": "Big deal",
+                "kind": "deal",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "outgoing",
+                "via": "relations"
+              },
+              {
+                "id": "d2",
+                "name": "Small deal",
+                "kind": "deal",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "outgoing",
+                "via": "relations"
+              },
+              {
+                "id": "d3",
+                "name": "Mid deal",
+                "kind": "deal",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "outgoing",
+                "via": "relations"
+              }
+            ],
+            "total": 3
+          },
+          {
+            "key": "unknown_tie:outgoing",
+            "label": "Unknown tie",
+            "edgeType": "unknown_tie",
+            "direction": "outgoing",
+            "reversed": false,
+            "items": [
+              {
+                "id": "x1",
+                "name": "Gadget",
+                "kind": "widget",
+                "graphKind": "entity",
+                "edgeType": "unknown_tie",
+                "direction": "outgoing",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          }
+        ],
+        "total": 11
+      }
+    },
+    {
+      "name": "only provenance: no groups (the EMPTY invite), BOTH captures + inSession still read",
+      "neighbors": [
+        {
+          "id": "cap-2",
+          "name": "",
+          "kind": "capture",
+          "subtype": null,
+          "subtypes": [],
+          "edgeType": "produced",
+          "direction": "incoming",
+          "via": "links"
+        },
+        {
+          "id": "cap-3",
+          "name": "Whiteboard photo",
+          "kind": "capture",
+          "subtype": null,
+          "subtypes": [],
+          "edgeType": "produced",
+          "direction": "incoming",
+          "via": "links"
+        },
+        {
+          "id": "doc-1",
+          "name": "Body",
+          "kind": "document",
+          "subtype": null,
+          "subtypes": [],
+          "edgeType": "produced",
+          "direction": "incoming",
+          "via": "links"
+        },
+        {
+          "id": "sess-2",
+          "name": "Triage",
+          "kind": "session",
+          "subtype": null,
+          "subtypes": [],
+          "edgeType": "produced",
+          "direction": "incoming",
+          "via": "links"
+        }
+      ],
+      "relationTypes": [
+        {
+          "type": "works_at",
+          "label": "Works at",
+          "inverseLabel": "Employs",
+          "directionality": "unidirectional",
+          "description": "",
+          "category": "custom",
+          "source": "workspace"
+        },
+        {
+          "type": "reports_to",
+          "label": "Reports to",
+          "inverseLabel": null,
+          "directionality": "unidirectional"
+        },
+        {
+          "type": "relates_to",
+          "label": "Related to",
+          "inverseLabel": null,
+          "directionality": "bidirectional"
+        },
+        {
+          "type": "mentors",
+          "label": "Mentors",
+          "inverseLabel": null
+        }
+      ],
+      "keyFactIds": [],
+      "expected": {
+        "provenance": {
+          "madeFrom": [
+            {
+              "id": "cap-2",
+              "name": "",
+              "kind": "capture",
+              "graphKind": "capture",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            },
+            {
+              "id": "cap-3",
+              "name": "Whiteboard photo",
+              "kind": "capture",
+              "graphKind": "capture",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            }
+          ],
+          "inSession": {
+            "id": "sess-2",
+            "name": "Triage",
+            "kind": "session",
+            "graphKind": "session",
+            "edgeType": "produced",
+            "direction": "incoming",
+            "via": "links"
+          },
+          "all": [
+            {
+              "id": "cap-2",
+              "name": "",
+              "kind": "capture",
+              "graphKind": "capture",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            },
+            {
+              "id": "cap-3",
+              "name": "Whiteboard photo",
+              "kind": "capture",
+              "graphKind": "capture",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            },
+            {
+              "id": "doc-1",
+              "name": "Body",
+              "kind": "document",
+              "graphKind": "document",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            },
+            {
+              "id": "sess-2",
+              "name": "Triage",
+              "kind": "session",
+              "graphKind": "session",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            }
+          ]
+        },
+        "groups": [],
+        "total": 0
+      }
+    },
+    {
+      "name": "relation vocabulary FAILED: ties still shown, labels humanized, never hidden",
+      "neighbors": [
+        {
+          "id": "acme",
+          "name": "acme",
+          "kind": "entity",
+          "subtype": "company",
+          "subtypes": [
+            "company"
+          ],
+          "edgeType": "works_at",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "id": "bob",
+          "name": "bob",
+          "kind": "entity",
+          "subtype": "person",
+          "subtypes": [
+            "person"
+          ],
+          "edgeType": "reports_to",
+          "direction": "incoming",
+          "via": "relations"
+        }
+      ],
+      "relationTypes": [],
+      "keyFactIds": [],
+      "expected": {
+        "provenance": {
+          "madeFrom": [],
+          "inSession": null,
+          "all": []
+        },
+        "groups": [
+          {
+            "key": "reports_to:incoming",
+            "label": "Reports to",
+            "edgeType": "reports_to",
+            "direction": "incoming",
+            "reversed": true,
+            "items": [
+              {
+                "id": "bob",
+                "name": "bob",
+                "kind": "person",
+                "graphKind": "entity",
+                "edgeType": "reports_to",
+                "direction": "incoming",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          },
+          {
+            "key": "works_at:outgoing",
+            "label": "Works at",
+            "edgeType": "works_at",
+            "direction": "outgoing",
+            "reversed": false,
+            "items": [
+              {
+                "id": "acme",
+                "name": "acme",
+                "kind": "company",
+                "graphKind": "entity",
+                "edgeType": "works_at",
+                "direction": "outgoing",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          }
+        ],
+        "total": 2
+      }
+    }
+  ],
+  "keyFactRows": [
+    {
+      "name": "entity-ref key facts (string, array, {id}) + facts subtitle; invites, other kinds and range subtitles ignored",
+      "model": {
+        "keyFacts": [
+          {
+            "key": "company",
+            "renderKind": "entity-ref",
+            "value": "acme"
+          },
+          {
+            "key": "team",
+            "renderKind": "entity-ref",
+            "value": [
+              "p1",
+              " p2 ",
+              ""
+            ]
+          },
+          {
+            "key": "owner",
+            "renderKind": "entity-ref",
+            "value": {
+              "id": "o1",
+              "title": "Olga"
+            }
+          },
+          {
+            "key": "manager",
+            "renderKind": "entity-ref",
+            "value": null,
+            "empty": true
+          },
+          {
+            "key": "email",
+            "renderKind": "text",
+            "value": "x@y.z"
+          },
+          {
+            "key": "dup",
+            "renderKind": "entity-ref",
+            "value": "acme"
+          }
+        ],
+        "hero": {
+          "subtitle": {
+            "kind": "facts",
+            "facts": [
+              {
+                "key": "account",
+                "renderKind": "entity-ref",
+                "value": "acct-9"
+              },
+              {
+                "key": "role",
+                "renderKind": "text",
+                "value": "CFO"
+              }
+            ]
+          }
+        }
+      },
+      "expected": [
+        "acme",
+        "p1",
+        "p2",
+        "o1",
+        "acct-9"
+      ]
+    },
+    {
+      "name": "range subtitle and no key facts ⇒ nothing",
+      "model": {
+        "keyFacts": null,
+        "hero": {
+          "subtitle": {
+            "kind": "range",
+            "start": {
+              "key": "start",
+              "renderKind": "entity-ref",
+              "value": "zzz"
+            },
+            "end": null
+          }
+        }
+      },
+      "expected": []
+    }
+  ],
+  "suggestionRows": [
+    {
+      "name": "entity_id defs with a resolved target suggest; unresolved / non-ref defs do not; one per target kind",
+      "kind": "deal",
+      "defs": [
+        {
+          "slug": "company",
+          "valueType": "entity_id",
+          "uiHints": {
+            "linkedProfileSlug": "company"
+          }
+        },
+        {
+          "slug": "contact",
+          "valueType": "entity_id",
+          "uiHints": {
+            "linkedProfileSlug": "person"
+          }
+        },
+        {
+          "slug": "buyer",
+          "valueType": "entity_id",
+          "uiHints": {
+            "linkedProfileSlug": "company"
+          }
+        },
+        {
+          "slug": "ghost",
+          "valueType": "entity_id",
+          "uiHints": {}
+        },
+        {
+          "slug": "stage",
+          "valueType": "string",
+          "uiHints": {
+            "linkedProfileSlug": "task"
+          }
+        },
+        {
+          "slug": "owner",
+          "valueType": "entity_id",
+          "uiHints": {
+            "linkedProfileSlug": "person"
+          }
+        },
+        {
+          "slug": "project",
+          "valueType": "entity_id",
+          "uiHints": {
+            "linkedProfileSlug": "project"
+          }
+        },
+        {
+          "slug": "event",
+          "valueType": "entity_id",
+          "uiHints": {
+            "linkedProfileSlug": "event"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "label": "Company",
+          "targetKind": "company",
+          "relationType": null,
+          "propertySlug": "company",
+          "source": "property"
+        },
+        {
+          "label": "Person",
+          "targetKind": "person",
+          "relationType": null,
+          "propertySlug": "contact",
+          "source": "property"
+        },
+        {
+          "label": "Project",
+          "targetKind": "project",
+          "relationType": null,
+          "propertySlug": "project",
+          "source": "property"
+        }
+      ]
+    },
+    {
+      "name": "no reference properties ⇒ no chips",
+      "kind": "note",
+      "defs": [
+        {
+          "slug": "body",
+          "valueType": "string"
+        }
+      ],
+      "expected": []
+    }
+  ]
+}

@@ -1699,6 +1699,15 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "token_lookup_hash",
     addedBy: "0255_calendar_feed_tokens.sql",
   },
+  // Capability intents (0283) — the open registry of what a tool does. The
+  // seed rows are ABSTRACT_VERBS. A missing table makes every intent lookup
+  // that is not in the seed fail closed, and a fresh pod would disagree with
+  // one that ran the migration.
+  {
+    table: "capability_intents",
+    column: "effect",
+    addedBy: "0283_capability_intents.sql",
+  },
 ];
 
 /**

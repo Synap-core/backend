@@ -1,4 +1,4 @@
-import { and, count, eq, gt, gte, isNull, or, sql } from "drizzle-orm";
+import { and, count, eq, gt, gte, isNull, ne, or, sql } from "drizzle-orm";
 import { users, type AgentMetadata } from "../schema/users.js";
 import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import { governanceRules } from "../schema/governance-rules.js";
@@ -14,6 +14,7 @@ import {
   matchesActionPattern,
   DEFAULT_DAILY_WRITE_CEILING,
   PROPOSE_REASON,
+  REVERSIBLE_CLASS_PATTERN,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 import {
@@ -312,6 +313,10 @@ export function draftRuleMatchesWrite(
       return false;
     }
   }
+  // Same attribution prerequisite as the resolver: no agent, no class lane.
+  if (!write.agentUserId && rule.targetPattern === REVERSIBLE_CLASS_PATTERN) {
+    return false;
+  }
   // Target match — the SAME scorer the resolver uses (undefined = no match).
   const score = scoreRuleTarget(
     {
@@ -471,6 +476,12 @@ export async function resolveGovernanceRule(
     // can never accidentally let an agent-scoped rule leak into a caller
     // (the automation door) that must not consult per-agent rules.
     if (!includeAgentPrincipal && rule.principalKind === "agent") continue;
+    // ATTRIBUTION IS THE PREREQUISITE of the reversible-by-default lane: an
+    // anonymous write (no agent) never matches the class row, so it keeps the
+    // floor it had (rung 8 / propose).
+    if (!agentUserId && rule.targetPattern === REVERSIBLE_CLASS_PATTERN) {
+      continue;
+    }
     const targetScore = scoreRuleTarget(
       rule,
       eventKey,
@@ -612,6 +623,9 @@ export async function syncAutoApproveRules(
           isNull(governanceRules.revokedAt),
           isNull(governanceRules.sourceProposalId),
           eq(governanceRules.targetKind, "action"),
+          // The reversible-by-default row is a Settings toggle, not a mirrored
+          // autoApproveFor entry — a list PATCH never switches it off.
+          ne(governanceRules.targetPattern, REVERSIBLE_CLASS_PATTERN),
           principalCondition,
           scopeCondition
         )

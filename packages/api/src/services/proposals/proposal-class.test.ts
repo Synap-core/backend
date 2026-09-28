@@ -9,6 +9,8 @@ import {
   CLASS_LIFETIME_HOURS,
   PROPOSAL_CLASSES,
   CAPABILITY_RUN_PROPOSAL_TYPE,
+  DURABLE_OBJECT_VERBS,
+  capabilityRunVerbId,
 } from "./proposal-class.js";
 
 const API_SRC = fileURLToPath(new URL("../..", import.meta.url));
@@ -129,10 +131,13 @@ describe("classifyProposal", () => {
     expect(classifyProposal("merge", "entity")).toBe(
       classifyProposal("merge", "entity")
     );
+    // 2026-09-28: ONE bounded payload read exists — a capability run's
+    // `data.verbId` (the verb the approval executes). Pinned below: it moves
+    // NOTHING but a capability run, and that only toward objectWork.
     expect(
       classifyProposal.length,
-      "arity is (proposalType, targetType) only"
-    ).toBe(2);
+      "arity is (proposalType, targetType, runVerbId)"
+    ).toBe(3);
   });
 
   it("classifies the literal EVERY capability-proposal producer writes (source scan)", () => {
@@ -276,10 +281,13 @@ describe("classifyProposal — access", () => {
     // (`visible_to`) is never read.
     expect(classifyProposal("expose", "relation")).toBe("access");
     expect(classifyProposal("create", "relation")).toBe("objectWork");
-    expect(
-      classifyProposal.length,
-      "arity is still (proposalType, targetType)"
-    ).toBe(2);
+    // The run verb is the ONLY third input, and it cannot reach this lane.
+    expect(classifyProposal("expose", "relation", "entity.delete")).toBe(
+      "access"
+    );
+    expect(classifyProposal("join", "workspace", "messaging.send")).toBe(
+      "access"
+    );
   });
 
   it("does NOT swallow the governance lane", () => {
@@ -341,5 +349,75 @@ describe("classifyProposal — access", () => {
       PROPOSAL_CLASSES.filter((c) => CLASS_LIFETIME_HOURS[c] !== null)
     ).toEqual(["ephemeral"]);
     expect(PROPOSAL_CLASSES).toContain("access");
+  });
+});
+
+describe("classifyProposal — a capability run that acts on a durable object", () => {
+  // The live rows, 2026-09-28: nine agent-requested GRP question retirements,
+  // filed through run_capability as `entity.delete`, classed ephemeral and due
+  // to expire 24h later undecided.
+  it("entity.delete / entity.update / entity.archive-shaped runs never expire", () => {
+    for (const verb of ["entity.delete", "entity.update", "document.update"]) {
+      expect(classifyProposal("capability.run", "capability", verb)).toBe(
+        "objectWork"
+      );
+      expect(
+        proposalLifetimeHours("capability.run", "capability", verb)
+      ).toBeNull();
+    }
+  });
+
+  it("an outbound call stays ephemeral, and so does a run with no verb", () => {
+    expect(
+      classifyProposal("capability.run", "capability", "messaging.send")
+    ).toBe("ephemeral");
+    expect(classifyProposal("capability.run", "capability", null)).toBe(
+      "ephemeral"
+    );
+    expect(classifyProposal("capability.run", "capability")).toBe("ephemeral");
+    // An unknown / agent-made verb is not a durable-object verb by name shape.
+    expect(
+      classifyProposal("capability.run", "capability", "entity.nuke_everything")
+    ).toBe("ephemeral");
+  });
+
+  it("the verb moves nothing but a capability run — and only toward keeping it", () => {
+    const pairs: Array<[string, string]> = [
+      ["merge", "entity"],
+      ["governance.widen_lane", "governance_rule"],
+      ["join", "workspace"],
+      ["create", "entity"],
+      ["capability.run", "playbook"],
+    ];
+    for (const [pt, tt] of pairs) {
+      expect(classifyProposal(pt, tt, "entity.delete")).toBe(
+        classifyProposal(pt, tt)
+      );
+    }
+    for (const verb of DURABLE_OBJECT_VERBS) {
+      expect(
+        CLASS_LIFETIME_HOURS[
+          classifyProposal("capability.run", "capability", verb)
+        ]
+      ).toBeNull();
+    }
+  });
+
+  it("capabilityRunVerbId reads data.verbId and nothing else", () => {
+    expect(capabilityRunVerbId({ verbId: "entity.delete" })).toBe(
+      "entity.delete"
+    );
+    expect(capabilityRunVerbId({ capabilityKind: "tool" })).toBeNull();
+    expect(capabilityRunVerbId({ verbId: 3 })).toBeNull();
+    expect(capabilityRunVerbId(null)).toBeNull();
+  });
+
+  it("a durable-object run does not die with its session", () => {
+    expect(
+      diesWithSession("capability.run", "capability", "entity.delete")
+    ).toBe(false);
+    expect(
+      diesWithSession("capability.run", "capability", "messaging.send")
+    ).toBe(true);
   });
 });

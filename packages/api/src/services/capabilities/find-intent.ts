@@ -67,7 +67,7 @@
  * build a second index.
  */
 
-import { ABSTRACT_VERBS, type AbstractVerb } from "@synap/database/schema";
+import { listIntentSlugs } from "./intent-registry.js";
 
 import {
   rankByTerms,
@@ -152,7 +152,7 @@ export interface CapabilityIntentMatch {
 
 /** One abstract intent the query's words landed on, with the verbs that declare it. */
 export interface AbstractIntentMatch {
-  intent: AbstractVerb;
+  intent: string;
   /** Verbs declaring it under this caller's lens. `[]` is a real answer. */
   verbs: IntentVerbMatch[];
   score: number;
@@ -253,7 +253,7 @@ function normalise(score: number, best: number): number {
 }
 
 /** Words for an abstract verb token, so "send a message" reaches `send_message`. */
-function intentText(verb: AbstractVerb): string {
+function intentText(verb: string): string {
   return verb.replace(/_/g, " ");
 }
 
@@ -268,6 +268,7 @@ export async function findByIntent(
   );
   const limit = input.limit ?? CATALOG_LIMIT;
   const terms = queryTerms(input.intent);
+  const vocabulary = catalogs.has("intents") ? await listIntentSlugs() : [];
 
   const ctx: CapabilityRegistryContext = {
     workspaceId: input.workspaceId,
@@ -310,7 +311,7 @@ export async function findByIntent(
     runnableActions: actions.length,
     verbs,
     verbsDeclaringIntent,
-    abstractVerbs: ABSTRACT_VERBS.length,
+    abstractVerbs: vocabulary.length,
     queryTerms: terms,
   };
 
@@ -362,14 +363,14 @@ export async function findByIntent(
     };
   }
 
-  // ── Catalog 2: the closed abstract-intent axis ────────────────────────────
+  // ── Catalog 2: the intent registry (seed ∪ stored rows) ──────────────────
   if (catalogs.has("intents")) {
     const byIntent = foldVerbsByIntent(rows);
-    // A SEPARATE rankByTerms call: 13 abstract verbs is its own rarity pool,
+    // A SEPARATE rankByTerms call: the registry is its own rarity pool,
     // and folding it into the action pool above would skew both.
     const ranked = rankByTerms(
       input.intent,
-      ABSTRACT_VERBS,
+      vocabulary,
       (v) => ({ primary: [v, intentText(v)] }),
       { primary: "intent", secondary: "-", tertiary: "-" }
     );
@@ -385,7 +386,8 @@ export async function findByIntent(
       })),
     };
     scoring.intents = {
-      ranker: "rankByTerms over the closed ABSTRACT_VERBS vocabulary",
+      ranker:
+        "rankByTerms over the intent registry (seed plus capability_intents rows)",
       scale: "confidence = score ÷ the best intent score in THIS result",
       note: `Routing only — an intent resolves to CONCRETE verb ids that synap_run_capability then governs exactly as before. An intent with verbs: [] means nothing visible declares it; ${verbsDeclaringIntent} of ${verbs} verb catalog entries declare an intent at all, so this axis cannot see the rest.`,
     };

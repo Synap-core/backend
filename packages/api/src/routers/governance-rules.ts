@@ -41,6 +41,8 @@ import {
   desc,
   ProposalStatus,
   authoredCreatedBy,
+  readReversibleDefault,
+  setReversibleDefault,
 } from "@synap/database";
 import {
   governanceRules,
@@ -64,6 +66,7 @@ import {
   AGENT_SCHEMA_DEFINITION_EVENT_KEYS,
   AGENT_STRUCTURE_WRITE_EVENT_KEYS,
   nonWidenableFloorFor,
+  REVERSIBLE_EVENT_KEYS,
 } from "@synap/governance-policy";
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
@@ -544,6 +547,36 @@ export const governanceRulesRouter = router({
       ],
     };
   }),
+
+  /**
+   * The POD DEFAULT "reversible writes act" (founder, 2026-09-28): is the one
+   * `@reversible` pod rule active, which writes it lets an agent do directly
+   * (`REVERSIBLE_EVENT_KEYS`, derived from the engine's door class), and may
+   * the caller switch it. Read by Settings › Approvals.
+   */
+  reversibleDefault: protectedProcedure.query(async ({ ctx }) => {
+    const state = await readReversibleDefault(db);
+    return {
+      ...state,
+      reversibleActions: REVERSIBLE_EVENT_KEYS,
+      canManage: await isPodAdmin(ctx.userId),
+    };
+  }),
+
+  /**
+   * Switch the pod default. A pod-scope rule, so pod-admin only — the same
+   * gate `create`/`revoke` apply to a global rule. Humans only: this is a
+   * Kratos `protectedProcedure`, never on the agent (Hub/MCP) doors.
+   */
+  setReversibleDefault: protectedProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      return setReversibleDefault(db, {
+        enabled: input.enabled,
+        userId: ctx.userId,
+      });
+    }),
 
   /**
    * Create one rule — the "always approve for X" door. See file header for

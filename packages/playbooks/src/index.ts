@@ -89,10 +89,10 @@ export interface ToolVerb {
    * can ask for "send a message" without knowing whether the pod has Gmail or
    * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
    * `capability_run_receipts.verb_id` and inside stored automation flows), and a
-   * legacy catalog entry with no `intent` reads exactly as before. A verb that
-   * fits none of the closed values leaves this unset rather than inventing one.
+   * legacy catalog entry with no `intent` reads exactly as before. The value is
+   * a registry slug. `AbstractVerb` is only the seed list.
    */
-  intent?: AbstractVerb;
+  intent?: string;
 }
 
 /** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
@@ -1503,10 +1503,10 @@ export interface CapabilitySkillDef {
   /**
    * The abstract INTENT this verb serves — the routing axis carried onto the
    * derived `ToolVerbCatalogEntry.intent`. Optional; a teaching (`instruction`)
-   * skill is not a callable verb and never carries one. An unknown value is
-   * REJECTED by the applier, never silently stored.
+   * skill is not a callable verb and never carries one. A slug that is not in
+   * the seed and not in `capability_intents` is REJECTED by the applier.
    */
-  intent?: AbstractVerb;
+  intent?: string;
 }
 
 /**

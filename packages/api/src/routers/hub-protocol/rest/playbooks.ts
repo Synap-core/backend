@@ -62,7 +62,7 @@ const ListPlaybooksQuerySchema = z.object({
  * Only the door's own fields (write home, overlap override, attribution) are
  * added; `.describe()` decorates the picked definition fields for OpenAPI.
  */
-const CreatePlaybookBodySchema = playbookDefinitionSchema
+export const CreatePlaybookBodySchema = playbookDefinitionSchema
   .pick({
     name: true,
     goalTemplate: true,

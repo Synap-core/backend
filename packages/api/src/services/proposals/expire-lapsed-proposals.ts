@@ -39,6 +39,7 @@ import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.
 import { scrubGuestPayloads } from "../forms/guest-retention.js";
 import {
   CLASS_LIFETIME_HOURS,
+  capabilityRunVerbId,
   proposalLifetimeHours,
 } from "./proposal-class.js";
 
@@ -86,9 +87,12 @@ export const isSessionBoundDraft = isDocumentEditProposal;
  */
 export function diesWithSession(
   proposalType: string,
-  targetType: string
+  targetType: string,
+  /** A capability run's verb (`capabilityRunVerbId(data)`) — see `DURABLE_OBJECT_VERBS`. */
+  runVerbId?: string | null
 ): boolean {
-  if (proposalLifetimeHours(proposalType, targetType) !== null) return true;
+  if (proposalLifetimeHours(proposalType, targetType, runVerbId) !== null)
+    return true;
   return isSessionBoundDraft({ targetType, proposalType });
 }
 
@@ -98,6 +102,12 @@ export interface LapseCandidate {
   proposalType: string;
   targetType: string;
   createdAt: Date;
+  /**
+   * The raw `proposals.data` — read ONLY for a capability run's `verbId`, which
+   * decides whether the run acts on a durable object (never expires) or is an
+   * outbound call (24h). Absent ⇒ classed as an outbound call.
+   */
+  data?: unknown;
 }
 
 /**
@@ -118,7 +128,11 @@ export function selectLapsedIds(
 ): string[] {
   const out: string[] = [];
   for (const p of candidates) {
-    const hours = proposalLifetimeHours(p.proposalType, p.targetType);
+    const hours = proposalLifetimeHours(
+      p.proposalType,
+      p.targetType,
+      capabilityRunVerbId(p.data)
+    );
     if (hours === null) continue;
     if (now.getTime() - p.createdAt.getTime() > hours * 60 * 60 * 1000) {
       out.push(p.id);
@@ -255,8 +269,9 @@ export async function expireLapsedProposals(
       proposalType: proposals.proposalType,
       targetType: proposals.targetType,
       createdAt: proposals.createdAt,
-      // Carried ONLY so an expiry can discard a staged source blob — see
-      // `discardExpiredSourceBlobs`.
+      // Carried so an expiry can discard a staged source blob (see
+      // `discardExpiredSourceBlobs`), and for a capability run's `verbId`,
+      // which the class rule reads (`DURABLE_OBJECT_VERBS`).
       data: proposals.data,
     })
     .from(proposals)
@@ -365,7 +380,13 @@ export async function expireSessionEphemerals(
       );
 
     const ids = pending
-      .filter((p) => diesWithSession(p.proposalType, p.targetType))
+      .filter((p) =>
+        diesWithSession(
+          p.proposalType,
+          p.targetType,
+          capabilityRunVerbId(p.data)
+        )
+      )
       .map((p) => p.id);
     if (ids.length === 0) return 0;
 

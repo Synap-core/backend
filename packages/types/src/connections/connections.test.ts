@@ -179,7 +179,7 @@ describe("groupConnections — what leaves the section", () => {
       relationTypes: TYPES,
     });
     expect(groups.flatMap((g) => g.items.map((i) => i.id))).toEqual(["acme"]);
-    expect(provenance.madeFrom?.id).toBe("cap1");
+    expect(provenance.madeFrom.map((i) => i.id)).toEqual(["cap1"]);
     expect(provenance.inSession?.id).toBe("s1");
     expect(provenance.all.map((i) => i.id)).toEqual([
       "cap1",
@@ -187,6 +187,37 @@ describe("groupConnections — what leaves the section", () => {
       "p1",
       "room",
     ]);
+  });
+
+  it("made from TWO captures names both, once each, in input order (rules out: first-only)", () => {
+    const cap = (id: string, via = "links") =>
+      n({
+        id,
+        kind: "capture",
+        subtype: null,
+        edgeType: "produced",
+        direction: "incoming",
+        via,
+      });
+    const { provenance } = groupConnections({
+      neighbors: [
+        cap("memo-a"),
+        // The same capture reached a second way: still one source.
+        cap("memo-a", "produced-in"),
+        cap("memo-b"),
+        // Outgoing `produced` (this entity produced a capture) is NOT a source.
+        n({
+          id: "memo-c",
+          kind: "capture",
+          subtype: null,
+          edgeType: "produced",
+          direction: "outgoing",
+          via: "links",
+        }),
+      ],
+      relationTypes: TYPES,
+    });
+    expect(provenance.madeFrom.map((i) => i.id)).toEqual(["memo-a", "memo-b"]);
   });
 
   it("a property edge twinned with its relation renders once", () => {

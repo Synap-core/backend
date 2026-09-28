@@ -83,6 +83,7 @@ export * from "./utils/workspace-client-projection.js";
 export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
 export * from "./utils/governance-rule-provenance.js";
+export * from "./utils/reversible-default.js";
 export * from "./utils/connection-governance.js";
 export * from "./utils/knowledge-contract.js";
 // Message shape matcher (shared door) + the config-settings/guideline store.
