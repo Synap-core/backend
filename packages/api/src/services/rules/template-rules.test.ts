@@ -3,6 +3,8 @@ import {
   decideTemplateRule,
   readTemplateRules,
   templateRuleHash,
+  templateRulesConverged,
+  type TemplateRuleStatus,
 } from "./template-rules.js";
 import { buildRuleMetadata, readRuleMetadata } from "./index.js";
 
@@ -133,5 +135,42 @@ describe("template rules — plumbing", () => {
     expect(read?.seed).toEqual(seedOf(DECL));
     // And a hash over the READ row equals the seed — "untouched" is reachable.
     expect(templateRuleHash(read!)).toBe(read!.seed!.hash);
+  });
+});
+
+describe("templateRulesConverged — what withholds the template stamp", () => {
+  // Every status, classified — a new status must be placed here deliberately.
+  const CONVERGED: Record<TemplateRuleStatus, boolean> = {
+    created: true,
+    updated: true,
+    unchanged: true,
+    kept: true,
+    conflict: true, // the owner's edit wins; reported, not pending
+    deleted_by_owner: true,
+    offered: true, // remembered from an earlier pass (no proposalId)
+    denied: false,
+    failed: false,
+  };
+  for (const [status, expected] of Object.entries(CONVERGED)) {
+    it(`${status} → ${expected ? "converged" : "withheld"}`, () => {
+      expect(
+        templateRulesConverged([
+          { key: "a", status: "unchanged" },
+          { key: "b", status: status as TemplateRuleStatus },
+        ])
+      ).toBe(expected);
+    });
+  }
+
+  it("an offer filed THIS pass is queued, not applied → withheld", () => {
+    expect(
+      templateRulesConverged([
+        { key: "a", status: "offered", proposalId: "p-1" },
+      ])
+    ).toBe(false);
+  });
+
+  it("no declared rules → converged", () => {
+    expect(templateRulesConverged([])).toBe(true);
   });
 });

@@ -61,6 +61,9 @@ vi.mock("@synap/api", () => ({
   reconcileWorkspacePlaybooksToTemplate:
     h.reconcileWorkspacePlaybooksToTemplate,
   reconcileInstalledPacks: h.reconcileInstalledPacks,
+  playbookReportConverged: () => true,
+  applyTemplateRules: async () => [],
+  templateRulesConverged: () => true,
 }));
 
 import { reconcileWorkspacesToTemplates } from "./reconcile-workspaces-to-templates.js";

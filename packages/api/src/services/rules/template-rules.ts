@@ -148,6 +148,27 @@ export function decideTemplateRule(input: {
 }
 
 /**
+ * Did this pass converge the template's rules? The boot pass withholds the
+ * whole-template `packageVersion` stamp when it did not (backend-rules: a
+ * marker asserts only what was checked). `conflict` / `kept` /
+ * `deleted_by_owner` ARE converged — the owner's choice wins and is reported.
+ * An offer filed THIS pass (`proposalId`) is queued, not applied, so it
+ * withholds; an offer remembered from an earlier pass (a declined or pending
+ * proposal, ref without ruleId) does not, or one declined offer would keep the
+ * space "stale" forever.
+ */
+export function templateRulesConverged(
+  outcomes: ReadonlyArray<TemplateRuleOutcome>
+): boolean {
+  return outcomes.every(
+    (o) =>
+      o.status !== "failed" &&
+      o.status !== "denied" &&
+      !(o.status === "offered" && o.proposalId)
+  );
+}
+
+/**
  * Install / converge a template's rules in one space. Non-fatal per rule;
  * returns one outcome per declared rule. Writes the brief's rule refs through
  * the brief's compare-and-set door.

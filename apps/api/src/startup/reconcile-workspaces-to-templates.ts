@@ -63,6 +63,8 @@ import {
   reconcileWorkspacePlaybooksToTemplate,
   playbookReportConverged,
   reconcileInstalledPacks,
+  applyTemplateRules,
+  templateRulesConverged,
   type ResolvedWorkspaceTemplate,
 } from "@synap/api";
 
@@ -265,6 +267,46 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         );
       }
 
+      // TEMPLATE RULES — same door as the install path
+      // (`applyPackagePostWorkspace` → `applyTemplateRules`), three-way
+      // stamped per rule (`metadata.rule.seed`): untouched rows take template
+      // updates, owner edits are kept (conflicts reported), owner deletions
+      // are never reinstalled. This is how a pod installed BEFORE its template
+      // shipped rules receives them — on the next boot, not only on install.
+      // Rules are part of the whole-template hash, so a pass that did not
+      // converge them withholds the version stamp exactly like playbooks do.
+      // Its own try: a failed rules read must not cost the space its
+      // profile/brief reconcile below — it only withholds the stamp.
+      let ruleOutcomes: Awaited<ReturnType<typeof applyTemplateRules>>;
+      try {
+        ruleOutcomes = await applyTemplateRules({
+          workspaceId: ws.id,
+          userId: ws.ownerId,
+          templateSlug: templateKey,
+          rules: (resolved.packageDefinition as { rules?: unknown }).rules,
+        });
+      } catch (err) {
+        ruleOutcomes = [
+          {
+            key: "(template rules)",
+            status: "failed",
+            reason: err instanceof Error ? err.message : String(err),
+          },
+        ];
+      }
+      const rulesConverged = templateRulesConverged(ruleOutcomes);
+      const ruleChanges = ruleOutcomes.filter(
+        (o) => o.status !== "unchanged" && o.status !== "kept"
+      );
+      if (ruleChanges.length > 0) {
+        logger[rulesConverged ? "info" : "warn"](
+          { workspaceId: ws.id, templateKey, rules: ruleChanges },
+          rulesConverged
+            ? "Template rules reconciled"
+            : "Template rules did not converge — packageVersion stamp withheld"
+        );
+      }
+
       // STAMP-ON-WRITE: pass the slug+version this pass is converging TO, so
       // `settings.packageVersion` advances in lockstep with the content it
       // reconciled. Before this, the boot sweep reconciled content but left the
@@ -282,7 +324,8 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         definition:
           resolved.workspaceDefinition as unknown as WorkspaceDefinitionInput,
         packageSlug: templateKey,
-        packageVersion: playbooksConverged ? resolved.version : undefined,
+        packageVersion:
+          playbooksConverged && rulesConverged ? resolved.version : undefined,
       });
 
       const changed =

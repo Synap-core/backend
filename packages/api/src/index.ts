@@ -461,3 +461,10 @@ export {
   reconcileInstalledPacks,
   type InstalledPackReconcileOutcome,
 } from "./services/reconcile-installed-packs.js";
+// Template rules (package `rules[]`) — the boot pass converges them through
+// the same three-way-stamped applier the install door uses.
+export {
+  applyTemplateRules,
+  templateRulesConverged,
+  type TemplateRuleOutcome,
+} from "./services/rules/template-rules.js";
