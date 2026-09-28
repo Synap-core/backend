@@ -12813,6 +12813,111 @@ export interface FunnelStep {
 	category: PlaybookStageCategory;
 	count: number;
 }
+declare const ACTIVITY_OUTCOMES: readonly [
+	"succeeded",
+	"failed",
+	"proposed",
+	"rejected",
+	"reverted",
+	"waiting",
+	"running",
+	"stopped"
+];
+export type ActivityOutcome = (typeof ACTIVITY_OUTCOMES)[number];
+/**
+ * WHO acted. An agent is named when the pod could name it (`id: null` = an
+ * agent that recorded no attributable identity, never a guess). `system` is a
+ * rule acting on its own (an automation run): `id`/`name` name the rule.
+ */
+export type ActivityActor = {
+	kind: "agent";
+	id: string | null;
+	name: string | null;
+} | {
+	kind: "human";
+	id: string;
+	name: string | null;
+	isViewer: boolean;
+} | {
+	kind: "system";
+	id: string | null;
+	name: string | null;
+};
+declare const ACTIVITY_SOURCES: readonly [
+	"proposal",
+	"decision",
+	"run",
+	"session"
+];
+export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
+/**
+ * The DOOR a row opens — through the route table (`objectNavTarget(kind, id)`).
+ * An applied proposal opens the object it made or changed; one that did not
+ * apply opens itself (`kind: "proposal"`), because its object may not exist.
+ * A run opens the run (`kind: "run"`, with its `flowType`), a session itself.
+ */
+export interface ActivityObjectRef {
+	/** Normalized object kind (`entity`, `document`, `proposal`, `run`, …). */
+	kind: string;
+	id: string;
+	/** What the object is called, when known. */
+	name: string | null;
+	/** An entity's profile slug, for its noun ("Person"), when known. */
+	profileSlug?: string | null;
+	/** A run's ledger (`automation` | `playbook`), for the run route. */
+	flowType?: string | null;
+}
+export interface ActivityRow {
+	/** Stable key, unique across sources: `<source>:<id>`. */
+	id: string;
+	source: ActivitySource;
+	/** When the act happened (ISO). The list is ordered by it, newest first. */
+	occurredAt: string;
+	actor: ActivityActor;
+	/** The vocabulary ACTION token (`create`, `approve`, `run`, `start`, …). */
+	action: string;
+	/** `resolveActionLabel(action, "past")` — "Created", "Approved", "Ran". */
+	verb: string;
+	/**
+	 * The headline. A proposal / decision row carries the proposal's own display
+	 * title (the pod's `proposalDisplaySummary` — the name every proposal door
+	 * leads with); a run its flow's name; a session its title.
+	 */
+	title: string;
+	object: ActivityObjectRef;
+	/** The proposal behind a proposal / decision row. */
+	proposalId: string | null;
+	project: {
+		id: string;
+		name: string | null;
+	} | null;
+	/**
+	 * The session it happened in — the provenance door. `null` when there is
+	 * none, or when the viewer may not read that session (decision D1).
+	 */
+	session: {
+		id: string;
+		title: string;
+	} | null;
+	outcome: ActivityOutcome;
+	/**
+	 * The Undo door — `proposals.revert(proposalId)` — on exactly ONE row per
+	 * revertable proposal: the decision row when a person approved it, the
+	 * proposal row when a rule auto-approved it. Undo reverts the WHOLE
+	 * proposal, so `changeCount` says how far it reaches (`null` = unknown).
+	 */
+	undo: {
+		proposalId: string;
+		changeCount: number | null;
+	} | null;
+	/** A failed run's own error line, when it recorded one. */
+	error: string | null;
+}
+export interface ActivityPage {
+	items: ActivityRow[];
+	/** Pass back as `cursor` for the next (older) page; `null` = no more. */
+	nextCursor: string | null;
+}
 export interface RunGroupsPage {
 	groups: RunGroup[];
 	nextCursor: string | null;
@@ -35447,6 +35552,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				actor?: string | undefined;
+				projectId?: string | undefined;
+				workspaceId?: string | null | undefined;
+				outcome?: "running" | "failed" | "proposed" | "reverted" | "rejected" | "succeeded" | "waiting" | "stopped" | undefined;
+				source?: "session" | "run" | "proposal" | "decision" | undefined;
+				since?: string | undefined;
+				cursor?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: ActivityPage;
+			meta: object;
+		}>;
 		summary: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				projectId?: string | undefined;
