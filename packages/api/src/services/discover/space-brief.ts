@@ -144,6 +144,24 @@ export function resolveSpacePurpose(
   );
 }
 
+/** One-line cap for a space's purpose in a LIST of spaces (orient light, find). */
+export const SPACE_PURPOSE_LINE_CAP = 120;
+
+/**
+ * A space's purpose as ONE list line: `resolveSpacePurpose`, whitespace
+ * collapsed, clipped to `SPACE_PURPOSE_LINE_CAP`. The full purpose rides in
+ * the pinned space's brief; a list of 13 spaces at 220 chars each was ~2.9 KB.
+ */
+export function spacePurposeLine(
+  description: unknown,
+  onboarding: unknown
+): string | undefined {
+  return line(
+    resolveSpacePurpose(description, onboarding),
+    SPACE_PURPOSE_LINE_CAP
+  );
+}
+
 export interface SpaceBriefWorkspaceRow {
   id: string;
   name: string;

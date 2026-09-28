@@ -75,6 +75,7 @@ import {
 import {
   buildSpaceBrief,
   resolveSpacePurpose,
+  spacePurposeLine,
   type SpaceBrief,
 } from "./space-brief.js";
 
@@ -775,22 +776,24 @@ export async function discover(
           ) {
             out.acceptsEntities = false;
           }
-          if (onboarding) {
-            out.onboarding =
-              detail === "full"
-                ? onboarding
-                : onboarding.goal !== undefined
-                  ? { goal: onboarding.goal }
-                  : undefined;
+          // Light keeps `{ goal }` only where onboarding is PENDING (the
+          // space is empty): elsewhere the goal already rides as the purpose
+          // line below, or is subordinate to an authored one — not twice.
+          if (onboarding && detail === "full") {
+            out.onboarding = onboarding;
+          } else if (onboarding?.goal !== undefined && out.entityCount === 0) {
+            out.onboarding = { goal: onboarding.goal };
           }
-          // Full: real description/goal, or nothing. Light: same, truncated.
+          // Full: real description/goal, or nothing. Light: the SAME purpose
+          // as one list line (`spacePurposeLine`, ~120 chars); the pinned
+          // space's full purpose rides in its `brief`.
           if (detail === "full") {
             out.description = purpose
               ? (w.description ?? purpose)
               : (w.description ?? null);
-          } else if (authored) {
-            out.description =
-              authored.length > 220 ? `${authored.slice(0, 217)}…` : authored;
+          } else {
+            const purposeLine = spacePurposeLine(w.description, onboarding);
+            if (purposeLine) out.description = purposeLine;
           }
           if (detail === "full") {
             out.profiles = perWsProfiles.get(w.id) ?? [];

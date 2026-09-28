@@ -423,3 +423,71 @@ describe("orient pinned to a space serves its brief", () => {
     expect(h.briefCalls).toHaveLength(0);
   });
 });
+
+describe("orient light — every listed space carries its purpose as ONE line", () => {
+  // 13 spaces, the live pod's count (2026-09-28). Purposes come from the one
+  // rule (`resolveSpacePurpose`): authored description, else onboarding goal,
+  // never a `Domain: x` placeholder.
+  const long = (i: number) =>
+    `Space ${i} is where the ${"team keeps its working records and ".repeat(5)}decides next steps.`;
+  beforeEach(() => {
+    h.workspaceRows = Array.from({ length: 13 }, (_, i) => ({
+      id: `ws-${i}`,
+      name: `Space ${i}`,
+      description:
+        i % 3 === 0 ? null : i % 3 === 1 ? long(i) : "Domain: personal",
+      settings: {
+        workspaceSubtype: "personal",
+        ...(i % 3 !== 1
+          ? {
+              onboarding: {
+                goal: `Goal ${i}: ${"capture the domain ".repeat(12)}`,
+              },
+            }
+          : {}),
+      },
+      workspaceType: "personal",
+    }));
+    h.entityCountRows = h.workspaceRows.map((w, i) => ({
+      workspaceId: w.id,
+      count: i < 10 ? 5 : 0,
+    }));
+  });
+
+  it("clips each purpose to 120 chars, from the authored description or the goal", async () => {
+    const light = await run("light");
+    console.log(
+      Buffer.byteLength(JSON.stringify(light)),
+      Buffer.byteLength(JSON.stringify(light.workspaces))
+    );
+    expect(light.workspaces).toHaveLength(13 - 1); // ws-10 is empty with no goal
+    for (const w of light.workspaces) {
+      // Non-vacuity: every fixture row resolves to a purpose.
+      expect(typeof w.description).toBe("string");
+      expect((w.description as string).length).toBeLessThanOrEqual(120);
+      expect(w.description).not.toMatch(/^Domain:/);
+    }
+    const authored = light.workspaces.find((w) => w.id === "ws-1")!;
+    expect(authored.description).toMatch(/^Space 1 is where the team/);
+    expect(authored.description).toMatch(/…$/);
+    // A placeholder description falls through to the goal.
+    const placeholder = light.workspaces.find((w) => w.id === "ws-2")!;
+    expect(placeholder.description).toMatch(/^Goal 2: capture the domain/);
+  });
+
+  it("keeps `onboarding.goal` only where onboarding is pending (an empty space)", async () => {
+    const light = await run("light");
+    const byId = new Map(light.workspaces.map((w) => [w.id, w]));
+    // Holds entities: the goal already rides as its purpose — not twice.
+    expect(byId.get("ws-0")).not.toHaveProperty("onboarding");
+    // Empty with a goal: the onboarding hint is the point.
+    expect(byId.get("ws-12")?.onboarding).toEqual({
+      goal: expect.stringMatching(/^Goal 12/),
+    });
+    // Full keeps the whole spec everywhere.
+    const full = await run("full");
+    expect(
+      full.workspaces.find((w) => w.id === "ws-0")?.onboarding?.goal
+    ).toMatch(/^Goal 0/);
+  });
+});
