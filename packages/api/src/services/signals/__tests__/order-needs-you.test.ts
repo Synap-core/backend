@@ -151,6 +151,29 @@ describe("session blocks are contiguous", () => {
     ]);
   });
 
+  it("a cluster filed entirely under a session joins that session's block; a spanning one stays its own row", () => {
+    const inS1 = { ...cluster("in-s1", ago(3)), sessionId: "s-1" } as ProposalCluster;
+    const spanning = { ...cluster("span", ago(2)), sessionId: null } as ProposalCluster;
+    const signals = unionNeedsYou({
+      clusters: [inS1, spanning],
+      notifications: [],
+      owedSlots: [owed("s-1", "First", ago(1)), owed("s-2", "Other", ago(4))],
+      now: NOW,
+    });
+    expect(ids(signals)).toEqual([
+      "slot:s-1:first",
+      "cluster:in-s1",
+      "cluster:span",
+      "slot:s-2:other",
+    ]);
+    expect(signals.map((s) => s.groupKey)).toEqual([
+      "session:s-1",
+      "session:s-1",
+      "proposal-cluster:span",
+      "session:s-2",
+    ]);
+  });
+
   it("a session's draft-asks row carries the session key", () => {
     const [row] = signalsFromDraftAsks(
       {

@@ -292,6 +292,15 @@ export interface ProposalCluster {
   /** Distinct workspaces the cluster's proposals span. */
   workspaceIds: string[];
   /**
+   * The ONE session every member was filed under — `null` when any member was
+   * filed under none, or members span several. A needs-you page folds a
+   * one-session cluster into that session's row (`signalFromCluster`); a
+   * cluster spanning sessions stays its own row. Unlike `sources` (deduped
+   * provenance tuples, where a member with no provenance leaves no trace),
+   * this is decided over EVERY member.
+   */
+  sessionId: string | null;
+  /**
    * Member count per `governance_reason`, so a card can render its composition
    * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
    * total. Terraform's plan rollup is the precedent: never "N changes", always
@@ -353,8 +362,17 @@ interface ClusterAccumulator {
   sources: ProposalClusterSource[];
   latestAt: Date;
   workspaceIds: Set<string>;
+  /** Every member's session (`null` for none) — one entry ⇒ one session. */
+  sessionIds: Set<string | null>;
   reasonCounts: Record<string, number>;
   attentionFloorCount: number;
+}
+
+/** The single session a cluster's members share, or `null`. */
+function oneSessionOf(ids: ReadonlySet<string | null>): string | null {
+  if (ids.size !== 1) return null;
+  const [only] = ids;
+  return only ?? null;
 }
 
 /**
@@ -386,6 +404,7 @@ export function collapseProposalsToClusters(
         sources: [],
         latestAt: row.createdAt,
         workspaceIds: new Set<string>(),
+        sessionIds: new Set<string | null>(),
         reasonCounts: {},
         attentionFloorCount: 0,
       };
@@ -400,6 +419,7 @@ export function collapseProposalsToClusters(
       acc.latestAt = row.createdAt;
     }
     if (row.workspaceId) acc.workspaceIds.add(row.workspaceId);
+    acc.sessionIds.add(row.sessionId ?? null);
 
     // Composition. An absent reason is counted under "unspecified" rather than
     // dropped — a member whose escalation cause is unknown must still show up
@@ -440,6 +460,7 @@ export function collapseProposalsToClusters(
     sources: acc.sources,
     latestAt: acc.latestAt,
     workspaceIds: [...acc.workspaceIds],
+    sessionId: oneSessionOf(acc.sessionIds),
     reasonCounts: acc.reasonCounts,
     attentionFloorCount: acc.attentionFloorCount,
   }));

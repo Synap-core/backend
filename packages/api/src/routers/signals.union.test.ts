@@ -40,6 +40,7 @@ function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
     sources: [],
     latestAt: new Date("2026-09-04T10:00:00Z"),
     workspaceIds: ["ws-1"],
+    sessionId: null,
     reasonCounts: {},
     attentionFloorCount: 0,
     ...over,

@@ -194,6 +194,27 @@ describe("collapseProposalsToClusters", () => {
     );
   });
 
+  it("names the ONE session only when every member was filed under it", () => {
+    const one = collapseProposalsToClusters([
+      row({ id: "p1", sessionId: "S" }),
+      row({ id: "p2", sessionId: "S" }),
+    ]);
+    expect(one[0]!.sessionId).toBe("S");
+    // A member filed under NO session: not entirely one session. (`sources`
+    // would still list only S — this is why the field is decided per member.)
+    const mixed = collapseProposalsToClusters([
+      row({ id: "p1", sessionId: "S" }),
+      row({ id: "p2", sessionId: null }),
+    ]);
+    expect(mixed[0]!.sessionId).toBeNull();
+    const spanning = collapseProposalsToClusters([
+      row({ id: "p1", sessionId: "S" }),
+      row({ id: "p2", sessionId: "T" }),
+    ]);
+    expect(spanning[0]!.sessionId).toBeNull();
+    expect(collapseProposalsToClusters([row({ id: "p1" })])[0]!.sessionId).toBeNull();
+  });
+
   it("orders clusters newest-active first", () => {
     const clusters = collapseProposalsToClusters([
       row({

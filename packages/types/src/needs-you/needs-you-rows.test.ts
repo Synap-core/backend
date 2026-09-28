@@ -152,7 +152,22 @@ describe("needsYouRows — the card", () => {
     expect(needsYouItemKind(row("a", { blockedReason: "Decision" }))).toBe("decision");
     expect(needsYouItemKind(row("a", { kind: "draft-asks" }))).toBe("ask");
     expect(needsYouItemKind(row("a", { kind: "session-review" }))).toBe("review");
+    expect(needsYouItemKind(row("a", { kind: "proposal-cluster" }))).toBe("decision");
     expect(needsYouCountsLabel([{ kind: "decision", count: 1 }])).toBe("1 decision");
+  });
+});
+
+describe("needsYouRows — a session appears ONCE", () => {
+  it("a cluster filed under the session folds into its card, counted as its N decisions", () => {
+    const out = needsYouRows([
+      row("slot", { groupKey: "session:S", blockedReason: "physical", sessionTitle: "Tracks-first" }),
+      row("cl", { groupKey: "session:S", kind: "proposal-cluster", count: 2 }),
+      row("other-cl", { kind: "proposal-cluster", groupKey: "proposal-cluster:k" }),
+    ]);
+    expect(shape(out.recent)).toEqual(["session:S[slot,cl]", "item:other-cl"]);
+    const [card] = out.recent;
+    if (card?.kind !== "session") throw new Error("expected a card");
+    expect(needsYouCountsLabel(card.counts)).toBe("1 action · 2 decisions");
   });
 });
 

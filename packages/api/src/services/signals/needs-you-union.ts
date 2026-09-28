@@ -206,8 +206,9 @@ export interface Signal {
   lifetimeHours?: number | null;
   /**
    * WHICH block this row belongs to on a needs-you page. `session:<id>` for
-   * everything a session owes the person (its owed slots, its draft-asks row),
-   * `proposal-cluster:<fingerprint>` for a cluster, else `null`. The union
+   * everything a session owes the person (its owed slots, its draft-asks row,
+   * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
+   * any other cluster, else `null`. The union
    * emits rows sharing a key CONTIGUOUSLY ({@link orderNeedsYou}), so a
    * surface draws a group header exactly where the key changes and never
    * re-groups on its own.
@@ -433,7 +434,14 @@ export function signalFromCluster(
     // (proposalType + targetType are both fingerprint inputs).
     class: cluster.class,
     lifetimeHours: cluster.lifetimeHours,
-    groupKey: `proposal-cluster:${cluster.fingerprint}`,
+    // A cluster filed ENTIRELY under one session belongs to that session's
+    // block, so a needs-you page shows the session ONCE (its card counts the
+    // decision beside its owed slots). A cluster spanning sessions, or with a
+    // member filed under none, stays its own row. Grouping only — `count` and
+    // `signals.count` are untouched.
+    groupKey: cluster.sessionId
+      ? sessionGroupKey(cluster.sessionId)
+      : `proposal-cluster:${cluster.fingerprint}`,
     ageBucket: ageBucketOf(cluster.latestAt, now),
     repeatCount: 1,
   };

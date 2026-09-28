@@ -257,7 +257,9 @@ export interface NeedsYouRows<T extends GroupableSignal> {
 /**
  * The unit a session card counts one signal in: an owed slot by its blocked
  * reason (`owed` when it recorded none), a draft's asks as `ask`, a session
- * awaiting acceptance as `review`, anything else by its signal kind.
+ * awaiting acceptance as `review`, a proposal cluster filed under the session
+ * as `decision` (a pending proposal IS a decision), anything else by its
+ * signal kind.
  */
 export function needsYouItemKind(signal: GroupableSignal): string {
   if (signal.kind === "owed-slot") {
@@ -265,12 +267,14 @@ export function needsYouItemKind(signal: GroupableSignal): string {
   }
   if (signal.kind === "draft-asks") return "ask";
   if (signal.kind === "session-review") return "review";
+  if (signal.kind === "proposal-cluster") return "decision";
   return signal.kind;
 }
 
-/** How many units one signal contributes — a draft row stands for its N asks. */
+/** How many units one signal contributes — a draft row stands for its N asks,
+ *  a cluster for its N proposals. */
 function unitsOf(signal: GroupableSignal): number {
-  if (signal.kind === "draft-asks") {
+  if (signal.kind === "draft-asks" || signal.kind === "proposal-cluster") {
     const n = signal.count;
     return Number.isFinite(n) && n > 1 ? Math.floor(n) : 1;
   }
