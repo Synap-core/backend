@@ -886,6 +886,7 @@ export {
 /** The Ask card's shared surface rules and copy — see `./card.ts`. */
 export {
   ASK_COPY,
+  LOOKED_AT_ROW_CAP,
   askSlotStanding,
   classifyAskRefusal,
   askRowRegion,

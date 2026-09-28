@@ -128,6 +128,13 @@ const REFUSAL_FALLBACK: Record<AskRefusalKind, string> = {
 };
 
 /**
+ * How many "What I looked at" refs a card shows inline before "+N" — and "+N"
+ * is a DOOR to the ask page, which lists them all (relay's value, adopted by
+ * both apps). The pod stores at most `ASK_LIMITS.lookedAtMax` (8).
+ */
+export const LOOKED_AT_ROW_CAP = 2;
+
+/**
  * Staleness is `askRefusalIsStale`; only its two stale shapes are split here,
  * off the pod's `ask_changed:` prefix. The `ask_…:` code is stripped, and a
  * message that was ONLY the code reads as the kind's copy, never the code.

@@ -11,7 +11,18 @@ import {
   type NextRungInput,
 } from "./index.js";
 import { NON_WIDENABLE_GOVERNANCE_REASONS } from "../proposals/governance-grant-options.js";
-import { TRUST_RUNG_LABELS, resolveTrustRungLabel } from "../vocabulary/index.js";
+import {
+  NEXT_RUNG_OUTCOME_LABELS,
+  TRUST_RUNG_LABELS,
+  resolveTrustRungLabel,
+} from "../vocabulary/index.js";
+import {
+  NEXT_RUNG_OUTCOME,
+  NEXT_RUNG_OUTCOMES,
+  NO_NEXT_RUNG_CODE,
+  isNoNextRungError,
+} from "./index.js";
+import { LOOKED_AT_ROW_CAP } from "../ask/index.js";
 
 const pending = (over: Partial<NextRungInput> = {}): NextRungInput => ({
   item: {
@@ -23,6 +34,8 @@ const pending = (over: Partial<NextRungInput> = {}): NextRungInput => ({
   agentUserId: "agent-1",
   governanceReason: null,
   reversible: true,
+  profileSlug: "note",
+  workspaceId: "ws-1",
   ...over,
 });
 
@@ -86,6 +99,7 @@ describe("nextRung", () => {
       from: "propose",
       to: "do_tell",
       via: "governance_rule",
+      reach: "space",
     });
     expect(
       nextRung(
@@ -251,5 +265,53 @@ describe("the words", () => {
     expect(resolveTrustRungLabel("do_tell")).toBe("Does it, tells you");
     expect(resolveTrustRungLabel("quiet", "offer")).toBe("Always let it do this");
     expect(resolveTrustRungLabel("some_rung")).toBe("Some rung");
+  });
+});
+
+describe("W7 review: kind, reach, outcomes, refusal", () => {
+  it("an entity grant with no known kind is REFUSED, never widened to every kind", () => {
+    expect(nextRung(pending({ profileSlug: null }))).toBeNull();
+    expect(nextRung(pending({ profileSlug: undefined }))).toBeNull();
+    // A non-entity subject needs no kind (a document is one kind already).
+    expect(
+      nextRung(
+        pending({
+          profileSlug: null,
+          item: {
+            kind: "proposal",
+            status: "pending",
+            proposalType: "update",
+            targetType: "document",
+          },
+        })
+      )
+    ).not.toBeNull();
+  });
+
+  it("a pod-wide grant says so: reach is 'pod' without a space", () => {
+    expect(nextRung(pending({ workspaceId: null }))?.reach).toBe("pod");
+    expect(nextRung(pending())?.reach).toBe("space");
+  });
+
+  it("every outcome is a mark with words from the vocabulary", () => {
+    for (const o of [...NEXT_RUNG_OUTCOMES, "failed"] as const) {
+      const m = NEXT_RUNG_OUTCOME[o];
+      expect(m.label.length, o).toBeGreaterThan(0);
+      expect(m.label, o).toBe(NEXT_RUNG_OUTCOME_LABELS[o]);
+    }
+    expect(NEXT_RUNG_OUTCOME.needs_admin.label).toBe("Sent to a pod admin");
+    expect(NEXT_RUNG_OUTCOME.failed).toMatchObject({ tone: "error", glyph: "alert" });
+  });
+
+  it("isNoNextRungError reads the typed code, and the pinned prefix for older pods", () => {
+    expect(isNoNextRungError({ data: { reasonCode: NO_NEXT_RUNG_CODE } })).toBe(true);
+    expect(isNoNextRungError({ shape: { data: { reasonCode: "NO_NEXT_RUNG" } } })).toBe(true);
+    expect(isNoNextRungError({ message: "NO_NEXT_RUNG: nope" })).toBe(true);
+    expect(isNoNextRungError({ data: { reasonCode: "OTHER" }, message: "boom" })).toBe(false);
+    expect(isNoNextRungError(null)).toBe(false);
+  });
+
+  it("the looked-at row cap is shared", () => {
+    expect(LOOKED_AT_ROW_CAP).toBe(2);
   });
 });

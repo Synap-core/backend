@@ -65,6 +65,8 @@ import {
   resolveProposalAttention,
   type ProposalAttentionInput,
 } from "../proposals/attention.js";
+import type { UnitGlyph, UnitTone } from "../units/state.js";
+import { NEXT_RUNG_OUTCOME_LABELS } from "../vocabulary/index.js";
 import {
   isNonWidenableGovernanceReason,
   type GovernanceRuleDraft,
@@ -234,23 +236,60 @@ export interface NextRungInput {
    * governance) has none. Absent ⇒ unknown ⇒ no offer.
    */
   reversible?: boolean;
+  /**
+   * The kind the grant would name — the profile the GATE matches the next
+   * write's rule against (for an entity UPDATE that is the entity's own type,
+   * which the server resolves; see {@link PROFILED_SUBJECTS}).
+   */
+  profileSlug?: string | null;
+  /**
+   * The space the grant would be scoped to (the server narrows to the
+   * record's home space when it has one). `null`/absent ⇒ a pod-wide grant:
+   * the offer says so through {@link NextRungOffer.reach}.
+   */
+  workspaceId?: string | null;
 }
+
+/**
+ * Where a grant applies: `space` = one space, `pod` = EVERY space. A pod-wide
+ * grant is legitimate (a personal record has no space) but never silent — a
+ * surface says "in every space" when `reach` is `pod`.
+ */
+export type NextRungReach = "space" | "pod";
 
 /** One step up, and the config that grants it. */
 export interface NextRungOffer {
   from: TrustRung;
   to: TrustRung;
   via: NextRungVia;
+  reach: NextRungReach;
 }
+
+/**
+ * Subjects whose writes span MANY kinds, so a grant that names no kind would
+ * cover every kind ("let it edit notes" silently becoming "let it edit
+ * anything"). An offer on these subjects REQUIRES a known profile; without one
+ * it is refused, never widened.
+ */
+export const PROFILED_SUBJECTS: readonly string[] = ["entity"];
 
 /**
  * What accepting an offer did (`governanceRules.proposeNextRung`):
  *   created          — the caller may grant, so the rule was written now;
  *   already_covered  — an identical active rule already stands;
- *   proposed         — filed for the agent's owner to approve.
- * Words: `NEXT_RUNG_OUTCOME_LABELS` in the vocabulary.
+ *   proposed         — filed for the agent's owner to approve;
+ *   needs_admin      — the caller IS the agent's owner but the grant needs a
+ *                      pod admin (a pod-wide rule): filed for a pod admin,
+ *                      never "sent to the owner" — they are the owner.
+ * Words: `NEXT_RUNG_OUTCOME_LABELS` in the vocabulary; marks:
+ * {@link NEXT_RUNG_OUTCOME}.
  */
-export const NEXT_RUNG_OUTCOMES = ["created", "already_covered", "proposed"] as const;
+export const NEXT_RUNG_OUTCOMES = [
+  "created",
+  "already_covered",
+  "proposed",
+  "needs_admin",
+] as const;
 export type NextRungOutcome = (typeof NEXT_RUNG_OUTCOMES)[number];
 
 /**
@@ -279,7 +318,72 @@ export function nextRung(input: NextRungInput): NextRungOffer | null {
   if (!input.agentUserId) return null;
   if (input.reversible !== true) return null;
   if (!ruleCanReachReason(input.governanceReason)) return null;
-  return { from, to, via };
+  if (
+    PROFILED_SUBJECTS.includes(input.item.targetType ?? "") &&
+    !input.profileSlug
+  )
+    return null;
+  return { from, to, via, reach: input.workspaceId ? "space" : "pod" };
+}
+
+// ─── Outcomes of accepting an offer ─────────────────────────────────────────
+
+/**
+ * Each outcome as a MARK — tone + glyph (`@synap-core/types/units` tokens) +
+ * its words from the vocabulary (`NEXT_RUNG_OUTCOME_LABELS`, the one word
+ * table) — ONCE, for both apps. `failed` is the client's own state (the call
+ * threw for a reason other than {@link isNoNextRungError}); it is a mark too,
+ * never a sentence. Keyed by `NextRungOutcome | "failed"`: a new outcome
+ * stops the build here until it has a mark.
+ */
+const NEXT_RUNG_OUTCOME_MARKS = {
+  created: { tone: "success", glyph: "check" },
+  already_covered: { tone: "textSecondary", glyph: "check" },
+  proposed: { tone: "info", glyph: "person" },
+  needs_admin: { tone: "info", glyph: "person" },
+  failed: { tone: "error", glyph: "alert" },
+} as const satisfies Record<
+  NextRungOutcome | "failed",
+  { tone: UnitTone; glyph: UnitGlyph }
+>;
+
+export const NEXT_RUNG_OUTCOME: Readonly<
+  Record<
+    NextRungOutcome | "failed",
+    { label: string; tone: UnitTone; glyph: UnitGlyph }
+  >
+> = Object.fromEntries(
+  (Object.keys(NEXT_RUNG_OUTCOME_MARKS) as Array<NextRungOutcome | "failed">).map(
+    (o) => [o, { label: NEXT_RUNG_OUTCOME_LABELS[o], ...NEXT_RUNG_OUTCOME_MARKS[o] }]
+  )
+) as Record<
+  NextRungOutcome | "failed",
+  { label: string; tone: UnitTone; glyph: UnitGlyph }
+>;
+
+// ─── The typed refusal ──────────────────────────────────────────────────────
+
+/**
+ * The machine code `proposeNextRung` refuses with when a card has no next rung.
+ * Carried as tRPC `error.data.reasonCode` (and, for older pods, as the prefix
+ * of the message) — read it with {@link isNoNextRungError}, never a regex.
+ */
+export const NO_NEXT_RUNG_CODE = "NO_NEXT_RUNG";
+
+/** Did this tRPC error mean "this card has no next rung"? */
+export function isNoNextRungError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as {
+    data?: { reasonCode?: unknown } | null;
+    shape?: { data?: { reasonCode?: unknown } | null } | null;
+    message?: unknown;
+  };
+  const code = e.data?.reasonCode ?? e.shape?.data?.reasonCode;
+  if (code === NO_NEXT_RUNG_CODE) return true;
+  return (
+    typeof e.message === "string" &&
+    e.message.startsWith(`${NO_NEXT_RUNG_CODE}:`)
+  );
 }
 
 // ─── The grant ──────────────────────────────────────────────────────────────

@@ -1237,6 +1237,7 @@ export const NEXT_RUNG_OUTCOME_LABELS: Readonly<
   created: "Rule added",
   already_covered: "Already a rule",
   proposed: "Sent to the agent's owner",
+  needs_admin: "Sent to a pod admin",
   failed: "Not saved",
 };
 
