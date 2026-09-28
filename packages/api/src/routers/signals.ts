@@ -61,6 +61,8 @@ import { sessionsWithOpenQuestion } from "../services/signals/open-question-sess
 import { needsYouRole } from "../notifications/registry.js";
 import { listDraftAskSlots } from "../services/focus-sessions/draft-asks.js";
 import { resolveScope } from "../utils/scope-filter.js";
+import { readClusterSessions } from "../services/signals/cluster-sessions.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 
 /**
  * The open-question read for the `"session-pointer"` rows in a notification
@@ -419,8 +421,16 @@ export const signalsRouter = router({
 
         const notificationRows =
           notifs.notifications as NotificationSignalInput[];
+        // The clusters' sessions, named through the session READ floor with
+        // this door's roster reading — one batched read. A session the viewer
+        // cannot read is absent, so its cluster stays a plain row.
+        const clusterSessions = await readClusterSessions(groups.groups, {
+          userId: requireUserId(ctx.userId),
+          roster: rosterReadFor(ctx),
+        });
         const signals = unionNeedsYou({
           clusters: groups.groups,
+          clusterSessions,
           notifications: notificationRows,
           owedSlots: owed as OwedSlotSignalInput[],
           // Same read as `count`, so the list and the badge fold the same rows.

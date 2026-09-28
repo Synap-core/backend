@@ -151,11 +151,12 @@ describe("session blocks are contiguous", () => {
     ]);
   });
 
-  it("a cluster filed entirely under a session joins that session's block; a spanning one stays its own row", () => {
+  it("a cluster filed entirely under a READABLE session joins that session's block; a spanning one stays its own row", () => {
     const inS1 = { ...cluster("in-s1", ago(3)), sessionId: "s-1" } as ProposalCluster;
     const spanning = { ...cluster("span", ago(2)), sessionId: null } as ProposalCluster;
     const signals = unionNeedsYou({
       clusters: [inS1, spanning],
+      clusterSessions: new Map([["s-1", { title: "Tracks-first", projectId: "p-1" }]]),
       notifications: [],
       owedSlots: [owed("s-1", "First", ago(1)), owed("s-2", "Other", ago(4))],
       now: NOW,
@@ -172,6 +173,23 @@ describe("session blocks are contiguous", () => {
       "proposal-cluster:span",
       "session:s-2",
     ]);
+      const joined = signals.find((s) => s.id === "cluster:in-s1")!;
+    expect(joined.sessionTitle).toBe("Tracks-first");
+    expect(joined.sessionProjectId).toBe("p-1");
+  });
+
+  it("a cluster whose session the viewer CANNOT read stays a plain row — no key, no name", () => {
+    const hidden = { ...cluster("hidden", ago(3)), sessionId: "s-private" } as ProposalCluster;
+    const [row] = unionNeedsYou({
+      clusters: [hidden],
+      clusterSessions: new Map(), // the read floor returned nothing for it
+      notifications: [],
+      owedSlots: [],
+      now: NOW,
+    });
+    expect(row!.groupKey).toBe("proposal-cluster:hidden");
+    expect("sessionTitle" in row!).toBe(false);
+    expect("sessionProjectId" in row!).toBe(false);
   });
 
   it("a session's draft-asks row carries the session key", () => {

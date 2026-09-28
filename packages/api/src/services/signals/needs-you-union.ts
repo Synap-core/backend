@@ -128,13 +128,14 @@ export interface Signal {
   /**
    * The session's DISPLAY NAME (`resolveSessionTitle`: its title, else the
    * goal's first line) — what a needs-you card names a session that owes
-   * several things by. `owed-slot` / `draft-asks` / `session-review` only;
+   * several things by. `owed-slot` / `draft-asks` / `session-review`, and a
+   * `proposal-cluster` filed under a session the viewer can read, only;
    * absent on an older pod, where a reader falls back to `sessionGoal`.
    */
   sessionTitle?: string | null;
   /**
    * The owning session's project — the card's rail colour. `owed-slot` /
-   * `draft-asks` only; `null` when the session is in no project. Named
+   * `draft-asks` / a session-filed `proposal-cluster` only; `null` when the session is in no project. Named
    * `sessionProjectId` because it is the SESSION's scope, not the signal's:
    * no other kind carries a scope, and a surface must guard it.
    */
@@ -407,12 +408,29 @@ function viewFromActions(
   return undefined;
 }
 
+/**
+ * The session a cluster was filed under, as the VIEWER may see it — read
+ * through the session read floor (`readClusterSessions`). Present only for a
+ * session the viewer can read.
+ */
+export interface ClusterSessionName {
+  title: string | null;
+  projectId: string | null;
+}
+
 /** One cluster → one signal. Title via the vocabulary SSOT, imperative mood
- *  (the card describes what approving it WILL do, not what happened). */
+ *  (the card describes what approving it WILL do, not what happened).
+ *
+ *  `session` is the viewer-readable name of `cluster.sessionId`. Without it
+ *  (the viewer cannot read the session, or the caller did not look it up) the
+ *  cluster gets NO session key — it stays its own row, so a session the viewer
+ *  may not read is never named nor implied. Fail closed by default. */
 export function signalFromCluster(
   cluster: ProposalCluster,
-  now: Date = new Date()
+  now: Date = new Date(),
+  session?: ClusterSessionName
 ): Signal {
+  const inSession = cluster.sessionId && session ? cluster.sessionId : null;
   const sampleId = cluster.sampleProposalIds[0] ?? null;
   return {
     id: `cluster:${cluster.fingerprint}`,
@@ -434,13 +452,17 @@ export function signalFromCluster(
     // (proposalType + targetType are both fingerprint inputs).
     class: cluster.class,
     lifetimeHours: cluster.lifetimeHours,
-    // A cluster filed ENTIRELY under one session belongs to that session's
-    // block, so a needs-you page shows the session ONCE (its card counts the
+    // A cluster filed ENTIRELY under one session the viewer can read belongs
+    // to that session's block, so a needs-you page shows the session ONCE (its card counts the
     // decision beside its owed slots). A cluster spanning sessions, or with a
     // member filed under none, stays its own row. Grouping only — `count` and
     // `signals.count` are untouched.
-    groupKey: cluster.sessionId
-      ? sessionGroupKey(cluster.sessionId)
+    ...(inSession && session?.title ? { sessionTitle: session.title } : {}),
+    ...(inSession && session?.projectId
+      ? { sessionProjectId: session.projectId }
+      : {}),
+    groupKey: inSession
+      ? sessionGroupKey(inSession)
       : `proposal-cluster:${cluster.fingerprint}`,
     ageBucket: ageBucketOf(cluster.latestAt, now),
     repeatCount: 1,
@@ -1003,6 +1025,12 @@ export function unionSuggestions(
  */
 export function unionNeedsYou(args: {
   clusters: ProposalCluster[];
+  /**
+   * sessionId → its name, for the clusters' sessions the VIEWER may read
+   * (`readClusterSessions`). A cluster whose session is absent here stays its
+   * own row. Absent ⇒ no cluster joins a session block (fail closed).
+   */
+  clusterSessions?: ReadonlyMap<string, ClusterSessionName>;
   notifications: NotificationSignalInput[];
   /** Required, not optional: a caller that forgets the third source ships a
    *  tray that silently under-reports, which is the defect, not a default. */
@@ -1037,7 +1065,13 @@ export function unionNeedsYou(args: {
     ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
     ...(args.draftAsks ? signalsFromDraftAsks(args.draftAsks, now) : []),
     ...(args.reviewSessions ?? []).map((r) => signalFromReviewSession(r, now)),
-    ...args.clusters.map((c) => signalFromCluster(c, now)),
+    ...args.clusters.map((c) =>
+      signalFromCluster(
+        c,
+        now,
+        c.sessionId ? args.clusterSessions?.get(c.sessionId) : undefined
+      )
+    ),
     ...notifications.map((f) =>
       signalFromNotification(f.row, now, f.repeatCount)
     ),
