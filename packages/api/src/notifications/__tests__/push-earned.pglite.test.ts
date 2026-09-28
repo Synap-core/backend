@@ -373,6 +373,7 @@ describe("W8 — a push is earned", () => {
 
   // ── 3. the blocking ask's push, and its quick answer through the real door ─
   it("a typed confirm ask pushes to the ASK with a quick answer that answers it", async () => {
+    process.env.PUBLIC_URL = "http://pod.example.test/";
     const sessionId = await seedSession("active");
     const ask: Ask = { mode: "confirm", prompt: "Casual tone?" };
     const r = await blockExpectedOutput({
@@ -404,11 +405,14 @@ describe("W8 — a push is earned", () => {
       id: sessionId,
       slot: "Tone",
     });
+    // Which pod sent it — relay refuses a quick answer after a pod switch.
+    expect(push.data.podUrl).toBe("https://pod.example.test");
     const quick = push.data.quickAnswer as PushQuickAnswer;
     expect(quick.askFingerprint).toBe(askFingerprint(ask));
 
     // THE SEAM: what the lock screen sends, unchanged, through the owed
     // page's own answer service.
+    delete process.env.PUBLIC_URL;
     const yes = quick.actions.find((a) => a.id === "yes")!;
     const answered = await answerSessionSlot({
       sessionId: quick.sessionId,
@@ -434,8 +438,14 @@ describe("W8 — a push is earned", () => {
         options: [{ label: "Casual", recommended: true }, { label: "Formal" }],
       },
     } as Parameters<typeof blockExpectedOutput>[0]);
-    const push = h.pushes[0] as { body: string; categoryId: string };
+    const push = h.pushes[0] as {
+      body: string;
+      categoryId: string;
+      data: Record<string, unknown>;
+    };
     expect(push.categoryId).toBe("ask-choose-recommended");
+    // PUBLIC_URL unset ⇒ no podUrl (relay answers as before), never a guess.
+    expect(push.data).not.toHaveProperty("podUrl");
     expect(push.body).toBe("Tone: casual or formal\nRecommended: Casual");
   });
 

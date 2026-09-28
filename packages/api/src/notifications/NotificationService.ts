@@ -39,7 +39,7 @@ import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { emitSideEffects } from "@synap/events";
 import { getNotificationDef } from "./registry.js";
 import { sendExpoPush } from "./expo-push.js";
-import { openLink } from "../utils/deep-links.js";
+import { openLink, podPublicOrigin } from "../utils/deep-links.js";
 import {
   classifyPush,
   pushEnvelope,
@@ -798,6 +798,9 @@ export const NotificationService = {
             // W8 extras (`PushPayloadExtras`) — additive, an older relay
             // ignores them and keeps routing on `kind`/`id`.
             ...(pushCategory ? { pushCategory } : {}),
+            // Which pod sent this, so relay refuses a queued quick answer
+            // after a pod switch. Absent when PUBLIC_URL is unset.
+            ...(podPublicOrigin() ? { podUrl: podPublicOrigin() } : {}),
             ...(input.push?.slot ? { slot: input.push.slot } : {}),
             ...(quickAnswer ? { quickAnswer } : {}),
           },

@@ -19,6 +19,22 @@ function publicBase(): string | undefined {
 }
 
 /**
+ * The pod's public ORIGIN (`https://pod.example.com`), from the same
+ * normalized PUBLIC_URL every link uses, or `undefined` when unset or
+ * unparseable. A push carries it so a lock-screen answer queued before a pod
+ * switch is never sent to the wrong pod.
+ */
+export function podPublicOrigin(): string | undefined {
+  const base = publicBase();
+  if (!base) return undefined;
+  try {
+    return new URL(base).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The DEVICE flavour of a link, chosen by the PRODUCER at build time.
  *
  * A producer always knows its audience — a push notification addressed to a

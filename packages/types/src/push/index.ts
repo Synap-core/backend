@@ -474,6 +474,12 @@ export function quickAnswerPushBody(
  */
 export interface PushPayloadExtras {
   pushCategory: PushCategory;
+  /**
+   * The sending pod's public origin (`https://pod.example.com`). A quick
+   * answer is sent ONLY when it equals the signed-in pod's origin; absent
+   * (PUBLIC_URL unset, or an older pod) ⇒ answer as before.
+   */
+  podUrl?: string;
   /** The owed page's slot, beside the flat `kind: "owed"` / `id`. */
   slot?: string;
   quickAnswer?: PushQuickAnswer;
