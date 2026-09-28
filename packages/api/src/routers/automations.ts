@@ -2149,7 +2149,11 @@ export const automationsRouter = router({
         // matching is by profile, so it does not narrow this query.
         entityId: z.string().uuid().optional(),
         workspaceId: z.string().uuid(),
-        /** What the user said they want — ranks, never filters (see playbooks). */
+        /**
+         * What the user said they want — ranks by rarity-weighted overlap, and
+         * a candidate with NO signal (no kind, no word match) is dropped
+         * (see playbooks.matchForEntity).
+         */
         intentText: z.string().max(2000).optional(),
       })
     )

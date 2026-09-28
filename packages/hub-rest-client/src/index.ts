@@ -82,6 +82,15 @@ export type {
   HubOrientTeamRoster,
   HubOrientResult,
   HubOrientOptions,
+  // Space brief (stored mirror + orient's built brief)
+  HubSpaceBrief,
+  HubSpaceBriefCardinality,
+  HubSpaceBriefCollectTarget,
+  HubSpaceBriefExpertise,
+  HubSpaceBriefAnchor,
+  HubSpaceBriefFetchHint,
+  HubSpaceBriefRuleRef,
+  HubBuiltSpaceBrief,
   // Threads & Channels
   HubThread,
   HubMessage,
@@ -176,6 +185,8 @@ export type {
   KnowledgeAnswerPending,
   KnowledgeAnswerFailure,
   KnowledgeAnswerResponse,
+  HubAskSpaceHint,
+  HubAskSpacesHint,
   // Diagnose (third door)
   HubDiagnoseInput,
   HubDiagnoseResult,

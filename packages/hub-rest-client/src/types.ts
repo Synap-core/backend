@@ -767,6 +767,8 @@ export interface AskResponse {
   verdict?: string;
   degraded?: string[];
   pending?: KnowledgeAnswerPending;
+  /** Where the asked-about kinds live (see `KnowledgeAnswerResponse.spaces`). */
+  spaces?: HubAskSpacesHint;
   [key: string]: unknown;
 }
 
@@ -832,7 +834,26 @@ export interface KnowledgeAnswerResponse {
   };
   error?: string;
   failure?: KnowledgeAnswerFailure;
+  /**
+   * Where the asked-about kinds live — a routing HINT, never a fact. Absent
+   * when no kind was understood (or from a pod older than the hint);
+   * `status: "unavailable"` = the read failed, never "no spaces".
+   */
+  spaces?: HubAskSpacesHint;
 }
+
+/** One member space holding entities of the asked-about kinds. */
+export interface HubAskSpaceHint {
+  workspaceId: string;
+  name: string;
+  purpose?: string;
+  kinds: Array<{ slug: string; count: number }>;
+}
+
+/** Pod `AskSpacesHint` (`services/discover/space-catalog.ts`). */
+export type HubAskSpacesHint =
+  | { matches: HubAskSpaceHint[] }
+  | { status: "unavailable" };
 
 // ─── Diagnose (third door alongside ask + capture) ───────────────────────────
 
@@ -1693,12 +1714,98 @@ export interface HubOrientProfile {
   entityScope?: "pod" | "workspace" | null;
 }
 
+// ─── Space brief (stored) ────────────────────────────────────────────────────
+// MIRROR of `SpaceBrief` in `@synap-core/types/space-brief` — this package is
+// zero-dependency, so it cannot import it. Held equal by a COMPILE floor:
+// `parity/space-brief.floor.ts`, run by `pnpm typecheck` here.
+
+export type HubSpaceBriefCardinality = "one" | "few" | "several";
+
+export interface HubSpaceBriefCollectTarget {
+  profileSlug: string;
+  what: string;
+  cardinality?: HubSpaceBriefCardinality;
+  keyFields?: string[];
+  min?: number;
+}
+
+export interface HubSpaceBriefExpertise {
+  starters?: string[];
+  blindSpots?: string[];
+  bar?: string;
+}
+
+export interface HubSpaceBriefAnchor {
+  profileSlug: string;
+  role: "root" | "context";
+  seedRef?: string;
+  entityId?: string;
+  limit?: number;
+}
+
+export interface HubSpaceBriefFetchHint {
+  profileSlug?: string;
+  query?: string;
+  note?: string;
+}
+
+export interface HubSpaceBriefRuleRef {
+  key: string;
+  ruleId?: string;
+}
+
+/** A space's brief as stored at `settings.onboarding` (normalized). */
+export interface HubSpaceBrief {
+  purpose?: string;
+  goal?: string;
+  framing?: string;
+  expertise?: HubSpaceBriefExpertise;
+  collect?: HubSpaceBriefCollectTarget[];
+  openingQuestions?: string[];
+  doneWhen?: string;
+  anchors?: HubSpaceBriefAnchor[];
+  rules?: HubSpaceBriefRuleRef[];
+  fetch?: HubSpaceBriefFetchHint[];
+}
+
+/**
+ * The BUILT brief orient returns for a pinned space (pod
+ * `services/discover/space-brief.ts` `BuiltSpaceBrief`). Every field is
+ * optional for VERSION SKEW (older pods send fewer). Its top-level keys are
+ * held to what the pod really emits by the api tripwire
+ * `space-brief.templates.test.ts` (source parse of this interface).
+ */
+export interface HubBuiltSpaceBrief {
+  workspaceId?: string;
+  name?: string;
+  purpose?: string;
+  persona?: string;
+  anchors?: { root?: { kind: string; entityId?: string }; context?: string[] };
+  rules?: string[];
+  expertise?: HubSpaceBriefExpertise;
+  collect?: Array<{ kind: string; what?: string; cardinality?: string }>;
+  keyKinds?:
+    | Array<{ slug: string; name?: string; entityCount: number; description?: string }>
+    | { status: "unavailable" };
+  keyKindsTotal?: number;
+  /** `items` may be `[]` when the list was shed to fit; `total` stays true. */
+  playbooks?:
+    | {
+        items: Array<{ id: string; name: string; description?: string }>;
+        total: number;
+      }
+    | { status: "unavailable" };
+  trimmed?: string[];
+  more?: string;
+}
+
 export interface HubOrientWorkspace {
   id: string;
   name: string;
   domain: string | null;
   entityCount: number;
-  onboarding?: Record<string, unknown>;
+  /** light: `{ goal }` while the space is empty; full: the whole brief. */
+  onboarding?: HubSpaceBrief;
   description?: string | null;
   profiles?: HubOrientProfile[];
 }
@@ -1742,6 +1849,8 @@ export interface HubOrientResult {
   note: string;
   /** Internal team for the pinned/sample workspace — omitted when empty. */
   teamRoster?: HubOrientTeamRoster;
+  /** The pinned space's brief — present only when orient was pinned. */
+  brief?: HubBuiltSpaceBrief | { status: "unavailable" };
 }
 
 export interface HubOrientOptions {
@@ -2653,7 +2762,10 @@ export interface HubPlaybookPage {
 
 export interface CreatePlaybookInput {
   name: string;
-  /** May contain {{param}} placeholders. */
+  /**
+   * May reference declared params as `{name}` (or `@{arg:name}`). A bare
+   * `{{name}}` or an undeclared `{name}` is REFUSED — no run fills it.
+   */
   goalTemplate: string;
   description?: string;
   stages?: Array<Record<string, unknown>>;

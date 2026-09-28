@@ -13,6 +13,7 @@
  * Brand Library and CRM byte counts are pinned in the report below.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -218,5 +219,30 @@ describe("built brief — measured from the real templates", () => {
       "B trimmed:",
       JSON.stringify(brief.trimmed ?? [])
     );
+  });
+
+  it("every key the pod emits is declared on hub-rest-client's HubBuiltSpaceBrief", async () => {
+    // RIGHT: the client mirror's top-level keys, parsed from SOURCE (the
+    // package is zero-dependency; nothing to import at runtime).
+    const src = readFileSync(
+      join(here, "../../../../hub-rest-client/src/types.ts"),
+      "utf8"
+    );
+    const start = src.indexOf("export interface HubBuiltSpaceBrief {");
+    expect(start, "HubBuiltSpaceBrief not found").toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n}\n", start));
+    const declared = new Set(
+      [...body.matchAll(/^  ([A-Za-z]+)\??:/gm)].map((m) => m[1]!)
+    );
+    // LEFT: every top-level key a REAL built brief carries, across templates.
+    const emitted = new Set<string>();
+    for (const t of all.filter((x) => x.onboarding))
+      for (const k of Object.keys(await build(t))) emitted.add(k);
+    // Non-vacuity on both sides.
+    expect(declared.size).toBeGreaterThan(10);
+    expect([...emitted]).toEqual(
+      expect.arrayContaining(["purpose", "anchors", "rules", "keyKinds", "more"])
+    );
+    expect([...emitted].filter((k) => !declared.has(k))).toEqual([]);
   });
 });
