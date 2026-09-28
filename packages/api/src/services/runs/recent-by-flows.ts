@@ -37,6 +37,15 @@ export interface RecentFlowRun {
   status: RunStatus;
   startedAt: Date;
   completedAt: Date | null;
+  /**
+   * The focus session this run drives, or null when it has none — the door a
+   * `waiting_on_you` mark opens (the owed slot lives on that session). A
+   * playbook run carries it as `playbook_runs.session_id`; an automation run
+   * is linked from the session side (`metadata.automationRunId`, stamped by
+   * `openRunSession` — the same link the run reaper parks on). An ADDRESS
+   * only: opening it goes through the session door's own floor.
+   */
+  sessionId: string | null;
 }
 
 export interface RecentFlowHistory extends RecentFlowRef {
@@ -49,6 +58,7 @@ type RawRunRow = {
   status: string;
   startedAt: Date | string;
   completedAt: Date | string | null;
+  sessionId: string | null;
 };
 
 function rowsFromResult(result: unknown): RawRunRow[] {
@@ -62,6 +72,7 @@ function mapRow(row: RawRunRow): RecentFlowRun {
     status: row.status as RunStatus,
     startedAt: new Date(row.startedAt),
     completedAt: row.completedAt ? new Date(row.completedAt) : null,
+    sessionId: row.sessionId ?? null,
   };
 }
 
@@ -80,6 +91,12 @@ async function loadAutomationHistory(
         ${automationRuns.status} AS "status",
         ${automationRuns.startedAt} AS "startedAt",
         ${automationRuns.completedAt} AS "completedAt",
+        (
+          SELECT fs.id FROM focus_sessions fs
+          WHERE fs.metadata->>'automationRunId' = ${automationRuns.id}::text
+          ORDER BY fs.created_at DESC
+          LIMIT 1
+        ) AS "sessionId",
         count(*) FILTER (
           WHERE ${settledRunStatusWhere(automationRuns.status)}
         ) OVER (
@@ -118,6 +135,7 @@ async function loadPlaybookHistory(
         ${playbookRuns.status} AS "status",
         ${playbookRuns.startedAt} AS "startedAt",
         ${playbookRuns.completedAt} AS "completedAt",
+        ${playbookRuns.sessionId} AS "sessionId",
         count(*) FILTER (
           WHERE ${settledRunStatusWhere(playbookRuns.status)}
         ) OVER (
