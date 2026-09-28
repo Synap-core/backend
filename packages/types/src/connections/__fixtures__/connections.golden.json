@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared relay<->web sameness table for the connections section. Inputs are WIRE-shaped (graph.getObjectGraph neighbours, relations.listTypes rows, kind-card model facts, effective property defs); expected = the leaf output. Each surface runs ITS OWN adapters over the inputs and must reproduce expected unchanged. Regenerate only with the leaf: connections.golden.test.ts pins expected to the leaf.",
+  "$comment": "Shared relay<->web sameness table for the connections section. Inputs are WIRE-shaped (graph.getObjectGraph neighbours, relations.listTypes rows, kind-card model facts, effective property defs); expected = the leaf output. Each surface runs ITS OWN adapters over the inputs and must reproduce expected unchanged. Regenerate only with the leaf: connections.golden.test.ts pins expected to the leaf. liveRows are captured from the deployed pod (ids shortened): hosts build the kind-card model with THEIR real builder from entity+defs, assert keyFactEntityIds(model) === expectedDrawnKeys, then run the pipeline to expected.",
   "groupRows": [
     {
       "name": "person page: labels from this side, provenance split, key fact + property twin dropped, untyped last",
@@ -134,7 +134,7 @@
       "relationTypes": [
         {
           "type": "works_at",
-          "label": "Works at",
+          "label": "Works At",
           "inverseLabel": "Employs",
           "directionality": "unidirectional",
           "description": "",
@@ -143,7 +143,7 @@
         },
         {
           "type": "reports_to",
-          "label": "Reports to",
+          "label": "Reports To",
           "inverseLabel": null,
           "directionality": "unidirectional"
         },
@@ -462,7 +462,7 @@
       "relationTypes": [
         {
           "type": "works_at",
-          "label": "Works at",
+          "label": "Works At",
           "inverseLabel": "Employs",
           "directionality": "unidirectional",
           "description": "",
@@ -471,7 +471,7 @@
         },
         {
           "type": "reports_to",
-          "label": "Reports to",
+          "label": "Reports To",
           "inverseLabel": null,
           "directionality": "unidirectional"
         },
@@ -658,7 +658,7 @@
       "relationTypes": [
         {
           "type": "works_at",
-          "label": "Works at",
+          "label": "Works At",
           "inverseLabel": "Employs",
           "directionality": "unidirectional",
           "description": "",
@@ -667,7 +667,7 @@
         },
         {
           "type": "reports_to",
-          "label": "Reports to",
+          "label": "Reports To",
           "inverseLabel": null,
           "directionality": "unidirectional"
         },
@@ -836,11 +836,99 @@
         ],
         "total": 2
       }
+    },
+    {
+      "name": "symmetric type: incoming, outgoing AND structural edges merge into ONE 'both' group",
+      "neighbors": [
+        {
+          "kind": "entity",
+          "id": "a",
+          "name": "Alpha",
+          "subtype": "task",
+          "edgeType": "relates_to",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "kind": "entity",
+          "id": "b",
+          "name": "Beta",
+          "subtype": "task",
+          "edgeType": "relates_to",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "kind": "entity",
+          "id": "c",
+          "name": "Gamma",
+          "subtype": "task",
+          "edgeType": "relates_to",
+          "direction": "structural",
+          "via": "relations"
+        }
+      ],
+      "relationTypes": [
+        {
+          "type": "relates_to",
+          "label": "Relates To",
+          "inverseLabel": null,
+          "directionality": "bidirectional"
+        }
+      ],
+      "keyFactIds": [],
+      "expected": {
+        "provenance": {
+          "madeFrom": [],
+          "inSession": null,
+          "all": []
+        },
+        "groups": [
+          {
+            "key": "relates_to:both",
+            "label": "Relates to",
+            "edgeType": "relates_to",
+            "direction": "both",
+            "reversed": false,
+            "items": [
+              {
+                "id": "a",
+                "name": "Alpha",
+                "kind": "task",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "outgoing",
+                "via": "relations"
+              },
+              {
+                "id": "b",
+                "name": "Beta",
+                "kind": "task",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "incoming",
+                "via": "relations"
+              },
+              {
+                "id": "c",
+                "name": "Gamma",
+                "kind": "task",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "structural",
+                "via": "relations"
+              }
+            ],
+            "total": 3
+          }
+        ],
+        "total": 3
+      }
     }
   ],
   "keyFactRows": [
     {
-      "name": "entity-ref key facts (string, array, {id}) + facts subtitle; invites, other kinds and range subtitles ignored",
+      "name": "drawn facts: entity-ref (string, array, {id}) + multi-entity-ref + text/select name keys, key facts AND subtitle; invites, email and range subtitles ignored",
       "model": {
         "keyFacts": [
           {
@@ -873,13 +961,28 @@
           },
           {
             "key": "email",
-            "renderKind": "text",
+            "renderKind": "email",
             "value": "x@y.z"
           },
           {
             "key": "dup",
             "renderKind": "entity-ref",
             "value": "acme"
+          },
+          {
+            "key": "members",
+            "renderKind": "multi-entity-ref",
+            "value": [
+              "m1",
+              {
+                "id": "m2"
+              }
+            ]
+          },
+          {
+            "key": "stage",
+            "renderKind": "select",
+            "value": "Won"
           }
         ],
         "hero": {
@@ -905,7 +1008,11 @@
         "p1",
         "p2",
         "o1",
-        "acct-9"
+        "m1",
+        "m2",
+        "name:won",
+        "acct-9",
+        "name:cfo"
       ]
     },
     {
@@ -1021,6 +1128,495 @@
         }
       ],
       "expected": []
+    }
+  ],
+  "liveRows": [
+    {
+      "name": "live person (Léa, 2026-09-28): company is TEXT in the subtitle, the tie is works_at → the entity; drawn once",
+      "entity": {
+        "id": "c55e17f9-d6dc-4053-b680-112f52366b78",
+        "title": "Léa Dogfoodprobe",
+        "profileSlug": "person",
+        "properties": {
+          "role": "CTO",
+          "title": "Léa Dogfoodprobe",
+          "company": "Probeworks SAS"
+        }
+      },
+      "defs": [
+        {
+          "id": "c2d860dc",
+          "slug": "title",
+          "valueType": "string",
+          "uiHints": {
+            "label": "Title",
+            "inputType": "text"
+          },
+          "displayOrder": 0
+        },
+        {
+          "id": "473f1354",
+          "slug": "role",
+          "valueType": "string",
+          "uiHints": {
+            "label": "Role",
+            "inputType": "text"
+          },
+          "displayOrder": 0
+        },
+        {
+          "id": "c983320a",
+          "slug": "email",
+          "valueType": "string",
+          "uiHints": {
+            "label": "Email",
+            "inputType": "email"
+          },
+          "displayOrder": 1
+        },
+        {
+          "id": "5243247d",
+          "slug": "phone",
+          "valueType": "string",
+          "uiHints": {
+            "label": "Phone",
+            "inputType": "phone"
+          },
+          "displayOrder": 2
+        },
+        {
+          "id": "1384aac8",
+          "slug": "company",
+          "valueType": "string",
+          "uiHints": {
+            "label": "Company",
+            "inputType": "text"
+          },
+          "displayOrder": 3
+        }
+      ],
+      "neighbors": [
+        {
+          "kind": "session",
+          "id": "d3a601c6",
+          "name": "Dogfood Connect & Mirror after deploy and plan the next waves",
+          "subtype": null,
+          "edgeType": "produced",
+          "direction": "incoming",
+          "via": "links"
+        },
+        {
+          "kind": "proposal",
+          "id": "90b51f39",
+          "name": "Graph",
+          "subtype": "auto_approved",
+          "edgeType": "capture.graph",
+          "direction": "incoming",
+          "via": "governed"
+        },
+        {
+          "kind": "entity",
+          "id": "b13904fe",
+          "name": "Lyon meetup",
+          "subtype": "event",
+          "edgeType": "met_at",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "kind": "entity",
+          "id": "7a209636",
+          "name": "Send pricing to Probeworks SAS",
+          "subtype": "task",
+          "edgeType": "relates_to",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "kind": "entity",
+          "id": "bb73cebd",
+          "name": "Demo Synap relay for Léa Dogfoodprobe (Probeworks SAS)",
+          "subtype": "task",
+          "edgeType": "assigned_to",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "kind": "entity",
+          "id": "744a7714",
+          "name": "Probeworks SAS",
+          "subtype": "company",
+          "edgeType": "works_at",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "kind": "entity",
+          "id": "d4b84ad8",
+          "name": "Synap",
+          "subtype": "project",
+          "edgeType": "belongs_to_project",
+          "direction": "outgoing",
+          "via": "relations"
+        }
+      ],
+      "relationTypes": [
+        {
+          "type": "works_at",
+          "label": "Works At",
+          "inverseLabel": "Employs",
+          "directionality": "unidirectional"
+        },
+        {
+          "type": "met_at",
+          "label": "Met at",
+          "inverseLabel": null,
+          "directionality": "unidirectional"
+        },
+        {
+          "type": "relates_to",
+          "label": "Relates To",
+          "inverseLabel": null,
+          "directionality": "bidirectional"
+        },
+        {
+          "type": "assigned_to",
+          "label": "Assigned To",
+          "inverseLabel": null,
+          "directionality": "unidirectional"
+        },
+        {
+          "type": "belongs_to_project",
+          "label": "Belongs To Project",
+          "inverseLabel": null,
+          "directionality": "unidirectional"
+        }
+      ],
+      "expectedDrawnKeys": [
+        "name:cto",
+        "name:probeworks sas"
+      ],
+      "expected": {
+        "provenance": {
+          "madeFrom": [],
+          "inSession": {
+            "id": "d3a601c6",
+            "name": "Dogfood Connect & Mirror after deploy and plan the next waves",
+            "kind": "session",
+            "graphKind": "session",
+            "edgeType": "produced",
+            "direction": "incoming",
+            "via": "links"
+          },
+          "all": [
+            {
+              "id": "d3a601c6",
+              "name": "Dogfood Connect & Mirror after deploy and plan the next waves",
+              "kind": "session",
+              "graphKind": "session",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            },
+            {
+              "id": "90b51f39",
+              "name": "Graph",
+              "kind": "proposal",
+              "graphKind": "proposal",
+              "edgeType": "capture.graph",
+              "direction": "incoming",
+              "via": "governed"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "key": "assigned_to:incoming",
+            "label": "Assigned to",
+            "edgeType": "assigned_to",
+            "direction": "incoming",
+            "reversed": true,
+            "items": [
+              {
+                "id": "bb73cebd",
+                "name": "Demo Synap relay for Léa Dogfoodprobe (Probeworks SAS)",
+                "kind": "task",
+                "graphKind": "entity",
+                "edgeType": "assigned_to",
+                "direction": "incoming",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          },
+          {
+            "key": "belongs_to_project:outgoing",
+            "label": "Belongs to project",
+            "edgeType": "belongs_to_project",
+            "direction": "outgoing",
+            "reversed": false,
+            "items": [
+              {
+                "id": "d4b84ad8",
+                "name": "Synap",
+                "kind": "project",
+                "graphKind": "entity",
+                "edgeType": "belongs_to_project",
+                "direction": "outgoing",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          },
+          {
+            "key": "met_at:outgoing",
+            "label": "Met at",
+            "edgeType": "met_at",
+            "direction": "outgoing",
+            "reversed": false,
+            "items": [
+              {
+                "id": "b13904fe",
+                "name": "Lyon meetup",
+                "kind": "event",
+                "graphKind": "entity",
+                "edgeType": "met_at",
+                "direction": "outgoing",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          },
+          {
+            "key": "relates_to:both",
+            "label": "Relates to",
+            "edgeType": "relates_to",
+            "direction": "both",
+            "reversed": false,
+            "items": [
+              {
+                "id": "7a209636",
+                "name": "Send pricing to Probeworks SAS",
+                "kind": "task",
+                "graphKind": "entity",
+                "edgeType": "relates_to",
+                "direction": "incoming",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          }
+        ],
+        "total": 4
+      }
+    },
+    {
+      "name": "live note (2026-09-28): made from a capture (provenance line, not a group); a DIFFERENT decision that shares the capture's title stays listed under Created by",
+      "entity": {
+        "id": "1b19f8b4",
+        "title": "Antoine Servant",
+        "profileSlug": "note",
+        "properties": {
+          "title": "Antoine Servant"
+        }
+      },
+      "defs": [
+        {
+          "id": "c2d860dc",
+          "slug": "title",
+          "valueType": "string",
+          "uiHints": {
+            "label": "Title",
+            "inputType": "text"
+          },
+          "displayOrder": 0
+        },
+        {
+          "id": "f6db76f5",
+          "slug": "content",
+          "valueType": "string",
+          "uiHints": {
+            "label": "Content",
+            "inputType": "textarea"
+          },
+          "displayOrder": 1
+        },
+        {
+          "id": "c368b28a",
+          "slug": "tags",
+          "valueType": "array",
+          "uiHints": {
+            "label": "Tags",
+            "inputType": "tags"
+          },
+          "displayOrder": 2
+        }
+      ],
+      "neighbors": [
+        {
+          "kind": "session",
+          "id": "c1987f33",
+          "name": "Rework the four Relay surfaces",
+          "subtype": null,
+          "edgeType": "produced",
+          "direction": "incoming",
+          "via": "links"
+        },
+        {
+          "kind": "capture",
+          "id": "315b0219",
+          "name": "RELAY XP DIRECTION W1 — Widgets: consolidate, make extensible, allow multi-action tiles.",
+          "subtype": "markdown",
+          "edgeType": "produced",
+          "direction": "incoming",
+          "via": "links"
+        },
+        {
+          "kind": "proposal",
+          "id": "c3177599",
+          "name": "Graph",
+          "subtype": "auto_approved",
+          "edgeType": "capture.graph",
+          "direction": "incoming",
+          "via": "governed"
+        },
+        {
+          "kind": "entity",
+          "id": "d4b84ad8",
+          "name": "Synap",
+          "subtype": "project",
+          "edgeType": "belongs_to_project",
+          "direction": "outgoing",
+          "via": "relations"
+        },
+        {
+          "kind": "entity",
+          "id": "7f2f5106",
+          "name": "RELAY XP DIRECTION W1 — Widgets: consolidate, make extensible, allow multi-action tiles",
+          "subtype": "decision",
+          "edgeType": "created_by",
+          "direction": "incoming",
+          "via": "relations"
+        },
+        {
+          "kind": "capture",
+          "id": "315b0219",
+          "name": "RELAY XP DIRECTION W1 — Widgets: consolidate, make extensible, allow multi-action tiles.",
+          "subtype": "markdown",
+          "edgeType": "mentions",
+          "direction": "incoming",
+          "via": "relations"
+        }
+      ],
+      "relationTypes": [
+        {
+          "type": "created_by",
+          "label": "Created By",
+          "inverseLabel": null,
+          "directionality": "unidirectional"
+        },
+        {
+          "type": "belongs_to_project",
+          "label": "Belongs To Project",
+          "inverseLabel": null,
+          "directionality": "unidirectional"
+        }
+      ],
+      "expectedDrawnKeys": [],
+      "expected": {
+        "provenance": {
+          "madeFrom": [
+            {
+              "id": "315b0219",
+              "name": "RELAY XP DIRECTION W1 — Widgets: consolidate, make extensible, allow multi-action tiles.",
+              "kind": "capture",
+              "graphKind": "capture",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            }
+          ],
+          "inSession": {
+            "id": "c1987f33",
+            "name": "Rework the four Relay surfaces",
+            "kind": "session",
+            "graphKind": "session",
+            "edgeType": "produced",
+            "direction": "incoming",
+            "via": "links"
+          },
+          "all": [
+            {
+              "id": "c1987f33",
+              "name": "Rework the four Relay surfaces",
+              "kind": "session",
+              "graphKind": "session",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            },
+            {
+              "id": "315b0219",
+              "name": "RELAY XP DIRECTION W1 — Widgets: consolidate, make extensible, allow multi-action tiles.",
+              "kind": "capture",
+              "graphKind": "capture",
+              "edgeType": "produced",
+              "direction": "incoming",
+              "via": "links"
+            },
+            {
+              "id": "c3177599",
+              "name": "Graph",
+              "kind": "proposal",
+              "graphKind": "proposal",
+              "edgeType": "capture.graph",
+              "direction": "incoming",
+              "via": "governed"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "key": "belongs_to_project:outgoing",
+            "label": "Belongs to project",
+            "edgeType": "belongs_to_project",
+            "direction": "outgoing",
+            "reversed": false,
+            "items": [
+              {
+                "id": "d4b84ad8",
+                "name": "Synap",
+                "kind": "project",
+                "graphKind": "entity",
+                "edgeType": "belongs_to_project",
+                "direction": "outgoing",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          },
+          {
+            "key": "created_by:incoming",
+            "label": "Created by",
+            "edgeType": "created_by",
+            "direction": "incoming",
+            "reversed": true,
+            "items": [
+              {
+                "id": "7f2f5106",
+                "name": "RELAY XP DIRECTION W1 — Widgets: consolidate, make extensible, allow multi-action tiles",
+                "kind": "decision",
+                "graphKind": "entity",
+                "edgeType": "created_by",
+                "direction": "incoming",
+                "via": "relations"
+              }
+            ],
+            "total": 1
+          }
+        ],
+        "total": 2
+      }
     }
   ]
 }

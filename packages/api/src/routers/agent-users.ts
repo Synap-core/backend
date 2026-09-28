@@ -30,6 +30,15 @@ import { auditLog } from "../utils/audit-log.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import type { AgentMetadata } from "@synap/database/schema";
 import { withAgentPresence } from "../services/agent-presence.js";
+import {
+  applyAgentPosture,
+  readAgentGovernance,
+} from "@synap/database/agent-governance";
+import { readReversibleDefault } from "@synap/database";
+import {
+  AGENT_WRITE_MODE_LINE,
+  resolveAgentWriteMode,
+} from "@synap-core/types/agents";
 
 /**
  * Floor-first agent-user fetch backing `list`.
@@ -343,6 +352,40 @@ export const agentUsersRouter = router({
     }),
 
   /**
+   * How this agent's writes land, from the EFFECTIVE decision inputs — its own
+   * override (`readAgentGovernance`, the same reader as the Hub
+   * `GET /agent-users/:id/governance`) and the pod default — never the raw
+   * `writesRequireProposal` flag. `line` is the one sentence every surface shows.
+   */
+  governance: protectedProcedure
+    .input(z.object({ agentUserId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const state = await readAgentGovernance({
+        db,
+        agentUserId: input.agentUserId,
+      });
+      if (!state) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Agent user not found",
+        });
+      }
+      const podDefault = await readReversibleDefault(db);
+      const writeMode = resolveAgentWriteMode({
+        posture: state.posture,
+        podDefaultEnabled: podDefault.enabled,
+        writesRequireProposal: state.writesRequireProposal,
+      });
+      return {
+        writeMode,
+        line: AGENT_WRITE_MODE_LINE[writeMode],
+        /** The switch: ON iff this agent has the ask-first override. */
+        askFirst: state.posture === "ask-first",
+        podDefaultEnabled: podDefault.enabled,
+      };
+    }),
+
+  /**
    * Update an AI agent user
    */
   update: protectedProcedure
@@ -421,11 +464,7 @@ export const agentUsersRouter = router({
       // Update user record
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (input.name) updates.name = input.name;
-      if (
-        input.description !== undefined ||
-        input.capabilities !== undefined ||
-        input.writesRequireProposal !== undefined
-      ) {
+      if (input.description !== undefined || input.capabilities !== undefined) {
         const existing = (agent.agentMetadata || {}) as Record<string, unknown>;
         updates.agentMetadata = {
           ...existing,
@@ -435,9 +474,6 @@ export const agentUsersRouter = router({
           ...(input.capabilities !== undefined
             ? { capabilities: input.capabilities }
             : {}),
-          ...(input.writesRequireProposal !== undefined
-            ? { writesRequireProposal: input.writesRequireProposal }
-            : {}),
         };
       }
 
@@ -445,6 +481,19 @@ export const agentUsersRouter = router({
         .update(users)
         .set(updates)
         .where(eq(users.id, input.agentUserId));
+
+      // "Require approval for writes" — NOT the raw rung-5 flag any more (the
+      // pod default at rung 2.8 outranks it). ON = this agent's `ask-first`
+      // override (agent-scoped `propose` rules, THE posture writer); OFF =
+      // clear the override and follow the pod default. One store, one door.
+      if (input.writesRequireProposal !== undefined) {
+        await applyAgentPosture({
+          db,
+          agentUserId: input.agentUserId,
+          posture: input.writesRequireProposal ? "ask-first" : null,
+          createdBy: ctx.userId,
+        });
+      }
 
       // Update role if changed
       if (input.role) {

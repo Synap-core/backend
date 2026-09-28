@@ -242,3 +242,49 @@ describe("create-with-undo — an optional STRICTER preset on the pod default", 
     expect(await decide("entity", "update")).toBe("execute");
   });
 });
+
+describe("ask-first — the per-agent 'Require approval for writes' override", () => {
+  it("turns a pod-default agent strict: a reversible write (create or edit) then proposes", async () => {
+    await podDefaultOn();
+    expect(await decide("entity", "update")).toBe("execute");
+    await applyAgentPosture({
+      db,
+      agentUserId: AGENT,
+      posture: "ask-first",
+      createdBy: HUMAN,
+    });
+    expect(await decide("entity", "update")).toBe("propose");
+    expect(await decide("entity", "create")).toBe("propose");
+    expect(await decide("document", "update")).toBe("propose");
+    // The agent's own run bookkeeping is not the person's data.
+    expect(await decide("focus_session", "update")).toBe("execute");
+    expect(
+      (await readAgentGovernance({ db, agentUserId: AGENT }))!.posture
+    ).toBe("ask-first");
+  });
+
+  it("switching it OFF (posture null) clears the override: back to the pod default, nothing new written", async () => {
+    await podDefaultOn();
+    await applyAgentPosture({
+      db,
+      agentUserId: AGENT,
+      posture: "ask-first",
+      createdBy: HUMAN,
+    });
+    await applyAgentPosture({
+      db,
+      agentUserId: AGENT,
+      posture: null,
+      createdBy: HUMAN,
+    });
+    expect(await decide("entity", "update")).toBe("execute");
+    const state = (await readAgentGovernance({ db, agentUserId: AGENT }))!;
+    expect(state.posture).toBeNull();
+    expect(state.rules).toEqual([]);
+    // Clearing never loosens rung 5: with the pod default OFF it still proposes.
+    await pg.exec(
+      `UPDATE governance_rules SET revoked_at = now() WHERE target_pattern = '@reversible';`
+    );
+    expect(await decide("entity", "update")).toBe("propose");
+  });
+});

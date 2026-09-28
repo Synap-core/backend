@@ -57,6 +57,35 @@ export function humanizeToken(token: string): string {
 }
 
 /**
+ * Sentence-case a STORED display label so labels from different sources read
+ * alike — the same casing {@link humanizeToken} gives a token, applied to a
+ * label someone already wrote. Title Case words lower-case ("Works At" →
+ * "Works at"); words carrying deliberate casing stay (acronyms "CEO", mixed
+ * "iPhone", "McKinsey"). A label with no space that looks like a token
+ * (`works_at`, `worksAt`) goes through {@link humanizeToken} itself.
+ *
+ *   "Belongs To Project" → "Belongs to project"
+ *   "Reports To CEO"     → "Reports to CEO"
+ *   "met at"             → "Met at"
+ */
+export function sentenceCaseLabel(label: string): string {
+  const trimmed = label.trim();
+  if (!trimmed) return "";
+  if (!/\s/.test(trimmed) && /[_-]|[a-z0-9][A-Z]/.test(trimmed)) {
+    return humanizeToken(trimmed);
+  }
+  return trimmed
+    .split(/\s+/)
+    .map((word, i) => {
+      const plain = /^[A-Z]?[a-z]*$/.test(word.replace(/[^A-Za-z]/g, ""));
+      if (!plain) return word; // deliberate casing: CEO, iPhone, McKinsey
+      const lower = word.toLowerCase();
+      return i === 0 ? lower.charAt(0).toUpperCase() + lower.slice(1) : lower;
+    })
+    .join(" ");
+}
+
+/**
  * An action's two MOODS. Both are correct; they are not interchangeable:
  *   - `imperative` — what approving it WILL do. Buttons, pending proposals.
  *   - `past`       — what already happened. History, event feeds, receipts.

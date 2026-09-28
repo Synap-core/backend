@@ -7,20 +7,33 @@
  * answer. This file keeps them true: if the leaf's rule changes, this goes red
  * here first, and the golden is regenerated deliberately — never drifts.
  *
- * The adapters below are the SPEC of the wire mapping (C1 §3); each surface's
- * adapter must agree with it, which is exactly what their parity tests check.
- * Sameness is not correctness — `connections.test.ts` pins the rule itself.
+ * The wire adapters live ONCE in `./wire.ts` (both hosts import them); this
+ * file runs them over the table. Sameness is not correctness —
+ * `connections.test.ts` pins the rule itself.
+ *
+ * `liveRows` are shapes captured from the deployed pod. The kind-card model is
+ * built by each HOST's real builder (the kit, not reachable from here), so
+ * this side runs the pipeline from `expectedDrawnKeys`; the hosts assert their
+ * model draws exactly those keys, which is where "subtitle refs ignored" goes
+ * red.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { groupConnections, suggestConnections } from "./index.js";
+import {
+  groupWireConnections,
+  keyFactEntityIds,
+  suggestWireConnections,
+  type KindCardModelLike,
+  type WireGraphNeighbor,
+  type WireRelationType,
+} from "./index.js";
 
 interface Golden {
   groupRows: Array<{
     name: string;
-    neighbors: Array<Record<string, unknown>>;
-    relationTypes: Array<Record<string, unknown>>;
+    neighbors: WireGraphNeighbor[];
+    relationTypes: WireRelationType[];
     keyFactIds: string[];
     cap?: number;
     expected: unknown;
@@ -28,10 +41,21 @@ interface Golden {
   suggestionRows: Array<{
     name: string;
     kind: string;
-    defs: Array<Record<string, unknown>>;
+    defs: unknown[];
     expected: unknown;
   }>;
-  keyFactRows: Array<{ name: string; model: unknown; expected: string[] }>;
+  keyFactRows: Array<{
+    name: string;
+    model: KindCardModelLike;
+    expected: string[];
+  }>;
+  liveRows: Array<{
+    name: string;
+    neighbors: WireGraphNeighbor[];
+    relationTypes: WireRelationType[];
+    expectedDrawnKeys: string[];
+    expected: { groups: Array<{ edgeType: string; label: string }> };
+  }>;
 }
 
 const golden: Golden = JSON.parse(
@@ -40,9 +64,10 @@ const golden: Golden = JSON.parse(
 
 describe("connections golden (shared relay↔web table)", () => {
   it("is non-vacuous: every section has rows and the rows discriminate", () => {
-    expect(golden.groupRows.length).toBeGreaterThanOrEqual(4);
+    expect(golden.groupRows.length).toBeGreaterThanOrEqual(5);
     expect(golden.keyFactRows.length).toBeGreaterThanOrEqual(2);
     expect(golden.suggestionRows.length).toBeGreaterThanOrEqual(2);
+    expect(golden.liveRows.length).toBeGreaterThanOrEqual(2);
     // A wire type with NO directionality must be in the table (the one input
     // where "absent ⇒ directional" and "=== unidirectional" disagree).
     expect(
@@ -50,30 +75,26 @@ describe("connections golden (shared relay↔web table)", () => {
         r.relationTypes.some((t) => t.directionality === undefined)
       )
     ).toBe(true);
+    // Stored Title Case labels must be in the table, or casing is unguarded.
+    expect(
+      golden.liveRows.some((r) =>
+        r.relationTypes.some((t) => /\b[A-Z][a-z]+ [A-Z]/.test(t.label ?? ""))
+      )
+    ).toBe(true);
+    // The live person draws its company as TEXT — the name-key path.
+    expect(
+      golden.liveRows.some((r) =>
+        r.expectedDrawnKeys.some((k) => k.startsWith("name:"))
+      )
+    ).toBe(true);
   });
 
   it.each(golden.groupRows.map((r) => [r.name, r] as const))(
     "%s",
     (_name, row) => {
-      const out = groupConnections({
-        neighbors: row.neighbors.map((n) => ({
-          id: n.id as string,
-          name: (n.name as string) ?? "",
-          kind: n.kind as string,
-          subtype: (n.subtype as string | null) ?? null,
-          edgeType: (n.edgeType as string) ?? "",
-          direction:
-            n.direction === "incoming" || n.direction === "structural"
-              ? (n.direction as "incoming" | "structural")
-              : "outgoing",
-          via: (n.via as string | null) ?? null,
-        })),
-        relationTypes: row.relationTypes.map((t) => ({
-          slug: t.type as string,
-          displayName: (t.label as string | null) ?? null,
-          inverseLabel: (t.inverseLabel as string | null) ?? null,
-          isDirectional: t.directionality !== "bidirectional",
-        })),
+      const out = groupWireConnections({
+        neighbors: row.neighbors,
+        relationTypes: row.relationTypes,
         keyFactIds: row.keyFactIds,
         ...(row.cap !== undefined ? { cap: row.cap } : {}),
       });
@@ -81,21 +102,46 @@ describe("connections golden (shared relay↔web table)", () => {
     }
   );
 
+  it.each(golden.keyFactRows.map((r) => [r.name, r] as const))(
+    "%s",
+    (_name, row) => {
+      expect(keyFactEntityIds(row.model)).toEqual(row.expected);
+    }
+  );
+
+  it.each(golden.liveRows.map((r) => [r.name, r] as const))(
+    "%s",
+    (_name, row) => {
+      const out = groupWireConnections({
+        neighbors: row.neighbors,
+        relationTypes: row.relationTypes,
+        keyFactIds: row.expectedDrawnKeys,
+      });
+      expect(out).toEqual(row.expected);
+    }
+  );
+
+  it("live rows render once: no works_at under the person; the note keeps a same-titled but DIFFERENT object", () => {
+    const [person, note] = golden.liveRows;
+    expect(person!.expected.groups.map((g) => g.edgeType)).not.toContain(
+      "works_at"
+    );
+    // Provenance is excluded by id only: a decision that merely shares the
+    // capture's title is a real connection and must stay listed.
+    expect(note!.expected.groups.map((g) => g.edgeType)).toContain(
+      "created_by"
+    );
+    // Casing: every label is sentence case (no "Works At" / "Assigned To").
+    for (const r of golden.liveRows) {
+      for (const g of r.expected.groups)
+        expect(g.label).not.toMatch(/ [A-Z][a-z]/);
+    }
+  });
+
   it.each(golden.suggestionRows.map((r) => [r.name, r] as const))(
     "%s",
     (_name, row) => {
-      const refs = row.defs.flatMap((d) => {
-        const target = (d.uiHints as Record<string, unknown> | undefined)
-          ?.linkedProfileSlug;
-        return d.valueType === "entity_id" &&
-          typeof target === "string" &&
-          target
-          ? [{ slug: d.slug as string, targetKind: target, relationType: null }]
-          : [];
-      });
-      expect(
-        suggestConnections(row.kind, { referenceProperties: refs })
-      ).toEqual(row.expected);
+      expect(suggestWireConnections(row.kind, row.defs)).toEqual(row.expected);
     }
   );
 });

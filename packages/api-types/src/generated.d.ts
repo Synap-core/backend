@@ -4,6 +4,7 @@ import { Column, SQL } from 'drizzle-orm';
 import { z } from 'zod';
 
 declare const AGENT_POSTURE_NAMES: readonly [
+	"ask-first",
 	"create-with-undo"
 ];
 export type AgentPostureName = (typeof AGENT_POSTURE_NAMES)[number];
@@ -7638,7 +7639,9 @@ export interface RunGroup {
 	/** Runs that failed (lifetime — the drill-down number). */
 	failedCount: number;
 	/**
-	 * Runs that failed within the last `RECENT_FAILURE_WINDOW_DAYS` (7) days —
+	 * Runs that FAILED (`failed` only — a `blocked_by_policy` run is a calm
+	 * governance outcome, not a failure) within the last
+	 * `RECENT_FAILURE_WINDOW_DAYS` (7) days —
 	 * the HEALTH number (W2 calm). A flow is "failing" iff this is > 0; a flow
 	 * that failed 271 times in June and has run clean since is not failing now.
 	 */
@@ -10901,6 +10904,16 @@ export interface AgentPresence {
 	pendingKeys: number;
 }
 /**
+ * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
+ *  - `pod-default`      — creates and edits apply directly with Undo;
+ *  - `create-with-undo` — only creates apply directly (a stricter preset);
+ *  - `ask-first`        — every change asks (the agent's "Require approval"
+ *                          override, or the pod default switched off for a
+ *                          strict agent).
+ * Deletions and structural changes ask in every mode (engine floors).
+ */
+export type AgentWriteMode = "pod-default" | "create-with-undo" | "ask-first";
+/**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
  * propose a change to `governance_rules` / `governance_ceilings` /
  * `config_settings`. Sensitivity is enforced at the GATE (a loosening change
@@ -12352,6 +12365,15 @@ export interface RecentFlowRun {
 	status: RunStatus;
 	startedAt: Date;
 	completedAt: Date | null;
+	/**
+	 * The focus session this run drives, or null when it has none — the door a
+	 * `waiting_on_you` mark opens (the owed slot lives on that session). A
+	 * playbook run carries it as `playbook_runs.session_id`; an automation run
+	 * is linked from the session side (`metadata.automationRunId`, stamped by
+	 * `openRunSession` — the same link the run reaper parks on). An ADDRESS
+	 * only: opening it goes through the session door's own floor.
+	 */
+	sessionId: string | null;
 }
 export interface RecentFlowHistory extends RecentFlowRef {
 	runs: RecentFlowRun[];
@@ -12847,6 +12869,14 @@ export interface AgentStanding {
 	scoredTotal: number;
 	approveRate: number;
 	refuseRate: number;
+	/**
+	 * WRITES in the last {@link RECENT_WRITES_WINDOW_DAYS} days: this agent's
+	 * proposals that APPLIED (approved or auto-approved, a partial apply
+	 * included — part of it wrote), created inside the window. What Settings ›
+	 * Agents shows as "N writes · 7d": how much this agent actually changed
+	 * lately, as opposed to the lifetime decision counts above.
+	 */
+	writes7d: number;
 }
 /**
  * Agent provenance — WHERE an agent came from, for the Agent dashboard.
@@ -13406,7 +13436,14 @@ export type SignalKind =
  * (`excludeDrafts`) until the draft is accepted; answering any of them
  * accepts it (`accept-on-engagement.ts`). Proposals under a draft stay out.
  */
- | "draft-asks";
+ | "draft-asks"
+/**
+ * One session whose next move is the person's ACCEPTANCE (`needsYouReason`
+ * = `"review"`, THE needs-you rule's third population). Emitted under a
+ * bare PROJECT scope only — the one scope that counts it — so the project
+ * badge and the project list are one number over one predicate (W2 review).
+ */
+ | "session-review";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -27721,6 +27758,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				email: string;
 				agentMetadata: AgentMetadata | null;
 			} & AgentPresence)[];
+			meta: object;
+		}>;
+		governance: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				agentUserId: string;
+			};
+			output: {
+				writeMode: AgentWriteMode;
+				line: string;
+				askFirst: boolean;
+				podDefaultEnabled: boolean;
+			};
 			meta: object;
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{

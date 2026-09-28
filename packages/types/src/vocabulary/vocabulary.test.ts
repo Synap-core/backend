@@ -4,6 +4,7 @@ import {
   resolveStatusLabel,
   STATUS_LABELS,
   humanizeToken,
+  sentenceCaseLabel,
   resolveActionLabel,
   resolveObjectNoun,
   OBJECT_NOUNS,
@@ -102,6 +103,23 @@ describe("humanizeToken", () => {
     expect(humanizeToken("focus_session")).toBe("Focus session");
     expect(humanizeToken("capabilityKind")).toBe("Capability kind");
     expect(humanizeToken("api-key")).toBe("Api key");
+  });
+});
+
+describe("sentenceCaseLabel", () => {
+  it("reads stored Title Case labels like humanized ones", () => {
+    expect(sentenceCaseLabel("Works At")).toBe("Works at");
+    expect(sentenceCaseLabel("Belongs To Project")).toBe("Belongs to project");
+    expect(sentenceCaseLabel("Met at")).toBe("Met at");
+    expect(sentenceCaseLabel("met at")).toBe("Met at");
+    expect(sentenceCaseLabel("  Relates To ")).toBe("Relates to");
+  });
+  it("keeps deliberate casing and humanizes a token", () => {
+    expect(sentenceCaseLabel("Reports To CEO")).toBe("Reports to CEO");
+    expect(sentenceCaseLabel("Uses iPhone")).toBe("Uses iPhone");
+    expect(sentenceCaseLabel("works_at")).toBe("Works at");
+    expect(sentenceCaseLabel("worksAt")).toBe("Works at");
+    expect(sentenceCaseLabel("")).toBe("");
   });
 });
 

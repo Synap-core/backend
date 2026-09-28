@@ -309,6 +309,97 @@ export interface AgentStanding {
   scoredTotal: number;
   approveRate: number;
   refuseRate: number;
+  /**
+   * WRITES in the last {@link RECENT_WRITES_WINDOW_DAYS} days: this agent's
+   * proposals that APPLIED (approved or auto-approved, a partial apply
+   * included — part of it wrote), created inside the window. What Settings ›
+   * Agents shows as "N writes · 7d": how much this agent actually changed
+   * lately, as opposed to the lifetime decision counts above.
+   */
+  writes7d: number;
+}
+
+/** The window `AgentStanding.writes7d` counts over. */
+export const RECENT_WRITES_WINDOW_DAYS = 7;
+
+/** One `count(*) GROUP BY agent, status, partial, recent` row. */
+export interface AgentStatusCountRow {
+  agentUserId: string | null;
+  status: string;
+  isPartial: boolean;
+  isRecent: boolean;
+  count: number;
+}
+
+export interface AgentStatusAcc {
+  approved: number;
+  autoApproved: number;
+  partiallyApproved: number;
+  rejected: number;
+  reverted: number;
+  pending: number;
+  withdrawn: number;
+  writes7d: number;
+}
+
+/**
+ * Fold the grouped counts into per-agent buckets. Pure and exported so the
+ * bucketing — which status counts where, and what a recent WRITE is — is
+ * tested without a database.
+ */
+export function foldAgentStatusRows(
+  rows: readonly AgentStatusCountRow[]
+): Map<string, AgentStatusAcc> {
+  const byAgent = new Map<string, AgentStatusAcc>();
+  for (const r of rows) {
+    if (!r.agentUserId) continue;
+    const a = byAgent.get(r.agentUserId) ?? {
+      approved: 0,
+      autoApproved: 0,
+      partiallyApproved: 0,
+      rejected: 0,
+      reverted: 0,
+      pending: 0,
+      withdrawn: 0,
+      writes7d: 0,
+    };
+    switch (r.status) {
+      // A partially-applied row carries status `"approved"`/`"auto_approved"`
+      // like any other; only `data.dispositions` distinguishes it. Route it to
+      // its own bucket BEFORE it can reach `approved`.
+      case ProposalStatus.APPROVED:
+        if (r.isPartial) a.partiallyApproved += r.count;
+        else a.approved += r.count;
+        if (r.isRecent) a.writes7d += r.count;
+        break;
+      case ProposalStatus.AUTO_APPROVED:
+        if (r.isPartial) {
+          a.partiallyApproved += r.count;
+        } else {
+          a.approved += r.count;
+          a.autoApproved += r.count;
+        }
+        if (r.isRecent) a.writes7d += r.count;
+        break;
+      case ProposalStatus.REJECTED:
+        a.rejected += r.count;
+        break;
+      case ProposalStatus.REVERTED:
+        a.reverted += r.count;
+        break;
+      case ProposalStatus.PENDING:
+      case ProposalStatus.APPROVAL_FAILED:
+        a.pending += r.count;
+        break;
+      case ProposalStatus.WITHDRAWN:
+        a.withdrawn += r.count;
+        break;
+      default:
+        break;
+    }
+    byAgent.set(r.agentUserId, a);
+  }
+  return byAgent;
 }
 
 /**
@@ -334,11 +425,14 @@ export async function allAgentsScorecard(params: {
   // `computeAgentScorecard`) — any item disposition whose status is "reject".
   const isPartial = drizzleSql<boolean>`coalesce(jsonb_path_exists(${proposals.data}, '$.dispositions.*.status ? (@ == "reject")'), false)`;
 
+  const isRecent = drizzleSql<boolean>`(${proposals.createdAt} > now() - make_interval(days => ${RECENT_WRITES_WINDOW_DAYS}))`;
+
   const rows = await db
     .select({
       agentUserId: proposals.agentUserId,
       status: proposals.status,
       isPartial,
+      isRecent,
       count: drizzleSql<number>`count(*)::int`,
     })
     .from(proposals)
@@ -354,63 +448,9 @@ export async function allAgentsScorecard(params: {
         )
       )
     )
-    .groupBy(proposals.agentUserId, proposals.status, isPartial);
+    .groupBy(proposals.agentUserId, proposals.status, isPartial, isRecent);
 
-  type Acc = {
-    approved: number;
-    autoApproved: number;
-    partiallyApproved: number;
-    rejected: number;
-    reverted: number;
-    pending: number;
-    withdrawn: number;
-  };
-  const byAgent = new Map<string, Acc>();
-  for (const r of rows) {
-    if (!r.agentUserId) continue;
-    const a = byAgent.get(r.agentUserId) ?? {
-      approved: 0,
-      autoApproved: 0,
-      partiallyApproved: 0,
-      rejected: 0,
-      reverted: 0,
-      pending: 0,
-      withdrawn: 0,
-    };
-    switch (r.status) {
-      // A partially-applied row carries status `"approved"`/`"auto_approved"`
-      // like any other; only `data.dispositions` distinguishes it. Route it to
-      // its own bucket BEFORE it can reach `approved`.
-      case ProposalStatus.APPROVED:
-        if (r.isPartial) a.partiallyApproved += r.count;
-        else a.approved += r.count;
-        break;
-      case ProposalStatus.AUTO_APPROVED:
-        if (r.isPartial) {
-          a.partiallyApproved += r.count;
-        } else {
-          a.approved += r.count;
-          a.autoApproved += r.count;
-        }
-        break;
-      case ProposalStatus.REJECTED:
-        a.rejected += r.count;
-        break;
-      case ProposalStatus.REVERTED:
-        a.reverted += r.count;
-        break;
-      case ProposalStatus.PENDING:
-      case ProposalStatus.APPROVAL_FAILED:
-        a.pending += r.count;
-        break;
-      case ProposalStatus.WITHDRAWN:
-        a.withdrawn += r.count;
-        break;
-      default:
-        break;
-    }
-    byAgent.set(r.agentUserId, a);
-  }
+  const byAgent = foldAgentStatusRows(rows);
 
   const ids = [...byAgent.keys()];
   if (ids.length === 0) return [];
@@ -459,6 +499,7 @@ export async function allAgentsScorecard(params: {
       scoredTotal,
       approveRate: rate(a.approved),
       refuseRate: rate(a.rejected),
+      writes7d: a.writes7d,
     });
   }
 

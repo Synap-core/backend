@@ -12,11 +12,17 @@
  *   1. PROVENANCE is split out — the capture it was made from, the session it
  *      happened in, the proposal that governed it, its rooms. Those are "where
  *      did it come from", read as a quiet line / the Why pane, never a group.
- *   2. A neighbour already drawn as a KEY FACT on the card is dropped — render
- *      each piece of state once.
+ *   2. Render once: a neighbour the page already DRAWS is dropped — a key /
+ *      subtitle fact (by entity id, or by name for a fact typed as text), and
+ *      every provenance target (by id only — a DIFFERENT object that merely
+ *      shares a provenance target's title is a real connection and stays).
  *   3. Data edges group by `(edgeType, direction)`. A symmetric (non-directional)
- *      type merges both directions into one group.
- *   4. Label = def `displayName` outgoing, `inverseLabel` incoming; with no
+ *      type merges EVERY direction — incoming, outgoing and `structural` — into
+ *      one `both` group: it reads the same from either end, so a direction can
+ *      never split it.
+ *   4. Label = def `displayName` outgoing, `inverseLabel` incoming, both
+ *      sentence-cased (`sentenceCaseLabel`: "Works At" → "Works at", so stored
+ *      Title Case never sits beside a humanized "Met at"); with no
  *      inverse label an incoming directional group keeps the forward label and
  *      is flagged `reversed` (the renderer draws the arrow mark) — a forward
  *      label read from the wrong end is never presented as if it were right.
@@ -29,7 +35,10 @@ import {
   humanizeToken,
   normalizeObjectKind,
   resolveObjectNoun,
+  sentenceCaseLabel,
 } from "../vocabulary/index.js";
+
+export * from "./wire.js";
 
 export type ConnectionDirection = "outgoing" | "incoming" | "structural";
 
@@ -105,7 +114,11 @@ export interface ConnectionProvenance {
 export interface GroupConnectionsInput {
   neighbors: readonly ConnectionNeighbor[];
   relationTypes?: readonly ConnectionRelationType[];
-  /** Entity ids already drawn as key facts on the card. */
+  /**
+   * What the card already draws as facts: entity ids, and/or name keys
+   * ({@link drawnNameKey}) for facts that name a thing in text. Build it with
+   * `keyFactEntityIds(model)`.
+   */
   keyFactIds?: Iterable<string>;
   /** Max items per group (total still counts all). Omit for no cap. */
   cap?: number;
@@ -156,6 +169,22 @@ function partyRank(kind: string): number {
   return CONNECTION_PARTY_RANK[normalizeObjectKind(kind)] ?? OTHER_RANK;
 }
 
+/**
+ * The key under which a NAME drawn on the page matches a neighbour's name:
+ * `name:` + case-folded, whitespace-collapsed, trailing punctuation dropped
+ * ("Probeworks SAS" ≡ "probeworks  sas."). The prefix keeps it disjoint from
+ * entity ids in one `keyFactIds` set. Empty text ⇒ `null`.
+ */
+export function drawnNameKey(text: string | null | undefined): string | null {
+  const norm = (text ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[\s.,;:!?…。]+$/u, "");
+  return norm ? `name:${norm}` : null;
+}
+
 function toItem(n: ConnectionNeighbor): ConnectionItem {
   const subtype = n.subtype?.trim();
   return {
@@ -175,9 +204,10 @@ export function resolveConnectionLabel(
   direction: ConnectionDirection | "both",
   def: ConnectionRelationType | undefined
 ): { label: string; reversed: boolean } {
-  const forward = def?.displayName?.trim() || humanizeToken(edgeType);
+  const forward =
+    sentenceCaseLabel(def?.displayName ?? "") || humanizeToken(edgeType);
   if (direction !== "incoming") return { label: forward, reversed: false };
-  const inverse = def?.inverseLabel?.trim();
+  const inverse = sentenceCaseLabel(def?.inverseLabel ?? "");
   if (inverse) return { label: inverse, reversed: false };
   // Symmetric type: the forward label is true from both ends.
   if (def && def.isDirectional === false) {
@@ -217,6 +247,7 @@ export function groupConnections(
     }
   >();
 
+  // Pass 1 — provenance, so pass 2 can drop what the header line draws.
   for (const n of input.neighbors) {
     if (isProvenanceEdge(n)) {
       const item = toItem(n);
@@ -236,9 +267,15 @@ export function groupConnections(
       ) {
         provenance.inSession = item;
       }
-      continue;
     }
+  }
+  const provenanceIds = new Set(provenance.all.map((p) => p.id));
+  // Pass 2 — data edges.
+  for (const n of input.neighbors) {
+    if (isProvenanceEdge(n) || provenanceIds.has(n.id)) continue;
     if (keyFacts.has(n.id)) continue;
+    const nameKey = n.kind === "entity" ? drawnNameKey(n.name) : null;
+    if (nameKey && keyFacts.has(nameKey)) continue;
     if (n.via === "property" && relationPairs.has(`${n.id}:${n.direction}`)) {
       continue;
     }
@@ -246,9 +283,7 @@ export function groupConnections(
     const edgeType = n.edgeType?.trim() ?? "";
     const def = defs.get(edgeType);
     const direction: ConnectionDirection | "both" =
-      def && def.isDirectional === false && n.direction !== "structural"
-        ? "both"
-        : n.direction;
+      def && def.isDirectional === false ? "both" : n.direction;
     const key = `${edgeType}:${direction}`;
     let bucket = buckets.get(key);
     if (!bucket) {

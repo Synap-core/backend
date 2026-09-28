@@ -82,3 +82,48 @@ export function resolveAgentConnection(
     others: seenCount - 1,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Agent WRITE MODE — how an agent's writes land, as ONE rule + ONE sentence.
+// ---------------------------------------------------------------------------
+
+/**
+ * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
+ *  - `pod-default`      — creates and edits apply directly with Undo;
+ *  - `create-with-undo` — only creates apply directly (a stricter preset);
+ *  - `ask-first`        — every change asks (the agent's "Require approval"
+ *                          override, or the pod default switched off for a
+ *                          strict agent).
+ * Deletions and structural changes ask in every mode (engine floors).
+ */
+export type AgentWriteMode = "pod-default" | "create-with-undo" | "ask-first";
+
+export interface AgentWriteModeInput {
+  /** The agent's named override (`agentMetadata.governancePosture`), if any. */
+  posture: string | null | undefined;
+  /** Is the pod default (`@reversible` rule) on? */
+  podDefaultEnabled: boolean;
+  /** Legacy rung-5 flag — only matters when the pod default is off. */
+  writesRequireProposal: boolean;
+}
+
+/** The ONE derivation — the pod computes it, every surface reads it. */
+export function resolveAgentWriteMode(
+  input: AgentWriteModeInput
+): AgentWriteMode {
+  if (input.posture === "ask-first") return "ask-first";
+  if (input.posture === "create-with-undo") return "create-with-undo";
+  if (input.podDefaultEnabled) return "pod-default";
+  // Pod default off: a strict agent proposes everything; a non-strict one
+  // (twin / capture) keeps the platform floor's creates and edits.
+  return input.writesRequireProposal ? "ask-first" : "pod-default";
+}
+
+/** The ONE sentence per mode — summary line and switch caption both read it. */
+export const AGENT_WRITE_MODE_LINE: Record<AgentWriteMode, string> = {
+  "pod-default":
+    "Creates and edits apply directly with Undo; deletions and structural changes ask you.",
+  "create-with-undo":
+    "Creates apply directly with Undo; edits, deletions and structural changes ask you.",
+  "ask-first": "Every change asks you first.",
+};

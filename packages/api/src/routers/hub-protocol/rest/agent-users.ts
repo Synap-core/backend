@@ -342,11 +342,12 @@ export function registerAgentUsersRoutes(app: HubHono): void {
     // `agent_metadata` JSONB — `governance_rules` is the one decision store.
     const hasAutoApproveFor = body?.autoApproveFor !== undefined;
     const posture = body?.posture;
+    // `posture: null` = "follow the pod default" (clears this agent's override).
     if (posture !== undefined) {
-      if (!isAgentPostureName(posture)) {
+      if (posture !== null && !isAgentPostureName(posture)) {
         return c.json(
           {
-            error: `posture must be one of: ${AGENT_POSTURE_NAMES.join(", ")}`,
+            error: `posture must be one of: ${AGENT_POSTURE_NAMES.join(", ")}, or null (follow the pod default)`,
           },
           400
         );
@@ -425,7 +426,10 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         );
       }
 
-      if (posture !== undefined && isAgentPostureName(posture)) {
+      if (
+        posture === null ||
+        (posture !== undefined && isAgentPostureName(posture))
+      ) {
         const applied = await applyAgentPosture({
           db,
           agentUserId,

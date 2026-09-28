@@ -75,3 +75,37 @@ describe("create-with-undo (stricter preset)", () => {
     expect(run("property_def", "create")).toBe("propose");
   });
 });
+
+describe("ask-first (the per-agent 'Require approval for writes' override)", () => {
+  const posture = resolveAgentPosture("ask-first");
+
+  it("never loosens, and takes back every reversible create and edit", () => {
+    expect(posture.writesRequireProposal).toBe(true);
+    expect(posture.autoApproveFor).toEqual([]);
+    expect(posture.proposeFor).toEqual(
+      expect.arrayContaining([
+        "entity.create",
+        "entity.update",
+        "document.update",
+      ])
+    );
+    for (const k of REVERSIBLE_EVENT_KEYS) {
+      const c = classifyFloorEntry(k);
+      expect(posture.proposeFor.includes(k), k).toBe(
+        c === "create" || c === "write"
+      );
+    }
+  });
+
+  it("with the pod default on, the ENGINE proposes a reversible write for this agent", () => {
+    const verdict = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      writesRequireProposal: true,
+      governanceRuleVerdict: posture.proposeFor.includes("entity.update")
+        ? "propose"
+        : "auto",
+    }).verdict;
+    expect(verdict).toBe("propose");
+  });
+});

@@ -5,7 +5,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  drawnNameKey,
   groupConnections,
+  keyFactEntityIds,
   suggestConnections,
   type ConnectionNeighbor,
   type ConnectionRelationType,
@@ -240,6 +242,148 @@ describe("groupConnections — what leaves the section", () => {
     });
     expect(groups).toHaveLength(1);
     expect(groups[0].edgeType).toBe("works_at");
+  });
+});
+
+describe("groupConnections — F4b render once + casing", () => {
+  it("stored Title Case labels read sentence case, forward AND inverse (rules out: raw displayName)", () => {
+    const types: ConnectionRelationType[] = [
+      {
+        slug: "works_at",
+        displayName: "Works At",
+        inverseLabel: "Is Employer Of",
+        isDirectional: true,
+      },
+      {
+        slug: "reports_to",
+        displayName: "Reports To CEO",
+        isDirectional: true,
+      },
+    ];
+    const { groups } = groupConnections({
+      neighbors: [
+        n({ id: "acme", subtype: "company", edgeType: "works_at" }),
+        n({
+          id: "bob",
+          subtype: "person",
+          edgeType: "works_at",
+          direction: "incoming",
+        }),
+        n({ id: "ceo", subtype: "person", edgeType: "reports_to" }),
+      ],
+      relationTypes: types,
+    });
+    expect(groups.map((g) => g.label).sort()).toEqual([
+      "Is employer of",
+      "Reports to CEO",
+      "Works at",
+    ]);
+  });
+
+  it("a symmetric type arriving `structural` merges into the one `both` group (rules out: structural splits)", () => {
+    const { groups } = groupConnections({
+      neighbors: [
+        n({ id: "a" }),
+        n({ id: "b", direction: "incoming" }),
+        n({ id: "c", direction: "structural" }),
+      ],
+      relationTypes: TYPES,
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      direction: "both",
+      total: 3,
+      label: "Related to",
+    });
+  });
+
+  it("a text fact naming the tied entity drops the tie (live person: company is TEXT)", () => {
+    const model = {
+      keyFacts: null,
+      hero: {
+        subtitle: {
+          kind: "facts" as const,
+          facts: [
+            { renderKind: "text", value: "CTO" },
+            { renderKind: "text", value: "Probeworks SAS" },
+          ],
+        },
+      },
+    };
+    const keys = keyFactEntityIds(model);
+    expect(keys).toEqual(["name:cto", "name:probeworks sas"]);
+    const { groups } = groupConnections({
+      neighbors: [
+        n({
+          id: "pw",
+          name: "Probeworks  SAS.",
+          subtype: "company",
+          edgeType: "works_at",
+        }),
+        n({ id: "t1", name: "Send pricing to Probeworks SAS" }),
+      ],
+      relationTypes: TYPES,
+      keyFactIds: keys,
+    });
+    expect(groups.flatMap((g) => g.items.map((i) => i.id))).toEqual(["t1"]);
+  });
+
+  it("a name key never drops a non-entity neighbour, and an empty name draws nothing", () => {
+    expect(drawnNameKey("  ")).toBeNull();
+    const { groups } = groupConnections({
+      neighbors: [
+        n({
+          id: "s",
+          kind: "view",
+          name: "CTO",
+          via: "links",
+          edgeType: "shows",
+        }),
+      ],
+      keyFactIds: ["name:cto"],
+    });
+    expect(groups).toHaveLength(1);
+  });
+
+  it("a provenance target never reappears as a group (by id); a DIFFERENT object sharing its title stays", () => {
+    const out = groupConnections({
+      neighbors: [
+        n({
+          id: "cap",
+          kind: "capture",
+          name: "Plan W1.",
+          edgeType: "produced",
+          direction: "incoming",
+          via: "links",
+        }),
+        n({
+          id: "cap",
+          kind: "capture",
+          name: "Plan W1.",
+          edgeType: "mentions",
+          direction: "incoming",
+        }),
+        n({
+          id: "dec",
+          name: "Plan W1",
+          subtype: "decision",
+          edgeType: "created_by",
+          direction: "incoming",
+        }),
+        n({
+          id: "other",
+          name: "Plan W2",
+          subtype: "decision",
+          edgeType: "created_by",
+          direction: "incoming",
+        }),
+      ],
+    });
+    expect(out.provenance.madeFrom.map((m) => m.id)).toEqual(["cap"]);
+    expect(out.groups.flatMap((g) => g.items.map((i) => i.id))).toEqual([
+      "dec",
+      "other",
+    ]);
   });
 });
 

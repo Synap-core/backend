@@ -675,19 +675,28 @@ export async function syncAutoApproveRules(
 export async function applyAgentPosture(input: {
   db: DbHandle;
   agentUserId: string;
-  posture: AgentPostureName;
+  /**
+   * A stricter preset, or `null` = "follow the pod default": revoke this
+   * agent's own override rows and drop the marker — nothing new is written.
+   */
+  posture: AgentPostureName | null;
   /** The acting human — stored namespaced like every settings-mirror row. */
   createdBy: string;
-}): Promise<{ posture: AgentPostureName; writesRequireProposal: boolean }> {
+}): Promise<{
+  posture: AgentPostureName | null;
+  writesRequireProposal: boolean;
+}> {
   const { db, agentUserId, createdBy } = input;
-  const posture = resolveAgentPosture(input.posture);
-  const autos = Array.from(
-    new Set(filterUncoveredActions(posture.autoApproveFor))
-  );
-  const proposes = Array.from(new Set(posture.proposeFor));
+  const posture = input.posture ? resolveAgentPosture(input.posture) : null;
+  const autos = posture
+    ? Array.from(new Set(filterUncoveredActions(posture.autoApproveFor)))
+    : [];
+  const proposes = posture ? Array.from(new Set(posture.proposeFor)) : [];
+  // Clearing never loosens rung 5 either: the flag stays strict, and the pod
+  // default (rung 2.8) is what lets the agent act on reversible writes.
   const marker = JSON.stringify({
-    writesRequireProposal: posture.writesRequireProposal,
-    governancePosture: posture.name,
+    writesRequireProposal: true,
+    ...(posture ? { governancePosture: posture.name } : {}),
   });
 
   await db.transaction(async (tx) => {
@@ -727,13 +736,13 @@ export async function applyAgentPosture(input: {
     await tx
       .update(users)
       .set({
-        agentMetadata: sql`coalesce(${users.agentMetadata}, '{}'::jsonb) || ${marker}::jsonb`,
+        agentMetadata: sql`(coalesce(${users.agentMetadata}, '{}'::jsonb) - 'governancePosture') || ${marker}::jsonb`,
       })
       .where(and(eq(users.id, agentUserId), eq(users.userType, "agent")));
   });
   return {
-    posture: posture.name,
-    writesRequireProposal: posture.writesRequireProposal,
+    posture: posture ? posture.name : null,
+    writesRequireProposal: true,
   };
 }
 

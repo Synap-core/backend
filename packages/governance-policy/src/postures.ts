@@ -15,6 +15,12 @@
  * the floors keep closed (rules never outrank rungs 2 / 2.05–2.09 / 2.1 / 2.5).
  * New agents get NO posture — they take the pod default.
  *
+ * ── `ask-first` ──────────────────────────────────────────────────────────────
+ * The per-agent "Require approval for writes" switch: every change to the
+ * person's data (creates AND edits) proposes; only the agent's own session /
+ * run orchestration stays direct. "Follow the pod default" = NO posture
+ * (`applyAgentPosture({ posture: null })` clears the override, writes nothing new).
+ *
  * ── `create-with-undo` ──────────────────────────────────────────────────────
  * For an agent the owner wants on a shorter leash: its CREATES (and its own
  * session/run orchestration) keep the pod default's direct lane, every other
@@ -25,7 +31,7 @@
 
 import { REVERSIBLE_EVENT_KEYS, isPureReadAction } from "./index.js";
 
-export const AGENT_POSTURE_NAMES = ["create-with-undo"] as const;
+export const AGENT_POSTURE_NAMES = ["ask-first", "create-with-undo"] as const;
 export type AgentPostureName = (typeof AGENT_POSTURE_NAMES)[number];
 
 export interface AgentPosture {
@@ -68,6 +74,19 @@ export function classifyFloorEntry(
 
 export function resolveAgentPosture(name: AgentPostureName): AgentPosture {
   switch (name) {
+    case "ask-first":
+      // Every change to the person's data asks first — creates included. The
+      // agent's own session/run bookkeeping stays direct (proposing it would
+      // stall every run on a review of its own progress bar).
+      return {
+        name,
+        writesRequireProposal: true,
+        autoApproveFor: [],
+        proposeFor: REVERSIBLE_EVENT_KEYS.filter((k) => {
+          const c = classifyFloorEntry(k);
+          return c === "create" || c === "write";
+        }),
+      };
     case "create-with-undo":
       return {
         name,
