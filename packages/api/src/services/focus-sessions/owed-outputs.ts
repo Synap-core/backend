@@ -62,6 +62,7 @@ import {
   owedSlotWhere,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
@@ -162,6 +163,12 @@ export const MISSING_OWED_SINCE = "0000-00-00";
 export interface OwedSlot {
   sessionId: string;
   sessionGoal: string | null;
+  /**
+   * The session's DISPLAY NAME (`resolveSessionTitle` — its title, else the
+   * goal's first line, clipped): what a needs-you card names the session by.
+   * `null` only when the session has neither.
+   */
+  sessionTitle: string | null;
   /** The session's lifecycle state — an owed slot outlives its session. */
   sessionStatus: string;
   workspaceId: string | null;
@@ -222,6 +229,8 @@ export interface ListOwedSlotsParams {
 
 type OwedRow = {
   id: string;
+  /** Optional: a caller that selected no title reads as "no title". */
+  title?: string | null;
   goal: string | null;
   status: string;
   workspaceId: string | null;
@@ -252,6 +261,7 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
     owed.push({
       sessionId: row.id,
       sessionGoal: row.goal,
+      sessionTitle: resolveSessionTitle(row) || null,
       sessionStatus: row.status,
       workspaceId: row.workspaceId,
       projectId: row.projectId,
@@ -307,6 +317,7 @@ export async function listOwedSlots(
   const rows = await db
     .select({
       id: focusSessions.id,
+      title: focusSessions.title,
       goal: focusSessions.goal,
       status: focusSessions.status,
       workspaceId: focusSessions.workspaceId,

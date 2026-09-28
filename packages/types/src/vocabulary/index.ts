@@ -971,6 +971,47 @@ export function resolveBlockedReasonIcon(
 }
 
 /**
+ * COUNT NOUNS for what one session owes the person — the words of a needs-you
+ * session card's summary ("2 decisions", "1 action · 1 decision").
+ *
+ * Keyed by the item's needs-you kind (`@synap-core/types/needs-you`
+ * `needsYouItemKind`): an owed slot counts by its BLOCKED REASON (same keys as
+ * {@link BLOCKED_REASON_LABELS}, but a countable noun, not a chip label —
+ * "Human decision" is a label, "decision" is what you count), a draft's asks
+ * as `ask`, a session awaiting acceptance as `review`, and an owed slot that
+ * recorded no reason as `owed`. `[singular, plural]`, lower case: the noun
+ * sits after a number, mid-phrase.
+ */
+export const NEEDS_YOU_ITEM_NOUNS: Readonly<
+  Record<string, readonly [string, string]>
+> = {
+  decision: ["decision", "decisions"],
+  physical: ["action", "actions"],
+  credential: ["credential", "credentials"],
+  permission: ["permission", "permissions"],
+  capability: ["missing tool", "missing tools"],
+  policy: ["policy block", "policy blocks"],
+  ask: ["ask", "asks"],
+  review: ["review", "reviews"],
+  owed: ["thing", "things"],
+};
+
+/**
+ * "<n> <noun>" for one needs-you item kind — singular at 1. An unknown kind
+ * humanizes (lower-cased, plural by the fallback rule), never leaks.
+ */
+export function resolveNeedsYouItemCount(
+  kind: string | null | undefined,
+  n: number
+): string {
+  const key = (kind ?? "owed").trim().toLowerCase();
+  const nouns = NEEDS_YOU_ITEM_NOUNS[key];
+  if (nouns) return `${n} ${n === 1 ? nouns[0] : nouns[1]}`;
+  const noun = humanizeToken(key).toLowerCase();
+  return `${n} ${n === 1 ? noun : pluralizeFallback(noun)}`;
+}
+
+/**
  * NOTIFICATION-CATEGORY labels — the five buckets `notification_preferences`
  * and `NOTIFICATION_REGISTRY` sort every notification type into.
  *

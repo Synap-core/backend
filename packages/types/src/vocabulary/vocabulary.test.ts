@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "../proposals/intent.js";
 import {
+  resolveNeedsYouItemCount,
   resolveStatusLabel,
   STATUS_LABELS,
   humanizeToken,
@@ -1127,5 +1128,15 @@ describe("document-edit proposal types — verbs, not humanized nouns", () => {
         objectName: "Plan",
       })
     ).toBe('Update Document "Plan"');
+  });
+});
+
+describe("resolveNeedsYouItemCount", () => {
+  it("counts by the curated noun, singular at 1; unknown humanizes, never leaks", () => {
+    expect(resolveNeedsYouItemCount("decision", 2)).toBe("2 decisions");
+    expect(resolveNeedsYouItemCount("physical", 1)).toBe("1 action");
+    expect(resolveNeedsYouItemCount("policy", 2)).toBe("2 policy blocks");
+    expect(resolveNeedsYouItemCount(null, 3)).toBe("3 things");
+    expect(resolveNeedsYouItemCount("proposal_cluster", 2)).toBe("2 proposal clusters");
   });
 });

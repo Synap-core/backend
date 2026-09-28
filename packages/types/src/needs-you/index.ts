@@ -1,6 +1,7 @@
 /**
  * needs-you — the ONE shaping rule for a `signals.list` needs-you page, shared
- * by every surface (browser, relay). Pure and dependency-free.
+ * by every surface (browser, relay). Pure; its only imports are this package's
+ * own session-title and vocabulary leaves.
  *
  * The SERVER owns order (W2 contract: newest first across every kind, a
  * session's items contiguous at its newest item's position, recent before
@@ -29,6 +30,9 @@
  * failure fallback (a failed READ never reaches this leaf).
  */
 
+import { resolveSessionTitle } from "../focus-sessions/title.js";
+import { resolveNeedsYouItemCount } from "../vocabulary/index.js";
+
 /** `older` = occurred more than 7 days ago — stamped by the pod, never measured here. */
 export type NeedsYouAgeBucket = "recent" | "older";
 
@@ -47,8 +51,20 @@ export interface GroupableSignal {
   ageBucket: NeedsYouAgeBucket;
   /** How many identical notifications this ONE row folds (1 otherwise). */
   repeatCount: number;
-  /** `owed-slot` / `draft-asks`: the session goal — the header's name. */
+  /** `owed-slot` / `draft-asks`: the session goal — the name's fallback. */
   sessionGoal?: string | null;
+  /**
+   * `owed-slot` / `draft-asks` / `session-review`: the session's display name
+   * (`resolveSessionTitle`, stamped by the pod). Absent on an older pod, where
+   * {@link needsYouRows} falls back to the goal's first line.
+   */
+  sessionTitle?: string | null;
+  /** `owed-slot` / `draft-asks`: the session's project — a card's rail colour. */
+  sessionProjectId?: string | null;
+  /** `owed-slot`: what would unblock it — the unit a session card counts by. */
+  blockedReason?: string | null;
+  /** When it happened — a session card's `newestAt`. */
+  occurredAt?: string | Date;
 }
 
 export interface NeedsYouGroup<T extends GroupableSignal> {
@@ -176,4 +192,192 @@ export function groupSessionGoal<T extends GroupableSignal>(
     if (goal) return goal;
   }
   return null;
+}
+
+// ── One list (founder, 2026-09-28) ─────────────────────────────────────────
+//
+// The session GROUP above (a header over indented items) was rejected: "it was
+// clearer to see one list". A needs-you page is ONE list of rows, where:
+//   - a session owing exactly ONE thing is that thing's own row (an `item`),
+//     carrying its session only as quiet provenance;
+//   - a session owing TWO OR MORE things is ONE row (a `session` card) that
+//     names the session and counts what it owes by kind, and opens the
+//     session, where the items live under "Your turn".
+// Same server order, same Older fold, same contiguity rule as `groupNeedsYou`
+// (which this builds on, so the two can never disagree on WHICH rows belong
+// together — only on how a group is drawn).
+
+/** Which session a row came from — the provenance door of a single item. */
+export interface NeedsYouSessionRef {
+  id: string;
+  /** Display name: the pod's `sessionTitle`, else the goal's first line. */
+  title: string | null;
+  projectId: string | null;
+}
+
+/** How many things of ONE kind a session owes ("2 decisions"). */
+export interface NeedsYouCount {
+  /** A {@link needsYouItemKind} key — resolved to words by the vocabulary. */
+  kind: string;
+  count: number;
+}
+
+export type NeedsYouRow<T extends GroupableSignal> =
+  | {
+      kind: "item";
+      /** Stable React key: the signal's id. */
+      key: string;
+      signal: T;
+      /** Set when the item belongs to a session — its provenance door. */
+      session: NeedsYouSessionRef | null;
+    }
+  | {
+      kind: "session";
+      /** Stable React key: `session:<id>` (suffixed if the key reappears). */
+      key: string;
+      sessionId: string;
+      /** Display name: the pod's `sessionTitle`, else the goal's first line. */
+      title: string | null;
+      projectId: string | null;
+      /** ≥ 2, in server order — what the optional peek shows. */
+      items: T[];
+      /** By kind, in order of first appearance. */
+      counts: NeedsYouCount[];
+      /** The newest item's `occurredAt` (null when no item carries one). */
+      newestAt: string | Date | null;
+    };
+
+export interface NeedsYouRows<T extends GroupableSignal> {
+  recent: NeedsYouRow<T>[];
+  older: NeedsYouRow<T>[];
+  /** ROWS under the Older fold — a session card is one (what "Older · N" states). */
+  olderCount: number;
+}
+
+/**
+ * The unit a session card counts one signal in: an owed slot by its blocked
+ * reason (`owed` when it recorded none), a draft's asks as `ask`, a session
+ * awaiting acceptance as `review`, anything else by its signal kind.
+ */
+export function needsYouItemKind(signal: GroupableSignal): string {
+  if (signal.kind === "owed-slot") {
+    return signal.blockedReason?.trim().toLowerCase() || "owed";
+  }
+  if (signal.kind === "draft-asks") return "ask";
+  if (signal.kind === "session-review") return "review";
+  return signal.kind;
+}
+
+/** How many units one signal contributes — a draft row stands for its N asks. */
+function unitsOf(signal: GroupableSignal): number {
+  if (signal.kind === "draft-asks") {
+    const n = signal.count;
+    return Number.isFinite(n) && n > 1 ? Math.floor(n) : 1;
+  }
+  return 1;
+}
+
+function sessionRefOf<T extends GroupableSignal>(
+  sessionId: string,
+  items: readonly T[]
+): NeedsYouSessionRef {
+  let title: string | null = null;
+  for (const s of items) {
+    const t = s.sessionTitle?.trim();
+    if (t) {
+      title = t;
+      break;
+    }
+  }
+  if (!title) {
+    for (const s of items) {
+      const t = resolveSessionTitle({ goal: s.sessionGoal ?? null });
+      if (t) {
+        title = t;
+        break;
+      }
+    }
+  }
+  const projectId = items.find((s) => s.sessionProjectId)?.sessionProjectId;
+  return { id: sessionId, title, projectId: projectId ?? null };
+}
+
+function timeOf(at: string | Date | undefined): number {
+  if (at === undefined) return Number.NaN;
+  return (at instanceof Date ? at : new Date(at)).getTime();
+}
+
+function toRows<T extends GroupableSignal>(
+  groups: readonly NeedsYouGroup<T>[]
+): NeedsYouRow<T>[] {
+  const rows: NeedsYouRow<T>[] = [];
+  for (const g of groups) {
+    if (!g.sessionId) {
+      for (const signal of g.items) {
+        rows.push({ kind: "item", key: signal.id, signal, session: null });
+      }
+      continue;
+    }
+    const ref = sessionRefOf(g.sessionId, g.items);
+    if (g.items.length === 1) {
+      const signal = g.items[0]!;
+      rows.push({ kind: "item", key: signal.id, signal, session: ref });
+      continue;
+    }
+    const counts: NeedsYouCount[] = [];
+    let newestAt: string | Date | null = null;
+    for (const s of g.items) {
+      const kind = needsYouItemKind(s);
+      const hit = counts.find((c) => c.kind === kind);
+      if (hit) hit.count += unitsOf(s);
+      else counts.push({ kind, count: unitsOf(s) });
+      const t = timeOf(s.occurredAt);
+      if (!Number.isNaN(t) && (newestAt === null || t > timeOf(newestAt))) {
+        newestAt = s.occurredAt!;
+      }
+    }
+    rows.push({
+      kind: "session",
+      key: g.key,
+      sessionId: g.sessionId,
+      title: ref.title,
+      projectId: ref.projectId,
+      items: g.items,
+      counts,
+      newestAt,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Shape a server-ordered needs-you page into ONE list of rows + the Older
+ * fold. Never sorts: a card sits exactly where its session's (contiguous)
+ * items sat, i.e. at its newest item's position.
+ */
+export function needsYouRows<T extends GroupableSignal>(
+  signals: readonly T[]
+): NeedsYouRows<T> {
+  const shape = groupNeedsYou(signals);
+  const older = toRows(shape.older);
+  return { recent: toRows(shape.recent), older, olderCount: older.length };
+}
+
+/**
+ * Cap by ROWS (Home shows ≤ 5): a session card is one row, so a session's
+ * items are never split across the cap. `hiddenRows` is the rows left out.
+ */
+export function capNeedsYouRows<T extends GroupableSignal>(
+  rows: readonly NeedsYouRow<T>[],
+  limit: number
+): { shown: NeedsYouRow<T>[]; hiddenRows: number } {
+  const shown = rows.slice(0, Math.max(0, limit));
+  return { shown, hiddenRows: rows.length - shown.length };
+}
+
+/** A session card's summary: "2 decisions", "1 action · 1 decision". */
+export function needsYouCountsLabel(counts: readonly NeedsYouCount[]): string {
+  return counts
+    .map((c) => resolveNeedsYouItemCount(c.kind, c.count))
+    .join(" · ");
 }

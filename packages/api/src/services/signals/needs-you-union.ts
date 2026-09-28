@@ -126,6 +126,20 @@ export interface Signal {
    */
   sessionGoal?: string | null;
   /**
+   * The session's DISPLAY NAME (`resolveSessionTitle`: its title, else the
+   * goal's first line) — what a needs-you card names a session that owes
+   * several things by. `owed-slot` / `draft-asks` / `session-review` only;
+   * absent on an older pod, where a reader falls back to `sessionGoal`.
+   */
+  sessionTitle?: string | null;
+  /**
+   * The owning session's project — the card's rail colour. `owed-slot` /
+   * `draft-asks` only; `null` when the session is in no project. Named
+   * `sessionProjectId` because it is the SESSION's scope, not the signal's:
+   * no other kind carries a scope, and a surface must guard it.
+   */
+  sessionProjectId?: string | null;
+  /**
    * The owed slot's OWN `kind` (`ExpectedOutput.kind`) — NOT this signal's
    * `kind`, which is the union's discriminator and is already `"owed-slot"`.
    * Named `slotKind` for exactly that reason.
@@ -240,6 +254,8 @@ const KIND_SPECIFIC_SIGNAL_FIELDS = [
   "why",
   "claimedDone",
   "sessionGoal",
+  "sessionTitle",
+  "sessionProjectId",
   "slotKind",
   "criterionKey",
   "slotRef",
@@ -497,6 +513,10 @@ export interface OwedSlotSignalInput {
   claimedDone?: boolean;
   /** The owning session's declared goal, straight from `listOwedSlots`. */
   sessionGoal?: string | null;
+  /** The owning session's display name, straight from `listOwedSlots`. */
+  sessionTitle?: string | null;
+  /** The owning session's project, straight from `listOwedSlots`. */
+  projectId?: string | null;
   /**
    * The slot's own `ExpectedOutput.kind`, straight from `listOwedSlots`.
    * Optional here only because this input is a DB-free mirror; every real slot
@@ -530,6 +550,10 @@ export interface OwedSlotSignalInput {
  *   sessionGoal                     → `sessionGoal` — the work this slot came
  *                                      from, the context that decides whether
  *                                      to act now
+ *   sessionTitle                    → `sessionTitle` — the session's name, what
+ *                                      a card folding several of its asks says
+ *   projectId                       → `sessionProjectId` — that card's rail
+ *                                      colour (the session's scope, named so)
  *   blockedReason, why, claimedDone → carried straight through (be0abb7d)
  *   kind                            → `slotKind` (renamed: `Signal.kind` is
  *                                      the union discriminator). A criterion
@@ -555,10 +579,10 @@ export interface OwedSlotSignalInput {
  *                     `occurredAt`/age already answers "is this stale". Add it
  *                     if a surface ever needs to tell "still-open session" from
  *                     "obligation survived its session" apart — not before.
- *   workspaceId,
- *   projectId      → no `Signal` kind carries scope today (a cluster's scope is
- *                     implicit in its target); giving only ONE kind a scope
- *                     field would be state no shared renderer could rely on.
+ *   workspaceId    → no `Signal` kind carries a space; nothing renders one.
+ *                     (`projectId` was withheld here too until the one-list
+ *                     card needed its rail colour — it travels as
+ *                     `sessionProjectId`, the SESSION's scope, guarded.)
  *   icon           → would let a tray render a per-slot icon, but every
  *                     `Signal` renderer today draws its icon from `category`,
  *                     never from a kind string — undrawn context, not a hole.
@@ -570,6 +594,8 @@ const PROJECTED_OWED_SLOT_FIELDS = [
   "label",
   "owedSince",
   "sessionGoal",
+  "sessionTitle",
+  "projectId",
   "blockedReason",
   "why",
   "claimedDone",
@@ -582,7 +608,6 @@ const PROJECTED_OWED_SLOT_FIELDS = [
 const WITHHELD_OWED_SLOT_FIELDS = [
   "sessionStatus",
   "workspaceId",
-  "projectId",
   "icon",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
@@ -622,6 +647,8 @@ function owedInstant(owedSince: string): Date {
  * PROJECTED:
  *   sessionId   → `target.id` and the fold key (one row per draft)
  *   sessionGoal → the work named in `title`, and `sessionGoal`
+ *   sessionTitle, projectId → `sessionTitle` / `sessionProjectId`, as on the
+ *                 owed-slot row (the draft is ONE session)
  *   owedSince   → `occurredAt` = the draft's NEWEST ask — its last activity,
  *                 the key the one newest-first order sorts on
  *   label       → counted (`count` = asks on the draft); each label is the
@@ -633,12 +660,14 @@ function owedInstant(owedSince: string): Date {
  *     one row stands for N asks, and any single ask's reason/pointer/answer
  *     region on it would misdescribe the other N-1. The row is a door to the
  *     session, where every ask renders in full.
- *   sessionStatus, workspaceId, projectId → withheld for the reasons the
- *     owed-slot classification gives.
+ *   sessionStatus, workspaceId → withheld for the reasons the owed-slot
+ *     classification gives.
  */
 const PROJECTED_DRAFT_ASK_FIELDS = [
   "sessionId",
   "sessionGoal",
+  "sessionTitle",
+  "projectId",
   "owedSince",
   "label",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
@@ -654,7 +683,6 @@ const WITHHELD_DRAFT_ASK_FIELDS = [
   "ask",
   "sessionStatus",
   "workspaceId",
-  "projectId",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
@@ -698,6 +726,8 @@ export function signalsFromDraftAsks(
       .map((s) => owedInstant(s.owedSince))
       .reduce((a, b) => (b.getTime() > a.getTime() ? b : a));
     const goal = slots.find((s) => s.sessionGoal)?.sessionGoal ?? null;
+    const name = slots.find((s) => s.sessionTitle)?.sessionTitle ?? null;
+    const projectId = slots.find((s) => s.projectId)?.projectId ?? null;
     return {
       id: `draft:${sessionId}`,
       kind: "draft-asks" as const,
@@ -712,6 +742,8 @@ export function signalsFromDraftAsks(
       // Agent-originated, like the owed slots it folds.
       category: "ai",
       ...(goal ? { sessionGoal: goal } : {}),
+      ...(name ? { sessionTitle: name } : {}),
+      ...(projectId ? { sessionProjectId: projectId } : {}),
       groupKey: sessionGroupKey(sessionId),
       ageBucket: ageBucketOf(newest, now),
       repeatCount: 1,
@@ -763,6 +795,8 @@ export function signalFromOwedSlot(
     ...(row.why ? { why: row.why } : {}),
     ...(row.claimedDone !== undefined ? { claimedDone: row.claimedDone } : {}),
     ...(row.sessionGoal ? { sessionGoal: row.sessionGoal } : {}),
+    ...(row.sessionTitle ? { sessionTitle: row.sessionTitle } : {}),
+    ...(row.projectId ? { sessionProjectId: row.projectId } : {}),
     ...(row.kind ? { slotKind: row.kind } : {}),
     ...(row.criterionKey ? { criterionKey: row.criterionKey } : {}),
     ...(row.ref ? { slotRef: row.ref } : {}),
@@ -808,15 +842,17 @@ export function signalFromReviewSession(
   row: ReviewSessionSignalInput,
   now: Date = new Date()
 ): Signal {
+  const title = resolveSessionTitle(row);
   return {
     id: `review:${row.id}`,
     kind: "session-review",
-    title: resolveSessionTitle(row),
+    title,
     count: 1,
     occurredAt: row.updatedAt,
     target: { kind: "session", id: row.id },
     category: "ai",
     ...(row.goal ? { sessionGoal: row.goal } : {}),
+    ...(title ? { sessionTitle: title } : {}),
     groupKey: sessionGroupKey(row.id),
     ageBucket: ageBucketOf(row.updatedAt, now),
     repeatCount: 1,
