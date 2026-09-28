@@ -128,7 +128,10 @@ describe("filter presets", () => {
     for (const p of ACTIVITY_FILTER_PRESETS) {
       expect(activityFilterForPreset(p)).toBeTypeOf("object");
     }
-    expect(activityFilterForPreset("decided")).toEqual({ source: "decision" });
+    expect(activityFilterForPreset("decided")).toEqual({
+      source: "decision",
+      actor: "me",
+    });
     expect(activityFilterForPreset("failed")).toEqual({ outcome: "failed" });
   });
 });

@@ -18,6 +18,15 @@
  *   R_PB     playbook run completed, created by USER, session S_PB (PROJ)
  *   STRANGER — a personal (NULL-workspace) session, their agent's personal
  *            proposal in it, and a personal playbook run: none of it is USER's.
+ *   S_HID    the stranger's W1 session USER cannot read (no roster seat), and
+ *            P_HID, an applied proposal ABOUT it carrying its goal as the
+ *            target name — visible to USER as a W1 proposal, content withheld
+ *   S_RUNHID AGENT's session carried by R_HID, a personal run of STRANGER's
+ *            that USER cannot see — so the session must still list
+ *   P_STRDEC a W1 proposal the STRANGER decided (not USER's decision)
+ *   X_*      a CROSS-SOURCE tie at TIE_AT[0]: a proposal filed and decided at
+ *            that instant (proposal + decision rows) and an automation run
+ *            finished then — three key prefixes at one timestamp
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -46,7 +55,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import type { ActivityRow } from "@synap-core/types/activity";
+import {
+  activityFilterForPreset,
+  type ActivityRow,
+} from "@synap-core/types/activity";
 import { activityRouter } from "../../routers/activity.js";
 
 const USER = "user-1";
@@ -90,6 +102,13 @@ const S_SHARED = randomUUID();
 const CH_SHARED = randomUUID();
 const P_SHARED = randomUUID();
 const S_TRK = randomUUID();
+const S_HID = randomUUID();
+const P_HID = randomUUID();
+const S_RUNHID = randomUUID();
+const R_HID = randomUUID();
+const P_STRDEC = randomUUID();
+const X_PROP = randomUUID();
+const X_RUN = randomUUID();
 const E_ADA = randomUUID();
 const P_AUTO = randomUUID();
 const P_APPR = randomUUID();
@@ -371,9 +390,55 @@ beforeAll(async () => {
     data: { name: "Diary entry" },
   });
 
+  await session(S_HID, {
+    user: STRANGER,
+    goal: "Secret merger plan",
+    status: "active",
+    started: 14,
+  });
+  await proposal({
+    id: P_HID,
+    status: "auto_approved",
+    targetType: "session",
+    targetId: S_HID,
+    proposalType: "update",
+    at: ago(13),
+    agent: STRANGER_AGENT,
+    subject: STRANGER,
+    data: { targetName: "Secret merger plan" },
+  });
+  await session(S_RUNHID, {
+    goal: "Run nobody here can see",
+    status: "closed",
+    started: 45,
+    closed: 44,
+    origin: "agent",
+    metadata: { agentUserId: AGENT },
+  });
+  await proposal({
+    id: P_STRDEC,
+    status: "approved",
+    at: ago(33),
+    reviewedBy: STRANGER,
+    reviewedAt: ago(32),
+    data: { name: "Gamma Ltd" },
+  });
+
   await q(
     `insert into automations (id, workspace_id, created_by, name, trigger_type, status) values ($1,$2,$3,'Contact enrichment','event','active')`,
     [A1, W1, USER]
+  );
+  await proposal({
+    id: X_PROP,
+    status: "approved",
+    at: TIE_AT[0]!,
+    reviewedBy: STRANGER,
+    reviewedAt: TIE_AT[0]!,
+    data: { name: "Tie Co" },
+  });
+  await q(
+    `insert into automation_runs (id, automation_id, workspace_id, status, started_at, completed_at) values ($1,$2,$3,'completed',$4,$4)`,
+    [X_RUN, A1, W1, TIE_AT[0]]
   );
   await q(
     `insert into automation_runs (id, automation_id, workspace_id, status, error_message, started_at, completed_at) values ($1,$2,$3,'failed','boom',$4,$5)`,
@@ -386,7 +451,8 @@ beforeAll(async () => {
   await q(
     `insert into playbook_runs (id, workspace_id, playbook_id, session_id, status, started_at, completed_at, created_by) values
       ($1,$2,$3,$4,'completed',$5,$6,$7),
-      ($8,null,$9,null,'completed',$5,$10,$11)`,
+      ($8,null,$9,null,'completed',$5,$10,$11),
+      ($12,null,$9,$13,'completed',$5,$10,$11)`,
     [
       R_PB,
       W1,
@@ -399,6 +465,8 @@ beforeAll(async () => {
       PB_STR,
       ago(2),
       STRANGER,
+      R_HID,
+      S_RUNHID,
     ]
   );
 });
@@ -553,11 +621,59 @@ describe("activity.list — one ledger through the real door", () => {
     expect(ids(items)).toContain(`session:${S_SHARED}`);
   });
 
-  it("decided = the decisions a person made", async () => {
+  it("source=decision = the decisions a person made; the Decided preset = MINE", async () => {
     const { items } = await list({ source: "decision", limit: 100 });
     expect(new Set(ids(items))).toEqual(
+      new Set([
+        `decision:${P_APPR}`,
+        `decision:${P_REJ}`,
+        `decision:${P_STRDEC}`,
+        `decision:${X_PROP}`,
+      ])
+    );
+    // The preset the UI labels "Your decisions" — through the leaf, not a copy.
+    const mine = await list({
+      ...activityFilterForPreset("decided"),
+      limit: 100,
+    });
+    expect(new Set(ids(mine.items))).toEqual(
       new Set([`decision:${P_APPR}`, `decision:${P_REJ}`])
     );
+  });
+
+  it("a proposal about a session I cannot read names nothing and opens the proposal", async () => {
+    const { items } = await list({ limit: 100 });
+    const row = items.find((r) => r.id === `proposal:${P_HID}`)!;
+    // Non-vacuity: the row IS listed (a visible W1 proposal) and applied.
+    expect(row).toBeDefined();
+    expect(row.outcome).toBe("succeeded");
+    expect(JSON.stringify(row)).not.toContain("Secret merger plan");
+    expect(row.object).toEqual({
+      kind: "proposal",
+      id: P_HID,
+      name: row.title,
+    });
+    // …and the session itself is not listed to USER.
+    expect(ids(items)).not.toContain(`session:${S_HID}`);
+    // The owner reads the real name and is sent to the session.
+    const theirs = (await list({ limit: 100 }, STRANGER)).items.find(
+      (r) => r.id === `proposal:${P_HID}`
+    )!;
+    expect(theirs.object).toMatchObject({
+      kind: "session",
+      id: S_HID,
+      name: "Secret merger plan",
+    });
+  });
+
+  it("a session is left to its run only when the viewer can SEE that run", async () => {
+    const { items } = await list({ limit: 100 });
+    // R_HID is the stranger's personal run: invisible, so it carries nothing.
+    expect(ids(items)).not.toContain(`run:${R_HID}`);
+    expect(ids(items)).toContain(`session:${S_RUNHID}`);
+    // Control: a VISIBLE run still carries its session (S_PB via R_PB).
+    expect(ids(items)).toContain(`run:${R_PB}`);
+    expect(ids(items)).not.toContain(`session:${S_PB}`);
   });
 
   it("the cursor is stable: pages of 1, 2 and 3 read the exact same ledger", async () => {
@@ -571,6 +687,15 @@ describe("activity.list — one ledger through the real door", () => {
     // The three µs-apart rows inside one millisecond all arrive, once.
     const tie = whole.filter((k) => TIE.some((t) => k === `proposal:${t}`));
     expect(tie).toHaveLength(3);
+    // Three sources at ONE instant, in key order (run > proposal > decision).
+    const at0 = whole.filter((k) =>
+      [`run:${X_RUN}`, `proposal:${X_PROP}`, `decision:${X_PROP}`].includes(k)
+    );
+    expect(at0).toEqual([
+      `run:${X_RUN}`,
+      `proposal:${X_PROP}`,
+      `decision:${X_PROP}`,
+    ]);
   });
 
   it("since narrows by the act's own clock", async () => {

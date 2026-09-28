@@ -63,6 +63,9 @@ import { authoredByUser } from "../../services/agent-identity-service.js";
  * DO: `assertProposalVisibleTo` still gates `get`/`source` and
  * `canReviewProposal` still gates approve/reject, so an own-authored row in a
  * workspace the caller cannot review lists with `viewerCanReview: false`.
+ *
+ * `activity.list` floors on its own, STRICTER `proposalFloor`
+ * (services/activity/list-activity.ts): personal proposals owner-gated there.
  */
 export function proposalUserFloor(userId: string): SQL {
   return or(

@@ -1053,18 +1053,9 @@ export async function getTemporalNeighbors(
  * the rows through `redactUnreadableSessionTargets` first (owner-only reader):
  * a proposal about a session the viewer cannot read is named by the vocabulary
  * placeholder, never by the goal copied into its payload.
- *
- * Also the headline of every proposal / decision row in `activity.list`.
  */
 export async function proposalNeighborNames(
-  rows: ReadonlyArray<{
-    id: string;
-    proposalType: string;
-    targetType: string;
-    targetId: string | null;
-    data: unknown;
-    workspaceId: string | null;
-  }>,
+  rows: ReadonlyArray<NameableProposalRow>,
   userId: string,
   /** `roster`: honour the session roster branch — a HUMAN door passes
    *  `rosterReadFor(ctx)`; default owner-only (decision D1). */
@@ -1074,6 +1065,27 @@ export async function proposalNeighborNames(
     userId,
     roster: opts.roster ?? false,
   });
+  return nameRedactedProposals(readable);
+}
+
+interface NameableProposalRow {
+  id: string;
+  proposalType: string;
+  targetType: string;
+  targetId: string | null;
+  data: unknown;
+  workspaceId: string | null;
+}
+
+/**
+ * The naming half of `proposalNeighborNames`, for a caller that has ALREADY
+ * run `redactUnreadableSessionTargets` and must use the same redacted rows for
+ * more than the name — `activity.list`, whose object door reads the payload
+ * too. Never hand it unredacted rows.
+ */
+export function nameRedactedProposals(
+  readable: ReadonlyArray<NameableProposalRow>
+): Map<string, string> {
   const names = new Map<string, string>();
   for (const row of readable) {
     const request = buildRequestFromProposal(row as unknown as Proposal);

@@ -316,7 +316,7 @@ export interface ActivityFilter {
 
 /**
  * The filter row both apps show, as data: each preset is the door input it
- * stands for. "Decided" = the decisions a person made.
+ * stands for. "Decided" = the decisions the VIEWER made ("Your decisions").
  */
 export const ACTIVITY_FILTER_PRESETS = [
   "all",
@@ -340,7 +340,7 @@ export function activityFilterForPreset(
     case "failed":
       return { outcome: "failed" };
     case "decided":
-      return { source: "decision" };
+      return { source: "decision", actor: "me" };
   }
 }
 

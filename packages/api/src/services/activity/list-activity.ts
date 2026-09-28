@@ -25,7 +25,16 @@
  * own `limit + 1`, the merged page is exact — no client-side scan, no
  * undercount. The cursor carries the timestamp at MICROSECOND precision (a JS
  * Date would truncate it and silently skip rows that share a millisecond) and
- * the row key compared under `COLLATE "C"` — the same byte order JS sorts by.
+ * the row key `<source>:<uuid>`. Each source compares it as the row value
+ * `(at, id) < (cursor.at, cursor.id)` so it can walk an `(at DESC, id DESC)`
+ * index (migration 0288); see `window` for why that is the same order JS
+ * merges in.
+ *
+ * A SESSION's `at` is not fixed: it is its start while live and its close once
+ * settled. A session that closes between two page reads moves ahead of the
+ * cursor and can be listed again on a later page (or, from a later page's
+ * point of view, not at all until a refresh). The cursor is stable for every
+ * immutable timestamp; the client dedupes rows by `id`.
  *
  * Outcome filters are the INVERSE of the leaf's forward mappers, derived by
  * running each mapper over the column's own enum values — never a second,
@@ -49,7 +58,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import type { SQL } from "drizzle-orm";
+import type { AnyColumn, SQL } from "drizzle-orm";
 import {
   db,
   and,
@@ -98,7 +107,8 @@ import {
 } from "../agent-identity-service.js";
 import { displayNameForUser } from "../../routers/proposals/helper-functions.js";
 import { proposalPayloadTargetName } from "../../routers/proposals/display.js";
-import { proposalNeighborNames } from "../object-graph/graph-service.js";
+import { nameRedactedProposals } from "../object-graph/graph-service.js";
+import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
 import { proposalChangeCountSql } from "../proposals/object-subject.js";
 import { workAndTrackedRunsWhere } from "../focus-sessions/session-list-conditions.js";
 
@@ -130,6 +140,9 @@ interface ActivityCursor {
 }
 
 const EXACT_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+/** `<source prefix>:<uuid>` — every source's rows are keyed by a uuid id. */
+const KEY_RE =
+  /^(proposal|decision|run|session):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function encodeActivityCursor(c: ActivityCursor): string {
   return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
@@ -143,8 +156,7 @@ function decodeActivityCursor(cursor: string): ActivityCursor {
       typeof v.at === "string" &&
       EXACT_AT_RE.test(v.at) &&
       typeof v.key === "string" &&
-      v.key.length > 0 &&
-      v.key.length <= 200
+      KEY_RE.test(v.key)
     ) {
       return { at: v.at, key: v.key };
     }
@@ -166,29 +178,44 @@ function newerFirst(a: ActivityCursor, b: ActivityCursor): number {
 const exactAt = (at: SQL) =>
   drizzleSql<string>`to_char((${at}) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
-const keyOf = (prefix: string, id: unknown) =>
-  drizzleSql<string>`(${prefix} || ':' || (${id})::text)`;
-
-/** `(at, key) < cursor` in the shared order, plus `since`. */
+/**
+ * `(at, key) < cursor` in the shared order, plus `since` — as a ROW-VALUE
+ * comparison on `(at, id)` so each source can walk an `(at DESC, id DESC)`
+ * index. Sound because a source's key is `<its constant prefix>:<uuid>`: at an
+ * equal `at`, a key from ANOTHER source compares by prefix alone (all four
+ * prefixes differ in their first letter), and within the SAME source by the
+ * uuid, whose byte order equals its lowercase-hex text order. So the SQL
+ * boundary here and the JS `newerFirst` merge agree row for row.
+ */
 function window(
+  prefix: ActivitySource | "run",
   at: SQL,
-  key: SQL,
+  id: SQL | AnyColumn,
   cursor: ActivityCursor | null,
   since: string | undefined
 ): SQL[] {
   const out: SQL[] = [];
   if (since) out.push(drizzleSql`(${at}) >= ${since}::timestamptz`);
   if (cursor) {
-    out.push(
-      drizzleSql`((${at}) < ${cursor.at}::timestamptz or ((${at}) = ${cursor.at}::timestamptz and ${key} collate "C" < ${cursor.key}))`
-    );
+    const cursorPrefix = cursor.key.slice(0, cursor.key.indexOf(":"));
+    if (prefix === cursorPrefix) {
+      const cursorId = cursor.key.slice(cursorPrefix.length + 1);
+      out.push(
+        drizzleSql`((${at}), ${id}) < (${cursor.at}::timestamptz, ${cursorId}::uuid)`
+      );
+    } else if (`${prefix}:` < `${cursorPrefix}:`) {
+      // Every row of this source at the cursor's instant sorts after it.
+      out.push(drizzleSql`(${at}) <= ${cursor.at}::timestamptz`);
+    } else {
+      out.push(drizzleSql`(${at}) < ${cursor.at}::timestamptz`);
+    }
   }
   return out;
 }
 
-const order = (at: SQL, key: SQL) => [
+const order = (at: SQL, id: SQL | AnyColumn) => [
   drizzleSql`(${at}) desc`,
-  drizzleSql`${key} collate "C" desc`,
+  drizzleSql`${id} desc`,
 ];
 
 /**
@@ -263,6 +290,11 @@ const LIVE_SESSION_STATUSES = ["active", "paused", "forming"] as const;
 const proposalInTrack = (trackId: string) =>
   drizzleSql`exists (select 1 from ${focusSessions} where ${focusSessions.id} = ${proposals.sessionId} and ${focusSessions.trackId} = ${trackId})`;
 
+/**
+ * STRICTER than `proposalUserFloor` (routers/proposals/scope-conditions.ts):
+ * a NULL-workspace proposal is visible only to its subject or author, never
+ * pod-wide — a feed of everyone's acts must not read personal rows.
+ */
 function proposalFloor(viewer: string, lens: Lens): SQL {
   const floor = or(
     and(
@@ -298,7 +330,6 @@ async function readProposalActs(
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return [];
   const at = drizzleSql`${proposals.createdAt}`;
-  const key = keyOf("proposal", proposals.id);
   const rows = await database
     .select({
       id: proposals.id,
@@ -322,10 +353,10 @@ async function readProposalActs(
         q.trackId ? proposalInTrack(q.trackId) : undefined,
         statuses ? inArray(proposals.status, statuses as never[]) : undefined,
         actor,
-        ...window(at, key, cursor, q.since)
+        ...window("proposal", at, proposals.id, cursor, q.since)
       )
     )
-    .orderBy(...order(at, key))
+    .orderBy(...order(at, proposals.id))
     .limit(take);
   return rows.map((r) => ({
     source: "proposal" as const,
@@ -360,7 +391,6 @@ async function readDecisions(
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return [];
   const at = drizzleSql`${proposals.reviewedAt}`;
-  const key = keyOf("decision", proposals.id);
   const rows = await database
     .select({
       id: proposals.id,
@@ -384,10 +414,10 @@ async function readDecisions(
         q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
         q.trackId ? proposalInTrack(q.trackId) : undefined,
         actor,
-        ...window(at, key, cursor, q.since)
+        ...window("decision", at, proposals.id, cursor, q.since)
       )
     )
-    .orderBy(...order(at, key))
+    .orderBy(...order(at, proposals.id))
     .limit(take);
   return rows.map((r) => ({
     source: "decision" as const,
@@ -420,7 +450,6 @@ async function readAutomationRuns(
   );
   if (statuses && statuses.length === 0) return [];
   const at = drizzleSql`coalesce(${automationRuns.completedAt}, ${automationRuns.startedAt})`;
-  const key = keyOf("run", automationRuns.id);
   const rows = await database
     .select({
       id: automationRuns.id,
@@ -438,10 +467,10 @@ async function readAutomationRuns(
         statuses
           ? inArray(automationRuns.status, statuses as never[])
           : undefined,
-        ...window(at, key, cursor, q.since)
+        ...window("run", at, automationRuns.id, cursor, q.since)
       )
     )
-    .orderBy(...order(at, key))
+    .orderBy(...order(at, automationRuns.id))
     .limit(take);
   return rows.map((r) => ({
     source: "run" as const,
@@ -458,6 +487,24 @@ async function readAutomationRuns(
     flowName: r.flowName,
     error: r.error ?? null,
   }));
+}
+
+/**
+ * The playbook runs the viewer may see — ONE predicate for the run source and
+ * for the session source's "a run already carries this session" exclusion,
+ * so a session is dropped only for a run row the viewer is actually shown.
+ */
+function playbookRunVisible(q: ActivityQuery): SQL {
+  const viewer = q.access.userId;
+  return and(
+    scopedDb(q.access).predicate(playbookRuns),
+    // A personal run is its creator's (or their agent's) — never pod-wide.
+    or(
+      isNotNull(playbookRuns.workspaceId),
+      eq(playbookRuns.createdBy, viewer),
+      ownAgentUserFilter(playbookRuns.createdBy, viewer)
+    )
+  )!;
 }
 
 async function readPlaybookRuns(
@@ -478,7 +525,6 @@ async function readPlaybookRuns(
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return [];
   const at = drizzleSql`coalesce(${playbookRuns.completedAt}, ${playbookRuns.startedAt})`;
-  const key = keyOf("run", playbookRuns.id);
   const rows = await database
     .select({
       id: playbookRuns.id,
@@ -505,23 +551,17 @@ async function readPlaybookRuns(
     )
     .where(
       and(
-        scopedDb(q.access).predicate(playbookRuns),
-        // A personal run is its creator's (or their agent's) — never pod-wide.
-        or(
-          isNotNull(playbookRuns.workspaceId),
-          eq(playbookRuns.createdBy, viewer),
-          ownAgentUserFilter(playbookRuns.createdBy, viewer)
-        ),
+        playbookRunVisible(q),
         q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
         q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
         statuses
           ? inArray(playbookRuns.status, statuses as never[])
           : undefined,
         actor,
-        ...window(at, key, cursor, q.since)
+        ...window("run", at, playbookRuns.id, cursor, q.since)
       )
     )
-    .orderBy(...order(at, key))
+    .orderBy(...order(at, playbookRuns.id))
     .limit(take);
   return rows.map((r) => ({
     source: "run" as const,
@@ -561,7 +601,6 @@ async function readSessions(
   if (actor === null) return [];
   const live = drizzleSql`${focusSessions.status} in ('active', 'paused', 'forming')`;
   const at = drizzleSql`case when ${live} then coalesce(${focusSessions.startedAt}, ${focusSessions.createdAt}) else coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt}) end`;
-  const key = keyOf("session", focusSessions.id);
   const rows = await database
     .select({
       id: focusSessions.id,
@@ -576,27 +615,27 @@ async function readSessions(
       projectId: focusSessions.projectId,
     })
     .from(focusSessions)
-    .leftJoin(playbookRuns, eq(playbookRuns.sessionId, focusSessions.id))
     .where(
       and(
         scopedDb(q.access).predicate(focusSessions),
         // The work population the runs feed's session flow reads.
         // The project path's population: work, plus run sessions filed in a
-        // track (a track's stage sessions). A run carried by a playbook_runs
-        // row is excluded below, so nothing is listed twice.
+        // track (a track's stage sessions). A session carried by a playbook
+        // run the viewer SEES is left to that run, so nothing is listed
+        // twice — and a run hidden from the viewer hides nothing.
         workAndTrackedRunsWhere(),
         ne(focusSessions.status, "scheduled"),
-        isNull(playbookRuns.id),
+        drizzleSql`not exists (select 1 from ${playbookRuns} where ${playbookRuns.sessionId} = ${focusSessions.id} and ${playbookRunVisible(q)})`,
         q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
         q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
         statuses
           ? inArray(focusSessions.status, statuses as never[])
           : undefined,
         actor,
-        ...window(at, key, cursor, q.since)
+        ...window("session", at, focusSessions.id, cursor, q.since)
       )
     )
-    .orderBy(...order(at, key))
+    .orderBy(...order(at, focusSessions.id))
     .limit(take);
   return rows.map((r) => ({
     source: "session" as const,
@@ -615,6 +654,11 @@ async function readSessions(
 
 // ── The door ────────────────────────────────────────────────────────────────
 
+/**
+ * One page of the ledger. The cursor pages an ordering, not a snapshot: a
+ * session whose timestamp changes (started → closed) moves in that ordering
+ * and may appear on two pages — clients dedupe by row `id`.
+ */
 export async function listActivity(q: ActivityQuery): Promise<ActivityPage> {
   const database = q.database ?? db;
   const limit = Math.max(1, Math.min(q.limit, ACTIVITY_MAX_LIMIT));
@@ -736,10 +780,20 @@ async function enrich(
       : Promise.resolve([]),
   ]);
 
-  const titles = proposalRows.length
-    ? await proposalNeighborNames(proposalRows, viewer, { roster: q.roster })
-    : new Map<string, string>();
-  const proposalById = new Map(proposalRows.map((p) => [p.id, p]));
+  // Redact ONCE, and read every proposal field below — the headline AND the
+  // object door — from these rows only. A row naming a session the viewer
+  // cannot read comes back as a new object; the untouched ones are the same.
+  const readable = proposalRows.length
+    ? await redactUnreadableSessionTargets(proposalRows, {
+        userId: viewer,
+        roster: q.roster,
+      })
+    : proposalRows;
+  const redacted = new Set(
+    readable.filter((r, i) => r !== proposalRows[i]).map((r) => r.id)
+  );
+  const titles = nameRedactedProposals(readable);
+  const proposalById = new Map(readable.map((p) => [p.id, p]));
   const userById = new Map(userRows.map((u) => [u.id, u]));
   const projectById = new Map(projectRows.map((p) => [p.id, p]));
   const sessionById = new Map(
@@ -812,9 +866,12 @@ async function enrich(
       );
       const action = c.proposalType ?? "update";
       // An applied, non-composite, non-removing act opens what it made;
-      // everything else opens the proposal (its object may not exist).
+      // everything else opens the proposal (its object may not exist). A
+      // redacted row opens the proposal too: its target is a session the
+      // viewer cannot read.
       const opensTarget =
         p &&
+        !redacted.has(c.id) &&
         outcome === "succeeded" &&
         !composite &&
         !/(^|\.)(delete|archive|remove)$/.test(action);
