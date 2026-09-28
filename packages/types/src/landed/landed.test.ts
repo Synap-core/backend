@@ -11,7 +11,7 @@ import {
   summarizeSessionOutputs,
   type LandedActor,
 } from "./index.js";
-import { STATUS_LABELS } from "../vocabulary/index.js";
+import { STATUS_LABELS, resolveStatusLabel } from "../vocabulary/index.js";
 import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
 
 const at = (iso: string) => new Date(iso);
@@ -64,10 +64,24 @@ describe("landedSince — THE selection both apps use", () => {
     expect([...LANDED_SESSION_STATUSES]).toEqual([...TERMINAL_SESSION_STATUSES]);
   });
 
-  it("a failed session wears the failure tone; other exits read done", () => {
-    expect(resolveLandedSessionState("failed")).toMatchObject({ state: "failed", tone: "error" });
-    expect(resolveLandedSessionState("closed")).toMatchObject({ state: "done", glyph: "check" });
-    expect(resolveLandedSessionState("cancelled").state).toBe("done");
+  it("failed wears the failure tone; closed reads done; cancelled is a neutral STOPPED mark, never a check", () => {
+    expect(resolveLandedSessionState("failed")).toMatchObject({ state: "failed", tone: "error", statusToken: "failed" });
+    expect(resolveLandedSessionState("closed")).toMatchObject({ state: "done", glyph: "check", statusToken: "closed" });
+    const cancelled = resolveLandedSessionState("cancelled");
+    expect(cancelled).toMatchObject({ tone: "textMuted", glyph: "pause", statusToken: "cancelled" });
+    // A check says "it finished" — a cancelled session did not.
+    expect(cancelled.glyph).not.toBe("check");
+    expect(cancelled.state).not.toBe("done");
+    expect(resolveStatusLabel(cancelled.statusToken)).toBe("Cancelled");
+  });
+
+  it("every landed status has a mark distinct from the others and a vocabulary label", () => {
+    const marks = LANDED_SESSION_STATUSES.map((s) => {
+      const v = resolveLandedSessionState(s);
+      expect(Object.prototype.hasOwnProperty.call(STATUS_LABELS, v.statusToken) || v.statusToken === "closed").toBe(true);
+      return `${v.tone}/${v.glyph}`;
+    });
+    expect(new Set(marks).size).toBe(LANDED_SESSION_STATUSES.length);
   });
 });
 

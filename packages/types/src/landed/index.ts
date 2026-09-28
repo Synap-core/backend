@@ -280,13 +280,43 @@ export function landedSince<T extends LandedSessionLike>(
     .map(({ row }) => row);
 }
 
+/** A landed session's outcome mark, plus the token its LABEL comes from. */
+export type LandedSessionStateView = UnitStateView & {
+  /**
+   * Feed to `resolveStatusLabel` for the word ("Closed" / "Failed" /
+   * "Cancelled"). Never derive the label from `state`: a cancelled session
+   * borrows the `paused` mark (see below), not its word.
+   */
+  statusToken: string;
+};
+
 /**
- * The outcome mark of a landed session — `resolveUnitState`, asked the one
- * way both apps must ask it: `failed` wears the failure tone, every other
- * exit reads done.
+ * The outcome mark of a landed session — asked the one way both apps must ask
+ * it:
+ *   - `failed`    → the failure tone (`resolveUnitState({ failed })`);
+ *   - `closed`    → done / check (`resolveUnitState({ terminal })`);
+ *   - `cancelled` → a NEUTRAL STOPPED mark (muted, pause glyph, no rail).
+ *     Not done/check: a check tells the person the work FINISHED, and a
+ *     cancelled session did not. `UnitState` has no stopped member (adding
+ *     one forks every surface's exhaustive state map), so it borrows the
+ *     calm `paused` mark — its label comes from `statusToken`, "Cancelled".
  */
-export function resolveLandedSessionState(status: string): UnitStateView {
-  return resolveUnitState({ terminal: true, failed: status === "failed" });
+export function resolveLandedSessionState(
+  status: string
+): LandedSessionStateView {
+  if (status === "cancelled") {
+    return {
+      state: "paused",
+      tone: "textMuted",
+      glyph: "pause",
+      rail: { kind: "none", pct: null },
+      statusToken: status,
+    };
+  }
+  return {
+    ...resolveUnitState({ terminal: true, failed: status === "failed" }),
+    statusToken: status,
+  };
 }
 
 /** What a settled session produced — the Landed card's "12 leads · 1 doc". */

@@ -7,6 +7,14 @@
  * `@synap-core/types/landed` (`LandedObjectsPage`). See
  * `services/outputs/landed-outputs.ts`.
  *
+ * BOUND (accepted for V1, 2026-09-28): one read scans the 200 most recently
+ * ACTIVE sessions (`PROJECT_OUTPUTS_SESSION_SCAN`, the project door's bound).
+ * Past that the page says `truncated: true` and the least recently active
+ * sessions' outputs are absent from EVERY page — surfaces must say so, never
+ * present the list as complete. Sessions are not pre-filtered by `since` in
+ * SQL: nothing guarantees that producing an output bumps the session's
+ * `updated_at`, so such a filter could silently drop landed objects.
+ *
  * No Hub REST mirror: agents read their own session's outputs through
  * `focusSessions.outputs` / `get_session`; "what landed across the pod" is a
  * person's supervision read, not an agent door.
