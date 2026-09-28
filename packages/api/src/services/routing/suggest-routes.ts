@@ -18,11 +18,44 @@
  *               description / goal (strongest: it is what the user SAID)
  *   - kind    — the candidate is built for the entity's own kind
  *   - facet   — the candidate is built for a role the entity plays
- *   - anyKind — an automation with no kind filter (fires for everything new)
- * Ties keep the matcher's order (most recently updated first).
+ *   - anyKind — the candidate has no kind filter (fires for everything new)
+ *
+ * ── RARITY (founder decision 2026-09-28, space-brief plan item 8) ───────────
+ * An intent term is weighted by how RARE it is in THIS candidate pool, using
+ * the pod's ONE IDF formula (`rarityWeight`, `utils/term-match.ts`). Measured
+ * defect it fixes: the intent "design and build a feature … fix MCP discovery
+ * gaps" ranked "CRM Hygiene" first on the words "agent" and "each" — "each"
+ * sits in 7 of the 20 live candidates — and the flat 3-points-per-word sum tied it with
+ * "AI Dev Session" (which alone says "build"), the tie then going to whichever
+ * was edited last. A word most candidates share is weak evidence; a word only
+ * one candidate has is strong evidence. The pool is whatever the caller
+ * passes, so pass it AFTER every gate (rows a caller cannot see must never
+ * move the ranking — same rule as `rankByTerms`).
+ *
+ * WHY NOT `rankByTerms` ITSELF: it caps a query at `MAX_QUERY_TERMS` (8 — a
+ * bound for its SQL twin) and matches substrings, so a session goal would
+ * lose every word after the eighth and "fix" would hit "prefix". The ranker
+ * here keeps its whole-word stems and reuses only the rarity formula, so
+ * there is still ONE IDF rule in the pod.
+ *
+ * ── WHAT IS RETURNED ────────────────────────────────────────────────────────
+ * A candidate is returned only when it carries a signal ABOUT THIS REQUEST:
+ * an intent word, the entity's kind, or one of its roles. `anyKind` is a
+ * modifier, not evidence — "runs for anything new" is true of every
+ * subject-less candidate for every request — so it is recorded (and scores)
+ * only alongside an intent match, and a candidate with no real signal is not
+ * returned at all. On the same live call, 9 of the 20 candidates returned
+ * matched no word at all and rode back as "Runs for anything new" at 0.5.
+ *
+ * ── TIES ────────────────────────────────────────────────────────────────────
+ * Broken by relevance, never by recency: more distinct intent words, then the
+ * rarest word matched, then the structural signal (kind > facet), then the
+ * name (a stable, edit-independent order). Editing a playbook must never
+ * promote it.
  */
 
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { rarityWeight } from "../../utils/term-match.js";
 
 export type RouteCandidateKind = "playbook" | "automation";
 
@@ -102,7 +135,18 @@ function describe(signal: RouteSignal): string {
   }
 }
 
-/** Rank one entity's candidates. Stable: equal scores keep input order. */
+/** Structural tie-break strength: kind beats facet beats none. */
+function structuralRank(signals: readonly RouteSignal[]): number {
+  if (signals.some((s) => s.type === "kind")) return 2;
+  if (signals.some((s) => s.type === "facet")) return 1;
+  return 0;
+}
+
+/**
+ * Rank one entity's candidates, best first. Candidates with no signal about
+ * this request are DROPPED (see the header: a suggestion must be able to say
+ * why, and "runs for anything new" alone does not).
+ */
 export function rankRouteCandidates<C extends RouteCandidate>(input: {
   entity: RouteEntity;
   intentText?: string | null;
@@ -111,27 +155,47 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
   const intent = tokenize(input.intentText);
   const facets = new Set(input.entity.facetSlugs ?? []);
 
+  // Each candidate's own words, once — the rarity pass and the scoring pass
+  // both read them.
+  const own =
+    intent.size > 0
+      ? input.candidates.map((c) =>
+          tokenize([c.name, ...(c.text ?? [])].join(" "))
+        )
+      : [];
+  // Rarity of each intent stem over THIS pool (the ONE IDF formula).
+  const weightOf = new Map<string, number>();
+  for (const stemmed of intent.keys()) {
+    const docFreq = own.filter((words) => words.has(stemmed)).length;
+    weightOf.set(stemmed, rarityWeight(input.candidates.length, docFreq));
+  }
+
   const ranked = input.candidates.map((candidate, index) => {
     const signals: RouteSignal[] = [];
     let score = 0;
+    let termCount = 0;
+    let rarest = 0;
 
     if (intent.size > 0) {
-      const own = tokenize(
-        [candidate.name, ...(candidate.text ?? [])].join(" ")
-      );
-      const terms = [...intent.entries()]
-        .filter(([s]) => own.has(s))
-        .map(([, word]) => word);
-      if (terms.length > 0) {
-        signals.push({ type: "intent", terms });
-        score += WEIGHT.intentTerm * terms.length;
+      const hits = [...intent.entries()].filter(([s]) => own[index]!.has(s));
+      if (hits.length > 0) {
+        signals.push({ type: "intent", terms: hits.map(([, word]) => word) });
+        termCount = hits.length;
+        for (const [s] of hits) {
+          const w = weightOf.get(s) ?? 0;
+          score += WEIGHT.intentTerm * w;
+          rarest = Math.max(rarest, w);
+        }
       }
     }
 
     const slug = candidate.subjectProfileSlug;
     if (slug === null) {
-      signals.push({ type: "anyKind" });
-      score += WEIGHT.anyKind;
+      // A modifier, never evidence on its own (header, WHAT IS RETURNED).
+      if (termCount > 0) {
+        signals.push({ type: "anyKind" });
+        score += WEIGHT.anyKind;
+      }
     } else if (
       input.entity.profileSlug !== undefined &&
       slug === input.entity.profileSlug
@@ -144,7 +208,9 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
     }
 
     return {
-      index,
+      termCount,
+      rarest,
+      structural: structuralRank(signals),
       route: {
         candidate,
         score,
@@ -155,7 +221,16 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
   });
 
   return ranked
-    .sort((a, b) => b.route.score - a.route.score || a.index - b.index)
+    .filter((r) => r.route.signals.length > 0)
+    .sort(
+      (a, b) =>
+        b.route.score - a.route.score ||
+        b.termCount - a.termCount ||
+        b.rarest - a.rarest ||
+        b.structural - a.structural ||
+        a.route.candidate.name.localeCompare(b.route.candidate.name) ||
+        a.route.candidate.id.localeCompare(b.route.candidate.id)
+    )
     .map((r) => r.route);
 }
 
@@ -168,8 +243,8 @@ export interface EntityRouteSuggestions {
 /**
  * The capture followUp's call: for each captured entity, merge its playbook AND
  * automation candidates (loaded through the two matcher doors) into ONE ranked
- * list with reasons. Candidates with no signal at all are dropped — a
- * suggestion must be able to say why.
+ * list with reasons. The ranker already drops candidates with no signal about
+ * this request — a suggestion must be able to say why.
  */
 export function suggestRoutesForEntities(input: {
   entities: ReadonlyArray<
@@ -191,8 +266,6 @@ export function suggestRoutesForEntities(input: {
       entity,
       intentText: input.intentText,
       candidates: entity.candidates,
-    })
-      .filter((r) => r.signals.length > 0)
-      .slice(0, limit),
+    }).slice(0, limit),
   }));
 }

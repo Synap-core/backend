@@ -1,0 +1,125 @@
+{
+  "_source": "synap_match_playbooks pool on pod antoinesrvt, 2026-09-28 (read-only), ranked order as the pod returned it; CRM Hygiene precedes AI Dev Session because it won the pre-IDF tie on updatedAt",
+  "candidates": [
+    {
+      "id": "26d5f5be-31f3-4aec-a50c-6c0f21d5e80f",
+      "name": "CRM Hygiene",
+      "goalTemplate": "You are the CRM hygiene maintenance agent, running unattended on a daily schedule. Keep the pipeline healthy in two passes, and remember: EVERY change you make is a proposal for the user to review, so be precise and never fabricate.\nPass 1 — Enrich stale records. Find `person` and `company` records that are missing key fields (e.g. industry, companySize, location, jobTitle, email, website) or whose `lastContactDate` is old. For each, fill in what you can verify from existing pod data and public sources (use the enrichment tools you are granted); leave a field blank rather than guess. Do not touch records that are already complete and current.\nPass 2 — Flag stalled deals. Find `deal` records with no activity for a while or stuck in the same `dealStage` past a healthy threshold (roughly: contacted/qualified for 14+ days, proposal/negotiation for 30+ days). For each stalled deal, propose a concise `nextStep` to unblock it and note why it looks stalled. Do not advance a deal's stage on its behalf — surface the risk and a recommended action for the human to decide.\nSkip anything already healthy. If nothing needs attention, do nothing.",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "c8741146-157c-43cd-8f4c-e90b37d763a3",
+      "name": "AI Dev Session",
+      "goalTemplate": "Run the dev task \"{{task}}\" as a staged work session: brainstorm → validate → plan → build → verify → report. Recall before each step (synap ask), capture what you learn after (synap capture), and advance currentStage at every transition so Operations shows real progress.",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "e4aba21f-0bc1-4a55-b254-802f33f9efcc",
+      "name": "Plan Next Content",
+      "goalTemplate": "Audit the content corpus. Map every post onto its pillar and its journey stage, and list which pillar × stage cells are empty or thin. Check the running series for the chapter that is missing. If the pod has offers, note which ones no content teaches toward; if it has none, plan purely for audience-building and do not invent commerce. Then propose the next one or two pieces — each as a post idea placed on a pillar, a stage, and a platform, with the hook and the reason it is next.",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "c2a566fd-f07a-4ffe-ba5f-196a6fd34fec",
+      "name": "Discover Competitors",
+      "goalTemplate": "Find companies that compete with us in {ourSpace}. Use neural web search (the exa_search skill with category \"company\") to surface real, named companies — direct competitors, adjacent tools that solve the same job a different way, and emerging players. For each genuinely NEW one (not already a competitor in our ecosystem), propose it as a `competitor` entity and ALWAYS include its `website` (its canonical URL) so it de-duplicates against what we already track — never create a company that already exists. Skip anything already known. Report what you added and why each one matters.",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "73848ca9-c017-41b3-909e-6b9a0e5bcf3c",
+      "name": "Business Model (GRP)",
+      "goalTemplate": "Interrogate the business model of this project and record what it rests on: resolve each component question into a decision with evidence, keep conventions 'assumed' until their source is read, give every number a projection with its assumptions, and wire the graph with rests_on (cycles included).",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "4d930e83-ca6b-41d0-9523-fd538dc7c683",
+      "name": "Lead → qualified (discovery)",
+      "goalTemplate": "Qualify {{lead}} ({{segment}}) — source, enrich, reach out, run discovery, decide",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "e84cae92-ae79-4b5b-9122-0c1b8f0f844f",
+      "name": "Client Onboarding → Pod Provisioning",
+      "goalTemplate": "Onboard {{client}}: diagnose their information architecture, provision a Synap pod, configure it, and hand off the portal + MCP endpoint",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "f93b155b-dd1f-4782-a398-2ace3ade55f6",
+      "name": "GRP Business Model Interrogation",
+      "goalTemplate": "Run the 9 GRP interrogations for {{venture}}: understand the commitment, map the 9 questions, link each to evidence, and produce a complete business-model snapshot",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "46fc71e1-5645-49c6-816b-8b1b7007930f",
+      "name": "Agent Health Check",
+      "goalTemplate": "Check the health of all agents in the fleet, review recently failed tasks, and verify all provider keys are valid.",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "5d35b25f-193c-4129-bc11-09e90f0f6907",
+      "name": "Lead Outreach",
+      "goalTemplate": "Reach out to the lead \"\". Review what we know about them, draft a short, personalized first-touch message tailored to their context, and PROPOSE sending it (connect + message). Do not send anything without explicit approval.",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "418e862a-db53-4ecd-8574-78643a55a07f",
+      "name": "Research a Question",
+      "goalTemplate": "Investigate the question {question} and record the WHOLE investigation, not just the answer. Steps: (1) Use the source-triage skill to gather sources widely via web search, classify each by type and credibility, and create a `source` entity for every one — including the ones you rejected, marked rejected with a reason (never silently drop a source). (2) Form the candidate answers as `hypothesis` entities and link each to the question; link every source that bears on a hypothesis with `supports` or `contradicts`. (3) Use the evidence-synthesis skill to weigh the supporting vs contradicting sources and emit `finding` entities with honestly calibrated confidence, each `supported_by` its sources and `derived_from` this research. (4) Use the concept-cartography skill to place the findings onto the knowledge map — resolve or create the `field`/`concept` entities and wire `about` / `part_of` / `overlaps_with` / `prerequisite_of` edges, deduping against what already exists. (5) Create the `research` entity that `investigates` the question and `explored` the sources, write its conclusion and confidence, and set the question's status to answered. Every write is proposal-gated and reviewable.",
+      "subjectProfileSlug": "question"
+    },
+    {
+      "id": "9bc6b59d-44f6-4ae9-a512-7db87706803c",
+      "name": "[dogfood 09-22] Default phases probe",
+      "goalTemplate": "Probe that session stages seed from the playbook for {{subject}}",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "87b99767-173c-4193-800a-427a1cb7f9ce",
+      "name": "Dogfood sweep",
+      "goalTemplate": "File the friction hit during this session as findings with verbatim evidence, deduped against what is already open",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "564d8446-8edf-46bd-8f09-b58351a1e3ad",
+      "name": "GRP Deprecation Check",
+      "goalTemplate": "Check if {{updated_part}} deprecates linked GRP parts: detect cross-workspace dependencies, notify owners, plan updates, verify resolution",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "21ee0149-9ad3-43e5-a9e4-e0c7934065a8",
+      "name": "Diag Data IA Delivery",
+      "goalTemplate": "Deliver the 8-day Bpifrance Diag Data IA for {{client}}: kickoff → data/use-case mapping → maturity assessment → prioritized use cases → 12-24 month roadmap → costed investment plan → Bpifrance validation",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "086b1764-207c-430a-a9e4-782c38e25052",
+      "name": "Market Research Sprint",
+      "goalTemplate": "Map the competitive and market landscape for {{venture}}: discover competitors, segments, trends, and inspirations, then synthesize into a strategic market-positioning snapshot",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "14ffb26b-9cf1-4052-845d-443874d9808c",
+      "name": "[dogfood 2026-09-12] Stage Gate Probe",
+      "goalTemplate": "[dogfood 2026-09-12] probe the stage gate for {{target}}",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "6dcfeffc-abb3-4c57-8036-1e5adfb1d965",
+      "name": "Dogfood Idempotency Probe",
+      "goalTemplate": "Probe the create-door idempotency reorder for {{target}}",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "5cc89b06-3046-4425-becb-23837d3b5082",
+      "name": "Security Audit",
+      "goalTemplate": "Review the skill registry for any Untrusted or Review status skills. Check VirusTotal results and rotation dates of all provider keys.",
+      "subjectProfileSlug": null
+    },
+    {
+      "id": "7a1e3c5b-b068-4aaf-b6f5-908f22694f4d",
+      "name": "Client Onboarding",
+      "goalTemplate": "Onboard the client \"\". Ensure a `client` entity exists for them (create it if missing), set up their dedicated room/channel for collaboration, and post a short welcome summary of next steps. Surface anything still missing for kickoff.",
+      "subjectProfileSlug": null
+    }
+  ]
+}

@@ -68,10 +68,11 @@ describe("loadRouteSuggestions", () => {
     expect(res.status).toBe("ok");
     const [entity] = (res as Extract<typeof res, { status: "ok" }>).entities;
     expect(entity!.entityId).toBe("e1");
-    expect(entity!.suggestions.map((s) => s.candidate.id)).toEqual([
-      "pb-deal",
-      "au-any",
-    ]);
+    // "Tag new items" fires for any kind and matched none of the user's
+    // words: "runs for anything new" is not evidence about THIS capture, so
+    // it is not suggested (suggest-routes.ts, WHAT IS RETURNED). "Onboard
+    // client" is for another kind entirely.
+    expect(entity!.suggestions.map((s) => s.candidate.id)).toEqual(["pb-deal"]);
     for (const s of entity!.suggestions)
       expect(s.reason.length).toBeGreaterThan(0);
     expect(entity!.suggestions[0]!.reason).toContain("“review”");

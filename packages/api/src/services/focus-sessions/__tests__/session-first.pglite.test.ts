@@ -731,14 +731,16 @@ describe("playbook candidates are SUGGESTED, never applied", () => {
   it("a LONE strong match is a candidate, not an application", async () => {
     // Under the retired policy this was the auto-apply case: one candidate
     // over the lexical floor (two matched words at 3 points each). It now
-    // rides back as a candidate like any other.
+    // rides back as a candidate like any other. (The score scale is the
+    // ranker's: words are rarity-weighted over the pool — suggest-routes.ts —
+    // so a lone candidate's words weigh ln 2 each; only "it scored" matters.)
     const weekly = await playbook("Weekly review", "Review the week");
     const report = await matchSessionTemplate({
       userId: USER,
       goal: "Weekly review of the pipeline",
     });
     expect(report.candidates.map((c) => c.id)).toEqual([weekly]);
-    expect(report.candidates[0].score).toBeGreaterThanOrEqual(6);
+    expect(report.candidates[0].score).toBeGreaterThan(0);
     expect(report.optOut).toBe("pass templateId: null");
   });
 

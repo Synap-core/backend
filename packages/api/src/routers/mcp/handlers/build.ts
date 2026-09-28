@@ -356,7 +356,8 @@ export const buildHandlers: McpHandlerMap = {
       ...(profileSlug ? { profileSlug } : {}),
       entityId: args.entityId as string | undefined,
       workspaceId: matchWsId,
-      // Ranks, never filters: each candidate comes back with `score` + `reason`.
+      // Ranks (rarity-weighted words) and returns only candidates with a
+      // reason; each comes back with `score` + `reason` (suggest-routes.ts).
       ...(typeof args.intentText === "string" && args.intentText.trim()
         ? { intentText: args.intentText.slice(0, 2000) }
         : {}),

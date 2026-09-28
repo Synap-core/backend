@@ -274,8 +274,10 @@ describe("playbooks.matchForEntity", () => {
     });
 
     expect(result.map((r) => r.id)).toEqual(["pb-review", "pb-archive"]);
+    // Each word is in 1 of the 2 candidates: rarity ln(1 + 2/1) per word
+    // (suggest-routes.ts, RARITY), × 3 per word, + 2 for the kind.
+    expect(result[0]!.score).toBeCloseTo(3 * 2 * Math.log(3) + 2, 10);
     expect(result[0]).toMatchObject({
-      score: 8,
       reason: "You mentioned “review”, “weekly” · Made for post items",
       signals: [
         { type: "intent", terms: ["review", "weekly"] },
@@ -318,13 +320,25 @@ describe("playbooks.matchForEntity", () => {
     mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
 
     const caller = playbooksRouter.createCaller(callerCtx());
+    // A subject-less playbook comes back only when the words match it
+    // ("Runs for anything new" alone is not a reason — suggest-routes.ts).
     const [candidate] = await caller.matchForEntity({
       profileSlug: "deal",
       workspaceId: WORKSPACE,
+      intentText: "do the thing",
     });
 
     expect(candidate.subjectProfileSlug).toBeNull();
     expect(candidate.signals).toContainEqual({ type: "anyKind" });
+
+    // …and with no words, it is not returned at all.
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+    expect(
+      await caller.matchForEntity({
+        profileSlug: "deal",
+        workspaceId: WORKSPACE,
+      })
+    ).toEqual([]);
   });
 
   it("no profileSlug + intent ranks a null-subject Plan Next Content playbook first", async () => {
@@ -403,9 +417,13 @@ describe("playbooks.matchForEntity", () => {
     mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
 
     const caller = playbooksRouter.createCaller(callerCtx());
+    // The words reach Plan Next Content; the kind reaches Produce. (A
+    // subject-less playbook is RETURNED only on a word match — being in the
+    // pool is the SQL clause asserted below.)
     const result = await caller.matchForEntity({
       profileSlug: "post",
       workspaceId: WORKSPACE,
+      intentText: "publish",
     });
 
     expect(result.map((r) => r.id).sort()).toEqual(["pb-plan", "pb-produce"]);
@@ -416,7 +434,7 @@ describe("playbooks.matchForEntity", () => {
     expect(result.find((r) => r.id === "pb-plan")).toMatchObject({
       name: "Plan Next Content",
       subjectProfileSlug: null,
-      signals: [{ type: "anyKind" }],
+      signals: [{ type: "intent", terms: ["publish"] }, { type: "anyKind" }],
     });
 
     // LOAD-BEARING: the WHERE must OR in `subjectProfile IS NULL`. Reverting
