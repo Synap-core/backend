@@ -124,23 +124,23 @@ export const PUSH_CATEGORY_LABELS: Readonly<
 > = {
   "blocking-ask": {
     name: "Questions that block your work",
-    hint: "An agent is waiting on your answer — reply from the lock screen",
+    hint: "An agent is waiting on your answer",
   },
   "decision-blocking": {
     name: "Decisions that block your work",
-    hint: "An agent's change is waiting for your approval before it can go on",
+    hint: "An agent is waiting for your approval",
   },
   "work-broke": {
     name: "When something breaks",
-    hint: "A task failed, a session closed short, or a connection expired",
+    hint: "A task failed, a session fell short, or a connection expired",
   },
   mention: {
     name: "When you're mentioned",
-    hint: "Someone names you in a room, or invites you to a space",
+    hint: "Someone names you or invites you to a space",
   },
   system: {
     name: "System notices",
-    hint: "Storage, intelligence and pod health — also shown in Settings",
+    hint: "Storage, intelligence and pod health",
   },
 };
 
@@ -325,6 +325,13 @@ export function blockingAskTarget(
  * answerable from the lock screen only through its ONE recommended option
  * ("Use recommended"; the push body names it). Every action requires device
  * authentication (Face ID): an answer is a governance act.
+ *
+ * NO DESTRUCTIVENESS CHECK, knowingly. design-relay §5.3 offers Yes/No "only
+ * when the answer is not destructive", but an ask carries no signal of what
+ * its answer will cause: a slot answer hands input BACK to the agent, it
+ * never executes a write itself (every write the agent then makes is still
+ * governed). So no ask is refused a quick answer for being destructive; if
+ * asks ever gain a consequence field, gate `quickAnswerFor` on it here.
  */
 export const PUSH_QUICK_ANSWER_CATEGORIES = {
   "ask-confirm": [
@@ -416,6 +423,44 @@ export function quickAnswerFor(
       actions: [{ id: "done" }],
     };
   }
+  return null;
+}
+
+/** Longest single line the lock-screen body quotes (iOS shows ~4 lines). */
+const PUSH_BODY_LINE_MAX = 160;
+
+function clipLine(s: string): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > PUSH_BODY_LINE_MAX
+    ? `${t.slice(0, PUSH_BODY_LINE_MAX - 1)}…`
+    : t;
+}
+
+/**
+ * The push BODY for a quick-answerable ask: the lock-screen buttons must
+ * answer a question the push SHOWS. `null` when the ask has no quick answer
+ * (the notification's own body stands).
+ *   confirm → "<label>: <prompt>" — the prompt is what Yes/No answers, so it
+ *             wins over the slot's `why`; `why` only when there is no prompt.
+ *   choose  → "<label>: <why>" + a line "Recommended: <option>".
+ *   act     → "<label>: <why, else the first step>".
+ */
+export function quickAnswerPushBody(
+  slot: { label: string; why?: string | null },
+  ask: Ask | null | undefined
+): string | null {
+  const q = quickAnswerFor({ sessionId: "", label: slot.label }, ask);
+  if (!q || !ask) return null;
+  const why = slot.why?.trim() || "";
+  const head = (detail: string) =>
+    clipLine(detail ? `${slot.label}: ${detail}` : slot.label);
+  if (ask.mode === "confirm") return head(ask.prompt?.trim() || why);
+  if (ask.mode === "choose") {
+    const chip = q.actions[0]?.value;
+    const rec = chip?.type === "chip" ? chip.chip.label : "";
+    return `${head(why)}\n${clipLine(`Recommended: ${rec}`)}`;
+  }
+  if (ask.mode === "act") return head(why || ask.steps?.[0]?.trim() || "");
   return null;
 }
 

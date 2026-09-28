@@ -14,6 +14,7 @@ import {
   normalizePushPrefs,
   pushEnvelope,
   quickAnswerFor,
+  quickAnswerPushBody,
 } from "./index.js";
 
 const slot = { sessionId: "s-1", label: "Tone" };
@@ -244,5 +245,49 @@ describe("labels", () => {
       name: "Landed digest",
       hint: "",
     });
+  });
+});
+
+describe("quickAnswerPushBody — the push shows what the buttons answer", () => {
+  it("confirm shows its PROMPT even when the slot has a why", () => {
+    expect(
+      quickAnswerPushBody(
+        { label: "Scope", why: "the list is long" },
+        ask({ mode: "confirm", prompt: "Include companies under 10 people?" })
+      )
+    ).toBe("Scope: Include companies under 10 people?");
+    expect(
+      quickAnswerPushBody({ label: "Scope", why: "keep small ones?" }, ask({ mode: "confirm" }))
+    ).toBe("Scope: keep small ones?");
+  });
+
+  it("choose-recommended names the recommended option", () => {
+    const body = quickAnswerPushBody(
+      { label: "Tone", why: "casual or formal" },
+      ask({
+        mode: "choose",
+        options: [{ label: "Casual", recommended: true }, { label: "Formal" }],
+      })
+    );
+    expect(body).toBe("Tone: casual or formal\nRecommended: Casual");
+  });
+
+  it("act falls back to its first step; no quick answer ⇒ null", () => {
+    expect(
+      quickAnswerPushBody({ label: "Key" }, ask({ mode: "act", steps: ["Rotate the key"] }))
+    ).toBe("Key: Rotate the key");
+    expect(
+      quickAnswerPushBody(
+        { label: "Tone" },
+        ask({ mode: "choose", options: [{ label: "A" }, { label: "B" }] })
+      )
+    ).toBeNull();
+  });
+
+  it("hints carry no em dash (UI copy)", () => {
+    for (const c of PUSH_CATEGORIES) {
+      expect(resolvePushCategoryLabel(c).hint).not.toContain("\u2014");
+      expect(resolvePushCategoryLabel(c).name).not.toContain("\u2014");
+    }
   });
 });
