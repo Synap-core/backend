@@ -11982,7 +11982,8 @@ declare const LANDED_DECISION_STATES: readonly [
 	"approved",
 	"auto_approved",
 	"pending",
-	"reverted"
+	"reverted",
+	"unknown"
 ];
 export type LandedDecisionState = (typeof LANDED_DECISION_STATES)[number];
 /**
@@ -12029,6 +12030,13 @@ export interface LandedDecision {
 	} | null;
 	/** When it was decided (ISO), when recorded. */
 	decidedAt: string | null;
+	/**
+	 * How many objects that proposal created or changed. Undo reverts the WHOLE
+	 * proposal, so a row from a composite create must say so ("Undo · 4
+	 * changes") — undoing one row takes the other three with it. `null` when
+	 * there is no proposal, or the viewer cannot see it.
+	 */
+	changeCount: number | null;
 }
 export interface LandedObjectRow {
 	/**
@@ -12057,7 +12065,19 @@ export interface LandedObjectRow {
 	decision: LandedDecision;
 }
 export interface LandedObjectsPage {
+	/** What LANDED — never a pending row. Paged by the cursor. */
 	items: LandedObjectRow[];
+	/**
+	 * Proposed creations still waiting ("N to review ›" — one summary row that
+	 * opens Needs you, never a wall above what landed). NOT paged: `count` is
+	 * the whole set in the scanned sessions (same lens, `since`, actor filter),
+	 * `samples` the newest {@link LANDED_PENDING_SAMPLES}. Each sample's door is
+	 * its proposal (`ref.kind === "proposal"`).
+	 */
+	pending: {
+		count: number;
+		samples: LandedObjectRow[];
+	};
 	/** Pass back as `cursor` for the next (older) page; `null` = no more. */
 	nextCursor: string | null;
 	/**
@@ -12091,6 +12111,18 @@ export interface SessionOutputsSummary {
 		entityProfile?: LandedEntityProfile;
 	} | null;
 }
+/**
+ * The same fact on `focusSessions.get`, as a SECTION of the detail page: a
+ * failed read is `unavailable` — never `null` (which means "no agent acted")
+ * and never an error that takes the whole page down.
+ */
+export type SessionLiveness = {
+	status: "ok";
+	lastAgentActivityAt: Date | string | null;
+} | {
+	status: "unavailable";
+	reason: string;
+};
 /** The kinds a session can be converted INTO. */
 export type ConversionKind = "playbook" | "project";
 /** The receipt every conversion verb returns. Frontend renders it verbatim. */
@@ -32577,8 +32609,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: SessionKind;
 			} & SessionParticipants & {
 				verdict?: SessionVerdict;
-			} & {
-				lastAgentActivityAt: Date | null;
 			} & Partial<SessionEdges> & Partial<SessionOutputDependencies> & {
 				nextMove?: ContinuationNextMove;
 				unitFacts?: SessionUnitCounts;
@@ -32640,8 +32670,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: SessionKind;
 				} & SessionParticipants & {
 					verdict?: SessionVerdict;
-				} & {
-					lastAgentActivityAt: Date | null;
 				} & {
 					viewerRole: SessionViewerRole;
 				})[];
@@ -32946,6 +32974,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				criteria: unknown;
 				verdict?: SessionVerdict | undefined;
 				evaluations?: PacketEvaluationItem[] | undefined;
+				liveness: SessionLiveness;
 				viewerRole: SessionViewerRole;
 				triage: TriageProjection;
 				kind: "run" | "receipt" | "work";
