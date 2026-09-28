@@ -21,3 +21,12 @@ describe("next-rung outcome words (one mark, every surface)", () => {
     expect(resolveNextRungOutcomeLabel("sent_elsewhere")).toBe("Sent elsewhere");
   });
 });
+
+describe("the offer's words say how far the grant reaches", () => {
+  it("a space grant is the rung's offer; a pod-wide one adds 'in every space'", async () => {
+    const { resolveNextRungOfferLabel } = await import("./index.js");
+    expect(resolveNextRungOfferLabel("do_tell", "space")).toBe("Next time, do it and tell me");
+    expect(resolveNextRungOfferLabel("do_tell", "pod")).toBe("Next time, do it and tell me in every space");
+    expect(resolveNextRungOfferLabel(null, "pod")).toBe("");
+  });
+});

@@ -1224,6 +1224,19 @@ export function resolveTrustRungLabel(
 }
 
 /**
+ * The next-rung OFFER button's words: the target rung's `offer`, and — when
+ * the grant would reach every space (`NextRungOffer.reach === "pod"`) — it
+ * says so, so a pod-wide rule is never accepted as if it were local.
+ */
+export function resolveNextRungOfferLabel(
+  to: string | null | undefined,
+  reach?: "space" | "pod" | null
+): string {
+  const offer = resolveTrustRungLabel(to, "offer");
+  return offer && reach === "pod" ? `${offer} in every space` : offer;
+}
+
+/**
  * What accepting a next-rung offer did, as a MARK's words (ui-composition §1),
  * the same on every surface: `created` / `already_covered` name the rule (a
  * door to it), `proposed` the change filed for the agent's owner. `failed` is
