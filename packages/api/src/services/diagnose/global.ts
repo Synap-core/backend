@@ -101,6 +101,13 @@ export interface GlobalSignals {
     flowName: string;
     failedCount: number;
     hasRunning: boolean;
+    /**
+     * The flow's own address, so a surface can make each failing flow a DOOR
+     * to its page (the rail's health mark → Work › Activity › Failed). Absent
+     * on the synthetic "Chat" row, which has no flow of its own.
+     */
+    flowType?: "automation" | "playbook";
+    flowId?: string;
   }>;
   backlog: {
     pending: number;
@@ -404,6 +411,29 @@ export function summarizeGlobalHealth(
   };
 }
 
+/**
+ * One run group → one failing-flow row: the WINDOWED failure count, plus the
+ * flow's address (`flowType` + `flowId`) so a surface can open the flow's own
+ * page. Pure and exported so the projection is tested at the seam — a dropped
+ * address field would otherwise leave every failing flow a dead row while
+ * every type still checks.
+ */
+export function failingFlowOfGroup(g: {
+  flowName: string;
+  recentFailedCount: number;
+  hasRunning: boolean;
+  flowType: "automation" | "playbook";
+  flowId: string;
+}): GlobalSignals["failedFlows"][number] {
+  return {
+    flowName: g.flowName,
+    failedCount: g.recentFailedCount,
+    hasRunning: g.hasRunning,
+    flowType: g.flowType,
+    flowId: g.flowId,
+  };
+}
+
 // ── DB tier: gather the signals, then summarize ──────────────────────────────
 
 /**
@@ -572,13 +602,9 @@ export async function diagnoseGlobal(params: {
 
   // Windowed at the source (W2 calm): a flow is failing iff it failed in the
   // last RECENT_FAILURE_WINDOW_DAYS; `failedCount` here is that window's count.
-  const failedFlows = groups
+  const failedFlows: GlobalSignals["failedFlows"] = groups
     .filter((g) => g.recentFailedCount > 0)
-    .map((g) => ({
-      flowName: g.flowName,
-      failedCount: g.recentFailedCount,
-      hasRunning: g.hasRunning,
-    }));
+    .map(failingFlowOfGroup);
   // Chat has no flowId group — surface failed chat as one synthetic "Chat" row,
   // windowed the same way.
   // The SAME cutoff rule the flow groupers apply in SQL (`isRecentFailure`).
