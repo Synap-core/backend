@@ -155,6 +155,12 @@ export const knowledgeRouter = router({
          * reporting a match count as a run count.
          */
         truncated: synthesis.truncated,
+        /**
+         * Where the asked-about kinds live (`ask()`'s spaces hint): the member
+         * spaces holding them, or `{ status: "unavailable" }` when that read
+         * failed. Absent when no kind was understood. Same field on every door.
+         */
+        spaces: result.spaces,
       };
     }),
 });

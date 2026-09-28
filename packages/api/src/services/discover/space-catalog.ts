@@ -32,6 +32,7 @@ import {
 } from "@synap/database";
 import { getUserMemberWorkspaceIds } from "../../routers/hub-protocol/rest/_shared.js";
 import { spacePurposeLine } from "./space-brief.js";
+import { loadEntityUsage } from "./usage-aggregate.js";
 
 /** One-line cap for a space's persona in a search row. */
 export const SPACE_PERSONA_LINE_CAP = 120;
@@ -121,4 +122,98 @@ export async function listSpaceCandidates(
   return rows.map((r) =>
     toSpaceCandidate(r, (ownedByWs.get(r.id) ?? []).sort())
   );
+}
+
+// ── ask's spaces hint ────────────────────────────────────────────────────────
+
+/** Spaces an ask hint lists at most. */
+export const ASK_SPACES_HINT_LIMIT = 3;
+
+export interface AskSpaceHint {
+  workspaceId: string;
+  name: string;
+  /** One-line purpose (`spacePurposeLine`). Absent when the space has none. */
+  purpose?: string;
+  /** The asked-about kinds this space HOLDS, with its own entity counts. */
+  kinds: Array<{ slug: string; count: number }>;
+}
+
+/**
+ * The space(s) holding the kinds a question is about — `ask`'s routing hint.
+ * `matches: []` = read, and no member space holds any of those kinds.
+ * `{ status: "unavailable" }` = the read failed — never folded into "none".
+ */
+export type AskSpacesHint =
+  { matches: AskSpaceHint[] } | { status: "unavailable" };
+
+/**
+ * Map understood profile slugs to the member spaces holding entities of them,
+ * through THE usage aggregate (`loadEntityUsage`: same owner floor, same
+ * counts orient and grounding report). Ranked by how many of the asked-about
+ * entities each space holds. Returns `undefined` when there are no slugs —
+ * nothing was understood, so there is nothing to route.
+ */
+export async function suggestSpacesForKinds(
+  userId: string,
+  slugs: readonly string[]
+): Promise<AskSpacesHint | undefined> {
+  const wanted = new Set(slugs.filter(Boolean));
+  if (wanted.size === 0) return undefined;
+  try {
+    const ids = await getUserMemberWorkspaceIds(userId);
+    const usage = await loadEntityUsage({ userId, workspaceIds: ids });
+    const byWs = new Map<string, Map<string, number>>();
+    for (const row of usage) {
+      if (!row.workspaceId || !row.type || !wanted.has(row.type)) continue;
+      if (row.count <= 0) continue;
+      const kinds = byWs.get(row.workspaceId) ?? new Map<string, number>();
+      kinds.set(row.type, (kinds.get(row.type) ?? 0) + row.count);
+      byWs.set(row.workspaceId, kinds);
+    }
+    const total = (m: Map<string, number>) =>
+      [...m.values()].reduce((a, b) => a + b, 0);
+    const top = [...byWs.entries()]
+      .sort((a, b) => total(b[1]) - total(a[1]))
+      .slice(0, ASK_SPACES_HINT_LIMIT);
+    if (top.length === 0) return { matches: [] };
+    const rows = await db
+      .select({
+        id: workspaces.id,
+        name: workspaces.name,
+        description: workspaces.description,
+        settings: workspaces.settings,
+      })
+      .from(workspaces)
+      .where(
+        and(
+          inArray(
+            workspaces.id,
+            top.map(([id]) => id)
+          ),
+          isNull(workspaces.archivedAt)
+        )
+      );
+    const rowById = new Map(rows.map((r) => [r.id, r]));
+    return {
+      matches: top.flatMap(([id, kinds]) => {
+        const row = rowById.get(id);
+        if (!row) return [];
+        const onboarding = (row.settings as Record<string, unknown> | null)
+          ?.onboarding;
+        const purpose = spacePurposeLine(row.description, onboarding);
+        return [
+          {
+            workspaceId: id,
+            name: row.name,
+            ...(purpose ? { purpose } : {}),
+            kinds: [...kinds.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([slug, count]) => ({ slug, count })),
+          },
+        ];
+      }),
+    };
+  } catch {
+    return { status: "unavailable" };
+  }
 }

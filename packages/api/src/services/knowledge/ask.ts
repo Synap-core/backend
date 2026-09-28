@@ -49,6 +49,7 @@ const PROCEDURAL_IGNORED_TERMS: ReadonlySet<string> = new Set([
   ...QUESTION_WORDS,
 ]);
 import { structuredLookup } from "./structured.js";
+import type { AskSpacesHint } from "../discover/space-catalog.js";
 
 /**
  * A degradation tag on the response. Substrate outages use the substrate name;
@@ -145,6 +146,14 @@ export interface AskResult {
    * substrate). Omitted when empty. See AskPendingBlock.
    */
   pending?: AskPendingBlock;
+  /**
+   * Where the kinds this question is about LIVE: the member spaces holding
+   * entities of `understanding.profileTypes`, from the usage aggregate
+   * (`services/discover/space-catalog.ts`). A routing HINT, never an answer.
+   * ABSENT when no kind was understood; `{ status: "unavailable" }` when the
+   * read failed — never dropped.
+   */
+  spaces?: AskSpacesHint;
 }
 
 /**
@@ -317,10 +326,24 @@ export async function ask(params: AskParams): Promise<AskResult> {
       : { status: "ok", items: [] };
   }
 
-  const [procedural, episodic, pendingMatches] = await Promise.all([
+  // SPACES hint — where the understood kinds live. Reads the semantic
+  // engine's OWN understanding (no second understandQuery call, and nothing
+  // here routes capabilities: find-intent.ts forbids that). It marks its own
+  // failure as unavailable, so it cannot fail recall.
+  // Loaded lazily: space-catalog reads membership through the hub `_shared`
+  // module, which pulls the whole hub router graph (and back into this file).
+  const spacesP: Promise<AskSpacesHint | undefined> =
+    import("../discover/space-catalog.js")
+      .then(({ suggestSpacesForKinds }) =>
+        suggestSpacesForKinds(userId, semantic.understanding.profileTypes ?? [])
+      )
+      .catch((): AskSpacesHint => ({ status: "unavailable" }));
+
+  const [procedural, episodic, pendingMatches, spaces] = await Promise.all([
     proceduralP,
     episodicP,
     pendingP,
+    spacesP,
   ]);
 
   const answers: AskAnswer[] = [
@@ -395,5 +418,6 @@ export async function ask(params: AskParams): Promise<AskResult> {
     ...(pendingMatches.length
       ? { pending: { notice: PENDING_NOTICE, matches: pendingMatches } }
       : {}),
+    ...(spaces ? { spaces } : {}),
   };
 }

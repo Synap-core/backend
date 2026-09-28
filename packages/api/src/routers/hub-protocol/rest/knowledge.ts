@@ -661,6 +661,23 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     rank: z.number(),
   });
 
+  // `ask()`'s spaces hint — where the asked-about kinds live
+  // (`services/discover/space-catalog.ts` AskSpacesHint). A routing HINT,
+  // never a fact; `status: "unavailable"` = the read failed, never "none".
+  const askSpacesHintSchema = z.union([
+    z.object({
+      matches: z.array(
+        z.object({
+          workspaceId: z.string(),
+          name: z.string(),
+          purpose: z.string().optional(),
+          kinds: z.array(z.object({ slug: z.string(), count: z.number() })),
+        })
+      ),
+    }),
+    z.object({ status: z.literal("unavailable") }),
+  ]);
+
   const retrievalResponseSchema = z.object({
     query: z.string(),
     routedTo: z.array(z.string()),
@@ -700,6 +717,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         ),
       })
       .optional(),
+    // Where the asked-about kinds live. Absent when no kind was understood.
+    spaces: askSpacesHintSchema.optional(),
     // A/B ranker comparison — present ONLY when `compare` was requested.
     comparison: z
       .object({
@@ -937,6 +956,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
               // provider down ⇒ measurably thinner recall) from a healthy
               // empty result. Both rendered as "nothing found".
               degraded: z.array(z.string()),
+              // Where the asked-about kinds live (see retrieval schema).
+              spaces: askSpacesHintSchema.optional(),
               error: z.string().optional(),
               // WHY synthesis did not run, classified by the ONE failure door
               // (`utils/ai-failure.ts`) — the same `describeAiFailure` shape
@@ -1036,6 +1057,9 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           // `prependPendingNotice`'s one sentence and never the matches
           // themselves. Additive; omitted when nothing pends.
           ...(result.pending ? { pending: result.pending } : {}),
+          // Same parity for the spaces hint (where the asked-about kinds
+          // live). Additive; absent when no kind was understood.
+          ...(result.spaces ? { spaces: result.spaces } : {}),
           // Structured truncation, so a caller can DETECT a partial context
           // instead of hoping the model echoes the prose notice — the prose
           // dies with the response whenever synthesis fails.

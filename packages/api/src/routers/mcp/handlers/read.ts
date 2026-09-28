@@ -121,6 +121,9 @@ export const readHandlers: McpHandlerMap = {
     const pendingBlock = retrieved.pending
       ? { pending: retrieved.pending }
       : {};
+    // Where the asked-about kinds LIVE (`ask`'s spaces hint) — a routing hint,
+    // forwarded as-is so an `unavailable` read is never dropped here.
+    const spacesBlock = retrieved.spaces ? { spaces: retrieved.spaces } : {};
 
     // Build context + sources, then synthesize via IS. Pass the pending count
     // so the composed NL answer can acknowledge matching pending proposals
@@ -148,6 +151,7 @@ export const readHandlers: McpHandlerMap = {
       return ok({
         ...synthesis,
         ...pendingBlock,
+        ...spacesBlock,
         degraded: retrieved.degraded,
         message:
           `⚠️ AI synthesis did not run. ${failure.message} ` +
@@ -163,7 +167,12 @@ export const readHandlers: McpHandlerMap = {
     // keyword-fallback incident; this door never did, so an MCP caller — the
     // primary agent surface — could not tell a healthy empty result from a
     // degraded one. `truncated` rides along inside `...synthesis`.
-    return ok({ ...synthesis, ...pendingBlock, degraded: retrieved.degraded });
+    return ok({
+      ...synthesis,
+      ...pendingBlock,
+      ...spacesBlock,
+      degraded: retrieved.degraded,
+    });
   },
   synap_get_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
