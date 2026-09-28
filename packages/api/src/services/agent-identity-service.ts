@@ -28,8 +28,6 @@ import {
   clientKeyScope,
 } from "@synap/database";
 import { agents, users } from "@synap/database/schema";
-import { applyAgentPosture } from "@synap/database/agent-governance";
-import { DEFAULT_NEW_AGENT_POSTURE } from "@synap/governance-policy/postures";
 import type { AgentMetadata, ApiKeyToolProfile } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -562,28 +560,10 @@ export async function findOrCreateServiceAgentUser(opts: {
       { agentUserId, agentType, createdByUserId: creatorId },
       "findOrCreateServiceAgentUser: created agent user for creator×type"
     );
-    // D2 (founder, 2026-09-28): a NEW bring-your-own agent starts on
-    // `create-with-undo` — creates auto-approve with Undo, everything else
-    // proposes. Only on the INSERT branch (existing agents keep their posture)
-    // and only for BYOA agents (`cli`: setup/agent, OAuth, redeem, named
-    // agents); an IS roster sync keeps the strict default. Inserted STRICT
-    // above and loosened here in one transaction, so a failure here leaves the
-    // agent proposing everything — logged, never thrown: the agent exists.
-    if ((opts.createdVia ?? "cli") === "cli") {
-      try {
-        await applyAgentPosture({
-          db,
-          agentUserId,
-          posture: DEFAULT_NEW_AGENT_POSTURE,
-          createdBy: creatorId,
-        });
-      } catch (err) {
-        logger?.warn(
-          { err, agentUserId },
-          "findOrCreateServiceAgentUser: default posture not applied — agent stays strict"
-        );
-      }
-    }
+    // No posture is applied here: a new agent follows the POD default
+    // ("reversible writes act", founder 2026-09-28 — the reversible-default
+    // rule). A stricter named posture is an explicit operator choice
+    // (`PATCH /agent-users/:id/governance`), never a silent seed.
     return { agentUserId, email };
   } catch (err) {
     // DB firewall: unique (created_by_user_id, agent_type) for service agents
