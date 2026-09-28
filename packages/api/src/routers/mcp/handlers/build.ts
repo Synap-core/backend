@@ -93,6 +93,31 @@ const REVISE_PATCH_SCHEMA = z.object({
   fields: z.record(z.string(), z.unknown()),
 });
 
+/**
+ * Why match_playbooks scoped to ONE auto-picked workspace — said for the case
+ * that actually happened. `resolveEntityWorkspaceId` auto-picks both when NO
+ * entity was given and when a given entity's workspace could not be resolved;
+ * the note used to blame "the entity's own workspace" for both, so a caller
+ * that never passed an entity was told about one it never sent. A projectId
+ * ranks track templates higher but never chooses the workspace — say so, or
+ * the caller reads the project as the scope.
+ */
+export function matchScopeNote(p: {
+  entityGiven: boolean;
+  matchWsId: string;
+  memberCount: number;
+  projectId?: string;
+}): string {
+  const scope = `playbooks were matched against ONE workspace (${p.matchWsId}) of your ${p.memberCount} member workspaces`;
+  const why = p.entityGiven
+    ? `The entity's own workspace could not be resolved (deleted, pod-global, or not visible to you), so ${scope}. If this looks incomplete, the entity's real workspace may differ — pass an explicit workspaceId to scope deliberately.`
+    : `No workspaceId or entityId was given, so ${scope}. Pass workspaceId to choose the space, or entityId to match in that entity's own workspace.`;
+  const project = p.projectId
+    ? ` projectId ${p.projectId} only lifts that project's track templates in the ranking; it does not choose the workspace.`
+    : "";
+  return why + project;
+}
+
 export const buildHandlers: McpHandlerMap = {
   synap_create_cell: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
@@ -345,7 +370,16 @@ export const buildHandlers: McpHandlerMap = {
     // workspaces) — the explicit-workspaceId and resolved-entity-workspace
     // paths stay byte-identical to the prior array shape.
     if (autoPicked && memberCount > 1) {
-      const note = `The entity's own workspace could not be resolved, so playbooks were matched against ONE workspace (${matchWsId}) of your ${memberCount} member workspaces. If this looks incomplete, the entity's real workspace may differ — pass an explicit workspaceId to scope deliberately.`;
+      const note = matchScopeNote({
+        entityGiven:
+          typeof args.entityId === "string" && args.entityId.trim() !== "",
+        matchWsId,
+        memberCount,
+        projectId:
+          typeof args.projectId === "string" && isUuid(args.projectId)
+            ? args.projectId
+            : undefined,
+      });
       return ok({ playbooks: result, scopedWorkspaceId: matchWsId, note });
     }
     return ok(result);
