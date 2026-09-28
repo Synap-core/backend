@@ -24,6 +24,7 @@ import {
 import { entityDataNeighbors } from "../../../services/object-graph/entity-data-graph.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getDb } from "@synap/database";
+import { createLogger } from "@synap-core/core";
 import {
   db,
   entities,
@@ -365,29 +366,59 @@ export async function buildGraphEnvelope(
  * read" — and a read that resolves a handle is harmless: it is only ever passed
  * to the hub caller as a grouping hint.
  *
- * A prefix rule covers the bulk (`synap_get_*` / `synap_list_*`); the rest are
- * named. Ownership is still enforced downstream (`resolveWorkSession`), so this
- * list is a performance boundary, never an authorization one.
+ * WHICH tools read is DERIVED, never hand-listed: a tool is read-only exactly
+ * when its own definition declares `annotations.readOnlyHint: true` — the
+ * same flag every MCP client already sees. The hand-kept `READ_ONLY_TOOLS` set
+ * + `synap_get_`/`synap_list_` prefix this replaced fell behind twice at once:
+ * it omitted `synap_governance` (declared read-only, "never files anything"),
+ * so reading governance earned the false "this write was not filed … grouped
+ * in a session opened for you" note; and its prefix swept in
+ * `synap_get_channel`, which is get-OR-CREATE and declares itself a write.
+ * Ownership is still enforced downstream (`resolveWorkSession`), so this is a
+ * performance boundary, never an authorization one.
  */
-export const READ_ONLY_TOOL_PREFIXES = ["synap_get_", "synap_list_"] as const;
+const readOnlyLogger = createLogger({ module: "mcp-read-only-tools" });
+let readOnlyToolNamesPromise: Promise<ReadonlySet<string>> | null = null;
 
-export const READ_ONLY_TOOLS = new Set([
-  "synap_ask",
-  "synap_orient",
-  "synap_diagnose",
-  "synap_find",
-  "synap_load_skill",
-  "synap_match_playbooks",
-  "synap_resolve_identity",
-  "synap_template_health",
-]);
+/**
+ * The names of every tool whose definition declares `readOnlyHint: true`,
+ * read once from the live tool definitions (`tools.list()`, no session ctx —
+ * the same list `gen-manifest` serializes) and cached. A failed read is NOT
+ * cached, so the next call retries.
+ */
+export function readOnlyToolNames(): Promise<ReadonlySet<string>> {
+  readOnlyToolNamesPromise ??= import("../tools/index.js")
+    .then(async ({ tools }) => {
+      const defs = await tools.list();
+      return new Set(
+        defs
+          .filter((t) => t.annotations?.readOnlyHint === true)
+          .map((t) => t.name)
+      ) as ReadonlySet<string>;
+    })
+    .catch((err: unknown) => {
+      readOnlyToolNamesPromise = null;
+      throw err;
+    });
+  return readOnlyToolNamesPromise;
+}
 
-/** True when the tool only reads — no write to group under a session. */
-export function isReadOnlyTool(toolName: string): boolean {
-  return (
-    READ_ONLY_TOOLS.has(toolName) ||
-    READ_ONLY_TOOL_PREFIXES.some((p) => toolName.startsWith(p))
-  );
+/**
+ * True when the tool only reads — no write to group under a session. An
+ * unknown tool is a write (fails toward provenance). If the definitions
+ * cannot be read, every tool is treated as a write and the failure is logged:
+ * the cost is an extra SELECT, never a lost attribution.
+ */
+export async function isReadOnlyTool(toolName: string): Promise<boolean> {
+  try {
+    return (await readOnlyToolNames()).has(toolName);
+  } catch (err) {
+    readOnlyLogger.error(
+      { err, toolName },
+      "read-only tool set unavailable — treating the call as a write"
+    );
+    return false;
+  }
 }
 
 // The session-status vocabulary now lives in a leaf module
@@ -559,7 +590,7 @@ export async function resolveSessionHandle(
   userId: string,
   agentUserId?: string
 ): Promise<SessionResolution | undefined> {
-  if (isReadOnlyTool(toolName)) return undefined;
+  if (await isReadOnlyTool(toolName)) return undefined;
   // Normalize: sessionId flows to a `uuid` DB column, so a non-string arg is
   // dropped here rather than `as`-cast blindly.
   const explicit =

@@ -2,6 +2,13 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { isReadOnlyTool } from "./adapter.js";
+import { tools } from "./tools/index.js";
+
+/** `filter` for an async predicate. */
+async function readOnlyAmong(names: readonly string[]): Promise<string[]> {
+  const flags = await Promise.all(names.map((n) => isReadOnlyTool(n)));
+  return names.filter((_, i) => flags[i]);
+}
 
 /**
  * MCP focus-session attribution coverage.
@@ -40,8 +47,8 @@ describe("MCP session attribution — read-only deny-list", () => {
 
   it.each(PREVIOUSLY_MISSED_WRITES)(
     "%s is session-linked (was silently dropping provenance)",
-    (tool) => {
-      expect(isReadOnlyTool(tool)).toBe(false);
+    async (tool) => {
+      expect(await isReadOnlyTool(tool)).toBe(false);
     }
   );
 
@@ -58,7 +65,6 @@ describe("MCP session attribution — read-only deny-list", () => {
     "synap_get_graph",
     "synap_get_relations",
     "synap_get_document",
-    "synap_get_channel",
     "synap_get_session",
     "synap_get_thread_context",
     "synap_list_profiles",
@@ -69,16 +75,45 @@ describe("MCP session attribution — read-only deny-list", () => {
     "synap_list_playbooks",
     "synap_list_views",
     "synap_list_widgets",
+    // Was MISSING from the hand-kept set: declared readOnlyHint, "never files
+    // anything", yet a governance read earned the false "this write was not
+    // filed" session note (2026-09-28).
+    "synap_governance",
     // NOTE: `synap_list_projects` is deliberately absent — it was retired into
     // `synap_orient` (scope:['projects']) and only survives as a verb alias. The
     // `synap_list_` prefix still covers it if it ever returns.
   ];
 
-  it.each(READS)("%s stays read-only (no session round-trip)", (tool) => {
-    expect(isReadOnlyTool(tool)).toBe(true);
+  it.each(READS)("%s stays read-only (no session round-trip)", async (tool) => {
+    expect(await isReadOnlyTool(tool)).toBe(true);
   });
 
-  it("the write doors the OLD allow-list already covered are still covered", () => {
+  it("`synap_get_channel` is get-OR-CREATE — a write despite its `get_` prefix", async () => {
+    // The old prefix rule swept it into the reads; its definition says
+    // readOnlyHint:false, and a created channel belongs to the session.
+    expect(await isReadOnlyTool("synap_get_channel")).toBe(false);
+  });
+
+  it("DERIVED: read-only is exactly the tools whose definition declares readOnlyHint:true", async () => {
+    const defs = await tools.list();
+    const declared = defs
+      .filter((t) => t.annotations?.readOnlyHint === true)
+      .map((t) => t.name);
+    const writes = defs
+      .filter((t) => t.annotations?.readOnlyHint !== true)
+      .map((t) => t.name);
+    // Non-vacuity: a real tool surface, with both halves populated.
+    expect(defs.length).toBeGreaterThan(50);
+    expect(declared.length).toBeGreaterThan(20);
+    expect(writes.length).toBeGreaterThan(20);
+    expect(declared).toContain("synap_governance");
+    expect((await readOnlyAmong(declared)).sort()).toEqual(
+      [...declared].sort()
+    );
+    expect(await readOnlyAmong(writes)).toEqual([]);
+  });
+
+  it("the write doors the OLD allow-list already covered are still covered", async () => {
     // Regression floor: the inversion must not lose anything the allow-list had.
     const OLD_ALLOWLIST = [
       "synap_create_entity",
@@ -100,11 +135,11 @@ describe("MCP session attribution — read-only deny-list", () => {
       "synap_complete_session",
       "synap_promote_session_to_playbook",
     ];
-    expect(OLD_ALLOWLIST.filter(isReadOnlyTool)).toEqual([]);
+    expect(await readOnlyAmong(OLD_ALLOWLIST)).toEqual([]);
   });
 
-  it("an unknown/new tool defaults to session-linked (fails toward provenance)", () => {
-    expect(isReadOnlyTool("synap_some_future_write_door")).toBe(false);
+  it("an unknown/new tool defaults to session-linked (fails toward provenance)", async () => {
+    expect(await isReadOnlyTool("synap_some_future_write_door")).toBe(false);
   });
 
   /**
@@ -163,8 +198,8 @@ describe("MCP session attribution — explicit override is declared", () => {
     expect(missing).toEqual([]);
   });
 
-  it("those doors are session-linked in the first place (else the override is moot)", () => {
-    expect(OVERRIDE_DOORS.filter(isReadOnlyTool)).toEqual([]);
+  it("those doors are session-linked in the first place (else the override is moot)", async () => {
+    expect(await readOnlyAmong(OVERRIDE_DOORS)).toEqual([]);
   });
 
   /**
