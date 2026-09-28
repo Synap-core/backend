@@ -453,7 +453,7 @@ describe("MCP instructions — the live initialize path on a hostile pod", () =>
       );
     }
     const grounding = await buildGrounding(LIVE);
-    expect(grounding).toContain("Domains, busiest first:");
+    expect(grounding).toContain("Spaces (workspaceId), busiest first:");
     const server = createMCPServer(undefined, LIVE, grounding) as unknown as {
       _instructions?: string;
     };
