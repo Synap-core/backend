@@ -291,7 +291,7 @@ void _universalAreRequired;
 
 /**
  * Every surface shapes this page through ONE leaf (`@synap-core/types/needs-you`,
- * `groupNeedsYou`). A `Signal` must stay assignable to what that leaf reads, so
+ * `needsYouRows`). A `Signal` must stay assignable to what that leaf reads, so
  * renaming or retyping `groupKey` / `ageBucket` / `repeatCount` here stops the
  * build instead of silently un-grouping every surface.
  */

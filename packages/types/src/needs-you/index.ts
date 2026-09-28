@@ -9,9 +9,9 @@
  * This leaf never sorts. It only reads three fields the pod stamps on every
  * row and turns the flat page into what the reader sees:
  *
- * - `groupKey` — a run of rows sharing a `session:<id>` key becomes ONE group
- *   under a session header (the header is a door to that session). Any other
- *   key, or none, is a group of one: a cluster already stands for its N.
+ * - `groupKey` — a run of rows sharing a `session:<id>` key belongs to ONE
+ *   session: one row when it is a single item, one card when it is several
+ *   ({@link needsYouRows}). Any other key, or none, is a row of its own.
  * - `ageBucket` — `'older'` rows (> 7 days) are split off into the "Older · N"
  *   fold. A fold, never a filter: they still count and still render when
  *   opened. The split is a STABLE partition, so it cannot reorder anything the
@@ -67,19 +67,13 @@ export interface GroupableSignal {
   occurredAt?: string | Date;
 }
 
-export interface NeedsYouGroup<T extends GroupableSignal> {
-  /** Stable React key: the `groupKey`, or the lone row's id. */
+/** A contiguous run of one session's rows (or a lone row) — internal. */
+interface Run<T extends GroupableSignal> {
+  /** Stable React key: `session:<id>` (suffixed if it reappears), or the row's id. */
   key: string;
-  /** Set only on a `session:<id>` group — the header's door. */
+  /** Set only on a `session:<id>` run. */
   sessionId: string | null;
   items: T[];
-}
-
-export interface NeedsYouShape<T extends GroupableSignal> {
-  recent: NeedsYouGroup<T>[];
-  older: NeedsYouGroup<T>[];
-  /** ROWS under the Older fold (what "Older · N" states). */
-  olderCount: number;
 }
 
 const SESSION_PREFIX = "session:";
@@ -94,14 +88,14 @@ export function sessionIdOfGroupKey(
 }
 
 function pushInto<T extends GroupableSignal>(
-  groups: NeedsYouGroup<T>[],
+  groups: Run<T>[],
   signal: T,
   seen: Map<string, number>
 ): void {
   const sessionId = sessionIdOfGroupKey(signal.groupKey);
   const last = groups[groups.length - 1];
   // Contiguous only: the server emits a session's block in one run. A key that
-  // reappears after another row is a NEW header — merging it would move a row
+  // reappears after another row is a NEW run — merging it would move a row
   // the server placed, which is exactly the client re-sort this leaf refuses.
   if (sessionId && last && last.sessionId === sessionId) {
     last.items.push(signal);
@@ -118,38 +112,17 @@ function pushInto<T extends GroupableSignal>(
   groups.push({ key, sessionId, items: [signal] });
 }
 
-/** Shape a server-ordered page into session groups + the Older fold. */
-export function groupNeedsYou<T extends GroupableSignal>(
+/** Split a server-ordered page into contiguous runs + the Older partition. */
+function runsOf<T extends GroupableSignal>(
   signals: readonly T[]
-): NeedsYouShape<T> {
-  const recent: NeedsYouGroup<T>[] = [];
-  const older: NeedsYouGroup<T>[] = [];
-  let olderCount = 0;
+): { recent: Run<T>[]; older: Run<T>[] } {
+  const recent: Run<T>[] = [];
+  const older: Run<T>[] = [];
   const seen = new Map<string, number>();
   for (const s of signals) {
-    if (s.ageBucket === "older") {
-      olderCount += 1;
-      pushInto(older, s, seen);
-    } else {
-      pushInto(recent, s, seen);
-    }
+    pushInto(s.ageBucket === "older" ? older : recent, s, seen);
   }
-  return { recent, older, olderCount };
-}
-
-/**
- * Cap by GROUPS (Home shows ≤ 5): a session's asks stay together, never split
- * across the fold. `hiddenRows` is the rows the cap left out — what "+K more"
- * states.
- */
-export function capNeedsYouGroups<T extends GroupableSignal>(
-  groups: readonly NeedsYouGroup<T>[],
-  limit: number
-): { shown: NeedsYouGroup<T>[]; hiddenRows: number } {
-  const shown = groups.slice(0, Math.max(0, limit));
-  let hiddenRows = 0;
-  for (const g of groups.slice(shown.length)) hiddenRows += g.items.length;
-  return { shown, hiddenRows };
+  return { recent, older };
 }
 
 /** The fields ×N reads. Optional: a row from a pre-W2 pod may lack them. */
@@ -183,29 +156,16 @@ export function repeatLabel(signal: RepeatableSignal): string | null {
   return n > 1 ? `×${n}` : null;
 }
 
-/** The header's name: the work the session's asks came from. */
-export function groupSessionGoal<T extends GroupableSignal>(
-  group: NeedsYouGroup<T>
-): string | null {
-  for (const s of group.items) {
-    const goal = s.sessionGoal?.trim();
-    if (goal) return goal;
-  }
-  return null;
-}
-
 // ── One list (founder, 2026-09-28) ─────────────────────────────────────────
 //
-// The session GROUP above (a header over indented items) was rejected: "it was
-// clearer to see one list". A needs-you page is ONE list of rows, where:
+// The W2 session GROUP (a header over indented items) was rejected: "it was
+// clearer to see one list", and retired from every surface. A needs-you page is ONE list of rows, where:
 //   - a session owing exactly ONE thing is that thing's own row (an `item`),
 //     carrying its session only as quiet provenance;
 //   - a session owing TWO OR MORE things is ONE row (a `session` card) that
 //     names the session and counts what it owes by kind, and opens the
 //     session, where the items live under "Your turn".
-// Same server order, same Older fold, same contiguity rule as `groupNeedsYou`
-// (which this builds on, so the two can never disagree on WHICH rows belong
-// together — only on how a group is drawn).
+// Same server order, same Older fold, same contiguity rule (`runsOf`).
 
 /** Which session a row came from — the provenance door of a single item. */
 export interface NeedsYouSessionRef {
@@ -312,7 +272,7 @@ function timeOf(at: string | Date | undefined): number {
 }
 
 function toRows<T extends GroupableSignal>(
-  groups: readonly NeedsYouGroup<T>[]
+  groups: readonly Run<T>[]
 ): NeedsYouRow<T>[] {
   const rows: NeedsYouRow<T>[] = [];
   for (const g of groups) {
@@ -362,7 +322,7 @@ function toRows<T extends GroupableSignal>(
 export function needsYouRows<T extends GroupableSignal>(
   signals: readonly T[]
 ): NeedsYouRows<T> {
-  const shape = groupNeedsYou(signals);
+  const shape = runsOf(signals);
   const older = toRows(shape.older);
   return { recent: toRows(shape.recent), older, olderCount: older.length };
 }

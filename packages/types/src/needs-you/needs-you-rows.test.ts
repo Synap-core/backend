@@ -98,6 +98,37 @@ describe("needsYouRows — singleton vs multi", () => {
   });
 });
 
+describe("needsYouRows — server order, older wires", () => {
+  it("keeps server order across kinds — no hoist of clusters, slots or notifications", () => {
+    const out = needsYouRows([
+      row("notif-newest", { kind: "notification" }),
+      row("cluster", { kind: "proposal-cluster", groupKey: "proposal-cluster:k1" }),
+      row("slot", { groupKey: "session:s1" }),
+    ]);
+    expect(shape(out.recent)).toEqual(["item:notif-newest", "item:cluster", "item:slot"]);
+  });
+
+  it("react keys stay unique when a session key reappears", () => {
+    const out = needsYouRows([
+      row("a1", { groupKey: "session:A" }),
+      row("a2", { groupKey: "session:A" }),
+      row("b", { groupKey: "session:B" }),
+      row("a3", { groupKey: "session:A" }),
+      row("a4", { groupKey: "session:A" }),
+    ]);
+    const keys = out.recent.map((r) => r.key);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it("reads a pre-W2 pod (fields absent on the wire) as recent items, not a failure", () => {
+    const legacy = { id: "legacy", kind: "notification" } as GroupableSignal;
+    const out = needsYouRows([legacy]);
+    expect(shape(out.recent)).toEqual(["item:legacy"]);
+    expect(out.olderCount).toBe(0);
+  });
+});
+
 describe("needsYouRows — the card", () => {
   it("names the session by its TITLE, not its goal; project + newest carried", () => {
     const [card] = needsYouRows([
