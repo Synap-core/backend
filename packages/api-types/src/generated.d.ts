@@ -9235,6 +9235,12 @@ export type CaptureStructureAgainResult = (Exclude<RerunSessionResult, RerunDryR
 	/** The run that holds this capture (null when it has none and none was made). */
 	runSessionId: string | null;
 };
+export interface RosterAgent {
+	id: string;
+	name: string | null;
+	/** ISO; `null` = never seen. */
+	lastSeenAt: string | null;
+}
 declare const CAPTURE_DOORS: readonly [
 	"capture",
 	"capture.execute",
@@ -11232,41 +11238,6 @@ export type ProposePropertyDefRetireResult = {
 	migrationProposalId: null;
 	noMigrationReason: string;
 };
-/**
- * Agent presence — "connected / last seen" (V1 gaps G3, G8).
- *
- * The signal already exists per KEY: every authenticated MCP and Hub call
- * stamps `api_keys.last_used_at` (`apiKeyService.recordKeyUse`, throttled to
- * one write per key per minute). The mint's own verification does NOT stamp it
- * (`external-registration.ts` introspects instead), so a key that was minted
- * and never used reads as never seen. This joins that onto the agent USER the
- * surfaces list: an agent's `lastSeenAt` is its most recent key use, and
- * `host` is the instance label of the key it was last seen on.
- *
- * Callers pass ids they already floored (the list doors); this adds no rows.
- * A failed read throws — "never seen" and "could not tell" are different facts.
- */
-export interface AgentPresence {
-	/** ISO — most recent authenticated call on any of the agent's keys; `null` = never. */
-	lastSeenAt: string | null;
-	/** Instance label (`api_keys.instance_id`) of the key last seen; `null` if none/unlabelled. */
-	host: string | null;
-	/** Live keys (active, not revoked, not expired) — 0 means the agent cannot connect. */
-	activeKeys: number;
-	/** Keys minted and still awaiting the person's approval (inactive, not revoked, not expired). */
-	pendingKeys: number;
-	/**
-	 * Keys that existed and can no longer authenticate (revoked or expired). The
-	 * evidence `resolveAgentMark` needs before it may say "Disconnected" — an
-	 * agent that never held a key is a different fact ("No key yet").
-	 */
-	revokedKeys: number;
-	/**
-	 * Ids of the keys awaiting approval (the `pendingKeys`). Read by
-	 * `agentUsers.list` to build the ONE approval door (`/approve-agents?keys=`).
-	 */
-	pendingKeyIds: string[];
-}
 export type AgentDirection = "external" | "house";
 /**
  * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
@@ -11518,6 +11489,34 @@ export interface EnrichmentResult {
 	confidence: number;
 	data: Record<string, unknown>;
 }
+declare const PUSH_CATEGORIES: readonly [
+	"blocking-ask",
+	"decision-blocking",
+	"work-broke",
+	"mention",
+	"system"
+];
+export type PushCategory = (typeof PUSH_CATEGORIES)[number];
+/**
+ * How hard a push interrupts.
+ *   `interruptive` — sound, banner, breaks through Focus when time-sensitive.
+ *   `passive`      — lands silently in the notification list.
+ */
+export type PushLevel = "interruptive" | "passive";
+/** The iOS `interruptionLevel` Expo forwards (Expo push message field). */
+export type PushInterruptionLevel = "time-sensitive" | "active" | "passive";
+export interface PushCategoryPolicy {
+	/** On unless the person turns it off (`true`), or opt-in (`false`). */
+	defaultOn: boolean;
+	level: PushLevel;
+	interruptionLevel: PushInterruptionLevel;
+}
+export interface EffectivePushCategory extends PushCategoryPolicy {
+	category: PushCategory;
+	enabled: boolean;
+	/** `true` when the person set it; `false` when it is the default. */
+	explicit: boolean;
+}
 /**
  * Notification Type Registry
  *
@@ -11677,8 +11676,24 @@ export interface NotificationCatalogueEntry {
 	/** lucide icon name, from the registry entry. */
 	icon: string;
 	priority: NotificationDef["priority"];
-	/** The type's declared defaults, narrowed to channels with a transport. */
+	/**
+	 * The channels this type ACTUALLY goes out on when the person has set
+	 * nothing: the registry's defaults, narrowed to channels with a transport,
+	 * and WITHOUT `os` when the push contract (`@synap-core/types/push`) never
+	 * pushes it by default — an unclassified type, or a category that is off
+	 * by default. A settings screen must not advertise a push that never comes.
+	 */
 	defaultChannels: DeliveryChannel[];
+	/**
+	 * The push category this type rings the phone under, or `null` when it
+	 * never pushes on its own (a per-type rule can still force it).
+	 * `onlyWhenBlocking` — `proposal.created` pushes only when it blocks an
+	 * open session.
+	 */
+	push: {
+		category: PushCategory;
+		onlyWhenBlocking: boolean;
+	} | null;
 	/** Present only when the type declares one; narrowed to deliverable channels. */
 	channelCeiling?: DeliveryChannel[];
 	/** Rule values a picker may offer for THIS type — derived from the ceiling. */
@@ -11710,34 +11725,6 @@ export interface NotificationCatalogue {
 	withheldProducerlessCount: number;
 }
 export type PreferenceScope = "pod" | "workspace";
-declare const PUSH_CATEGORIES: readonly [
-	"blocking-ask",
-	"decision-blocking",
-	"work-broke",
-	"mention",
-	"system"
-];
-export type PushCategory = (typeof PUSH_CATEGORIES)[number];
-/**
- * How hard a push interrupts.
- *   `interruptive` — sound, banner, breaks through Focus when time-sensitive.
- *   `passive`      — lands silently in the notification list.
- */
-export type PushLevel = "interruptive" | "passive";
-/** The iOS `interruptionLevel` Expo forwards (Expo push message field). */
-export type PushInterruptionLevel = "time-sensitive" | "active" | "passive";
-export interface PushCategoryPolicy {
-	/** On unless the person turns it off (`true`), or opt-in (`false`). */
-	defaultOn: boolean;
-	level: PushLevel;
-	interruptionLevel: PushInterruptionLevel;
-}
-export interface EffectivePushCategory extends PushCategoryPolicy {
-	category: PushCategory;
-	enabled: boolean;
-	/** `true` when the person set it; `false` when it is the default. */
-	explicit: boolean;
-}
 /**
  * Broker trust diagnostics — WHY a Control-Plane-brokered pod can or cannot
  * broker connections, as non-secret facts.
@@ -20673,11 +20660,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "given";
 				sessionId: string;
 				deduped: boolean;
-				agent: {
-					id: string;
-					name: string | null;
-					lastSeenAt: string | null;
-				} | null;
+				agent: RosterAgent | null;
+				roster: RosterAgent[];
 				delivery: "on_check_in";
 				line: string;
 			};
@@ -28661,24 +28645,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
 			};
-			output: (Omit<{
-				role: string | null;
-				joinedAt: Date | null;
+			output: {
+				operatedByViewer: boolean;
 				id: string;
-				name: string | null;
-				email: string;
-				agentMetadata: AgentMetadata | null;
-				createdVia: AgentCreatedVia | null;
-				isPersonalAgent: boolean;
 				createdByUserId: string | null;
-			} & AgentPresence & {
+				name: string | null;
 				origin: string | null;
-				builtIn: boolean;
+				email: string;
+				role: string | null;
+				agentMetadata: AgentMetadata | null;
+				isPersonalAgent: boolean;
+				createdVia: AgentCreatedVia | null;
+				joinedAt: Date | null;
 				direction: AgentDirection;
-			}, "pendingKeyIds"> & {
+				lastSeenAt: string | null;
+				host: string | null;
+				activeKeys: number;
+				pendingKeys: number;
+				revokedKeys: number;
+				builtIn: boolean;
 				viewerCanDisconnect: boolean;
 				approveUrl: string | null;
-			})[];
+			}[];
 			meta: object;
 		}>;
 		governance: import("@trpc/server").TRPCQueryProcedure<{
@@ -31030,7 +31018,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setPushPrefs: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				categories: Record<"system" | "mention" | "blocking-ask" | "decision-blocking" | "work-broke", boolean>;
+				categories: Partial<Record<"system" | "mention" | "blocking-ask" | "decision-blocking" | "work-broke", boolean>>;
 			};
 			output: {
 				categories: EffectivePushCategory[];
