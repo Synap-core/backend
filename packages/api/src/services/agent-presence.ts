@@ -30,15 +30,23 @@ export interface AgentPresence {
    * agent that never held a key is a different fact ("No key yet").
    */
   revokedKeys: number;
+  /**
+   * Ids of the keys awaiting approval (the `pendingKeys`). Read by
+   * `agentUsers.list` to build the ONE approval door (`/approve-agents?keys=`).
+   */
+  pendingKeyIds: string[];
 }
 
-export const NEVER_SEEN: AgentPresence = {
+export const NEVER_SEEN: Readonly<AgentPresence> = {
   lastSeenAt: null,
   host: null,
   activeKeys: 0,
   pendingKeys: 0,
   revokedKeys: 0,
+  pendingKeyIds: [],
 };
+
+const neverSeen = (): AgentPresence => ({ ...NEVER_SEEN, pendingKeyIds: [] });
 
 export async function loadAgentPresence(
   agentUserIds: readonly string[],
@@ -49,6 +57,7 @@ export async function loadAgentPresence(
   if (ids.length === 0) return out;
   const rows = await db
     .select({
+      id: apiKeys.id,
       userId: apiKeys.userId,
       lastUsedAt: apiKeys.lastUsedAt,
       instanceId: apiKeys.instanceId,
@@ -61,7 +70,7 @@ export async function loadAgentPresence(
       and(inArray(apiKeys.userId, ids), eq(apiKeys.keyType, "hub_inbound"))
     );
   for (const r of rows) {
-    const cur = out.get(r.userId) ?? { ...NEVER_SEEN };
+    const cur = out.get(r.userId) ?? neverSeen();
     if (r.lastUsedAt) {
       const at = r.lastUsedAt.toISOString();
       if (!cur.lastSeenAt || at > cur.lastSeenAt) {
@@ -73,7 +82,10 @@ export async function loadAgentPresence(
     const expired = r.expiresAt !== null && r.expiresAt <= now;
     if (!r.revokedAt && !expired) {
       if (r.isActive) cur.activeKeys += 1;
-      else cur.pendingKeys += 1;
+      else {
+        cur.pendingKeys += 1;
+        cur.pendingKeyIds.push(r.id);
+      }
     } else {
       cur.revokedKeys += 1;
     }
@@ -87,5 +99,5 @@ export async function withAgentPresence<T extends { id: string }>(
   rows: T[]
 ): Promise<Array<T & AgentPresence>> {
   const presence = await loadAgentPresence(rows.map((r) => r.id));
-  return rows.map((r) => ({ ...r, ...(presence.get(r.id) ?? NEVER_SEEN) }));
+  return rows.map((r) => ({ ...r, ...(presence.get(r.id) ?? neverSeen()) }));
 }

@@ -1329,6 +1329,9 @@ export const intelligenceRouter = router({
         agentType: serviceType,
         isPersonalAgent: false,
         createdByUserId: ctx.userId,
+        // Provenance (0225): the same origin the IS registry stamps for its
+        // agents. It holds a hub key, so `withAgentOrigin` still lists it.
+        createdVia: "intelligence-service",
         agentMetadata: {
           agentType: serviceType,
           description: entry.description,

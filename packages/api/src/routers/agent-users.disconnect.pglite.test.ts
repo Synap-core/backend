@@ -4,7 +4,15 @@
  * loaded agent row) and real `api_keys` rows. Asserts the ROWS, not a return
  * value alone: a door that reported a count and revoked nothing is the defect.
  */
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -54,8 +62,11 @@ import {
   apiKeys,
   workspaces,
   workspaceMembers,
+  podMembers,
+  projectMembers,
 } from "@synap/database/schema";
 import { agentUsersRouter } from "./agent-users.js";
+import { apiKeyService } from "../services/api-keys.js";
 import type { Context } from "../types/context.js";
 
 const BASIC =
@@ -107,7 +118,8 @@ const keyRow = (id: string) =>
   ]).then((r) => r.rows[0]!);
 
 beforeAll(async () => {
-  for (const t of [users, apiKeys, workspaces, workspaceMembers])
+  // pod_members / project_members: the user floor (`userVisibleWhere`) reads them.
+  for (const t of [users, apiKeys, workspaces, workspaceMembers, podMembers, projectMembers])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   await q(
     `insert into users (id, email, user_type, created_by_user_id) values
@@ -248,5 +260,127 @@ describe("agentUsers.list — built-in agents are marked, from created_via (neve
       builtIn: false,
       origin: null,
     });
+  });
+});
+
+/** A HUB key (the only kind presence reads), optionally revoked. */
+async function hubKey(userId: string, state: "active" | "pending" | "revoked") {
+  const id = randomUUID();
+  await q(
+    `insert into api_keys (id, user_id, key_type, is_active, revoked_at) values ($1, $2, 'hub_inbound', $3, ${state === "revoked" ? "now()" : "null"})`,
+    [id, userId, state === "active"]
+  );
+  return id;
+}
+type ListRow = {
+  id: string;
+  builtIn: boolean;
+  viewerCanDisconnect: boolean;
+  approveUrl: string | null;
+  pendingKeyIds?: unknown;
+};
+const listed = async (userId: string) =>
+  new Map(
+    ((await caller(userId).list({ workspaceId: [] })) as ListRow[]).map((r) => [
+      r.id,
+      r,
+    ])
+  );
+
+describe("agentUsers.list — built-in needs a pod origin AND no key ever (W4 A2)", () => {
+  it("an IS agent that holds a hub key is listed, not folded as built-in", async () => {
+    const keyed = randomUUID();
+    const keyless = randomUUID();
+    const cut = randomUUID();
+    for (const id of [keyed, keyless, cut])
+      await q(
+        `insert into users (id, email, name, user_type, created_via, is_personal_agent) values ($1, $2, 'IS', 'agent', 'intelligence-service', false)`,
+        [id, `${id}@x`]
+      );
+    await hubKey(keyed, "active");
+    await hubKey(cut, "revoked");
+    const byId = await listed(OWNER);
+    expect(byId.get(keyed)).toMatchObject({ builtIn: false });
+    expect(byId.get(cut)).toMatchObject({ builtIn: false });
+    expect(byId.get(keyless)).toMatchObject({ builtIn: true });
+  });
+});
+
+describe("agentUsers.list — viewer verbs (W4 A4)", () => {
+  const prevUrl = process.env.PUBLIC_URL;
+  beforeEach(() => {
+    process.env.PUBLIC_URL = "https://pod.example.synap.live";
+  });
+  afterEach(() => {
+    if (prevUrl === undefined) delete process.env.PUBLIC_URL;
+    else process.env.PUBLIC_URL = prevUrl;
+  });
+
+  it("Disconnect + Approve are offered to the owner and a pod admin, never a stranger", async () => {
+    const pending = await hubKey(AGENT, "pending");
+    const owner = (await listed(OWNER)).get(AGENT)!;
+    expect(owner).toMatchObject({
+      viewerCanDisconnect: true,
+      approveUrl: `https://pod-admin.example.synap.live/approve-agents?keys=${pending}`,
+    });
+    // The key ids stay server-side: the URL is the door.
+    expect(owner.pendingKeyIds).toBeUndefined();
+    expect((await listed(ADMIN)).get(AGENT)).toMatchObject({
+      viewerCanDisconnect: true,
+    });
+    expect((await listed(STRANGER)).get(AGENT)).toMatchObject({
+      viewerCanDisconnect: false,
+      approveUrl: null,
+    });
+  });
+
+  it("no pending key ⇒ no approve door", async () => {
+    await hubKey(AGENT, "active");
+    expect((await listed(OWNER)).get(AGENT)?.approveUrl).toBeNull();
+  });
+});
+
+describe("agentUsers.list — the floor is one row per agent (W4 A1)", () => {
+  it("an agent in two of the caller's workspaces is ONE row", async () => {
+    const [w1, w2, agent] = [randomUUID(), randomUUID(), randomUUID()];
+    await q(`insert into workspaces (id, name) values ($1, 'W1'), ($2, 'W2')`, [
+      w1,
+      w2,
+    ]);
+    await q(
+      `insert into users (id, email, name, user_type, created_by_user_id) values ($1, $2, 'Two-space agent', 'agent', $3)`,
+      [agent, `${agent}@x`, OWNER]
+    );
+    for (const [ws, user, role] of [
+      [w1, OWNER, "owner"],
+      [w2, OWNER, "owner"],
+      [w1, agent, "editor"],
+      [w2, agent, "editor"],
+    ])
+      await q(
+        `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, $4)`,
+        [randomUUID(), ws, user, role]
+      );
+    const rows = (await caller(OWNER).list({ workspaceId: [] })) as ListRow[];
+    expect(rows.filter((r) => r.id === agent)).toHaveLength(1);
+  });
+});
+
+describe("agentUsers.disconnect — a revoked key stops validating NOW (W4 A3)", () => {
+  it("clears the verification cache AFTER the keys are revoked", async () => {
+    const k = await hubKey(AGENT, "active");
+    // The spy reads the key row AT THE MOMENT the cache is cleared (PGlite runs
+    // queries in order): cleared before the UPDATE would see it unrevoked.
+    let atClear: Promise<{ revoked_at: string | null }> | null = null;
+    const spy = vi
+      .spyOn(apiKeyService, "invalidateVerificationCache")
+      .mockImplementation(() => {
+        atClear = keyRow(k);
+      });
+    await caller(OWNER).disconnect({ agentUserId: AGENT });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(atClear).not.toBeNull();
+    expect((await atClear!).revoked_at).not.toBeNull();
+    spy.mockRestore();
   });
 });

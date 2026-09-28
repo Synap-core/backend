@@ -350,6 +350,33 @@ export class ApiKeyService {
   }
 
   /**
+   * Drop every cached verification. Any door that revokes keys OUTSIDE
+   * `revokeApiKey` / `rotateApiKey` (e.g. `agentUsers.disconnect`, a bulk
+   * UPDATE) must call this, or a revoked key keeps validating for up to
+   * `VERIFICATION_CACHE_TTL_MS` from the cache `/mcp` reads.
+   */
+  invalidateVerificationCache(): void {
+    verificationCache.clear();
+  }
+
+  /**
+   * Was this exact plaintext a key that has since been REVOKED (disconnected),
+   * as opposed to one the pod never issued? Lets an auth failure say "this key
+   * was disconnected" to its holder without telling anyone else anything: only
+   * the holder of the plaintext can ask, and an unknown key stays generic.
+   * O(1) sha256 lookup only (no bcrypt) — a legacy key without a lookup hash
+   * reads `false` and gets the generic message.
+   */
+  async isRevokedKey(apiKey: string): Promise<boolean> {
+    const [row] = await db
+      .select({ revokedAt: apiKeys.revokedAt })
+      .from(apiKeys)
+      .where(eq(apiKeys.keyLookupHash, this.verificationCacheKey(apiKey)))
+      .limit(1);
+    return !!row?.revokedAt;
+  }
+
+  /**
    * Compute the verification-cache key for a plaintext API key.
    * sha256 of the plaintext — the plaintext itself is NEVER stored anywhere.
    */

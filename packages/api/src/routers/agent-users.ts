@@ -31,6 +31,8 @@ import { auditLog } from "../utils/audit-log.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import type { AgentMetadata } from "@synap/database/schema";
 import { withAgentPresence } from "../services/agent-presence.js";
+import { toPodAdminOrigin } from "../utils/pod-admin-origin.js";
+import { apiKeyService } from "../services/api-keys.js";
 import {
   applyAgentPosture,
   readAgentGovernance,
@@ -81,6 +83,7 @@ async function queryAgentUsers(ctx: { userId: string }, workspaceLens: Lens) {
           agentMetadata: users.agentMetadata,
           createdVia: users.createdVia,
           isPersonalAgent: users.isPersonalAgent,
+          createdByUserId: users.createdByUserId,
           role: workspaceMembers.role,
           joinedAt: workspaceMembers.joinedAt,
         })
@@ -100,6 +103,7 @@ async function queryAgentUsers(ctx: { userId: string }, workspaceLens: Lens) {
       agentMetadata: users.agentMetadata,
       createdVia: users.createdVia,
       isPersonalAgent: users.isPersonalAgent,
+      createdByUserId: users.createdByUserId,
     })
     .from(users)
     .where(
@@ -115,33 +119,74 @@ async function queryAgentUsers(ctx: { userId: string }, workspaceLens: Lens) {
     joinedAt: null as Date | null,
   }));
 
-  return [...tied, ...podWide].map(withAgentOrigin);
+  // An agent that is a member of several visible workspaces joins once per
+  // membership; the roster is one row per AGENT (the first membership wins).
+  const seen = new Set<string>();
+  const unique = tied.filter((r) => !seen.has(r.id) && !!seen.add(r.id));
+  return [...unique, ...podWide];
 }
 
 /**
  * Where an agent came from, from the ONE column that records it
- * (`users.created_via`, migration 0225), plus the `is_personal_agent` column
- * for twins provisioned before 0225 stamped provenance. Never a name match.
+ * (`users.created_via`, migration 0225 — backfilled for the pod's own agents by
+ * 0285), plus `is_personal_agent` for twins.
  *
- * `builtIn` = the pod made it for itself — the personal twin, the capture and
- * form agents (`system`), or an Intelligence Service persona synced from its
- * roster (`intelligence-service`). Those never hold a hub key, so a surface
- * that reads the key-based presence ("Waiting for first call") must not ask
- * them to connect: mark them "Built-in" or leave them out. `cli` / `ui` are
- * agents a person brought or made; a NULL `created_via` (pre-0225) is not
- * claimed as built-in unless it is a twin.
+ * `builtIn` = the pod made it for itself (the twin, the capture and form agents
+ * — `system` — or an Intelligence Service persona — `intelligence-service`)
+ * AND it has never held a hub key. Origin alone is not enough: the IS registry
+ * (`intelligence-registry.ts`) and surface-agent provisioning mint a
+ * `hub_inbound` key for their agents, and an agent that holds (or held) a key
+ * is one the key-based mark CAN describe — hiding it as "Built-in" would hide a
+ * connected agent. Only a key-less pod agent is one a key-based mark would lie
+ * about ("Waiting for first call" forever). `cli` / `ui` are agents a person
+ * brought or made; a NULL `created_via` is never claimed as built-in unless it
+ * is a twin.
  */
 export function withAgentOrigin<
-  T extends { createdVia: string | null; isPersonalAgent: boolean | null },
+  T extends {
+    createdVia: string | null;
+    isPersonalAgent: boolean | null;
+    activeKeys: number;
+    pendingKeys: number;
+    revokedKeys: number;
+  },
 >(row: T): T & { origin: string | null; builtIn: boolean } {
-  return {
-    ...row,
-    origin: row.createdVia,
-    builtIn:
-      row.createdVia === "system" ||
-      row.createdVia === "intelligence-service" ||
-      row.isPersonalAgent === true,
-  };
+  const podMade =
+    row.createdVia === "system" ||
+    row.createdVia === "intelligence-service" ||
+    row.isPersonalAgent === true;
+  const everKeyed = row.activeKeys + row.pendingKeys + row.revokedKeys > 0;
+  return { ...row, origin: row.createdVia, builtIn: podMade && !everKeyed };
+}
+
+/**
+ * What the VIEWER may do on one roster row, decided here so no surface offers
+ * a verb the pod will refuse:
+ *  - `viewerCanDisconnect` — the same gate `disconnect` applies (the agent's
+ *    owner, or a pod admin);
+ *  - `approveUrl` — the ONE approval door for its pending keys
+ *    (`/approve-agents?keys=`, the page `synap init` opens), for that same
+ *    viewer; `null` when nothing awaits approval.
+ * `pendingKeyIds` stays server-side: the URL is the door.
+ */
+export function withViewerVerbs<
+  T extends { createdByUserId: string | null; pendingKeyIds: string[] },
+>(
+  row: T,
+  viewer: { userId: string; isPodAdmin: boolean; podAdminOrigin: string | null }
+): Omit<T, "pendingKeyIds"> & {
+  viewerCanDisconnect: boolean;
+  approveUrl: string | null;
+} {
+  const { pendingKeyIds, ...rest } = row;
+  const viewerCanDisconnect =
+    viewer.isPodAdmin ||
+    (!!row.createdByUserId && row.createdByUserId === viewer.userId);
+  const approveUrl =
+    viewerCanDisconnect && viewer.podAdminOrigin && pendingKeyIds.length > 0
+      ? `${viewer.podAdminOrigin}/approve-agents?keys=${pendingKeyIds.map(encodeURIComponent).join(",")}`
+      : null;
+  return { ...rest, viewerCanDisconnect, approveUrl };
 }
 
 export const agentUsersRouter = router({
@@ -377,9 +422,21 @@ export const agentUsersRouter = router({
     .input(z.object({ workspaceId: ScopeFilterShape.workspaceId }))
     .query(async ({ input, ctx }) => {
       const { workspaceLens } = resolveScope(ctx, input);
-      // + `lastSeenAt` / `host` / `activeKeys` / `pendingKeys` (V1 G3) — the
-      // connected signal Settings › Agents and the entry surfaces read.
-      return withAgentPresence(await queryAgentUsers(ctx, workspaceLens));
+      // + `lastSeenAt` / `host` / `activeKeys` / `pendingKeys` / `revokedKeys`
+      // (V1 G3) — the connected signal Settings › Agents and the entry
+      // surfaces read — then origin (needs the key counts) and viewer verbs.
+      const rows = await withAgentPresence(
+        await queryAgentUsers(ctx, workspaceLens)
+      );
+      const publicOrigin =
+        process.env.PUBLIC_URL ||
+        (ctx.req ? new URL(ctx.req.url).origin : null);
+      const viewer = {
+        userId: ctx.userId,
+        isPodAdmin: await isPodAdmin(ctx.userId),
+        podAdminOrigin: publicOrigin ? toPodAdminOrigin(publicOrigin) : null,
+      };
+      return rows.map((r) => withViewerVerbs(withAgentOrigin(r), viewer));
     }),
 
   /**
@@ -614,6 +671,9 @@ export const agentUsersRouter = router({
         })
         .where(and(eq(apiKeys.userId, agent.id), isNull(apiKeys.revokedAt)))
         .returning({ id: apiKeys.id });
+      // A revoked key must stop validating NOW, not when the 30s verification
+      // cache expires — `/mcp` validates from that cache. Same as revokeApiKey.
+      apiKeyService.invalidateVerificationCache();
 
       // Activity: the same event shape `apiKeys.adminRevokeAllForUser` writes
       // for a bulk revoke, subject = the agent.

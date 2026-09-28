@@ -50,7 +50,7 @@ describe("agent presence", () => {
         lastUsedAt: new Date("2026-09-28T09:00:00Z"),
         instanceId: "desktop",
       }),
-      key({ isActive: false }), // minted, awaiting approval
+      key({ id: "pending-key", isActive: false }), // minted, awaiting approval
       key({ isActive: false, revokedAt: new Date() }) // rejected — neither
     );
     const p = (await loadAgentPresence(["agent-a"])).get("agent-a")!;
@@ -60,6 +60,7 @@ describe("agent presence", () => {
       activeKeys: 2,
       pendingKeys: 1,
       revokedKeys: 1,
+      pendingKeyIds: ["pending-key"],
     });
   });
 

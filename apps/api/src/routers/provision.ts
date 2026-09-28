@@ -1501,6 +1501,9 @@ provisionRouter.post("/activate-addon", async (c) => {
         agentType: "openclaw",
         isPersonalAgent: false,
         createdByUserId: ownerUserId,
+        // Provenance (0225): the person activated this add-on from the
+        // dashboard — an agent a person brought, never a built-in.
+        createdVia: "ui",
         agentMetadata: {
           agentType: "openclaw",
           description:

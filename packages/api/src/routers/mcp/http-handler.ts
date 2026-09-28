@@ -410,6 +410,10 @@ mcpHttpApp.get("/", async (c) => {
  * Each request gets its own transport instance (stateless mode; the
  * Mcp-Session-Id minted at initialize is read as the conversation id only).
  */
+/** What a revoked (disconnected) key's holder is told — the way back included. */
+export const MCP_KEY_DISCONNECTED_MESSAGE =
+  "This key was disconnected. Run `synap init` to reconnect.";
+
 mcpHttpApp.post("/", async (c) => {
   // ── 1. Auth ──────────────────────────────────────────────────────────────
   const token = extractBearer(c.req.header("authorization") ?? null);
@@ -423,7 +427,16 @@ mcpHttpApp.post("/", async (c) => {
 
   const keyRecord = await apiKeyService.validateApiKey(token);
   if (!keyRecord || !keyRecord.userId) {
-    return jsonRpcError(null, -32600, "Invalid or expired API key");
+    // A key that WAS issued and then revoked (Disconnect) says so, with the
+    // way back; an unknown key stays generic — only the plaintext's holder
+    // can learn it was revoked.
+    return jsonRpcError(
+      null,
+      -32600,
+      (await apiKeyService.isRevokedKey(token))
+        ? MCP_KEY_DISCONNECTED_MESSAGE
+        : "Invalid or expired API key"
+    );
   }
 
   // ── 1b. Per-key rate limit (100 req/min) ─────────────────────────────────

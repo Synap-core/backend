@@ -111,8 +111,15 @@ export interface AgentMarkRowLike extends AgentPresenceLike {
    * The ONLY evidence for "Disconnected". Absent on older pods ⇒ never claimed.
    */
   revokedKeys?: number;
-  /** The pod made this agent for itself (twin, capture, IS persona): no key to hold. */
+  /** The pod made this agent for itself and it never held a key. */
   builtIn?: boolean;
+  /**
+   * The pod's answer to "may THIS viewer disconnect it" (owner or pod admin).
+   * Absent on older pods ⇒ offered, and the pod's refusal is said plainly.
+   */
+  viewerCanDisconnect?: boolean;
+  /** The ONE approval door for its pending keys, for this viewer; `null` = none. */
+  approveUrl?: string | null;
 }
 
 export type AgentMarkKind =
@@ -151,8 +158,10 @@ export interface AgentMark {
   seenAt: string | null;
   /** Readable machine / client name (`humanizeAgentHost`), or `null`. */
   host: string | null;
-  /** A live or pending key exists, so Disconnect is a real act. */
+  /** A live or pending key exists AND this viewer may cut it. */
   canDisconnect: boolean;
+  /** Where to approve its pending keys (the pod's door), or `null`. */
+  approveUrl: string | null;
 }
 
 const UUID_RE =
@@ -206,13 +215,15 @@ export function resolveAgentMark(
   const host = humanizeAgentHost(row?.host);
   const active = row?.activeKeys ?? 0;
   const pending = row?.pendingKeys ?? 0;
-  const canDisconnect = !!row && !row.builtIn && active + pending > 0;
+  const canDisconnect =
+    !!row && !row.builtIn && active + pending > 0 && row.viewerCanDisconnect !== false;
+  const approveUrl = (pending > 0 && row?.approveUrl) || null;
   const mark = (
     kind: AgentMarkKind,
     tone: AgentMarkTone,
     label: string | null,
     seenAt: string | null = null
-  ): AgentMark => ({ kind, tone, label, seenAt, host, canDisconnect });
+  ): AgentMark => ({ kind, tone, label, seenAt, host, canDisconnect, approveUrl });
 
   if (!row) return mark("unmeasured", "neutral", null);
   if (row.builtIn) return { ...mark("builtIn", "neutral", "Built-in"), host: null };

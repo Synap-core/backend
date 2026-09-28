@@ -140,6 +140,20 @@ describe('resolveAgentMark', () => {
   });
 });
 
+describe('resolveAgentMark — viewer verbs come from the pod', () => {
+  it('Disconnect only when the pod says this viewer may; absent (older pod) ⇒ offered', () => {
+    expect(resolveAgentMark(row({ activeKeys: 1, viewerCanDisconnect: false }), NOW).canDisconnect).toBe(false);
+    expect(resolveAgentMark(row({ activeKeys: 1, viewerCanDisconnect: true }), NOW).canDisconnect).toBe(true);
+    expect(resolveAgentMark(row({ activeKeys: 1 }), NOW).canDisconnect).toBe(true);
+  });
+  it('the approve door rides only with a pending key', () => {
+    const url = 'https://pod-admin.x/approve-agents?keys=k';
+    expect(resolveAgentMark(row({ pendingKeys: 1, approveUrl: url }), NOW).approveUrl).toBe(url);
+    expect(resolveAgentMark(row({ activeKeys: 1, approveUrl: url }), NOW).approveUrl).toBeNull();
+    expect(resolveAgentMark(row({ pendingKeys: 1 }), NOW).approveUrl).toBeNull();
+  });
+});
+
 describe('agentMarkText', () => {
   const rel = () => '3m ago';
   it('seen / stale ⇒ "Seen <time>"', () => {

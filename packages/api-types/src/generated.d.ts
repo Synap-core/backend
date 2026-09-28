@@ -10908,6 +10908,11 @@ export interface AgentPresence {
 	 * agent that never held a key is a different fact ("No key yet").
 	 */
 	revokedKeys: number;
+	/**
+	 * Ids of the keys awaiting approval (the `pendingKeys`). Read by
+	 * `agentUsers.list` to build the ONE approval door (`/approve-agents?keys=`).
+	 */
+	pendingKeyIds: string[];
 }
 /**
  * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
@@ -27756,7 +27761,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
 			};
-			output: ({
+			output: (Omit<{
 				role: string | null;
 				joinedAt: Date | null;
 				id: string;
@@ -27765,10 +27770,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentMetadata: AgentMetadata | null;
 				createdVia: string | null;
 				isPersonalAgent: boolean;
-			} & {
+				createdByUserId: string | null;
+			} & AgentPresence & {
 				origin: string | null;
 				builtIn: boolean;
-			} & AgentPresence)[];
+			}, "pendingKeyIds"> & {
+				viewerCanDisconnect: boolean;
+				approveUrl: string | null;
+			})[];
 			meta: object;
 		}>;
 		governance: import("@trpc/server").TRPCQueryProcedure<{
