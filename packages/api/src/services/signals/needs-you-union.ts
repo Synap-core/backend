@@ -1086,6 +1086,24 @@ function newestFirst(a: Signal, b: Signal): number {
   );
 }
 
+/** A `session:` block's rows all take the bucket of its newest row. */
+function liftSessionAgeBuckets(signals: readonly Signal[]): Signal[] {
+  const newest = new Map<string, Signal>();
+  for (const s of signals) {
+    if (!s.groupKey?.startsWith("session:")) continue;
+    const cur = newest.get(s.groupKey);
+    if (!cur || s.occurredAt.getTime() > cur.occurredAt.getTime()) {
+      newest.set(s.groupKey, s);
+    }
+  }
+  return signals.map((s) => {
+    const lead = s.groupKey ? newest.get(s.groupKey) : undefined;
+    return lead && lead.ageBucket !== s.ageBucket
+      ? { ...s, ageBucket: lead.ageBucket }
+      : s;
+  });
+}
+
 /**
  * THE needs-you order. Pure.
  *
@@ -1097,11 +1115,14 @@ function newestFirst(a: Signal, b: Signal): number {
  *   3. Blocks are ordered newest first across ALL kinds. A decision filed
  *      today outranks a slot owed for two weeks.
  *
- * A session whose rows straddle the week boundary appears as one block in
- * `recent` and one in `older` — the age rule outranks the grouping rule, as
- * the contract states ("recent first; older after, in the same order rules").
+ * A SESSION appears once (founder, 2026-09-28): every row of a `session:`
+ * block takes the `ageBucket` of its NEWEST row, so a session whose rows
+ * straddle the week boundary is ONE block — in `recent` if anything in it is
+ * recent. Only `session:` blocks are lifted; a cluster or a notification is
+ * one row anyway. Counts are unaffected (the rows are the same rows).
  */
-export function orderNeedsYou(signals: readonly Signal[]): Signal[] {
+export function orderNeedsYou(input: readonly Signal[]): Signal[] {
+  const signals = liftSessionAgeBuckets(input);
   const out: Signal[] = [];
   for (const bucket of ["recent", "older"] as const) {
     const blocks = new Map<string, Signal[]>();

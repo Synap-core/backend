@@ -226,4 +226,17 @@ describe("needsYouRows — Older fold + cap", () => {
     expect(shape(shown)).toEqual(["session:A[a1,a2,a3]", "item:x"]);
     expect(hiddenRows).toBe(1);
   });
+
+  it("hiddenItems is in BADGE units — a hidden card counts its signals, not its proposals", () => {
+    const { recent } = needsYouRows([
+      row("x"),
+      row("a1", { groupKey: "session:A", kind: "proposal-cluster", count: 12 }),
+      row("a2", { groupKey: "session:A" }),
+      row("y"),
+    ]);
+    const cut = capNeedsYouRows(recent, 1);
+    expect(cut.hiddenRows).toBe(2);
+    // card (2 signals) + y (1) — never 12 + 1 + 1.
+    expect(cut.hiddenItems).toBe(3);
+  });
 });

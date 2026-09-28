@@ -286,14 +286,31 @@ describe("age bucket", () => {
     });
     expect(signals.map((s) => s.ageBucket)).toEqual([
       "recent",
-      "older",
+      "recent",
       "older",
       "older",
     ]);
-    // s-1 straddles the boundary: its recent slot leads, its ancient slot is
-    // in the Older block — the age rule outranks grouping.
-    expect(signals[0]!.id).toBe("slot:s-1:recent");
-    expect(signals.at(-1)!.id).toBe("slot:s-1:ancient");
+    // s-1 straddles the boundary, and a session appears ONCE: its whole block
+    // takes its NEWEST row's bucket, so the ancient slot rides up with it.
+    expect(signals.slice(0, 2).map((s) => s.id)).toEqual([
+      "slot:s-1:recent",
+      "slot:s-1:ancient",
+    ]);
+  });
+
+  it("only session blocks are lifted — an old cluster or notification stays older", () => {
+    const signals = unionNeedsYou({
+      clusters: [cluster("old-decision", ago(9 * DAY))],
+      notifications: [],
+      owedSlots: [owed("s-9", "Only old", ago(10 * DAY)), owed("s-1", "Fresh", ago(1))],
+      now: NOW,
+    });
+    const bucket = Object.fromEntries(signals.map((s) => [s.id, s.ageBucket]));
+    expect(bucket).toEqual({
+      "slot:s-1:fresh": "recent",
+      "cluster:old-decision": "older",
+      "slot:s-9:only old": "older",
+    });
   });
 });
 

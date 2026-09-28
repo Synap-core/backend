@@ -329,14 +329,29 @@ export function needsYouRows<T extends GroupableSignal>(
 
 /**
  * Cap by ROWS (Home shows ≤ 5): a session card is one row, so a session's
- * items are never split across the cap. `hiddenRows` is the rows left out.
+ * items are never split across the cap.
+ *
+ * - `hiddenRows` — the ROWS left out (a card is one).
+ * - `hiddenItems` — the same, in BADGE units: one per signal, a card counting
+ *   its items. This is what "+K more" / "Show all N" states, so the number a
+ *   reader follows adds up with the needs-you badge (`signals.count`, one per
+ *   signal row). A card's own summary keeps its REAL units ("12 decisions"
+ *   for a 12-proposal cluster) — that is the work, not the badge.
  */
 export function capNeedsYouRows<T extends GroupableSignal>(
   rows: readonly NeedsYouRow<T>[],
   limit: number
-): { shown: NeedsYouRow<T>[]; hiddenRows: number } {
+): { shown: NeedsYouRow<T>[]; hiddenRows: number; hiddenItems: number } {
   const shown = rows.slice(0, Math.max(0, limit));
-  return { shown, hiddenRows: rows.length - shown.length };
+  const hidden = rows.slice(shown.length);
+  return {
+    shown,
+    hiddenRows: hidden.length,
+    hiddenItems: hidden.reduce(
+      (n, r) => n + (r.kind === "session" ? r.items.length : 1),
+      0
+    ),
+  };
 }
 
 /** A session card's summary: "2 decisions", "1 action · 1 decision". */
