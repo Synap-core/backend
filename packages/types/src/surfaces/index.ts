@@ -134,7 +134,7 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     replacedBy: "Desktop Data app",
     decisionDoc: V1_PLAN_DOC,
   },
-] as const;
+];
 
 export function deprecatedSurfacesFor(
   surface: DeprecatedSurfaceHost

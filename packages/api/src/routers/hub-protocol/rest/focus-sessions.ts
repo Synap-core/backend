@@ -83,6 +83,7 @@ import {
   SESSION_ANSWERS_MAX_LIMIT,
 } from "../../../services/focus-sessions/list-session-answers.js";
 import {
+  WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
   waitForSessionAnswers,
 } from "../../../services/focus-sessions/wait-for-answers.js";
@@ -777,9 +778,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     description:
       "Returns as soon as an answer newer than `since` exists " +
       "(`status: 'answered'`, the same page shape as GET /answers), or after " +
-      "`timeoutSeconds` (default 50, max 120) with `status: 'timeout'` and " +
-      "`nextSince` to wait on again. An agent key's read stamps the slot " +
-      "answer's `answerPickedUpAt` receipt.",
+      `\`timeoutSeconds\` (default ${WAIT_DEFAULT_SECONDS}, max ${WAIT_MAX_SECONDS}) with \`status: 'timeout'\` and ` +
+      "`nextSince` to wait on again. Without `since`, only UNREAD answers: " +
+      "slot answers not yet picked up, and room answers newer than the call. " +
+      "An agent key's read stamps the slot answer's `answerPickedUpAt` receipt.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       query: SessionAnswersWaitQuerySchema,
@@ -2610,7 +2612,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         since: q.data.since ? new Date(q.data.since) : null,
         timeoutSeconds: q.data.timeoutSeconds,
         limit: q.data.limit,
-        pickedUpBy: c.get("agentUserId") as string | undefined,
+        // An AGENT key's read is the "Picked up" moment; a person's never is.
+        stampReceipt: Boolean(c.get("agentUserId")),
         signal: c.req.raw.signal,
       });
       if (!result) {

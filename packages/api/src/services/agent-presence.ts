@@ -20,9 +20,9 @@ export interface AgentPresence {
   lastSeenAt: string | null;
   /** Instance label (`api_keys.instance_id`) of the key last seen; `null` if none/unlabelled. */
   host: string | null;
-  /** Live keys (active, not revoked) — 0 means the agent cannot connect. */
+  /** Live keys (active, not revoked, not expired) — 0 means the agent cannot connect. */
   activeKeys: number;
-  /** Keys minted and still awaiting the person's approval (inactive, not revoked). */
+  /** Keys minted and still awaiting the person's approval (inactive, not revoked, not expired). */
   pendingKeys: number;
 }
 
@@ -34,7 +34,8 @@ export const NEVER_SEEN: AgentPresence = {
 };
 
 export async function loadAgentPresence(
-  agentUserIds: readonly string[]
+  agentUserIds: readonly string[],
+  now: Date = new Date()
 ): Promise<Map<string, AgentPresence>> {
   const out = new Map<string, AgentPresence>();
   const ids = [...new Set(agentUserIds)].filter(Boolean);
@@ -46,6 +47,7 @@ export async function loadAgentPresence(
       instanceId: apiKeys.instanceId,
       isActive: apiKeys.isActive,
       revokedAt: apiKeys.revokedAt,
+      expiresAt: apiKeys.expiresAt,
     })
     .from(apiKeys)
     .where(
@@ -60,7 +62,9 @@ export async function loadAgentPresence(
         cur.host = r.instanceId ?? null;
       }
     }
-    if (!r.revokedAt) {
+    // An expired key cannot authenticate: it is neither live nor approvable.
+    const expired = r.expiresAt !== null && r.expiresAt <= now;
+    if (!r.revokedAt && !expired) {
       if (r.isActive) cur.activeKeys += 1;
       else cur.pendingKeys += 1;
     }

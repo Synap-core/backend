@@ -647,9 +647,10 @@ export interface ProvisionSurfaceAgentKeyOpts {
    */
   onAgentUserResolved?: (agentUserId: string) => Promise<void>;
   /**
-   * The MCP tool surface the new key LISTS (V1 D4). Default `"entry"` — every
-   * NEW agent key starts small; `"builder"` lists every tool. Keys minted
-   * before 0280 carry NULL (legacy, every tool) and are never touched here.
+   * The MCP tool surface the new key LISTS (V1 D4). Omitted: a re-mint keeps
+   * the agent's newest key's surface (legacy NULL stays legacy — D4 leaves
+   * existing agents unchanged); an agent with no key yet gets `"entry"`.
+   * `"builder"` lists every tool.
    */
   toolProfile?: ApiKeyToolProfile;
   logger?: ProvisionLogger;
@@ -786,6 +787,35 @@ export async function provisionSurfaceAgentKey(
   }
 
   // ── 5. Revoke siblings, then mint+verify ────────────────────────────────
+  // The MCP tool surface (V1 D4: "existing agents unchanged"). An explicit
+  // `toolProfile` wins. Otherwise a RE-mint (OAuth re-authorize, mcp-redeem,
+  // CLI re-mint) keeps what this agent's newest key listed — a legacy NULL key
+  // stays legacy, an entry key keeps its unlocked groups — and only an agent
+  // with no key yet starts on `entry`. Read BEFORE the sibling revoke.
+  const inherited =
+    opts.toolProfile === undefined
+      ? await db.query.apiKeys.findFirst({
+          where: and(
+            eq(apiKeys.userId, agentUserId),
+            eq(apiKeys.keyType, "hub_inbound")
+          ),
+          orderBy: (k, { desc }) => [desc(k.createdAt)],
+          columns: { toolProfile: true, toolGroups: true },
+        })
+      : undefined;
+  const toolSurface: {
+    toolProfile: ApiKeyToolProfile | null;
+    toolGroups?: string[];
+  } =
+    opts.toolProfile !== undefined
+      ? { toolProfile: opts.toolProfile }
+      : inherited
+        ? {
+            toolProfile: inherited.toolProfile ?? null,
+            toolGroups: inherited.toolGroups ?? [],
+          }
+        : { toolProfile: "entry" };
+
   await revokeActiveHubInboundKeysForUser(db, {
     userId: agentUserId,
     revokedBy: agentUserId,
@@ -815,7 +845,7 @@ export async function provisionSurfaceAgentKey(
         `Hub Protocol auth token for ${agentLabel} agent`,
       linkedUserId: resolvedLinkedUserId,
       instanceId: instanceId ?? null,
-      toolProfile: opts.toolProfile ?? "entry",
+      ...toolSurface,
       expiresAt: new Date(nowMs + ttlDays * DAY_MS),
       rotationScheduledAt: new Date(
         nowMs + (ttlDays - rotationLeadDays) * DAY_MS

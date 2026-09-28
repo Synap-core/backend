@@ -14,6 +14,13 @@
  *     missing and not-yours are the same `null`;
  *   - `since` is EXCLUSIVE, as in the poll; the result always carries a
  *     `nextSince` to pass back;
+ *   - NO `since` = UNREAD, never "every answer so far": slot answers that
+ *     carry no "Picked up" receipt yet (any age — an answer given while the
+ *     agent was away still counts), and room-question answers newer than the
+ *     moment the wait began. So a second ask never gets the first answer back
+ *     as new. Stated limit: a SLOTLESS room answer given before the wait began
+ *     is only seen with a `since` (e.g. the time the question was posted);
+ *     without a receipt stamp (a person's read) slot answers stay unread;
  *   - `timeoutSeconds` is clamped to [1, {@link WAIT_MAX_SECONDS}]
  *     (default {@link WAIT_DEFAULT_SECONDS} — under common proxy idle limits);
  *   - `answered` returns the SAME page shape as the poll (typed `value`
@@ -26,8 +33,10 @@
  * ({@link WAIT_FALLBACK_POLL_MS}) — the floor for a lost NOTIFY or a process
  * where the listener is not running. At most one read per wake.
  *
- * When `pickedUpBy` (the acting AGENT) is set, the slot answers it returns get
- * the "Picked up" receipt (`answer-pickup.ts`). A person's read never passes it.
+ * When `stampReceipt` is set (the reader is an AGENT), the slot answers it
+ * returns get the "Picked up" receipt (`answer-pickup.ts`) — unless the caller
+ * hung up (`signal` aborted), in which case nobody read them. A person's read
+ * never stamps.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -41,7 +50,11 @@ import { onSessionChanged } from "../../utils/session-changed-listener.js";
 const logger = createLogger({ module: "wait-for-answers" });
 
 export const WAIT_DEFAULT_SECONDS = 50;
-export const WAIT_MAX_SECONDS = 120;
+/**
+ * 90s: under the common 100s proxy idle limit. Codex CLI's default MCP tool
+ * timeout is 60s — Codex callers pass ≤55 (said on the tool).
+ */
+export const WAIT_MAX_SECONDS = 90;
 /** The floor poll when no NOTIFY arrives — a hint wake usually comes first. */
 export const WAIT_FALLBACK_POLL_MS = 5_000;
 
@@ -78,8 +91,8 @@ export async function waitForSessionAnswers(
     since?: Date | null;
     timeoutSeconds?: number;
     limit?: number;
-    /** The acting agent; stamps the "Picked up" receipt on what it reads. */
-    pickedUpBy?: string;
+    /** The reader is an AGENT: stamp the "Picked up" receipt on what it reads. */
+    stampReceipt?: boolean;
     /** Aborted when the caller hangs up — stop waiting (one last read, then `timeout`). */
     signal?: AbortSignal;
   },
@@ -112,10 +125,15 @@ export async function waitForSessionAnswers(
         userId: p.userId,
         since: p.since ?? null,
         limit: p.limit,
+        // No cursor = UNREAD (see the contract above).
+        ...(p.since
+          ? {}
+          : { skipPickedUp: true, roomSince: new Date(startedAt) }),
       });
       if (!page) return null;
       if (page.answers.length > 0) {
-        if (p.pickedUpBy) {
+        // A caller that hung up never read these — no receipt.
+        if (p.stampReceipt && !p.signal?.aborted) {
           try {
             await stamp({ sessionId: p.sessionId, answers: page.answers });
           } catch (err) {

@@ -24,6 +24,7 @@ import { tools } from "./tools/index.js";
 import { prompts } from "./prompts/index.js";
 import { filterToolsForAccess } from "./tool-profiles.js";
 import { loadKeyToolAccess } from "./tool-access.js";
+import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 
 const logger: any = createLogger({ module: "mcp-server" });
 
@@ -81,22 +82,44 @@ export const INSTRUCTIONS_BUDGET_BYTES = 2048;
 
 const SEPARATOR = "\n\n";
 
-/** Bytes left for grounding once the reflexes are placed. */
-export function groundingBudgetBytes(): number {
+/**
+ * Which reflexes a connection gets: `entry` keys (V1 D4) get the entry-worded
+ * text (`entry-instructions.ts`), every other key the full `reflexes.md`.
+ */
+export type InstructionsProfile = "entry" | "full";
+
+function reflexProseFor(profile: InstructionsProfile): string {
+  return profile === "entry" ? ENTRY_REFLEX_PROSE : REFLEX_PROSE;
+}
+
+/**
+ * Bytes left for grounding once the reflexes are placed. Defaults to the FULL
+ * reflexes — the longer text — so a grounding fitted to it fits either one.
+ */
+export function groundingBudgetBytes(
+  profile: InstructionsProfile = "full"
+): number {
   return Math.max(
     0,
     INSTRUCTIONS_BUDGET_BYTES -
-      Buffer.byteLength(REFLEX_PROSE) -
+      Buffer.byteLength(reflexProseFor(profile)) -
       Buffer.byteLength(SEPARATOR)
   );
 }
 
 /** Reflexes first (most important), then the live grounding when it fits. */
-export function composeInstructions(grounding?: string): string {
-  if (grounding && Buffer.byteLength(grounding) <= groundingBudgetBytes()) {
-    return `${REFLEX_PROSE}${SEPARATOR}${grounding}`;
+export function composeInstructions(
+  grounding?: string,
+  profile: InstructionsProfile = "full"
+): string {
+  const prose = reflexProseFor(profile);
+  if (
+    grounding &&
+    Buffer.byteLength(grounding) <= groundingBudgetBytes(profile)
+  ) {
+    return `${prose}${SEPARATOR}${grounding}`;
   }
-  return REFLEX_PROSE;
+  return prose;
 }
 
 export const SYNAP_INSTRUCTIONS = composeInstructions();
@@ -139,7 +162,12 @@ export function createMCPServer(
    * `synap_load_skill` may unlock deeper groups on it. Undefined (stdio/dev,
    * the unauthenticated GET/SSE branch) → every tool, as before.
    */
-  toolAccessKeyId?: string
+  toolAccessKeyId?: string,
+  /**
+   * Which reflexes the `instructions` carry (`entry` for an entry-profile
+   * key, read by the HTTP door at `initialize`). Default `full`.
+   */
+  instructionsProfile: InstructionsProfile = "full"
 ) {
   const server = new Server(
     {
@@ -156,7 +184,7 @@ export function createMCPServer(
       // Auto-grounding: the static reflexes + (when the HTTP handler resolved the
       // authed user) a live one-line snapshot of their pod, so the model is
       // grounded without having to call anything first.
-      instructions: composeInstructions(grounding),
+      instructions: composeInstructions(grounding, instructionsProfile),
     }
   );
 
@@ -266,7 +294,9 @@ export function createMCPServer(
                 method: "notifications/tools/list_changed",
               }),
           }
-        : undefined
+        : undefined,
+      // Cancelled request / closed connection — long waits stop on it.
+      extra.signal
     );
   });
 

@@ -36,6 +36,8 @@ export interface CreateApiKeyInput {
   instanceId?: string | null;
   /** MCP tool profile (0280). NULL/omitted = legacy (every tool listed). */
   toolProfile?: ApiKeyToolProfile | null;
+  /** Tool groups already unlocked (0280) — carried by a re-mint. Omitted = none. */
+  toolGroups?: string[];
 }
 
 export interface UpdateApiKeyInput {
@@ -92,6 +94,7 @@ export class ApiKeyRepository extends BaseRepository<
         linkedUserId: data.linkedUserId ?? null,
         instanceId: data.instanceId ?? null,
         toolProfile: data.toolProfile ?? null,
+        ...(data.toolGroups ? { toolGroups: data.toolGroups } : {}),
       })
       .returning();
 

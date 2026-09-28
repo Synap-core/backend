@@ -27,6 +27,7 @@ const key = (over: Record<string, unknown>) => ({
   instanceId: null,
   isActive: true,
   revokedAt: null,
+  expiresAt: null,
   ...over,
 });
 
@@ -56,6 +57,18 @@ describe("agent presence", () => {
       activeKeys: 2,
       pendingKeys: 1,
     });
+  });
+
+  it("an EXPIRED key is neither live nor pending; a future expiry still counts", async () => {
+    const now = new Date("2026-09-28T12:00:00Z");
+    rows.push(
+      key({ expiresAt: new Date("2026-09-28T11:59:59Z") }), // expired, active
+      key({ isActive: false, expiresAt: new Date("2026-09-01T00:00:00Z") }), // expired, pending
+      key({ expiresAt: new Date("2026-12-01T00:00:00Z") }) // live
+    );
+    const p = (await loadAgentPresence(["agent-a"], now)).get("agent-a")!;
+    expect(p.activeKeys).toBe(1);
+    expect(p.pendingKeys).toBe(0);
   });
 
   it("no ids → no read", async () => {

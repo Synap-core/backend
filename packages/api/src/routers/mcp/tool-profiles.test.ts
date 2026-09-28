@@ -1,15 +1,38 @@
 import { describe, it, expect } from "vitest";
+import { readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tools } from "./tools/index.js";
 import {
   BUILDER_REF,
+  SKILL_STEMS_THAT_UNLOCK,
   ENTRY_TOOLS,
   TOOL_GROUPS,
   TOOL_GROUP_NAMES,
   filterToolsForAccess,
   groupsForLoadSkillRef,
   isToolGroupRef,
+  parseToolGroupRef,
+  toolGroupRef,
   visibleToolNames,
 } from "./tool-profiles.js";
+
+/**
+ * Every seeded skill STEM on disk (`skills/<package>/*.md`) — what a bare
+ * `load_skill` ref resolves to. Globbed, never hand-listed, so a skill added
+ * tomorrow joins the collision check by existing.
+ */
+const SKILLS_ROOT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../../../skills"
+);
+const SKILL_STEMS: string[] = readdirSync(SKILLS_ROOT, { withFileTypes: true })
+  .filter((d) => d.isDirectory())
+  .flatMap((d) =>
+    readdirSync(join(SKILLS_ROOT, d.name))
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => f.slice(0, -3).toLowerCase())
+  );
 
 /**
  * MCP tool profiles (V1 D4). The coverage half is DERIVED from the live
@@ -97,17 +120,47 @@ describe("tool profiles", () => {
     );
   });
 
-  it("load_skill refs resolve to groups: builder = all, a group = itself, a teaching skill = what it teaches", () => {
+  it("load_skill refs resolve to groups: tools:builder = all, tools:<group> = itself, a teaching skill = what it teaches", () => {
+    expect(BUILDER_REF).toBe("tools:builder");
     expect(groupsForLoadSkillRef(BUILDER_REF)).toEqual(TOOL_GROUP_NAMES);
-    expect(groupsForLoadSkillRef(" Schema ")).toEqual(["schema"]);
+    expect(groupsForLoadSkillRef(" tools:Schema ")).toEqual(["schema"]);
     expect(groupsForLoadSkillRef("system/synap/from-intent")).toEqual([
       "schema",
       "spaces",
     ]);
     expect(groupsForLoadSkillRef("writes.md")).toEqual(["data"]);
     expect(groupsForLoadSkillRef("catalog")).toEqual([]);
-    expect(isToolGroupRef("builder")).toBe(true);
-    expect(isToolGroupRef("tracks")).toBe(true);
+    expect(isToolGroupRef("tools:builder")).toBe(true);
+    expect(isToolGroupRef("tools:tracks")).toBe(true);
     expect(isToolGroupRef("focus-sessions")).toBe(false);
+    // A bare group name is NOT a group ref — it is a skill ref.
+    expect(isToolGroupRef("tracks")).toBe(false);
+    expect(isToolGroupRef("builder")).toBe(false);
+    // An unknown name in the group namespace is reported, never widened.
+    expect(parseToolGroupRef("tools:everything")).toBeNull();
+  });
+
+  it("group refs and skill stems never collide (skills globbed from skills/*/*.md)", () => {
+    // Non-vacuity: the glob sees the real skills, including the two stems
+    // that ARE also group names — the collision this namespace exists for.
+    expect(SKILL_STEMS.length).toBeGreaterThan(40);
+    expect(SKILL_STEMS).toContain("governance");
+    expect(SKILL_STEMS).toContain("capabilities");
+
+    // Every skill stem resolves as a SKILL, never as a group ref…
+    expect(SKILL_STEMS.filter((stem) => isToolGroupRef(stem))).toEqual([]);
+    // …and no group ref is itself a skill stem.
+    const refs = [
+      BUILDER_REF,
+      ...TOOL_GROUP_NAMES.map((g) => toolGroupRef(g)),
+    ].map((r) => r.toLowerCase());
+    expect(refs.filter((r) => SKILL_STEMS.includes(r))).toEqual([]);
+  });
+
+  it("every skill that unlocks a group is a real skill file", () => {
+    expect(SKILL_STEMS_THAT_UNLOCK.length).toBeGreaterThan(10);
+    expect(
+      SKILL_STEMS_THAT_UNLOCK.filter((stem) => !SKILL_STEMS.includes(stem))
+    ).toEqual([]);
   });
 });

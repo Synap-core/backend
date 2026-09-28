@@ -100,6 +100,17 @@ export async function listSessionAnswers(p: {
   roster?: boolean;
   since?: Date | null;
   limit?: number;
+  /**
+   * UNREAD mode (the wait door with no cursor): drop slot answers that carry
+   * the "Picked up" receipt (`answerPickedUpAt`). Default false.
+   */
+  skipPickedUp?: boolean;
+  /**
+   * A separate floor for slotless ROOM answers (exclusive), used with
+   * `skipPickedUp`: they carry no receipt, so "unread" for them is "newer
+   * than this". Defaults to `since`.
+   */
+  roomSince?: Date | null;
 }): Promise<SessionAnswersPage | null> {
   const limit = Math.max(
     1,
@@ -109,6 +120,12 @@ export async function listSessionAnswers(p: {
     )
   );
   const since = p.since ? p.since.toISOString() : null;
+  const roomSince =
+    p.roomSince !== undefined
+      ? p.roomSince
+        ? p.roomSince.toISOString()
+        : null
+      : since;
 
   const session = await db.query.focusSessions.findFirst({
     where: and(
@@ -135,6 +152,7 @@ export async function listSessionAnswers(p: {
     // Owner answers only — the stamp's own author, re-checked on the read.
     if (a.answeredBy !== ownerId) continue;
     if (since && !(a.answeredAt > since)) continue;
+    if (p.skipPickedUp && slot.answerPickedUpAt) continue;
     const id =
       a.messageId ??
       `slot:${session.id}:${normalizeExpectedLabel(slot.label)}:${a.answeredAt}`;
@@ -173,7 +191,7 @@ export async function listSessionAnswers(p: {
           isNull(messages.deletedAt),
           drizzleSql`${messages.metadata}->${ROOM_POST_META_KEY}->>'kind' = 'question'`,
           drizzleSql`${messages.metadata}->${ROOM_POST_META_KEY}->'answer'->>'answeredBy' = ${ownerId}`,
-          ...(since ? [drizzleSql`${answeredAtSql} > ${since}`] : [])
+          ...(roomSince ? [drizzleSql`${answeredAtSql} > ${roomSince}`] : [])
         )
       )
       .orderBy(asc(answeredAtSql))

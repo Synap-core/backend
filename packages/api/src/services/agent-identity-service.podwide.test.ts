@@ -144,3 +144,53 @@ describe("provisionSurfaceAgentKey — pod-wide opt-in", () => {
     expect(lastMintInput).toBeUndefined();
   });
 });
+
+describe("provisionSurfaceAgentKey — the MCP tool surface (V1 D4)", () => {
+  // The agent's newest key, as the pre-revoke read sees it.
+  const newestKey = async (row: Record<string, unknown> | null) => {
+    const { db } = await import("@synap/database");
+    const findFirst = (
+      db as unknown as {
+        query: { apiKeys: { findFirst: ReturnType<typeof vi.fn> } };
+      }
+    ).query.apiKeys.findFirst;
+    findFirst.mockResolvedValueOnce(row);
+  };
+  const mint = (toolProfile?: "entry" | "builder") =>
+    provisionSurfaceAgentKey({
+      agentType: "claude-code",
+      createdByUserId: "human-1",
+      linkedUserId: null,
+      ...(toolProfile ? { toolProfile } : {}),
+    });
+
+  beforeEach(() => {
+    lastMintInput = undefined;
+  });
+
+  it("a FIRST key for the agent starts on the entry surface", async () => {
+    await newestKey(null);
+    await mint();
+    expect(lastMintInput?.toolProfile).toBe("entry");
+  });
+
+  it("a RE-mint of a legacy agent (NULL profile) stays legacy — existing agents unchanged", async () => {
+    await newestKey({ toolProfile: null, toolGroups: [] });
+    await mint();
+    expect(lastMintInput?.toolProfile).toBeNull();
+  });
+
+  it("a RE-mint of an entry agent keeps the groups it unlocked", async () => {
+    await newestKey({ toolProfile: "entry", toolGroups: ["tracks"] });
+    await mint();
+    expect(lastMintInput).toMatchObject({
+      toolProfile: "entry",
+      toolGroups: ["tracks"],
+    });
+  });
+
+  it("an explicit profile wins over the inherited one", async () => {
+    await mint("builder");
+    expect(lastMintInput?.toolProfile).toBe("builder");
+  });
+});

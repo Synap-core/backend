@@ -170,7 +170,7 @@ export const sessionHandlers: McpHandlerMap = {
   synap_wait_for_answer: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    const { toolName, args, userId, apiKeyScopes, agentUserId, signal } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const sessionId =
       typeof args.sessionId === "string" ? args.sessionId.trim() : "";
@@ -194,7 +194,9 @@ export const sessionHandlers: McpHandlerMap = {
       userId,
       since,
       timeoutSeconds,
-      pickedUpBy: agentUserId,
+      stampReceipt: Boolean(agentUserId),
+      // The client hung up / cancelled: stop waiting, stamp nothing.
+      signal,
     });
     if (!result) return ok({ error: `Focus session ${sessionId} not found` });
     if (result.status === "timeout") {

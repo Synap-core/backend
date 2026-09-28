@@ -9,6 +9,7 @@
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
+import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
 
 import {
   db,
@@ -400,8 +401,8 @@ async function authenticateServiceSetupRequest(
   };
 }
 
-/** Keys one batch approval may carry — `synap init` connects a handful of harnesses. */
-const PENDING_BATCH_MAX = 20;
+/** Keys one batch approval may carry — the one number pod-admin also reads. */
+const PENDING_BATCH_MAX = PENDING_APPROVAL_BATCH_MAX;
 
 /** Canonical uuid shape — anything else in `linkedUserId` is an email or name. */
 const UUID_RE =
@@ -654,22 +655,15 @@ export function registerSetupRoutes(app: HubHono): void {
     // creator (createdByUserId) is still resolved and required; only the key's
     // linked human is deliberately dropped.
     const podWide: boolean = body.podWide === true;
-    // The MCP tool surface the new key LISTS (V1 D4). Omitted → the door's
-    // default, `entry`; `builder` asks for every tool. Any other value is a
-    // caller error, not a guess.
-    const toolProfile: ApiKeyToolProfile | undefined =
-      body.toolProfile === undefined || body.toolProfile === null
-        ? undefined
-        : (API_KEY_TOOL_PROFILES as readonly unknown[]).includes(
-              body.toolProfile
-            )
-          ? (body.toolProfile as ApiKeyToolProfile)
-          : undefined;
-    if (
-      body.toolProfile !== undefined &&
-      body.toolProfile !== null &&
-      toolProfile === undefined
-    ) {
+    // The MCP tool surface the new key LISTS (V1 D4). Omitted/null → the
+    // door's default (a first key: `entry`; a re-mint keeps the agent's
+    // surface); `builder` asks for every tool. Any other value is a caller
+    // error, not a guess.
+    const toolProfileParse = z
+      .enum(API_KEY_TOOL_PROFILES)
+      .nullish()
+      .safeParse(body.toolProfile);
+    if (!toolProfileParse.success) {
       return c.json(
         {
           error: `Invalid \`toolProfile\` — expected one of: ${API_KEY_TOOL_PROFILES.join(", ")}.`,
@@ -677,6 +671,8 @@ export function registerSetupRoutes(app: HubHono): void {
         400
       );
     }
+    const toolProfile: ApiKeyToolProfile | undefined =
+      toolProfileParse.data ?? undefined;
     // Surface installs can request a pending-approval flow: key is created inactive
     // until the human owner approves it at the review URL.
     const requireApproval: boolean =

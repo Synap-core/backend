@@ -2585,6 +2585,15 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "linked_user_id" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "instance_id" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_profile" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_groups" text[] NOT NULL DEFAULT '{}';
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'api_keys_tool_profile_check'
+  ) THEN
+    ALTER TABLE "api_keys"
+      ADD CONSTRAINT "api_keys_tool_profile_check"
+      CHECK ("tool_profile" IS NULL OR "tool_profile" IN ('entry', 'builder'));
+  END IF;
+END $$;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;

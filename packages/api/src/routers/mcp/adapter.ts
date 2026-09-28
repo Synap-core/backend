@@ -78,7 +78,9 @@ export async function executeMCPToolViaHubProtocol(
    * unchanged.
    */
   keyType?: string | null,
-  keyWorkspaceId?: string | null
+  keyWorkspaceId?: string | null,
+  /** The MCP request's abort signal (`extra.signal`) — for long-running tools. */
+  signal?: AbortSignal
 ): Promise<CallToolResult> {
   const resolution = await resolveSessionHandle(
     toolName,
@@ -191,6 +193,7 @@ export async function executeMCPToolViaHubProtocol(
       sessionId,
       keyType,
       keyWorkspaceId,
+      signal,
       caller,
       lensCaller,
       requestedWorkspaceId,

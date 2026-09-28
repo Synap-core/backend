@@ -10841,9 +10841,9 @@ export interface AgentPresence {
 	lastSeenAt: string | null;
 	/** Instance label (`api_keys.instance_id`) of the key last seen; `null` if none/unlabelled. */
 	host: string | null;
-	/** Live keys (active, not revoked) — 0 means the agent cannot connect. */
+	/** Live keys (active, not revoked, not expired) — 0 means the agent cannot connect. */
 	activeKeys: number;
-	/** Keys minted and still awaiting the person's approval (inactive, not revoked). */
+	/** Keys minted and still awaiting the person's approval (inactive, not revoked, not expired). */
 	pendingKeys: number;
 }
 /**

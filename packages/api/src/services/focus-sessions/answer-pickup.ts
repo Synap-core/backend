@@ -61,6 +61,19 @@ export async function stampAnswersPickedUp(p: {
 }): Promise<number> {
   if (!p.answers.some((a) => a.slot)) return 0;
   const now = p.now ?? new Date();
+  // Check BEFORE taking the row lock: a re-read of answers already picked up
+  // (every poll after the first) is the common case and must not queue
+  // behind — or block — the session's writers. The lock below re-checks.
+  const [peek] = await db
+    .select({ expectedOutputs: focusSessions.expectedOutputs })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, p.sessionId))
+    .limit(1);
+  if (!peek) return 0;
+  const peeked: ExpectedOutput[] = Array.isArray(peek.expectedOutputs)
+    ? (peek.expectedOutputs as ExpectedOutput[])
+    : [];
+  if (stampPickedUp(peeked, p.answers, now).stamped === 0) return 0;
   return db.transaction(async (tx) => {
     const [locked] = await tx
       .select({ expectedOutputs: focusSessions.expectedOutputs })

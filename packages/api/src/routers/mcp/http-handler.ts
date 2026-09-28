@@ -40,6 +40,7 @@ import {
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
+import { loadKeyToolAccess } from "./tool-access.js";
 import { resolveIssuer } from "../oauth/config.js";
 import {
   db,
@@ -514,6 +515,13 @@ mcpHttpApp.post("/", async (c) => {
   const grounding = isInitialize
     ? await buildGrounding(effectiveUserId)
     : undefined;
+  // An ENTRY key's instructions name only the tools it lists (V1 D4). Read at
+  // initialize only — the one request whose `instructions` a client reads.
+  // A failed read fails the handshake rather than guessing a profile.
+  const instructionsProfile =
+    isInitialize && (await loadKeyToolAccess(keyRecord.id)).profile === "entry"
+      ? "entry"
+      : "full";
   const server = createMCPServer(
     defaultWorkspaceId,
     effectiveUserId,
@@ -531,7 +539,8 @@ mcpHttpApp.post("/", async (c) => {
     keyRecord.keyType,
     keyRecord.workspaceId,
     // The key's MCP tool profile (V1 D4) narrows what tools/list advertises.
-    keyRecord.id
+    keyRecord.id,
+    instructionsProfile
   );
   await server.connect(transport);
 

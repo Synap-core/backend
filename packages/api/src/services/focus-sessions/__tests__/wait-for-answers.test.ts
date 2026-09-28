@@ -141,7 +141,7 @@ describe("waitForSessionAnswers", () => {
 
     const agentStamp = vi.fn().mockRejectedValue(new Error("lock timeout"));
     const r = await waitForSessionAnswers(
-      { sessionId: SID, userId: "u1", pickedUpBy: "agent-1" },
+      { sessionId: SID, userId: "u1", stampReceipt: true },
       { list, subscribe: ch.subscribe, stamp: agentStamp }
     );
     expect(agentStamp).toHaveBeenCalledWith({
@@ -151,12 +151,74 @@ describe("waitForSessionAnswers", () => {
     expect(r?.status).toBe("answered");
   });
 
-  it("clamps the wait to [1, 120] seconds, default 50", () => {
+  it("a caller that HUNG UP stamps nothing (nobody read the answer)", async () => {
+    const ctl = new AbortController();
+    ctl.abort();
+    const stamp = vi.fn();
+    const r = await waitForSessionAnswers(
+      { sessionId: SID, userId: "u1", stampReceipt: true, signal: ctl.signal },
+      {
+        list: vi.fn().mockResolvedValue(page([answer()])),
+        subscribe: wakeChannel().subscribe,
+        stamp,
+      }
+    );
+    expect(r?.status).toBe("answered");
+    expect(stamp).not.toHaveBeenCalled();
+  });
+
+  it("an abort ends the sleep at once (no waiting out the timeout)", async () => {
+    const ctl = new AbortController();
+    const list = vi.fn().mockResolvedValue(page([]));
+    const pending = waitForSessionAnswers(
+      { sessionId: SID, userId: "u1", timeoutSeconds: 60, signal: ctl.signal },
+      { list, subscribe: wakeChannel().subscribe, pollMs: 3_600_000 }
+    );
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+    ctl.abort();
+    expect((await pending)?.status).toBe("timeout");
+  });
+
+  it("NO since = UNREAD: skips picked-up slot answers, room answers only from the wait's start", async () => {
+    const t0 = Date.parse("2026-09-28T12:00:00.000Z");
+    let t = t0;
+    const list = vi.fn().mockImplementation(async () => {
+      t += 1_000;
+      return page([]);
+    });
+    await waitForSessionAnswers(
+      { sessionId: SID, userId: "u1", timeoutSeconds: 1 },
+      { list, subscribe: wakeChannel().subscribe, pollMs: 1, now: () => t }
+    );
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        since: null,
+        skipPickedUp: true,
+        roomSince: new Date(t0),
+      })
+    );
+
+    // With a cursor, the cursor alone decides (the poll door's contract).
+    const cursor = vi.fn().mockResolvedValue(page([answer()]));
+    await waitForSessionAnswers(
+      {
+        sessionId: SID,
+        userId: "u1",
+        since: new Date("2026-09-28T09:00:00.000Z"),
+      },
+      { list: cursor, subscribe: wakeChannel().subscribe, stamp: vi.fn() }
+    );
+    const args = cursor.mock.calls[0]![0];
+    expect(args).not.toHaveProperty("skipPickedUp");
+    expect(args).not.toHaveProperty("roomSince");
+  });
+
+  it("clamps the wait to [1, 90] seconds, default 50", () => {
     expect(clampWaitSeconds(undefined)).toBe(WAIT_DEFAULT_SECONDS);
     expect(clampWaitSeconds(Number.NaN)).toBe(WAIT_DEFAULT_SECONDS);
     expect(clampWaitSeconds(0)).toBe(1);
     expect(clampWaitSeconds(9_999)).toBe(WAIT_MAX_SECONDS);
-    expect(WAIT_MAX_SECONDS).toBe(120);
+    expect(WAIT_MAX_SECONDS).toBe(90);
   });
 });
 

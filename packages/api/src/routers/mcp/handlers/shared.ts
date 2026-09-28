@@ -850,6 +850,8 @@ export interface McpToolContext {
   sessionId?: string;
   keyType?: string | null;
   keyWorkspaceId?: string | null;
+  /** Aborted when the MCP request is cancelled or the client disconnects. */
+  signal?: AbortSignal;
   /** Hub Protocol caller with NO ambient workspace lens (governance falls back to membership). */
   caller: Awaited<ReturnType<typeof createHubProtocolCaller>>;
   /** Hub Protocol caller with the resolved `?workspaceId=` lens as ambient governance workspace. */

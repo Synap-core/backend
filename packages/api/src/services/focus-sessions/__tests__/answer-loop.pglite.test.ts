@@ -694,4 +694,44 @@ describe("the answer loop", () => {
       ).status
     ).toBe(400);
   });
+
+  it("GET /answers/wait with NO since returns only UNREAD answers: a second wait never gets the first answer back", async () => {
+    const { sessionId, channelId } = await seed();
+    await hubQuestion(channelId, IS_AGENT);
+    const rid = await hubReply(channelId, "EU");
+    // A slotless room question answered BEFORE the wait: not unread (no cursor).
+    const res2 = await send(
+      app({ agentUserId: IS_AGENT }),
+      "POST",
+      `/threads/${channelId}/messages`,
+      {
+        role: "assistant",
+        content: "Ship today?",
+        userId: OWNER,
+        kind: "question",
+      }
+    );
+    expect(res2.status).toBeLessThan(300);
+    await new Promise((r) => setTimeout(r, 5));
+    await hubReply(channelId, "yes");
+
+    type WaitPage = { status: string; answers?: Array<{ id: string }> };
+    const wait = async () =>
+      (await (
+        await send(
+          app({ agentUserId: IS_AGENT }),
+          "GET",
+          `/focus-sessions/${sessionId}/answers/wait?timeoutSeconds=1`
+        )
+      ).json()) as WaitPage;
+
+    // First wait: the slot answer, not yet picked up — and the agent's read stamps it.
+    const first = await wait();
+    expect(first.status).toBe("answered");
+    expect(first.answers!.map((a) => a.id)).toEqual([rid]);
+
+    // Second wait: nothing unread — the first answer is NOT returned as new.
+    const second = await wait();
+    expect(second.status).toBe("timeout");
+  });
 });

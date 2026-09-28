@@ -4,8 +4,13 @@
  * Research the V1 plan leans on: tool-selection accuracy degrades past ~30-40
  * always-loaded tools, and Codex / Cursor do not defer MCP tools the way
  * Claude Code does. So a NEW agent key lists the 9-tool `entry` surface; the
- * rest arrive in named GROUPS, unlocked by `synap_load_skill` (a group name,
- * `builder` for all of them, or a skill whose teaching needs a group).
+ * rest arrive in named GROUPS, unlocked by `synap_load_skill` (`tools:<group>`,
+ * `tools:builder` for all of them, or a skill whose teaching needs a group).
+ *
+ * Group refs carry the `tools:` prefix because group names and skill stems
+ * share one `ref` namespace — `governance` and `capabilities` are BOTH a group
+ * and a seeded skill. A bare ref is always a skill; `tools:` is always a group
+ * (pinned by `tool-profiles.test.ts`, derived from the skills on disk).
  *
  * A profile narrows LISTING only. It is NOT a permission: `tools/call` of an
  * unlisted tool still runs under the key's scopes and governance, exactly as
@@ -146,8 +151,16 @@ export const TOOL_GROUPS = {
 export type ToolGroup = keyof typeof TOOL_GROUPS;
 export const TOOL_GROUP_NAMES = Object.keys(TOOL_GROUPS) as ToolGroup[];
 
-/** `load_skill('builder')` unlocks every group. */
-export const BUILDER_REF = "builder";
+/** The namespace of a tool-group ref: `load_skill('tools:<group>')`. */
+export const TOOL_GROUP_REF_PREFIX = "tools:";
+
+/** `load_skill('tools:builder')` unlocks every group. */
+export const BUILDER_REF = `${TOOL_GROUP_REF_PREFIX}builder`;
+
+/** The `load_skill` ref that unlocks one group. */
+export function toolGroupRef(group: ToolGroup | "builder"): string {
+  return `${TOOL_GROUP_REF_PREFIX}${group}`;
+}
 
 /**
  * Seeded skills whose teaching USES a group's tools. Loading one unlocks the
@@ -186,19 +199,37 @@ function stemOf(ref: string): string {
   return parts[parts.length - 1] ?? trimmed;
 }
 
-/** Is `ref` a tool-group ref (a group name or `builder`) rather than a skill? */
+/** Is `ref` in the tool-group namespace (`tools:…`), valid or not? */
 export function isToolGroupRef(ref: string): boolean {
-  const r = ref.trim().toLowerCase();
-  return r === BUILDER_REF || (TOOL_GROUP_NAMES as string[]).includes(r);
+  return ref.trim().toLowerCase().startsWith(TOOL_GROUP_REF_PREFIX);
+}
+
+/**
+ * The groups a `tools:` ref names, or `null` when the name after the prefix is
+ * not a group (the caller says so instead of unlocking nothing silently).
+ */
+export function parseToolGroupRef(ref: string): ToolGroup[] | null {
+  const name = ref
+    .trim()
+    .toLowerCase()
+    .slice(TOOL_GROUP_REF_PREFIX.length)
+    .trim();
+  if (`${TOOL_GROUP_REF_PREFIX}${name}` === BUILDER_REF) {
+    return [...TOOL_GROUP_NAMES];
+  }
+  return (TOOL_GROUP_NAMES as string[]).includes(name)
+    ? [name as ToolGroup]
+    : null;
 }
 
 /** The groups a `load_skill(ref)` unlocks. `[]` = none. */
 export function groupsForLoadSkillRef(ref: string): ToolGroup[] {
-  const r = ref.trim().toLowerCase();
-  if (r === BUILDER_REF) return [...TOOL_GROUP_NAMES];
-  if ((TOOL_GROUP_NAMES as string[]).includes(r)) return [r as ToolGroup];
+  if (isToolGroupRef(ref)) return parseToolGroupRef(ref) ?? [];
   return [...(SKILL_STEM_GROUPS[stemOf(ref)] ?? [])];
 }
+
+/** The skill stems that unlock a group (test seam: every key is a real skill). */
+export const SKILL_STEMS_THAT_UNLOCK = Object.keys(SKILL_STEM_GROUPS);
 
 export interface KeyToolAccess {
   profile: ApiKeyToolProfile | null;
