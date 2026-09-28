@@ -25,6 +25,7 @@ import {
   ApiKeyRepository,
   sql,
 } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   apiKeys,
   workspaceMembers,
@@ -491,18 +492,14 @@ export const apiKeysRouter = router({
         });
       }
 
-      const revokedRows = await db
-        .update(apiKeys)
-        .set({
-          isActive: false,
-          revokedAt: new Date(),
-          revokedBy: ctx.userId,
-          revokedReason: input.reason ?? "Bulk revocation by pod admin",
-        })
-        .where(
-          and(eq(apiKeys.userId, input.userId), eq(apiKeys.isActive, true))
-        )
-        .returning({ id: apiKeys.id });
+      const revokedRows = await revokeApiKeys(db, {
+        where: and(
+          eq(apiKeys.userId, input.userId),
+          eq(apiKeys.isActive, true)
+        ),
+        revokedBy: ctx.userId,
+        reason: input.reason ?? "Bulk revocation by pod admin",
+      });
 
       auditLog({
         subjectType: "apiKey",
@@ -792,22 +789,16 @@ export const apiKeysRouter = router({
       const keyName = `${input.integration.charAt(0).toUpperCase() + input.integration.slice(1)} — ${new Date().toISOString().slice(0, 10)}`;
 
       if (input.strategy === "replace_existing") {
-        await db
-          .update(apiKeys)
-          .set({
-            isActive: false,
-            revokedAt: new Date(),
-            revokedBy: ctx.userId,
-            revokedReason: `Replaced by ${input.integration} reconnect`,
-          })
-          .where(
-            and(
-              eq(apiKeys.userId, ctx.userId),
-              eq(apiKeys.hubId, integrationHub),
-              eq(apiKeys.keyType, "hub_inbound"),
-              eq(apiKeys.isActive, true)
-            )
-          );
+        await revokeApiKeys(db, {
+          where: and(
+            eq(apiKeys.userId, ctx.userId),
+            eq(apiKeys.hubId, integrationHub),
+            eq(apiKeys.keyType, "hub_inbound"),
+            eq(apiKeys.isActive, true)
+          ),
+          revokedBy: ctx.userId,
+          reason: `Replaced by ${input.integration} reconnect`,
+        });
       }
 
       const database = await getDb();

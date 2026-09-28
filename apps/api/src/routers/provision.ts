@@ -44,6 +44,7 @@ import {
   sql,
   TrustedIssuerService,
 } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   workspaces,
   intelligenceServices,
@@ -1553,21 +1554,15 @@ provisionRouter.post("/activate-addon", async (c) => {
     // one. The plaintext is returned once only and injected into the container
     // by the CP job via SSH.
 
-    await db
-      .update(apiKeys)
-      .set({
-        isActive: false,
-        revokedAt: new Date(),
-        revokedBy: agentUserId,
-        revokedReason: "Re-provisioning — replaced by new key",
-      })
-      .where(
-        and(
-          eq(apiKeys.userId, agentUserId),
-          eq(apiKeys.keyType, "hub_inbound"),
-          eq(apiKeys.isActive, true)
-        )
-      );
+    await revokeApiKeys(db, {
+      where: and(
+        eq(apiKeys.userId, agentUserId),
+        eq(apiKeys.keyType, "hub_inbound"),
+        eq(apiKeys.isActive, true)
+      ),
+      revokedBy: agentUserId,
+      reason: "Re-provisioning — replaced by new key",
+    });
 
     const eventRepo = new EventRepository(sql);
     const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
@@ -1736,15 +1731,11 @@ provisionRouter.post("/deactivate-addon", async (c) => {
 
     // Belt-and-suspenders: revoke any remaining active Hub keys in DB
     // (CP already called revokeHubApiKeyOnPod via Hub Protocol before this)
-    await db
-      .update(apiKeys)
-      .set({
-        isActive: false,
-        revokedAt: new Date(),
-        revokedBy: agentUserId,
-        revokedReason: "Addon deprovisioned",
-      })
-      .where(and(eq(apiKeys.userId, agentUserId), eq(apiKeys.isActive, true)));
+    await revokeApiKeys(db, {
+      where: and(eq(apiKeys.userId, agentUserId), eq(apiKeys.isActive, true)),
+      revokedBy: agentUserId,
+      reason: "Addon deprovisioned",
+    });
 
     logger.info(
       { agentUserId, membershipsRemoved: deleted.length },

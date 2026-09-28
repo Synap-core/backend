@@ -10,6 +10,7 @@ import { createHash } from "crypto";
 import { apiKeys } from "../schema/index.js";
 import type { ApiKeyToolProfile } from "../schema/api-keys.js";
 import { BaseRepository } from "./base-repository.js";
+import { revokeApiKeys } from "../utils/api-key-revocation.js";
 import type { EventRepository } from "./event-repository.js";
 
 export interface CreateApiKeyInput {
@@ -130,18 +131,13 @@ export class ApiKeyRepository extends BaseRepository<
    * Emits: api_keys.revoke.completed
    */
   async revoke(id: string, userId: string, reason?: string): Promise<void> {
-    const [apiKey] = await this.db
-      .update(apiKeys)
-      .set({
-        isActive: false,
-        revokedAt: new Date(),
-        revokedBy: userId,
-        revokedReason: reason,
-      })
-      .where(eq(apiKeys.id, id))
-      .returning();
+    const revoked = await revokeApiKeys(this.db, {
+      where: eq(apiKeys.id, id),
+      revokedBy: userId,
+      reason: reason ?? "Revoked by user",
+    });
 
-    if (!apiKey) {
+    if (revoked.length === 0) {
       throw new Error("API key not found");
     }
 
@@ -214,15 +210,11 @@ export class ApiKeyRepository extends BaseRepository<
       .returning();
 
     // Revoke old key
-    await this.db
-      .update(apiKeys)
-      .set({
-        isActive: false,
-        revokedAt: new Date(),
-        revokedBy: userId,
-        revokedReason: "Rotated",
-      })
-      .where(eq(apiKeys.id, id));
+    await revokeApiKeys(this.db, {
+      where: eq(apiKeys.id, id),
+      revokedBy: userId,
+      reason: "Rotated",
+    });
 
     // Note: Rotation creates a new key and revokes the old one
     // The create event is emitted for the new key

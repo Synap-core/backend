@@ -2,6 +2,7 @@ import { router, podAdminProcedure } from "../trpc.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { TrustedIssuerService, db, eq, and } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { apiKeys, trustedIssuers } from "@synap/database/schema";
 import { trustedIssuerCapabilitiesSchema } from "./trusted-issuer-capabilities.js";
 import { normalizeIssuerUrl } from "../utils/issuer-url-safety.js";
@@ -57,20 +58,14 @@ export const trustedIssuersRouter = router({
 
       // Immediately revoke issuer-bound integration keys so access is cut off now.
       const issuerHost = new URL(issuer.issuerUrl).hostname;
-      await db
-        .update(apiKeys)
-        .set({
-          isActive: false,
-          revokedAt: new Date(),
-          revokedBy: ctx.userId,
-          revokedReason: `Issuer revoked: ${issuer.issuerUrl}`,
-        })
-        .where(
-          and(
-            eq(apiKeys.hubId, `integration:${issuerHost}`),
-            eq(apiKeys.isActive, true)
-          )
-        );
+      await revokeApiKeys(db, {
+        where: and(
+          eq(apiKeys.hubId, `integration:${issuerHost}`),
+          eq(apiKeys.isActive, true)
+        ),
+        revokedBy: ctx.userId,
+        reason: `Issuer revoked: ${issuer.issuerUrl}`,
+      });
     }),
 
   adminRegister: podAdminProcedure

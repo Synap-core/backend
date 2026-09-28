@@ -27,6 +27,7 @@ import {
   drizzleSql,
   sqlDrizzle,
 } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   users,
   workspaceMembers,
@@ -824,14 +825,10 @@ export const intelligenceRegistryRouter = router({
       }
 
       // 1. Revoke all API keys
-      await db
-        .update(apiKeys)
-        .set({
-          isActive: false,
-          revokedAt: new Date(),
-          revokedReason: `Deprovisioned by user ${ctx.userId}`,
-        })
-        .where(eq(apiKeys.userId, agent.id));
+      await revokeApiKeys(db, {
+        where: eq(apiKeys.userId, agent.id),
+        reason: `Deprovisioned by user ${ctx.userId}`,
+      });
 
       // 2. Delete agent user record (surface agents have no required workspace membership)
       await db.delete(users).where(eq(users.id, agent.id));
@@ -937,14 +934,10 @@ export const intelligenceRegistryRouter = router({
 
       const agentId = existingAgent.id;
 
-      await db
-        .update(apiKeys)
-        .set({
-          isActive: false,
-          revokedAt: new Date(),
-          revokedReason: `Key rotated by user ${ctx.userId}`,
-        })
-        .where(eq(apiKeys.userId, agentId));
+      await revokeApiKeys(db, {
+        where: eq(apiKeys.userId, agentId),
+        reason: `Key rotated by user ${ctx.userId}`,
+      });
 
       const keyPrefix =
         process.env.NODE_ENV === "production"

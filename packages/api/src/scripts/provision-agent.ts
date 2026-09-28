@@ -29,6 +29,7 @@ import {
   and,
   eq,
 } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   users,
   workspaceMembers,
@@ -386,14 +387,10 @@ async function run() {
       process.exit(1);
     }
 
-    await db
-      .update(apiKeys)
-      .set({
-        isActive: false,
-        revokedAt: new Date(),
-        revokedReason: "Deprovisioned via CLI",
-      })
-      .where(eq(apiKeys.userId, agent.id));
+    await revokeApiKeys(db, {
+      where: eq(apiKeys.userId, agent.id),
+      reason: "Deprovisioned via CLI",
+    });
 
     await db
       .delete(workspaceMembers)
@@ -420,14 +417,10 @@ async function run() {
       process.exit(1);
     }
 
-    await db
-      .update(apiKeys)
-      .set({
-        isActive: false,
-        revokedAt: new Date(),
-        revokedReason: "Key rotated via CLI",
-      })
-      .where(eq(apiKeys.userId, agent.id));
+    await revokeApiKeys(db, {
+      where: eq(apiKeys.userId, agent.id),
+      reason: "Key rotated via CLI",
+    });
 
     const keyPrefix =
       process.env.NODE_ENV === "production"

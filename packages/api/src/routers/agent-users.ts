@@ -14,6 +14,7 @@ import {
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, inArray, isNull, drizzleSql } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { isPodAdmin } from "../utils/workspace-role.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
@@ -32,7 +33,6 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import type { AgentMetadata } from "@synap/database/schema";
 import { withAgentPresence } from "../services/agent-presence.js";
 import { toPodAdminOrigin } from "../utils/pod-admin-origin.js";
-import { apiKeyService } from "../services/api-keys.js";
 import {
   applyAgentPosture,
   readAgentGovernance,
@@ -659,21 +659,15 @@ export const agentUsersRouter = router({
         });
       }
 
-      const revoked = await db
-        .update(apiKeys)
-        .set({
-          isActive: false,
-          revokedAt: new Date(),
-          revokedBy: callerId,
-          revokedReason: isOwner
-            ? "Disconnected by its owner"
-            : "Disconnected by a pod admin",
-        })
-        .where(and(eq(apiKeys.userId, agent.id), isNull(apiKeys.revokedAt)))
-        .returning({ id: apiKeys.id });
-      // A revoked key must stop validating NOW, not when the 30s verification
-      // cache expires — `/mcp` validates from that cache. Same as revokeApiKey.
-      apiKeyService.invalidateVerificationCache();
+      const revoked = await revokeApiKeys(db, {
+        where: and(eq(apiKeys.userId, agent.id), isNull(apiKeys.revokedAt)),
+        revokedBy: callerId,
+        reason: isOwner
+          ? "Disconnected by its owner"
+          : "Disconnected by a pod admin",
+      });
+      // `revokeApiKeys` (the ONE revoke door) drops the verification cache
+      // `/mcp` validates from, so the keys stop working NOW, not in 30s.
 
       // Activity: the same event shape `apiKeys.adminRevokeAllForUser` writes
       // for a bulk revoke, subject = the agent.
@@ -815,18 +809,14 @@ export const agentUsersRouter = router({
         input.reason ?? "Cascade revoke: agent user removed by pod admin";
 
       // Cascade: revoke every active API key owned by these agents in one shot.
-      const revokedKeys = await db
-        .update(apiKeys)
-        .set({
-          isActive: false,
-          revokedAt: new Date(),
-          revokedBy: ctx.userId,
-          revokedReason: revokeReason,
-        })
-        .where(
-          and(inArray(apiKeys.userId, ownedIds), eq(apiKeys.isActive, true))
-        )
-        .returning({ id: apiKeys.id });
+      const revokedKeys = await revokeApiKeys(db, {
+        where: and(
+          inArray(apiKeys.userId, ownedIds),
+          eq(apiKeys.isActive, true)
+        ),
+        revokedBy: ctx.userId,
+        reason: revokeReason,
+      });
 
       // Remove workspace memberships for every owned agent.
       await db

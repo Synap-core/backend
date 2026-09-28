@@ -11,6 +11,7 @@ import { randomBytes, createHash } from "crypto";
 import bcrypt from "bcrypt";
 import { TRPCError } from "@trpc/server";
 import { db, sql as pgSql, drizzleSql as sql } from "@synap/database"; // pgSql = postgres.js, sql = Drizzle
+import { revokeApiKeys, onApiKeysRevoked } from "@synap/database/api-key-revocation";
 import {
   apiKeys,
   KEY_PREFIXES,
@@ -350,10 +351,9 @@ export class ApiKeyService {
   }
 
   /**
-   * Drop every cached verification. Any door that revokes keys OUTSIDE
-   * `revokeApiKey` / `rotateApiKey` (e.g. `agentUsers.disconnect`, a bulk
-   * UPDATE) must call this, or a revoked key keeps validating for up to
-   * `VERIFICATION_CACHE_TTL_MS` from the cache `/mcp` reads.
+   * Drop every cached verification. Registered with `onApiKeysRevoked`, so
+   * every revoke through `revokeApiKeys` calls it — no call site has to
+   * remember (tripwire `api-key-revoke-one-door.test.ts`).
    */
   invalidateVerificationCache(): void {
     verificationCache.clear();
@@ -621,21 +621,15 @@ export class ApiKeyService {
     userId: string,
     reason?: string
   ): Promise<void> {
-    await db
-      .update(apiKeys)
-      .set({
-        isActive: false,
-        revokedAt: new Date(),
-        revokedBy: userId,
-        revokedReason: reason || "Revoked by user",
-      })
-      .where(eq(apiKeys.id, keyId));
-
-    // Invalidate the verification cache. The cache is keyed by sha256(plaintext)
-    // and we only have the keyId here, so clear it entirely — revocations are
-    // rare and correctness (a revoked key must stop validating) beats the
-    // micro-cost of repopulating other keys' cache entries.
-    verificationCache.clear();
+    // The ONE revoke door: it runs the UPDATE, then drops the verification
+    // cache (registered below). The cache is keyed by sha256(plaintext) and we
+    // only have the keyId, so it is cleared entirely — revocations are rare and
+    // a revoked key must stop validating now.
+    await revokeApiKeys(db, {
+      where: eq(apiKeys.id, keyId),
+      revokedBy: userId,
+      reason: reason || "Revoked by user",
+    });
   }
 
   /**
@@ -804,3 +798,8 @@ export class ApiKeyService {
  * Singleton instance
  */
 export const apiKeyService = new ApiKeyService();
+
+// Every revoke through `revokeApiKeys` (@synap/database — the one door, used by
+// the repository, the routers and the setup door alike) drops this process's
+// verification cache. Looked up at call time so a test can observe it.
+onApiKeysRevoked(() => apiKeyService.invalidateVerificationCache());

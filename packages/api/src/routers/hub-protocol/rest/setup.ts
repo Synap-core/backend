@@ -31,6 +31,7 @@ import {
   TrustedIssuerService,
   type ApiKeyScope,
 } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 
 import { resolveKeyIdentity } from "../../../access/key-identity.js";
 import { apiKeyService } from "../../../services/api-keys.js";
@@ -199,7 +200,6 @@ async function computePodAdminInvariant(): Promise<{
     };
   }
 }
-
 
 /**
  * Provisioning auth for the product-neutral `/setup/service` door.
@@ -2334,10 +2334,10 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
     if (!(await canDecidePendingConnection(approverId, key.linkedUserId)))
       return c.json({ error: "Not authorized to decide this connection" }, 403);
 
-    await db
-      .update(apiKeys)
-      .set({ isActive: false, revokedAt: new Date() })
-      .where(and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)));
+    await revokeApiKeys(db, {
+      where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
+      reason: "Rejected at approval",
+    });
     logger.info({ keyId, approverId }, "setup/agent/pending: rejected");
     return c.json({ ok: true });
   });

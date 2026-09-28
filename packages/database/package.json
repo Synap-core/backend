@@ -31,6 +31,11 @@
       "import": "./dist/utils/channel-visibility.js",
       "default": "./dist/utils/channel-visibility.js"
     },
+    "./api-key-revocation": {
+      "types": "./dist/utils/api-key-revocation.d.ts",
+      "import": "./dist/utils/api-key-revocation.js",
+      "default": "./dist/utils/api-key-revocation.js"
+    },
     "./capture-routing": {
       "types": "./dist/services/capture-routing.d.ts",
       "import": "./dist/services/capture-routing.js",

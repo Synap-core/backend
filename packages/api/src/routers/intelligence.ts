@@ -16,6 +16,7 @@ import {
 import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, desc, or, like, sql, drizzleSql } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   intelligenceCommands,
   commandRuns,
@@ -1261,16 +1262,13 @@ export const intelligenceRouter = router({
 
       if (existing) {
         // Idempotent — rotate key and return fresh docker command
-        await db
-          .update(apiKeys)
-          .set({
-            isActive: false,
-            revokedAt: new Date(),
-            revokedReason: "Re-provisioned via UI",
-          })
-          .where(
-            and(eq(apiKeys.userId, existing.id), eq(apiKeys.isActive, true))
-          );
+        await revokeApiKeys(db, {
+          where: and(
+            eq(apiKeys.userId, existing.id),
+            eq(apiKeys.isActive, true)
+          ),
+          reason: "Re-provisioned via UI",
+        });
 
         const keyPrefix =
           process.env.NODE_ENV === "production"

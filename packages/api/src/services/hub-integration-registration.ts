@@ -9,6 +9,7 @@
 
 import { randomBytes } from "crypto";
 import type { ApiKeyRepository, CreateApiKeyInput } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { and, eq } from "@synap/database";
 import type { db } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
@@ -126,24 +127,16 @@ export async function revokeActiveHubInboundKeysForUser(
     instanceId?: string;
   }
 ): Promise<void> {
-  await database
-    .update(apiKeys)
-    .set({
-      isActive: false,
-      revokedAt: new Date(),
-      revokedBy: params.revokedBy,
-      revokedReason: params.revokedReason,
-    })
-    .where(
-      and(
-        eq(apiKeys.userId, params.userId),
-        eq(apiKeys.keyType, "hub_inbound"),
-        eq(apiKeys.isActive, true),
-        params.instanceId
-          ? eq(apiKeys.instanceId, params.instanceId)
-          : undefined
-      )
-    );
+  await revokeApiKeys(database, {
+    where: and(
+      eq(apiKeys.userId, params.userId),
+      eq(apiKeys.keyType, "hub_inbound"),
+      eq(apiKeys.isActive, true),
+      params.instanceId ? eq(apiKeys.instanceId, params.instanceId) : undefined
+    ),
+    revokedBy: params.revokedBy,
+    reason: params.revokedReason,
+  });
 }
 
 /**
