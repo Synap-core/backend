@@ -428,6 +428,16 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "instance_id",
     addedBy: "0204_api_keys_instance_id.sql",
   },
+  {
+    table: "api_keys",
+    column: "tool_profile",
+    addedBy: "0280_api_keys_tool_profile.sql",
+  },
+  {
+    table: "api_keys",
+    column: "tool_groups",
+    addedBy: "0280_api_keys_tool_profile.sql",
+  },
 
   // api_key_external_users — sub-token mappings (0018)
   {

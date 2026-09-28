@@ -29,6 +29,7 @@ import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import type { AgentMetadata } from "@synap/database/schema";
+import { withAgentPresence } from "../services/agent-presence.js";
 
 /**
  * Floor-first agent-user fetch backing `list`.
@@ -336,7 +337,9 @@ export const agentUsersRouter = router({
     .input(z.object({ workspaceId: ScopeFilterShape.workspaceId }))
     .query(async ({ input, ctx }) => {
       const { workspaceLens } = resolveScope(ctx, input);
-      return queryAgentUsers(ctx, workspaceLens);
+      // + `lastSeenAt` / `host` / `activeKeys` / `pendingKeys` (V1 G3) — the
+      // connected signal Settings › Agents and the entry surfaces read.
+      return withAgentPresence(await queryAgentUsers(ctx, workspaceLens));
     }),
 
   /**

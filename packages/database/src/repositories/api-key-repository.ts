@@ -8,6 +8,7 @@
 import { eq, and } from "drizzle-orm";
 import { createHash } from "crypto";
 import { apiKeys } from "../schema/index.js";
+import type { ApiKeyToolProfile } from "../schema/api-keys.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 
@@ -33,6 +34,8 @@ export interface CreateApiKeyInput {
   /** Per-runtime instance label for concurrent agent instances sharing one
    * identity. NULL = legacy single-key model. See schema/api-keys.ts. */
   instanceId?: string | null;
+  /** MCP tool profile (0280). NULL/omitted = legacy (every tool listed). */
+  toolProfile?: ApiKeyToolProfile | null;
 }
 
 export interface UpdateApiKeyInput {
@@ -88,6 +91,7 @@ export class ApiKeyRepository extends BaseRepository<
         workspaceId: data.workspaceId ?? null,
         linkedUserId: data.linkedUserId ?? null,
         instanceId: data.instanceId ?? null,
+        toolProfile: data.toolProfile ?? null,
       })
       .returning();
 
@@ -195,6 +199,10 @@ export class ApiKeyRepository extends BaseRepository<
         linkedUserId: oldKey.linkedUserId,
         instanceId: oldKey.instanceId,
         parentKeyId: oldKey.parentKeyId,
+        // The MCP tool surface the client lists — a rotation must not widen
+        // an entry key to every tool, nor forget what it unlocked.
+        toolProfile: oldKey.toolProfile,
+        toolGroups: oldKey.toolGroups,
         isActive: true,
         usageCount: 0,
         rotatedFromId: id,

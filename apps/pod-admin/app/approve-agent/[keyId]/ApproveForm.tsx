@@ -205,7 +205,7 @@ export function ApproveForm({
   );
 }
 
-function Row({
+export function Row({
   label,
   value,
   mono,
@@ -226,7 +226,7 @@ function Row({
   );
 }
 
-function Outcome({
+export function Outcome({
   tone,
   icon,
   title,

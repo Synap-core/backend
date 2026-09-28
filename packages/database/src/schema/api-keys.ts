@@ -123,6 +123,19 @@ export const apiKeys = pgTable(
     // See migration 0204_api_keys_instance_id.sql.
     instanceId: text("instance_id"),
 
+    // MCP tool profile — the tool surface this key's MCP client LISTS (V1 D4).
+    // NULL = legacy: every tool (keys minted before 0280 keep what they had).
+    // 'entry' = the small entry surface new agent keys get; 'builder' = every
+    // tool, chosen. Narrows listing only — never a permission. See
+    // `routers/mcp/tool-profiles.ts` and migration 0280_api_keys_tool_profile.sql.
+    toolProfile: text("tool_profile").$type<ApiKeyToolProfile>(),
+    // Deeper tool groups an entry key unlocked via `synap_load_skill`. Sticky
+    // per key: the /mcp transport is stateless, so there is no session to hold it.
+    toolGroups: text("tool_groups")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+
     // Audit Trail
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -153,6 +166,10 @@ export const apiKeys = pgTable(
     ),
   })
 );
+
+/** The MCP tool profiles a key can carry (`api_keys.tool_profile`, 0280). */
+export const API_KEY_TOOL_PROFILES = ["entry", "builder"] as const;
+export type ApiKeyToolProfile = (typeof API_KEY_TOOL_PROFILES)[number];
 
 /**
  * TypeScript type for API Key record

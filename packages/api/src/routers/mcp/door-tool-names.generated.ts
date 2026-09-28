@@ -405,4 +405,9 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": null,
     raycast: null,
   },
+  synap_wait_for_answer: {
+    "pod-mcp": "synap_wait_for_answer",
+    "cp-connector": null,
+    raycast: null,
+  },
 };

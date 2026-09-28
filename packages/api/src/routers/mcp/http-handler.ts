@@ -529,7 +529,9 @@ mcpHttpApp.post("/", async (c) => {
     // workspace and pins pod-wide calls to the bound ws. Non-service/unbound
     // keys (`keyWorkspaceId == null`) pass through unchanged.
     keyRecord.keyType,
-    keyRecord.workspaceId
+    keyRecord.workspaceId,
+    // The key's MCP tool profile (V1 D4) narrows what tools/list advertises.
+    keyRecord.id
   );
   await server.connect(transport);
 

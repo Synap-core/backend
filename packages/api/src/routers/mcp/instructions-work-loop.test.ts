@@ -56,6 +56,10 @@ describe("MCP instructions teach the session work loop", () => {
     ["advance the stage", "`currentStage`"],
     ["hand person-only work as a human-owned output", "`owner:'human'`"],
     ["…with a reason", "`blockedReason`"],
+    [
+      "…then wait for the answer instead of ending the turn",
+      "`wait_for_answer`",
+    ],
     ["ask in the session's room", "`session.channelId`"],
     ["…by posting there", "`post_message`"],
     ["grade before done", "`evaluate_session`"],

@@ -8,6 +8,7 @@
 
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
+import { z } from "zod";
 
 import {
   db,
@@ -15,6 +16,7 @@ import {
   eq,
   and,
   inArray,
+  isNull,
   count,
   apiKeys,
   apiKeyExternalUsers,
@@ -64,6 +66,8 @@ import { provisionSurfaceAgentKey } from "../../../services/agent-identity-servi
 import { disconnectAllUserConnections } from "../../../services/capabilities/capability-nango-sync.js";
 import {
   API_KEY_SCOPES,
+  API_KEY_TOOL_PROFILES,
+  type ApiKeyToolProfile,
   isValidScope,
   isPrivilegedMintScope,
 } from "@synap/database/schema";
@@ -396,6 +400,9 @@ async function authenticateServiceSetupRequest(
   };
 }
 
+/** Keys one batch approval may carry — `synap init` connects a handful of harnesses. */
+const PENDING_BATCH_MAX = 20;
+
 /** Canonical uuid shape — anything else in `linkedUserId` is an email or name. */
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -647,6 +654,29 @@ export function registerSetupRoutes(app: HubHono): void {
     // creator (createdByUserId) is still resolved and required; only the key's
     // linked human is deliberately dropped.
     const podWide: boolean = body.podWide === true;
+    // The MCP tool surface the new key LISTS (V1 D4). Omitted → the door's
+    // default, `entry`; `builder` asks for every tool. Any other value is a
+    // caller error, not a guess.
+    const toolProfile: ApiKeyToolProfile | undefined =
+      body.toolProfile === undefined || body.toolProfile === null
+        ? undefined
+        : (API_KEY_TOOL_PROFILES as readonly unknown[]).includes(
+              body.toolProfile
+            )
+          ? (body.toolProfile as ApiKeyToolProfile)
+          : undefined;
+    if (
+      body.toolProfile !== undefined &&
+      body.toolProfile !== null &&
+      toolProfile === undefined
+    ) {
+      return c.json(
+        {
+          error: `Invalid \`toolProfile\` — expected one of: ${API_KEY_TOOL_PROFILES.join(", ")}.`,
+        },
+        400
+      );
+    }
     // Surface installs can request a pending-approval flow: key is created inactive
     // until the human owner approves it at the review URL.
     const requireApproval: boolean =
@@ -970,6 +1000,7 @@ export function registerSetupRoutes(app: HubHono): void {
         podWide,
         instanceId,
         agentLabel,
+        ...(toolProfile ? { toolProfile } : {}),
         // Only the surface-key path provisions a genuine local CLI adjunct
         // (claude-code / codex / cursor). NEVER for jwt/issuer (cloud) agents:
         // an agentCommand on the row makes the renderer try to launch a local
@@ -2056,6 +2087,151 @@ export function registerSetupRoutes(app: HubHono): void {
       return false;
     }
   }
+
+  // ─── One-click batch approval (V1 D5) ─────────────────────────────────────
+  // `synap init` connects several harnesses at once (Claude Code, Codex, …),
+  // each minting a PENDING key. The person approves them together in ONE step,
+  // signed in (Kratos) — the same authority as the per-key door above, applied
+  // per key. Static paths, registered before `/setup/agent/pending/:keyId`.
+
+  const PendingBatchBodySchema = z.object({
+    keyIds: z.array(z.string().uuid()).min(1).max(PENDING_BATCH_MAX),
+  });
+
+  /**
+   * POST /setup/agent/pending/lookup — what the batch approval page shows:
+   * each requested key's name, agent type and instance label, and whether it
+   * is still pending. Only keys the signed-in person may decide are described;
+   * the rest come back `forbidden` / `not_found` (never another person's
+   * agent details).
+   */
+  app.post("/setup/agent/pending/lookup", async (c) => {
+    const approverId = await resolveKratosPodUserId(c);
+    if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
+    const parsed = PendingBatchBodySchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    const rows = await db
+      .select({
+        id: apiKeys.id,
+        keyName: apiKeys.keyName,
+        instanceId: apiKeys.instanceId,
+        isActive: apiKeys.isActive,
+        revokedAt: apiKeys.revokedAt,
+        linkedUserId: apiKeys.linkedUserId,
+        agentType: users.agentType,
+        agentName: users.name,
+      })
+      .from(apiKeys)
+      .leftJoin(users, eq(users.id, apiKeys.userId))
+      .where(inArray(apiKeys.id, parsed.data.keyIds));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const keys = [];
+    for (const keyId of parsed.data.keyIds) {
+      const r = byId.get(keyId);
+      if (!r) {
+        keys.push({ keyId, status: "not_found" as const });
+        continue;
+      }
+      if (!(await canDecidePendingConnection(approverId, r.linkedUserId))) {
+        keys.push({ keyId, status: "forbidden" as const });
+        continue;
+      }
+      keys.push({
+        keyId,
+        status: r.revokedAt
+          ? ("rejected" as const)
+          : r.isActive
+            ? ("active" as const)
+            : ("pending" as const),
+        keyName: r.keyName,
+        agentType: r.agentType ?? null,
+        agentName: r.agentName ?? null,
+        instanceId: r.instanceId ?? null,
+      });
+    }
+    return c.json({ keys });
+  });
+
+  /**
+   * POST /setup/agent/pending/approve-batch — approve several pending keys in
+   * one step. Per key: the same gate as the single approve (the linked human
+   * or a pod admin) and the same compound `isActive = false` guard, so a key a
+   * concurrent reject revoked is never resurrected. Partial success is normal
+   * and reported per key; the status is 200 whenever the request was valid.
+   */
+  app.post("/setup/agent/pending/approve-batch", async (c) => {
+    const approverId = await resolveKratosPodUserId(c);
+    if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
+    const parsed = PendingBatchBodySchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    const results: Array<{
+      keyId: string;
+      outcome:
+        "approved" | "already_active" | "rejected" | "not_found" | "forbidden";
+    }> = [];
+    for (const keyId of [...new Set(parsed.data.keyIds)]) {
+      const key = await db.query.apiKeys.findFirst({
+        where: eq(apiKeys.id, keyId),
+        columns: {
+          id: true,
+          isActive: true,
+          revokedAt: true,
+          linkedUserId: true,
+        },
+      });
+      if (!key) {
+        results.push({ keyId, outcome: "not_found" });
+        continue;
+      }
+      if (!(await canDecidePendingConnection(approverId, key.linkedUserId))) {
+        results.push({ keyId, outcome: "forbidden" });
+        continue;
+      }
+      if (key.revokedAt) {
+        results.push({ keyId, outcome: "rejected" });
+        continue;
+      }
+      if (key.isActive) {
+        results.push({ keyId, outcome: "already_active" });
+        continue;
+      }
+      const flipped = await db
+        .update(apiKeys)
+        .set({ isActive: true })
+        .where(
+          and(
+            eq(apiKeys.id, keyId),
+            eq(apiKeys.isActive, false),
+            isNull(apiKeys.revokedAt)
+          )
+        )
+        .returning({ id: apiKeys.id });
+      results.push({
+        keyId,
+        outcome: flipped.length > 0 ? "approved" : "rejected",
+      });
+    }
+    const approved = results.filter((r) => r.outcome === "approved").length;
+    logger.info(
+      { approverId, approved, requested: results.length },
+      "setup/agent/pending: batch approved"
+    );
+    return c.json({ approved, results });
+  });
 
   /** Poll for approval status — authenticated with the human hub-protocol key. */
   app.get("/setup/agent/pending/:keyId", async (c) => {

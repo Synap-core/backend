@@ -83,6 +83,11 @@ import {
   SESSION_ANSWERS_MAX_LIMIT,
 } from "../../../services/focus-sessions/list-session-answers.js";
 import {
+  WAIT_MAX_SECONDS,
+  waitForSessionAnswers,
+} from "../../../services/focus-sessions/wait-for-answers.js";
+import { stampAnswersPickedUp } from "../../../services/focus-sessions/answer-pickup.js";
+import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
 } from "../../../services/focus-sessions/block-guidelines.js";
@@ -406,6 +411,26 @@ const AnswerOutputBodySchema = z
   .refine((v) => v.value !== undefined || !!v.text?.trim(), {
     message: "An answer needs `text` or `value`.",
   });
+
+/** The long-poll's query: the poll cursor, plus a bounded wait (V1 G4). */
+const SessionAnswersWaitQuerySchema = z.object({
+  since: z
+    .string()
+    .refine((v) => !Number.isNaN(Date.parse(v)), "since must be an ISO date")
+    .optional(),
+  timeoutSeconds: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(WAIT_MAX_SECONDS)
+    .optional(),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(SESSION_ANSWERS_MAX_LIMIT)
+    .optional(),
+});
 
 /**
  * Poll cursor. `since` must PARSE as a date (an ISO-8601 string from a prior
@@ -740,6 +765,41 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         description: "The slot's ask changed (`ask_changed:`)",
         schema: ErrorSchema,
       },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/focus-sessions/:id/answers/wait",
+    tags: ["FocusSessions"],
+    summary: "Wait (bounded long-poll) for the session owner's next answer",
+    description:
+      "Returns as soon as an answer newer than `since` exists " +
+      "(`status: 'answered'`, the same page shape as GET /answers), or after " +
+      "`timeoutSeconds` (default 50, max 120) with `status: 'timeout'` and " +
+      "`nextSince` to wait on again. An agent key's read stamps the slot " +
+      "answer's `answerPickedUpAt` receipt.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      query: SessionAnswersWaitQuerySchema,
+    },
+    responses: {
+      200: {
+        description: "Answered, or timed out",
+        schema: z.object({
+          status: z.enum(["answered", "timeout"]),
+          sessionId: z.string(),
+          since: z.string().nullable(),
+          answers: z.array(z.unknown()).optional(),
+          nextSince: z.string().nullable(),
+          hasMore: z.boolean().optional(),
+          waitedSeconds: z.number().optional(),
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -2494,9 +2554,71 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!page) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
+      // An AGENT reading the answers is the "Picked up" moment (G5); a person
+      // polling their own session never stamps it.
+      const pickedUpBy = c.get("agentUserId") as string | undefined;
+      if (pickedUpBy && page.answers.length > 0) {
+        await stampAnswersPickedUp({
+          sessionId: id,
+          answers: page.answers,
+        }).catch((err) =>
+          logger.warn({ err, id }, "focus-sessions.answers: receipt failed")
+        );
+      }
       return c.json(page);
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.answers failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  /**
+   * GET /focus-sessions/:id/answers/wait?since=<iso>&timeoutSeconds=<n>
+   *
+   * The bounded LONG-POLL twin of `/answers` (V1 G4) — what
+   * `synap_wait_for_answer` runs over MCP. Contract: `wait-for-answers.ts`.
+   * Static-suffix route on a distinct path, so it cannot shadow `/answers`.
+   */
+  app.get("/focus-sessions/:id/answers/wait", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    const q = SessionAnswersWaitQuerySchema.safeParse({
+      since: c.req.query("since"),
+      timeoutSeconds: c.req.query("timeoutSeconds"),
+      limit: c.req.query("limit"),
+    });
+    if (!q.success) {
+      return c.json(
+        { error: "Invalid query", details: q.error.flatten() },
+        400
+      );
+    }
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const result = await waitForSessionAnswers({
+        sessionId: id,
+        userId: acting.userId,
+        since: q.data.since ? new Date(q.data.since) : null,
+        timeoutSeconds: q.data.timeoutSeconds,
+        limit: q.data.limit,
+        pickedUpBy: c.get("agentUserId") as string | undefined,
+        signal: c.req.raw.signal,
+      });
+      if (!result) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.answers.wait failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err) as never

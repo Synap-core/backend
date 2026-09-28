@@ -7133,6 +7133,20 @@ export interface ExpectedOutput {
 	 */
 	answer?: SlotAnswer;
 	/**
+	 * When the AGENT first read {@link answer} — the "Picked up" receipt (V1 gap
+	 * G5). SERVER-STAMPED by the agent answer reads (api `wait_for_answer`, the
+	 * Hub `GET /focus-sessions/:id/answers` poll) and never by a client: a
+	 * person's own read never stamps it. ISO timestamp, server clock.
+	 *
+	 * `answer` present and this ABSENT = "Answered · waiting for the agent". A new
+	 * answer clears it (the new answer has not been read yet), and so does the
+	 * slot being handed back to the person, which also drops the answer.
+	 * Top-level rather than inside `answer` so a client that round-trips a slot
+	 * it read BEFORE the pick-up is silent about it (KEEP), instead of carrying a
+	 * stale `answer` that no longer deep-equals the stored one.
+	 */
+	answerPickedUpAt?: string;
+	/**
 	 * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
 	 * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
 	 * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
@@ -10807,6 +10821,30 @@ export interface RendererUsageReport {
 	 * entity floor. `null` when the count could not be taken.
 	 */
 	perEntityOverrideCount: number | null;
+}
+/**
+ * Agent presence — "connected / last seen" (V1 gaps G3, G8).
+ *
+ * The signal already exists per KEY: every authenticated MCP and Hub call
+ * stamps `api_keys.last_used_at` (`apiKeyService.recordKeyUse`, throttled to
+ * one write per key per minute). The mint's own verification does NOT stamp it
+ * (`external-registration.ts` introspects instead), so a key that was minted
+ * and never used reads as never seen. This joins that onto the agent USER the
+ * surfaces list: an agent's `lastSeenAt` is its most recent key use, and
+ * `host` is the instance label of the key it was last seen on.
+ *
+ * Callers pass ids they already floored (the list doors); this adds no rows.
+ * A failed read throws — "never seen" and "could not tell" are different facts.
+ */
+export interface AgentPresence {
+	/** ISO — most recent authenticated call on any of the agent's keys; `null` = never. */
+	lastSeenAt: string | null;
+	/** Instance label (`api_keys.instance_id`) of the key last seen; `null` if none/unlabelled. */
+	host: string | null;
+	/** Live keys (active, not revoked) — 0 means the agent cannot connect. */
+	activeKeys: number;
+	/** Keys minted and still awaiting the person's approval (inactive, not revoked). */
+	pendingKeys: number;
 }
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
@@ -27576,14 +27614,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
 			};
-			output: {
+			output: ({
 				role: string | null;
 				joinedAt: Date | null;
 				id: string;
 				name: string | null;
 				email: string;
 				agentMetadata: AgentMetadata | null;
-			}[];
+			} & AgentPresence)[];
 			meta: object;
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
@@ -32770,6 +32808,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							};
 						} | undefined;
 					} | undefined;
+					answerPickedUpAt?: string | undefined;
 					ask?: {
 						mode: "confirm";
 						prompt?: string | undefined;
@@ -32979,6 +33018,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							};
 						} | undefined;
 					} | undefined;
+					answerPickedUpAt?: string | undefined;
 					ask?: {
 						mode: "confirm";
 						prompt?: string | undefined;

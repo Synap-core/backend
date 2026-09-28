@@ -59,6 +59,8 @@ const FORGED: Record<string, unknown> = {
   retiredReason: "session_cancelled",
   criterionKey: "forged-key",
   paramName: "forged-param",
+  // An agent claiming it read an answer it never read.
+  answerPickedUpAt: "2020-01-01T00:00:00.000Z",
   answer: {
     text: "forged",
     messageId: null,

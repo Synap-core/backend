@@ -7,6 +7,10 @@ import { db, eq, and, inArray } from "@synap/database";
 import { syncAutoApproveRules } from "@synap/database/agent-governance";
 import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
+import {
+  loadAgentPresence,
+  NEVER_SEEN,
+} from "../../../services/agent-presence.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -189,6 +193,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
           .where(
             and(eq(users.userType, "agent"), eq(users.createdByUserId, userId))
           );
+        // Connected / last seen (V1 G3) — the CLI roster and `init` read it.
+        const presence = await loadAgentPresence(mineAgents.map((r) => r.id));
         return c.json(
           mineAgents.map((row) => {
             const meta = (row.agentMetadata ?? {}) as {
@@ -204,6 +210,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
               createdVia: row.createdVia ?? null,
               createdAt: row.createdAt,
               focusWorkspaceId: meta.focusWorkspaceId ?? null,
+              ...(presence.get(row.id) ?? NEVER_SEEN),
             };
           })
         );

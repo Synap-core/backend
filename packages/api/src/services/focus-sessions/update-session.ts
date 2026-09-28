@@ -318,6 +318,9 @@ export const expectedOutputWireSchema = z.object({
       value: AskAnswerValueSchema.optional(),
     })
     .optional(),
+  // The agent's pick-up receipt — stamped by `answer-pickup.ts` only. On the
+  // wire for the same round-trip reason as `answer`.
+  answerPickedUpAt: z.string().optional(),
   // HOW the person can answer — AGENT-declared, never stamped. Parsed with the
   // ONE ask schema (`@synap-core/types/ask`): closed modes, ≤8 options with ≤1
   // recommended, flat forms with AI-authored credential fields dropped, http(s)
@@ -439,6 +442,9 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // The person's answer (`answer-slot.ts`). An agent that could author it
   // would put words in the person's mouth and hand itself its own slot back.
   "answer",
+  // The agent's "Picked up" receipt (`answer-pickup.ts`). An agent that could
+  // author it would tell the person it read an answer it never read.
+  "answerPickedUpAt",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -573,6 +579,7 @@ export function mergeExpectedOutputs(
     // answer to this one once the slot comes back (`stampBlocked`, same rule).
     if (prior.owner !== "human" && item.owner === "human") {
       delete carried.answer;
+      delete carried.answerPickedUpAt;
     }
     // Stripped first so a server-stamped field the STORED slot does not carry
     // cannot survive as the incoming value — `carried` can only overwrite keys

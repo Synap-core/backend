@@ -305,6 +305,7 @@ export function stampBlocked(
     // once this one comes back the agent reads the old answer as the new one
     // (continuation packet `aiCanDo[].answer`, the `answered` nudge).
     delete withRef.answer;
+    delete withRef.answerPickedUpAt;
     return reconcileOwedSince(
       {
         ...withRef,

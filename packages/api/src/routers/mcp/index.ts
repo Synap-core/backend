@@ -22,6 +22,8 @@ import { loadSkillPackagesFromDisk } from "../hub-protocol/rest/skills.js";
 import { resources } from "./resources/index.js";
 import { tools } from "./tools/index.js";
 import { prompts } from "./prompts/index.js";
+import { filterToolsForAccess } from "./tool-profiles.js";
+import { loadKeyToolAccess } from "./tool-access.js";
 
 const logger: any = createLogger({ module: "mcp-server" });
 
@@ -130,7 +132,14 @@ export function createMCPServer(
    * legacy passthrough (no behavior change).
    */
   keyType?: string | null,
-  keyWorkspaceId?: string | null
+  keyWorkspaceId?: string | null,
+  /**
+   * The authenticating key's id, from the HTTP door. When set, `tools/list`
+   * is narrowed to the key's tool profile (`tool-profiles.ts`) and
+   * `synap_load_skill` may unlock deeper groups on it. Undefined (stdio/dev,
+   * the unauthenticated GET/SSE branch) → every tool, as before.
+   */
+  toolAccessKeyId?: string
 ) {
   const server = new Server(
     {
@@ -140,7 +149,8 @@ export function createMCPServer(
     {
       capabilities: {
         resources: {},
-        tools: {},
+        // `listChanged`: `synap_load_skill` can widen an entry key's tool list.
+        tools: { listChanged: true },
         prompts: {},
       },
       // Auto-grounding: the static reflexes + (when the HTTP handler resolved the
@@ -181,16 +191,19 @@ export function createMCPServer(
 
   // Register tool handlers
   server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const all = await tools.list({
+      workspaceId: defaultWorkspaceId,
+      agentUserId,
+      door: "chat",
+    });
     return {
-      tools: await tools.list({
-        workspaceId: defaultWorkspaceId,
-        agentUserId,
-        door: "chat",
-      }),
+      tools: toolAccessKeyId
+        ? filterToolsForAccess(all, await loadKeyToolAccess(toolAccessKeyId))
+        : all,
     };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     // HTTP transport: sessionUserId is injected by http-handler.ts (already auth-checked).
     // Stdio transport in production: requires MCP_USER_ID env var.
     if (
@@ -239,7 +252,21 @@ export function createMCPServer(
       agentUserId,
       // Service-key confinement — pinned per-request through to the executor.
       keyType,
-      keyWorkspaceId
+      keyWorkspaceId,
+      toolAccessKeyId
+        ? {
+            keyId: toolAccessKeyId,
+            // Related to THIS request, so a streaming transport carries it on
+            // the call's own response stream. NOTE: the HTTP door runs the
+            // stateless transport with `enableJsonResponse`, which DROPS
+            // request-related notifications — `synap_load_skill` therefore
+            // also returns the unlocked tools' schemas inline.
+            notifyToolsChanged: () =>
+              extra.sendNotification({
+                method: "notifications/tools/list_changed",
+              }),
+          }
+        : undefined
     );
   });
 

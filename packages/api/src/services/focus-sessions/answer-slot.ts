@@ -170,7 +170,10 @@ export function stampAnswered(
     slot.owner === "human" && handBack
       ? stampUnblocked(outputs, slot.label)[index]!
       : { ...slot };
-  return outputs.map((o, i) => (i === index ? { ...handedBack, answer } : o));
+  // A new answer has not been picked up yet — the prior receipt was about the
+  // prior answer (`answer-pickup.ts`).
+  const { answerPickedUpAt: _stale, ...fresh } = handedBack;
+  return outputs.map((o, i) => (i === index ? { ...fresh, answer } : o));
 }
 
 export async function answerExpectedOutput(

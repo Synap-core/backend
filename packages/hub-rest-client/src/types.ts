@@ -977,6 +977,11 @@ export interface FocusSessionExpectedOutput {
    */
   answer?: HubSlotAnswer;
   /**
+   * When the agent first read `answer` (pod-stamped "Picked up" receipt).
+   * `answer` without it = answered, still waiting for the agent.
+   */
+  answerPickedUpAt?: string;
+  /**
    * HOW the person can answer this slot — declared by the agent alongside
    * `owner: 'human'` + `blockedReason`. Absent ⇒ a plain free-text answer / "I
    * did this". Duplicated from `SlotAsk` (@synap/playbooks) because this

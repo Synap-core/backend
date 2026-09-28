@@ -469,6 +469,20 @@ export interface ExpectedOutput {
    */
   answer?: SlotAnswer;
   /**
+   * When the AGENT first read {@link answer} — the "Picked up" receipt (V1 gap
+   * G5). SERVER-STAMPED by the agent answer reads (api `wait_for_answer`, the
+   * Hub `GET /focus-sessions/:id/answers` poll) and never by a client: a
+   * person's own read never stamps it. ISO timestamp, server clock.
+   *
+   * `answer` present and this ABSENT = "Answered · waiting for the agent". A new
+   * answer clears it (the new answer has not been read yet), and so does the
+   * slot being handed back to the person, which also drops the answer.
+   * Top-level rather than inside `answer` so a client that round-trips a slot
+   * it read BEFORE the pick-up is silent about it (KEEP), instead of carrying a
+   * stale `answer` that no longer deep-equals the stored one.
+   */
+  answerPickedUpAt?: string;
+  /**
    * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
    * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
    * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and

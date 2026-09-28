@@ -450,6 +450,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     attestedAt: "2026-09-08T12:00:00.000Z",
     retiredAt: "2026-09-08T13:00:00.000Z",
     retiredReason: "session_cancelled",
+    answerPickedUpAt: "2026-09-08T15:00:00.000Z",
     answer: {
       text: "Use the EU account",
       messageId: "55555555-5555-5555-5555-555555555555",

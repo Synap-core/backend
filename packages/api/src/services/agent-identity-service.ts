@@ -25,7 +25,7 @@ import {
   type ApiKeyScope,
 } from "@synap/database";
 import { agents, users } from "@synap/database/schema";
-import type { AgentMetadata } from "@synap/database/schema";
+import type { AgentMetadata, ApiKeyToolProfile } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
@@ -646,6 +646,12 @@ export interface ProvisionSurfaceAgentKeyOpts {
    * it did inline.
    */
   onAgentUserResolved?: (agentUserId: string) => Promise<void>;
+  /**
+   * The MCP tool surface the new key LISTS (V1 D4). Default `"entry"` — every
+   * NEW agent key starts small; `"builder"` lists every tool. Keys minted
+   * before 0280 carry NULL (legacy, every tool) and are never touched here.
+   */
+  toolProfile?: ApiKeyToolProfile;
   logger?: ProvisionLogger;
 }
 
@@ -809,6 +815,7 @@ export async function provisionSurfaceAgentKey(
         `Hub Protocol auth token for ${agentLabel} agent`,
       linkedUserId: resolvedLinkedUserId,
       instanceId: instanceId ?? null,
+      toolProfile: opts.toolProfile ?? "entry",
       expiresAt: new Date(nowMs + ttlDays * DAY_MS),
       rotationScheduledAt: new Date(
         nowMs + (ttlDays - rotationLeadDays) * DAY_MS

@@ -18,6 +18,7 @@ import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
+import { waitForSessionAnswers } from "../../../services/focus-sessions/wait-for-answers.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
@@ -160,6 +161,51 @@ function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
 }
 
 export const sessionHandlers: McpHandlerMap = {
+  /**
+   * The bounded long-poll for the person's answer (V1 G4) — how an agent the
+   * pod cannot wake keeps its turn alive after an ask. Contract:
+   * `services/focus-sessions/wait-for-answers.ts`. Owner-floored like the
+   * poll door; the acting agent's read stamps the "Picked up" receipt.
+   */
+  synap_wait_for_answer: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const sessionId =
+      typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+    if (!UUID_RE.test(sessionId)) {
+      return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
+    }
+    let since: Date | null = null;
+    if (typeof args.since === "string" && args.since.trim() !== "") {
+      const parsed = new Date(args.since);
+      if (Number.isNaN(parsed.getTime())) {
+        return ok({
+          error: "since must be an ISO timestamp — pass back `nextSince`.",
+        });
+      }
+      since = parsed;
+    }
+    const timeoutSeconds =
+      typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : undefined;
+    const result = await waitForSessionAnswers({
+      sessionId,
+      userId,
+      since,
+      timeoutSeconds,
+      pickedUpBy: agentUserId,
+    });
+    if (!result) return ok({ error: `Focus session ${sessionId} not found` });
+    if (result.status === "timeout") {
+      return ok({
+        ...result,
+        next: "No answer yet. Call synap_wait_for_answer again with since = nextSince, or end your turn — the answer stays on the session.",
+      });
+    }
+    return ok(result);
+  },
+
   synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);

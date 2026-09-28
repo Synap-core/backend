@@ -42,6 +42,46 @@ const PING = "__listener_ping__";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * In-process WAKE subscribers, keyed by session id — how a long-poll
+ * (`wait-for-answers.ts`) learns a session changed without a busy DB loop.
+ * Fed from the raw NOTIFY (before the push coalescer), so a waiter wakes on
+ * the write itself. A wake is a HINT, never data: the waiter re-reads through
+ * its own floor, and keeps a slow poll as the floor for a lost NOTIFY.
+ */
+const sessionWaiters = new Map<string, Set<() => void>>();
+
+/** Subscribe to changes of one session. Returns the unsubscribe. */
+export function onSessionChanged(
+  sessionId: string,
+  wake: () => void
+): () => void {
+  let set = sessionWaiters.get(sessionId);
+  if (!set) {
+    set = new Set();
+    sessionWaiters.set(sessionId, set);
+  }
+  set.add(wake);
+  return () => {
+    const current = sessionWaiters.get(sessionId);
+    if (!current) return;
+    current.delete(wake);
+    if (current.size === 0) sessionWaiters.delete(sessionId);
+  };
+}
+
+function wakeSessionWaiters(sessionId: string): void {
+  const set = sessionWaiters.get(sessionId);
+  if (!set) return;
+  for (const wake of [...set]) {
+    try {
+      wake();
+    } catch (err) {
+      logger.warn({ err, sessionId }, "focus_session_changed: waiter threw");
+    }
+  }
+}
+
 /** Resolve the audience and post one id-only emit per member. Never throws. */
 export async function emitSessionUpdated(sessionId: string): Promise<void> {
   let audience: string[];
@@ -153,6 +193,7 @@ export async function startSessionChangedListener(
       );
       return;
     }
+    wakeSessionWaiters(payload);
     coalescer.push(payload);
   };
 

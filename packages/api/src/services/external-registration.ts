@@ -41,7 +41,11 @@ export async function createAndVerifyHubInboundKey(
     createdByUserId
   );
 
-  const verified = await apiKeyService.validateApiKey(plainKey);
+  // Introspection, not a use: `validateApiKey` would stamp `last_used_at`, and
+  // an agent's "last seen" (agentUsers.list) must mean the agent called in —
+  // not that the pod verified the key it just minted.
+  const status = await apiKeyService.getApiKeyStatus(plainKey);
+  const verified = status.status === "valid" ? status.record : null;
   const scope =
     verified && Array.isArray(verified.scope)
       ? (verified.scope as string[])
