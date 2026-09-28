@@ -71,7 +71,9 @@ async function visibleNames(
  * Items with no provenance are returned untouched, and no query runs when
  * none has any.
  */
-export async function resolveLookedAtForReader<T extends { ask?: SlotAsk }>(
+export async function resolveLookedAtForReader<
+  T extends { ask?: SlotAsk | null },
+>(
   userId: string,
   items: T[]
 ): Promise<T[]> {

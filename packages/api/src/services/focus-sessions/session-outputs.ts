@@ -344,7 +344,26 @@ export async function listSessionOutputs(
   if (!session) return null;
 
   const joined = await listOutputsForSessions(database, [session]);
-  return joined.get(session.id) ?? { outputs: [], pendingExpected: [] };
+  const result = joined.get(session.id) ?? {
+    outputs: [],
+    pendingExpected: [],
+  };
+  // "What I looked at" on a pending slot's ask: named through THIS reader's
+  // access floor, refs they cannot see dropped — the same resolution the owed
+  // read applies (`looked-at.ts`), so the room, the ask page and the needs-you
+  // tray show one answer. Lazy for the same reason as there: no provenance,
+  // no access-registry load.
+  if (!result.pendingExpected.some((e) => e.ask?.lookedAt?.length)) {
+    return result;
+  }
+  const { resolveLookedAtForReader } = await import("./looked-at.js");
+  return {
+    ...result,
+    pendingExpected: await resolveLookedAtForReader(
+      userId,
+      result.pendingExpected
+    ),
+  };
 }
 
 /**
@@ -359,6 +378,11 @@ export async function listSessionOutputs(
  * through the session visibility floor). This reads ledgers BY those ids, and
  * the id set is the authorization — the same contract `attachPathSections`
  * states.
+ *
+ * `pendingExpected[].ask.lookedAt` comes back AS STORED — `{kind, id}`,
+ * unnamed — because this batch has no reader. Its callers only count or list
+ * produced outputs; a surface that SHOWS an ask reads the per-session door
+ * (`listSessionOutputs`), which names each ref through the reader's floor.
  */
 export async function listOutputsForSessions(
   database: typeof db,

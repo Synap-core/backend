@@ -284,6 +284,24 @@ describe('an ask carries "what I looked at"', () => {
     ]);
   });
 
+  it("the room's read (focusSessions.outputs pendingExpected) names and floors them the same way", async () => {
+    const sessionId = await seedSession();
+    const acme = await seedEntity(USER, "Acme Corp");
+    const pricing = await seedDocument(USER, "Pricing notes");
+    await ask(sessionId, [
+      { kind: "entity", id: acme, title: "SPOOFED" },
+      { kind: "document", id: pricing },
+    ]);
+    await q(`update documents set user_id = $1 where id = $2`, [OTHER, pricing]);
+    const res = await focusSessionsRouter
+      .createCaller({ authenticated: true, userId: USER } as unknown as Context)
+      .outputs({ sessionId });
+    const slot = res.pendingExpected.find((e) => e.label === "Pick vendor");
+    expect(slot?.ask?.lookedAt).toEqual([
+      { kind: "entity", id: acme, title: "Acme Corp" },
+    ]);
+  });
+
   it("refuses a cited object the agent's principal cannot see, and stores nothing", async () => {
     const sessionId = await seedSession();
     const foreign = await seedEntity(OTHER, "Someone else's deal");
