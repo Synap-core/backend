@@ -587,6 +587,10 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   failed: "Failed",
   cancelled: "Cancelled",
   skipped: "Skipped",
+  // W2 calm: a run the reaper found past its window with its session still
+  // owing the person an open slot (automation_runs / playbook_runs). Not
+  // failed, not running — waiting on the human.
+  waiting_on_you: "Waiting on you",
   // connection sync phases (K2 `SyncPhase`, `connection-sync.ts`). `failed` is
   // shared with the run lifecycle above. `mapping` is what the user sees happen
   // — records matched against what is already in Synap — not the mapper's name.

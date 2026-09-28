@@ -537,6 +537,11 @@ describe("resolveStatusLabel", () => {
   it("names the derived session lenses without leaking their tokens", () => {
     expect(resolveStatusLabel("ready")).toBe("Ready");
     expect(resolveStatusLabel("waiting")).toBe("Waiting");
+    // A run waiting on the person (W2 calm) — an explicit row, not the fallback.
+    expect(resolveStatusLabel("waiting_on_you")).toBe("Waiting on you");
+    expect(
+      Object.prototype.hasOwnProperty.call(STATUS_LABELS, "waiting_on_you")
+    ).toBe(true);
     expect(resolveStatusLabel("blocked")).toBe("Blocked");
     expect(resolveStatusLabel("done")).toBe("Done");
     expect(resolveStatusLabel("drafted")).toBe("Drafted");
