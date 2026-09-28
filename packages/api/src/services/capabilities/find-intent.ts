@@ -16,6 +16,14 @@
  *   - `rankByTerms`            the ONE lexical ranker (real IDF)
  *   - `foldVerbsByIntent`      the ONE intent reverse index
  *   - `matchSessionTemplate`   the ONE playbook matcher the start door uses
+ *   - `listSpaceCandidates`    the member spaces as rows (name, purpose via
+ *                              `resolveSpacePurpose`, persona, collect + owned
+ *                              kinds) — `services/discover/space-catalog.ts`
+ *
+ * The fourth catalog, `spaces`, answers "WHERE does this belong?" — an agent
+ * asked to "store brand assets" must reach Brand Library and its `brand-*`
+ * kinds, not a generic `file`. Same ranker, its own rarity pool, its own
+ * confidence scale, and a failed read is `spaces.error`, never `matches: []`.
  *
  * ── FOUNDER DECISIONS ENCODED HERE ──────────────────────────────────────────
  *
@@ -30,9 +38,9 @@
  * measured over the array you pass (`rarityWeight(N, df)`), so folding
  * capabilities and intents into one pool contaminates both IDF pools: a term
  * that is rare among 35 verbs looks common beside 13 abstract verbs. The
- * playbook arm does not even use the same ranker (`rankRouteCandidates` is a
- * token-count sum with no IDF at all), which is the sharpest form of the same
- * point.
+ * playbook arm does not even use the same ranker (`rankRouteCandidates` sums
+ * per-term weights times the SAME `rarityWeight`, over its own playbook pool,
+ * plus kind/facet bonuses), so its scores are on a different scale again.
  *
  * **Confidence is normalised PER CATALOG and the scale is NAMED on the wire.**
  * `understandQuery`'s `CONFIDENCE_SCALE = 4` is calibrated for profiles (a
@@ -92,9 +100,15 @@ import {
   matchSessionTemplate,
   type SessionPlaybookCandidates,
 } from "../focus-sessions/match-session-template.js";
+import type { SpaceCandidate } from "../discover/space-catalog.js";
 
-/** The three catalogs this door searches. A caller may narrow to some of them. */
-export const FIND_CATALOGS = ["capabilities", "intents", "playbooks"] as const;
+/** The catalogs this door searches. A caller may narrow to some of them. */
+export const FIND_CATALOGS = [
+  "capabilities",
+  "intents",
+  "playbooks",
+  "spaces",
+] as const;
 export type FindCatalog = (typeof FIND_CATALOGS)[number];
 
 /** How many rows each catalog contributes at most. */
@@ -111,10 +125,10 @@ export interface FindByIntentInput {
   userId: string;
   agentUserId?: string;
   /**
-   * Which catalogs to search. Default: all three. Typed loosely on purpose —
+   * Which catalogs to search. Default: all of them. Typed loosely on purpose —
    * this is a wire value, so unknown names are DROPPED here rather than at an
    * adapter that would then own a second copy of the vocabulary. A list that
-   * ends up empty falls back to all three: "the caller named only nonsense" is
+   * ends up empty falls back to all of them: "the caller named only nonsense" is
    * not the same fact as "nothing matched", and answering it with an empty
    * result would report the second while meaning the first.
    */
@@ -161,11 +175,36 @@ export interface AbstractIntentMatch {
   termCoverage: { hit: number; of: number };
 }
 
+/** One member space the query's words landed on. */
+export interface SpaceIntentMatch {
+  workspaceId: string;
+  name: string;
+  /** `resolveSpacePurpose`, one line. Absent when the space declares none. */
+  purpose?: string;
+  /**
+   * Up to 3 kinds to WRITE there: the ones the query's words named (ranked
+   * over this space's own kinds), else the space's lead kinds (template
+   * `collect` order first). Absent when the space declares no kinds.
+   */
+  kinds?: string[];
+  score: number;
+  confidence: number;
+  match: TermMatch;
+  termCoverage: { hit: number; of: number };
+}
+
+/**
+ * The spaces block. `matches` and `error` are mutually exclusive: a failed
+ * read is `error`, never a fake empty list.
+ */
+export type FindSpaces = { matches: SpaceIntentMatch[] } | { error: string };
+
 /** What each catalog's numbers mean. Named on the wire so they are never compared. */
 export interface FindScoring {
   capabilities?: ScaleNote;
   intents?: ScaleNote;
   playbooks?: ScaleNote;
+  spaces?: ScaleNote;
 }
 
 export interface ScaleNote {
@@ -209,6 +248,8 @@ export interface FindByIntentResult {
   intents?: { matches: AbstractIntentMatch[] };
   /** The EXACT block `start_session` ships. ABSENT when not searched. */
   playbooks?: SessionPlaybookCandidates;
+  /** Member spaces to route the work to. ABSENT when not searched. */
+  spaces?: FindSpaces;
   scoring: FindScoring;
   coverage: FindCoverage;
   /** Present only when no catalog produced a single match. */
@@ -255,6 +296,71 @@ function normalise(score: number, best: number): number {
 /** Words for an abstract verb token, so "send a message" reaches `send_message`. */
 function intentText(verb: string): string {
   return verb.replace(/_/g, " ");
+}
+
+/** How many kinds a space match suggests. */
+const SPACE_KIND_HINTS = 3;
+
+/**
+ * The kinds to suggest for one matched space: a SEPARATE `rankByTerms` call
+ * over that space's own kinds (its own rarity pool — "brand" names every
+ * Brand Library kind, "asset" only one), else its lead kinds.
+ */
+function spaceKindHints(query: string, kinds: readonly string[]): string[] {
+  const hit = rankByTerms(query, kinds, (k) => ({
+    primary: [k, k.replace(/[-_]+/g, " ")],
+  }));
+  return (hit.length ? hit.map((h) => h.item) : kinds).slice(
+    0,
+    SPACE_KIND_HINTS
+  );
+}
+
+async function searchSpaces(
+  query: string,
+  userId: string,
+  terms: string[],
+  limit: number
+): Promise<FindSpaces> {
+  let candidates: SpaceCandidate[];
+  try {
+    const { listSpaceCandidates } =
+      await import("../discover/space-catalog.js");
+    candidates = await listSpaceCandidates(userId);
+  } catch (err) {
+    return {
+      error:
+        err instanceof Error && err.message.length > 0
+          ? err.message
+          : String(err),
+    };
+  }
+  const ranked = rankByTerms(
+    query,
+    candidates,
+    (c) => ({
+      primary: c.name,
+      secondary: c.kinds,
+      tertiary: [c.purpose, c.persona].filter(Boolean).join(" "),
+    }),
+    { primary: "name", secondary: "kinds", tertiary: "purpose/persona" }
+  );
+  const best = ranked[0]?.score ?? 0;
+  return {
+    matches: ranked.slice(0, limit).map((r) => {
+      const kinds = spaceKindHints(query, r.item.kinds);
+      return {
+        workspaceId: r.item.workspaceId,
+        name: r.item.name,
+        ...(r.item.purpose ? { purpose: r.item.purpose } : {}),
+        ...(kinds.length ? { kinds } : {}),
+        score: r.score,
+        confidence: normalise(r.score, best),
+        match: r.match,
+        termCoverage: coverageOf(r.match, terms),
+      };
+    }),
+  };
 }
 
 export async function findByIntent(
@@ -407,15 +513,35 @@ export async function findByIntent(
     scoring.playbooks = {
       ranker:
         "rankRouteCandidates (services/routing/suggest-routes.ts) — the ranker synap_start_session and capture suggestions use",
-      scale: "raw score: a per-term weight summed, with NO rarity weighting",
+      scale:
+        "raw score: per-term weight × rarityWeight over the playbook pool, summed, plus kind/facet bonuses",
       note: "A different ranker from the capability arms. Its scores are not comparable to theirs, and are passed through unchanged so this door and start_session report the same number.",
+    };
+  }
+
+  // ── Catalog 4: the member spaces (WHERE the work belongs) ─────────────────
+  if (catalogs.has("spaces")) {
+    result.spaces = await searchSpaces(
+      input.intent,
+      input.userId,
+      terms,
+      limit
+    );
+    scoring.spaces = {
+      ranker:
+        "rankByTerms over the caller's member spaces (name / kinds / purpose+persona); kinds per space by a separate rankByTerms over that space's own kinds",
+      scale: "confidence = score ÷ the best space score in THIS result",
+      note: "Routing: pin the space (set_workspace_focus) to get its brief, then write one of its `kinds`. Every member space is searched regardless of the workspaceId lens. spaces.error means the read failed — not that no space fits.",
     };
   }
 
   const total =
     (result.capabilities?.matches.length ?? 0) +
     (result.intents?.matches.length ?? 0) +
-    (result.playbooks?.candidates.length ?? 0);
+    (result.playbooks?.candidates.length ?? 0) +
+    (result.spaces && "matches" in result.spaces
+      ? result.spaces.matches.length
+      : 0);
 
   if (total === 0) {
     result.noConfidentMatch = {

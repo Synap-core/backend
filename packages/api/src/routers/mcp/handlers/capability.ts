@@ -933,7 +933,8 @@ export const capabilityHandlers: McpHandlerMap = {
     return ok(result);
   },
   /**
-   * ONE discovery door across three catalogs. See
+   * ONE discovery door across four catalogs (capabilities, intents,
+   * playbooks, member spaces). See
    * `services/capabilities/find-intent.ts` for every founder decision it
    * encodes; this adapter only reads args and hands the result back whole.
    */
@@ -974,7 +975,7 @@ export const capabilityHandlers: McpHandlerMap = {
         userId,
         ...(agentUserId ? { agentUserId } : {}),
         // Unknown names are dropped by the service, and a list that ends up
-        // empty falls back to all three — never "searched nothing, no match".
+        // empty falls back to all of them — never "searched nothing, no match".
         ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
         ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
       })

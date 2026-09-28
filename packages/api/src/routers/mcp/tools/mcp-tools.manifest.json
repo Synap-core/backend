@@ -4454,7 +4454,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "What can do this? Searches the pod's runnable verbs, the abstract-intent axis and the user's playbooks in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+      "description": "What can do this, and where does it belong? Searches the pod's runnable verbs, the abstract-intent axis, the user's playbooks and their spaces (with the kinds to write there) in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4470,9 +4470,9 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["capabilities", "intents", "playbooks"]
+              "enum": ["capabilities", "intents", "playbooks", "spaces"]
             },
-            "description": "Which catalogs to search. Omit for all three. A catalog you leave out is ABSENT from the result, not empty."
+            "description": "Which catalogs to search. Omit for all. A catalog you leave out is ABSENT from the result, not empty."
           },
           "limit": {
             "type": "number",
