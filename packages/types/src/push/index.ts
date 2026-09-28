@@ -42,7 +42,6 @@ export const PUSH_CATEGORIES = [
   "work-broke",
   "mention",
   "system",
-  "morning-brief",
 ] as const;
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];
 
@@ -72,8 +71,12 @@ export interface PushCategoryPolicy {
 /**
  * Defaults follow design-relay §5.2's table. `system` (storage, degraded
  * intelligence, issuer approval) belongs on the Settings health mark, so it
- * is opt-in. The morning brief is the ONE passive push that replaces every
- * per-event push for non-blocking work, so it is on.
+ * is opt-in.
+ *
+ * NOT HERE (yet): the morning brief ("3 need you · 4 landed overnight", one
+ * passive push at a chosen time). It has no producer — a category and a time
+ * setting nobody reads would be a toggle that does nothing — so it joins this
+ * list together with its producer, never before.
  */
 export const PUSH_CATEGORY_POLICY: Readonly<
   Record<PushCategory, PushCategoryPolicy>
@@ -99,11 +102,6 @@ export const PUSH_CATEGORY_POLICY: Readonly<
     interruptionLevel: "active",
   },
   system: { defaultOn: false, level: "passive", interruptionLevel: "passive" },
-  "morning-brief": {
-    defaultOn: true,
-    level: "passive",
-    interruptionLevel: "passive",
-  },
 };
 
 // ─── Classification ─────────────────────────────────────────────────────────
@@ -157,8 +155,6 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "pod.storage_warning": "system",
   "system.intelligence_degraded": "system",
   "system.issuer_pending_approval": "system",
-  // The daily ritual door.
-  "push.morning_brief": "morning-brief",
   // Not a 10-second decision: in-app / Home only.
   "connector.sync.failed": null,
   "inbox.mention": null,
@@ -186,29 +182,17 @@ export function classifyPush(
 
 // ─── The person's preferences ───────────────────────────────────────────────
 
-/** `HH:MM`, 24h, the person's own clock (`users.timezone`). */
-const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
-
-export function isPushClockTime(v: unknown): v is string {
-  return typeof v === "string" && HH_MM.test(v);
-}
-
-/** Default morning-brief time, the person's local clock. */
-export const MORNING_BRIEF_DEFAULT_AT = "08:00";
-
 /**
  * The stored shape (`notification_preferences.push_prefs`). SPARSE: a category
  * the person never touched is absent and reads as its default — never as off.
  */
 export interface PushPrefs {
   categories?: Partial<Record<PushCategory, boolean>>;
-  /** `HH:MM` local; absent ⇒ {@link MORNING_BRIEF_DEFAULT_AT}. */
-  morningBriefAt?: string;
 }
 
 /**
  * Parse whatever the column holds into a `PushPrefs`, dropping anything that
- * is not a known category with a boolean or a valid clock time. A malformed
+ * is not a known category with a boolean. A malformed
  * value degrades to defaults for THAT key only.
  */
 export function normalizePushPrefs(raw: unknown): PushPrefs {
@@ -223,7 +207,6 @@ export function normalizePushPrefs(raw: unknown): PushPrefs {
     }
     if (Object.keys(kept).length > 0) out.categories = kept;
   }
-  if (isPushClockTime(r.morningBriefAt)) out.morningBriefAt = r.morningBriefAt;
   return out;
 }
 
@@ -257,23 +240,16 @@ export function effectivePushCategories(
   });
 }
 
-/** The morning-brief local time in effect. */
-export function morningBriefAt(prefs: PushPrefs | null | undefined): string {
-  return prefs?.morningBriefAt ?? MORNING_BRIEF_DEFAULT_AT;
-}
-
 // ─── Where a tap lands ──────────────────────────────────────────────────────
 
 /**
  * The tap target, in the `{kind, id, view?}` vocabulary both clients' ONE
  * route table already speaks, plus `slot` for the owed page's query param.
- * `kind: "home"` has no object: it is the Home tab.
  */
 export type PushTarget =
   | { kind: "owed"; id: string; slot: string }
   | { kind: "session"; id: string; view?: "room" }
-  | { kind: "proposal"; id: string }
-  | { kind: "home" };
+  | { kind: "proposal"; id: string };
 
 /**
  * A blocking ask lands ON THE ASK (`/owed/<sessionId>?slot=<label>`), not on
@@ -289,9 +265,6 @@ export function blockingAskTarget(
     ? { kind: "owed", id: sessionId, slot: only }
     : { kind: "session", id: sessionId };
 }
-
-/** The morning brief is the daily door to Home. */
-export const MORNING_BRIEF_TARGET: PushTarget = { kind: "home" };
 
 // ─── Quick answers from the lock screen ─────────────────────────────────────
 
@@ -433,21 +406,4 @@ export function pushEnvelope(
     ...(opts.threadId ? { threadId: opts.threadId } : {}),
     ...(opts.quickAnswer ? { categoryId: opts.quickAnswer.category } : {}),
   };
-}
-
-// ─── Morning brief copy ─────────────────────────────────────────────────────
-
-/**
- * "3 need you · 4 landed overnight". `null` when both are zero: a brief with
- * nothing in it is not sent (Home already says "All clear").
- */
-export function morningBriefBody(counts: {
-  needsYou: number;
-  landed: number;
-}): string | null {
-  const parts: string[] = [];
-  if (counts.needsYou > 0)
-    parts.push(`${counts.needsYou} ${counts.needsYou === 1 ? "needs" : "need"} you`);
-  if (counts.landed > 0) parts.push(`${counts.landed} landed overnight`);
-  return parts.length > 0 ? parts.join(" · ") : null;
 }

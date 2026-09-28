@@ -44,8 +44,6 @@ import {
 import {
   PUSH_CATEGORIES,
   effectivePushCategories,
-  isPushClockTime,
-  morningBriefAt,
   type PushPrefs,
 } from "@synap-core/types/push";
 import {
@@ -55,10 +53,7 @@ import {
 
 /** What a phone's push settings render — every category, effective state. */
 function pushPrefsView(prefs: PushPrefs) {
-  return {
-    categories: effectivePushCategories(prefs),
-    morningBriefAt: morningBriefAt(prefs),
-  };
+  return { categories: effectivePushCategories(prefs) };
 }
 
 /**
@@ -479,7 +474,7 @@ export const notifCenterRouter = router({
 
   /**
    * Every push category with its effective state (`enabled`, `explicit` = the
-   * person set it, `defaultOn`, `level`) and the morning-brief time. Defaults
+   * person set it, `defaultOn`, `level`). Defaults
    * come from `@synap-core/types/push`. A failed read THROWS (isError) — it is
    * never answered with the defaults.
    */
@@ -488,27 +483,16 @@ export const notifCenterRouter = router({
   ),
 
   /**
-   * Turn push categories on/off and/or set the morning-brief time. Sparse and
-   * merged in SQL: categories not named are left as stored.
+   * Turn push categories on/off. Sparse and merged in SQL: categories not
+   * named are left as stored.
    */
   setPushPrefs: protectedProcedure
     .input(
-      z
-        .object({
-          categories: z
-            .record(z.enum(PUSH_CATEGORIES), z.boolean())
-            .optional(),
-          morningBriefAt: z
-            .string()
-            .refine(isPushClockTime, "Expected HH:MM (24h)")
-            .optional(),
-        })
-        .refine(
-          (v) =>
-            (v.categories && Object.keys(v.categories).length > 0) ||
-            v.morningBriefAt !== undefined,
-          { message: "Nothing to change." }
-        )
+      z.object({
+        categories: z
+          .record(z.enum(PUSH_CATEGORIES), z.boolean())
+          .refine((c) => Object.keys(c).length > 0, "Nothing to change."),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       if (ctx.agentUserId) {

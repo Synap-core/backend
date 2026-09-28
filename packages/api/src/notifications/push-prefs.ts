@@ -36,7 +36,6 @@ export async function readPushPrefs(userId: string): Promise<PushPrefs> {
 export interface PushPrefsPatch {
   /** Categories to set; others are left as stored. */
   categories?: Partial<Record<PushCategory, boolean>>;
-  morningBriefAt?: string;
 }
 
 /**
@@ -50,8 +49,6 @@ export async function writePushPrefs(
 ): Promise<PushPrefs> {
   const categories = normalizePushPrefs({ categories: patch.categories })
     .categories;
-  const at = normalizePushPrefs({ morningBriefAt: patch.morningBriefAt })
-    .morningBriefAt;
 
   const podRow = and(
     eq(notificationPreferences.userId, userId),
@@ -68,15 +65,13 @@ export async function writePushPrefs(
   }
 
   const catsJson = JSON.stringify(categories ?? {});
-  const atJson = JSON.stringify(at ? { morningBriefAt: at } : {});
   await db
     .update(notificationPreferences)
     .set({
       pushPrefs: drizzleSql`(coalesce(${notificationPreferences.pushPrefs}, '{}'::jsonb)
         || jsonb_build_object('categories',
              coalesce(${notificationPreferences.pushPrefs}->'categories', '{}'::jsonb)
-             || ${catsJson}::jsonb)
-        || ${atJson}::jsonb)`,
+             || ${catsJson}::jsonb))`,
       updatedAt: new Date(),
     })
     .where(podRow);

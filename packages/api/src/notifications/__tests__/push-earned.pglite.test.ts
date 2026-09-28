@@ -286,11 +286,9 @@ describe("W8 — a push is earned", () => {
     await writePushPrefs(USER, { categories: { "decision-blocking": false } });
     await writePushPrefs(USER, {
       categories: { system: true, bogus: true } as never,
-      morningBriefAt: "07:15",
     });
     expect(await readPushPrefs(USER)).toEqual({
       categories: { "decision-blocking": false, system: true },
-      morningBriefAt: "07:15",
     });
     const pod = await q<{ n: number }>(
       `select count(*)::int as n from notification_preferences where user_id = $1 and workspace_id is null`,
@@ -353,7 +351,7 @@ describe("W8 — a push is earned", () => {
       userId: USER,
       agentUserId: AGENT,
       expectedLabel: "Tone",
-      blockedReason: "action",
+      blockedReason: "decision",
       why: "rotate the key",
       ask,
     } as Parameters<typeof blockExpectedOutput>[0]);

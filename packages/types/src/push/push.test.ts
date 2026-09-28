@@ -9,8 +9,6 @@ import {
   classifyPush,
   effectivePushCategories,
   isPushCategoryEnabled,
-  morningBriefAt,
-  morningBriefBody,
   normalizePushPrefs,
   pushEnvelope,
   quickAnswerFor,
@@ -70,12 +68,9 @@ describe("preferences", () => {
     expect(
       normalizePushPrefs({
         categories: { "blocking-ask": false, nope: true, system: "yes" },
-        morningBriefAt: "25:00",
+        morningBriefAt: "07:30",
       })
     ).toEqual({ categories: { "blocking-ask": false } });
-    expect(normalizePushPrefs({ morningBriefAt: "07:30" })).toEqual({
-      morningBriefAt: "07:30",
-    });
     expect(normalizePushPrefs("garbage")).toEqual({});
     expect(normalizePushPrefs(null)).toEqual({});
   });
@@ -91,10 +86,6 @@ describe("preferences", () => {
     });
   });
 
-  it("brief time defaults to 08:00", () => {
-    expect(morningBriefAt(null)).toBe("08:00");
-    expect(morningBriefAt({ morningBriefAt: "06:45" })).toBe("06:45");
-  });
 });
 
 describe("targets", () => {
@@ -213,7 +204,7 @@ describe("quickAnswerFor", () => {
   });
 });
 
-describe("envelope + brief", () => {
+describe("envelope", () => {
   it("a blocking ask is time-sensitive, threaded and carries its OS category", () => {
     const q = quickAnswerFor(slot, ask({ mode: "confirm" }));
     expect(pushEnvelope("blocking-ask", { threadId: "s-1", quickAnswer: q })).toEqual({
@@ -225,15 +216,8 @@ describe("envelope + brief", () => {
   });
 
   it("a passive category makes no sound", () => {
-    expect(pushEnvelope("morning-brief").sound).toBeNull();
-    expect(PUSH_CATEGORY_POLICY["morning-brief"].level).toBe("passive");
+    expect(pushEnvelope("system").sound).toBeNull();
+    expect(PUSH_CATEGORY_POLICY.system.level).toBe("passive");
   });
 
-  it("brief body", () => {
-    expect(morningBriefBody({ needsYou: 3, landed: 4 })).toBe(
-      "3 need you · 4 landed overnight"
-    );
-    expect(morningBriefBody({ needsYou: 1, landed: 0 })).toBe("1 needs you");
-    expect(morningBriefBody({ needsYou: 0, landed: 0 })).toBeNull();
-  });
 });
