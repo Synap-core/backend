@@ -99,9 +99,10 @@ Or just a Session on its own — most of them are.
   started from**, so editing the method later never silently rewrites the
   vocabulary a live track sits in. (`project-tracks.ts`, migration 0272/0274.)
 - A **Session** is a bounded unit of work toward one goal, with a scope and a
-  checkpoint you accept before it runs. Sessions are born inside a track and
-  carry `trackId` + the stage they were filed at, stamped at birth and never
-  re-derived. (`focus-sessions.ts:103-121`.)
+  checkpoint you accept before it runs. When one is filed into a track it
+  carries `trackId` + the stage, stamped at birth and never re-derived — but
+  that is optional, and a session may be workspace-scoped with no project at
+  all. (`focus-sessions.ts:103-121`.)
 
 ### Repeatability
 
