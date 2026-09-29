@@ -313,6 +313,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       if (outcome.kind === "invalid") {
         return c.json({ error: outcome.error }, 400);
       }
+      if (outcome.kind === "missing_workspace") {
+        return c.json({ error: "No workspace resolved for this read" }, 403);
+      }
       return c.json(outcome.result);
     } catch (err) {
       return errorResponse(c, err, "playbooks.get failed");

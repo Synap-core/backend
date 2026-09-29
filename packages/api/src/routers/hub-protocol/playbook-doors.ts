@@ -326,6 +326,6 @@ export async function getPlaybookDoor(
   }
 
   const caller = await callerFor(identity, null);
-  const result = await caller.get(playbookId.trim());
+  const result = await caller.get({ id: playbookId.trim() });
   return { kind: "result", result };
 }

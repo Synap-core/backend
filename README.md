@@ -306,8 +306,8 @@ no config files. Try Firebase or Bubble.
 
 - 💬 **[Discord](https://discord.gg/xhRdQ7hG5h)** — where builders share
   workspaces, playbooks, and capabilities
-- 🐦 **[X / Twitter](https://x.com/synap)** — build in public
-- 📬 **[Substack](https://synap.substack.com)** — the user-centric web movement
+- 🐦 **[X / Twitter](https://x.com/synapOSI)** — build in public
+- 📬 **[Substack](https://substack.com/@antoineservant)** — the user-centric web movement
 - 🐙 **[GitHub Discussions](https://github.com/Synap-core/backend/discussions)** — technical Q&A
 
 Ecosystem contributions welcome. If you build a workspace template, a
@@ -323,5 +323,5 @@ real for you, tell us — that's the only payment we care about at this altitude
 
 ---
 
-**Built by [@antoine](https://x.com/antoine) and a growing community.**
+**Built by [@antoine](https://substack.com/@antoineservant) and a growing community.**
 One founder, one honest system, one movement — the user is the center.
