@@ -100,9 +100,11 @@ Or just a Session on its own — most of them are.
   vocabulary a live track sits in. (`project-tracks.ts`, migration 0272/0274.)
 - A **Session** is a bounded unit of work toward one goal, with a scope and a
   checkpoint you accept before it runs. When one is filed into a track it
-  carries `trackId` + the stage, stamped at birth and never re-derived — but
-  that is optional, and a session may be workspace-scoped with no project at
-  all. (`focus-sessions.ts:103-121`.)
+  carries `trackId` + the stage — but that is optional, and a session may be
+  workspace-scoped with no project at all. (`focus-sessions.ts:103-121`.)
+  Note the schema's "never re-derived" comment on `trackStage` is **stale**:
+  both the update service and the tRPC patch route accept a new value
+  (`update-session.ts:143`, `routers/focus-sessions.ts:1563`).
 
 ### Repeatability
 
