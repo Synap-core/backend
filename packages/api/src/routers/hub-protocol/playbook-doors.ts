@@ -305,3 +305,27 @@ export async function runPlaybookDoor(
   });
   return { kind: "result", result: withReviewUrl(result) };
 }
+
+/**
+ * Get a single playbook by ID with full details including stages and declared params.
+ * Read-only, uses the same user-floor resolution as the other doors.
+ */
+export async function getPlaybookDoor(
+  identity: PlaybookDoorIdentity,
+  playbookId: string
+): Promise<
+  PlaybookDoorOutcome<
+    Awaited<ReturnType<ReturnType<typeof playbooksRouter.createCaller>["get"]>>
+  >
+> {
+  if (!playbookId || playbookId.trim() === "") {
+    return {
+      kind: "invalid",
+      error: "playbookId is required — discover via listPlaybooksDoor",
+    };
+  }
+
+  const caller = await callerFor(identity, null);
+  const result = await caller.get(playbookId.trim());
+  return { kind: "result", result };
+}

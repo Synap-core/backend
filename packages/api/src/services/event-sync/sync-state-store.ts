@@ -18,6 +18,7 @@ import {
   users,
   eq,
   and,
+  inArray,
   isNull,
   isNotNull,
   desc,
@@ -322,7 +323,7 @@ export async function findApprovedConnectionImport(
     .from(proposals)
     .where(
       and(
-        eq(proposals.proposalType, "import.graph"),
+        inArray(proposals.proposalType, ["capture.graph", "import.graph"]),
         eq(proposals.status, "approved"),
         drizzleSql`${proposals.data} -> 'connectionSync' ->> 'connectionId' = ${connectionId}`
       )

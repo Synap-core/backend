@@ -33,7 +33,12 @@ export function approvalIdempotencyNamespace(
 }
 
 export function approvalIdempotencyProvider(proposalType: string): string {
-  return proposalType === "import.graph" ? "import" : "proposal";
+  // Both names must land on the SAME provider string: switching the literal
+  // without switching this would re-key the namespace and let a re-apply of an
+  // already-applied import create a second set of entities.
+  return proposalType === "capture.graph" || proposalType === "import.graph"
+    ? "import"
+    : "proposal";
 }
 
 export function approvalIdempotency(

@@ -2412,8 +2412,9 @@ function deriveChangeKind(
     t === "create" ||
     t === "create_composite" ||
     // Structured imports create entities (import-orchestrator stamps
-    // "import.graph" with the sessionId set, so it reaches this ledger).
-    t === "import.graph" ||
+    // "capture.graph" with the sessionId set, so it reaches this ledger).
+    t === "capture.graph" ||
+    t === "import.graph" || // pre-unification rows still in the ledger
     t.startsWith("create") ||
     t.endsWith(".create")
   )

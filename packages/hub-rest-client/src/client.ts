@@ -250,6 +250,7 @@ import type {
   DefineCellInput,
   HubDefineCellResult,
   ListPlaybooksOptions,
+  HubPlaybook,
   HubPlaybookPage,
   CreatePlaybookInput,
   HubCreatePlaybookResult,
@@ -2274,6 +2275,16 @@ export class HubRestClient {
     return this.request<HubPlaybookPage>(
       "GET",
       `/api/hub/playbooks${qs ? `?${qs}` : ""}`
+    );
+  }
+
+  /**
+   * Get a single playbook by ID with full details including stages and declared params.
+   */
+  async getPlaybook(playbookId: string): Promise<HubPlaybook> {
+    return this.request<HubPlaybook>(
+      "GET",
+      `/api/hub/playbooks/${encodeURIComponent(playbookId)}`
     );
   }
 

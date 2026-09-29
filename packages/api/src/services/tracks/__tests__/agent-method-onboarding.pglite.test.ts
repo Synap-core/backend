@@ -239,14 +239,14 @@ describe("agent-authored method → approved → track → owed question", () =>
     const created = await buildHandlers.synap_create_playbook!(
       agentCtx({
         name: "Grant application",
-        goalTemplate: "Apply to {{funder}}",
+        goalTemplate: "Apply to {funder}",
         scope: "project",
         stages: [
           {
             key: "draft",
             name: "Draft",
             category: "started",
-            goal: "Draft the application for {{funder}}",
+            goal: "Draft the application for {funder}",
           },
           { key: "submit", name: "Submit", category: "completed" },
         ],

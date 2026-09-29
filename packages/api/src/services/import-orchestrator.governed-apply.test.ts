@@ -91,7 +91,7 @@ function orchestrator(trpcCtx: Record<string, unknown> = {}) {
 
 const importProposal = (over: Record<string, unknown> = {}) => ({
   id: PID,
-  proposalType: "import.graph",
+  proposalType: "capture.graph",
   status: "pending",
   workspaceId: null,
   sessionId: null,
@@ -126,7 +126,7 @@ describe("applyThroughApproval — one refusal, authority first", () => {
 
   it("a proposal that is not an import answers the SAME not found, before any authority check", async () => {
     h.findFirst.mockResolvedValue(
-      importProposal({ proposalType: "capture.graph" })
+      importProposal({ proposalType: "import.graph" })
     );
     await expect(
       orchestrator().applyThroughApproval(PID, { source: "markdown" })

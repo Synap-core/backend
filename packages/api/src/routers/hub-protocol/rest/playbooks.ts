@@ -17,6 +17,7 @@ import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 import {
   createPlaybookDoor,
+  getPlaybookDoor,
   listPlaybooksDoor,
   runPlaybookDoor,
   type PlaybookDoorIdentity,
@@ -289,6 +290,33 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  /**
+   * GET /playbooks/:id
+   */
+  app.get("/playbooks/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read required" },
+        403
+      );
+    }
+    try {
+      const outcome = await getPlaybookDoor(
+        doorIdentity(c, c.get("agentUserId")),
+        c.req.param("id")
+      );
+      if (outcome.kind === "not_found") {
+        return c.json({ error: outcome.error }, 404);
+      }
+      if (outcome.kind === "invalid") {
+        return c.json({ error: outcome.error }, 400);
+      }
+      return c.json(outcome.result);
+    } catch (err) {
+      return errorResponse(c, err, "playbooks.get failed");
+    }
   });
 
   /**

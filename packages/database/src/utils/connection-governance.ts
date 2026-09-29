@@ -414,7 +414,13 @@ export async function applyConnectionSyncApproval(input: {
   const db = input.db ?? sharedDb;
   const { proposal, userId } = input;
 
-  if (proposal.proposalType !== "import.graph") {
+  // Both literals: the unified import-door stamps `capture.graph`, while
+  // connection-sync producers (and every pre-unification row) still stamp
+  // `import.graph`. Accepting only one would silently skip the approval hook.
+  if (
+    proposal.proposalType !== "import.graph" &&
+    proposal.proposalType !== "capture.graph"
+  ) {
     return { applied: false, skipped: "not-import-graph" };
   }
   const cs = readConnectionSync(proposal.data);
@@ -487,7 +493,7 @@ export async function isConnectionSyncProposal(
         // Exactly the shape `readConnectionSync` accepts as well-formed: an
         // import.graph whose stamp is an OBJECT with a string connectionId. A
         // JSON-null / array / scalar stamp is not a sync proposal on either side.
-        eq(proposals.proposalType, "import.graph"),
+        inArray(proposals.proposalType, ["import.graph", "capture.graph"]),
         sql`jsonb_typeof(${proposals.data} -> 'connectionSync') = 'object'`,
         sql`jsonb_typeof(${proposals.data} -> 'connectionSync' -> 'connectionId') = 'string'`,
         sql`length(${proposals.data} -> 'connectionSync' ->> 'connectionId') > 0`
@@ -561,7 +567,8 @@ export function isPodWideConnectionSyncApproval(proposal: {
 }): boolean {
   return (
     !proposal.workspaceId &&
-    proposal.proposalType === "import.graph" &&
+    (proposal.proposalType === "import.graph" ||
+      proposal.proposalType === "capture.graph") &&
     readConnectionSync(proposal.data) !== undefined
   );
 }

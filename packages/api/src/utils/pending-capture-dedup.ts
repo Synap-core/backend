@@ -672,7 +672,10 @@ export async function findRejectedConnectionSyncImport(
       and(
         authoredByUser(params.userId),
         eq(proposals.status, ProposalStatus.REJECTED),
-        eq(proposals.proposalType, "import.graph"),
+        inArray(
+          proposals.proposalType,
+          CAPTURE_GRAPH_PROPOSAL_TYPES as unknown as string[]
+        ),
         drizzleSql`${proposals.data} ->> 'idempotencyKey' = ${params.idempotencyKey}`,
         drizzleSql`${proposals.data} -> 'connectionSync' ->> 'connectionId' = ${params.connectionId}`,
         drizzleSql`${proposals.data} -> 'connectionSync' -> 'kinds' = ${JSON.stringify(params.kinds)}::jsonb`
