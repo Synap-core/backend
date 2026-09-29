@@ -98,11 +98,11 @@ Project    — long-lived intent. Months. A thing you're actually doing.
   ├── Track    — a METHOD running inside one project
   │              ("Business model", "Content", "Build"). A project runs N.
   │
-  │   ├── Session  — short-lived, one task type, born INSIDE a track.
-  │   │              Stamped with the track + the stage it was filed at.
-  │   │              Many sessions per track.
+  │   ├── Session  — short-lived, one task type. Filed at a track + stage.
   │   └── Session
   └── Track
+
+Or just a Session on its own — most of them are.
 ```
 
 - A **Project** is long-lived intent. Progress is **derived** from contained
@@ -111,16 +111,23 @@ Project    — long-lived intent. Months. A thing you're actually doing.
   definition it started from**, so editing the method never silently rewrites a
   live track's vocabulary.
 - A **Session** is a bounded unit of work with a scope and checkpoint you accept
-  before it runs. Sessions are born inside a track.
+  before it runs. It can be filed at a **track** and a **stage**, or stand on
+  its own.
+
+**Honest scope:** tracks and projects are the structure for long-running
+engagements, and they enforce their own rules — a session cannot be filed into
+another project's track. But a session may be workspace-scoped with no project
+at all, and most sessions today are. The hierarchy is where multi-week work
+gets a shape; it isn't a requirement for using the pod.
 
 **Repeatability** sits on top: a session that works becomes a **Playbook**
 (a template for one kind of work, or a method a project runs as a track), and
 an **Automation** binds a playbook to a trigger — `event`, `cron`, `webhook`,
 or `manual`. Do it once, run it forever — still governed.
 
-**The collaboration claim:** every session has a **channel** — a linked room
-where humans and agents work the same goal together, with artifacts and
-proposals visible in-band. One active session per channel. This is the
+**The collaboration claim:** a session gets a **channel** — a linked room where
+humans and agents work the same goal together, with artifacts and proposals
+visible in-band rather than locked in a private transcript. This is the
 differentiator: not "an AI that answers you," but a place where several agents
 and you work the same records, and you stay in the approval seat.
 
@@ -160,20 +167,20 @@ an auth bug to production can't do that here.
 Every primitive is available today via **SDK, CLI, MCP, tRPC and the Hub
 Protocol REST API** — the same operations through several doors.
 
-|                        |                                                                                                                                                                                                           |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **🗂 Typed entities**   | Built-in kinds (person, task, event, note, article, decision, research…), custom kinds, JSONB properties validated against schema, optimistic locking, full provenance.                                   |
-| **🔗 Knowledge graph** | Typed relations, BFS traversal, property↔relation bridge, graph views.                                                                                                                                    |
-| **📸 Event sourcing**  | Append-only event chain on a TimescaleDB-backed Postgres, `requested → approved → validated` phases, causation & correlation IDs.                                                                         |
-| **✅ Proposals**       | Every AI mutation is a proposal you review, with a full audit trail.                                                                                                                                      |
-| **🎨 View types**      | Sheet · Table · List · Grid · Gallery · Kanban · Matrix · Masonry · Calendar · Gantt · Timeline · Graph · Flow · Map · Branch tree · Bento · Whiteboard · Mindmap — 18 projections over the same records. |
-| **⚙️ Automations**     | DAG flows with 23 node types, and `event` / `cron` / `webhook` / `manual` triggers.                                                                                                                       |
-| **📚 Playbooks**       | Sessions saved as reusable templates. Run it once, run it forever.                                                                                                                                        |
-| **🧩 Capabilities**    | Credentialed tools an agent can call, gated by proposals.                                                                                                                                                 |
-| **🤖 Agent-native**    | MCP-first, Bring-Your-Own-Agent, per-agent identity + RBAC.                                                                                                                                               |
-| **🔐 Auth & access**   | Ory Kratos + Hydra (OAuth2/OIDC) for identity, plus a **central access layer** — every scoped table declares its visibility rule in one registry, and every read and write is gated through it.           |
-| **⚡ Real-time**       | Socket.IO events, Yjs collaborative rooms.                                                                                                                                                                |
-| **🔍 Search**          | Typesense full-text + semantic, pgvector embeddings.                                                                                                                                                      |
+|                        |                                                                                                                                                                                                             |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **🗂 Typed entities**   | Built-in kinds (person, task, event, note, article, decision, research…), custom kinds, JSONB properties validated against schema, optimistic locking, full provenance.                                     |
+| **🔗 Knowledge graph** | Typed relations, BFS traversal, property↔relation bridge, graph views.                                                                                                                                      |
+| **📸 Event sourcing**  | Append-only event chain on a TimescaleDB-backed Postgres, `requested → approved → validated` phases, causation & correlation IDs.                                                                           |
+| **✅ Proposals**       | Every AI mutation is a proposal you review, with a full audit trail.                                                                                                                                        |
+| **🎨 View types**      | Sheet · Table · List · Grid · Gallery · Kanban · Matrix · Masonry · Calendar · Gantt · Timeline · Graph · Flow · Map · Branch tree · Bento · Whiteboard — 17 implemented projections over the same records. |
+| **⚙️ Automations**     | DAG flows with 23 node types, and `event` / `cron` / `webhook` / `manual` triggers.                                                                                                                         |
+| **📚 Playbooks**       | Sessions saved as reusable templates. Run it once, run it forever.                                                                                                                                          |
+| **🧩 Capabilities**    | Credentialed tools an agent can call, gated by proposals.                                                                                                                                                   |
+| **🤖 Agent-native**    | MCP-first, Bring-Your-Own-Agent, per-agent identity + RBAC.                                                                                                                                                 |
+| **🔐 Auth & access**   | Ory Kratos + Hydra (OAuth2/OIDC) for identity, plus a **central access layer** — every scoped table declares its visibility rule in one registry, and every read and write is gated through it.             |
+| **⚡ Real-time**       | Socket.IO events, Yjs collaborative rooms.                                                                                                                                                                  |
+| **🔍 Search**          | Typesense full-text, plus pgvector embeddings behind a feature flag.                                                                                                                                        |
 
 ---
 

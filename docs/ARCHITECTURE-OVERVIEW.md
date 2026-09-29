@@ -84,11 +84,11 @@ Project    — long-lived intent. Months. A thing you're actually doing.
   │              (e.g. "Business model", "Content", "Build").
   │              A project runs N of these.
   │
-  │   ├── Session  — short-lived, one task type, born INSIDE a track.
-  │   │              Stamped with the track + the stage it was filed at.
-  │   │              Many sessions per track.
+  │   ├── Session  — short-lived, one task type. Filed at a track + stage.
   │   └── Session
   └── Track
+
+Or just a Session on its own — most of them are.
 ```
 
 - A **Project** is long-lived intent. It has a `phase` (where the work is) and
@@ -118,8 +118,16 @@ trigger. Now it runs without you — still governed, still auditable.
 
 Every session has a **channel** — a linked room where humans and agents
 participate in the same thread of work, with artifacts and proposals visible
-in-band rather than locked in a private transcript. One active session per
-channel. (`focus-sessions.ts:225`, `channels.ts`.)
+in-band rather than locked in a private transcript. (`focus-sessions.ts:225`,
+`channels.ts`.)
+
+> ⚠️ **Honest scope.** The channel is created on session start and wired back
+> onto the row, so it is nullable until then. And the track layer is
+> **optional** — `focus_sessions.trackId` is documented as "NULL for almost
+> every session" (`focus-sessions.ts:107-108`). A session may be
+> workspace-scoped with no project at all. The hierarchy is where multi-week
+> work gets a shape; it is not a precondition for using the pod, and this
+> document should not be read as claiming it is.
 
 This is the differentiator: not "an AI that answers you" but a place where
 several agents and you work the same goal, on the same records, and you stay in
@@ -158,7 +166,9 @@ the data is yours, not the model's.
 A pod is standard infrastructure you can run and open yourself:
 
 - **PostgreSQL** (with **pgvector** for embeddings) — your records.
-- **Typesense** — full-text + semantic search.
+- **Typesense** — full-text search. (The old vector-search endpoint is
+  deprecated; pgvector still backs the agent's internal retrieval behind a
+  feature flag.)
 - **MinIO** — file storage.
 - **Ory Kratos + Hydra** — identity and OAuth2/OIDC.
 - **TimescaleDB** — the append-only event chain (a Postgres extension).
