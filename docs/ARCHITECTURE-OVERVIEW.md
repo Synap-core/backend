@@ -115,6 +115,12 @@ Or just a Session on its own — most of them are.
 So: you do work once, in a session. It becomes a playbook. You bind it to a
 trigger. Now it runs without you — still governed, still auditable.
 
+> ⚠️ **One honest gap.** Promoting a session to a playbook is **refused for a
+> project-scoped session** (`playbook-lifecycle.ts:676-682`,
+> `reason: "project_scoped_session"`). Since project scope is the common case
+> now, that is the promotion path's likeliest live failure — worth knowing
+> before promising "any session becomes a playbook" in public copy.
+
 ### The collaboration claim
 
 Every session has a **channel** — a linked room where humans and agents
@@ -134,22 +140,50 @@ This is the differentiator: not "an AI that answers you" but a place where
 several agents and you work the same goal, on the same records, and you stay in
 the approval seat.
 
+> ⚠️ **What is real, and what is only declared.** Tracks are genuinely started
+> and genuinely stepped — a live track on this pod has advanced through 3
+> stages with a real `stageHistory`. But the hierarchy is **never started
+> automatically**: `startTrack` is only ever called from a human or agent
+> door, and no seeder or reconciler creates one. The `params` chain (declare →
+> pin → answer → hand to the session → render) is fully wired end to end, but
+> the one live track's method declares no params, so no data on this pod yet
+> exercises it. `focus_sessions.status = 'forming'` is **unproduced** — reads
+> only, zero writers. And a `command` node in an automation flow is an explicit
+> dead end. Say "you can start a track," not "projects get tracks."
+
 ---
 
 ## 4. Governance (why you can trust an agent with your data)
 
-- **Every AI mutation is a proposal.** The agent proposes a change; you approve
-  or reject it. There are no silent writes. (`checkPermissionOrPropose()` is the
-  one door.)
+- **Every AI mutation is governed.** The engine (`decideAgentPolicy`, reached
+  through `checkPermissionOrPropose()`) resolves every write to one of two
+  outcomes: **propose**, or **auto**. Most writes propose — the agent suggests,
+  you approve or reject. Where you have granted a rule, some apply
+  automatically and file a receipt instead.
+- **The floors are not rules.** Admin actions, destructive actions
+  (delete/archive/purge), and scope changes are hard-floored to propose
+  _regardless of_ ownership, any allow-list, or any governance rule. A rule can
+  only widen or keep-reviewable; it can never close or bypass a floor.
+  (`packages/governance-policy/src/index.ts:23,40,210,237`.)
 - **Proposals are scoped, reviewable, and reversible** — you see what changed,
   why, and can undo it.
-- **The event chain is append-only** — the history is the audit trail.
-- **Credentials live in a governed capability layer**, not in your prompts. An
-  agent can be given a scoped credential it can never exfiltrate.
+- **The event chain is append-only** — the history is the audit trail, for
+  auto-applied writes exactly as for proposed ones.
+- **Credentials live in a governed capability layer**, not in your prompts. A
+  grant carries its own exec mode, so a broad capability can still be forced to
+  propose per-run.
 
-This is the "git PR for your data" idea, and it's the reason a vibe-coded AI
-app that would ship an auth bug to production can't do that here — writes are
-gated by design.
+This is the "git PR for your data" idea. The precise version of the claim: an AI
+that would quietly write to production is stopped by default, and the classes
+of change that are genuinely dangerous cannot be waved through by a rule.
+
+> ⚠️ **Do not state this as an absolute.** "Every AI mutation goes through a
+> proposal" and "the AI physically cannot ship a security mistake" are both
+> false against this engine: `auto` is a real, reachable outcome
+> (`governance-policy/src/index.ts:1129` — `"auto"` executes, `"propose"`
+> proposes). The defensible claim is narrower and still strong: writes are
+> governed by default, the dangerous classes can never auto-apply, and
+> everything is on the event chain either way.
 
 ---
 

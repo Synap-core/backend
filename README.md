@@ -44,8 +44,8 @@ Prerequisites: **Docker** + **Compose v2**, `curl`, `openssl`.
 
 A hosted pod in one click. Talk to your AI in natural language — it **proposes**
 what to build (a workspace, a workflow, a capability), you **approve**, the
-system assembles itself. No auth code. No leaked secrets. No RLS policies to
-forget.
+system assembles itself. No auth code. No credentials in prompts. No RLS
+policies to forget.
 
 → **[Get a hosted pod](https://www.synap.live/hosted)**
 
@@ -152,7 +152,10 @@ Nothing skipped. Nothing hidden.
 
 ## Governance (why you can trust an agent with your data)
 
-- **Every AI mutation is a proposal.** Approve or reject. No silent writes.
+- **Every AI mutation is governed.** Most arrive as proposals you approve. Some
+  run automatically where you've granted a rule — and **destructive, admin, and
+  scope-changing writes can never auto-approve, by design.** Either way, every
+  one is on the event chain.
 - **Scoped, reviewable, reversible.** See what changed, why, and undo it.
 - **The event chain is append-only** — the history _is_ the audit trail.
 - **Credentials live in a governed capability layer**, not in your prompts.
@@ -172,7 +175,7 @@ Protocol REST API** — the same operations through several doors.
 | **🗂 Typed entities**   | Built-in kinds (person, task, event, note, article, decision, research…), custom kinds, JSONB properties validated against schema, optimistic locking, full provenance.                                     |
 | **🔗 Knowledge graph** | Typed relations, BFS traversal, property↔relation bridge, graph views.                                                                                                                                      |
 | **📸 Event sourcing**  | Append-only event chain on a TimescaleDB-backed Postgres, `requested → approved → validated` phases, causation & correlation IDs.                                                                           |
-| **✅ Proposals**       | Every AI mutation is a proposal you review, with a full audit trail.                                                                                                                                        |
+| **✅ Proposals**       | AI writes are governed: consequential ones arrive as proposals you review, and the rest follow a rule you set. Deletes, admin changes, and scope changes can never auto-apply.                              |
 | **🎨 View types**      | Sheet · Table · List · Grid · Gallery · Kanban · Matrix · Masonry · Calendar · Gantt · Timeline · Graph · Flow · Map · Branch tree · Bento · Whiteboard — 17 implemented projections over the same records. |
 | **⚙️ Automations**     | DAG flows with 23 node types, and `event` / `cron` / `webhook` / `manual` triggers.                                                                                                                         |
 | **📚 Playbooks**       | Sessions saved as reusable templates. Run it once, run it forever.                                                                                                                                          |
