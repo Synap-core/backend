@@ -129,18 +129,27 @@ export function capabilityNextAction(
         ...link,
       };
     }
+    // The `enable` hints are shown VERBATIM (browser activity rows read
+    // `fixHint`, the refusal body carries `enable.hint`) and always sit beside
+    // the capability they describe, so they name no capability: a container
+    // name can be a raw token ("google"), and "verbs" is our jargon, not the
+    // person's word. `kind: "enable"` is what a UI branches on.
     case "connected":
       return {
         kind: "enable",
-        hint: `Enable verbs for "${name}" — connection is ready.`,
+        hint: "Connected, but its actions are off. Turn them on to use it.",
         ...link,
       };
     case "draft":
-      return { kind: "enable", hint: `Enable verbs for "${name}".`, ...link };
+      return {
+        kind: "enable",
+        hint: "Its actions are off. Turn them on to use it.",
+        ...link,
+      };
     case "partial":
       return {
         kind: "enable",
-        hint: `Enable the remaining verbs for "${name}".`,
+        hint: "Some of its actions are off. Turn them on to use them.",
         ...link,
       };
     case "ready":

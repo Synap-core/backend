@@ -1020,9 +1020,9 @@ export class ImportOrchestrator {
         workspaceId,
         targetType: "entity",
         targetId,
-        proposalType: "import.graph",
+        proposalType: "capture.graph",
         action: "create",
-        source: "intelligence",
+        source: "import",
         summary: `${summary} · ${quality.summary}`,
         sessionId: sessionId ?? null,
         data: buildImportGraphProposalData({
@@ -1293,7 +1293,7 @@ export class ImportOrchestrator {
     const proposal = await db.query.proposals.findFirst({
       where: eq(proposals.id, proposalId),
     });
-    if (!proposal || proposal.proposalType !== "import.graph") {
+    if (!proposal || proposal.proposalType !== "capture.graph") {
       throw notFound();
     }
     // The approve door's own authority check — this IS an approval. The acting
@@ -1748,9 +1748,9 @@ export class ImportOrchestrator {
         workspaceId,
         targetType: "entity",
         targetId: batchId,
-        proposalType: "import.graph",
+        proposalType: "capture.graph",
         action: "create",
-        source: "intelligence",
+        source: "import",
         summary: `${summary} · ${quality.summary}`,
         sessionId: sessionId ?? null,
         data: buildImportGraphProposalData({

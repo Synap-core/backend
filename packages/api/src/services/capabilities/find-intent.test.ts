@@ -24,7 +24,7 @@ import { TEMPLATE_OPT_OUT } from "../focus-sessions/match-session-template.js";
 const listCapabilities = vi.fn();
 const matchSessionTemplate = vi.fn();
 const queryCatalogCache = vi.fn();
-const listIntentSlugs = vi.fn(async () => [
+const INTENT_SLUGS = [
   "search_external",
   "find_people",
   "enrich_entity",
@@ -38,7 +38,8 @@ const listIntentSlugs = vi.fn(async () => [
   "capture_into_pod",
   "run_external_job",
   "connect_account",
-]);
+];
+const listIntentSlugs = vi.fn(async () => [...INTENT_SLUGS]);
 
 vi.mock("./capability-registry.js", () => ({
   listCapabilities: (...a: unknown[]) => listCapabilities(...a),
@@ -143,6 +144,7 @@ beforeEach(() => {
   listCapabilities.mockReset().mockResolvedValue(CATALOG);
   matchSessionTemplate.mockReset().mockResolvedValue(NO_PLAYBOOKS);
   queryCatalogCache.mockReset().mockResolvedValue([]);
+  listIntentSlugs.mockReset().mockImplementation(async () => [...INTENT_SLUGS]);
 });
 
 const lens = { workspaceId: null, userId: "u1" };
@@ -329,13 +331,13 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
         slug: "web-read",
         kind: "capability",
         name: "Web read",
-        description: "Read a public page",
+        description: "Read a public page for capture into pod",
         version: "1.2.0",
         tier: "free",
         vendor: "synap",
       },
       {
-        slug: "postiz",
+        slug: "postiz_capture_into_pod",
         kind: "capability",
         name: "Postiz",
         description: null,
@@ -344,13 +346,13 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
         slug: "buffer",
         kind: "capability",
         name: "Buffer",
-        description: "Queue a post",
+        description: "Queue a capture into pod",
       },
       {
         slug: "fourth",
         kind: "capability",
         name: "Fourth",
-        description: "must be dropped",
+        description: "must be dropped capture into pod",
       },
     ]);
 
@@ -374,11 +376,11 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
         {
           slug: "web-read",
           name: "Web read",
-          description: "Read a public page",
+          description: "Read a public page for capture into pod",
           kind: "capability",
         },
         {
-          slug: "postiz",
+          slug: "postiz_capture_into_pod",
           name: "Postiz",
           description: null,
           kind: "capability",
@@ -386,11 +388,99 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
         {
           slug: "buffer",
           name: "Buffer",
-          description: "Queue a post",
+          description: "Queue a capture into pod",
           kind: "capability",
         },
       ],
     });
+  });
+
+  it("drops loose single-word catalog hits and keeps a description that contains the phrase", async () => {
+    listIntentSlugs.mockImplementation(async () => [
+      ...INTENT_SLUGS,
+      "publish_post",
+    ]);
+    queryCatalogCache.mockResolvedValue([
+      {
+        slug: "client-comms-report",
+        kind: "capability",
+        name: "Client Comms Report",
+        description: "A weekly post for clients",
+      },
+      {
+        slug: "discord-bot",
+        kind: "capability",
+        name: "Discord Bot",
+        description: "Post messages into Discord",
+      },
+      {
+        slug: "arch-client-intelligence",
+        kind: "capability",
+        name: "Arch Client Intelligence",
+        description: "Client intelligence post",
+      },
+      {
+        slug: "publish",
+        kind: "capability",
+        name: "Publisher",
+        description: "post",
+      },
+      {
+        slug: "postiz",
+        kind: "capability",
+        name: "Postiz",
+        description: "Schedule and publish post to social networks",
+      },
+      {
+        slug: "web-read",
+        kind: "capability",
+        name: "Web read",
+        description: "Read a public page",
+      },
+    ]);
+
+    const r = await findByIntent({ intent: "publish post", ...lens });
+
+    expect(queryCatalogCache).toHaveBeenCalledWith({
+      query: "publish post publish_post",
+      kind: "capability",
+      limit: 3,
+    });
+    // "post" or "publish" alone is not the intent. Split across fields
+    // ("publish" slug + "post" description) is not either. The phrase is.
+    expect(r.marketplace).toEqual({
+      matches: [
+        {
+          slug: "postiz",
+          name: "Postiz",
+          description: "Schedule and publish post to social networks",
+          kind: "capability",
+        },
+      ],
+    });
+
+    queryCatalogCache.mockResolvedValue([
+      {
+        slug: "client-comms-report",
+        kind: "capability",
+        name: "Client Comms Report",
+        description: "A weekly post for clients",
+      },
+      {
+        slug: "discord-bot",
+        kind: "capability",
+        name: "Discord Bot",
+        description: "Post messages into Discord",
+      },
+      {
+        slug: "arch-client-intelligence",
+        kind: "capability",
+        name: "Arch Client Intelligence",
+        description: "Client intelligence post",
+      },
+    ]);
+    const none = await findByIntent({ intent: "publish post", ...lens });
+    expect(none.marketplace).toEqual({ matches: [] });
   });
 
   it("a thrown catalog read sets marketplace.error and still returns the intent", async () => {

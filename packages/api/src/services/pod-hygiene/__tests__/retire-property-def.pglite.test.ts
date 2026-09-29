@@ -236,7 +236,7 @@ describe("propertyDefs.proposeRetire — always a proposal", () => {
       target_type: "property_def",
       proposal_type: "retire",
     });
-    expect(row.data.summary).toBe('Retire Property "evidence-quality"');
+    expect(row.data.summary).toBe('Retire Field "evidence-quality"');
     expect(await defExists(EMPTY_DEF)).toBe(true);
 
     // A second filing does not stack a duplicate.

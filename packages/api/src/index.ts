@@ -24,7 +24,12 @@ export { syncReceiveApp } from "./routers/sync.js";
 export { webhooksInboundRouter } from "./routers/webhooks-inbound.js";
 export { createHubProtocolCallerContext } from "./routers/hub-protocol/utils.js";
 export { proposalsRouter } from "./routers/proposals.js";
-export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
+export {
+  resolveIntelligenceService,
+  selectIntelligenceService,
+  envIntelligenceEndpoint,
+  describeServingIntelligence,
+} from "./utils/intelligence-routing.js";
 export { getPodCallback, type PodCallback } from "./utils/pod-callback.js";
 export {
   ensureAgentThread,

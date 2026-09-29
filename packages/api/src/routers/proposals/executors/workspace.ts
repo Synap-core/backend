@@ -509,6 +509,25 @@ export function registerWorkspaceExecutors(): void {
         inner.operation === undefined &&
         typeof inner.id === "string"
       ) {
+        // LEGACY SHAPE: a bare `{ id }` names nothing to change. Before
+        // edec5fa4, `workspaces.setIntelligenceService` filed exactly this
+        // (the chosen service was never recorded), and the reconcile door in
+        // `definition-engine.ts` still files it when a non-admin is refused.
+        // Replaying it renamed nothing yet flipped the row APPROVED — a
+        // silent no-op that read as "done". Refuse it, classified as stale
+        // (PRECONDITION_FAILED, never BAD_REQUEST: the reviewer did nothing
+        // wrong), BEFORE the row is touched, so it stays pending to reject.
+        if (
+          inner.name === undefined &&
+          inner.description === undefined &&
+          inner.settings === undefined
+        ) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "This request was filed by an earlier version and does not say what to change, so approving it would do nothing. Reject it and make the change again.",
+          });
+        }
         const membership = await getWorkspaceMembership(db, inner.id, userId);
         if (!membership) {
           throw new TRPCError({

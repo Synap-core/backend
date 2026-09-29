@@ -34,6 +34,7 @@ import {
 } from "../../../services/focus-sessions/session-blocked-by.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
+import { stampAutoApprovedCreate } from "../../../services/proposals/stamp-materialized.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
 import { db } from "@synap/database";
 import { checkLinkEndpointsVisible } from "./link-endpoint-visibility.js";
@@ -340,6 +341,16 @@ export function registerLinksRoutes(app: HubHono): void {
       }
 
       const isUsesIndex = parsed.data.linkType === "uses";
+      // Undo record for an AUTO-APPROVED edge: the row this call inserted, or
+      // the empty record when the edge already existed (created nothing).
+      const receiptId =
+        "granted" in perm ? perm.autoApprovedProposalId : undefined;
+      const stampLink = (linkId: string | undefined) =>
+        stampAutoApprovedCreate({
+          receiptId,
+          record: linkId ? { linkIds: [linkId] } : {},
+          door: "POST /links",
+        });
 
       if (isBlockedBy) {
         // `addSessionBlocker` derives the edge's workspace itself from the
@@ -356,6 +367,7 @@ export function registerLinksRoutes(app: HubHono): void {
           const refusal = BLOCKER_REFUSALS[result.reason];
           return c.json({ error: refusal.error }, refusal.status);
         }
+        await stampLink(result.linkId);
         // `link` is always null — there is no row to hand back through the
         // dedicated producer; `blockedBy.inserted` (1 = new edge, 0 = already
         // existed) distinguishes this from the generic door's shape.
@@ -379,6 +391,7 @@ export function registerLinksRoutes(app: HubHono): void {
               : "Project not found";
           return c.json({ error: message }, 404);
         }
+        await stampLink(uses.linkId);
         return c.json({
           status: "created",
           link: null,
@@ -395,6 +408,7 @@ export function registerLinksRoutes(app: HubHono): void {
         linkType: parsed.data.linkType as LinkType,
         metadata: parsed.data.metadata,
       });
+      await stampLink(created?.id);
 
       return c.json({ status: "created", link: created ?? null });
     } catch (err) {

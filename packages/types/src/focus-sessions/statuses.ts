@@ -45,6 +45,26 @@ export function isTerminalSessionStatus(
 }
 
 /**
+ * Suspended statuses — resumable, and not moving: `paused` by a person, or
+ * `stale` (the reaper found the session quiet). NOT terminal: either can pick
+ * up again. THE ONE READING of `stale` for a person-facing state filter —
+ * Work › Sessions files it with Paused through this set, never beside Done.
+ * (Activity's outcome for a session row is a different axis — how an act
+ * ended — and draws `stopped` with the same pause mark.)
+ */
+export const SUSPENDED_SESSION_STATUSES = ["paused", "stale"] as const;
+export type SuspendedSessionStatus =
+  (typeof SUSPENDED_SESSION_STATUSES)[number];
+
+export function isSuspendedSessionStatus(
+  v: string | null | undefined
+): v is SuspendedSessionStatus {
+  return (
+    v != null && (SUSPENDED_SESSION_STATUSES as readonly string[]).includes(v)
+  );
+}
+
+/**
  * Every `focus_sessions.status` value (mirrors the schema's column enum). Used
  * to validate a model-supplied `status` filter — see synap_list_sessions — and
  * to derive the zod enums on the tRPC and Hub REST doors.

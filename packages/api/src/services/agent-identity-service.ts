@@ -511,10 +511,22 @@ export async function findOrCreateServiceAgentUser(opts: {
       eq(users.isPersonalAgent, false)
     ),
     orderBy: (u, { asc }) => [asc(u.createdAt)],
-    columns: { id: true, email: true },
+    columns: { id: true, email: true, createdVia: true },
   });
 
   if (existing) {
+    // A row older than migration 0225 carries NULL `created_via`, and reuse
+    // used to return it untouched — so the IS roster sync LINKED the pod's own
+    // persona to a NULL row, and `resolveAgentDirection` (NULL ⇒ external)
+    // listed it as an agent a person connected. A caller that names its
+    // provenance stamps it here, but ONLY over NULL: a value any writer
+    // already recorded is never rewritten (0287 is the backfill half).
+    if (opts.createdVia && existing.createdVia == null) {
+      await db
+        .update(users)
+        .set({ createdVia: opts.createdVia })
+        .where(and(eq(users.id, existing.id), isNull(users.createdVia)));
+    }
     logger?.info(
       { agentUserId: existing.id, agentType, createdByUserId: creatorId },
       "findOrCreateServiceAgentUser: reusing existing agent user for creator×type"

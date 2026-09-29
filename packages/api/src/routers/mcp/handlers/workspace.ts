@@ -28,6 +28,7 @@ import {
 } from "../../../utils/project-workspace.js";
 import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
 import { updateSpaceBriefGoverned } from "../../../services/space-brief-door.js";
+import { stampAutoApprovedCreate } from "../../../services/proposals/stamp-materialized.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserMemberWorkspaceIds } from "../../hub-protocol/rest/_shared.js";
 import { checkLinkEndpointsVisible } from "../../hub-protocol/rest/link-endpoint-visibility.js";
@@ -774,6 +775,13 @@ export const workspaceHandlers: McpHandlerMap = {
             : "Project not found",
       });
     }
+    // Undo record for an AUTO-APPROVED edge: the row inserted, or nothing
+    // when the edge already existed.
+    await stampAutoApprovedCreate({
+      receiptId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
+      record: uses.linkId ? { linkIds: [uses.linkId] } : {},
+      door: "synap_project_use_workspace",
+    });
     return ok({ status: "linked", projectId, workspaceId });
   },
   // ── Governed workspace operations (R8a) — thin: `workspace-ops-doors.ts`

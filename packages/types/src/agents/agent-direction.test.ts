@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_DIRECTION_BY_ORIGIN,
   AGENT_ORIGINS,
+  agentDirectionOf,
   resolveAgentDirection,
 } from "./index";
 
@@ -58,6 +59,24 @@ describe("resolveAgentDirection — whose agent is this", () => {
     }
     expect(Object.keys(AGENT_DIRECTION_BY_ORIGIN).sort()).toEqual(
       [...AGENT_ORIGINS].sort()
+    );
+  });
+});
+
+describe("agentDirectionOf — a served roster row", () => {
+  it("the pod's direction wins over what origin alone would say", () => {
+    // Discriminating row: origin alone reads external; the pod said house.
+    expect(agentDirectionOf({ direction: "house", origin: null })).toBe(
+      "house"
+    );
+  });
+  it("no direction (older pod) ⇒ derived from origin", () => {
+    expect(agentDirectionOf({ origin: "intelligence-service" })).toBe("house");
+    expect(agentDirectionOf({ origin: "cli" })).toBe("external");
+  });
+  it("an unknown direction value is ignored, never trusted", () => {
+    expect(agentDirectionOf({ direction: "weird", origin: "system" })).toBe(
+      "house"
     );
   });
 });

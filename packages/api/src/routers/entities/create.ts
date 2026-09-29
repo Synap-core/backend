@@ -73,6 +73,7 @@ import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
 import { computeEntityPropertyDiff } from "../../utils/entity-property-diff.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+import { stampAutoApprovedCreate } from "../../services/proposals/stamp-materialized.js";
 
 const logger = createLogger({ module: "entities-router" });
 
@@ -1219,6 +1220,16 @@ export const createProcs = {
                 where: eq(entities.id, dup.id),
               });
               const dedupFacets = await attachRequestedFacets(dup.id);
+              // The gate already minted this call's receipt: record that it
+              // created NOTHING, so its Undo can never delete the earlier
+              // write's row (that row is the earlier receipt's to undo).
+              await stampAutoApprovedCreate({
+                receiptId:
+                  "granted" in perm ? perm.autoApprovedProposalId : undefined,
+                record: {},
+                door: "entities.create (retry dedup)",
+                database,
+              });
               logger.info(
                 {
                   event: "entity_create_dedup",
@@ -1586,6 +1597,20 @@ export const createProcs = {
           });
         }
       }
+
+      // Undo record for an AUTO-APPROVED create: the receipt was minted by the
+      // gate BEFORE this write and its `targetId` is the pre-minted
+      // `entityId`, which the row above does NOT carry — so the created id is
+      // only knowable here. Stamped LAST, after every write this handler makes
+      // to the new entity (facets, project filing), so none of them reads as an
+      // edit made after the create. Only `entityIds`, mirroring the approval
+      // executor (`executors/entity.ts`): the entity is what undo retires.
+      await stampAutoApprovedCreate({
+        receiptId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
+        record: { entityIds: [createdEntity.id] },
+        door: "entities.create",
+        database,
+      });
 
       return {
         status: "created",

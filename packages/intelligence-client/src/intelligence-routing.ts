@@ -71,6 +71,29 @@ export interface ResolvedService {
   serviceApiKey: string;
 }
 
+/** How the resolver arrived at its answer — which rung of the ladder held. */
+export type IntelligenceSelectionVia =
+  "capability" | "workspace" | "user" | "pod_default" | "env";
+
+/**
+ * The resolver's CHOICE, before any client is built: the registered row that
+ * serves (`service`), or `null` when nothing registered qualifies and the env
+ * service (step 5) answers. Reads rows only — never decrypts a key, so naming
+ * the serving service cannot fail on an undecryptable key the way building a
+ * client can. This is the ONE ladder: `resolveIntelligenceService` builds its
+ * client from this, and status/diagnostic surfaces describe it, so neither can
+ * ever name a different service than the one that answers.
+ */
+export interface IntelligenceSelection {
+  service: IntelligenceServiceRow | null;
+  via: IntelligenceSelectionVia;
+}
+
+/** The env-fallback service endpoint (step 5). One place for the default URL. */
+export function envIntelligenceEndpoint(): string {
+  return process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+}
+
 /**
  * Resolve which intelligence service (agent) to use.
  * @alias resolveAgent
@@ -78,11 +101,38 @@ export interface ResolvedService {
 export async function resolveIntelligenceService(
   ctx: ServiceResolutionContext = {}
 ): Promise<ResolvedService> {
-  const capability = ctx.capability || "default";
-
   // Look up the dedicated AI agent user for this human+workspace (non-blocking)
   const agentUserId = await lookupAgentUser(ctx.userId, ctx.workspaceId);
 
+  const { service } = await selectIntelligenceService(ctx);
+  if (service) {
+    return { ...createClient(service), agentUserId };
+  }
+
+  // 5. Fallback to default service from environment
+  logger.debug(
+    "Step 5: No DB-registered service matched — falling back to env default"
+  );
+  const defaultService = createDefaultClient();
+  logger.info(
+    {
+      url: defaultService.endpoint,
+      source: "env_fallback",
+      hasKey: !!defaultService.serviceApiKey,
+    },
+    "IS resolved via environment fallback"
+  );
+  return { ...defaultService, agentUserId };
+}
+
+/**
+ * Steps 0-4 of the ladder: which REGISTERED service serves this context, or
+ * `null` (→ env fallback, step 5).
+ */
+export async function selectIntelligenceService(
+  ctx: ServiceResolutionContext = {}
+): Promise<IntelligenceSelection> {
+  const capability = ctx.capability || "default";
   // 0. Capability-first routing: if a specific capability is requested (e.g. "channels"),
   //    find a service that explicitly advertises it before checking workspace preferences.
   //    This ensures relay traffic goes to OpenClaw/ZeroClaw, not the default IS.
@@ -108,7 +158,7 @@ export async function resolveIntelligenceService(
         },
         "IS resolved via capability-first routing"
       );
-      return { ...createClient(capService), agentUserId };
+      return { service: capService, via: "capability" };
     }
     logger.debug(
       { capability },
@@ -144,7 +194,7 @@ export async function resolveIntelligenceService(
           },
           "IS resolved via workspace preference"
         );
-        return { ...createClient(service), agentUserId };
+        return { service, via: "workspace" };
       }
       logger.debug(
         { wsServiceId },
@@ -183,7 +233,7 @@ export async function resolveIntelligenceService(
         },
         "IS resolved via user preference"
       );
-      return { ...createClient(service), agentUserId };
+      return { service, via: "user" };
     }
     logger.debug(
       { userServiceId },
@@ -199,23 +249,35 @@ export async function resolveIntelligenceService(
   //    so the badge and the routing can never disagree.
   const podDefault = await selectPodDefaultService();
   if (podDefault) {
-    return { ...createClient(podDefault), agentUserId };
+    return { service: podDefault, via: "pod_default" };
   }
+  return { service: null, via: "env" };
+}
 
-  // 5. Fallback to default service from environment
-  logger.debug(
-    "Step 5: No DB-registered service matched — falling back to env default"
-  );
-  const defaultService = createDefaultClient();
-  logger.info(
-    {
-      url: defaultService.endpoint,
-      source: "env_fallback",
-      hasKey: !!defaultService.serviceApiKey,
-    },
-    "IS resolved via environment fallback"
-  );
-  return { ...defaultService, agentUserId };
+/**
+ * The service that ACTUALLY serves a context, described for status surfaces
+ * (`/api/provision/status`, `/api/provision/diagnose-intelligence`).
+ *
+ * A thin projection of `selectIntelligenceService` — no ladder of its own.
+ * `registered` = a row in `intelligence_services` answers (`service` is that
+ * row); `env` = no registered row qualifies and the env service answers
+ * (`service` is null — the env service has no row, so no status/key to report).
+ */
+export interface ServingIntelligence {
+  source: "registered" | "env";
+  via: IntelligenceSelectionVia;
+  /** The endpoint requests actually go to. */
+  url: string;
+  service: IntelligenceServiceRow | null;
+}
+
+export async function describeServingIntelligence(
+  ctx: ServiceResolutionContext = {}
+): Promise<ServingIntelligence> {
+  const { service, via } = await selectIntelligenceService(ctx);
+  return service
+    ? { source: "registered", via, url: service.webhookUrl, service }
+    : { source: "env", via, url: envIntelligenceEndpoint(), service: null };
 }
 
 /** A registered intelligence-service row, as the resolver reads it. */
@@ -569,7 +631,7 @@ export async function setDefaultIntelligenceService(
  * Create default client from environment.
  */
 function createDefaultClient(): ResolvedService {
-  const baseUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+  const baseUrl = envIntelligenceEndpoint();
   return {
     serviceId: "default",
     endpoint: baseUrl,

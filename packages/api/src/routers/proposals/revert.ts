@@ -109,22 +109,31 @@ export function planProposalRevert(
   const changeType =
     (data && isRequestShapedProposalData(data) ? data.changeType : undefined) ??
     proposal.proposalType;
+  // An auto-approve RECEIPT names its type `<subject>.<action>` (the gate's
+  // event key — `permission-check.ts`), a pending proposal the bare verb. The
+  // receipt of a create is a create, of a delete a delete: without this the
+  // `@reversible` lane's creates all fell to `unsupported` ("Can't be undone")
+  // while the lane promised every change comes with Undo.
+  const isDottedReceipt = (action: string) =>
+    proposal.proposalType === `${proposal.targetType}.${action}`;
   const isCreate =
     proposal.proposalType === "create" ||
     changeType === "create" ||
+    isDottedReceipt("create") ||
     isCompositeProposalData(data ?? null);
   const isUpdate =
     !isCreate &&
     (proposal.proposalType === "update" ||
       proposal.proposalType === "edit" ||
       proposal.proposalType === "user_edit" ||
-      // An auto-approve receipt names its type `<subject>.<action>`.
-      proposal.proposalType === `${proposal.targetType}.update` ||
+      isDottedReceipt("update") ||
       changeType === "update");
   const isDelete =
     !isCreate &&
     !isUpdate &&
-    (proposal.proposalType === "delete" || changeType === "delete");
+    (proposal.proposalType === "delete" ||
+      changeType === "delete" ||
+      isDottedReceipt("delete"));
   const isMerge =
     !isCreate &&
     !isUpdate &&
@@ -282,10 +291,19 @@ export function planProposalRevert(
     // propose time, not a created row. Falling back to it is how an import
     // with no record reverted by deleting a random id → NOT_FOUND → "Revert
     // failed". A graph with no record says so instead.
+    //
+    // NEVER for an auto-approve RECEIPT (`<subject>.create`) either. The gate
+    // mints the receipt BEFORE the write with `targetId = data.id ?? random`,
+    // and the door does not have to honour that id: `entities.create` writes a
+    // row with its own id (live receipt 3b0d64cb… named c3d53123…, which does
+    // not exist; the entity created was 8059774b…). The receipt's created ids
+    // are stamped by the door AFTER the write (`stampAutoApprovedCreate`);
+    // an older receipt with no stamp has no trustworthy id, so it says so.
     const stampedNothing = materialized !== undefined;
     if (
       isEmpty() &&
       !stampedNothing &&
+      !isDottedReceipt("create") &&
       !isCompositeProposalData(data ?? null)
     ) {
       if (proposal.targetType === "entity" && proposal.targetId) {
@@ -300,7 +318,9 @@ export function planProposalRevert(
         kind: "unsupported",
         reason: stampedNothing
           ? `Revert of a '${proposal.targetType}' create proposal is not supported: it created no new rows (it matched something that already existed), so there is nothing to undo.`
-          : `Revert of a '${proposal.targetType}' create proposal is not supported: no materialized record of created rows.`,
+          : isDottedReceipt("create")
+            ? `Revert of this '${proposal.targetType}' create is not supported: it was applied before undo records were kept, so which row it created was never recorded.`
+            : `Revert of a '${proposal.targetType}' create proposal is not supported: no materialized record of created rows.`,
       };
     }
 

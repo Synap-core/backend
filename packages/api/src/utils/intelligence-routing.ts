@@ -11,12 +11,18 @@ export {
   getDefaultActiveService,
   setDefaultIntelligenceService,
   selectPodDefaultService,
+  selectIntelligenceService,
+  envIntelligenceEndpoint,
+  describeServingIntelligence,
   IntelligenceAuthError,
 } from "@synap/intelligence-client";
 
 export type {
   ServiceResolutionContext,
   ResolvedService,
+  IntelligenceSelection,
+  IntelligenceSelectionVia,
+  ServingIntelligence,
 } from "@synap/intelligence-client";
 
 export { resolveAgentForTask } from "@synap/intelligence-client";

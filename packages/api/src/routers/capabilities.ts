@@ -275,12 +275,30 @@ const capabilityRegistryRouter = router({
           query: z.string().optional(),
           kind: z.enum(CAPABILITY_KINDS).optional(),
           limit: z.number().int().min(1).max(500).optional(),
+          /**
+           * ONE read for every space: pod-wide rows + every row in any space
+           * the caller can see (`userVisibleWhere`), each row tagged with its
+           * own `workspaceId` (null = pod-wide). A space-scoped copy of a name
+           * stays its own row; pod-wide duplicates still collapse. Mutually
+           * exclusive with `workspaceId` (a lens and "all" contradict).
+           */
+          allSpaces: z.boolean().optional(),
         })
         .optional()
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const workspaceId = await resolveRegistryLens(userId, input?.workspaceId);
+      const allSpaces = input?.allSpaces === true;
+      if (allSpaces && input?.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Pass either workspaceId (one space) or allSpaces (every space), not both.",
+        });
+      }
+      const workspaceId = allSpaces
+        ? null
+        : await resolveRegistryLens(userId, input?.workspaceId);
 
       // `limit: null` — never slice the RAW flat list here. This door hands its
       // result straight to `sectionCapabilities`, which dedupes (a provider
@@ -289,7 +307,7 @@ const capabilityRegistryRouter = router({
       // duplicate rows of something else, so the picker could render "no
       // match" while a match exists. Cap AFTER dedup instead, below.
       const caps = await listCapabilities(
-        { workspaceId, userId },
+        { workspaceId, userId, ...(allSpaces ? { allSpaces: true } : {}) },
         {
           ...(input?.query ? { query: input.query } : {}),
           ...(input?.kind ? { kind: input.kind } : {}),
@@ -303,6 +321,7 @@ const capabilityRegistryRouter = router({
         // at all without a query — an unsearched catalogue must not be
         // silently short.
         limit: input?.limit ?? (input?.query ? DEFAULT_QUERY_LIMIT : undefined),
+        ...(allSpaces ? { bySpace: true } : {}),
       });
       return {
         ...sections,
@@ -311,7 +330,11 @@ const capabilityRegistryRouter = router({
          * needs to say "select a workspace to also see its capabilities"
          * instead of rendering an unexplained short list.
          */
-        lens: { workspaceId, podOnly: workspaceId === null },
+        lens: {
+          workspaceId,
+          podOnly: workspaceId === null && !allSpaces,
+          allSpaces,
+        },
       };
     }),
 

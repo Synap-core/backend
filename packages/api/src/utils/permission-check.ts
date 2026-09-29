@@ -52,6 +52,7 @@ import {
   channelMembers,
   messages,
   focusSessions,
+  playbooks,
   ChannelMemberKind,
   ProposalStatus,
 } from "@synap/database/schema";
@@ -4100,6 +4101,27 @@ export async function resolveProposalTargetName(
         .limit(1);
       return session?.goal ?? undefined;
     } catch {
+      return undefined;
+    }
+  }
+
+  // A playbook edit carries `name` only when it renames, so a steps/settings
+  // change titled itself "Update Template" with no template named.
+  if (subjectType === "playbook" && isLikelyUUID(targetId)) {
+    try {
+      const [playbook] = await db
+        .select({ name: playbooks.name })
+        .from(playbooks)
+        .where(eq(playbooks.id, targetId))
+        .limit(1);
+      return playbook?.name ?? undefined;
+    } catch (err) {
+      // Title only: a failed read degrades the summary to "Update Template",
+      // it never blocks the proposal. Logged so it is not a silent blank.
+      logger.warn(
+        { err, targetId },
+        "resolveProposalTargetName: playbook name lookup failed"
+      );
       return undefined;
     }
   }

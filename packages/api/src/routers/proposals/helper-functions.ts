@@ -93,6 +93,12 @@ export function referencedNameIds(
       stringProp(payload, "playbookId") ?? stringProp(payload, "templateId")
     );
   }
+  // A proposal ABOUT a playbook names it by its own row: `playbook/update`
+  // carries `name` only when it renames, so without the join a settings or
+  // steps edit read "Update Template" with no template.
+  if (row.targetType === "playbook") {
+    ids.playbook = uuidOrUndefined(row.targetId);
+  }
   ids.project = uuidOrUndefined(row.projectId);
   if (row.targetType === "automation") {
     ids.automation = uuidOrUndefined(stringProp(payload, "automationId"));

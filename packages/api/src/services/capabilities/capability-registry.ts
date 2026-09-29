@@ -59,7 +59,11 @@ import {
   type RunPosture,
 } from "./run-posture.js";
 import { userVisibleWhere } from "@synap/database";
-import { visibleSkillsWhere } from "../skills/visibility.js";
+import {
+  visibleSkillsAnyWorkspaceWhere,
+  visibleSkillsWhere,
+} from "../skills/visibility.js";
+import { isToolRowLaunchable } from "./verb-launchable.js";
 import { declaredReadOnly } from "./capability-drift.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
 import { rankByTerms, type TermMatch } from "../../utils/term-match.js";
@@ -82,6 +86,14 @@ export interface CapabilityRegistryContext {
    */
   workspaceId: string | null;
   userId: string;
+  /**
+   * EVERY SPACE AT ONCE: pod-wide rows plus every row in any workspace the
+   * caller can see (`userVisibleWhere` — member, owner, or pod-visible), in ONE
+   * read. `workspaceId` is ignored when set. Each row is then tagged with its
+   * own `workspaceId` so a surface can say "in <space>". Replaces N per-space
+   * reads (Settings › Tools did ~15). Absent → the lens behaviour above.
+   */
+  allSpaces?: boolean;
 }
 
 /** Map a `tools.kind` value to the read-model CapabilityKind. */
@@ -145,6 +157,12 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
   verbs?: CapabilityVerbStateWithResponseShape[];
   /** Skill lifecycle: false for an inactive/errored skill (not launchable). */
   runnable?: boolean;
+  /**
+   * The row's OWN space: a workspace id, or `null` for a pod-wide / personal
+   * row. Emitted ONLY by an `allSpaces` read (see `CapabilityRegistryContext`);
+   * a lensed read leaves it absent, its shape unchanged.
+   */
+  workspaceId?: string | null;
   /** Why this row matched a `query`; absent without one. */
   match?: TermMatch;
   /**
@@ -598,12 +616,16 @@ export async function listCapabilities(
     .from(tools)
     .where(
       and(
-        ctx.workspaceId
-          ? or(
-              isNull(tools.workspaceId),
-              eq(tools.workspaceId, ctx.workspaceId)
-            )
-          : isNull(tools.workspaceId),
+        ctx.allSpaces
+          ? // Pod-wide + every space the caller can see — the access floor,
+            // never a hand-rolled membership join.
+            userVisibleWhere(tools.workspaceId, ctx.userId)
+          : ctx.workspaceId
+            ? or(
+                isNull(tools.workspaceId),
+                eq(tools.workspaceId, ctx.workspaceId)
+              )
+            : isNull(tools.workspaceId),
         toolNotRetiredWhere()
       )
     );
@@ -653,7 +675,11 @@ export async function listCapabilities(
     // Owner-aware by construction: `visibleSkillsWhere` ANDs `skills.userId` on
     // the user tier and re-ANDs the membership lens on the workspace tier. At
     // pod altitude it degrades to `pod OR (user AND userId = caller)`.
-    .where(visibleSkillsWhere(ctx.userId, ctx.workspaceId ?? undefined));
+    .where(
+      ctx.allSpaces
+        ? visibleSkillsAnyWorkspaceWhere(ctx.userId)
+        : visibleSkillsWhere(ctx.userId, ctx.workspaceId ?? undefined)
+    );
 
   // verb id (= skill name) → providerSpec, for declarative skills only. A tool's
   // verb catalog entry id mirrors the requiring skill's name (see deriveToolVerbs
@@ -731,9 +757,14 @@ export async function listCapabilities(
     userId: ctx.userId,
   });
 
+  // Only an all-spaces read tags a row with its space (shape unchanged otherwise).
+  const spaceTag = (workspaceId: string | null | undefined) =>
+    ctx.allSpaces ? { workspaceId: workspaceId ?? null } : {};
+
   const toolCaps: RegistryCapability[] = toolRows.map((row) => ({
     kind: toolKindToCapabilityKind(row.kind),
     id: row.id,
+    ...spaceTag(row.workspaceId),
     name: row.name,
     description: row.description ?? null,
     inputSchema: asInputSchema(row.inputSchema),
@@ -788,6 +819,9 @@ export async function listCapabilities(
       : {
           kind: "skill",
           id: row.id,
+          // A pod/user-scoped skill belongs to no space even if a stale
+          // workspace_id lingers on it — visibility keys off `scope`.
+          ...spaceTag(row.scope === "workspace" ? row.workspaceId : null),
           name: row.name,
           description: row.description ?? null,
           inputSchema: asInputSchema(row.parameters),
@@ -816,17 +850,20 @@ export async function listCapabilities(
     .select()
     .from(intelligenceCommands)
     .where(
-      ctx.workspaceId
-        ? or(
-            isNull(intelligenceCommands.workspaceId),
-            eq(intelligenceCommands.workspaceId, ctx.workspaceId)
-          )
-        : isNull(intelligenceCommands.workspaceId)
+      ctx.allSpaces
+        ? userVisibleWhere(intelligenceCommands.workspaceId, ctx.userId)
+        : ctx.workspaceId
+          ? or(
+              isNull(intelligenceCommands.workspaceId),
+              eq(intelligenceCommands.workspaceId, ctx.workspaceId)
+            )
+          : isNull(intelligenceCommands.workspaceId)
     );
 
   const commandCaps: Capability[] = commandRows.map((row) => ({
     kind: "command",
     id: row.id,
+    ...spaceTag(row.workspaceId),
     name: row.title,
     description: null,
     // Commands declare inputs as DerivedInput[] — surfaced as the raw array under
@@ -934,6 +971,8 @@ export interface SectionedCapabilities {
      * the first one seen — not a claim that only one row exists.
      */
     id: string;
+    /** The row's own space (`null` = pod-wide). Present ONLY with `bySpace`. */
+    workspaceId?: string | null;
     /**
      * The capability container this integration belongs to, or `null` for an
      * un-packaged brick. `null` is a real answer, not a missing one: it is what
@@ -970,6 +1009,8 @@ export interface SectionedCapabilities {
    *  under that integration instead, never duplicated here. */
   skills: Array<{
     id: string;
+    /** The row's own space (`null` = pod-wide). Present ONLY with `bySpace`. */
+    workspaceId?: string | null;
     name: string;
     description: string | null;
     governance: "auto" | "propose" | "none";
@@ -986,7 +1027,13 @@ export interface SectionedCapabilities {
     match?: TermMatch;
   }>;
   /** Intelligence commands. */
-  commands: Array<{ id: string; name: string; description: string | null }>;
+  commands: Array<{
+    id: string;
+    /** The row's own space (`null` = pod-wide). Present ONLY with `bySpace`. */
+    workspaceId?: string | null;
+    name: string;
+    description: string | null;
+  }>;
   /**
    * Built-in capabilities — browsable bricks, rendered as a collapsed section.
    * De-duplicated by name like every other section (the IS manifest and the
@@ -1033,6 +1080,14 @@ export interface SectionCapabilitiesOptions {
    * Omit for the historic behaviour: every distinct row, unbounded.
    */
   limit?: number;
+  /**
+   * Fold per SPACE: a row's dedupe identity becomes (its `workspaceId`, name)
+   * instead of name alone, and every integration / skill / command row carries
+   * `workspaceId`. For an `allSpaces` registry read — pod-wide copies still
+   * collapse into one row, while a space-scoped copy stays its own row so a
+   * surface can say "in <space>". Omit for the lensed fold (unchanged).
+   */
+  bySpace?: boolean;
 }
 
 /**
@@ -1058,6 +1113,11 @@ export function sectionCapabilities(
     SectionedCapabilities["builtins"][number]
   >();
   let teachingDocs = 0;
+  const bySpace = opts?.bySpace === true;
+  const key = (c: RegistryCapability) => spacedName(c, bySpace);
+  const spaceOf = (c: RegistryCapability) =>
+    bySpace ? { workspaceId: c.workspaceId ?? null } : {};
+  const seenCommands = new Set<string>();
 
   for (const c of caps) {
     // Browsable, but usually not launchable through this door — carried as a row
@@ -1099,10 +1159,11 @@ export function sectionCapabilities(
 
     if (c.kind === "tool" || c.kind === "source-provider") {
       for (const v of c.verbs ?? []) providerVerbIds.add(v.id);
-      const existing = integrations.get(c.name);
+      const existing = integrations.get(key(c));
       if (!existing) {
-        integrations.set(c.name, {
+        integrations.set(key(c), {
           id: c.id,
+          ...spaceOf(c),
           containerId: c.containerId ?? null,
           containerName: c.containerName ?? null,
           name: c.name,
@@ -1150,9 +1211,10 @@ export function sectionCapabilities(
     if (c.kind === "skill") {
       // An unlaunchable skill (inactive/error) is management noise here.
       if (c.runnable === false) continue;
-      if (!skillByName.has(c.name)) {
-        skillByName.set(c.name, {
+      if (!skillByName.has(key(c))) {
+        skillByName.set(key(c), {
           id: c.id,
+          ...spaceOf(c),
           name: c.name,
           description: c.description ?? null,
           governance: runPosture({
@@ -1170,8 +1232,12 @@ export function sectionCapabilities(
     }
 
     if (c.kind === "command") {
+      // A row id is unique, so this only dedupes a row handed in twice.
+      if (seenCommands.has(c.id)) continue;
+      seenCommands.add(c.id);
       commands.push({
         id: c.id,
+        ...spaceOf(c),
         name: c.name,
         description: c.description ?? null,
       });
@@ -1205,12 +1271,13 @@ export function sectionCapabilities(
       name: row.name,
       containerId: row.containerId,
       connection: connectionFromRegistry(row.connection),
-      // Grants are issued per TOOL today, so every verb shares one grant state
-      // (`buildVerbStates`). "Any verb granted" is therefore the honest read of
-      // "can anything here run"; a verbless row falls back to the row's own
-      // approval.
-      enabled:
-        row.verbs.length > 0 ? row.verbs.some((v) => v.granted) : row.enabled,
+      // "Needs enable" = the execute door would REFUSE (`not_approved`): the
+      // SAME predicate the runnable-action projection advertises by
+      // (`isToolRowLaunchable` — tool approved AND a verb whose backing skill
+      // is active+approved). NOT grant state: a missing tool grant only makes
+      // an agent run PROPOSE (already said by `governance`), and no enable
+      // switch issues a grant — so a grant-derived block could never clear.
+      enabled: isToolRowLaunchable(row),
     });
     if (blocked) row.blocked = blocked;
   }
@@ -1234,7 +1301,20 @@ export function sectionCapabilities(
   };
 
   if (typeof opts?.limit !== "number") return full;
-  return capSectionsByRank(full, caps, opts.limit);
+  return capSectionsByRank(full, caps, opts.limit, bySpace);
+}
+
+/**
+ * A row's name-identity for the fold: the name alone (lensed), or the name
+ * within its own space (`bySpace`). Pod-wide rows share the empty space, so
+ * their duplicates still collapse. The ONE spelling — the fold and the rank cap
+ * both key on it, so "the same row" cannot drift between them.
+ */
+function spacedName(
+  c: { name: string; workspaceId?: string | null },
+  bySpace: boolean
+): string {
+  return bySpace ? `${c.workspaceId ?? ""}\u0000${c.name}` : c.name;
 }
 
 /** Stamp each verb's run posture and fold the row's: `auto` only when every
@@ -1265,11 +1345,14 @@ function stampRunPosture(
  *  any other grantable kind the fold above skips). Kept as ONE function so a
  *  row's rank key can never drift from the fold's own "what counts as the
  *  same row" rule above. */
-function sectionDedupeKey(c: RegistryCapability): string | null {
+function sectionDedupeKey(
+  c: RegistryCapability,
+  bySpace: boolean
+): string | null {
   if (c.kind === "builtin-tool") return `builtin:${c.name}`;
   if (c.kind === "tool" || c.kind === "source-provider")
-    return `integration:${c.name}`;
-  if (c.kind === "skill") return `skill:${c.name}`;
+    return `integration:${spacedName(c, bySpace)}`;
+  if (c.kind === "skill") return `skill:${spacedName(c, bySpace)}`;
   if (c.kind === "command") return `command:${c.id}`;
   return null;
 }
@@ -1290,17 +1373,18 @@ function sectionDedupeKey(c: RegistryCapability): string | null {
 function capSectionsByRank(
   full: SectionedCapabilities,
   caps: RegistryCapability[],
-  limit: number
+  limit: number,
+  bySpace: boolean
 ): SectionedCapabilities {
   const firstIndex = new Map<string, number>();
   caps.forEach((c, i) => {
-    const key = sectionDedupeKey(c);
+    const key = sectionDedupeKey(c, bySpace);
     if (key && !firstIndex.has(key)) firstIndex.set(key, i);
   });
 
   const dedupeKeys = [
-    ...full.integrations.map((it) => `integration:${it.name}`),
-    ...full.skills.map((s) => `skill:${s.name}`),
+    ...full.integrations.map((it) => `integration:${spacedName(it, bySpace)}`),
+    ...full.skills.map((s) => `skill:${spacedName(s, bySpace)}`),
     ...full.builtins.map((b) => `builtin:${b.name}`),
     ...full.commands.map((c) => `command:${c.id}`),
   ];
@@ -1314,9 +1398,11 @@ function capSectionsByRank(
 
   return {
     integrations: full.integrations.filter((it) =>
-      kept.has(`integration:${it.name}`)
+      kept.has(`integration:${spacedName(it, bySpace)}`)
     ),
-    skills: full.skills.filter((s) => kept.has(`skill:${s.name}`)),
+    skills: full.skills.filter((s) =>
+      kept.has(`skill:${spacedName(s, bySpace)}`)
+    ),
     commands: full.commands.filter((c) => kept.has(`command:${c.id}`)),
     builtins: full.builtins.filter((b) => kept.has(`builtin:${b.name}`)),
     excluded: full.excluded,

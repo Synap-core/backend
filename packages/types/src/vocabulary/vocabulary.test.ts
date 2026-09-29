@@ -252,7 +252,7 @@ describe("resolveObjectNoun", () => {
     expect(resolveObjectNoun("focus_sessions")).toBe("Session");
     expect(resolveObjectNoun("entity_facet")).toBe("Facet");
     expect(resolveObjectNoun("entity_facets")).toBe("Facet");
-    expect(resolveObjectNoun("property_def")).toBe("Property");
+    expect(resolveObjectNoun("property_def")).toBe("Field");
     // CP publish vocabulary → pod runtime vocabulary. A marketplace package of
     // this kind must not read "Workflow" in one surface and "Automation" in
     // another; before the alias, `workflow` humanized and missed the icon.
@@ -260,7 +260,7 @@ describe("resolveObjectNoun", () => {
     expect(resolveObjectNoun("workflows")).toBe(
       resolveObjectNoun("automation")
     );
-    expect(resolveObjectNoun("property_defs")).toBe("Property");
+    expect(resolveObjectNoun("property_defs")).toBe("Field");
     expect(resolveObjectNoun("relation")).toBe("Link");
     expect(resolveObjectNoun("relations")).toBe("Link");
   });
@@ -356,7 +356,19 @@ describe("buildFallbackTitle — the regressions it shipped", () => {
     ).toBe("Create Session");
     expect(
       buildFallbackTitle({ changeType: "update", targetType: "property_def" })
-    ).toBe("Update Property");
+    ).toBe("Update Field");
+  });
+
+  it("a property definition is a FIELD — singular, plural and a retire title", () => {
+    expect(resolveObjectNoun("property")).toBe("Field");
+    expect(resolveObjectNounPlural("property_def")).toBe("Fields");
+    expect(
+      buildObjectActionTitle({
+        action: "retire",
+        objectKind: "property_def",
+        objectName: "evidence-quality",
+      })
+    ).toBe('Retire Field "evidence-quality"');
   });
 
   it("keeps the historical shape for ordinary proposals", () => {
@@ -825,9 +837,9 @@ describe("resolveObjectNounPlural", () => {
   });
 
   it("a consonant + y fallback takes -ies, never a bare s", () => {
-    // `property` is an alias TARGET with no registry entry — it read "Propertys".
-    expect(resolveObjectNounPlural("property")).toBe("Properties");
-    expect(resolveObjectNounPlural("property_def")).toBe("Properties");
+    // An uncurated token ending consonant + y (once `property`, which read
+    // "Propertys" before it was curated to "Field").
+    expect(resolveObjectNounPlural("some_category")).toBe("Some categories");
     // A vowel + y keeps the plain s.
     expect(resolveObjectNounPlural("some_key_way")).toBe("Some key ways");
   });
@@ -1137,6 +1149,8 @@ describe("resolveNeedsYouItemCount", () => {
     expect(resolveNeedsYouItemCount("physical", 1)).toBe("1 action");
     expect(resolveNeedsYouItemCount("policy", 2)).toBe("2 policy blocks");
     expect(resolveNeedsYouItemCount(null, 3)).toBe("3 things");
-    expect(resolveNeedsYouItemCount("proposal_cluster", 2)).toBe("2 proposal clusters");
+    expect(resolveNeedsYouItemCount("proposal_cluster", 2)).toBe(
+      "2 proposal clusters"
+    );
   });
 });

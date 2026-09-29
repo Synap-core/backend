@@ -73,7 +73,11 @@ export async function hydrateUsedWorkspaces(
 import { createLink } from "../services/links/links-service.js";
 
 export type LinkProjectToWorkspaceResult =
-  | { linked: true }
+  | {
+      linked: true;
+      /** The row THIS call inserted — absent when the edge already existed. */
+      linkId?: string;
+    }
   | { linked: false; reason: "project_not_found" | "workspace_not_found" };
 
 /**
@@ -121,7 +125,7 @@ export async function linkProjectToWorkspace(
     return { linked: false, reason: "workspace_not_found" };
   }
 
-  await createLink({
+  const created = await createLink({
     workspaceId: args.workspaceId,
     fromType: "project",
     fromId: args.projectId,
@@ -129,7 +133,7 @@ export async function linkProjectToWorkspace(
     toId: args.workspaceId,
     linkType: "uses",
   });
-  return { linked: true };
+  return { linked: true, ...(created?.id ? { linkId: created.id } : {}) };
 }
 
 export type UnlinkProjectFromWorkspaceResult =

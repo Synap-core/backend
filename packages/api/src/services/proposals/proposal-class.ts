@@ -18,7 +18,7 @@
  * ── Measured, 660 pending on the team pod, 2026-09-02 ───────────────────────
  *   ephemeral   441  capability.run     median age 11.7d, ZERO under 24h
  *   curatorial  143  merge (entity)     median 19.0d
- *   objectWork   69  create · import.graph · ai_edit
+ *   objectWork   69  create · import.graph · capture.graph · ai_edit
  *   governance    2  governance.*
  *   access        0  does not exist in the data yet — deliberately NOT a class
  *

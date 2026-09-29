@@ -8332,6 +8332,15 @@ export interface ProposalCluster {
 	/** Distinct workspaces the cluster's proposals span. */
 	workspaceIds: string[];
 	/**
+	 * The ONE session every member was filed under — `null` when any member was
+	 * filed under none, or members span several. A needs-you page folds a
+	 * one-session cluster into that session's row (`signalFromCluster`); a
+	 * cluster spanning sessions stays its own row. Unlike `sources` (deduped
+	 * provenance tuples, where a member with no provenance leaves no trace),
+	 * this is decided over EVERY member.
+	 */
+	sessionId: string | null;
+	/**
 	 * Member count per `governance_reason`, so a card can render its composition
 	 * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
 	 * total. Terraform's plan rollup is the precedent: never "N changes", always
@@ -9558,6 +9567,12 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
 	verbs?: CapabilityVerbStateWithResponseShape[];
 	/** Skill lifecycle: false for an inactive/errored skill (not launchable). */
 	runnable?: boolean;
+	/**
+	 * The row's OWN space: a workspace id, or `null` for a pod-wide / personal
+	 * row. Emitted ONLY by an `allSpaces` read (see `CapabilityRegistryContext`);
+	 * a lensed read leaves it absent, its shape unchanged.
+	 */
+	workspaceId?: string | null;
 	/** Why this row matched a `query`; absent without one. */
 	match?: TermMatch;
 	/**
@@ -11912,6 +11927,11 @@ export type BlockerEdgeResult = {
 	 * it never claims a write this call did not make.
 	 */
 	inserted: number;
+	/**
+	 * The id of the row THIS call inserted — absent when the edge already
+	 * existed. What an auto-approve receipt's undo record names.
+	 */
+	linkId?: string;
 } | {
 	linked: false;
 	reason: "not_found" | "self_blocker";
@@ -12799,6 +12819,12 @@ export interface SessionAnswersPage {
 export interface OwedSlot {
 	sessionId: string;
 	sessionGoal: string | null;
+	/**
+	 * The session's DISPLAY NAME (`resolveSessionTitle` — its title, else the
+	 * goal's first line, clipped): what a needs-you card names the session by.
+	 * `null` only when the session has neither.
+	 */
+	sessionTitle: string | null;
 	/** The session's lifecycle state — an owed slot outlives its session. */
 	sessionStatus: string;
 	workspaceId: string | null;
@@ -14194,6 +14220,21 @@ export interface Signal {
 	 */
 	sessionGoal?: string | null;
 	/**
+	 * The session's DISPLAY NAME (`resolveSessionTitle`: its title, else the
+	 * goal's first line) — what a needs-you card names a session that owes
+	 * several things by. `owed-slot` / `draft-asks` / `session-review`, and a
+	 * `proposal-cluster` filed under a session the viewer can read, only;
+	 * absent on an older pod, where a reader falls back to `sessionGoal`.
+	 */
+	sessionTitle?: string | null;
+	/**
+	 * The owning session's project — the card's rail colour. `owed-slot` /
+	 * `draft-asks` / a session-filed `proposal-cluster` only; `null` when the session is in no project. Named
+	 * `sessionProjectId` because it is the SESSION's scope, not the signal's:
+	 * no other kind carries a scope, and a surface must guard it.
+	 */
+	sessionProjectId?: string | null;
+	/**
 	 * The owed slot's OWN `kind` (`ExpectedOutput.kind`) — NOT this signal's
 	 * `kind`, which is the union's discriminator and is already `"owed-slot"`.
 	 * Named `slotKind` for exactly that reason.
@@ -14260,8 +14301,9 @@ export interface Signal {
 	lifetimeHours?: number | null;
 	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
-	 * everything a session owes the person (its owed slots, its draft-asks row),
-	 * `proposal-cluster:<fingerprint>` for a cluster, else `null`. The union
+	 * everything a session owes the person (its owed slots, its draft-asks row,
+	 * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
+	 * any other cluster, else `null`. The union
 	 * emits rows sharing a key CONTIGUOUSLY ({@link orderNeedsYou}), so a
 	 * surface draws a group header exactly where the key changes and never
 	 * re-groups on its own.
@@ -18326,6 +18368,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					threadId: string | null;
 					commandRunId: string | null;
 					sourceMessageId: string | null;
+					reasonCode: string | null;
 					expiresAt: Date | null;
 					reviewedBy: string | null;
 					reviewedAt: Date | null;
@@ -18339,7 +18382,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					nodeId: string | null;
 					dedupHash: string | null;
 					externalDispatchedAt: Date | null;
-					reasonCode: string | null;
 					governanceReason: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
@@ -18397,6 +18439,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					threadId: string | null;
 					commandRunId: string | null;
 					sourceMessageId: string | null;
+					reasonCode: string | null;
 					expiresAt: Date | null;
 					reviewedBy: string | null;
 					reviewedAt: Date | null;
@@ -18410,7 +18453,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					nodeId: string | null;
 					dedupHash: string | null;
 					externalDispatchedAt: Date | null;
-					reasonCode: string | null;
 					governanceReason: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
@@ -18536,6 +18578,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				threadId: string | null;
 				commandRunId: string | null;
 				sourceMessageId: string | null;
+				reasonCode: string | null;
 				expiresAt: Date | null;
 				reviewedBy: string | null;
 				reviewedAt: Date | null;
@@ -18549,7 +18592,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				nodeId: string | null;
 				dedupHash: string | null;
 				externalDispatchedAt: Date | null;
-				reasonCode: string | null;
 				governanceReason: string | null;
 				comments: unknown;
 				revisionHistory: ProposalRevision[];
@@ -22256,14 +22298,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					query?: string | undefined;
 					kind?: "skill" | "tool" | "command" | "teaching-doc" | "builtin-tool" | "source-provider" | undefined;
 					limit?: number | undefined;
+					allSpaces?: boolean | undefined;
 				} | undefined;
 				output: {
 					lens: {
 						workspaceId: string | null;
 						podOnly: boolean;
+						allSpaces: boolean;
 					};
 					integrations: Array<{
 						id: string;
+						workspaceId?: string | null;
 						containerId: string | null;
 						containerName: string | null;
 						name: string;
@@ -22282,6 +22327,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}>;
 					skills: Array<{
 						id: string;
+						workspaceId?: string | null;
 						name: string;
 						description: string | null;
 						governance: "auto" | "propose" | "none";
@@ -22293,6 +22339,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}>;
 					commands: Array<{
 						id: string;
+						workspaceId?: string | null;
 						name: string;
 						description: string | null;
 					}>;

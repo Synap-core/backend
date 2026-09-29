@@ -30,6 +30,8 @@ import { createLogger } from "@synap-core/core";
 import {
   createAndVerifyHubInboundKey,
   encryptServiceKey,
+  describeServingIntelligence,
+  envIntelligenceEndpoint,
   getSyncGenerationState,
   resolveServiceKey,
   toRegistrationTrace,
@@ -42,6 +44,7 @@ import {
   EventRepository,
   ApiKeyRepository,
   sql,
+  drizzleSql,
   TrustedIssuerService,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
@@ -754,9 +757,17 @@ provisionRouter.post("/validate-credentials", async (c) => {
 provisionRouter.get("/status", async (c) => {
   try {
     const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
+    // The CP connection is POD-level state that lives in the settings of the
+    // workspace it was written to — NOT of "whichever workspace comes first".
+    // `findFirst()` with no filter read an arbitrary space, so a pod whose
+    // first space carried no `controlPlane` reported `connected:false` /
+    // "disconnected" while the CP link was fine.
+    const ws =
+      (await db.query.workspaces.findFirst({
+        columns: { settings: true },
+        where: drizzleSql`${workspaces.settings}->'controlPlane' IS NOT NULL`,
+      })) ??
+      (await db.query.workspaces.findFirst({ columns: { settings: true } }));
 
     // Optional trusted-issuer auth. Public callers without Authorization always
     // get the response; an untrusted issuer receives 401.
@@ -789,8 +800,26 @@ provisionRouter.get("/status", async (c) => {
         }
       | undefined;
 
-    const intelligenceServiceId = settings.intelligenceServiceId as
-      string | undefined;
+    // The service that ACTUALLY serves — through the resolver routing itself
+    // uses (capability → workspace → user → pod default → env), never a
+    // `workspaces.findFirst().settings.intelligenceServiceId` read, which named
+    // whichever space came first. Optional `?workspaceId=` lenses it to one
+    // space; without it this is the pod-level answer (the pod default).
+    const wsParam = c.req.query("workspaceId");
+    if (
+      wsParam !== undefined &&
+      !z.string().uuid().safeParse(wsParam).success
+    ) {
+      return c.json({ error: "workspaceId must be a UUID" }, 400);
+    }
+    const serving = await describeServingIntelligence({
+      workspaceId: wsParam,
+    });
+    const svc = serving.service;
+
+    // `intelligenceService` stays the REGISTERED-row record (consumers read
+    // `.status` to decide `active`); an env-served pod keeps it null and is
+    // named by `serviceProbe.source: "env_fallback"` below.
     let intelligenceService: {
       serviceId: string;
       url: string;
@@ -801,45 +830,34 @@ provisionRouter.get("/status", async (c) => {
     let credentialsValid: boolean | null = null;
     const connectionIssues: string[] = [];
 
-    if (intelligenceServiceId) {
-      const svc = await db.query.intelligenceServices.findFirst({
-        where: eq(intelligenceServices.serviceId, intelligenceServiceId),
-        columns: {
-          serviceId: true,
-          webhookUrl: true,
-          status: true,
-          apiKey: true,
-        },
-      });
-      if (svc) {
-        intelligenceService = {
-          serviceId: svc.serviceId,
-          url: svc.webhookUrl,
-          status: svc.status,
-        };
+    if (svc) {
+      intelligenceService = {
+        serviceId: svc.serviceId,
+        url: svc.webhookUrl,
+        status: svc.status,
+      };
 
-        // Use DB-cached status to derive credentialsValid — no live outbound call.
-        // "active" = credentials last verified OK (or never checked → assume valid)
-        // "credential_error" = live probe previously confirmed stale key
-        if (svc.status === "credential_error") {
-          credentialsValid = false;
-          connectionIssues.push("credentials_invalid");
-        } else if (svc.status === "expiring") {
-          // Key works but expires within 14 days
-          credentialsValid = true;
-          connectionIssues.push("key_expiring");
-        } else if (svc.status === "active") {
-          credentialsValid = true;
-        }
-        // Other statuses (disabled, etc.) leave credentialsValid = null
+      // Use DB-cached status to derive credentialsValid — no live outbound call.
+      // "active" = credentials last verified OK (or never checked → assume valid)
+      // "credential_error" = live probe previously confirmed stale key
+      if (svc.status === "credential_error") {
+        credentialsValid = false;
+        connectionIssues.push("credentials_invalid");
+      } else if (svc.status === "expiring") {
+        // Key works but expires within 14 days
+        credentialsValid = true;
+        connectionIssues.push("key_expiring");
+      } else if (svc.status === "active") {
+        credentialsValid = true;
+      }
+      // Other statuses (disabled, etc.) leave credentialsValid = null
 
-        // Check if the stored key can be decrypted — catches missing/changed encryption key
-        if (svc.apiKey) {
-          try {
-            resolveServiceKey(svc.apiKey);
-          } catch {
-            connectionIssues.push("key_decrypt_failed");
-          }
+      // Check if the stored key can be decrypted — catches missing/changed encryption key
+      if (svc.apiKey) {
+        try {
+          resolveServiceKey(svc.apiKey);
+        } catch {
+          connectionIssues.push("key_decrypt_failed");
         }
       }
     }
@@ -859,22 +877,10 @@ provisionRouter.get("/status", async (c) => {
         ? "connected"
         : "partial";
 
-    // Resolve the IS URL that the runtime would actually use right now
-    let resolvedIsUrl: string | null = null;
-    let resolvedIsSource: "database" | "env_fallback" | "none" = "none";
-    if (intelligenceService) {
-      resolvedIsUrl = intelligenceService.url;
-      resolvedIsSource = "database";
-    } else {
-      const envUrl = process.env.INTELLIGENCE_HUB_URL;
-      if (envUrl) {
-        resolvedIsUrl = envUrl;
-        resolvedIsSource = "env_fallback";
-      } else {
-        resolvedIsUrl = "http://localhost:3002";
-        resolvedIsSource = "env_fallback";
-      }
-    }
+    // The URL the runtime actually uses — the resolver's own answer.
+    const resolvedIsUrl: string = serving.url;
+    const resolvedIsSource: "database" | "env_fallback" =
+      serving.source === "registered" ? "database" : "env_fallback";
 
     // LIVE reachability of the URL the runtime would actually use. Every field
     // above this line is a cached DB row; this one asks the service. Both are
@@ -1090,55 +1096,49 @@ provisionRouter.get("/debug", async (c) => {
 provisionRouter.get("/diagnose-intelligence", async (c) => {
   const issues: string[] = [];
 
-  // 1. Resolve the IS URL (DB first → env fallback)
+  // 1. Resolve the service that ACTUALLY serves — through the resolver routing
+  //    itself uses (capability → workspace → user → pod default → env). This
+  //    used to read `workspaces.findFirst().settings.intelligenceServiceId`,
+  //    i.e. whichever space came first, so it could diagnose a service nobody
+  //    routes to. `?workspaceId=` lenses it to one space (that space's pinned
+  //    service, else the pod default).
+  const wsParam = c.req.query("workspaceId");
+  if (wsParam !== undefined && !z.string().uuid().safeParse(wsParam).success) {
+    return c.json({ error: "workspaceId must be a UUID" }, 400);
+  }
+
   let resolvedUrl: string | null = null;
   let resolvedSource: "database" | "env" | "none" = "none";
+  let resolvedVia: string | null = null;
   let keyPrefix: string | null = null;
 
   try {
-    const db = await getDb();
-    const settings = (
-      await db.query.workspaces.findFirst({ columns: { settings: true } })
-    )?.settings as Record<string, unknown> | undefined;
-    const intelligenceServiceId = settings?.intelligenceServiceId as
-      string | undefined;
-
-    if (intelligenceServiceId) {
-      const svc = await db.query.intelligenceServices.findFirst({
-        where: eq(intelligenceServices.serviceId, intelligenceServiceId),
-        columns: {
-          webhookUrl: true,
-          apiKey: true,
-          status: true,
-          enabled: true,
-        },
-      });
-      if (svc) {
-        resolvedUrl = svc.webhookUrl;
-        resolvedSource = "database";
-        try {
-          const decrypted = resolveServiceKey(svc.apiKey);
-          keyPrefix = decrypted ? decrypted.slice(0, 12) + "..." : null;
-        } catch {
-          keyPrefix = null;
-          issues.push("key_decrypt_failed");
-        }
-        if (!svc.enabled) issues.push("service_disabled");
-        if (svc.status === "credential_error")
-          issues.push("credentials_invalid");
+    const serving = await describeServingIntelligence({
+      workspaceId: wsParam,
+    });
+    resolvedUrl = serving.url;
+    resolvedVia = serving.via;
+    const svc = serving.service;
+    if (svc) {
+      resolvedSource = "database";
+      try {
+        const decrypted = resolveServiceKey(svc.apiKey);
+        keyPrefix = decrypted ? decrypted.slice(0, 12) + "..." : null;
+      } catch {
+        keyPrefix = null;
+        issues.push("key_decrypt_failed");
       }
-    }
-
-    if (!resolvedUrl) {
-      resolvedUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+      if (!svc.enabled) issues.push("service_disabled");
+      if (svc.status === "credential_error") issues.push("credentials_invalid");
+    } else {
       resolvedSource = "env";
       if (!process.env.INTELLIGENCE_HUB_URL) {
         issues.push("no_env_url_using_default");
       }
     }
   } catch (err) {
-    logger.error({ err }, "diagnose-intelligence: DB resolution failed");
-    resolvedUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+    logger.error({ err }, "diagnose-intelligence: resolution failed");
+    resolvedUrl = envIntelligenceEndpoint();
     resolvedSource = "env";
     issues.push("db_resolution_error");
   }
@@ -1202,7 +1202,7 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
   };
 
   return c.json({
-    resolved: { url: resolvedUrl, source: resolvedSource },
+    resolved: { url: resolvedUrl, source: resolvedSource, via: resolvedVia },
     health: healthResult,
     ready: readyResult,
     auth: authResult,

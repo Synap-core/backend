@@ -357,6 +357,32 @@ export function resolveAgentDirection(
   return "external";
 }
 
+/** A roster row as a surface receives it (`agentUsers.list`). */
+export interface ServedAgentDirectionRow {
+  /** The pod's own answer (`agentUsers.list` → `direction`), when it sends one. */
+  direction?: string | null;
+  /** `users.created_via` — what an older pod without `direction` still sends. */
+  origin?: string | null;
+  isPersonalAgent?: boolean | null;
+}
+
+/**
+ * Whose agent a SERVED roster row is: the pod's `direction` when it sent a
+ * known one, else {@link resolveAgentDirection} over the origin it did send.
+ * Surfaces read this, never `builtIn` — `builtIn` is "pod-made AND never
+ * keyed", so a keyed IS persona has `builtIn: false` and would be listed as
+ * the person's own agent.
+ */
+export function agentDirectionOf(row: ServedAgentDirectionRow): AgentDirection {
+  if (row.direction === "house" || row.direction === "external") {
+    return row.direction;
+  }
+  return resolveAgentDirection({
+    origin: row.origin,
+    isPersonalAgent: row.isPersonalAgent,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Agent WRITE MODE — how an agent's writes land, as ONE rule + ONE sentence.
 // ---------------------------------------------------------------------------

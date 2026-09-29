@@ -47,6 +47,7 @@ import {
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { UUID_RE } from "./session-metadata.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 
 export interface BlockerEdgeInput {
   /** The session that cannot proceed. */
@@ -67,6 +68,11 @@ export type BlockerEdgeResult =
        * it never claims a write this call did not make.
        */
       inserted: number;
+      /**
+       * The id of the row THIS call inserted — absent when the edge already
+       * existed. What an auto-approve receipt's undo record names.
+       */
+      linkId?: string;
     }
   | { linked: false; reason: "not_found" | "self_blocker" };
 
@@ -169,7 +175,11 @@ export async function addSessionBlocker(
     })
     .returning({ id: links.id });
 
-  return { linked: true, inserted: inserted.length };
+  return {
+    linked: true,
+    inserted: inserted.length,
+    ...(inserted[0]?.id ? { linkId: inserted[0].id } : {}),
+  };
 }
 
 /** What happened to ONE create-time blocker. Reported per id, never folded. */
@@ -223,6 +233,7 @@ export async function addCreateTimeBlockers(input: {
         });
         continue;
       }
+      let receiptId: string | undefined;
       if (input.agentUserId) {
         const perm = await checkPermissionOrPropose({
           userId: input.userId,
@@ -256,12 +267,22 @@ export async function addCreateTimeBlockers(input: {
           });
           continue;
         }
+        receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
       }
       const result = await addSessionBlocker({
         sessionId: input.sessionId,
         blockerSessionId,
         userId: input.userId,
       });
+      // Undo record for the agent's auto-approved edge: the row this call
+      // inserted, or nothing when the edge already existed.
+      if (result.linked && receiptId) {
+        await stampAutoApprovedCreate({
+          receiptId,
+          record: result.linkId ? { linkIds: [result.linkId] } : {},
+          door: "addCreateTimeBlockers",
+        });
+      }
       reports.push(
         result.linked
           ? { blockerSessionId, status: "linked", inserted: result.inserted }

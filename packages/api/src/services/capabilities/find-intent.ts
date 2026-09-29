@@ -352,6 +352,26 @@ function marketplaceQueryFor(slug: string): string {
 }
 
 /**
+ * Catalog search is per word, so "post" alone hits unrelated packages.
+ * Keep a row only when its slug, name, or description contains the raw slug
+ * or the full spaced phrase. Fields are not joined. No survivor means
+ * `matches: []` — never the loose hits.
+ */
+function marketplaceEntryServesIntent(
+  entry: { slug: string; name: string; description: string | null },
+  slug: string
+): boolean {
+  const needles = [...new Set([slug, intentText(slug)])]
+    .map((needle) => needle.toLowerCase())
+    .filter((needle) => needle.length > 0);
+  if (needles.length === 0) return false;
+  return [entry.slug, entry.name, entry.description ?? ""].some((field) => {
+    const haystack = field.toLowerCase();
+    return needles.some((needle) => haystack.includes(needle));
+  });
+}
+
+/**
  * Catalog-cache read. A throw becomes `error` and does not fail the find —
  * the intent matches are already on the result.
  */
@@ -364,12 +384,15 @@ async function lookupMarketplace(slug: string): Promise<FindMarketplace> {
       limit: MARKETPLACE_LIMIT,
     });
     return {
-      matches: entries.slice(0, MARKETPLACE_LIMIT).map((entry) => ({
-        slug: entry.slug,
-        name: entry.name,
-        description: entry.description,
-        kind: entry.kind,
-      })),
+      matches: entries
+        .filter((entry) => marketplaceEntryServesIntent(entry, slug))
+        .slice(0, MARKETPLACE_LIMIT)
+        .map((entry) => ({
+          slug: entry.slug,
+          name: entry.name,
+          description: entry.description,
+          kind: entry.kind,
+        })),
     };
   } catch (err) {
     return {

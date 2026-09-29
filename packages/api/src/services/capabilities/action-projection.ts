@@ -11,6 +11,7 @@ import type { Capability } from "@synap/playbooks";
 import { verbType } from "./capability-catalog.js";
 import { runPosture } from "./run-posture.js";
 import { declaredReadOnly } from "./capability-drift.js";
+import { isVerbLaunchable } from "./verb-launchable.js";
 
 export interface RunnableActionConnection {
   required: boolean;
@@ -126,8 +127,9 @@ function projectWithSource(
       // The execute door launches the backing skill, not the tool row. Do not
       // surface a catalog verb when that skill is missing, inactive, or draft.
       if (
-        (verb as typeof verb & { backingSkillExecutable?: boolean })
-          .backingSkillExecutable !== true
+        !isVerbLaunchable(
+          verb as typeof verb & { backingSkillExecutable?: boolean }
+        )
       ) {
         continue;
       }

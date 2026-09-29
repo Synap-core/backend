@@ -342,9 +342,9 @@ export async function submitSyncGraphToImport(
     workspaceId: input.workspaceId,
     targetType: "entity",
     targetId,
-    proposalType: "import.graph",
+    proposalType: "capture.graph",
     action: "create",
-    source: IMPORT_SOURCE,
+    source: "import",
     summary: input.summary,
     data: {
       ...buildImportGraphProposalData({

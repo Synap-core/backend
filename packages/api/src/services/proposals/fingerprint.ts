@@ -64,6 +64,7 @@ function classifyChange(proposalType: string): ChangeClass {
     // Structured graph imports create entities (import-orchestrator stamps
     // "import.graph"), so they cluster with the create signature.
     t === "import.graph" ||
+    t === "capture.graph" || // unified import-door with source="import"
     t.startsWith("create") ||
     t.endsWith(".create")
   ) {

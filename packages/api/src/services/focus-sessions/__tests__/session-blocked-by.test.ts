@@ -130,6 +130,8 @@ describe("addSessionBlocker (producer)", () => {
     ).toEqual({
       linked: true,
       inserted: 1,
+      // The inserted row's id — what an auto-approve receipt's undo names.
+      linkId: "link-1",
     });
     expect(calls.some((c) => c.method === "insert")).toBe(true);
     expect(calls.some((c) => c.method === "onConflictDoNothing")).toBe(true);

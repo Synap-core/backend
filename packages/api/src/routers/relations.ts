@@ -112,6 +112,7 @@ import {
 import { assertAnchorAdmin } from "../services/sharing/anchor-admin.js";
 import { shareResource } from "../services/sharing/share-service.js";
 import { shareActorFromCtx } from "./shares.js";
+import { stampAutoApprovedCreate } from "../services/proposals/stamp-materialized.js";
 
 /**
  * Direction schema for relation queries
@@ -1001,10 +1002,29 @@ export const relationsRouter = router({
                   )
             ),
           });
-          if (existing) return { id: existing.id, status: "exists" as const };
+          if (existing) {
+            // The gate already minted this call's receipt: it created nothing.
+            await stampAutoApprovedCreate({
+              receiptId:
+                "granted" in perm ? perm.autoApprovedProposalId : undefined,
+              record: {},
+              door: "relations.create (existing edge)",
+              database,
+            });
+            return { id: existing.id, status: "exists" as const };
+          }
         }
         throw err;
       }
+
+      // Undo record for an AUTO-APPROVED create — the edge actually written,
+      // read off the row (see `stampAutoApprovedCreate`).
+      await stampAutoApprovedCreate({
+        receiptId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
+        record: { relationIds: [relation.id] },
+        door: "relations.create",
+        database,
+      });
 
       // 2b. Reverse-sync: if this relation type maps to an entity_id property, auto-set it
       syncRelationToPropertyOnCreate(

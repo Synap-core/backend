@@ -640,6 +640,49 @@ export async function stampEntityUpdate(args: {
   });
 }
 
+/**
+ * Stamp what an AUTO-APPROVED create actually wrote onto its receipt — the
+ * create-side twin of `stampEntityUpdate`.
+ *
+ * The gate (`checkPermissionOrPropose`) mints the `<subject>.create` receipt
+ * BEFORE the write, with `targetId = data.id ?? random`. That id is a guess
+ * the door is not bound by (`entities.create` writes its own id; a dedup or
+ * an existing edge writes nothing), so the ONLY trustworthy record of the
+ * created row is the one the door stamps AFTER it wrote. Revert reads exactly
+ * this (`planProposalRevert` never falls back to a receipt's `targetId`).
+ *
+ * Pass the EMPTY record when the write created nothing (it returned a row that
+ * already existed): `materialized: {}` is the existing convention for "created
+ * nothing", so revert answers "nothing to undo" instead of deleting a row this
+ * write never made.
+ *
+ * Best-effort by the same contract as the update stamp: the write is already
+ * committed, so a failed stamp is logged loudly and leaves the receipt
+ * unstamped (revert then fails loud) — it never fails the write. No receipt id
+ * (a human write, or the receipt insert failed) ⇒ nothing to stamp.
+ */
+export async function stampAutoApprovedCreate(args: {
+  receiptId: string | undefined;
+  record: CompleteMaterializedRecord;
+  /** The door, for the log line. */
+  door: string;
+  database?: StampDatabase;
+}): Promise<void> {
+  if (!args.receiptId) return;
+  try {
+    await stampMaterialized({
+      proposalId: args.receiptId,
+      record: args.record,
+      ...(args.database ? { database: args.database } : {}),
+    });
+  } catch (err) {
+    logger.error(
+      { err, proposalId: args.receiptId, door: args.door },
+      "auto-approved create: undo record NOT stamped on the receipt — this write cannot be undone"
+    );
+  }
+}
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

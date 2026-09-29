@@ -237,3 +237,68 @@ describe("approving a proposed setIntelligenceService applies it", () => {
     expect(settings).toEqual({ agentPersonality: "terse" });
   });
 });
+
+describe("a LEGACY setIntelligenceService proposal (bare `{ id }`, pre-edec5fa4)", () => {
+  it("refuses as stale, writes nothing, and leaves the row pending", async () => {
+    await h.client!.query(
+      `update workspaces set name = 'Builder', settings = '{"agentPersonality":"terse","intelligenceServiceId":"svc-old"}'::jsonb where id = $1`,
+      [WS]
+    );
+    await h.client!.query(`delete from proposals where id = $1`, [PROPOSAL]);
+    await h.client!.query(
+      `insert into proposals (id, workspace_id, status) values ($1, $2, 'pending')`,
+      [PROPOSAL, WS]
+    );
+    const before = await h.client!.query<{ name: string; settings: unknown }>(
+      `select name, settings from workspaces where id = $1`,
+      [WS]
+    );
+
+    // The exact payload the pre-edec5fa4 gate filed: `data: { id }`, nothing else.
+    const legacy = { id: WS };
+    const exec = proposalExecRegistry.resolve("workspace/update")!;
+    await expect(
+      exec.execute({
+        proposal: {
+          id: PROPOSAL,
+          targetType: "workspace",
+          targetId: WS,
+          proposalType: "update",
+          workspaceId: WS,
+          sessionId: null,
+          projectId: null,
+          agentUserId: null,
+          subjectUserId: OWNER,
+          sourceMessageId: null,
+          data: {
+            requestId: "r-legacy",
+            targetType: "workspace",
+            data: legacy,
+          },
+        },
+        payload: legacy,
+        userId: OWNER,
+        input: { proposalId: PROPOSAL },
+        ctx: {} as never,
+        deps: {
+          reportProposalOutcome: () => undefined,
+          emitProposalReviewed: () => undefined,
+        },
+      } as never)
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringMatching(/earlier version/),
+    });
+
+    const after = await h.client!.query<{ name: string; settings: unknown }>(
+      `select name, settings from workspaces where id = $1`,
+      [WS]
+    );
+    expect(after.rows[0]).toEqual(before.rows[0]);
+    const status = await h.client!.query<{ status: string }>(
+      `select status from proposals where id = $1`,
+      [PROPOSAL]
+    );
+    expect(status.rows[0]?.status).toBe("pending");
+  });
+});

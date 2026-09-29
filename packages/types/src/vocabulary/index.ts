@@ -382,6 +382,12 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
   // its tool, a submission as the proposal / record it became.
   form: "Form",
   submission: "Submission",
+  // A property DEFINITION (`property_def` → `property` in OBJECT_KIND_ALIASES)
+  // is a "Field" to the person — `retire_field`, "the new field in
+  // `properties[]`" (skills/synap). Without this row it humanized to
+  // "Property" and proposals read `Retire Property "x"`. It keys the alias
+  // TARGET, so `property`, `property_def` and `property_defs` all land here.
+  property: "Field",
 };
 
 /**
@@ -774,6 +780,8 @@ export const CAPTURE_DOOR_LABELS: Readonly<Record<string, string>> = {
   "calcom.backfill": "Cal.com",
   import: "Import",
   structure_again: "Structure again",
+  // Unified import-door: import.graph proposals now use capture.graph proposalType
+  // with source="import" — same label for the user.
 };
 
 export function resolveCaptureDoorLabel(
@@ -1204,8 +1212,14 @@ export const TRUST_RUNG_LABELS: Readonly<
   Record<TrustRung, { name: string; offer: string }>
 > = {
   ask: { name: "Asks you", offer: "Ask me first" },
-  propose: { name: "Proposes", offer: "Next time, prepare it for me to decide" },
-  do_tell: { name: "Does it, tells you", offer: "Next time, do it and tell me" },
+  propose: {
+    name: "Proposes",
+    offer: "Next time, prepare it for me to decide",
+  },
+  do_tell: {
+    name: "Does it, tells you",
+    offer: "Next time, do it and tell me",
+  },
   quiet: { name: "Just does it", offer: "Always let it do this" },
 };
 

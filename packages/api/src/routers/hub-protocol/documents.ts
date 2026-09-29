@@ -37,6 +37,7 @@ import {
 } from "../../utils/write-door-idempotency.js";
 
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+import { stampAutoApprovedCreate } from "../../services/proposals/stamp-materialized.js";
 import {
   readSessionDocument,
   upsertSessionDocumentSection,
@@ -300,6 +301,13 @@ export const documentsRouter = router({
           agentUserId: input.agentUserId,
           expectedLabel: input.expectedLabel,
         });
+        // Undo record — the created id, read off the row (see the helper).
+        await stampAutoApprovedCreate({
+          receiptId:
+            "granted" in perm ? perm.autoApprovedProposalId : undefined,
+          record: { documentIds: [created.id] },
+          door: "hub.documents.create (external url)",
+        });
 
         return {
           id: created.id,
@@ -347,6 +355,13 @@ export const documentsRouter = router({
         title: created.title,
         agentUserId: input.agentUserId,
         expectedLabel: input.expectedLabel,
+      });
+      // Undo record for the auto-approved create: the id of the row written,
+      // never the receipt's pre-minted `targetId` (see the helper).
+      await stampAutoApprovedCreate({
+        receiptId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
+        record: { documentIds: [created.id] },
+        door: "hub.documents.create",
       });
 
       return {

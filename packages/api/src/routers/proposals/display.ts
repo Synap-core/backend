@@ -1236,6 +1236,11 @@ export async function enrichProposalsForDisplay(
         ? documentTitleById.get(request.targetId)
         : undefined) ??
       displayLabelFromRecord(payload) ??
+      // The row's own target (the request's `targetType` union has no
+      // "playbook"); the id is the one `referencedNameIds` batch-joined.
+      (row.targetType === "playbook"
+        ? playbookById.get(row.targetId)?.name
+        : undefined) ??
       entityMeta?.title ??
       entityMeta?.preview ??
       undefined;
