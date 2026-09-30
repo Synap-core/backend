@@ -9,8 +9,10 @@ model you control, in units of work you define.
 - **You own the data.** Your pod is your own PostgreSQL. Export it, `pg_dump`
   it, self-host it, or let us run it. No lock-in, because the substrate is the
   public one.
-- **Every AI change is reviewed.** Agents propose; you approve. Nothing
-  consequential lands unseen, and every write is on an append-only event chain.
+- **Every AI change is governed.** Agents propose; you approve. Some run
+  automatically where you've granted a rule — and **destructive, admin, and
+  scope-changing writes can never auto-approve, by design**. Either way,
+  every one is on the event chain.
 - **Bring your own agent.** We never meter your inference. Claude, ChatGPT,
   Cursor, or anything that speaks MCP works against your pod under permissions
   you grant.
@@ -55,8 +57,7 @@ Both doors lead to the same primitives below.
 
 ## The mental model: two layers
 
-Synap has two layers, and confusing them is the most common way to describe the
-product wrong.
+Synap has two layers, and confusing them is the single most common way to describe the product wrong.
 
 | Layer                | What it is                                            | Is it the feature?      |
 | -------------------- | ----------------------------------------------------- | ----------------------- |
