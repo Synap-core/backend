@@ -22,6 +22,10 @@ import {
   reconcileLiveConnections,
 } from "../../../services/capabilities/capability-nango-sync.js";
 import {
+  deriveProviderConnection,
+  providerConnectionMap,
+} from "../../../services/capabilities/capability-catalog.js";
+import {
   ConnectionSyncStatusSchema,
   getConnectionSyncStatus,
 } from "../../../services/event-sync/connection-sync.js";
@@ -160,17 +164,14 @@ export function registerConnectorsRoutes(app: HubHono): void {
           200
         );
       }
-      const connMap = new Map(
-        listed.connections.map((conn) => [conn.provider, conn.connectionId])
-      );
+      const providerConn = providerConnectionMap(listed.connections);
       return c.json(
         {
           providers: declared.integrations.map((i) => ({
             id: i.uniqueKey,
             provider: i.provider,
             displayName: i.displayName,
-            connected: connMap.has(i.uniqueKey),
-            connectionId: connMap.get(i.uniqueKey),
+            ...deriveProviderConnection(providerConn, i.uniqueKey),
           })),
           nangoStatus: "ok" as const,
         },

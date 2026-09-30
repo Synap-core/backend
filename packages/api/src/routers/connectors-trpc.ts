@@ -64,6 +64,10 @@ import {
   setConnectionKeepSyncing,
 } from "../services/capabilities/capability-nango-sync.js";
 import { resolveCapabilityNangoProviderKeys } from "../services/capabilities/capability-provider-resolution.js";
+import {
+  deriveProviderConnection,
+  providerConnectionMap,
+} from "../services/capabilities/capability-catalog.js";
 import { getConnectionSyncStatus } from "../services/event-sync/connection-sync.js";
 import { loadProviderSyncKinds } from "../connectors/sync-kinds.js";
 import type { SyncConnectorConnection } from "../connectors/SyncConnector.js";
@@ -374,12 +378,7 @@ export const connectorsRouter = router({
         nangoError: { reason: fault.reason, message: fault.error },
       };
     }
-    const connectionByProvider = new Map<string, string>();
-    for (const c of listed.connections) {
-      if (!connectionByProvider.has(c.provider)) {
-        connectionByProvider.set(c.provider, c.connectionId);
-      }
-    }
+    const providerConn = providerConnectionMap(listed.connections);
     // What each connection brings, before connecting. `undefined` = unknown
     // (template unreadable), `[]` = brings nothing.
     const syncKindsByProvider = await loadProviderSyncKinds(
@@ -399,8 +398,7 @@ export const connectorsRouter = router({
           id: i.uniqueKey,
           provider: i.provider,
           displayName: i.displayName,
-          connected: connectionByProvider.has(i.uniqueKey),
-          connectionId: connectionByProvider.get(i.uniqueKey),
+          ...deriveProviderConnection(providerConn, i.uniqueKey),
           syncKinds: syncKindsByProvider.get(i.uniqueKey),
         })),
         pendingInstall

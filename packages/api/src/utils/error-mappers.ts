@@ -26,6 +26,11 @@ import {
   FacetProfileKindError,
   FacetKindMismatchError,
 } from "@synap/database";
+import {
+  classifyThrownFailure,
+  safeFailureSentence,
+  safeApprovalError,
+} from "../routers/proposals/failure-classification.js";
 
 // ── HTTP → tRPC code table ─────────────────────────────────────────────────
 
@@ -160,4 +165,43 @@ export function isDbDomainError(error: unknown): error is Error {
     error instanceof FacetProfileKindError ||
     error instanceof FacetKindMismatchError
   );
+}
+
+// ── Setup-required (capability-install) mapper ─────────────────────────────
+
+/**
+ * Convert a `SetupRequiredError` — or any duck-typed `isSetupRequiredLike`
+ * carrier — into a CODED `TRPCError` whose `cause` still holds the structured
+ * payload, so `init-trpc.ts`'s errorFormatter can forward
+ * `failureClass` / `missingFields` / `connection` to the client.
+ *
+ * ## Why the code is not mapped here
+ *
+ * `SetupRequiredError` carries NO `.code`, so unchecked tRPC's own boundary
+ * (`getTRPCErrorFromUnknown`) wraps it into an `INTERNAL_SERVER_ERROR` and the
+ * actionable "connect Google / supply the API key" payload is dropped — the
+ * browser's `error.data.failureClass` read is permanently absent. The
+ * class→code mapping is NOT re-invented: it is reached through
+ * `safeApprovalError` / `classifyThrownFailure`
+ * (`routers/proposals/failure-classification.ts`), the SAME derivation the
+ * proposal-approval path and the Hub REST `POST /capabilities/apply` door
+ * (400/412 + body) use — so no two doors can disagree on the code
+ * (`missing_field → BAD_REQUEST`, `no_connection → PRECONDITION_FAILED`).
+ *
+ * `safeFailureSentence` supplies the value-free, redacted sentence the thrower
+ * already wrote (it names param LABELS, never values), so the message the
+ * client sees matches the REST door's body and the stored `rejectionReason`.
+ *
+ * CALLER CONTRACT: only invoke this for an input that satisfies
+ * `isSetupRequiredLike` — routing an unclassified error here would replace the
+ * debugging message the unknown branch preserves with the generic safe
+ * sentence. `errorCatchingMiddleware` guards it.
+ */
+export function mapSetupRequiredToTRPC(error: unknown): TRPCError {
+  const meta = classifyThrownFailure(error);
+  return safeApprovalError(
+    error,
+    meta,
+    safeFailureSentence(error, meta)
+  ) as TRPCError;
 }

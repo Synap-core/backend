@@ -9,6 +9,7 @@ import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
 import type { Context } from "./context.js";
 import { createLogger } from "@synap-core/core";
+import { isSetupRequiredLike } from "./services/proposals/setup-required-error.js";
 
 const logger = createLogger({ module: "trpc" });
 
@@ -31,13 +32,28 @@ export const t = initTRPC.context<Context>().create({
 
     // A capture follow-up CONFLICT names the question's status as a stable,
     // machine-readable field, so clients never parse the message text.
-    const captureQuestionStatus = (
-      error.cause as { captureQuestionStatus?: unknown } | undefined
-    )?.captureQuestionStatus;
+    const cause = error.cause as Record<string, unknown> | undefined;
+    const captureQuestionStatus = cause?.captureQuestionStatus;
     // A typed refusal names its machine code the same way (`reasonCode`, e.g.
     // `NO_NEXT_RUNG` — read by `isNoNextRungError`, @synap-core/types).
-    const reasonCode = (error.cause as { reasonCode?: unknown } | undefined)
-      ?.reasonCode;
+    const reasonCode = cause?.reasonCode;
+
+    // A capability install that needs a HUMAN before it can apply is converted
+    // by `errorCatchingMiddleware` into a coded TRPCError whose `cause` is the
+    // original `SetupRequiredError`. Forward the SAME value-free payload the Hub
+    // REST `POST /capabilities/apply` door returns (400/412 + body), so a tRPC
+    // client renders the setup card from `error.data.failureClass` instead of
+    // parsing the message. Guarded by the ONE duck-typed reader, so only the
+    // value-free contract is ever exposed.
+    const setupRequired = isSetupRequiredLike(cause)
+      ? {
+          failureClass: cause.failureClass,
+          missingFields: cause.missingFields,
+          ...(cause.connection !== undefined
+            ? { connection: cause.connection }
+            : {}),
+        }
+      : {};
 
     return {
       ...shape,
@@ -50,6 +66,7 @@ export const t = initTRPC.context<Context>().create({
           ? { captureQuestionStatus }
           : {}),
         ...(typeof reasonCode === "string" ? { reasonCode } : {}),
+        ...setupRequired,
       },
     };
   },

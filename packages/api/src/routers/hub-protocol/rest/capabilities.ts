@@ -24,6 +24,10 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
+import {
+  isSetupRequiredLike,
+  SETUP_FAILURE_CLASSES,
+} from "../../../services/proposals/setup-required-error.js";
 import { INTENT_SLUG_RE } from "@synap/database/schema";
 import {
   intentError,
@@ -290,6 +294,24 @@ const ApplyCapabilityResponseSchema = z.object({
     automations: z.array(z.record(z.string(), z.unknown())),
   }),
   proposals: z.array(z.string()),
+});
+
+/**
+ * The body the apply door returns when an install needs a HUMAN first — a
+ * required param was not supplied (`missing_field`) or an account is not
+ * connected (`no_connection`). Mirrors {@link SetupRequiredLike}; the status is
+ * 400 / 412, never 500 (see the catch in `POST /capabilities/apply`).
+ */
+const SetupRequiredResponseSchema = z.object({
+  failureClass: z.enum(SETUP_FAILURE_CLASSES),
+  missingFields: z.array(z.string()),
+  connection: z
+    .object({
+      provider: z.string().optional(),
+      state: z.string().optional(),
+    })
+    .optional(),
+  message: z.string(),
 });
 
 const CapabilitiesListResponseSchema = z.object({
@@ -804,6 +826,10 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Template not found", schema: ErrorSchema },
+      412: {
+        description: "Setup required — a human must supply a param or connect",
+        schema: SetupRequiredResponseSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -900,6 +926,24 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         return c.json(
           { error: err instanceof Error ? err.message : "Forbidden" },
           403
+        );
+      // SETUP REQUIRED: an install that needs a HUMAN before it can apply (a
+      // required param missing, or an account not connected) throws
+      // `SetupRequiredError`, which carries NO `.code`. The generic mapping
+      // below speaks only tRPC codes, so it would collapse this actionable
+      // failure into an opaque 500. Surface the structured body with the SAME
+      // status codes `failure-classification.ts`'s CLASS_TRPC_CODE assigns:
+      // missing_field → BAD_REQUEST (400), no_connection → PRECONDITION_FAILED
+      // (412).
+      if (isSetupRequiredLike(err))
+        return c.json(
+          {
+            failureClass: err.failureClass,
+            missingFields: err.missingFields,
+            connection: err.connection,
+            message: err.message,
+          },
+          err.failureClass === "no_connection" ? 412 : 400
         );
       logger.error({ err }, "capabilities apply failed");
       return c.json(

@@ -565,6 +565,43 @@ export { capabilityNextAction } from "./capability-enable-link.js";
 // ── Connection-state snapshot (resilient) ─────────────────────────────────────
 
 /**
+ * The ONE derivation of the user's live provider → connectionId map from the
+ * broker's connection list (FIRST connection wins — the same dedup
+ * `dedupeConnections` enforces on the registry, so a duplicate provider is a
+ * transient anomaly, not a real fork). `loadConnState` (the catalog) and both
+ * `connectors.providers` doors (tRPC + Hub REST) read THIS projection, so
+ * "which providers are connected, and to what" can never fork across surfaces.
+ */
+export function providerConnectionMap(
+  connections: Array<{ provider: string; connectionId: string }>
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const cn of connections) {
+    if (!map.has(cn.provider)) map.set(cn.provider, cn.connectionId);
+  }
+  return map;
+}
+
+/**
+ * Project ONE provider's `connected` from the canonical connection map — the
+ * boolean the `connectors.providers` doors (tRPC + Hub REST) return. `connected`
+ * means a live connection is LISTED for the key. The doors' boolean contract has
+ * no `expired`/`unavailable`/`unverified` axis (those are the catalog card's
+ * richer vocabulary via {@link deriveConnection}), so the reauth health overlay
+ * is deliberately NOT folded in here — this keeps the doors' public output
+ * identical while the underlying map is derived once.
+ */
+export function deriveProviderConnection(
+  providerConn: Map<string, string>,
+  providerKey: string
+): { connected: boolean; connectionId?: string } {
+  const connectionId = providerConn.get(providerKey);
+  return connectionId
+    ? { connected: true, connectionId }
+    : { connected: false };
+}
+
+/**
  * Resolve the user's live provider connections and the set of existing vault
  * secrets referenced by the given refs. The catalog must always render, so a
  * broker fault does not throw — but it is RECORDED (`providerConnFault`) and
@@ -575,7 +612,7 @@ export async function loadConnState(
   userId: string,
   vaultSecretIds: string[]
 ): Promise<ConnState> {
-  const providerConn = new Map<string, string>();
+  let providerConn = new Map<string, string>();
   let providerAvailable: Set<string> | null = null;
   let providerConnFault: ConnState["providerConnFault"] = null;
   const resolved = await resolveBroker("nango");
@@ -590,11 +627,7 @@ export async function loadConnState(
       resolved.broker.listIntegrationsResult(),
     ]);
     if (listed.ok) {
-      for (const cn of listed.connections) {
-        if (!providerConn.has(cn.provider)) {
-          providerConn.set(cn.provider, cn.connectionId);
-        }
-      }
+      providerConn = providerConnectionMap(listed.connections);
     } else {
       providerConnFault = { reason: listed.reason, message: listed.error };
     }

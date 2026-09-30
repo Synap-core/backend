@@ -22,8 +22,10 @@ import {
   isSynapLikeError,
   isDbDomainError,
   mapDbErrorToTRPC,
+  mapSetupRequiredToTRPC,
   statusCodeToTRPCCode,
 } from "./utils/error-mappers.js";
+import { isSetupRequiredLike } from "./services/proposals/setup-required-error.js";
 import { auditLogMiddleware } from "./middleware/audit-log.js";
 import { readOnlyGuardMiddleware } from "./middleware/read-only-guard.js";
 import { guestContainmentMiddleware } from "./access/guest-containment.js";
@@ -38,17 +40,44 @@ const logger = createLogger({ module: "trpc" });
  * typed TRPCErrors so the errorFormatter and clients always see
  * consistent error codes.
  *
+ * ⚠️ tRPC 11 delivers a downstream throw as a RESOLVED `{ ok: false, error }`
+ * result, not a rejection: `callRecursive` (`@trpc/server` dist) wraps EVERY
+ * middleware/resolver call in its own try/catch and returns the converted
+ * error, so `await next()` never rejects on a resolver error. The conversion
+ * therefore inspects the RESULT first; the `catch` below is kept only as a
+ * safety net for a future tRPC that rejects (and for a middleware that throws
+ * synchronously before building a result).
+ *
  * Conversion order:
- *   1. TRPCError        → pass through unchanged
- *   2. SynapError-like  → map statusCode → tRPC code
- *   3. DB domain errors → map to NOT_FOUND / BAD_REQUEST / CONFLICT
- *   4. Unknown          → INTERNAL_SERVER_ERROR
+ *   1. Setup-required   → map failureClass → tRPC code, keep payload as `cause`
+ *   2. TRPCError        → pass through unchanged
+ *   3. SynapError-like  → map statusCode → tRPC code
+ *   4. DB domain errors → map to NOT_FOUND / BAD_REQUEST / CONFLICT
+ *   5. Unknown          → INTERNAL_SERVER_ERROR
+ *
+ * Exported so the error-shape seam can be exercised end-to-end without a db or
+ * a full server (see `__tests__/setup-required-trpc.test.ts`).
  */
-const errorCatchingMiddleware = t.middleware(async ({ next }) => {
+export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
   try {
-    return await next();
+    const result = await next();
+
+    // THE LIVE PATH. A capability install that needs a HUMAN before it can
+    // apply — a required param missing, or an account not connected — throws a
+    // `SetupRequiredError` carrying NO `.code`. tRPC has already converted it
+    // to an opaque `INTERNAL_SERVER_ERROR` with the original as `cause`, so
+    // inspect `result.error.cause` and rebuild it through the shared
+    // `failure-classification` mapping (the SAME 400/412 the Hub REST
+    // `POST /capabilities/apply` door returns). The rebuilt error keeps the
+    // `SetupRequiredError` as `cause`, which `init-trpc.ts` forwards as
+    // `failureClass` / `missingFields` / `connection`.
+    if (!result.ok && isSetupRequiredLike(result.error.cause)) {
+      throw mapSetupRequiredToTRPC(result.error.cause);
+    }
+
+    return result;
   } catch (error) {
-    // Already a tRPC error — pass through
+    // Already a tRPC error — pass through. (Catches the rethrow above too.)
     if (error instanceof TRPCError) throw error;
 
     // SynapError from @synap-core/core OR @synap-core/types (duck-typed)
@@ -58,6 +87,12 @@ const errorCatchingMiddleware = t.middleware(async ({ next }) => {
         message: error.message,
         cause: error,
       });
+    }
+
+    // Defensive: a setup-required error reaching us by a routing path that
+    // bypassed the result inspection above still converts identically.
+    if (isSetupRequiredLike(error)) {
+      throw mapSetupRequiredToTRPC(error);
     }
 
     // @synap/database domain exceptions (ProfileNotFoundError, etc.)
