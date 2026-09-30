@@ -13,17 +13,13 @@ import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { toAutomationDigest, AUTOMATIONS_DIGEST_NOTE } from "./read-lean.js";
 import { validateCreateVerbInput } from "../validate-create-verb.js";
-import { wireCreatedVerb } from "../../../services/capabilities/create-declarative-verb.js";
 import {
-  db,
-  tools as toolsTable,
-  eq,
-  and,
-  or,
-  isNull,
-  type ProviderVerbSpec,
-} from "@synap/database";
-import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+  wireCreatedVerb,
+  parentToolWhere,
+  parentToolMissingMessage,
+  buildProviderVerbSpec,
+} from "../../../services/capabilities/create-declarative-verb.js";
+import { db, tools as toolsTable } from "@synap/database";
 import { defineProfile } from "../../hub-protocol/define-profile.js";
 import { proposePropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
 import {
@@ -623,46 +619,30 @@ export const capabilityHandlers: McpHandlerMap = {
     // Hard constraint 2: toolName must ALREADY be installed/credentialed for
     // the caller (pod-wide, or the given workspace) — this door only ADDS a
     // verb to an existing tool. It never creates a tool/connection as a
-    // side effect.
-    const wsLens = input.workspaceId
-      ? or(
-          isNull(toolsTable.workspaceId),
-          eq(toolsTable.workspaceId, input.workspaceId)
-        )
-      : isNull(toolsTable.workspaceId);
+    // side effect. Predicate + error wording are the SHARED ones
+    // (`parentToolWhere`/`parentToolMissingMessage` in create-declarative-verb.ts)
+    // so this door and tRPC `capabilities.registry.createVerb` cannot drift.
     const [existingTool] = await db
       .select({ id: toolsTable.id, name: toolsTable.name })
       .from(toolsTable)
       .where(
-        and(
-          eq(toolsTable.name, input.toolName),
-          wsLens,
-          userVisibleWhere(toolsTable.workspaceId, userId)
-        )
+        parentToolWhere({
+          userId,
+          toolName: input.toolName,
+          workspaceId: input.workspaceId,
+        })
       )
       .limit(1);
     if (!existingTool) {
       return ok({
-        error:
-          `Tool '${input.toolName}' is not installed` +
-          `${input.workspaceId ? ` for workspace ${input.workspaceId}` : ""}. ` +
-          `synap_create_verb only adds a verb to an ALREADY-installed, credentialed tool — ` +
-          `install/connect '${input.toolName}' first, or check the exact name via synap_list_capabilities.`,
+        error: parentToolMissingMessage(input.toolName, input.workspaceId),
       });
     }
 
-    // Hard constraint 4: reuse the canonical ProviderVerbSpec shape
-    // verbatim (@synap/database schema/skills.ts) — no invented field names.
-    const providerSpec: ProviderVerbSpec = {
-      tool: input.toolName,
-      method: input.method,
-      pathTemplate: input.pathTemplate,
-      ...(input.transport ? { transport: input.transport } : {}),
-      ...(input.graphql ? { graphql: input.graphql } : {}),
-      ...(input.query ? { query: input.query } : {}),
-      ...(input.body ? { body: input.body } : {}),
-      ...(input.responseShape ? { responseShape: input.responseShape } : {}),
-    };
+    // Hard constraint 4: reuse the canonical ProviderVerbSpec shape via the
+    // SHARED builder (`buildProviderVerbSpec` in create-declarative-verb.ts) —
+    // the tRPC door assembles the same object, so the two cannot drift.
+    const providerSpec = buildProviderVerbSpec(input);
 
     // Hard constraint 3: reuse the SAME governed door POST /skills uses
     // (skillsRouter.create) — checkPermissionOrPropose runs INSIDE it. No
