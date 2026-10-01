@@ -13,6 +13,25 @@
  * and this function additionally short-circuits when a pod-wide capability named
  * "Synap Core" already exists — so re-running on every boot is a cheap no-op.
  *
+ * ── WHY EVERY SKILL HERE CARRIES AN `intent` ──────────────────────────────────
+ * The routing axis is a real COLUMN (`skills.intent`, migration 0292) written by
+ * the applier from each definition skill's TOP-LEVEL `intent`. Without one, a
+ * verb is INVISIBLE to `list_capabilities({intent})` — not broken, just
+ * unroutable, and silently so.
+ *
+ * This definition declares `tools: []`, so there is no tool catalog to derive
+ * from: the migration-0292 backfill cannot help these rows (it derives from
+ * `tools.capabilities[]`, and there is none). The declaration below is the ONLY
+ * thing that can make them routable, which is why it is on every skill rather
+ * than left to a backfill.
+ *
+ * The values come from the CLOSED vocabulary (`ABSTRACT_VERBS` + the
+ * `publish_post` row from migration 0284). A verb that genuinely does not fit —
+ * a pod-INTERNAL operation that never reaches the outside world — is left unset
+ * ON PURPOSE and pinned in
+ * `__tripwires__/builtin-verb-intent-reachability.tripwire.test.ts`, so the
+ * omission is a recorded decision rather than an oversight.
+ *
  * WIRING: call once at pod startup (after the pod-admin/user invariants), passing
  * nothing — it resolves the pod-owner identity itself. It is intentionally
  * NON-FATAL: a fresh, pre-bootstrap pod (no owner yet) is skipped with a log line,
@@ -67,6 +86,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "feed.post",
       kind: "builtin",
       scope: "pod",
+      intent: "publish_post",
       description:
         "Post a message into a channel; mirrors to a bound Discord channel if present.",
       parameters: {
@@ -83,6 +103,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "ai.triage",
       kind: "builtin",
       scope: "pod",
+      intent: "enrich_entity",
       description:
         "Batch-classify emails (relevance + category + summary) via the IS mail_triage tool. AI-backed builtin used by the mail-feed automation.",
       parameters: {
@@ -98,6 +119,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "ai.generate",
       kind: "builtin",
       scope: "pod",
+      intent: "run_external_job",
       description:
         "Synchronous single-shot LLM completion via the IS generate tool. Returns the raw text, or (when json:true) the parsed JSON object — stored flat as the automation step's output, so downstream nodes read steps.<id>.output.<field> (one .output, same rule for every node). Read-only (pure compute, no mutation): auto-runs inside an automation without a proposal.",
       parameters: {
@@ -131,6 +153,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "message.interpret",
       kind: "builtin",
       scope: "pod",
+      intent: "capture_into_pod",
       description:
         "Interpret a message's content into a GOVERNED proposal: runs the AI extraction engine (the same client.structure the capture path uses) over `content` and files ONE pending import.graph proposal via the shared capture proposal door — so an automation/playbook node can turn an inbound message into a review-inbox suggestion. `guidelines` is natural-language extraction bias (injected as the structure `instructions`). `workspaceId` scopes the proposal; `channelId`/`entityId` are accepted context. Read-only w.r.t. graph data (files a human-governed review item, never a direct write): auto-runs inside an automation. Returns { status, proposalId?, reviewUrl?, entityCount, relationCount } — or { status:'no_proposal', reason } when nothing durable was extracted.",
       parameters: {
@@ -172,6 +195,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "output.generate",
       kind: "builtin",
       scope: "pod",
+      intent: "generate_media",
       description:
         "Generate output: place a multi-slide artboard deck (carousel/deck) onto a whiteboard. Emits the same board:place placement the generate_carousel/generate_deck path produces.",
       parameters: {
@@ -201,6 +225,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "entity.query",
       kind: "builtin",
       scope: "pod",
+      intent: "list_records",
       description:
         "READ entities selected by EXACTLY ONE of `profileSlug` (a single kind/role slug) or `roleCategory` (every role tagged that category — dynamic, no enumeration), scoped to the caller's floor. Optional JSONB property-equality filter and workspace lens. Returns { entities[], count }. Read-only: auto-runs, scoped by the access layer.",
       parameters: {
@@ -335,6 +360,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "entity.create",
       kind: "builtin",
       scope: "pod",
+      intent: "capture_into_pod",
       description:
         "Create an entity via the governed entities.create path (checkPermissionOrPropose). May return a proposal. Returns the created entity or { status: 'proposed', proposalId }.",
       parameters: {
@@ -353,6 +379,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "entity.update",
       kind: "builtin",
       scope: "pod",
+      intent: "enrich_entity",
       description:
         "Update an entity via the governed entities.update path (checkPermissionOrPropose). May return a proposal. Returns the updated entity or { status: 'proposed', proposalId }.",
       parameters: {
@@ -609,6 +636,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "document.create",
       kind: "builtin",
       scope: "pod",
+      intent: "capture_into_pod",
       description:
         "Create a document in the acting workspace via the governed documents.create path.",
       parameters: {
@@ -764,6 +792,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "tool.request",
       kind: "builtin",
       scope: "pod",
+      intent: "connect_account",
       description:
         "Record that the user needs a TOOL (an app or service) Synap cannot connect yet — call it after market.search finds nothing for that tool, or when you are blocked for lack of it. One deduped tool request per tool name (a repeat is a no-op); an agent call is proposed for the user's review. Returns { status: created|updated|proposed|already-recorded|invalid-name|refused, normalizedKey, entityId, proposalId? }.",
       parameters: {
@@ -784,6 +813,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "market.search",
       kind: "builtin",
       scope: "pod",
+      intent: "search_external",
       description:
         "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Agents must send kind:template not kind:workspace. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. Read-only.",
       parameters: {
@@ -809,6 +839,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "market.install",
       kind: "builtin",
       scope: "pod",
+      intent: "connect_account",
       description:
         "Install a marketplace entry found via market.search. An agent-initiated install ALWAYS creates a reviewable capability.install proposal (never auto-provisions); an operator call installs directly. Tier-gated (fails early if the pod's plan doesn't cover it). Returns { status: 'installed', result } or { status: 'proposed', proposalId, reviewUrl }.",
       parameters: {
@@ -882,6 +913,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "channel.ingest",
       kind: "builtin",
       scope: "pod",
+      intent: "capture_into_pod",
       description:
         "Record a GENERIC inbound message onto its external channel via the shared inbound sink (resolve-or-create the channel, dedup-insert the message, emit external_message.received). Provider-agnostic — every field is a parameter, so provider ingest can be composed as config/automation from outside the pod. Two exclusive modes: SINGLE (text + idempotencySeed) for one message, or BATCH (messages[] + messageMap) for a whole thread in one call — for automations that cannot loop per-message; messageMap gives the dot-paths into each raw row. WRITE: flows through the full capability gate (an owner-run automation passes straight through). Returns { channelId, contextObjectId, inboundHash, created } (created=false on a duplicate delivery).",
       parameters: {
@@ -927,6 +959,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "messaging.send",
       kind: "builtin",
       scope: "pod",
+      intent: "send_message",
       description:
         "Send a governed EXTERNAL message on a bound channel, on ANY provider (email / LinkedIn / Discord / Proton). Routes through the ONE governed send door (sendExternalMessage): an AGENT-initiated send with no approving grant is PROPOSED (never auto-sent), an owner send goes direct, and the client-comms firewall stays enforced. Provider-agnostic — the connector is resolved from the channel's externalSource and owns any reply-header derivation. WRITE: flows through the full capability gate. Returns { success, messageId?, proposed?, proposalId? } (proposed=true when routed to review).",
       parameters: {
@@ -1050,6 +1083,12 @@ export async function ensureSynapCoreCapability(): Promise<void> {
           agentTypes: skills.agentTypes,
           executionMode: skills.executionMode,
           timeoutSeconds: skills.timeoutSeconds,
+          // PROJECTED_SKILL_FIELDS.intent reads the ROUTING INTENT off the
+          // column (migration 0292). Kept in lock-step with the same select in
+          // reconcile-capabilities-to-templates.ts — this file converges Synap
+          // Core's own 47 builtins, which are exactly the ones a `tools: []`
+          // definition left unroutable by intent.
+          intent: skills.intent,
           // PROJECTED_SKILL_FIELDS.metadata reads `allowedHosts` out of this
           // bag. Omit the column and it is `undefined` on every row — a
           // declared egress allowlist would then never be seen as drift.

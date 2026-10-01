@@ -885,6 +885,21 @@ export interface WorkspaceSettings {
 	/** Slug of the control plane package used to create this workspace. */
 	packageSlug?: string;
 	/**
+	 * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (the pod's
+	 * `capability_intents` closed vocabulary) the template declared as this
+	 * space's task requirements.
+	 *
+	 * Distinct from `capabilities`/`workspaceCapabilities`, which name what this
+	 * space PROVIDES to others; this is what it CONSUMES, and it is what the
+	 * intent resolver joins against what is installed to report a GAP.
+	 *
+	 * A DECLARATION, not a snapshot. A gap is a real, reportable fact (the
+	 * template may legitimately declare ahead of its installs), so this is stored
+	 * as-authored and never reconciled away. Omitted = the workspace declares no
+	 * external capability requirements, which is a real answer, not a missing one.
+	 */
+	taskIntents?: string[];
+	/**
 	 * System-reserved slug identifying built-in workspaces created by the backend.
 	 * Used for idempotent re-creation (e.g. 'pod-admin').
 	 * Never set by users.
@@ -3680,7 +3695,7 @@ declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "tools";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "error" | "inactive";
+			data: "active" | "inactive" | "error";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4006,6 +4021,23 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		requiredIntents: import("drizzle-orm/pg-core").PgColumn<{
+			name: "required_intents";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
 		version: import("drizzle-orm/pg-core").PgColumn<{
 			name: "version";
 			tableName: "playbooks";
@@ -4068,7 +4100,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "archived" | "paused" | "draft";
+			data: "active" | "archived" | "draft" | "paused";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -7075,7 +7107,9 @@ export interface ToolVerb {
 	 * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
 	 * `capability_run_receipts.verb_id` and inside stored automation flows), and a
 	 * legacy catalog entry with no `intent` reads exactly as before. The value is
-	 * a registry slug. `AbstractVerb` is only the seed list.
+	 * a registry slug from the OPEN `capability_intents` table (the 13-slug
+	 * `ABSTRACT_VERBS` seed is only what migration 0283 inserted; `publish_post`
+	 * is a later row). It is `string`, never a closed union, for that reason.
 	 */
 	intent?: string;
 }
@@ -24777,6 +24811,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							required?: boolean | undefined;
 							stageKey?: string | undefined;
 						}[] | undefined;
+						requiredIntents?: string[] | undefined;
 						subjectProfile?: Record<string, unknown> | undefined;
 						schedule?: unknown;
 						metadata?: Record<string, unknown> | undefined;
@@ -27055,6 +27090,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category?: string | undefined;
 				executionMode?: "sync" | "async" | undefined;
 				timeoutSeconds?: number | undefined;
+				intent?: string | undefined;
 				agentUserId?: string | undefined;
 				metadata?: Record<string, unknown> | undefined;
 			};
@@ -27151,6 +27187,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					providerSpec: ProviderVerbSpec | null;
 					parameters: unknown;
 					category: string | null;
+					intent: string | null;
 					topics: string[] | null;
 					source: string | null;
 					author: string | null;
@@ -27224,6 +27261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					providerSpec: ProviderVerbSpec | null;
 					parameters: unknown;
 					category: string | null;
+					intent: string | null;
 					topics: string[] | null;
 					source: string | null;
 					author: string | null;
@@ -27342,6 +27380,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					providerSpec: ProviderVerbSpec | null;
 					parameters: unknown;
 					category: string | null;
+					intent: string | null;
 					topics: string[] | null;
 					source: string | null;
 					author: string | null;
@@ -35707,6 +35746,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs: unknown;
 				stages: unknown;
 				criteria: unknown;
+				requiredIntents: unknown;
 				version: number;
 				schedule: unknown;
 				executor: PlaybookExecutorRef;
@@ -35740,6 +35780,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					stages: unknown;
 					criteria: unknown;
+					requiredIntents: unknown;
 					version: number;
 					schedule: unknown;
 					executor: PlaybookExecutorRef;
@@ -35776,6 +35817,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					stages: unknown;
 					criteria: unknown;
+					requiredIntents: unknown;
 					version: number;
 					schedule: unknown;
 					executor: PlaybookExecutorRef;
@@ -35839,6 +35881,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs: unknown;
 				stages: unknown;
 				criteria: unknown;
+				requiredIntents: unknown;
 				schedule: unknown;
 				flowAutomationId: string | null;
 				subjectProfile: unknown;
@@ -36053,6 +36096,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 				}[] | undefined;
+				requiredIntents?: string[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
 				metadata?: Record<string, unknown> | undefined;
@@ -36089,6 +36133,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					stages: unknown;
 					criteria: unknown;
+					requiredIntents: unknown;
 					schedule: unknown;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
@@ -36309,6 +36354,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 				}[] | undefined;
+				requiredIntents?: string[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
@@ -36342,6 +36388,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					stages: unknown;
 					criteria: unknown;
+					requiredIntents: unknown;
 					schedule: unknown;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
@@ -36409,6 +36456,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					stages: unknown;
 					criteria: unknown;
+					requiredIntents: unknown;
 					schedule: unknown;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;

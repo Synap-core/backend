@@ -14,13 +14,16 @@
  *
  * A definition skill also projects onto a SECOND surface: the requiring tool's
  * `tools.capabilities` verb catalog (`deriveToolVerbs`), which is where
- * `ToolVerbCatalogEntry.intent` — the routing axis — actually lands. A field
- * that lives only there (intent did) is invisible to a `skills`-row diff, so a
- * template change touching only it reported NO drift while the reconcile went
- * on to stamp the new `contentHash` — recording convergence it never performed
- * and permanently fast-pathing past the miss. `capabilityVerbCatalogDrift`
- * closes that half; see `PROJECTED_SKILL_FIELDS`' note on why both halves are
- * pinned by a tripwire.
+ * `ToolVerbCatalogEntry.intent` — the routing axis — was ORIGINALLY the only
+ * place it landed. A field that lives only there is invisible to a `skills`-row
+ * diff, so a template change touching only it reported NO drift while the
+ * reconcile went on to stamp the new `contentHash` — recording convergence it
+ * never performed and permanently fast-pathing past the miss. That is why
+ * `intent` is now a real `skills.intent` COLUMN (`PROJECTED_SKILL_FIELDS`,
+ * migration 0292) rather than a `metadata` key: the catalog mirror is derived,
+ * the column is the authority, and the column is visible to this diff.
+ * `capabilityVerbCatalogDrift` closes the remaining half; see
+ * `PROJECTED_SKILL_FIELDS`' note on why both halves are pinned by a tripwire.
  */
 
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
@@ -59,6 +62,17 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v7 = v6 + the skill-row `intent` COLUMN as its own `PROJECTED_SKILL_FIELDS`
+ *      entry (migration 0292). v6 compared intent as a `skills.metadata` KEY;
+ *      that was a second writer beside `deriveToolVerbs` and it is gone, so the
+ *      comparator now reads a real column. The bump is load-bearing for the same
+ *      reason every bump here is: a v6 stamp says "clean under a comparator that
+ *      looked somewhere this one does not", so honouring it would assert
+ *      convergence about the new column that was never checked. Retiring every
+ *      v6 stamp makes each container re-diff exactly once under v7.
+ * v6 = v5 + the skill-row `intent` as a `skills.metadata` KEY. Superseded by v7
+ *      — retained in this history because a v6 stamp on disk is exactly what
+ *      makes the bump necessary, not noise to be edited away.
  * v5 = v4 + `metadata.readOnly` (the AUTHORED read-only declaration the
  *      capability gate honours — see `SKILL_METADATA_READ_ONLY`). Adding it
  *      retires every v4 stamp so each container re-diffs once and a declared
@@ -73,7 +87,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 5;
+export const DRIFT_COMPARATOR_VERSION = 7;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -126,8 +140,11 @@ export interface InstalledSkillRow {
   agentTypes?: string[] | null;
   executionMode?: string | null;
   timeoutSeconds?: number | null;
-  /** The live row's `skills.metadata` bag. Only its `allowedHosts` and
-   *  `readOnly` keys are definition-owned; every other key is DB state (see
+  /** The live row's `skills.intent` column — see the entry in
+   *  `PROJECTED_SKILL_FIELDS`. */
+  intent?: string | null;
+  /** The live row's `skills.metadata` bag. Only its `allowedHosts` and `readOnly`
+   *  keys are definition-owned; every other key is DB state (see
    *  the `SKILL_METADATA_*` constants). */
   metadata?: Record<string, unknown> | null;
 }
@@ -150,6 +167,14 @@ export interface DefinitionSkillRow {
   /** The definition's `metadata` bag — see `declaredAllowedHosts` and
    *  `declaredReadOnly`. */
   metadata?: Record<string, unknown> | null;
+  /**
+   * The definition skill's TOP-LEVEL routing intent, projected onto the REAL
+   * `skills.intent` column (migration 0292) — not into the `metadata` bag,
+   * which never carried it. Templates declare it beside `metadata` (`gmail_send`
+   * has no `metadata` key at all), so reading it out of the bag would find
+   * nothing on every real template.
+   */
+  intent?: string | null;
 }
 
 /**
@@ -205,6 +230,25 @@ export const SKILL_METADATA_ALLOWED_HOSTS = "allowedHosts";
  * without re-earning approval.
  */
 export const SKILL_METADATA_READ_ONLY = "readOnly";
+
+/*
+ * THERE IS NO THIRD `skills.metadata` KEY. The routing intent used to be one —
+ * `SKILL_METADATA_INTENT = "intent"` — and was removed in favour of a REAL
+ * COLUMN, `skills.intent` (migration 0292). It is worth saying why, because the
+ * reason is not "the column is nicer":
+ *
+ *   The metadata path was a WORKAROUND for the fact that `intent` lived only on
+ *   the requiring TOOL's verb catalog, and a definition declaring `tools: []`
+ *   (all of Synap Core's 47 builtins) had no such tool — so `messaging.send` was
+ *   unroutable by intent while installed and runnable. Folding the value into
+ *   the DB-owned `metadata` bag fixed reachability but created a SECOND WRITER
+ *   beside `deriveToolVerbs`, i.e. the two-writers defect this codebase keeps
+ *   paying for, with neither able to see the other.
+ *
+ *   A column has one writer by construction: the applier's `resolveVerbIntent`.
+ *   `metadata` keeps exactly the two keys that are genuinely bag-shaped
+ *   (`allowedHosts`, `readOnly`) and nothing else.
+ */
 
 /**
  * The egress allowlist a definition DECLARES, or `undefined` when it declares
@@ -272,7 +316,9 @@ export function projectSkillMetadata(
 ): Record<string, unknown> | undefined {
   const hosts = declaredAllowedHosts(definitionMetadata);
   const readOnly = declaredReadOnly(definitionMetadata);
-  if (hosts === undefined && readOnly === undefined) return undefined;
+  if (hosts === undefined && readOnly === undefined) {
+    return undefined;
+  }
   return {
     ...((existing ?? {}) as Record<string, unknown>),
     ...(hosts !== undefined ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts } : {}),
@@ -347,18 +393,53 @@ export const PROJECTED_SKILL_FIELDS: Record<
     expected: (d) => d.agentTypes,
     actual: (i) => i.agentTypes ?? null,
   },
-  // NARROWED ON PURPOSE. The applier's `.set({ metadata })` writes exactly one
-  // key of this bag (`projectSkillMetadata` above); every other key is DB-owned
-  // and preserved. So this entry reads exactly that key — comparing the whole
-  // bag would report drift on `marketSource`/counters the template never owns,
-  // i.e. a re-apply on every boot. Marker coverage == applier coverage.
+  /**
+   * THE ROUTING INTENT, as its own COLUMN entry rather than a metadata key.
+   *
+   * It used to ride inside the `metadata` bag (a second writer beside
+   * `deriveToolVerbs`); it is now the real `skills.intent` column written by the
+   * applier's `resolveVerbIntent`, and it therefore belongs in this table like
+   * every other projected column — a table that skipped it would stamp the
+   * template converged while a changed intent reached no pod, which is the exact
+   * durable lie `DRIFT_COMPARATOR_VERSION` exists to retire.
+   *
+   * Same `undefined`-is-load-bearing rule as `category`/`agentTypes`: a
+   * definition that declares NO intent makes the applier skip the column, so
+   * there is nothing to converge to and comparing would report drift a re-apply
+   * never fixes — a re-apply on every boot. A definition that DOES declare one
+   * converges, and a row missing it reads `null`, which is the drift signal.
+   */
+  intent: {
+    expected: (d) =>
+      typeof d.intent === "string" && d.intent.length > 0
+        ? d.intent
+        : undefined,
+    // Declared-ness is decided on the DEFINITION side, exactly as `metadata`
+    // does for its independently-declarable keys: a template that declares no
+    // `intent` must not diff against (or blank) one set by another definition.
+    // Missing on a DECLARED key reads `null`, which is the drift signal —
+    // dropping this read would make the column invisible here and the stamp
+    // would overclaim.
+    actual: (i, d) =>
+      typeof d.intent === "string" && d.intent.length > 0
+        ? (i.intent ?? null)
+        : undefined,
+  },
+  // NARROWED ON PURPOSE. The applier's `.set({ metadata })` writes exactly the
+  // definition-owned keys of this bag (`projectSkillMetadata` above); every
+  // other key is DB-owned and preserved. So this entry reads exactly those keys —
+  // comparing the whole bag would report drift on `marketSource`/counters the
+  // template never owns, i.e. a re-apply on every boot. Marker coverage ==
+  // applier coverage.
   metadata: {
     expected: (d) => {
       const hosts = declaredAllowedHosts(d.metadata);
       const readOnly = declaredReadOnly(d.metadata);
-      // BOTH absent → the applier writes nothing, so there is nothing to
+      // ALL absent → the applier writes nothing, so there is nothing to
       // converge to and the field is skipped (the shared rule above).
-      if (hosts === undefined && readOnly === undefined) return undefined;
+      if (hosts === undefined && readOnly === undefined) {
+        return undefined;
+      }
       // Only the DECLARED keys are present. A key the definition omits is not
       // written by the applier, so it must not appear on either side.
       return {
@@ -383,7 +464,9 @@ export const PROJECTED_SKILL_FIELDS: Record<
         declaredReadOnly(d.metadata) === undefined
           ? undefined
           : (declaredReadOnly(i.metadata) ?? null);
-      if (hosts === undefined && readOnly === undefined) return undefined;
+      if (hosts === undefined && readOnly === undefined) {
+        return undefined;
+      }
       return {
         ...(hosts !== undefined
           ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts }

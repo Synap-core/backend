@@ -78,6 +78,7 @@ import {
   playbookStatusSchema,
   playbookScopeSchema,
   playbookExpectedOutputSchema,
+  playbookRequiredIntentsSchema,
 } from "../schemas/playbook-definition.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
@@ -342,6 +343,14 @@ export const updateInputSchema = z.object({
   stages: playbookStagesSchema.optional(),
   /** See `createInputSchema.criteria`. */
   criteria: sessionCriteriaSchema.optional(),
+  /**
+   * See `playbookDefinitionSchema.requiredIntents` — REPLACES the declared
+   * list (the same all-optional PATCH contract `params` has). Declared here as
+   * a hand-copy-able shape because this is a PATCH, not a definition; the
+   * vocabulary rule it applies is the ONE door's, exported from there so a
+   * change cannot make the patch and the create accept different slugs.
+   */
+  requiredIntents: playbookRequiredIntentsSchema.optional(),
   subjectProfile: jsonRecord.optional(),
   /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
   schedule: playbookScheduleInputSchema.optional(),
@@ -1713,6 +1722,7 @@ export const playbooksRouter = router({
           expectedOutputs: input.expectedOutputs,
           stages: input.stages,
           criteria: input.criteria,
+          requiredIntents: input.requiredIntents,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
           metadata: input.metadata,
@@ -1834,6 +1844,7 @@ export const playbooksRouter = router({
             expectedOutputs: input.expectedOutputs ?? [],
             stages: input.stages ?? [],
             criteria: input.criteria ?? [],
+            requiredIntents: input.requiredIntents ?? [],
             subjectProfile: input.subjectProfile ?? null,
             schedule: input.schedule ?? null,
             metadata: input.metadata ?? {},
@@ -2072,6 +2083,9 @@ export const playbooksRouter = router({
             : {}),
           ...(input.stages !== undefined ? { stages: input.stages } : {}),
           ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
+          ...(input.requiredIntents !== undefined
+            ? { requiredIntents: input.requiredIntents }
+            : {}),
           ...(input.subjectProfile !== undefined
             ? { subjectProfile: input.subjectProfile }
             : {}),
@@ -2114,6 +2128,8 @@ export const playbooksRouter = router({
         set.expectedOutputs = input.expectedOutputs;
       if (input.stages !== undefined) set.stages = input.stages;
       if (input.criteria !== undefined) set.criteria = input.criteria;
+      if (input.requiredIntents !== undefined)
+        set.requiredIntents = input.requiredIntents;
       if (input.subjectProfile !== undefined)
         set.subjectProfile = input.subjectProfile;
       if (input.schedule !== undefined) set.schedule = input.schedule;

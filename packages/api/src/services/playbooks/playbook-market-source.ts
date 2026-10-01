@@ -64,6 +64,17 @@ export const PLAYBOOK_MANAGED_FIELDS = [
   "expectedOutputs",
   "stages",
   "criteria",
+  // MANAGED, deliberately. A template declares what its playbooks NEED the pod
+  // to be able to do, so a change to that declaration must REACH an installed
+  // pod — the same reason `stages`/`criteria` are managed. Leaving it out is
+  // precisely the defect backend-rules.md records: a field the applier writes
+  // but the reconcile never compares reaches ZERO pods, silently and forever,
+  // because the baseline is stamped from the same projection that skipped it.
+  //
+  // Reconciling the DECLARATION is not gating SATISFIABILITY: the reconcile
+  // diffs what a template declares against what a pod has, and a gap is
+  // reported (see `matchRequiredIntents`), never refused.
+  "requiredIntents",
   "subjectProfile",
   "schedule",
   "executor",

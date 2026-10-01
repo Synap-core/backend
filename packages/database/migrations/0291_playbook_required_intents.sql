@@ -1,0 +1,26 @@
+-- 0291_playbook_required_intents
+--
+-- A PLAYBOOK declares the ABSTRACT intents it needs the pod to be able to do,
+-- so a run can resolve the capability serving each one instead of the author
+-- hard-coding a vendor tool that may not be installed. Slugs of the pod's
+-- `capability_intents` vocabulary (migrations 0283/0284) — the same closed
+-- vocabulary a workspace template's `taskIntents` uses (what the SPACE needs)
+-- and a capability template's `provides` (what the PACK serves). This is the
+-- third: what the PROCESS needs.
+--
+-- WHAT IT IS NOT: a satisfiability constraint. A playbook may declare an
+-- intent nothing installed serves today, and that gap is the declaration doing
+-- its job — it is what a later install is checked against. No subset rule
+-- against installed capabilities is expressed here or at the write door.
+--
+-- NO backfill and NO constraint on the contents: `[]` (the default) is the
+-- honest reading for every playbook that declares nothing, and a playbook that
+-- needs no external capability legitimately declares nothing. Vocabulary
+-- membership is enforced at the write door (`schemas/playbook-definition.ts`),
+-- which is the one place that can name the offenders; a CHECK constraint here
+-- could only say "something is wrong", never which slug.
+--
+-- Fresh installs also get the column from 0000_baseline_schema.sql. This file
+-- is for pods that already booted.
+
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "required_intents" jsonb NOT NULL DEFAULT '[]'::jsonb;

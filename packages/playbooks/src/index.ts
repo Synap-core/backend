@@ -37,33 +37,42 @@ export type ToolKind =
  */
 export type ToolVerbKind = "read" | "write" | "action";
 
-/**
- * The CLOSED vocabulary of abstract intents — the ROUTING axis over the verb
- * catalog. Kept in LOCK-STEP with `ABSTRACT_VERBS` / `AbstractVerb` in
- * @synap/database `schema/tools.ts`, re-declared here (not imported) exactly
- * like `ToolVerbKind` above, so this package stays dependency-free.
- *
- * Routing only, never authorization: an intent resolves to a concrete verb id
- * BEFORE the governance gate.
- */
-export type AbstractVerb =
-  // ACQUIRE
-  | "search_external"
-  | "find_people"
-  | "enrich_entity"
-  | "fetch_record"
-  | "list_records"
-  // ACT OUTWARD
-  | "send_message"
-  | "request_connection"
-  | "schedule_event"
-  | "manage_file"
-  | "generate_media"
-  // BRIDGE
-  | "capture_into_pod"
-  // CONTROL
-  | "run_external_job"
-  | "connect_account";
+// ⚠️ `AbstractVerb` USED TO BE RE-DECLARED HERE and was DELETED (2026-10-01).
+// It was a fourth, TYPE-only copy of the intent vocabulary, and it had gone
+// STALE: 13 slugs, missing `publish_post` (migration 0284). Worse, it was
+// DEAD — a whole-repo scan (every repo, `src/`, `dist/`, and generated `.d.ts`)
+// found ZERO importers of `AbstractVerb` from this package, so nothing could
+// have noticed the staleness. A mirror nothing imports and nothing checks is
+// strictly worse than no mirror: it reads like a contract.
+//
+// It is deliberately NOT re-added. The routing axis needs no union in this
+// package: `ToolVerb.intent` below is `string`, because the SSOT is the pod's
+// `capability_intents` TABLE and the vocabulary is OPEN (a slug is a row). A
+// closed union here would re-introduce exactly the rot that made this type
+// stale, and it would be stale in the one direction that is invisible — nothing
+// here consumes it, so no typecheck fails when a row is added.
+//
+// THE VOCABULARY'S THREE REMAINING MIRRORS, and why each must stay:
+//   - `ABSTRACT_VERBS` (runtime, 13-slug seed) — @synap/database
+//     `schema/tools.ts`. Cannot import `@synap-core/types` (types devDepends on
+//     database ⇒ build cycle). Guarded by
+//     `src/utils/intent-vocabulary-parity.test.ts` (migration SQL).
+//   - `ABSTRACT_INTENTS` + `REGISTERED_EXTRAS` + `CAPABILITY_INTENTS` —
+//     @synap-core/types `src/capability-intents/`, a LEAF subpath (pure, no
+//     generated dep) because the barrel re-exports `@synap/database` types and
+//     a VALUE import from a barrel crashes Hermes. Linked by synap-app +
+//     @synap/api. Guarded by its own `parity.test.ts` (migration SQL).
+//   - `ABSTRACT_VERBS` + `REGISTERED_EXTRAS` + `CAPABILITY_INTENTS` —
+//     synap-control-plane-api `src/seeds/capability-intent-vocabulary.ts`. A
+//     SEPARATE DEPLOY TARGET with its OWN lockfile; it resolves neither
+//     `@synap-core/types` nor the pod's packages (verified: `require.resolve`
+//     → MODULE_NOT_FOUND). Guarded inside `capability-provides.test.ts`.
+// A fourth copy with no importers was not a mirror — it was a comment that
+// looked like a contract.
+//
+// To add a slug: write the migration, then all three mirrors. Every guard
+// re-derives from the migration SQL, so a missed mirror is a RED BUILD, never a
+// silent divergence. See `skills/intent-vocabulary-ssot` for the full procedure.
 
 export interface ToolVerb {
   /** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
@@ -90,7 +99,9 @@ export interface ToolVerb {
    * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
    * `capability_run_receipts.verb_id` and inside stored automation flows), and a
    * legacy catalog entry with no `intent` reads exactly as before. The value is
-   * a registry slug. `AbstractVerb` is only the seed list.
+   * a registry slug from the OPEN `capability_intents` table (the 13-slug
+   * `ABSTRACT_VERBS` seed is only what migration 0283 inserted; `publish_post`
+   * is a later row). It is `string`, never a closed union, for that reason.
    */
   intent?: string;
 }
@@ -152,6 +163,22 @@ export interface PlaybookParam {
 // own file because the run funnel is its only caller and the rules are long;
 // re-exported here so `@synap/playbooks` stays the one import.
 export * from "./params.js";
+
+// `requiredIntents` — what a playbook NEEDS the pod to be able to do, and the
+// pure matcher that turns that declaration plus a resolver index into a
+// per-intent verdict. Also its own file: the "a gap is a fact, never a
+// rejection" rule and the seam to the resolver are long enough that inlining
+// them into this barrel would bury them.
+export * from "./required-intents.js";
+
+// `export *` does not bring a name into LOCAL scope, so the composition merge
+// below needs these bound explicitly. Imported rather than re-qualified
+// (`requiredIntents.mergeRequiredIntents`) so the call sites read like the
+// `unionCapabilityRefs` / `mergeStages` helpers they sit beside.
+import {
+  mergeRequiredIntents,
+  type PlaybookRequiredIntents,
+} from "./required-intents.js";
 
 /**
  * Fallback used only when a pinned list has nobody eligible. The filter and
@@ -1646,6 +1673,19 @@ export interface LoopPlaybookDef {
   channelSpec?: Record<string, unknown>;
   /** Conforms to ExpectedOutput[]; stored loosely (validated at the boundary). */
   expectedOutputs?: Record<string, unknown>[];
+  /**
+   * The ABSTRACT intents this playbook needs the pod to be able to do — the
+   * process half of the intent spine (a template's `taskIntents` is what the
+   * SPACE needs; a capability's `provides` is what the PACK serves). Slugs of
+   * the closed vocabulary, validated at the write door exactly like
+   * `taskIntents`; see {@link readRequiredIntents} and
+   * {@link mergeRequiredIntents}.
+   *
+   * TYPE-only here, stored loosely like its `stages`/`expectedOutputs`
+   * siblings: this package stays dependency-free, so the vocabulary and the
+   * zod schema both live at the door (`@synap/api` `schemas/playbook-definition`).
+   */
+  requiredIntents?: PlaybookRequiredIntents;
   /** Capabilities granted to the playbook (resolved local refs → `grants` links). */
   grants?: CapabilityRef[];
   /** Inline schedule — materializes the backing cron automation via the create path. */
@@ -1744,8 +1784,9 @@ export interface LoopDefinition {
 //   - stages: additive by `key` — base stages keep their order; an overlay stage
 //     whose `key` matches a base stage merges onto it (overlay stage fields win,
 //     stage `grants` union); overlay stages with new keys append after.
-//   - grants / params / expectedOutputs: UNION (grants dedup by kind+id, params
-//     by name, expectedOutputs by kind) — base first, overlay appended.
+//   - grants / params / expectedOutputs / requiredIntents: UNION (grants dedup
+//     by kind+id, params by name, expectedOutputs by kind, requiredIntents by
+//     slug) — base first, overlay appended.
 //   - `ref` is the overlay's (the concrete playbook); `extends` is dropped.
 
 /** Dedup a CapabilityRef list by (kind,id), keeping first occurrence. */
@@ -1861,6 +1902,14 @@ export function composePlaybookDef(
       base.expectedOutputs,
       overlay.expectedOutputs,
       "kind"
+    ),
+    // Declarations UNION — an overlay cannot narrow what a base journey needs.
+    // Same additive rule as grants: a process's requirements are a SET of
+    // capabilities it depends on, and dropping the base's would let an overlay
+    // silently strip a real dependency off a shared method.
+    requiredIntents: mergeRequiredIntents(
+      base.requiredIntents,
+      overlay.requiredIntents
     ),
   };
   // Strip keys left undefined so the flattened def matches a hand-authored one.

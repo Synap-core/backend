@@ -178,6 +178,25 @@ export interface WorkspaceDefinitionInput {
   workspaceVisibility?: WorkspaceVisibility;
   /** Capability ids this workspace provides or consumes. */
   workspaceCapabilities?: string[];
+  /**
+   * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (closed
+   * vocabulary, the pod's `capability_intents` table) its template declares it
+   * requires. Distinct from `workspaceCapabilities`, which names what this space
+   * PROVIDES to others; this is what it CONSUMES.
+   *
+   * Persisted verbatim to `settings.taskIntents` (JSONB — no column, no
+   * migration). It is a DECLARATION, not a snapshot: a gap between this list and
+   * what is installed is the field doing its job, and is what the intent
+   * resolver reports and can propose an install for. Never a reconciliation
+   * target.
+   *
+   * Validation lives at the AUTHORING layer (`validateTemplate`'s
+   * `task-intent-unknown` in `@synap-core/types`' workspace-templates), where
+   * the closed vocabulary is importable. This is the transport, so it stays a
+   * plain string array — a slug the pod's router does not know is reported by
+   * the resolver as unsatisfied, never silently dropped.
+   */
+  taskIntents?: string[];
   /** Product-surface policy for the existing CRM workspace. */
   crm?: WorkspaceSettings["crm"];
   /** Domain → provider/consumer role map. */
@@ -494,6 +513,8 @@ const WorkspaceDefinitionSchema = z
     workspaceSubtype: z.string().optional(),
     workspaceVisibility: z.string().optional(),
     workspaceCapabilities: z.array(z.string()).optional(),
+    // Transport for the declared-intent sink — see `WorkspaceDefinitionInput.taskIntents`.
+    taskIntents: z.array(z.string()).optional(),
     crm: z
       .object({
         surface: z.enum(["pipeline", "full"]),
@@ -990,6 +1011,12 @@ export async function createWorkspaceFromDefinition(
   }
   if (definition.workspaceCapabilities) {
     settings.workspaceCapabilities = definition.workspaceCapabilities;
+  }
+  // The DECLARED intents (Phase 3's read side). A declaration is not a snapshot:
+  // stored as-authored, gaps are reported and can be proposed for, never
+  // reconciled away here.
+  if (definition.taskIntents) {
+    settings.taskIntents = definition.taskIntents;
   }
   if (definition.crm) {
     settings.crm = definition.crm;

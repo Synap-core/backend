@@ -854,6 +854,11 @@ export async function createCapabilityFromDefinition(
         timeoutSeconds: skillsTable.timeoutSeconds,
         body: skillsTable.body,
         approved: skillsTable.approved,
+        // Read so the routing-intent projection below can write ONLY when the
+        // definition declares one — a definition that omits `intent` must not
+        // revoke one set elsewhere (the same undefined-is-load-bearing rule the
+        // egress/readOnly keys follow).
+        intent: skillsTable.intent,
         // Read so the egress projection can MERGE onto the live bag rather than
         // replace it, and so `allowedHostsChanged` can compare by value.
         metadata: skillsTable.metadata,
@@ -958,8 +963,19 @@ export async function createCapabilityFromDefinition(
           agentTypes: s.agentTypes,
           executionMode: s.executionMode ?? "sync",
           timeoutSeconds: s.timeoutSeconds ?? 30,
-          // The ONLY definition-owned key of this DB-owned bag. `undefined`
-          // when the definition declares no hosts, which Drizzle SKIPS — the
+          // THE SINGLE WRITER of the routing intent. Validated through the SAME
+          // `resolveVerbIntent` the derived catalog mirror uses, so a template
+          // cannot be accepted by one door and rejected by the other.
+          //
+          // `undefined` when the definition declares none, which Drizzle SKIPS —
+          // an existing intent is then left alone rather than revoked, the same
+          // undefined-is-load-bearing contract `allowedHosts`/`readOnly` follow.
+          // A definition that DOES declare one overwrites unconditionally: it is
+          // the authority, and it is how a tool-less builtin like
+          // `messaging.send` becomes reachable by intent at all.
+          intent: resolveVerbIntent(s, knownIntents),
+          // The ONLY definition-owned keys of this DB-owned bag. `undefined`
+          // when the definition declares none, which Drizzle SKIPS — the
           // live bag (marketSource, rule, counters) is then untouched.
           metadata: projectSkillMetadata(existingSkill.metadata, s.metadata),
           updatedAt: new Date(),
@@ -1000,12 +1016,18 @@ export async function createCapabilityFromDefinition(
       category: s.category,
       executionMode: s.executionMode ?? "sync",
       timeoutSeconds: s.timeoutSeconds ?? 30,
-      // Persist the declared sandbox egress allowlist — the ONE key of the
-      // definition's `metadata` bag that is definition-owned. Without this a
-      // published package could never grant its own skill egress: the sandbox
-      // is default-deny, so the skill installed fine and failed at run with
-      // `domain_not_approved`. Narrowed to the one key rather than passing the
-      // whole bag, which also carries read-only catalog hints (`verbType`).
+      // THE SINGLE WRITER of the routing intent — same call and same validation
+      // as the update branch above. This is the branch that finally lets a skill
+      // which `requires` NO tool (every Synap Core builtin, e.g.
+      // `messaging.send`) carry an intent, because it lands on the skill row
+      // itself instead of on a tool that does not exist.
+      intent: resolveVerbIntent(s, knownIntents),
+      // Persist the definition-owned keys of the `metadata` bag — the declared
+      // sandbox egress allowlist. Without it a published package could never
+      // grant its own skill egress: the sandbox is default-deny, so the skill
+      // installed fine and failed at run with `domain_not_approved`. Narrowed to
+      // the declared keys rather than passing the whole bag, which also carries
+      // read-only catalog hints (`verbType`).
       metadata: projectSkillMetadata(null, s.metadata),
       workspaceId: connWorkspaceId,
     });
@@ -1512,9 +1534,17 @@ export function deriveVerbKind(s: CapabilitySkillDef): ToolVerbKind {
  *
  * An `instruction` skill is a TEACHING doc, not a callable verb — it never
  * reaches here, because `deriveToolVerbs` only walks skills that `requires` a
- * tool and the applier derives no catalog entry for prose.
+ * tool and the applier derives no catalog entry for prose. It is never reached
+ * for the SKILL-ROW projection either: that one walks every skill.
+ *
+ * EXPORTED because there are now TWO consumers and they MUST agree. The
+ * `skills.intent` column is the single writer; `deriveToolVerbs` keeps mirroring
+ * the value into the requiring tool's verb catalog as a DERIVED projection for
+ * already-installed rows. If the two derived their validation differently, a
+ * template could be accepted by one door and rejected by the other — so both
+ * call THIS.
  */
-function resolveVerbIntent(
+export function resolveVerbIntent(
   s: CapabilitySkillDef,
   known?: ReadonlySet<string>
 ): ToolVerbCatalogEntry["intent"] {
@@ -1556,8 +1586,22 @@ export function deriveToolVerbs(
           ? s.parameters
           : undefined,
       govDefault,
-      // Routing axis — omitted entirely when the template declares none, so a
-      // legacy entry's shape is unchanged.
+      // Routing axis — DERIVED, NOT OWNED. The authority for this value is the
+      // `skills.intent` column, which this same applier writes for EVERY skill
+      // (including one that `requires` no tool at all, which is the shape that
+      // was previously unreachable here). This mirror stays because the verb-list
+      // door and the intent index both read a tool's catalog, and rewriting every
+      // already-installed row's catalog is a migration with no behavioural gain
+      // while the column is read as the preferred source.
+      //
+      // END OF THE MIGRATION PATH: once `capabilityVerbCatalogDrift` reads the
+      // column for every installed row (the column backfill in 0292 covers rows
+      // installed before it), this field can be dropped. It must not be removed
+      // before that — a pod whose rows predate 0292 would lose every intent on
+      // the catalog-shaped readers.
+      //
+      // Omitted entirely when the template declares none, so a legacy entry's
+      // shape is unchanged.
       ...(intent ? { intent } : {}),
     });
   }

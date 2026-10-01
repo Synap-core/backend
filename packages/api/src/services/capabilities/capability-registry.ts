@@ -471,7 +471,17 @@ export function buildVerbStates(
   toolKind: string,
   providerSpecByName: Map<string, ProviderVerbSpec>,
   backingSkillExecutableByName: Map<string, boolean>,
-  declaredReadOnlyByName: Map<string, boolean> = new Map()
+  declaredReadOnlyByName: Map<string, boolean> = new Map(),
+  /**
+   * verb id (= skill name) → the skill row's OWN `intent` column.
+   *
+   * The authority for the routing axis (migration 0292). Preferred over the
+   * catalog entry's mirrored `intent`, and this is the whole point: a skill that
+   * `requires` NO tool has no catalog entry at all — so on `tools: []`
+   * definitions (all of Synap Core's 47 builtins) the column is the only place
+   * an intent can exist. See the fallback note in the body.
+   */
+  skillIntentByName: Map<string, string> = new Map()
 ): CapabilityVerbStateWithResponseShape[] {
   if (!Array.isArray(catalog) || catalog.length === 0) return [];
   const granted = !!grant;
@@ -484,8 +494,23 @@ export function buildVerbStates(
         : spec
           ? deriveProviderVerbParamsSchema(spec)
           : undefined;
+    // COLUMN FIRST, CATALOG MIRROR SECOND. The column is the single writer; the
+    // mirror only exists for rows installed before 0292 (which the migration's
+    // backfill covers by deriving intent from exactly this catalog entry), so a
+    // null column with a non-null mirror is the expected shape of a pod that has
+    // not been re-applied yet. The column therefore OVERRIDES the mirror, not
+    // merely fills a gap — otherwise a value the applier has since changed could
+    // never take effect and the re-apply would be a no-op forever.
+    //
+    // When NEITHER side has one the key stays ABSENT (not `intent: undefined`),
+    // so a consumer can tell "declares none" from "declares something" and
+    // `foldVerbsByIntent` can leave the verb out of the index rather than guess
+    // it into a bucket.
+    const columnIntent = skillIntentByName.get(v.id);
+    const intent = columnIntent ?? v.intent;
     return {
       ...v,
+      ...(intent ? { intent } : {}),
       granted,
       effectiveExecMode: grant ? grant.execMode : v.govDefault,
       ...(paramsSchema ? { paramsSchema } : {}),
@@ -688,9 +713,19 @@ export async function listCapabilities(
   // verb id (= skill name) → the skill's authored read-only declaration, read
   // through the same helper the gate uses.
   const declaredReadOnlyByName = new Map<string, boolean>();
+  // verb id (= skill name) → the skill row's own `intent` COLUMN. Read straight
+  // off `skillRows` (which selects every column), never off the tool's catalog:
+  // a skill requiring no tool has no catalog to read, which is precisely why
+  // this map exists.
+  const skillIntentByName = new Map<string, string>();
   for (const s of skillRows) {
     const declared = declaredReadOnly(s.metadata);
     if (declared !== undefined) declaredReadOnlyByName.set(s.name, declared);
+    // Empty string is treated as absent, matching the write door's `z.string()
+    // .min(1)` — an empty intent is not a routable slug.
+    if (typeof s.intent === "string" && s.intent.length > 0) {
+      skillIntentByName.set(s.name, s.intent);
+    }
     if (s.kind === "declarative" && s.providerSpec) {
       providerSpecByName.set(s.name, s.providerSpec as ProviderVerbSpec);
     }
@@ -781,7 +816,8 @@ export async function listCapabilities(
       row.kind,
       providerSpecByName,
       backingSkillExecutableByName,
-      declaredReadOnlyByName
+      declaredReadOnlyByName,
+      skillIntentByName
     ),
     ...(row.kind === "provider"
       ? {

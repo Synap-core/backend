@@ -9,6 +9,7 @@ property-defs.md
 overlay-properties.md
 entity-scope.md
 relations.md
+intent-vocabulary-ssot.md
 worked-example.md
 common-mistakes.md
 more.md

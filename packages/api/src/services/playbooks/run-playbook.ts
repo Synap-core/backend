@@ -348,6 +348,7 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
   params: unknown;
   expectedOutputs: unknown;
   criteria: unknown;
+  requiredIntents: unknown;
 } {
   return {
     version: playbook.version,
@@ -356,6 +357,11 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     params: playbook.params,
     expectedOutputs: playbook.expectedOutputs,
     criteria: playbook.criteria,
+    // WHAT THIS RUN ASKED THE POD TO BE ABLE TO DO. Snapshotted with the rest
+    // so "what ran" includes the requirements the run was launched under, not
+    // only the template it was launched from — a run whose playbook has since
+    // been re-declared must still read as what it actually needed.
+    requiredIntents: playbook.requiredIntents,
   };
 }
 

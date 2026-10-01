@@ -13,6 +13,11 @@ export const DEFINITION_VERSION_FIELDS = [
   "channelSpec",
   "expectedOutputs",
   "criteria",
+  // A playbook's DECLARED requirements are part of its definition: a run
+  // snapshots them, and changing them changes what the process asks the pod to
+  // do. Omitting them here would let a requirements edit leave `version`
+  // untouched, so the snapshot could not tell the two apart.
+  "requiredIntents",
 ] as const;
 
 export function definitionVersionChanged(

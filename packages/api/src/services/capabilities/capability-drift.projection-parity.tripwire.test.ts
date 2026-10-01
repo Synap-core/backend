@@ -74,9 +74,33 @@ function applierProjectedSkillKeys(): string[] {
     "end of the applier's skills update block not found"
   ).toBeGreaterThan(setStart);
   const keys: string[] = [];
-  for (const line of src.slice(setStart, end).split("\n")) {
-    const m = /^\s+(\w+):\s*(.+)$/.exec(line);
-    if (m && /\bs\./.test(m[2])) keys.push(m[1]);
+  const lines = src.slice(setStart, end).split("\n");
+  // A value expression may SPAN lines (a call with arguments on their own
+  // lines). Keying only off same-line text made such a key invisible to the
+  // scan — and the non-vacuity floor below is what caught it, since a silently
+  // dropped key shrinks `applied` rather than failing an assertion about the
+  // dropped key itself. So each key's value is read from the key up to the next
+  // key at the SAME indent (or the end of the block).
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(\s+)(\w+):\s*(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    const [, indent, key, head] = m;
+    let value = head;
+    for (let j = i + 1; j < lines.length; j++) {
+      const next = new RegExp(`^${indent}\\w+:`);
+      if (next.test(lines[j]) || lines[j].trim() === "},") break;
+      value += `\n${lines[j]}`;
+    }
+    // Definition-owned means the value is DERIVED FROM the definition skill `s` —
+    // which has two spellings in this applier, and recognising only the first is
+    // how the `intent` column arrived here invisible: it is projected as
+    // `intent: resolveVerbIntent(s, knownIntents)`, a CALL that consumes `s`,
+    // not a `s.` property read. Under a property-read-only predicate that key
+    // looked DB-owned, the comparator's `intent` entry read as "a field the
+    // applier no longer projects", and the pin failed in the direction that
+    // invites the lazy fix — deleting the comparator entry instead of teaching
+    // the scan. Both spellings are matched; neither is a hand-list.
+    if (/\bs\./.test(value) || /\(\s*s\s*[,)]/.test(value)) keys.push(key);
   }
   return keys;
 }
@@ -108,13 +132,13 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     expect(
       Object.keys(PROJECTED_SKILL_FIELDS).length,
       "the projected-field set changed. " + WHY_IT_MATTERS
-    ).toBe(11);
+    ).toBe(12);
     expect(
       DRIFT_COMPARATOR_VERSION,
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(5);
+    ).toBe(7);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -165,6 +189,11 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       },
       live: { metadata: { allowedHosts: [], readOnly: false } },
     },
+    // A REAL COLUMN now, not a `metadata` key — so the perturbation is a value
+    // on the definition side against a different value on the live side. This is
+    // the field whose readers were all joining THROUGH a tool, which is how a
+    // `tools: []` definition lost its intent entirely.
+    intent: { def: { intent: "send_message" }, live: { intent: null } },
   };
 
   const BASE = {
@@ -179,6 +208,12 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     agentTypes: null,
     executionMode: "sync",
     timeoutSeconds: 30,
+    // Declared on the BASE so the `intent` perturbation below is a REAL
+    // disagreement. Without it every definition here declares none, `expected`
+    // returns `undefined` for the field, and the comparator skips it by design —
+    // so the row would stay green with the column read removed entirely, i.e. a
+    // vacuous control. Asserted explicitly below.
+    intent: "send_message",
     metadata: { allowedHosts: [] },
   } as const;
 

@@ -63,6 +63,10 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
     "the builtin verb market.search, run through run_capability on every door",
   declare_source:
     "the governance action in `workspace/declare_source` (a proposal type), not a tool",
+  send_message:
+    "an ABSTRACT INTENT (routing axis over the verb catalog), not a tool — the concrete verb is vendor-keyed, e.g. `gmail_send`",
+  generate_media:
+    "an ABSTRACT INTENT (routing axis over the verb catalog), not a tool — the concrete verb is vendor-keyed, e.g. `fal_generate_image`",
 };
 
 /** Human door name for the closing note. Product copy, not a domain token. */

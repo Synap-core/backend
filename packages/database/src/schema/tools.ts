@@ -55,6 +55,27 @@ export type ToolAuthBinding =
  * This is a ROUTING axis and never an authorization axis: an intent resolves to
  * a concrete verb id BEFORE the governance gate, which continues to decide on
  * the concrete verb exactly as it did before.
+ *
+ * ── THIS IS THE SEED, NOT THE VOCABULARY ────────────────────────────────────
+ * THE SSOT IS THE `capability_intents` TABLE (migrations `0283` seeded the 13
+ * below; `0284` added `publish_post`, deliberately NOT a member of this union).
+ * Read membership at runtime through the table; this array exists so a fresh pod
+ * resolves the 13 seed slugs before any query, and so the applier can REJECT an
+ * unknown value instead of persisting one.
+ *
+ * ONE OF THREE MIRRORS. This one cannot import `@synap-core/types` — types
+ * devDepends on `@synap/database`, so a reverse import is a build cycle (the same
+ * constraint that mirrors `GUIDELINE_SCOPE_ORDER`). The other two mirrors are
+ * `@synap-core/types/capability-intents` and the control plane's
+ * `src/seeds/capability-intent-vocabulary.ts` (a separate deploy target with its
+ * own lockfile). A fourth copy in `@synap/playbooks` was DELETED 2026-10-01 —
+ * stale, and with zero importers.
+ *
+ * To add a slug: the migration, then all three mirrors, then rebuild
+ * `packages/types` (consumers typecheck its `dist`). The arity floors in
+ * `packages/api/src/__tripwires__/intent-vocabulary-one-ssot.tripwire.test.ts`
+ * stop the build until they are updated. Full procedure:
+ * `skills/synap-schema/intent-vocabulary-ssot.md`.
  */
 export const ABSTRACT_VERBS = [
   // ACQUIRE — bring information in

@@ -121,6 +121,12 @@ export function registerPlaybookExecutors(): void {
         stages: innerData.stages as PlaybookStageInput[] | undefined,
         // Re-validated by `playbooks.create` (`sessionCriteriaSchema`).
         criteria: innerData.criteria,
+        // What the playbook NEEDS the pod to do. Re-validated by
+        // `playbooks.create` (`playbookRequiredIntentsSchema`). Read back for
+        // the same reason `criteria` is: without it an APPROVED playbook
+        // materializes with an empty requirement list — the agent's declaration
+        // is silently dropped on the one path a human explicitly approved.
+        requiredIntents: innerData.requiredIntents as string[] | undefined,
         subjectProfile: innerData.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: innerData.schedule,
@@ -246,6 +252,7 @@ export function registerPlaybookExecutors(): void {
         "expectedOutputs",
         "stages",
         "criteria",
+        "requiredIntents",
         "subjectProfile",
         "schedule",
         "executor",

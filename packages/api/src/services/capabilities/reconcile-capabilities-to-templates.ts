@@ -346,6 +346,12 @@ export async function reconcileCapabilitiesToTemplates(
                 agentTypes: skills.agentTypes,
                 executionMode: skills.executionMode,
                 timeoutSeconds: skills.timeoutSeconds,
+                // PROJECTED_SKILL_FIELDS.intent reads the ROUTING INTENT off the
+                // column (migration 0292). Omit it and it is `undefined` on every
+                // row — a changed intent would diff clean, get stamped converged,
+                // and reach no installed pod, which is the whole class this
+                // select's comment above is about.
+                intent: skills.intent,
                 // PROJECTED_SKILL_FIELDS.metadata reads `allowedHosts` out of this
                 // bag. Omit the column and it is `undefined` on every row — a
                 // declared egress allowlist would then never be seen as drift.

@@ -632,6 +632,21 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0267_session_criteria_and_evaluations.sql",
   },
 
+  {
+    table: "playbooks",
+    column: "required_intents",
+    addedBy: "0291_playbook_required_intents.sql",
+  },
+
+  // A SKILL's own routing intent (0292). Every registry read selects it, so a
+  // missing column 500s the whole capability registry — the same shape as
+  // `focus_sessions.stages` below.
+  {
+    table: "skills",
+    column: "intent",
+    addedBy: "0292_skills_intent.sql",
+  },
+
   // A session's OWN phases (0270). Every session read selects `stages`, so a
   // missing column 500s every session door exactly as `criteria` would.
   {

@@ -221,6 +221,38 @@ export const skills = pgTable(
 
     category: text("category"), // e.g. 'action', 'context', 'crm', 'research'
 
+    /**
+     * ROUTING intent (`ABSTRACT_VERBS` in `./tools`): what this verb MEANS,
+     * independent of the vendor that implements it — so an agent can ask "what
+     * can send a message?" without already knowing `gmail_send`.
+     *
+     * WHY A COLUMN HERE AND NOT ONLY ON THE TOOL'S VERB CATALOG. `intent` used
+     * to be persisted in exactly one place: `tools.capabilities[].intent`,
+     * written by `deriveToolVerbs` for skills that `requires` that tool. Every
+     * reader therefore had to join THROUGH a tool. That works only while the
+     * definition declares one, and two real shapes do not — `SYNAP_CORE_DEFINITION`
+     * and `web-read.capability.json` both declare `tools: []`. So none of
+     * Synap Core's 47 builtins could carry an intent at all. Verified live
+     * 2026-10-01: an agent asking `intent: "send_message"` on a pod whose
+     * `messaging.send` builtin exists received ONLY `gmail_send`, with no
+     * signal the provider-agnostic door was there.
+     *
+     * The skill is the thing that actually executes, so the skill row is the
+     * right carrier. `tools.capabilities[].intent` remains, as the DERIVED
+     * projection the verb-list door reads — this column is the authority, not
+     * a second derivation of it.
+     *
+     * ROUTING, NEVER AUTHORIZATION. An intent resolves to a CONCRETE verb id;
+     * the grant gate then decides on that verb exactly as it did before, so this
+     * column cannot widen what a caller may run.
+     *
+     * NULLABLE, no FK: the vocabulary is OPEN (seeded in `ABSTRACT_VERBS` plus
+     * rows in `capability_intents`), so a foreign key would force a migration
+     * to register every new intent. Null means "declares none" and is never
+     * guessed into a bucket.
+     */
+    intent: text("intent"),
+
     // ── Discoverability (from agent_skills merge) ─────────────────────────
 
     /** Searchable keywords — "animation", "react", "timeline", etc. */

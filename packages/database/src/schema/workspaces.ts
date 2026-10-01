@@ -828,6 +828,21 @@ export interface WorkspaceSettings {
   /** Slug of the control plane package used to create this workspace. */
   packageSlug?: string;
   /**
+   * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (the pod's
+   * `capability_intents` closed vocabulary) the template declared as this
+   * space's task requirements.
+   *
+   * Distinct from `capabilities`/`workspaceCapabilities`, which name what this
+   * space PROVIDES to others; this is what it CONSUMES, and it is what the
+   * intent resolver joins against what is installed to report a GAP.
+   *
+   * A DECLARATION, not a snapshot. A gap is a real, reportable fact (the
+   * template may legitimately declare ahead of its installs), so this is stored
+   * as-authored and never reconciled away. Omitted = the workspace declares no
+   * external capability requirements, which is a real answer, not a missing one.
+   */
+  taskIntents?: string[];
+  /**
    * System-reserved slug identifying built-in workspaces created by the backend.
    * Used for idempotent re-creation (e.g. 'pod-admin').
    * Never set by users.

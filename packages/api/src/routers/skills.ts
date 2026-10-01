@@ -1039,6 +1039,24 @@ export const skillsRouter = router({
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).default("sync"),
         timeoutSeconds: z.number().min(1).max(300).default(30),
+        /**
+         * The skill's vendor-INDEPENDENT routing intent (the
+         * `capability_intents` vocabulary): what this verb MEANS, so an agent can
+         * ask "what can send a message?" without already knowing `gmail_send`.
+         *
+         * ROUTING, NEVER AUTHORIZATION — an intent resolves to a concrete verb id
+         * and the grant gate then decides on that verb exactly as before.
+         *
+         * ONLY the capability-definition applier sets this (it is the only
+         * caller that passes it). It is deliberately NOT on `update`: leaving
+         * the human/agent edit door without it is what makes the column a genuine
+         * SINGLE writer, so a definition re-apply is the one and only thing that
+         * can change a verb's meaning. The vocabulary is closed and validated at
+         * the applier's write boundary (`resolveVerbIntent`); this field is
+         * `z.string()` only because an unknown slug must throw a template-shaped
+         * error naming the offenders, which a Zod enum here could not.
+         */
+        intent: z.string().min(1).optional(),
         /** The acting AGENT identity, when this create is agent-initiated
          *  (e.g. via an MCP tool) — mirrors entities.ts's createEntity input.
          *  Threaded into checkPermissionOrPropose below so an agent-created
@@ -1119,6 +1137,10 @@ export const skillsRouter = router({
           category: input.category,
           executionMode: input.executionMode,
           timeoutSeconds: input.timeoutSeconds,
+          // Carried so an approved proposal materializes a skill whose routing
+          // intent is intact — a proposal that dropped it would install a
+          // verb that no intent lookup can ever find.
+          ...(input.intent ? { intent: input.intent } : {}),
         },
         agentUserId: input.agentUserId,
       });
@@ -1170,6 +1192,10 @@ export const skillsRouter = router({
           category: input.category,
           executionMode: input.executionMode,
           timeoutSeconds: input.timeoutSeconds,
+          // The definition-declared routing intent (applier-only). Omitted when
+          // the definition declares none → the column stays NULL, which is the
+          // honest reading for a skill that declares no intent.
+          ...(input.intent ? { intent: input.intent } : {}),
           // Persist the caller-supplied metadata bag (e.g. the marketplace
           // source-link); omitted → the column default `{}` applies.
           ...(input.metadata ? { metadata: input.metadata } : {}),

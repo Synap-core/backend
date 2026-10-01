@@ -64,6 +64,20 @@ export const playbooks = pgTable(
      */
     criteria: jsonb("criteria").notNull().default([]),
     /**
+     * PlaybookRequiredIntent[] — the ABSTRACT intents this playbook needs the
+     * pod to be able to do (`@synap/playbooks`), slugs of the pod's
+     * `capability_intents` vocabulary. Added by 0291.
+     *
+     * WHAT A PLAYBOOK NEEDS, NOT WHAT THE POD HAS: a playbook may — SHOULD —
+     * declare an intent nothing installed currently serves; that gap is what a
+     * later install is checked against, so it is reported, never rejected. Same
+     * split as a workspace template's `taskIntents` (what the SPACE needs) and
+     * a capability template's `provides` (what the PACK serves); validated
+     * against that same closed vocabulary at the write door
+     * (`schemas/playbook-definition.ts`).
+     */
+    requiredIntents: jsonb("required_intents").notNull().default([]),
+    /**
      * Monotonic definition version (D3c). Bumped on a governed update that
      * changes a definition-affecting field (goalTemplate/stages/params/
      * inputStrategy/channelSpec/expectedOutputs). A run snapshots this into

@@ -181,6 +181,10 @@
       "types": "./dist/tools/index.d.ts",
       "import": "./dist/tools/index.js"
     },
+    "./capability-intents": {
+      "types": "./dist/capability-intents/index.d.ts",
+      "import": "./dist/capability-intents/index.js"
+    },
     "./navigation": {
       "types": "./dist/navigation/index.d.ts",
       "import": "./dist/navigation/index.js"

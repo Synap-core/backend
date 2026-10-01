@@ -2119,6 +2119,13 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "skill_group" text;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "always_on" boolean NOT NULL DEFAULT false;
 -- 0254: proof-it-ran. NULL = the skill has never completed a real run.
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "proven_at" timestamptz;
+-- 0292: the skill's OWN routing intent (the `capability_intents` vocabulary).
+-- Routing only, never authorization: it resolves to a concrete verb id and the
+-- grant gate then decides on that verb. Nullable + no FK — the vocabulary is
+-- open, and null means "declares none". The skill row is the carrier because a
+-- definition declaring `tools: []` (all of Synap Core's builtins) has no tool
+-- row to hang a verb catalog on. See migrations/0292_skills_intent.sql.
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "intent" text;
 
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
@@ -4574,6 +4581,11 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 
 -- session is graded against; the grade itself lives in session_evaluations.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- 0291: the ABSTRACT intents a playbook needs the pod to be able to do
+-- (capability_intents vocabulary). WHAT IT NEEDS, not what the pod has: a
+-- playbook may declare an intent nothing installed serves, and that gap is
+-- what a later install is checked against — so it is reported, never rejected.
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "required_intents" jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- 0270: a session's OWN phases. `expected_outputs` and `criteria` above are
 -- both seeded from the playbook and authorable afterwards; `stages` was the
 -- missing third, and without it a session running no playbook could not have
