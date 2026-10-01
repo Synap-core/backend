@@ -141,6 +141,40 @@ function getRunningApiVersion(): string | null {
   return cachedApiVersion;
 }
 
+// Generate HTML for MCP Apps embeddable UI
+// This creates a minimal HTML document with CSP that loads the actual UI in an iframe
+function generateAppSrcdoc(kind: string, id: string, embed: boolean): string {
+  const baseUrl =
+    config.server.baseUrl || `http://localhost:${config.server.port}`;
+  const appUrl = `${baseUrl}/apps/${kind}/${id}?embed=${embed ? "1" : "0"}`;
+
+  // CSP for secure iframe embedding
+  const csp = embed
+    ? "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"
+    : "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'";
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="${csp}">
+  <style>
+    body { margin: 0; height: 100vh; overflow: hidden; display: flex; justify-content: center; align-items: center; background: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .loading { text-align: center; padding: 40px; }
+    iframe { width: 100%; height: 100%; border: none; }
+  </style>
+</head>
+<body>
+  <div class="loading">Loading Synap ${kind}...</div>
+  <iframe 
+    src="${appUrl}" 
+    sandbox="allow-scripts allow-same-origin"
+    allow="synap-widget"
+  ></iframe>
+</body>
+</html>`;
+}
+
 // Validate configuration at startup
 try {
   // Validate PostgreSQL database config
@@ -1153,44 +1187,40 @@ app.route("/api/capture", captureProgressStreamApp);
 app.route("/v1", openaiCompatApp);
 
 // Apps routes for MCP Apps surface - embeddable UI for entities, views, proposals, sessions, channels
-app.route("/apps/entity/:id", (c) => {
+app.get("/apps/entity/:id", (c) => {
   const { id } = c.req.param();
   const embed = c.req.query("embed") === "1";
   const html = generateAppSrcdoc("entity", id, embed);
   return c.html(html);
 });
 
-app.route("/apps/view/:id", (c) => {
+app.get("/apps/view/:id", (c) => {
   const { id } = c.req.param();
   const embed = c.req.query("embed") === "1";
   const html = generateAppSrcdoc("view", id, embed);
   return c.html(html);
 });
 
-app.route("/apps/proposal/:id", (c) => {
+app.get("/apps/proposal/:id", (c) => {
   const { id } = c.req.param();
   const embed = c.req.query("embed") === "1";
   const html = generateAppSrcdoc("proposal", id, embed);
   return c.html(html);
 });
 
-app.route("/apps/session/:id", (c) => {
+app.get("/apps/session/:id", (c) => {
   const { id } = c.req.param();
   const embed = c.req.query("embed") === "1";
   const html = generateAppSrcdoc("session", id, embed);
   return c.html(html);
 });
 
-app.route("/apps/channel/:id", (c) => {
+app.get("/apps/channel/:id", (c) => {
   const { id } = c.req.param();
   const embed = c.req.query("embed") === "1";
   const html = generateAppSrcdoc("channel", id, embed);
   return c.html(html);
 });
-
-// File Upload REST endpoint (multipart/form-data — not tRPC)
-// Auth: Kratos session cookie (applied inside fileUploadApp)
-app.route("/api/files", fileUploadApp);
 
 // File Upload REST endpoint (multipart/form-data — not tRPC)
 // Auth: Kratos session cookie (applied inside fileUploadApp)
