@@ -57,6 +57,38 @@ import { mergePackageSearchTags } from "./package-search-tokens.js";
 
 const logger = createLogger({ module: "cp-catalog-sync" });
 
+/**
+ * Compare two version strings, returning >0 if a is newer, <0 if b is newer, 0 if equal.
+ * Handles semantic versions (1.2.3), hash-prefixed versions (h-abc123), and empty strings.
+ * Empty version is treated as older than any real version.
+ */
+function compareVersions(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+
+  // Strip leading 'h-' from hash versions (e.g. "h-16a7f0bd5ee5" → "16a7f0bd5ee5")
+  const aClean = a.startsWith("h-") ? a.slice(2) : a;
+  const bClean = b.startsWith("h-") ? b.slice(2) : b;
+
+  // Try semantic version compare first (e.g. "1.2.3" vs "1.2.4")
+  const semverA = aClean.match(/^(\d+)\.(\d+)\.(\d+)(?:-.*)?$/);
+  const semverB = bClean.match(/^(\d+)\.(\d+)\.(\d+)(?:-.*)?$/);
+  if (semverA && semverB) {
+    const [, aMajor, aMinor, aPatch] = semverA;
+    const [, bMajor, bMinor, bPatch] = semverB;
+    const majorDiff = Number(aMajor) - Number(bMajor);
+    if (majorDiff !== 0) return majorDiff;
+    const minorDiff = Number(aMinor) - Number(bMinor);
+    if (minorDiff !== 0) return minorDiff;
+    return Number(aPatch) - Number(bPatch);
+  }
+
+  // Fall back to string compare for hash versions or mixed formats
+  // Lexicographic works for fixed-length hashes and ISO dates
+  return aClean.localeCompare(bClean);
+}
+
 export const CP_CATALOG_SYNC_QUEUE = "cp-catalog-sync";
 /** Cron schedule for this worker (every 10 minutes) — mirrors capability-template-sync. */
 export const CP_CATALOG_SYNC_CRON = "*/10 * * * *";
@@ -445,10 +477,37 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
     syncedAt: now,
   }));
 
+  // ── DEFENCE IN DEPTH ──
+  // A single duplicate slug in the CP catalog (e.g. two `fireflies` rows with
+  // different versions) would make the whole multi-row upsert fail with:
+  // "ON CONFLICT DO UPDATE command cannot affect row a second time".
+  // Dedupe by (source, kind, slug) keeping the newest version, so ONE bad
+  // upstream row cannot starve the entire pod's catalog. This is the same
+  // discipline as "an empty result and a failed read are different facts".
+  const deduped = new Map<string, (typeof rows)[0]>();
+  for (const row of rows) {
+    const key = `${row.source}|${row.kind}|${row.slug}`;
+    const existing = deduped.get(key);
+    if (
+      !existing ||
+      compareVersions(row.version ?? "", existing.version ?? "") > 0
+    ) {
+      deduped.set(key, row);
+    }
+  }
+  const dedupedRows = Array.from(deduped.values());
+
+  if (dedupedRows.length !== rows.length) {
+    logger.warn(
+      { source, kind, before: rows.length, after: dedupedRows.length },
+      "Catalog sync deduped duplicate slugs — keeping newest version per (source, kind, slug). Upstream CP catalog has duplicates."
+    );
+  }
+
   try {
     await db
       .insert(cpCatalogCache)
-      .values(rows)
+      .values(dedupedRows)
       .onConflictDoUpdate({
         target: [
           cpCatalogCache.source,

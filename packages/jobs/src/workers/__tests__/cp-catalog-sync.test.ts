@@ -443,3 +443,130 @@ describe("handleCpCatalogSync — derived search tokens fold into tags", () => {
     expect(rows[0]!.definition).toBeNull();
   });
 });
+
+describe("handleCpCatalogSync — dedupe by (source, kind, slug) before upsert", () => {
+  it("dedupes duplicate slugs from the same source/kind, keeping the newest version", async () => {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/capabilities")) {
+        // Two entries with same slug, different versions — upstream bug
+        return jsonRes({
+          capabilities: [
+            {
+              key: "fireflies",
+              name: "Fireflies.ai Meetings",
+              description: "v1",
+              version: "h-16a7f0bd5ee5", // older
+            },
+            {
+              key: "fireflies",
+              name: "Fireflies.ai Meetings",
+              description: "v2",
+              version: "h-53e4b4d3acc3", // newer
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      return jsonRes({ packages: [], total: 0 });
+    });
+
+    await handleCpCatalogSync();
+
+    const rows = upsertedRows() as Array<{ slug: string; version: string }>;
+    // Only ONE row should be upserted (the newer version)
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.slug).toBe("fireflies");
+    expect(rows[0]!.version).toBe("h-53e4b4d3acc3");
+    // Warning should be logged about dedup
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: CP,
+        kind: "capability",
+        before: 2,
+        after: 1,
+      }),
+      expect.stringContaining("deduped duplicate slugs")
+    );
+  });
+
+  it("keeps both entries when slugs differ (no false dedupe)", async () => {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/capabilities")) {
+        return jsonRes({
+          capabilities: [
+            {
+              key: "fireflies",
+              name: "Fireflies.ai Meetings",
+              version: "1.0.0",
+            },
+            { key: "freellmapi", name: "FreeLLMAPI Gateway", version: "2.0.0" },
+          ],
+        });
+      }
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      return jsonRes({ packages: [], total: 0 });
+    });
+
+    await handleCpCatalogSync();
+
+    const rows = upsertedRows() as Array<{ slug: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.slug).sort()).toEqual(["fireflies", "freellmapi"]);
+    // No warn about dedupe
+    const warnCalls = loggerMock.warn.mock.calls.filter((c) =>
+      String(c[1]).includes("deduped")
+    );
+    expect(warnCalls).toHaveLength(0);
+  });
+
+  it("handles empty version strings (keeps non-empty over empty)", async () => {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/capabilities")) {
+        return jsonRes({
+          capabilities: [
+            { key: "test-cap", name: "Test", version: "" },
+            { key: "test-cap", name: "Test", version: "1.0.0" },
+          ],
+        });
+      }
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      return jsonRes({ packages: [], total: 0 });
+    });
+
+    await handleCpCatalogSync();
+
+    const rows = upsertedRows() as Array<{ slug: string; version: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.version).toBe("1.0.0");
+  });
+
+  it("handles semver comparison correctly", async () => {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/capabilities")) {
+        return jsonRes({
+          capabilities: [
+            { key: "test-cap", name: "Test", version: "1.2.3" },
+            { key: "test-cap", name: "Test", version: "1.2.4" },
+            { key: "test-cap", name: "Test", version: "2.0.0" },
+          ],
+        });
+      }
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      return jsonRes({ packages: [], total: 0 });
+    });
+
+    await handleCpCatalogSync();
+
+    const rows = upsertedRows() as Array<{ slug: string; version: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.version).toBe("2.0.0");
+  });
+});
