@@ -25,6 +25,7 @@ import {
   eq,
   and,
   desc,
+  inArray,
   notInArray,
   channels,
   entities,
@@ -70,6 +71,19 @@ import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
 import { proposeCapabilityEnable } from "../capabilities/propose-capability-enable.js";
 import { createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
+import {
+  decidePinnedSubject,
+  fillSoleRequiredEntityParam,
+  pickFirstEligible,
+  readPinnedIds,
+  readPinnedStrategy,
+  subjectProfileSlug,
+  type PinnedStrategy,
+} from "./pinned-subject.js";
+import {
+  findFallbackSubject,
+  loadVisibleEntityIds,
+} from "./pinned-subject-query.js";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -224,7 +238,7 @@ export interface RunPlaybookInput {
   unenabledSkillPreflight?: boolean;
 }
 
-export interface RunPlaybookResult {
+type PlaybookRunStarted = {
   /** The ledger row for this run — NULL when an existing session was reused
    *  (idempotency-by-subject): a reuse starts no new run. */
   run: PlaybookRun | null;
@@ -239,7 +253,21 @@ export interface RunPlaybookResult {
   parentLink?:
     | { status: "linked"; parentSessionId: string }
     | { status: "failed"; parentSessionId: string; reason: string };
-}
+  /** Present only on the no-subject branch, so both union members share the key. */
+  skipped?: undefined;
+};
+
+export type RunPlaybookResult =
+  | PlaybookRunStarted
+  | {
+      /** A pinned playbook had nobody eligible and the fallback matched nothing.
+       *  No session, no run, no event stamp. */
+      run: null;
+      session: null;
+      skipped: "no-subject";
+      reused?: undefined;
+      parentLink?: undefined;
+    };
 
 /**
  * Derive the propose-only governance flag from a playbook's metadata. A
@@ -389,6 +417,8 @@ function channelTypeFromSpec(spec: ChannelSpec | undefined) {
 
 /** Narrow the loosely-typed JSONB `inputStrategy` column. */
 function readInputStrategy(value: unknown): InputStrategy {
+  const pinned = readPinnedStrategy(value);
+  if (pinned) return pinned;
   if (!value || typeof value !== "object") return { kind: "none" };
   const s = value as { kind?: string };
   if (
@@ -413,6 +443,8 @@ function readInputStrategy(value: unknown): InputStrategy {
  *   - query   → TODO(P-query): resolve `sourceSubscriptionId` into a live item
  *     set. Not yet implemented — runs ONCE with the caller's params so the
  *     playbook still fires (we do NOT fabricate items).
+ *   - pinned  → exactly ONE run. The subject is chosen before this function
+ *     (caller, else the pin list, else one fallback row). No fan-out.
  *
  * Returns the per-run `input` payloads, capped at MAX_INPUT_FANOUT.
  */
@@ -470,9 +502,99 @@ async function resolveInputItems(
       return [baseParams];
     }
 
+    case "pinned":
+      return [baseParams];
+
     default:
       return [baseParams];
   }
+}
+
+/**
+ * Ids on the pin list that can run now: visible, of the playbook's kind when
+ * it names one, and not already in flight for this playbook. An in-flight
+ * first pin is skipped so the next pin can start — two sessions of the same
+ * playbook may be open on two subjects.
+ */
+async function eligiblePinIds(
+  playbook: Playbook,
+  ids: readonly string[],
+  workspaceId: string,
+  ownerId: string
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const visible = await loadVisibleEntityIds({
+    ids,
+    workspaceId,
+    ownerId,
+    profileSlug: subjectProfileSlug(playbook.subjectProfile),
+  });
+  if (visible.length === 0) return new Set();
+  const db = await getDb();
+  const busy = await db
+    .select({ subjectEntityId: focusSessions.subjectEntityId })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.playbookId, playbook.id),
+        inArray(focusSessions.subjectEntityId, [...ids]),
+        notInArray(focusSessions.status, [
+          ...IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES,
+        ])
+      )
+    );
+  const busyIds = new Set(
+    busy
+      .map((row) => row.subjectEntityId)
+      .filter((id): id is string => typeof id === "string")
+  );
+  return new Set(visible.filter((id) => !busyIds.has(id)));
+}
+
+/**
+ * Choose the subject for a pinned playbook. Caller subject wins and does not
+ * read the list. Otherwise the first eligible pin, otherwise one fallback
+ * row (not written onto the list). `skip` means nothing was eligible.
+ */
+async function choosePinnedSubject(
+  playbook: Playbook,
+  input: RunPlaybookInput,
+  strategy: PinnedStrategy
+): Promise<ReturnType<typeof decidePinnedSubject>> {
+  const caller =
+    typeof input.subjectId === "string" ? input.subjectId.trim() : "";
+  if (caller) {
+    return decidePinnedSubject({
+      callerSubjectId: caller,
+      pinnedIds: [],
+      eligibleIds: new Set(),
+      fallbackId: null,
+    });
+  }
+  const pinnedIds = readPinnedIds(playbook.metadata);
+  const eligibleIds = await eligiblePinIds(
+    playbook,
+    pinnedIds,
+    input.workspaceId,
+    input.userId
+  );
+  const pin = pickFirstEligible(pinnedIds, (id) => eligibleIds.has(id));
+  let fallbackId: string | null = null;
+  const slug = subjectProfileSlug(playbook.subjectProfile);
+  if (!pin && slug && strategy.fallback) {
+    fallbackId = await findFallbackSubject({
+      profileSlug: slug,
+      workspaceId: input.workspaceId,
+      ownerId: input.userId,
+      fallback: strategy.fallback,
+    });
+  }
+  return decidePinnedSubject({
+    callerSubjectId: null,
+    pinnedIds,
+    eligibleIds,
+    fallbackId,
+  });
 }
 
 interface RunFiling {
@@ -526,8 +648,11 @@ async function resolveRunFiling(input: RunPlaybookInput): Promise<RunFiling> {
  *
  * Honors the playbook's `inputStrategy` (S9): `none` runs once; `static`/`query`
  * may fan one run per item (bounded); `rotating` advances a cursor and runs the
- * current item. The PRIMARY (first) run + session is returned for the stable
- * single-result contract; any additional fan-out runs execute as side effects.
+ * current item; `pinned` runs once for the caller subject, else the first
+ * eligible pin, else one fallback row. A pinned playbook with nobody eligible
+ * returns `skipped: "no-subject"` before any session exists. The PRIMARY
+ * (first) run + session is returned for the stable single-result contract;
+ * any additional fan-out runs execute as side effects.
  */
 export async function runPlaybook(
   input: RunPlaybookInput
@@ -577,20 +702,47 @@ export async function runPlaybook(
     }
   }
 
+  // Pinned subject, BEFORE any session and before a rotating cursor could
+  // advance (a pinned playbook has no cursor). Caller subject wins. The
+  // resolved id is written onto the run input so idempotentBySubject can
+  // see it — the automation path always sets that flag.
+  let runInput: RunPlaybookInput = input;
+  const strategy = readInputStrategy(playbook.inputStrategy);
+  if (strategy.kind === "pinned") {
+    const chosen = await choosePinnedSubject(playbook, input, strategy);
+    if (chosen.outcome === "skip") {
+      return { run: null, session: null, skipped: "no-subject" };
+    }
+    runInput = {
+      ...input,
+      subjectId: chosen.subjectId,
+      params: fillSoleRequiredEntityParam(
+        (input.params ?? {}) as Record<string, unknown>,
+        playbook.params,
+        chosen.subjectId
+      ),
+    };
+  }
+
   // S9: resolve the input strategy into per-run param payloads. The first item
   // is the primary (returned) run; the rest fan out as side effects.
   const runItems = await resolveInputItems(
     playbook,
-    (input.params ?? {}) as Record<string, unknown>
+    (runInput.params ?? {}) as Record<string, unknown>
   );
 
-  const primary = await executeSingleRun(playbook, input, runItems[0], filing);
+  const primary = await executeSingleRun(
+    playbook,
+    runInput,
+    runItems[0] ?? {},
+    filing
+  );
 
   // Fan-out: additional items each get their own session/channel/run. Failures
   // are logged but never abort the primary result.
   for (let i = 1; i < runItems.length; i++) {
     try {
-      await executeSingleRun(playbook, input, runItems[i], filing);
+      await executeSingleRun(playbook, runInput, runItems[i], filing);
     } catch (err) {
       logger.error(
         { err, playbookId: playbook.id, itemIndex: i },
@@ -612,7 +764,7 @@ async function executeSingleRun(
   input: RunPlaybookInput,
   params: Record<string, unknown>,
   filing: RunFiling
-): Promise<RunPlaybookResult> {
+): Promise<PlaybookRunStarted> {
   const db = await getDb();
 
   // The owning principal: agent-user when an AI runs it, else the human.
@@ -713,7 +865,7 @@ async function executeSingleRun(
   // owner floor is the HUMAN principal (`input.userId`), not `actorId`: an
   // agent-started run's session is owned by the agent user, while the session
   // the agent was working in belongs to the person.
-  let parentLink: RunPlaybookResult["parentLink"];
+  let parentLink: PlaybookRunStarted["parentLink"];
   if (input.parentSessionId && session) {
     try {
       const spawn = await recordSessionSpawn({

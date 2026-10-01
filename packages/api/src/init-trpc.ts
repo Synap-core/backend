@@ -10,6 +10,7 @@ import superjson from "superjson";
 import type { Context } from "./context.js";
 import { createLogger } from "@synap-core/core";
 import { isSetupRequiredLike } from "./services/proposals/setup-required-error.js";
+import { readWeakDedupWire } from "./utils/weak-dedup-wire.js";
 
 const logger = createLogger({ module: "trpc" });
 
@@ -37,6 +38,10 @@ export const t = initTRPC.context<Context>().create({
     // A typed refusal names its machine code the same way (`reasonCode`, e.g.
     // `NO_NEXT_RUNG` — read by `isNoNextRungError`, @synap-core/types).
     const reasonCode = cause?.reasonCode;
+    // Weak same-name gate. Discriminator is `cause.code`, not `cause.reasonCode`,
+    // so a revision-guard CONFLICT (no such cause) does not pick this up.
+    // Candidates are projected to {id,title,type}; other cause fields stay off the wire.
+    const weakDedup = readWeakDedupWire(cause);
 
     // A capability install that needs a HUMAN before it can apply is converted
     // by `errorCatchingMiddleware` into a coded TRPCError whose `cause` is the
@@ -66,6 +71,13 @@ export const t = initTRPC.context<Context>().create({
           ? { captureQuestionStatus }
           : {}),
         ...(typeof reasonCode === "string" ? { reasonCode } : {}),
+        ...(weakDedup
+          ? {
+              reasonCode: weakDedup.reasonCode,
+              candidates: weakDedup.candidates,
+              ...(weakDedup.opRef ? { opRef: weakDedup.opRef } : {}),
+            }
+          : {}),
         ...setupRequired,
       },
     };

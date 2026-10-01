@@ -272,7 +272,23 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   compare: { imperative: "Compare", past: "Compared" },
   see: { imperative: "See", past: "Seen" },
   open: { imperative: "Open", past: "Opened" },
+  // Putting a record on a playbook's ordered pin list, and taking it off.
+  // The button is imperative; a receipt of the act is past. `humanizeToken`
+  // has no tense, so without these rows both moods render "Pin" / "Unpin".
+  pin: { imperative: "Pin", past: "Pinned" },
+  unpin: { imperative: "Unpin", past: "Unpinned" },
 };
+
+/**
+ * Metadata key for the ordered subject ids a pinned playbook consumes from
+ * the front. The strategy object (`inputStrategy.kind === "pinned"`) is
+ * reconciled from the template; this list is the owner's and must stay on
+ * `metadata` so a template update cannot wipe it.
+ */
+export const PINNED_ENTITY_IDS_KEY = "pinnedEntityIds";
+
+/** A pin list refuses a longer write. Runtime reads stop at the same cap. */
+export const PIN_LIST_CAP = 50;
 
 /**
  * Verbs that already name the PART they act on ("Edit section") take a

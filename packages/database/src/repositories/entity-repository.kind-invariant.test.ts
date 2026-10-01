@@ -5,8 +5,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // `EntityRepository.create`: a create aimed at a role profile (a "hat") must
 // be adapted to write the entity on the role's underlying KIND, with the role
 // attached as a facet — never created directly under the role's own slug —
-// and a role with more than one applicable kind must be rejected outright
-// (it can't guess which entity to attach to).
+// and a role with no applicable kind must be rejected outright (there is
+// nothing to create). A role with several applicable kinds is created on the
+// kind `pickUnderlyingKind` reads from the title, with the role as a facet.
 //
 // Postgres is down in this environment, so the DB boundary is faked with a
 // minimal chainable `insert().values().returning()` + `transaction()` stand-
@@ -83,6 +84,20 @@ describe("EntityRepository.create — kind vs facet write guard", () => {
           profileKind: "role",
           applicableKinds: ["person", "company"],
         } as any;
+      if (ref === "company")
+        return {
+          id: "kind-company-id",
+          slug: "company",
+          profileKind: "kind",
+          applicableKinds: [],
+        } as any;
+      if (ref === "tag")
+        return {
+          id: "role-tag-id",
+          slug: "tag",
+          profileKind: "role",
+          applicableKinds: [],
+        } as any;
       return null;
     });
 
@@ -131,7 +146,55 @@ describe("EntityRepository.create — kind vs facet write guard", () => {
     expect(emitAttachSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("Case B: a role with more than one applicable kind is rejected, not silently created", async () => {
+  it("Case B: a multi-kind role with no organization marker lands on person, with the role attached", async () => {
+    const repo = new EntityRepository(
+      db,
+      eventRepo as unknown as EventRepository
+    );
+
+    const result = await repo.create(
+      {
+        profileSlug: "deal",
+        title: "Lead: Jeremie Zarka — President, Elevate Labs",
+        userId: "user-1",
+        properties: { notes: "fintech" },
+        skipValidation: true,
+      },
+      "user-1"
+    );
+
+    expect(result.type).toBe("person");
+    expect(insertedRows).toHaveLength(1);
+    expect(insertedRows[0]?.profileId).toBe("kind-person-id");
+    expect(attachSpy).toHaveBeenCalledTimes(1);
+    const attachArg = attachSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(attachArg.profileId).toBe("role-deal-id");
+    expect(attachArg.properties).toEqual({ notes: "fintech" });
+  });
+
+  it("Case C: a multi-kind role whose title names an organization lands on company", async () => {
+    const repo = new EntityRepository(
+      db,
+      eventRepo as unknown as EventRepository
+    );
+
+    const result = await repo.create(
+      {
+        profileSlug: "deal",
+        title: "Elevate Labs",
+        userId: "user-1",
+        skipValidation: true,
+      },
+      "user-1"
+    );
+
+    expect(result.type).toBe("company");
+    expect(insertedRows[0]?.profileId).toBe("kind-company-id");
+    const attachArg = attachSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(attachArg.profileId).toBe("role-deal-id");
+  });
+
+  it("Case D: a role with no applicable kind is still rejected, before any write", async () => {
     const repo = new EntityRepository(
       db,
       eventRepo as unknown as EventRepository
@@ -140,7 +203,8 @@ describe("EntityRepository.create — kind vs facet write guard", () => {
     await expect(
       repo.create(
         {
-          profileSlug: "deal", // role with 2 applicable kinds
+          profileSlug: "tag",
+          title: "Anything",
           userId: "user-1",
           skipValidation: true,
         },
@@ -148,7 +212,6 @@ describe("EntityRepository.create — kind vs facet write guard", () => {
       )
     ).rejects.toBeInstanceOf(EntityCreateRejectedError);
 
-    // Rejected before any write — no entity row, no facet attach.
     expect(insertedRows).toHaveLength(0);
     expect(attachSpy).not.toHaveBeenCalled();
   });

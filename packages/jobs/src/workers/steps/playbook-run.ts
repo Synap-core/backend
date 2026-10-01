@@ -345,6 +345,16 @@ export async function executePlaybookRun(
     onMissingRequired: "owe",
   });
 
+  // Nobody was eligible. Do not throw — an empty list is a quiet week, not a
+  // failed automation — and do not stamp a session onto the firing event,
+  // because no session exists.
+  if (result.session == null) {
+    return {
+      status: "skipped",
+      reason: result.skipped ?? "no-subject",
+    };
+  }
+
   await backStampEventSession(
     automationContext?.triggerEventId,
     result.session.id

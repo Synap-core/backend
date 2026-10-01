@@ -103,6 +103,7 @@ import {
   resolveIdentity,
   extractIdentitySignals,
   resolveRolePayload,
+  pickUnderlyingKind,
   resolveWorkspacePlacement,
   resolveProjectPlacement,
   resolveKindWritePin,
@@ -2933,11 +2934,12 @@ const captureBaseRouter = router({
       // Kind + Facets guard (T2): a payload whose profileSlug is itself a ROLE
       // (client/partner/…) must never become a role-named entity — the role is
       // a facet on a real subject. Rewrite each such payload to (kind + facet):
-      // carry the role as a facet and set the entity's kind to the role's single
-      // applicable kind. When the kind is ambiguous/underivable, only proceed
-      // onto an existing subject (link + attach the role via strong match); else
-      // leave it unchanged + log — never invent a kind. The strong-match loop
-      // below then links/creates, and the facet-attach pass materializes roles.
+      // carry the role as a facet and set the entity's kind to an underlying
+      // kind (the single applicable kind, or `pickUnderlyingKind` when several
+      // apply). A strong identity match on a multi-kind role attaches to that
+      // subject instead of creating. A role that names no kind is left unchanged
+      // and the create floor refuses it. The loop below then links/creates, and
+      // the facet-attach pass materializes roles.
       for (const e of input.entities) {
         if (e.existingEntityId) continue;
         const rolePayload = await resolveRolePayload(database, e.profileSlug, {
@@ -2967,10 +2969,19 @@ const captureBaseRouter = router({
             e.existingEntityId = identity.entity.id;
             e.facets = [roleFacet, ...(e.facets ?? [])];
           } else {
-            logger.warn(
-              { roleSlug: e.profileSlug, tempId: e.tempId },
-              "capture.execute: role-slug payload has no single applicable kind and no identity match — creating as-is (fallback)"
+            const kind = pickUnderlyingKind(
+              rolePayload.applicableKinds,
+              e.title
             );
+            if (kind) {
+              e.facets = [roleFacet, ...(e.facets ?? [])];
+              e.profileSlug = kind;
+            } else {
+              logger.warn(
+                { roleSlug: e.profileSlug, tempId: e.tempId },
+                "capture.execute: role-slug payload declares no underlying kind — create floor will refuse"
+              );
+            }
           }
         }
       }

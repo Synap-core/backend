@@ -13,9 +13,13 @@
  */
 
 import { z } from "zod";
-import { db, eq } from "@synap/database";
-import { aiProviders } from "@synap/database/schema";
-import { encryptServiceKey } from "@synap/database";
+import { db, eq, and, isNull, inArray } from "@synap/database";
+import { aiProviders, aiProviderCredentials } from "@synap/database/schema";
+import {
+  encryptServiceKey,
+  decryptServiceKey,
+  isEncryptedServiceKey,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { Context as HonoLikeContext } from "hono";
 import { hasScope, type HubHono } from "./_shared.js";
@@ -30,6 +34,10 @@ import {
   pushProvidersToIS,
   resolveISAdminEndpoint,
 } from "../../../utils/push-providers-to-is.js";
+import {
+  resolveProviderCredentialsBatch,
+  SetCredentialSchema,
+} from "../../ai-provider-credentials.js";
 
 const logger = createLogger({ module: "hub-ai-providers" });
 
@@ -169,6 +177,53 @@ export function registerAiProvidersRoutes(app: HubHono): void {
       createdAt: p.createdAt.toISOString(),
       updatedAt: p.updatedAt.toISOString(),
     }));
+    return c.json({ providers });
+  });
+
+  // GET /ai-providers/credentials — resolve per-user/workspace credentials (for IS callback)
+  app.get("/ai-providers/credentials", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const linkedUserId = c.get("linkedUserId") as string | undefined;
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const userId = linkedUserId ?? agentUserId;
+    const workspaceId = c.req.query("workspaceId");
+
+    const providerIds = (
+      await db.query.aiProviders.findMany({
+        where: eq(aiProviders.enabled, true),
+      })
+    ).map((p) => p.providerId);
+
+    const overrides = await resolveProviderCredentialsBatch(
+      providerIds,
+      workspaceId ?? undefined,
+      userId ?? undefined
+    );
+
+    const rows = await db.query.aiProviders.findMany({
+      where: eq(aiProviders.enabled, true),
+    });
+
+    const providers = rows.map((p) => {
+      const decryptedKey =
+        p.encryptedApiKey && isEncryptedServiceKey(p.encryptedApiKey)
+          ? decryptServiceKey(p.encryptedApiKey)
+          : (p.encryptedApiKey ?? undefined);
+      const apiKey = overrides.get(p.providerId) ?? decryptedKey ?? null;
+      const source = overrides.has(p.providerId)
+        ? userId
+          ? "user"
+          : "workspace"
+        : "pod-wide";
+      return {
+        providerId: p.providerId,
+        apiKey,
+        source,
+      };
+    });
+
     return c.json({ providers });
   });
 
@@ -355,5 +410,146 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     await db.delete(aiProviders).where(eq(aiProviders.providerId, providerId));
     await syncToIS();
     return c.json({ ok: true });
+  });
+
+  // PATCH /ai-providers/credentials — upsert per-user/workspace API key override
+  app.patch("/ai-providers/credentials", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+
+    let body: z.infer<typeof SetCredentialSchema>;
+    try {
+      body = SetCredentialSchema.parse(await c.req.json());
+    } catch (err) {
+      return c.json({ error: String(err) }, 400);
+    }
+
+    const linkedUserId = c.get("linkedUserId") as string | undefined;
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const userId = linkedUserId ?? agentUserId ?? (c.get("userId") as string);
+
+    if (!userId) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const encryptedApiKey = encryptServiceKey(body.apiKey);
+    const now = new Date();
+
+    // If workspace is specified, store as workspace-level override
+    if (body.workspaceId) {
+      const existing = await db.query.aiProviderCredentials.findFirst({
+        where: and(
+          eq(aiProviderCredentials.providerId, body.providerId),
+          eq(aiProviderCredentials.workspaceId, body.workspaceId as any),
+          isNull(aiProviderCredentials.userId)
+        ),
+      });
+
+      if (existing) {
+        await db
+          .update(aiProviderCredentials)
+          .set({
+            encryptedApiKey,
+            enabled: body.enabled,
+            priority: body.priority,
+            updatedAt: now,
+          })
+          .where(eq(aiProviderCredentials.id, existing.id));
+      } else {
+        await db.insert(aiProviderCredentials).values({
+          providerId: body.providerId,
+          workspaceId: body.workspaceId as any,
+          userId: null,
+          encryptedApiKey,
+          enabled: body.enabled,
+          priority: body.priority,
+          createdBy: userId,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    } else {
+      // Store as user-level override
+      const existing = await db.query.aiProviderCredentials.findFirst({
+        where: and(
+          eq(aiProviderCredentials.providerId, body.providerId),
+          eq(aiProviderCredentials.userId, userId)
+        ),
+      });
+
+      if (existing) {
+        await db
+          .update(aiProviderCredentials)
+          .set({
+            encryptedApiKey,
+            enabled: body.enabled,
+            priority: body.priority,
+            updatedAt: now,
+          })
+          .where(eq(aiProviderCredentials.id, existing.id));
+      } else {
+        await db.insert(aiProviderCredentials).values({
+          providerId: body.providerId,
+          workspaceId: null,
+          userId,
+          encryptedApiKey,
+          enabled: body.enabled,
+          priority: body.priority,
+          createdBy: userId,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+
+    return c.json({ ok: true });
+  });
+
+  // DELETE /ai-providers/credentials/:providerId
+  app.delete("/ai-providers/credentials/:providerId", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+
+    const providerId = c.req.param("providerId");
+    const linkedUserId = c.get("linkedUserId") as string | undefined;
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const userId = linkedUserId ?? agentUserId ?? (c.get("userId") as string);
+    const workspaceId = c.req.query("workspaceId");
+
+    if (!userId) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    // Delete both user-level and workspace-level if matching
+    const conditions = [
+      eq(aiProviderCredentials.providerId, providerId),
+      eq(aiProviderCredentials.enabled, true),
+    ];
+
+    if (workspaceId) {
+      conditions.push(
+        eq(aiProviderCredentials.workspaceId, workspaceId as any),
+        isNull(aiProviderCredentials.userId)
+      );
+    } else {
+      conditions.push(eq(aiProviderCredentials.userId, userId));
+    }
+
+    const existing = await db.query.aiProviderCredentials.findMany({
+      where: and(...conditions),
+    });
+
+    if (existing.length === 0) {
+      return c.json({ ok: true, deleted: 0 });
+    }
+
+    const ids = existing.map((e) => e.id);
+    await db
+      .delete(aiProviderCredentials)
+      .where(inArray(aiProviderCredentials.id, ids));
+
+    return c.json({ ok: true, deleted: ids.length });
   });
 }

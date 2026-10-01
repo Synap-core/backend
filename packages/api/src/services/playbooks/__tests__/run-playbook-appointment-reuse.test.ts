@@ -30,7 +30,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     getDb: vi.fn(async () => ({ query: { focusSessions: { findFirst } } })),
-    and: vi.fn((...c: unknown[]) => ({ and: c.filter((x) => x !== undefined) })),
+    and: vi.fn((...c: unknown[]) => ({
+      and: c.filter((x) => x !== undefined),
+    })),
     eq: vi.fn((col: unknown, v: unknown) => ({ eq: [col, v] })),
     notInArray: vi.fn((col: unknown, v: unknown) => ({ notInArray: [col, v] })),
     desc: vi.fn((col: unknown) => ({ desc: col })),
@@ -38,7 +40,8 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 vi.mock("../playbook-lifecycle.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../playbook-lifecycle.js")>();
+  const actual =
+    await importOriginal<typeof import("../playbook-lifecycle.js")>();
   return {
     ...actual,
     resolveRunnablePlaybook: vi.fn(async () => ({
@@ -125,6 +128,7 @@ describe("runPlaybook subject-idempotency — an appointment is not reused", () 
 
     expect(result.reused).toBe(true);
     expect(result.run).toBeNull();
+    if (result.session === null) throw new Error("expected a session");
     expect(result.session.id).toBe("session-active");
   });
 });

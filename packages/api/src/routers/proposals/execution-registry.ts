@@ -29,6 +29,10 @@ import type {
 } from "@synap-core/types";
 import type { PropertyDecisionMap } from "@synap/database";
 import type { MaterializeRelationFailure } from "../../utils/materialize-composite.js";
+import type {
+  IdentityReceipt,
+  IdentityResolutionInput,
+} from "./executors/identity-resolution.js";
 
 const logger = createLogger({ module: "proposal-execution-registry" });
 
@@ -136,6 +140,11 @@ export interface ProposalExecutorArgs {
      * executor; other executors ignore it.
      */
     facets?: Array<{ profileSlug: string; status?: string }>;
+    /**
+     * Weak same-name choice for a single entity/create. Absent ⇒ today's create
+     * (CONFLICT / ENTITY_WEAK_DEDUP when a same-kind same-name row exists).
+     */
+    identityResolution?: IdentityResolutionInput;
   };
   ctx: Context;
   deps: ProposalExecutorDeps;
@@ -229,6 +238,15 @@ export interface ProposalExecutorResult {
    * application. Omitted when every submitted edge landed.
    */
   relationsFailed?: MaterializeRelationFailure[];
+  /**
+   * Set when an identity-resolution verb ran. `filled` / `conflicts` are
+   * fill_empty only (conflicts may be empty). Composite approvals with more
+   * than one resolved op leave this unset and report `identities` instead —
+   * one object is never copied onto every op.
+   */
+  identity?: IdentityReceipt;
+  /** Composite: one entry per op that ran a resolution, keyed by disposition ref. */
+  identities?: Array<IdentityReceipt & { ref: string }>;
 }
 
 export interface ProposalExecutor {

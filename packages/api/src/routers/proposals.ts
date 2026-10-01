@@ -146,6 +146,11 @@ import {
   emitProposalReviewed,
   reportProposalOutcome,
 } from "./proposals/apply-approval.js";
+import {
+  identityResolutionByRefInput,
+  identityResolutionInput,
+} from "./proposals/executors/identity-resolution.js";
+import { weakDedupFailureFields } from "../utils/weak-dedup-wire.js";
 export {
   type GovernanceWidenLaneProposalData,
   type GovernanceTightenLaneProposalData,
@@ -1400,6 +1405,17 @@ export const proposalsRouter = router({
          * absent ref ⇒ no facets. Honored only by the composite branch.
          */
         facetsByRef: z.record(z.string(), z.array(facetSpecInput)).optional(),
+        /**
+         * Weak same-name choice for a single entity/create. Absent ⇒ today's
+         * create (CONFLICT / ENTITY_WEAK_DEDUP). One object is never copied
+         * onto every op of a composite — use `identityResolutionByRef`.
+         */
+        identityResolution: identityResolutionInput.optional(),
+        /**
+         * Composite per-create choice, keyed by the SAME entity ref
+         * `dispositions` uses. A missing key keeps today's create for that op.
+         */
+        identityResolutionByRef: identityResolutionByRefInput.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2947,6 +2963,12 @@ export const proposalsRouter = router({
         expectedRevisions: z
           .record(z.string(), z.number().int().nonnegative())
           .optional(),
+        /**
+         * Per-proposal weak same-name choice. A present key is that item's
+         * `identityResolution`. An absent key is today's approve. A composite
+         * item cannot name a verb per op from a batch.
+         */
+        resolutions: identityResolutionByRefInput.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2974,6 +2996,16 @@ export const proposalsRouter = router({
         relationsFailed?: ProposalExecutorResult["relationsFailed"];
         /** Parts the executor declined to apply, each a reviewer sentence — see ProposalExecutorResult. */
         refusals?: ProposalExecutorResult["refusals"];
+        /**
+         * Set only when this item's CONFLICT is the weak same-name gate.
+         * A revision-guard CONFLICT has no reasonCode — clients must not
+         * treat every CONFLICT as "changed after you opened this".
+         */
+        reasonCode?: "ENTITY_WEAK_DEDUP";
+        candidates?: Array<{ id: string; title: string | null; type: string }>;
+        opRef?: string;
+        identity?: ProposalExecutorResult["identity"];
+        identities?: ProposalExecutorResult["identities"];
       }> = [];
 
       for (const proposalId of input.proposalIds) {
@@ -3011,8 +3043,9 @@ export const proposalsRouter = router({
           // not seen the current version and must re-read before deciding.
           // Collapsing the two would make "already approved" demand a reload it
           // does not need, and would blunt the one signal the revision binding
-          // exists to send. `CONFLICT` on this door means the revision guard
-          // and nothing else.
+          // exists to send. `CONFLICT` here is the revision guard OR a weak
+          // same-name create (`reasonCode: "ENTITY_WEAK_DEDUP"` on the item).
+          // Clients must branch on reasonCode, not on CONFLICT alone.
           if (
             proposal.status !== ProposalStatus.PENDING &&
             proposal.status !== ProposalStatus.APPROVAL_FAILED
@@ -3061,6 +3094,7 @@ export const proposalsRouter = router({
           // single approve does) while every remaining item is still attempted.
           // Idempotency is layered: the status guard above skips terminal rows,
           // and each executor keeps its own already-APPROVED short-circuit.
+          const resolution = input.resolutions?.[proposalId];
           const result = await applyProposalApproval({
             proposal,
             userId,
@@ -3069,6 +3103,7 @@ export const proposalsRouter = router({
               ...(input.comment !== undefined
                 ? { comment: input.comment }
                 : {}),
+              ...(resolution ? { identityResolution: resolution } : {}),
             },
             ctx,
           });
@@ -3082,6 +3117,10 @@ export const proposalsRouter = router({
               // What the executor declined to apply — dropping it made a partial
               // application read as a clean one on the batch door.
               ...(result.refusals?.length ? { refusals: result.refusals } : {}),
+              ...(result.identity ? { identity: result.identity } : {}),
+              ...(result.identities?.length
+                ? { identities: result.identities }
+                : {}),
             });
           } else {
             // The shared door returned a falsy `success` WITHOUT throwing, so
@@ -3111,6 +3150,7 @@ export const proposalsRouter = router({
             error: error instanceof Error ? error.message : "Unknown error",
             errorCode:
               error instanceof TRPCError ? error.code : "INTERNAL_SERVER_ERROR",
+            ...weakDedupFailureFields(error),
           });
         }
       }

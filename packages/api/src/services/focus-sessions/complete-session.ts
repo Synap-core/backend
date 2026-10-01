@@ -42,6 +42,7 @@ import {
   desc,
   drizzleSql,
   liveRunStatusWhere,
+  playbooks,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -66,6 +67,14 @@ import {
 } from "./cancel-session.js";
 import type { SessionVerdict } from "@synap-core/types/focus-sessions";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
+import { createLogger } from "@synap-core/core";
+import {
+  isPinnedStrategy,
+  metadataAfterUnpin,
+  shouldDropPin,
+} from "../playbooks/pinned-subject.js";
+
+const logger = createLogger({ module: "complete-focus-session" });
 
 export interface CompleteFocusSessionParams {
   sessionId: string;
@@ -362,6 +371,19 @@ export async function completeFocusSession(
       .returning();
   });
 
+  // A successful close drops this subject from that playbook's pin list.
+  // Cancel and fail keep it. The already-terminal guard above returned
+  // before any write, and a proposal threw before this transaction, so
+  // neither of those unpins. The close has committed: a failed unpin is
+  // logged and does not roll it back. Version is not bumped — the list is
+  // metadata, not the definition.
+  if (shouldDropPin(terminalStatus) && updated) {
+    await unpinClosedSubject({
+      playbookId: session.playbookId,
+      subjectEntityId: session.subjectEntityId,
+    });
+  }
+
   // The stop, AFTER the commit: no lock is held across its calls and nothing it
   // does can roll the cancel back. It never throws — a failed stop lands in
   // `stopFailed`. The outcome is the record's second write.
@@ -527,4 +549,43 @@ export async function completeFocusSession(
     ...(cancel ? { cancel } : {}),
     verdict,
   };
+}
+
+/**
+ * Remove the closed session's subject from its playbook's pin list.
+ * No-op when the playbook is not pinned, or the id is not on the list.
+ * Never throws — the close has already committed.
+ */
+async function unpinClosedSubject(session: {
+  playbookId: string | null;
+  subjectEntityId: string | null;
+}): Promise<void> {
+  if (!session.playbookId || !session.subjectEntityId) return;
+  try {
+    const [playbook] = await db
+      .select({
+        id: playbooks.id,
+        inputStrategy: playbooks.inputStrategy,
+        metadata: playbooks.metadata,
+      })
+      .from(playbooks)
+      .where(eq(playbooks.id, session.playbookId))
+      .limit(1);
+    if (!playbook || !isPinnedStrategy(playbook.inputStrategy)) return;
+    const next = metadataAfterUnpin(playbook.metadata, session.subjectEntityId);
+    if (!next) return;
+    await db
+      .update(playbooks)
+      .set({ metadata: next, updatedAt: new Date() })
+      .where(eq(playbooks.id, playbook.id));
+  } catch (err) {
+    logger.error(
+      {
+        err,
+        playbookId: session.playbookId,
+        subjectEntityId: session.subjectEntityId,
+      },
+      "closed session did not drop its pin"
+    );
+  }
 }

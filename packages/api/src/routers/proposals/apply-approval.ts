@@ -45,7 +45,9 @@ import {
   isPlanBatch,
   normalizeProposalSource,
   isRequestShapedProposalData,
+  opRef,
 } from "@synap-core/types/proposals";
+import type { IdentityResolutionInput } from "./executors/identity-resolution.js";
 import type {
   CompositeProposalOperation,
   CompositeCreateEntityOp,
@@ -128,6 +130,8 @@ import {
   readProposalEntityProfileSlug,
   readProposalExpectedLabel,
 } from "../../services/focus-sessions/satisfy-expected-output.js";
+import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -545,6 +549,13 @@ export async function applyProposalApproval(args: {
      */
     facets?: FacetSpec[];
     facetsByRef?: Record<string, FacetSpec[]>;
+    /**
+     * Single entity/create weak same-name choice. The composite branch does
+     * not apply this onto every op — that map is `identityResolutionByRef`.
+     */
+    identityResolution?: IdentityResolutionInput;
+    /** Composite per-create choice, keyed by the disposition ref. */
+    identityResolutionByRef?: Record<string, IdentityResolutionInput>;
   };
   ctx: Context;
 }): Promise<ProposalExecutorResult> {
@@ -571,6 +582,30 @@ export async function applyProposalApproval(args: {
         // without it a `kind: "knowledge"` slot satisfied by a PROPOSED capture
         // stayed pending forever. Same field the auto-approve half forwards.
         entityProfileSlug: readProposalEntityProfileSlug(args.proposal.data),
+      });
+      // `satisfyExpectedOutputs` stamps the expected-output SLOT `done`, but
+      // the session outputs board (`session-outputs.ts`) reads the
+      // `artifacts` ledger — which only ever got a row when an agent write
+      // door called `recordSessionArtifact` itself. Approval is the ONE
+      // moment a human vouches that the agent's output is real, so it is the
+      // safe place to write the provenance row: the entity already exists
+      // (the materializer ran above), and a failure here must not unwind an
+      // approval that already succeeded. Same non-fatal contract as the
+      // `satisfyExpectedOutputs` swallow above.
+      await recordSessionArtifact({
+        sessionId: args.proposal.sessionId,
+        workspaceId: args.ctx.workspaceId ?? null,
+        userId: args.userId,
+        kind: normalizeObjectKind(args.proposal.targetType ?? "entity") as any,
+        refId: args.proposal.targetId ?? "",
+        // The slot CLAIM the proposal carried — the same label the
+        // `satisfyExpectedOutputs` call above matched against. The proposal
+        // row has no `title` column; the display layer derives the name from
+        // the payload (`displayLabelFromRecord`), so the artifact reads the
+        // same field. Falls back to "Untitled output" when neither exists.
+        title:
+          readProposalExpectedLabel(args.proposal.data) ?? "Untitled output",
+        agentUserId: args.ctx.agentUserId ?? null,
       });
     } catch (err) {
       logger.warn(
@@ -812,6 +847,19 @@ async function applyProposalApprovalInner(
       );
     }
 
+    // Disposition ref per surviving create, zipped in the same order as
+    // `decisionSlices`. `$opN` is the ORIGINAL index — this array may already
+    // have rejected ops removed, so the filtered index is not the ref.
+    const entityRefByIndex = new Map<number, string>();
+    {
+      let sliceIdx = 0;
+      reconciledOperations.forEach((op, index) => {
+        if (op.op !== "create_entity") return;
+        const slice = decisionSlices[sliceIdx++];
+        if (slice) entityRefByIndex.set(index, slice.ref);
+      });
+    }
+
     // Shared materialization: N entities → ref map → M relations.
     // Same logic the user-import (/import/apply) path uses.
     let materializeResult: Awaited<
@@ -877,6 +925,13 @@ async function applyProposalApprovalInner(
           ...(typeof payload.source === "string"
             ? { source: normalizeProposalSource(payload.source) }
             : {}),
+          // One entry applies only to that ref. A singular identityResolution
+          // is intentionally not forwarded here.
+          ...(input.identityResolutionByRef
+            ? { identityResolutionByRef: input.identityResolutionByRef }
+            : {}),
+          entityRef: (op, index) =>
+            entityRefByIndex.get(index) ?? op.ref ?? opRef(index),
         }
       );
     } catch (err) {
@@ -1185,6 +1240,16 @@ async function applyProposalApprovalInner(
       }
     }
 
+    const identities = createdEntities.flatMap((entity) =>
+      entity.identity ? [entity.identity] : []
+    );
+    // One resolved op can also be read as the singular receipt. More than one
+    // must stay on `identities` — copying one object onto every op is the bug.
+    const identity =
+      identities.length === 1
+        ? (({ ref: _ref, ...receipt }) => receipt)(identities[0]!)
+        : undefined;
+
     return {
       success: true,
       primaryId,
@@ -1194,6 +1259,8 @@ async function applyProposalApprovalInner(
       // to the caller — dropping it here is what made an approval whose every
       // edge failed read as a clean success.
       ...(relationsFailed.length > 0 ? { relationsFailed } : {}),
+      ...(identities.length > 0 ? { identities } : {}),
+      ...(identity ? { identity } : {}),
     };
   }
 

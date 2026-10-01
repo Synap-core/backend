@@ -17,8 +17,10 @@ import {
   isPlanBatch,
   isPlanOperation,
   normalizeProposalSource,
+  opRef,
   registerEntityRef,
   resolveCompositeRef,
+  type CompositeCreateEntityOp,
   type CompositeProposalOperation,
 } from "@synap-core/types/proposals";
 import {
@@ -32,6 +34,13 @@ import { createLogger } from "@synap-core/core";
 // materializer's invariant-1 guard can never drift apart.
 import { RELATION_SLUGS } from "@synap/database";
 import type { EntityPropertyDiff } from "./entity-property-diff.js";
+import {
+  applyIdentityResolution,
+  entityIdentityPorts,
+  type IdentityReceipt,
+  type IdentityResolutionInput,
+} from "../routers/proposals/executors/identity-resolution.js";
+import { rethrowIfWeakDedup } from "./weak-dedup-wire.js";
 
 const logger = createLogger({ module: "materialize-composite" });
 
@@ -238,6 +247,11 @@ export interface MaterializeEntityResult {
    * `existingEntityId` link.
    */
   linkedByRetry?: true;
+  /**
+   * Set when this create op ran an approve-time identity resolution.
+   * `ref` is the disposition key (`op.ref` or `$opN`), not a second policy.
+   */
+  identity?: IdentityReceipt & { ref: string };
 }
 
 export interface MaterializeRelationResult {
@@ -429,7 +443,14 @@ export interface MaterializeResult {
  * shared without re-deriving the router's exact procedure types.
  */
 
-export type EntityCreateCaller = { create: (input: any) => Promise<any> };
+export type EntityCreateCaller = {
+  create: (input: any) => Promise<any>;
+  /** Present on the approve caller. Required only when a resolution verb updates. */
+  get?: (input: {
+    id: string;
+  }) => Promise<{ entity?: Record<string, unknown> | null } | null>;
+  update?: (input: any) => Promise<any>;
+};
 
 export type RelationCreateCaller = { create: (input: any) => Promise<any> };
 
@@ -630,6 +651,17 @@ export interface MaterializeOptions {
    * any write, like the Rule Loop callers.
    */
   planCallers?: PlanCallers;
+  /**
+   * Per create-entity ref (the SAME key dispositions use). A missing key keeps
+   * today's create. One entry is never applied to any other op.
+   */
+  identityResolutionByRef?: Record<string, IdentityResolutionInput>;
+  /**
+   * Disposition ref for a create_entity op. Approve passes this because the
+   * operations array may already have rejected ops removed, so `$opN` is NOT
+   * the index in this array. Default: `op.ref ?? opRef(index)`.
+   */
+  entityRef?: (op: CompositeCreateEntityOp, index: number) => string;
 }
 
 /** Internal: stops a plan at its first failed step (never escapes the materializer). */
@@ -968,6 +1000,11 @@ export async function materializeCompositeGraph(
       let documentId: string | undefined;
       let propertyDiff: EntityPropertyDiff | undefined;
       let linkedByRetry: true | undefined;
+      let identity: (IdentityReceipt & { ref: string }) | undefined;
+      // Disposition key. `$opN` uses the caller's original index when approve
+      // passed `entityRef` — this array may already have rejected ops removed.
+      const resolvedRef = options?.entityRef?.(op, i) ?? op.ref ?? opRef(i);
+      const resolution = options?.identityResolutionByRef?.[resolvedRef];
       // Operation-keyed idempotency (U1): if this op already materialized under
       // the caller's stable namespace (a retry), link the prior entity instead of
       // re-creating. Keyed by `${namespace}:${op.ref}` — distinct ops have
@@ -991,6 +1028,26 @@ export async function materializeCompositeGraph(
         );
       }
 
+      // Resolve BEFORE the create/link branch so separate and the update verbs
+      // share one helper. Absent key, an op-level existingEntityId link, or an
+      // idempotent retry hit: unchanged (a resolution is never guessed onto them).
+      let resolutionDecision:
+        Awaited<ReturnType<typeof applyIdentityResolution>> | undefined;
+      if (resolution && !op.existingEntityId && !idemHitId) {
+        const ports = entityIdentityPorts(entityCaller);
+        resolutionDecision = await applyIdentityResolution({
+          resolution,
+          proposed: {
+            title: op.title ?? null,
+            description: op.description ?? null,
+            content: op.content ?? null,
+            properties: op.properties ?? null,
+          },
+          load: ports.load,
+          update: ports.update,
+        });
+      }
+
       if (op.existingEntityId) {
         // `existingEntityId` is normally a real entity UUID, but a chunked import
         // may link to an entity CREATED in an earlier chunk — in that case it is a
@@ -1007,6 +1064,10 @@ export async function materializeCompositeGraph(
           linkedByRetry = true;
         }
         if (idemExternalId) idemSeenThisCall.add(idemExternalId);
+      } else if (resolutionDecision && !resolutionDecision.forceCreate) {
+        realId = resolutionDecision.receipt.entityId;
+        linkedExisting = true;
+        identity = { ...resolutionDecision.receipt, ref: resolvedRef };
       } else {
         // Per-op workspace pin (multi-home import graphs): when the op carries
         // `targetWorkspaceId`, pass it through to entities.create (membership
@@ -1014,25 +1075,40 @@ export async function materializeCompositeGraph(
         // workspace even for pod-default profiles. Ops without a pin keep the
         // caller's ambient flag (proposal.approve path unchanged).
         const opTargetWorkspaceId = op.targetWorkspaceId;
-        const result = await entityCaller.create({
-          profileSlug: op.profileSlug,
-          title: op.title || "Untitled",
-          description: op.description,
-          properties: op.properties,
-          content: op.content, // long-form body → linked document
-          ...(opProjectId ? { projectId: opProjectId } : {}),
-          ...(opTargetWorkspaceId
-            ? { targetWorkspaceId: opTargetWorkspaceId }
-            : {}),
-          source: materializeSource,
-          // Explicit workspace-scope request: pin to the target (or ambient)
-          // workspace even for pod-default profiles. Per-op pin forces true;
-          // otherwise imports may set options.workspaceScoped, while proposal
-          // approve leaves it false so pod-default profiles stay global.
-          workspaceScoped: opTargetWorkspaceId
-            ? true
-            : (options?.workspaceScoped ?? false),
-        });
+        let result: Awaited<ReturnType<EntityCreateCaller["create"]>>;
+        try {
+          result = await entityCaller.create({
+            profileSlug: op.profileSlug,
+            title: op.title || "Untitled",
+            description: op.description,
+            properties: op.properties,
+            content: op.content, // long-form body → linked document
+            ...(opProjectId ? { projectId: opProjectId } : {}),
+            ...(opTargetWorkspaceId
+              ? { targetWorkspaceId: opTargetWorkspaceId }
+              : {}),
+            source: materializeSource,
+            // Explicit workspace-scope request: pin to the target (or ambient)
+            // workspace even for pod-default profiles. Per-op pin forces true;
+            // otherwise imports may set options.workspaceScoped, while proposal
+            // approve leaves it false so pod-default profiles stay global.
+            workspaceScoped: opTargetWorkspaceId
+              ? true
+              : (options?.workspaceScoped ?? false),
+            // Helper returns forceCreate only for `separate` — the only weak-gate bypass.
+            ...(resolutionDecision?.forceCreate ? { forceCreate: true } : {}),
+          });
+        } catch (err) {
+          rethrowIfWeakDedup(err, resolvedRef);
+          throw err;
+        }
+        if (resolutionDecision?.forceCreate && (result as { id?: string }).id) {
+          identity = {
+            verb: "separate",
+            entityId: (result as { id: string }).id,
+            ref: resolvedRef,
+          };
+        }
         // A door that answers "proposed" did not create anything. Outside a
         // plan the historic behaviour stands; inside one it is a failed step.
         if (
@@ -1143,6 +1219,7 @@ export async function materializeCompositeGraph(
         ...(documentId ? { documentId } : {}),
         ...(propertyDiff ? { propertyDiff } : {}),
         ...(linkedByRetry ? { linkedByRetry } : {}),
+        ...(identity ? { identity } : {}),
       });
 
       // Declared facets are attached in pass 1.5 below (once every create_entity

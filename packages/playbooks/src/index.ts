@@ -153,12 +153,24 @@ export interface PlaybookParam {
 // re-exported here so `@synap/playbooks` stays the one import.
 export * from "./params.js";
 
+/**
+ * Fallback used only when a pinned list has nobody eligible. The filter and
+ * order are the automation query DSL (`query-dsl.ts`). Live ids never live
+ * here — reconcile owns this object and would wipe them.
+ */
+export type PinnedFallback = {
+  filter?: Record<string, unknown>;
+  orderBy?: string;
+  orderDir?: "asc" | "desc";
+};
+
 /** "What to check" — the dynamic input set a scheduled run draws from. */
 export type InputStrategy =
   | { kind: "none" }
   | { kind: "static"; items: unknown[] }
   | { kind: "rotating"; items: unknown[]; cursor: number }
-  | { kind: "query"; sourceSubscriptionId: string };
+  | { kind: "query"; sourceSubscriptionId: string }
+  | { kind: "pinned"; fallback?: PinnedFallback };
 
 export type ChannelSpecType = "GROUP" | "AGENT_COLLAB" | "THREAD";
 export interface ChannelMemberSpec {

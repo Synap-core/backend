@@ -46,6 +46,7 @@ import {
   type EntityProvenance,
 } from "../utils/materialize-entity.js";
 import { resolveRolePayload } from "./facet-resolution-service.js";
+import { pickUnderlyingKind } from "../utils/role-underlying-kind.js";
 import { createLogger } from "@synap-core/core";
 import {
   resolveIdentity,
@@ -345,21 +346,21 @@ export class EntityUpsertService {
 
     // ── Step 3: Create new entity ─────────────────────────────────────────────
     // Kind + Facets: no identity match for a role-slug payload. Create the
-    // entity of the role's applicable KIND (only when it's unambiguous — a
-    // single applicableKind) and attach the role as a facet, so we never
-    // materialize a role-named entity. When the kind is ambiguous/underivable,
-    // fall back to current behavior + log — never invent an identity/kind.
+    // entity of an underlying KIND and attach the role as a facet, so we never
+    // materialize a role-named entity. One applicable kind is that kind;
+    // several are chosen from the title (`pickUnderlyingKind`). A role that
+    // names no kind cannot be created — leave the slug and let the floor refuse.
     let createSlug = input.profileSlug;
-    if (rolePayload && rolePayload.applicableKinds.length === 1) {
-      createSlug = rolePayload.applicableKinds[0];
-    } else if (rolePayload) {
-      logger.warn(
-        {
-          role: rolePayload.slug,
-          applicableKinds: rolePayload.applicableKinds,
-        },
-        "EntityUpsertService: role-slug payload has no single applicable kind and no identity match — creating as-is (fallback)"
-      );
+    if (rolePayload) {
+      const kind = pickUnderlyingKind(rolePayload.applicableKinds, input.title);
+      if (kind) {
+        createSlug = kind;
+      } else {
+        logger.warn(
+          { role: rolePayload.slug },
+          "EntityUpsertService: role-slug payload declares no underlying kind — create floor will refuse"
+        );
+      }
     }
 
     // Funnel through the governed materializer (NOT EntityRepository.create

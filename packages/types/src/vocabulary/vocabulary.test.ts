@@ -734,6 +734,16 @@ describe("rerun — the intake run verb", () => {
   });
 });
 
+describe("pin — the playbook list verb", () => {
+  it("carries both moods, so a receipt cannot say Pin for an act already done", () => {
+    expect(resolveActionLabel("pin", "imperative")).toBe("Pin");
+    expect(resolveActionLabel("unpin", "imperative")).toBe("Unpin");
+    // humanizeToken ignores the mood and would leave the past as "Pin".
+    expect(resolveActionLabel("pin", "past")).toBe("Pinned");
+    expect(resolveActionLabel("unpin", "past")).toBe("Unpinned");
+  });
+});
+
 describe("publish — the object-work decision verb", () => {
   it("carries BOTH moods, so the button and the receipt cannot disagree", () => {
     // "Publish" on the button while the trail says "Approved" would describe

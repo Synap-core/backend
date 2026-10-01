@@ -19,6 +19,7 @@ import {
   eq,
   focusSessions,
   inArray,
+  links,
   vaultGrants,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
@@ -111,6 +112,7 @@ import {
   attachSessionEdges,
   type SessionEdges,
 } from "../services/focus-sessions/session-blocked-by.js";
+import { recordSessionSpawn } from "@synap/database";
 import {
   attachSessionOutputDependencies,
   type SessionOutputDependencies,
@@ -929,6 +931,92 @@ export const focusSessionsRouter = router({
         blockerSessionId: input.blockerSessionId,
         userId: ctx.userId,
       });
+    }),
+
+  /**
+   * Declare that `childSessionId` was forked from `sessionId` — a
+   * `session --spawned_from--> session` edge. Same owner-floor rules as
+   * `addBlocker`: both ends must belong to the caller.
+   */
+  addChild: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        parentSessionId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [child, parent] = await Promise.all([
+        db.query.focusSessions.findFirst({
+          where: and(
+            eq(focusSessions.id, input.sessionId),
+            eq(focusSessions.userId, ctx.userId)
+          ),
+          columns: { id: true, workspaceId: true },
+        }),
+        db.query.focusSessions.findFirst({
+          where: and(
+            eq(focusSessions.id, input.parentSessionId),
+            eq(focusSessions.userId, ctx.userId)
+          ),
+          columns: { id: true },
+        }),
+      ]);
+      if (!child) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      if (!parent) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Parent session ${input.parentSessionId} not found`,
+        });
+      }
+      const result = await recordSessionSpawn({
+        childSessionId: input.sessionId,
+        parentSessionId: input.parentSessionId,
+        userId: ctx.userId,
+        workspaceId: child.workspaceId,
+      });
+      return result;
+    }),
+
+  /** Drop a `spawned_from` edge. Reports whether one was actually there. */
+  removeChild: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        parentSessionId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const session = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+        columns: { id: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      const [removed] = await db
+        .delete(links)
+        .where(
+          and(
+            eq(links.fromType, "session"),
+            eq(links.fromId, input.sessionId),
+            eq(links.toType, "session"),
+            eq(links.toId, input.parentSessionId),
+            eq(links.linkType, "spawned_from")
+          )
+        );
+      return { removed: removed !== undefined };
     }),
 
   // ── Triage ───────────────────────────────────────────────────────────────

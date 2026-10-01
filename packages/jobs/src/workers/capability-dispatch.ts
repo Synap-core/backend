@@ -124,8 +124,10 @@ export interface PlaybookRunnerInput {
 
 export interface PlaybookRunnerResult {
   run: { id: string; status: string } | null;
-  session: { id: string; channelId: string | null };
+  /** Null only when `skipped` is `"no-subject"` — nothing was started. */
+  session: { id: string; channelId: string | null } | null;
   reused?: boolean;
+  skipped?: "no-subject";
 }
 
 type PlaybookRunner = (

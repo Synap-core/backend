@@ -34,12 +34,13 @@ import {
   normalizeKnowledgeProperties,
 } from "../utils/knowledge-contract.js";
 import { reservedEntityKindReason } from "../utils/reserved-profile-slugs.js";
+import { pickUnderlyingKind } from "../utils/role-underlying-kind.js";
 import { stampProbeMarker } from "../utils/request-write-context.js";
 
 /**
  * Typed carrier for `EntityRepository.create`'s TEACHING rejections — the
  * caller aimed the generic create door at something that is not an entity
- * (a project, a multi-kind role). These were `throw new Error(...)`, which no
+ * (a project, a role that names no underlying kind). These were `throw new Error(...)`, which no
  * cause-chain mapper can classify, so the clearest teaching prose in the
  * codebase reached the client as a 500 ("Database operation failed") and the
  * agent learned nothing.
@@ -291,14 +292,15 @@ export class EntityRepository extends BaseRepository<
 
     // 1a. Role profiles are hats, never things (Kind + Facets). A create
     // aimed at a role profile is transparently adapted to the same shape
-    // ConvertToFacetOp produces: the entity is created on the role's single
-    // applicable KIND, and the role attaches as a facet carrying the supplied
-    // properties (attached atomically with the insert in step 3). This keeps
-    // every legacy door — capture,
-    // remember_fact, research persistence, raw create_entity — writing the
-    // kind+facet shape without per-caller edits. A multi-kind role (client →
-    // person|company) can't guess its target entity, so it is rejected toward
-    // the attach door instead.
+    // ConvertToFacetOp produces: the entity is created on an underlying KIND,
+    // and the role attaches as a facet carrying the supplied properties
+    // (attached atomically with the insert in step 3). This keeps every
+    // legacy door — capture, remember_fact, research persistence, raw
+    // create_entity — writing the kind+facet shape without per-caller edits.
+    // One applicable kind is that kind. Several (lead → company|person) pick
+    // via `pickUnderlyingKind` (the title's subject) so a caller who named a
+    // role and no existing party is not sent back to do the two writes itself.
+    // A role that names NO kind still refuses: there is nothing to create.
     let roleFacetProfile: typeof profile | null = null;
     let roleFacetProperties: Record<string, unknown> = {};
     if (profile.profileKind === "role") {
@@ -309,24 +311,24 @@ export class EntityRepository extends BaseRepository<
       // slug directly reintroduces the exact one-entity-one-kind drift this
       // feature exists to close.
       const applicable = profile.applicableKinds ?? [];
-      if (applicable.length !== 1) {
+      const targetSlug = pickUnderlyingKind(applicable, data.title);
+      if (!targetSlug) {
         throw new EntityCreateRejectedError(
           "role-is-not-a-kind",
           `Profile '${profile.slug}' is a role (a hat), not a kind — it cannot ` +
-            `be created as an entity. Resolve or create the target entity ` +
-            `(applicable kinds: ${applicable.join(", ") || "none"}) first, ` +
-            `then attach the '${profile.slug}' facet to it.`,
+            `be created as an entity. It declares no underlying kind. Attach ` +
+            `the '${profile.slug}' facet to an existing entity instead.`,
           profile.id
         );
       }
       const target = await this.profileResolution.resolveProfile(
-        applicable[0],
+        targetSlug,
         userId,
         data.workspaceId ?? ""
       );
       if (!target || target.profileKind === "role") {
         throw new Error(
-          `Role '${profile.slug}' targets kind '${applicable[0]}', which is ` +
+          `Role '${profile.slug}' targets kind '${targetSlug}', which is ` +
             `not an active kind profile on this pod`
         );
       }

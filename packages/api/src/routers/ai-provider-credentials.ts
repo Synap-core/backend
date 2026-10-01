@@ -155,11 +155,13 @@ export async function resolveProviderCredentialsBatch(
 
 // ── Input schemas ─────────────────────────────────────────────────────────
 
-const SetCredentialSchema = z.object({
+export const SetCredentialSchema = z.object({
   providerId: z.string().min(1),
   apiKey: z.string().min(1),
   enabled: z.boolean().default(true),
   priority: z.number().int().min(0).default(10),
+  /** Absent ⇒ per-user override. Set ⇒ workspace-scoped (userId NULL). */
+  workspaceId: z.string().uuid().optional(),
 });
 
 // ── Auth helpers ──────────────────────────────────────────────────────────

@@ -59,6 +59,7 @@ export * from "./utils/reserved-profile-slugs.js";
 export * from "./utils/request-write-context.js";
 export * from "./utils/exposure-policy-settings.js";
 export * from "./utils/entity-create-guardrails.js";
+export * from "./utils/role-underlying-kind.js";
 export * from "./utils/project-slug.js";
 export * from "./utils/cp-project-sync-trigger.js";
 export * from "./utils/materialize-entity.js";

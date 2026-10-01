@@ -43,6 +43,11 @@ import {
   type StoredProposalData,
 } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
+import {
+  applyIdentityResolution,
+  entityIdentityPorts,
+  type IdentityReceipt,
+} from "./identity-resolution.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import {
   attachSourceBlob,
@@ -198,21 +203,58 @@ export function registerEntityExecutors(): void {
       //
       // I3 pin: when entityHome is set, pass it as rung-1 `targetWorkspaceId`
       // so create does not re-derive from ambient. Null home → no pin (pod).
-      const createdEntity = (await entityCaller.create({
-        proposedEntityId: storedEntityId,
-        profileSlug,
-        title: (innerData.title as string) || "Untitled",
-        description: innerData.description as string | undefined,
-        properties,
-        content: innerData.content as string | undefined,
-        // `entities.create` persists `documentId` into the proposal data
-        // (entities.ts) but this replay historically dropped it — so an approved
-        // entity-with-document proposal (a proposed file upload, or any
-        // long-content entity that proposed) lost its document link. Forward it.
-        documentId: innerData.documentId as string | undefined,
-        ...(entityHome ? { targetWorkspaceId: entityHome } : {}),
-        source: "system",
-      })) as { id?: string; deduplicated?: boolean };
+      //
+      // Weak same-name matches are NOT an auto-merge. `separate` is the only
+      // forceCreate bypass; the other verbs update or link `existingEntityId`
+      // and must not create a second row.
+      const resolution = input.identityResolution;
+      const ports = entityIdentityPorts(entityCaller);
+      const decision = resolution
+        ? await applyIdentityResolution({
+            resolution,
+            proposed: {
+              title:
+                typeof innerData.title === "string" ? innerData.title : null,
+              description:
+                typeof innerData.description === "string"
+                  ? innerData.description
+                  : null,
+              content:
+                typeof innerData.content === "string"
+                  ? innerData.content
+                  : null,
+              properties,
+            },
+            load: ports.load,
+            update: ports.update,
+          })
+        : null;
+      let identity: IdentityReceipt | undefined;
+      let createdEntity: { id?: string; deduplicated?: boolean };
+      if (!decision || decision.forceCreate) {
+        createdEntity = (await entityCaller.create({
+          proposedEntityId: storedEntityId,
+          profileSlug,
+          title: (innerData.title as string) || "Untitled",
+          description: innerData.description as string | undefined,
+          properties,
+          content: innerData.content as string | undefined,
+          // `entities.create` persists `documentId` into the proposal data
+          // (entities.ts) but this replay historically dropped it — so an approved
+          // entity-with-document proposal (a proposed file upload, or any
+          // long-content entity that proposed) lost its document link. Forward it.
+          documentId: innerData.documentId as string | undefined,
+          ...(entityHome ? { targetWorkspaceId: entityHome } : {}),
+          source: "system",
+          ...(decision?.forceCreate ? { forceCreate: true } : {}),
+        })) as { id?: string; deduplicated?: boolean };
+        if (decision?.forceCreate && createdEntity.id) {
+          identity = { verb: "separate", entityId: createdEntity.id };
+        }
+      } else {
+        identity = decision.receipt;
+        createdEntity = { id: decision.receipt.entityId, deduplicated: true };
+      }
 
       // Approve-time FACET channel (single-entity twin of the composite path):
       // Prefer facets stored on the proposal at propose time (R2 — entities.create
@@ -269,10 +311,14 @@ export function registerEntityExecutors(): void {
       // or an approve after APPROVAL_FAILED) re-runs this executor and dedups onto
       // the row the FIRST attempt created — same id as the pre-minted one, and
       // ours to own. A merge onto a DIFFERENT id is a pre-existing entity.
+      // keep/fill/use linked a row this proposal did not create — even when the
+      // pre-minted id happens to equal that row, revert must not delete it.
+      const linkedByResolution = !!decision && !decision.forceCreate;
       const mergedOntoExisting =
-        createdEntity?.deduplicated === true &&
-        !!createdEntity.id &&
-        createdEntity.id !== storedEntityId;
+        linkedByResolution ||
+        (createdEntity?.deduplicated === true &&
+          !!createdEntity.id &&
+          createdEntity.id !== storedEntityId);
 
       // Mirror the composite path (proposals.ts): only entities this proposal
       // actually CREATED are ours to undo / to claim as session output / to file
@@ -328,7 +374,7 @@ export function registerEntityExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return { success: true, ...(identity ? { identity } : {}) };
     },
   });
 

@@ -47,6 +47,8 @@ import {
   buildWeakDedupCause,
   ENTITY_JUNK_TITLE_CODE,
   reservedEntityKindReason,
+  pickUnderlyingKind,
+  promoteMultiKindRoleCreate,
 } from "@synap/database";
 import { reconcileKindWithPlacement } from "./kind-placement.js";
 import { entities, workspaces, links } from "@synap/database/schema";
@@ -266,6 +268,17 @@ export const createProcs = {
       // Resolve profile — capture full profile object so defaultValues are available at step 3
       let profileSlug: string | undefined;
       let earlyResolvedProfile: any = null;
+      /**
+       * Set only when this create named a multi-kind role and was rewritten
+       * onto one underlying kind. The weak same-name gate then runs against
+       * THAT kind. An exact-title hit on a *different* applicable kind (a
+       * company already named what this lead would have become a person for)
+       * is the same refusal: the role can sit on that party. Unrelated kinds
+       * that share a title stay advisory, as they do for every other create.
+       */
+      let roleApplicableKinds: string[] | null = null;
+      /** Properties moved onto the role facet, still needed for identity signals. */
+      let roleIdentityProperties: Record<string, unknown> | null = null;
       if (input.profileSlug) {
         profileSlug = input.profileSlug;
       } else if (input.profileId) {
@@ -289,6 +302,46 @@ export const createProcs = {
           code: "BAD_REQUEST",
           message: "Either profileSlug or profileId must be provided",
         });
+      }
+
+      // A role slug ("lead") is a hat. When the caller named one and no party
+      // exists yet, create the underlying kind with this same title and attach
+      // the role — don't send the agent back to do both writes. Single-kind
+      // roles stay on the repository adapter (placement for that path is
+      // unchanged). Multi-kind roles are rewritten HERE, before dedup and
+      // governance, so the same-name gate and the proposal see the kind.
+      if (profileSlug && !earlyResolvedProfile) {
+        const database = await getDb();
+        earlyResolvedProfile = await new ProfileResolutionService(
+          database
+        ).resolveProfile(profileSlug, ctx.userId, governanceWorkspaceId);
+      }
+      if (
+        earlyResolvedProfile?.profileKind === "role" &&
+        (earlyResolvedProfile.applicableKinds?.length ?? 0) > 1
+      ) {
+        const applicable = [
+          ...(earlyResolvedProfile.applicableKinds as string[]),
+        ];
+        const kindSlug = pickUnderlyingKind(applicable, input.title);
+        if (kindSlug) {
+          const database = await getDb();
+          const kindProfile = await new ProfileResolutionService(
+            database
+          ).resolveProfile(kindSlug, ctx.userId, governanceWorkspaceId);
+          if (kindProfile && kindProfile.profileKind !== "role") {
+            roleIdentityProperties = { ...(input.properties ?? {}) };
+            promoteMultiKindRoleCreate({
+              roleSlug: earlyResolvedProfile.slug,
+              applicableKinds: applicable,
+              title: input.title,
+              draft: input,
+            });
+            profileSlug = kindSlug;
+            earlyResolvedProfile = kindProfile;
+            roleApplicableKinds = applicable;
+          }
+        }
       }
 
       // File-is-uploaded-bytes guard (API entry). The `file` kind is ONLY for
@@ -431,6 +484,9 @@ export const createProcs = {
       // executor records it as LINKED, not created (see approve-executors.ts).
       const dedupSignals = [
         ...extractIdentitySignals(input.properties ?? {}),
+        ...(roleIdentityProperties
+          ? extractIdentitySignals(roleIdentityProperties)
+          : []),
         ...externalIdSignal,
       ];
       // Resolve when we have strong signals OR a title for the weak same-name
@@ -777,6 +833,38 @@ export const createProcs = {
                 },
                 "[entities.create] forceCreate=true — bypassing weak same-name gate"
               );
+            }
+          }
+
+          // Role create: an exact-title party the role can already sit on is
+          // the same conflict as a same-kind hit. The picked kind had no row
+          // (that would have thrown above); another applicable kind does.
+          if (
+            roleApplicableKinds &&
+            !input.forceCreate &&
+            identity.match !== "strong"
+          ) {
+            const hits = identity.crossKindCandidates.filter((candidate) =>
+              roleApplicableKinds!.includes(candidate.type)
+            );
+            if (hits.length > 0) {
+              const types = new Set(hits.map((hit) => hit.type));
+              const label = types.size === 1 ? hits[0]!.type : "record";
+              logger.info(
+                {
+                  event: "identity_resolve_merge",
+                  outcome: "blocked_weak",
+                  userId: ctx.userId,
+                  profileSlug,
+                  candidateCount: hits.length,
+                },
+                "[entities.create] role create — exact name already exists on an applicable kind"
+              );
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: buildWeakEntityDedupMessage(hits, label),
+                cause: buildWeakDedupCause(hits),
+              });
             }
           }
         } catch (resolveErr) {

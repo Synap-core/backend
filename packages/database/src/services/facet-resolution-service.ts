@@ -250,8 +250,9 @@ export interface RolePayloadInfo {
  *
  * FAILS CLOSED without a lens: no workspace ⇒ null, no guess. That is safe
  * because null only skips the create-payload rewrite; `EntityRepository.create`
- * still adapts a single-kind role into kind+facet and refuses a multi-kind one
- * (`role-is-not-a-kind`), so a role-named entity is never created. What a
+ * still adapts a role into kind+facet (one applicable kind, or the kind
+ * `pickUnderlyingKind` reads from the title) and refuses a role that names no
+ * kind (`role-is-not-a-kind`), so a role-named entity is never created. What a
  * workspace-less caller loses is the strong-match attach of a MULTI-kind role
  * onto an existing entity.
  *

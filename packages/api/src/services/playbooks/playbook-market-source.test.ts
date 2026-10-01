@@ -209,4 +209,45 @@ describe("planPlaybookReconcile", () => {
     expect(PLAYBOOK_MANAGED_FIELDS).not.toContain("name");
     expect(PLAYBOOK_MANAGED_FIELDS).not.toContain("metadata");
   });
+
+  const PIN = "11111111-1111-4111-8111-111111111111";
+  const PINNED = {
+    kind: "pinned",
+    fallback: {
+      filter: { "post-status": "Idea" },
+      orderBy: "createdAt",
+      orderDir: "asc",
+    },
+  };
+
+  it("adopts a pinned strategy onto a default row and keeps the owner's pin ids", () => {
+    const p = plan(
+      row({
+        scope: "project",
+        stages: STAGES,
+        metadata: {
+          pinnedEntityIds: [PIN],
+          marketSource: {
+            packageSlug: "grants",
+            packageVersion: "h-1",
+            installedAt: "x",
+            baseline: baselineOf(TEMPLATE),
+          },
+        },
+      }),
+      { ...TEMPLATE, inputStrategy: PINNED }
+    );
+    expect(p.applied).toContain("inputStrategy");
+    expect(p.patch.inputStrategy).toMatchObject({ kind: "pinned" });
+    expect(p.metadata).toMatchObject({ pinnedEntityIds: [PIN] });
+  });
+
+  it("an unstamped row that already chose a strategy keeps it", () => {
+    const p = plan(row({ inputStrategy: { kind: "static", items: [1] } }), {
+      ...TEMPLATE,
+      inputStrategy: PINNED,
+    });
+    expect(p.ownerOwned).toContain("inputStrategy");
+    expect(p.patch.inputStrategy).toBeUndefined();
+  });
 });

@@ -92,7 +92,15 @@ import {
   previewPermissionDecision,
   proposedMessageFor,
 } from "../utils/permission-check.js";
-import { stableStringify } from "../utils/stable-stringify.js";
+import { definitionVersionChanged } from "../services/playbooks/definition-version.js";
+import {
+  PINNED_ENTITY_IDS_KEY,
+  explainPinnedIdRejection,
+  parsePinnedEntityIds,
+  isPinnedStrategy,
+  subjectProfileSlug,
+} from "../services/playbooks/pinned-subject.js";
+import { loadVisibleEntitiesById } from "../services/playbooks/pinned-subject-query.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { rankByTerms, queryTerms } from "../utils/term-match.js";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
@@ -1982,6 +1990,54 @@ export const playbooksRouter = router({
         );
       }
 
+      // 2d. A pin list is an ordered whitelist on metadata. The request's
+      // strategy wins over the stored one: writing ids onto a playbook that
+      // is not pinned is a bad request, not a proposal. Omitting the key
+      // leaves the stored list alone (the metadata merge below).
+      if (
+        input.metadata !== undefined &&
+        Object.prototype.hasOwnProperty.call(
+          input.metadata,
+          PINNED_ENTITY_IDS_KEY
+        )
+      ) {
+        const parsed = parsePinnedEntityIds(
+          input.metadata[PINNED_ENTITY_IDS_KEY]
+        );
+        if (!parsed.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: parsed.message });
+        }
+        const effectiveStrategy =
+          input.inputStrategy !== undefined
+            ? input.inputStrategy
+            : existing.inputStrategy;
+        if (!isPinnedStrategy(effectiveStrategy)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "This playbook does not take a pin list.",
+          });
+        }
+        if (parsed.ids.length > 0) {
+          const rows = await loadVisibleEntitiesById({
+            ids: parsed.ids,
+            workspaceId: existing.workspaceId,
+            ownerId: ctx.userId,
+          });
+          const problem = explainPinnedIdRejection(
+            parsed.ids,
+            rows,
+            subjectProfileSlug(
+              input.subjectProfile !== undefined
+                ? input.subjectProfile
+                : existing.subjectProfile
+            )
+          );
+          if (problem) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: problem });
+          }
+        }
+      }
+
       // 3. Governance membrane decides approve vs propose.
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -2074,22 +2130,15 @@ export const playbooksRouter = router({
       // field actually changes (compared against the loaded row, so a no-op
       // save doesn't inflate it). The version is stamped into each run's
       // definitionSnapshot so "what ran" can be diffed against "today".
-      const DEFINITION_FIELDS = [
-        "goalTemplate",
-        "stages",
-        "params",
-        "inputStrategy",
-        "channelSpec",
-        "expectedOutputs",
-        "criteria",
-      ] as const;
-      const definitionChanged = DEFINITION_FIELDS.some(
-        (f) =>
-          set[f] !== undefined &&
-          stableStringify(set[f]) !==
-            stableStringify((existing as Record<string, unknown>)[f])
-      );
-      if (definitionChanged) set.version = (existing.version ?? 1) + 1;
+      // Metadata — including the pin list — is not a definition field.
+      if (
+        definitionVersionChanged(
+          set as Record<string, unknown>,
+          existing as unknown as Record<string, unknown>
+        )
+      ) {
+        set.version = (existing.version ?? 1) + 1;
+      }
 
       let updated: Playbook;
       try {
@@ -2624,7 +2673,7 @@ export const playbooksRouter = router({
       // `try`/`let` pair so this stays the ONE assigned runPlaybook call in
       // this file, which `severed-approval-doors.test.ts` (6b) anchors on (and
       // counts) when it proves this door passes no `idempotentBySubject`.
-      const { run, session, parentLink } = await runPlaybook({
+      const { run, session, parentLink, skipped } = await runPlaybook({
         playbookId: input.playbookId,
         workspaceId: runWorkspaceId,
         userId: ctx.userId,
@@ -2649,6 +2698,17 @@ export const playbooksRouter = router({
         }
         throw err;
       });
+
+      if (skipped === "no-subject" || session === null) {
+        return {
+          run: null,
+          session: null,
+          status: "skipped" as const,
+          message:
+            "No pinned record was ready, and the fallback found nothing.",
+          proposalId: null as string | null,
+        };
+      }
 
       return {
         run,

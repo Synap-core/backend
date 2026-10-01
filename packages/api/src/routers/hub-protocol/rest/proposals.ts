@@ -42,6 +42,10 @@ import {
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
+import {
+  identityResolutionByRefInput,
+  identityResolutionInput,
+} from "../../proposals/executors/identity-resolution.js";
 
 /** Page size when the caller names none — matches the historical tRPC default,
  *  so an existing caller that sends no `limit` sees byte-identical membership. */
@@ -213,7 +217,39 @@ export function registerProposalsRoutes(app: HubHono): void {
       "Approves a pending proposal, executing its effect immediately. Delegates to the canonical `proposals.approve` tRPC mutation, then re-fetches the proposal so the response carries its post-execution state (e.g. a capability.run's `data.runResult` — success + returned data, or the exact denial reason on failure) in the SAME round trip instead of requiring a separate GET.",
     request: {
       params: z.object({ id: z.string() }),
-      body: z.object({ reason: z.string().optional() }),
+      body: z.object({
+        identityResolution: z
+          .object({
+            verb: z.enum([
+              "fill_empty",
+              "keep_existing",
+              "use_capture",
+              "separate",
+            ]),
+            existingEntityId: z.string().uuid().optional(),
+          })
+          .optional()
+          .describe(
+            "Weak same-name choice for a single entity/create. fill_empty, keep_existing, and use_capture require existingEntityId. separate does not. Absent ⇒ today's create."
+          ),
+        identityResolutionByRef: z
+          .record(
+            z.string(),
+            z.object({
+              verb: z.enum([
+                "fill_empty",
+                "keep_existing",
+                "use_capture",
+                "separate",
+              ]),
+              existingEntityId: z.string().uuid().optional(),
+            })
+          )
+          .optional()
+          .describe(
+            "Composite per-create choice, keyed by the entity ref dispositions use. One entry is not applied to any other op."
+          ),
+      }),
     },
     responses: {
       200: {
@@ -233,6 +269,57 @@ export function registerProposalsRoutes(app: HubHono): void {
             .optional()
             .describe(
               "How many existing rows the approval linked to instead of creating (e.g. 1 when an open session of the same goal and scope already existed)."
+            ),
+          identity: z
+            .object({
+              verb: z.enum([
+                "fill_empty",
+                "keep_existing",
+                "use_capture",
+                "separate",
+              ]),
+              entityId: z.string(),
+              filled: z.array(z.string()).optional(),
+              conflicts: z
+                .array(
+                  z.object({
+                    key: z.string(),
+                    kept: z.any(),
+                    incoming: z.any(),
+                  })
+                )
+                .optional(),
+            })
+            .optional()
+            .describe(
+              "Set when an identity resolution ran. Not stored on the proposal row — only this response carries it. fill_empty includes filled and conflicts."
+            ),
+          identities: z
+            .array(
+              z.object({
+                ref: z.string(),
+                verb: z.enum([
+                  "fill_empty",
+                  "keep_existing",
+                  "use_capture",
+                  "separate",
+                ]),
+                entityId: z.string(),
+                filled: z.array(z.string()).optional(),
+                conflicts: z
+                  .array(
+                    z.object({
+                      key: z.string(),
+                      kept: z.any(),
+                      incoming: z.any(),
+                    })
+                  )
+                  .optional(),
+              })
+            )
+            .optional()
+            .describe(
+              "Composite: one entry per op that ran a resolution. Singular identity is also set when exactly one op resolved."
             ),
         }),
       },
@@ -566,10 +653,39 @@ export function registerProposalsRoutes(app: HubHono): void {
       );
     }
     // SECURITY — an AGENT credential must never APPROVE a proposal (the human
-    // review step). See rejectAgentReviewer for the full rationale.
+    // review step). See rejectAgentReviewer for the full rationale. Runs
+    // BEFORE the body is parsed so an agent key never reaches approve.
     const blocked = rejectAgentReviewer(c, "approve");
     if (blocked) return blocked;
     const proposalId = c.req.param("id");
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const rawBody = (jsonRead.body ?? {}) as {
+      identityResolution?: unknown;
+      identityResolutionByRef?: unknown;
+    };
+    let identityResolution:
+      ReturnType<typeof identityResolutionInput.parse> | undefined;
+    if (rawBody.identityResolution !== undefined) {
+      const parsed = identityResolutionInput.safeParse(
+        rawBody.identityResolution
+      );
+      if (!parsed.success) {
+        return c.json({ error: "Invalid identityResolution" }, 400);
+      }
+      identityResolution = parsed.data;
+    }
+    let identityResolutionByRef:
+      ReturnType<typeof identityResolutionByRefInput.parse> | undefined;
+    if (rawBody.identityResolutionByRef !== undefined) {
+      const parsed = identityResolutionByRefInput.safeParse(
+        rawBody.identityResolutionByRef
+      );
+      if (!parsed.success) {
+        return c.json({ error: "Invalid identityResolutionByRef" }, 400);
+      }
+      identityResolutionByRef = parsed.data;
+    }
     try {
       const userId = c.get("userId") as string;
       const scopes = c.get("scopes") as string[];
@@ -579,9 +695,26 @@ export function registerProposalsRoutes(app: HubHono): void {
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
-      const approval = (await caller.approve({ proposalId: resolvedId })) as {
+      const approval = (await caller.approve({
+        proposalId: resolvedId,
+        ...(identityResolution ? { identityResolution } : {}),
+        ...(identityResolutionByRef ? { identityResolutionByRef } : {}),
+      })) as {
         primaryId?: string;
         linked?: number;
+        identity?: {
+          verb: string;
+          entityId: string;
+          filled?: string[];
+          conflicts?: { key: string; kept: unknown; incoming: unknown }[];
+        };
+        identities?: Array<{
+          ref: string;
+          verb: string;
+          entityId: string;
+          filled?: string[];
+          conflicts?: { key: string; kept: unknown; incoming: unknown }[];
+        }>;
       } | null;
       // Re-fetch so the caller sees the post-execution state in ONE round trip —
       // e.g. a capability.run's data.runResult (success + returned data, or the
@@ -605,6 +738,10 @@ export function registerProposalsRoutes(app: HubHono): void {
           ...(typeof approval?.linked === "number"
             ? { linked: approval.linked }
             : {}),
+          // identity is not persisted on the proposal row — it has to ride
+          // this response or a fill_empty conflict is dropped.
+          ...(approval?.identity ? { identity: approval.identity } : {}),
+          ...(approval?.identities ? { identities: approval.identities } : {}),
         },
         200
       );
