@@ -1,24 +1,24 @@
 /**
- * Hub Protocol REST — capability connections CRUD (Wave 4).
+ * Hub Protocol REST — capability credentials CRUD (Wave 4).
  *
  * Thin governed door over `services/capabilities/capability-connections.ts` (the
- * single writer). A connection is a `secrets` row carrying `capability_id` — the
- * vault IS the connection registry (plan §3.2). No route ever returns a secret
+ * single writer). A credential is a `secrets` row carrying `capability_id` — the
+ * vault IS the credential registry (plan §3.2). No route ever returns a secret
  * value; the service is owner-gated.
  *
- *   GET    /capabilities/:capabilityId/connections        (read)
- *   POST   /capabilities/:capabilityId/connections        (write)
- *   PATCH  /capabilities/:capabilityId/connections/:id     (write)
- *   DELETE /capabilities/:capabilityId/connections/:id     (write)
+ *   GET    /capabilities/:capabilityId/credentials        (read)
+ *   POST   /capabilities/:capabilityId/credentials        (write)
+ *   PATCH  /capabilities/:capabilityId/credentials/:id     (write)
+ *   DELETE /capabilities/:capabilityId/credentials/:id     (write)
  */
 
 import { z } from "zod";
 
 import {
-  addConnection,
-  listConnections,
-  removeConnection,
-  updateConnection,
+  addCredential,
+  listCredentials,
+  removeCredential,
+  updateCredential,
 } from "../../../services/capabilities/capability-connections.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -34,7 +34,7 @@ import {
 
 // ── OpenAPI schemas ────────────────────────────────────────────────────────────
 
-const ConnectionSchema = z.object({
+const CredentialSchema = z.object({
   id: z.string(),
   label: z.string(),
   contextType: z.string().nullable(),
@@ -43,7 +43,7 @@ const ConnectionSchema = z.object({
   accountHint: z.string().nullable(),
   kind: z.enum(["nango", "vault"]),
   isPodWide: z.boolean(),
-  // Merged live-truth fields (capability-connections.listConnections): the Nango
+  // Merged live-truth fields (capability-connections.listCredentials): the Nango
   // provider key, connection health, and whether the row is a real secrets row or
   // a synthetic live-Nango connection with no registry row yet.
   provider: z.string().nullable(),
@@ -51,11 +51,11 @@ const ConnectionSchema = z.object({
   persisted: z.boolean(),
 });
 
-const ListConnectionsResponseSchema = z.object({
-  connections: z.array(ConnectionSchema),
+const ListCredentialsResponseSchema = z.object({
+  credentials: z.array(CredentialSchema),
 });
 
-const AddConnectionRequestSchema = z.object({
+const AddCredentialRequestSchema = z.object({
   label: z.string().min(1).max(255),
   value: z.string().optional(),
   contextType: z.string().nullable().optional(),
@@ -65,7 +65,7 @@ const AddConnectionRequestSchema = z.object({
   isPodWide: z.boolean().optional(),
 });
 
-const UpdateConnectionRequestSchema = z.object({
+const UpdateCredentialRequestSchema = z.object({
   label: z.string().min(1).max(255).optional(),
   value: z.string().optional(),
   contextType: z.string().nullable().optional(),
@@ -86,27 +86,27 @@ function statusForError(msg: string): 400 | 403 | 404 | 500 {
   ) {
     return 403;
   }
-  // Vault-only validation (a Nango/account connection can't be pod-wide).
+  // Vault-only validation (a Nango/account credential can't be pod-wide).
   if (lower.includes("must be a vault key")) return 400;
   return 500;
 }
 
-export function registerCapabilityConnectionsRoutes(app: HubHono): void {
-  // ── GET /capabilities/:capabilityId/connections ─────────────────────────────
+export function registerCapabilityCredentialsRoutes(app: HubHono): void {
+  // ── GET /capabilities/:capabilityId/credentials ─────────────────────────────
   registerOpenApi(app, {
     method: "get",
-    path: "/capabilities/{capabilityId}/connections",
+    path: "/capabilities/{capabilityId}/credentials",
     tags: ["Capabilities"],
-    summary: "List a capability's connections",
+    summary: "List a capability's credentials",
     description:
-      "Returns metadata for the capability's connections (vault rows carrying " +
+      "Returns metadata for the capability's credentials (vault rows carrying " +
       "capability_id). NEVER returns secret values. Owner-scoped. Requires " +
       "hub-protocol.read.",
     request: { params: z.object({ capabilityId: z.string().uuid() }) },
     responses: {
       200: {
-        description: "Connections",
-        schema: ListConnectionsResponseSchema,
+        description: "Credentials",
+        schema: ListCredentialsResponseSchema,
       },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
@@ -114,7 +114,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     },
   });
 
-  app.get("/capabilities/:capabilityId/connections", async (c) => {
+  app.get("/capabilities/:capabilityId/credentials", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.read required" },
@@ -126,40 +126,40 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const connections = await listConnections(capabilityId, acting.userId);
-      return c.json({ connections }, 200);
+      const credentials = await listCredentials(capabilityId, acting.userId);
+      return c.json({ credentials }, 200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       const status = statusForError(msg);
       if (status === 500)
-        logger.error({ err, capabilityId }, "connections list failed");
+        logger.error({ err, capabilityId }, "credentials list failed");
       return c.json({ error: msg }, status);
     }
   });
 
-  // ── POST /capabilities/:capabilityId/connections ────────────────────────────
+  // ── POST /capabilities/:capabilityId/credentials ────────────────────────────
   registerOpenApi(app, {
     method: "post",
-    path: "/capabilities/{capabilityId}/connections",
+    path: "/capabilities/{capabilityId}/credentials",
     tags: ["Capabilities"],
-    summary: "Add a connection to a capability",
+    summary: "Add a credential to a capability",
     description:
-      "Server-encrypts and stores a new connection (secrets row) for the " +
+      "Server-encrypts and stores a new credential (secrets row) for the " +
       "capability. Promotes it to default when requested or when it is the " +
-      "capability's first connection. Requires hub-protocol.write.",
+      "capability's first credential. Requires hub-protocol.write.",
     request: {
       params: z.object({ capabilityId: z.string().uuid() }),
-      body: AddConnectionRequestSchema,
+      body: AddCredentialRequestSchema,
     },
     responses: {
-      200: { description: "Created connection", schema: ConnectionSchema },
+      200: { description: "Created credential", schema: CredentialSchema },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
 
-  app.post("/capabilities/:capabilityId/connections", async (c) => {
+  app.post("/capabilities/:capabilityId/credentials", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },
@@ -170,7 +170,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     if (capabilityId instanceof Response) return capabilityId;
     const jsonRead = await readJsonBody(c);
     if (!jsonRead.ok) return jsonRead.res;
-    const parsed = AddConnectionRequestSchema.safeParse(jsonRead.body);
+    const parsed = AddCredentialRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid body", details: parsed.error.issues },
@@ -180,7 +180,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const connection = await addConnection({
+      const credential = await addCredential({
         capabilityId,
         actorUserId: acting.userId,
         label: parsed.data.label,
@@ -191,34 +191,34 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
         isDefault: parsed.data.isDefault,
         isPodWide: parsed.data.isPodWide,
       });
-      return c.json(connection, 200);
+      return c.json(credential, 200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       const status = statusForError(msg);
       if (status === 500)
-        logger.error({ err, capabilityId }, "connection add failed");
+        logger.error({ err, capabilityId }, "credential add failed");
       return c.json({ error: msg }, status);
     }
   });
 
-  // ── PATCH /capabilities/:capabilityId/connections/:id ───────────────────────
+  // ── PATCH /capabilities/:capabilityId/credentials/:id ───────────────────────
   registerOpenApi(app, {
     method: "patch",
-    path: "/capabilities/{capabilityId}/connections/{id}",
+    path: "/capabilities/{capabilityId}/credentials/{id}",
     tags: ["Capabilities"],
-    summary: "Update a capability connection",
+    summary: "Update a capability credential",
     description:
-      "Updates connection fields; rotates (re-encrypts) when `value` is given; " +
+      "Updates credential fields; rotates (re-encrypts) when `value` is given; " +
       "enforces a single default. Requires hub-protocol.write.",
     request: {
       params: z.object({
         capabilityId: z.string().uuid(),
         id: z.string().uuid(),
       }),
-      body: UpdateConnectionRequestSchema,
+      body: UpdateCredentialRequestSchema,
     },
     responses: {
-      200: { description: "Updated connection", schema: ConnectionSchema },
+      200: { description: "Updated credential", schema: CredentialSchema },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
@@ -226,7 +226,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     },
   });
 
-  app.patch("/capabilities/:capabilityId/connections/:id", async (c) => {
+  app.patch("/capabilities/:capabilityId/credentials/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },
@@ -239,7 +239,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     if (id instanceof Response) return id;
     const jsonRead = await readJsonBody(c);
     if (!jsonRead.ok) return jsonRead.res;
-    const parsed = UpdateConnectionRequestSchema.safeParse(jsonRead.body);
+    const parsed = UpdateCredentialRequestSchema.safeParse(jsonRead.body);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid body", details: parsed.error.issues },
@@ -249,9 +249,9 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const connection = await updateConnection({
+      const credential = await updateCredential({
         capabilityId,
-        connectionId: id,
+        credentialId: id,
         actorUserId: acting.userId,
         label: parsed.data.label,
         value: parsed.data.value,
@@ -261,24 +261,24 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
         isDefault: parsed.data.isDefault,
         isPodWide: parsed.data.isPodWide,
       });
-      return c.json(connection, 200);
+      return c.json(credential, 200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       const status = statusForError(msg);
       if (status === 500)
-        logger.error({ err, capabilityId, id }, "connection update failed");
+        logger.error({ err, capabilityId, id }, "credential update failed");
       return c.json({ error: msg }, status);
     }
   });
 
-  // ── DELETE /capabilities/:capabilityId/connections/:id ──────────────────────
+  // ── DELETE /capabilities/:capabilityId/credentials/:id ──────────────────────
   registerOpenApi(app, {
     method: "delete",
-    path: "/capabilities/{capabilityId}/connections/{id}",
+    path: "/capabilities/{capabilityId}/credentials/{id}",
     tags: ["Capabilities"],
-    summary: "Remove a capability connection",
+    summary: "Remove a capability credential",
     description:
-      "Soft-deletes a connection; promotes the oldest remaining connection to " +
+      "Soft-deletes a credential; promotes the oldest remaining credential to " +
       "default when the removed one was default. Requires hub-protocol.write.",
     request: {
       params: z.object({
@@ -300,7 +300,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     },
   });
 
-  app.delete("/capabilities/:capabilityId/connections/:id", async (c) => {
+  app.delete("/capabilities/:capabilityId/credentials/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },
@@ -314,9 +314,9 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const result = await removeConnection({
+      const result = await removeCredential({
         capabilityId,
-        connectionId: id,
+        credentialId: id,
         actorUserId: acting.userId,
       });
       return c.json(result, 200);
@@ -324,7 +324,7 @@ export function registerCapabilityConnectionsRoutes(app: HubHono): void {
       const msg = err instanceof Error ? err.message : "Unknown error";
       const status = statusForError(msg);
       if (status === 500)
-        logger.error({ err, capabilityId, id }, "connection remove failed");
+        logger.error({ err, capabilityId, id }, "credential remove failed");
       return c.json({ error: msg }, status);
     }
   });

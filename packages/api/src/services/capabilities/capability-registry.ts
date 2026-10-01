@@ -68,7 +68,6 @@ import { declaredReadOnly } from "./capability-drift.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
 import { rankByTerms, type TermMatch } from "../../utils/term-match.js";
 import {
-  connectionFromRegistry,
   resolveCapabilityBlock,
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
@@ -1270,7 +1269,18 @@ export function sectionCapabilities(
     const blocked = resolveCapabilityBlock({
       name: row.name,
       containerId: row.containerId,
-      connection: connectionFromRegistry(row.connection),
+      // The registry's `connection` is the flat `{required, connected, provider}`
+      // projection; `resolveCapabilityBlock` speaks the catalog's
+      // `CapabilityCardConnection`. Fold the one projection into the other HERE
+      // (the single call site) rather than through a second converter.
+      connection: row.connection
+        ? {
+            required: row.connection.required,
+            kind: "provider",
+            provider: row.connection.provider,
+            state: row.connection.connected ? "connected" : "missing",
+          }
+        : undefined,
       // "Needs enable" = the execute door would REFUSE (`not_approved`): the
       // SAME predicate the runnable-action projection advertises by
       // (`isToolRowLaunchable` — tool approved AND a verb whose backing skill

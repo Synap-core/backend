@@ -20,10 +20,11 @@
 
 import { z } from "@hono/zod-openapi";
 
+import { loadCapabilityTemplate } from "../../../services/capabilities/create-from-definition.js";
 import {
-  createCapabilityFromDefinition,
-  loadCapabilityTemplate,
-} from "../../../services/capabilities/create-from-definition.js";
+  applyCapabilityDefinition,
+  capabilityInstallParamsSchema,
+} from "../../../services/capabilities/marketplace-install.js";
 import {
   isSetupRequiredLike,
   SETUP_FAILURE_CLASSES,
@@ -273,7 +274,7 @@ const ApplyCapabilityRequestSchema = z
       .regex(/^[a-z0-9-]+$/)
       .optional(),
     /** Param values substituted into `{{param}}` placeholders. */
-    params: z.record(z.string(), z.unknown()).optional(),
+    params: capabilityInstallParamsSchema.optional(),
     /** Omit for pod-wide. */
     workspaceId: z.string().uuid().optional(),
   })
@@ -889,32 +890,13 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         workspaceId ?? null
       );
 
-      // NORMALIZE the two collection fields the applier iterates unguarded
-      // (`for (const t of def.tools)` / `for (const s of def.skills)` in
-      // create-from-definition.ts). The INLINE path already gets `[]` from the
-      // schema's `.default([])`; the templateKey path never touches that schema
-      // (parsing a CP definition through it would STRIP contentHash/emits/
-      // updatePolicy/metadata), so a tools-only CP template — e.g. `discord-bot`,
-      // which ships no `skills` key at all — would otherwise TypeError into a 500.
-      // Spread-then-override: every other CP-injected field survives untouched.
-      const normalized = {
-        ...(definition as Record<string, unknown>),
-        tools: Array.isArray((definition as { tools?: unknown }).tools)
-          ? (definition as { tools: unknown[] }).tools
-          : [],
-        skills: Array.isArray((definition as { skills?: unknown }).skills)
-          ? (definition as { skills: unknown[] }).skills
-          : [],
-      };
-
-      const result = await createCapabilityFromDefinition(
-        // Inline defs are structurally validated by CapabilityDefinitionSchema;
-        // `providerSpec` is passed through as opaque JSON (the applier re-casts it
-        // to Record), so a boundary cast to the applier's input type is safe.
-        normalized as unknown as Parameters<
-          typeof createCapabilityFromDefinition
-        >[0],
-        body.params ?? {},
+      // The shared apply step (marketplace-install.applyCapabilityDefinition)
+      // normalizes the two collection fields the applier iterates unguarded
+      // (`for (const t of def.tools)` / `for (const s of def.skills)`) and threads
+      // `params` into the governed `createCapabilityFromDefinition`.
+      const result = await applyCapabilityDefinition(
+        definition,
+        body.params,
         ctx
       );
       return c.json(result, 200);

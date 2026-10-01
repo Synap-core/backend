@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { secrets } from "@synap/database/schema";
 
-import { mergeConnectionViews } from "./capability-connections.js";
+import { mergeCredentialViews } from "./capability-connections.js";
 
 /**
- * `mergeConnectionViews` — the pure core of the MERGED connection list (the fix
+ * `mergeCredentialViews` — the pure core of the MERGED credential list (the fix
  * for "Connected card + empty list"). It unions the persisted registry rows with
  * the live Nango connections so the list shows what the card shows, deduped on
  * accountHint == Nango connectionId, and — crucially — preserves persisted rows
@@ -31,9 +31,9 @@ function row(
 
 const CONN = "conn_abcdef123456";
 
-describe("mergeConnectionViews", () => {
+describe("mergeCredentialViews", () => {
   it("(a) live connection with no secrets row → one SYNTHETIC row (persisted:false)", () => {
-    const views = mergeConnectionViews([], {
+    const views = mergeCredentialViews([], {
       ok: true,
       connections: [{ connectionId: CONN, provider: "google" }],
     });
@@ -58,7 +58,7 @@ describe("mergeConnectionViews", () => {
     const persisted = [
       row({ id: "sec-1", accountHint: CONN, name: "google · 123456" }),
     ];
-    const views = mergeConnectionViews(persisted, {
+    const views = mergeCredentialViews(persisted, {
       ok: true,
       connections: [{ connectionId: CONN, provider: "google" }],
     });
@@ -79,7 +79,7 @@ describe("mergeConnectionViews", () => {
       row({ id: "sec-1", accountHint: CONN, isDefault: true }),
       row({ id: "sec-2", accountHint: "conn_other999999" }),
     ];
-    const views = mergeConnectionViews(persisted, {
+    const views = mergeCredentialViews(persisted, {
       ok: false,
       connections: [],
     });
@@ -95,7 +95,7 @@ describe("mergeConnectionViews", () => {
     const persisted = [
       row({ id: "sec-1", accountHint: CONN, connectionState: "needs_reauth" }),
     ];
-    const views = mergeConnectionViews(persisted, {
+    const views = mergeCredentialViews(persisted, {
       ok: false,
       connections: [],
     });
@@ -109,7 +109,7 @@ describe("mergeConnectionViews", () => {
       row({ id: "sec-user", isDefault: true, isPodWide: false }),
       row({ id: "sec-pod", isDefault: true, isPodWide: true }),
     ];
-    const views = mergeConnectionViews(persisted, {
+    const views = mergeCredentialViews(persisted, {
       ok: false,
       connections: [],
     });

@@ -218,21 +218,3 @@ export function resolveCapabilityBlock(input: {
   }
   return undefined;
 }
-
-/**
- * Adapt the REGISTRY's connection shape (`{required, connected, provider}` —
- * `RegistryCapability.connection`) to the CATALOG's (`{required, kind, state,
- * provider}`). Two shapes for one fact is pre-existing debt; converting in ONE
- * place is what stops a third from appearing at each call site.
- */
-export function connectionFromRegistry(
-  conn: { required: boolean; connected: boolean; provider?: string } | undefined
-): CapabilityCardConnection | undefined {
-  if (!conn) return undefined;
-  return {
-    required: conn.required,
-    kind: "provider",
-    ...(conn.provider ? { provider: conn.provider } : {}),
-    state: conn.connected ? "connected" : "missing",
-  };
-}

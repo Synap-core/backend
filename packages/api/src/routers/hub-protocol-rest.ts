@@ -32,7 +32,7 @@ import {
   registerCapabilitiesCatalogRoutes,
   registerCapabilitiesActionsRoutes,
   registerCapabilitiesExecuteRoutes,
-  registerCapabilityConnectionsRoutes,
+  registerCapabilityCredentialsRoutes,
   registerLoopsRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
@@ -291,7 +291,7 @@ registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-templat
 registerCapabilitiesCatalogRoutes(app); // GET /capabilities/catalog (pack-grouped, status-computed cards)
 registerCapabilitiesActionsRoutes(app); // GET /capabilities/actions (honestly executable action projection)
 registerCapabilitiesExecuteRoutes(app); // POST /capabilities/execute (agnostic capability launcher)
-registerCapabilityConnectionsRoutes(app); // GET/POST/PATCH/DELETE /capabilities/:capabilityId/connections (W4 connection CRUD)
+registerCapabilityCredentialsRoutes(app); // GET/POST/PATCH/DELETE /capabilities/:capabilityId/credentials (W4 credential CRUD)
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse

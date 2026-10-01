@@ -1,8 +1,8 @@
 /**
- * Capability-connection service — the SINGLE source of truth for CRUD over a
- * capability's connections (Wave 4).
+ * Capability-credential service — the SINGLE source of truth for CRUD over a
+ * capability's credentials (Wave 4).
  *
- * A "connection" is a `secrets` row (the vault IS the connection registry, plan
+ * A "credential" is a `secrets` row (the vault IS the credential registry, plan
  * §3.2) that carries `capability_id`. It optionally binds to a context object
  * (`context_type`/`context_id`), is one of possibly-many under a capability with
  * exactly one `is_default`, and — for a Nango 1-of-N account — an `account_hint`.
@@ -28,8 +28,8 @@ import { resolveCapabilityNangoProviderKeys } from "./capability-provider-resolu
 
 // ── Public shapes ─────────────────────────────────────────────────────────────
 
-/** A connection as surfaced to callers — NEVER carries the secret value. */
-export interface CapabilityConnectionView {
+/** A credential as surfaced to callers — NEVER carries the secret value. */
+export interface CapabilityCredentialView {
   /** Real `secrets.id` for a persisted row; synthetic `nango:<connectionId>`
    *  for a live-Nango connection with no registry row yet. */
   id: string;
@@ -68,12 +68,12 @@ export interface CapabilityConnectionView {
 
 /**
  * kind heuristic — determined WITHOUT decrypting the value (a list must stay
- * cheap and must never touch plaintext). A Nango connection is the one that
- * delegates its credential to a provider: it carries a `provider_integration_id`
- * FK or an `account_hint` (the 1-of-N account selector). Everything else is a
- * direct vault key.
+ * cheap and must never touch plaintext). A Nango credential is the one that
+ * delegates its secret to a provider connection: it carries a
+ * `provider_integration_id` FK or an `account_hint` (the 1-of-N account
+ * selector). Everything else is a direct vault key.
  */
-function connectionKind(row: {
+function credentialKind(row: {
   providerIntegrationId: string | null;
   accountHint: string | null;
 }): "nango" | "vault" {
@@ -86,9 +86,9 @@ function connectionKind(row: {
  * Liveness from the connection-health mirror (`secrets.connection_state`). This
  * is the SAME `needs_reauth` signal the catalog reads (`capability-catalog.ts`
  * loadConnState, :575-593) — kept in lock-step so the list and the card agree on
- * whether a connection is usable, not merely present.
+ * whether a credential is usable, not merely present.
  */
-function connectionHealth(
+function credentialHealth(
   connectionState: string | null | undefined
 ): "connected" | "needs_reauth" {
   return connectionState === "needs_reauth" ? "needs_reauth" : "connected";
@@ -98,7 +98,7 @@ function connectionHealth(
 function persistedRowToView(
   row: typeof secrets.$inferSelect,
   provider: string | null
-): CapabilityConnectionView {
+): CapabilityCredentialView {
   return {
     id: row.id,
     label: row.name,
@@ -106,10 +106,10 @@ function persistedRowToView(
     contextId: row.contextId ?? null,
     isDefault: row.isDefault,
     accountHint: row.accountHint ?? null,
-    kind: connectionKind(row),
+    kind: credentialKind(row),
     isPodWide: row.isPodWide,
     provider,
-    health: connectionHealth(row.connectionState),
+    health: credentialHealth(row.connectionState),
     persisted: true,
   };
 }
@@ -123,8 +123,8 @@ function persistedRowToView(
  * for the UI without touching stored state (setDefault still acts on real rows).
  */
 function enforceOneDefault(
-  views: CapabilityConnectionView[]
-): CapabilityConnectionView[] {
+  views: CapabilityCredentialView[]
+): CapabilityCredentialView[] {
   const idx = views.findIndex((v) => v.isDefault);
   const winner = idx >= 0 ? idx : views.length > 0 ? 0 : -1;
   return views.map((v, i) => ({ ...v, isDefault: i === winner }));
@@ -133,15 +133,15 @@ function enforceOneDefault(
 // ── Ownership gate (mirrors tools.ts bindCredential) ──────────────────────────
 
 /**
- * Load the connection (a `secrets` row) for `connectionId` scoped to
+ * Load the credential (a `secrets` row) for `credentialId` scoped to
  * `capabilityId` (so a caller can never address a secret that is not this
- * capability's connection), then OWNER-gate it: `secret.userId === actorUserId`,
+ * capability's credential), then OWNER-gate it: `secret.userId === actorUserId`,
  * else fall back to pod-admin. Throws (Error) when not found; `requirePodAdmin`
  * throws a TRPCError when the actor is neither owner nor admin.
  */
-async function loadOwnedConnection(
+async function loadOwnedCredential(
   capabilityId: string,
-  connectionId: string,
+  credentialId: string,
   actorUserId: string
 ) {
   const [row] = await db
@@ -149,16 +149,16 @@ async function loadOwnedConnection(
     .from(secrets)
     .where(
       and(
-        eq(secrets.id, connectionId),
+        eq(secrets.id, credentialId),
         eq(secrets.capabilityId, capabilityId),
         isNull(secrets.deletedAt)
       )
     )
     .limit(1);
   if (!row) {
-    throw new Error("Connection not found for this capability.");
+    throw new Error("Credential not found for this capability.");
   }
-  // Owner floor, PLUS a pod-wide floor: a pod-wide connection (shared vault key)
+  // Owner floor, PLUS a pod-wide floor: a pod-wide credential (shared vault key)
   // is a pod-level object even though it is owned by the admin who created it, so
   // mutating it always requires pod-admin — never just the owning actor.
   if (row.isPodWide || row.userId !== actorUserId) {
@@ -168,7 +168,7 @@ async function loadOwnedConnection(
 }
 
 /**
- * Unset the current default connection(s) for a capability WITHIN a tier
+ * Unset the current default credential(s) for a capability WITHIN a tier
  * (respects the partial unique index `idx_secrets_capability_default`, which is
  * keyed on (capability_id, is_pod_wide) so a per-user default and a pod-wide
  * default coexist). Scoping to the SAME tier means promoting a pod-wide default
@@ -202,15 +202,15 @@ async function unsetCapabilityDefault(
 // ── list ──────────────────────────────────────────────────────────────────────
 
 /**
- * List a capability's connections (metadata only, never values). Owner-scoped:
- * an actor sees their own connections; if the capability has connections owned by
+ * List a capability's credentials (metadata only, never values). Owner-scoped:
+ * an actor sees their own credentials; if the capability has credentials owned by
  * ANOTHER user, the actor must be a pod-admin to see them (else `requirePodAdmin`
  * throws) — mirrors the bindCredential ownership floor.
  */
-export async function listConnections(
+export async function listCredentials(
   capabilityId: string,
   actorUserId: string
-): Promise<CapabilityConnectionView[]> {
+): Promise<CapabilityCredentialView[]> {
   // Reconcile live Nango OAuth connections into the registry first (backfill +
   // refresh) so a Nango-backed capability's accounts appear here and become
   // pickable. Best-effort: a Nango outage must never break the list.
@@ -226,8 +226,8 @@ export async function listConnections(
     )
     .orderBy(asc(secrets.createdAt));
 
-  // A member always sees their OWN connections + any POD-WIDE connection (a shared
-  // key they can legitimately use). Foreign PER-USER connections (another member's
+  // A member always sees their OWN credentials + any POD-WIDE credential (a shared
+  // key they can legitimately use). Foreign PER-USER credentials (another member's
   // private key) are only revealed to a pod-admin — but their mere existence must
   // NOT error a normal member (that was the old all-or-nothing `requirePodAdmin`
   // throw). So compute admin-ness non-throwingly and filter rather than throw.
@@ -274,7 +274,7 @@ export async function listConnections(
     }
   }
 
-  return mergeConnectionViews(visible, {
+  return mergeCredentialViews(visible, {
     ok: liveOk,
     connections: liveConnections,
   });
@@ -282,19 +282,19 @@ export async function listConnections(
 
 /**
  * Merge persisted registry rows with the live Nango connections into ONE view —
- * the pure core of `listConnections` (exported for test). A live connection with
+ * the pure core of `listCredentials` (exported for test). A live connection with
  * no persisted pointer becomes a SYNTHETIC row (`persisted:false`); the
  * persisted↔live join is on accountHint == Nango connectionId, so a mirrored
- * connection appears exactly ONCE. When Nango faulted (`live.ok === false`) the
+ * credential appears exactly ONCE. When Nango faulted (`live.ok === false`) the
  * persisted rows are returned untouched — never blanked, never synthesized over.
  */
-export function mergeConnectionViews(
+export function mergeCredentialViews(
   persisted: Array<typeof secrets.$inferSelect>,
   live: {
     ok: boolean;
     connections: Array<{ connectionId: string; provider: string }>;
   }
-): CapabilityConnectionView[] {
+): CapabilityCredentialView[] {
   const hintToProvider = new Map(
     live.connections.map((c) => [c.connectionId, c.provider] as const)
   );
@@ -302,10 +302,10 @@ export function mergeConnectionViews(
   // Persisted rows first — a Nango pointer row's provider comes from the live
   // join (the row stores only its accountHint/connectionId, not the provider key).
   const persistedHints = new Set<string>();
-  const views: CapabilityConnectionView[] = persisted.map((r) => {
+  const views: CapabilityCredentialView[] = persisted.map((r) => {
     if (r.accountHint) persistedHints.add(r.accountHint);
     const provider =
-      connectionKind(r) === "nango" && r.accountHint
+      credentialKind(r) === "nango" && r.accountHint
         ? (hintToProvider.get(r.accountHint) ?? null)
         : null;
     return persistedRowToView(r, provider);
@@ -338,34 +338,34 @@ export function mergeConnectionViews(
 
 // ── add ────────────────────────────────────────────────────────────────────────
 
-export interface AddConnectionInput {
+export interface AddCredentialInput {
   capabilityId: string;
   actorUserId: string;
   label: string;
-  /** Optional secret value — a Nango connection has none of its own. */
+  /** Optional secret value — a Nango credential has none of its own. */
   value?: string;
   contextType?: string | null;
   contextId?: string | null;
   accountHint?: string | null;
   isDefault?: boolean;
   /**
-   * Mark this a POD-WIDE connection (shared vault key). Pod-admin only (enforced
-   * here). VAULT ONLY — rejected for a Nango connection (one carrying an
+   * Mark this a POD-WIDE credential (shared vault key). Pod-admin only (enforced
+   * here). VAULT ONLY — rejected for a Nango credential (one carrying an
    * accountHint), which would be an unsupported pod-wide OAuth.
    */
   isPodWide?: boolean;
 }
 
 /**
- * Create a server-encrypted connection stamped with `capability_id` + fields.
- * When `isDefault` is set OR this is the capability's FIRST connection IN ITS
+ * Create a server-encrypted credential stamped with `capability_id` + fields.
+ * When `isDefault` is set OR this is the capability's FIRST credential IN ITS
  * TIER, any existing default of that tier is unset first and this one becomes
  * default (respects `idx_secrets_capability_default`, keyed on
  * (capability_id, is_pod_wide)). The secret is always owned by the actor.
  */
-export async function addConnection(
-  input: AddConnectionInput
-): Promise<CapabilityConnectionView> {
+export async function addCredential(
+  input: AddCredentialInput
+): Promise<CapabilityCredentialView> {
   const {
     capabilityId,
     actorUserId,
@@ -377,21 +377,21 @@ export async function addConnection(
   } = input;
   const isPodWide = input.isPodWide === true;
 
-  // Write RBAC: creating a pod-wide (shared) connection is a pod-level privileged
-  // action. VAULT ONLY: reject a pod-wide Nango connection (accountHint present) —
+  // Write RBAC: creating a pod-wide (shared) credential is a pod-level privileged
+  // action. VAULT ONLY: reject a pod-wide Nango credential (accountHint present) —
   // a pod-wide OAuth would need run-as-owner proxying and is out of scope.
   if (isPodWide) {
     if (accountHint != null) {
       throw new Error(
-        "A pod-wide connection must be a vault key — Nango/account connections cannot be pod-wide."
+        "A pod-wide credential must be a vault key — Nango/account credentials cannot be pod-wide."
       );
     }
     await requirePodAdmin(actorUserId);
   }
 
-  // First-connection auto-default (per TIER): if the capability has no connection
+  // First-credential auto-default (per TIER): if the capability has no credential
   // yet in this tier, this one must be its default (the resolver's is_default
-  // fallback needs a target). Tier-scoped so the first pod-wide connection becomes
+  // fallback needs a target). Tier-scoped so the first pod-wide credential becomes
   // the pod-wide default without stealing a member's per-user default slot.
   const [existingAny] = await db
     .select({ id: secrets.id })
@@ -410,8 +410,8 @@ export async function addConnection(
   if (makeDefault) await unsetCapabilityDefault(capabilityId, { isPodWide });
 
   // Reuse the SAME server-side encryption the vault route + template applier use.
-  // A connection with no value of its own (Nango) still stores an (empty) blob so
-  // the row shape is uniform — the credential lives on the linked provider.
+  // A credential with no value of its own (Nango) still stores an (empty) blob so
+  // the row shape is uniform — the credential lives on the linked provider connection.
   const blob = encryptServerSide(value ?? "");
 
   const [secret] = await db
@@ -447,7 +447,7 @@ export async function addConnection(
   // none so context-less rows dedupe under the unique index (NULLs are distinct
   // in Postgres). Idempotent: refresh the label/context on conflict.
   // BEST-EFFORT: the "used by" join is presentational — a hiccup writing it must
-  // never fail the connection creation (the secret + audit are already committed).
+  // never fail the credential creation (the secret + audit are already committed).
   try {
     await db
       .insert(secretUsages)
@@ -481,15 +481,15 @@ export async function addConnection(
   }
 
   // provider is null here — the write door doesn't resolve live Nango; the merged
-  // `listConnections` is the source of provider truth.
+  // `listCredentials` is the source of provider truth.
   return persistedRowToView(secret, null);
 }
 
 // ── update ─────────────────────────────────────────────────────────────────────
 
-export interface UpdateConnectionInput {
+export interface UpdateCredentialInput {
   capabilityId: string;
-  connectionId: string;
+  credentialId: string;
   actorUserId: string;
   label?: string;
   contextType?: string | null;
@@ -503,32 +503,32 @@ export interface UpdateConnectionInput {
 }
 
 /**
- * Update a connection's fields; rotate (re-encrypt) when `value` is supplied;
+ * Update a credential's fields; rotate (re-encrypt) when `value` is supplied;
  * enforce a single default PER TIER (unset the target tier's other default when
  * this row is/becomes default).
  */
-export async function updateConnection(
-  input: UpdateConnectionInput
-): Promise<CapabilityConnectionView> {
-  const { capabilityId, connectionId, actorUserId } = input;
-  // loadOwnedConnection already requires pod-admin when the EXISTING row is
+export async function updateCredential(
+  input: UpdateCredentialInput
+): Promise<CapabilityCredentialView> {
+  const { capabilityId, credentialId, actorUserId } = input;
+  // loadOwnedCredential already requires pod-admin when the EXISTING row is
   // pod-wide (or foreign).
-  const existing = await loadOwnedConnection(
+  const existing = await loadOwnedCredential(
     capabilityId,
-    connectionId,
+    credentialId,
     actorUserId
   );
 
-  // Promoting a per-user connection TO pod-wide is itself a pod-level privileged
-  // action (loadOwnedConnection only gated the existing state). VAULT ONLY: a
-  // Nango connection (accountHint present, existing or being set) can't be pod-wide.
+  // Promoting a per-user credential TO pod-wide is itself a pod-level privileged
+  // action (loadOwnedCredential only gated the existing state). VAULT ONLY: a
+  // Nango credential (accountHint present, existing or being set) can't be pod-wide.
   if (input.isPodWide === true && !existing.isPodWide) {
     const effectiveAccountHint =
       input.accountHint !== undefined
         ? input.accountHint
         : existing.accountHint;
     // Gate on the SAME discriminator the runtime resolver uses
-    // (`connectionKind` = providerIntegrationId OR accountHint), not accountHint
+    // (`credentialKind` = providerIntegrationId OR accountHint), not accountHint
     // alone. A row carrying `providerIntegrationId` with a null accountHint is
     // still Nango at dispatch time (external-dispatch routes on
     // providerIntegrationId first), so it must never be promotable pod-wide.
@@ -536,7 +536,7 @@ export async function updateConnection(
       existing.providerIntegrationId != null || effectiveAccountHint != null;
     if (isNango) {
       throw new Error(
-        "A pod-wide connection must be a vault key — Nango/account connections cannot be pod-wide."
+        "A pod-wide credential must be a vault key — Nango/account credentials cannot be pod-wide."
       );
     }
     await requirePodAdmin(actorUserId);
@@ -550,7 +550,7 @@ export async function updateConnection(
   if (effectiveIsDefault) {
     await unsetCapabilityDefault(capabilityId, {
       isPodWide: effectiveIsPodWide,
-      exceptId: connectionId,
+      exceptId: credentialId,
     });
   }
 
@@ -591,20 +591,20 @@ export async function updateConnection(
 // ── remove ─────────────────────────────────────────────────────────────────────
 
 /**
- * Soft-delete a connection (sets `deleted_at`/`deleted_by`). When the removed row
- * was the capability's default and other connections remain, the OLDEST remaining
- * connection is promoted to default so the capability always has a resolvable
+ * Soft-delete a credential (sets `deleted_at`/`deleted_by`). When the removed row
+ * was the capability's default and other credentials remain, the OLDEST remaining
+ * credential is promoted to default so the capability always has a resolvable
  * default.
  */
-export async function removeConnection(input: {
+export async function removeCredential(input: {
   capabilityId: string;
-  connectionId: string;
+  credentialId: string;
   actorUserId: string;
 }): Promise<{ ok: true; promotedDefaultId: string | null }> {
-  const { capabilityId, connectionId, actorUserId } = input;
-  const existing = await loadOwnedConnection(
+  const { capabilityId, credentialId, actorUserId } = input;
+  const existing = await loadOwnedCredential(
     capabilityId,
-    connectionId,
+    credentialId,
     actorUserId
   );
 
@@ -626,7 +626,7 @@ export async function removeConnection(input: {
   });
 
   // Drop the "used by" join row(s) for this secret under this capability — the
-  // Connections face must stop showing a removed connection. (Soft-deleting the
+  // Connections face must stop showing a removed credential. (Soft-deleting the
   // secret does not cascade the join; the FK cascade only fires on hard delete.)
   await db
     .delete(secretUsages)
@@ -679,7 +679,7 @@ export async function removeConnection(input: {
  * so the UI can warn: revoking here logs the OAuth account out everywhere.
  *
  * Ownership: a persisted pointer row is owner/pod-admin gated (pod-wide or
- * foreign rows require pod-admin — same floor as `loadOwnedConnection`); a
+ * foreign rows require pod-admin — same floor as `loadOwnedCredential`); a
  * synthetic connection is authorized by proving it is one of the ACTOR's own live
  * Nango connections (Nango filters by `end_user.id`), so a member can never
  * revoke another user's connection.

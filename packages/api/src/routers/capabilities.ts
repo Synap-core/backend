@@ -83,10 +83,11 @@ import {
 import { capabilityContainersRouter } from "./capability-containers.js";
 import { buildCapabilityCatalog } from "../services/capabilities/capability-catalog.js";
 import { buildAutomationCatalog } from "../services/capabilities/automation-catalog.js";
+import { loadCapabilityTemplate } from "../services/capabilities/create-from-definition.js";
 import {
-  createCapabilityFromDefinition,
-  loadCapabilityTemplate,
-} from "../services/capabilities/create-from-definition.js";
+  applyCapabilityDefinition,
+  capabilityInstallParamsSchema,
+} from "../services/capabilities/marketplace-install.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
 import { CapabilityExecuteInput } from "../contracts/capability-execute.js";
 import { setCapabilityRenderer } from "../services/capabilities/set-capability-renderer.js";
@@ -100,10 +101,10 @@ import {
 import { reconcileCapabilitiesToTemplates } from "../services/capabilities/reconcile-capabilities-to-templates.js";
 import { CAPABILITY_UPDATE_GROUP_KEY } from "../services/capabilities/notify-capability-updates.js";
 import {
-  addConnection,
-  listConnections,
-  removeConnection,
-  updateConnection,
+  addCredential,
+  listCredentials,
+  removeCredential,
+  updateCredential,
   disconnectConnection,
 } from "../services/capabilities/capability-connections.js";
 
@@ -829,18 +830,18 @@ export const capabilitiesRouter = router({
     }),
 
   /**
-   * Capability CONNECTIONS (Wave 4) — CRUD over a capability's connections
+   * Capability CREDENTIALS (Wave 4) — CRUD over a capability's credentials
    * (vault rows carrying `capability_id`). tRPC mirror of the Hub REST
-   * `/capabilities/:capabilityId/connections` doors so the browser can drive the
+   * `/capabilities/:capabilityId/credentials` doors so the browser can drive the
    * SAME owner-gated `capability-connections` service (acting as the authenticated
    * operator via `ctx.userId`). NEVER returns a secret value.
    */
-  connections: router({
+  credentials: router({
     list: protectedProcedure
       .input(z.object({ capabilityId: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
         const userId = requireUserId(ctx.userId);
-        return listConnections(input.capabilityId, userId);
+        return listCredentials(input.capabilityId, userId);
       }),
 
     add: protectedProcedure
@@ -858,14 +859,14 @@ export const capabilitiesRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const userId = requireUserId(ctx.userId);
-        return addConnection({ ...input, actorUserId: userId });
+        return addCredential({ ...input, actorUserId: userId });
       }),
 
     update: protectedProcedure
       .input(
         z.object({
           capabilityId: z.string().uuid(),
-          connectionId: z.string().uuid(),
+          credentialId: z.string().uuid(),
           label: z.string().min(1).max(255).optional(),
           value: z.string().optional(),
           contextType: z.string().nullable().optional(),
@@ -877,19 +878,19 @@ export const capabilitiesRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const userId = requireUserId(ctx.userId);
-        return updateConnection({ ...input, actorUserId: userId });
+        return updateCredential({ ...input, actorUserId: userId });
       }),
 
     remove: protectedProcedure
       .input(
         z.object({
           capabilityId: z.string().uuid(),
-          connectionId: z.string().uuid(),
+          credentialId: z.string().uuid(),
         })
       )
       .mutation(async ({ ctx, input }) => {
         const userId = requireUserId(ctx.userId);
-        return removeConnection({ ...input, actorUserId: userId });
+        return removeCredential({ ...input, actorUserId: userId });
       }),
 
     /**
@@ -1054,7 +1055,7 @@ export const capabilitiesRouter = router({
          * installs WITH its key in one governed call (creating the vault secret),
          * instead of throwing. Mirrors the Hub REST `apply` door (rest/capabilities).
          */
-        params: z.record(z.string(), z.unknown()).optional(),
+        params: capabilityInstallParamsSchema.optional(),
         workspaceId: z.string().uuid(),
       })
     )
@@ -1065,7 +1066,7 @@ export const capabilitiesRouter = router({
           workspaceId: input.workspaceId,
         }));
 
-      return createCapabilityFromDefinition(definition, input.params ?? {}, {
+      return applyCapabilityDefinition(definition, input.params, {
         ...ctx,
         workspaceId: input.workspaceId,
       });

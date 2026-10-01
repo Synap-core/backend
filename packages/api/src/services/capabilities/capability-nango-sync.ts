@@ -3,7 +3,7 @@
  *
  * A Nango OAuth connection's credential lives in Nango, NOT the vault — so it is
  * never written to `secrets` by the connect flow, and therefore never appears in
- * the capability's connection registry (`listConnections`) nor becomes pickable
+ * the capability's credential registry (`listCredentials`) nor becomes pickable
  * by the run-time `connectionSelector`. This module closes that gap: for a
  * capability whose tool(s) use the `nango://` scheme, it mirrors the user's live
  * Nango connections into `secrets` POINTER rows — one row per Nango connection,
@@ -11,7 +11,7 @@
  * proxy) and `account_hint` (which Nango connection it represents). The row holds
  * no real key (an empty encrypted blob), because the credential stays in Nango.
  *
- * It is a RECONCILER, not a one-shot: called lazily from `listConnections`, it
+ * It is a RECONCILER, not a one-shot: called lazily from `listCredentials`, it
  * both BACKFILLS pre-existing connections and stays fresh as new ones appear.
  * Idempotent (dedupes on `account_hint`) and BEST-EFFORT (a Nango outage must
  * never break the list — callers swallow its errors).
