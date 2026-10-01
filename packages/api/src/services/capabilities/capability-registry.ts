@@ -65,6 +65,7 @@ import {
 } from "../skills/visibility.js";
 import { isToolRowLaunchable } from "./verb-launchable.js";
 import { declaredReadOnly } from "./capability-drift.js";
+import { verbType } from "./capability-catalog.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
 import { rankByTerms, type TermMatch } from "../../utils/term-match.js";
 import {
@@ -531,6 +532,116 @@ export function buildVerbStates(
   });
 }
 
+// ── Skill rows as verbs (the tool-less half of the routing axis) ─────────────
+
+/**
+ * The facts a `skills` row carries that a verb row is built from. Structurally a
+ * subset of the `skills` table select, named so the projection below reads as
+ * what it consumes rather than taking the whole row.
+ */
+interface SkillVerbFacts {
+  name: string;
+  kind: string;
+  status: string;
+  approved: boolean | null;
+  metadata: unknown;
+  parameters: unknown;
+  intent: string | null;
+}
+
+/**
+ * A tool-less skill IS a verb, and the registry must say so.
+ *
+ * ── WHY THIS EXISTS (the live defect, 2026-10-01) ──────────────────────────
+ * `buildVerbStates` above can only see verbs that hang off a `tools` row's
+ * catalog. A skill that `requires` NO tool has no such row — and both producers
+ * of that shape declare `tools: []`: `SYNAP_CORE_DEFINITION` (47 builtins) and
+ * the CP's `web-read` template. Those verbs therefore reached the registry as
+ * `kind:"skill"` rows carrying NO `verbs` array at all, and every consumer that
+ * folds the routing axis iterates `c.verbs ?? []`. So the intent was written,
+ * stored, and read, and still reached nothing: an agent asking
+ * `intent:"send_message"` got only `gmail_send`, while the always-installed
+ * `messaging.send` was invisible. Verified live, and reproduced under PGlite in
+ * `builtin-skill-intent-reachability.pglite.test.ts`.
+ *
+ * ── WHY THE VERB ID IS THE SKILL NAME ──────────────────────────────────────
+ * It is already the identity, three times over, and re-deriving a new one would
+ * make the intent resolve to a verb no door can run:
+ *   - `executeCapability` resolves `verbId` with `eq(skills.name, verbId)`;
+ *   - `projectRunnableActions` already projects a skill-only row with
+ *     `verbId = capability.name` and calls it "the same key the catalog card's
+ *     verb and the execute door's `verbId` resolve by";
+ *   - the registry's own contract for a TOOL verb is that its catalog `id`
+ *     mirrors the requiring skill's name.
+ * So the skill name is what a caller must be handed, and this row says so.
+ *
+ * ── WHY `[]` RATHER THAN A ROW WITH NO INTENT ───────────────────────────────
+ * A verb that declares no intent must stay ABSENT from the index so a consumer
+ * can tell "declares none" from "declares something" — the same reason
+ * `buildVerbStates` omits the key entirely rather than writing
+ * `intent: undefined`, and the reason `foldVerbsByIntent` never guesses. An
+ * unannotated verb (all 30-odd pod-internal exemptions) is still listed as a
+ * `verbs` row so the shape is uniform and `isVerbLaunchable` has something to
+ * judge; it simply carries no `intent` and so cannot enter the index.
+ *
+ * ── ROUTING, NEVER AUTHORIZATION ───────────────────────────────────────────
+ * This adds DISCOVERABILITY. It cannot widen what a caller may run: every
+ * execution fact below (`backingSkillExecutable`, the read-only declaration)
+ * is read off the SAME row the run door reads, and `granted` is `false`
+ * unconditionally — a skill row carries no tool grant, so `foldVerbsByIntent`
+ * reports it un-granted and `runPosture` therefore PROPOSES, exactly as it did
+ * before this row existed. The action projection's own skill-only arm, which
+ * governs what a run actually meets, is untouched.
+ */
+function buildSkillVerb(
+  row: SkillVerbFacts,
+  skillIntentByName: Map<string, string>
+): CapabilityVerbStateWithResponseShape[] {
+  const declared = declaredReadOnly(
+    (row.metadata as Record<string, unknown> | null) ?? null
+  );
+  // The COLUMN is the single writer (migration 0292). The map is built from
+  // `skillRows` with the same empty-string-is-absent rule the write door applies
+  // (`z.string().min(1)`), so a `""` never becomes a routable slug.
+  const intent = skillIntentByName.get(row.name);
+  return [
+    {
+      id: row.name,
+      label: row.name,
+      // Direction for a skill verb, from the SAME `verbType` the catalog card
+      // and the action projection use — never a fresh heuristic that could
+      // disagree with them about whether this verb pulls or pushes.
+      kind: verbType(
+        row.name,
+        row.metadata as Record<string, unknown> | null,
+        row.kind
+      ),
+      // A skill row is not a tool row, so there is no tool grant to resolve and
+      // no `govDefault` in a catalog. `false` is the honest "no grant exists",
+      // which is what makes a non-read-only verb PROPOSE rather than run.
+      granted: false,
+      // Required by the `CapabilityVerbState` contract (`ToolVerb.govDefault`) —
+      // the posture this verb would get with no grant, i.e. exactly the
+      // `effectiveExecMode` below. It carries no decision here: `runPosture`
+      // reads `granted` first and a skill row is never granted, so this is the
+      // value a reader sees for "absent grant", not a second authority.
+      govDefault: "propose",
+      // The verb's default posture absent any grant, kept as the same value a
+      // catalog-derived verb would carry so a consumer reading it cannot
+      // mistake "unmeasured" for "auto".
+      effectiveExecMode: "propose",
+      // Read off THIS row, exactly as `buildVerbStates` does for a tool verb —
+      // so `runPosture` short-circuits to `auto` for a skill that declares
+      // itself read-only, identically on both paths.
+      ...(declared !== undefined ? { declaredReadOnly: declared } : {}),
+      ...(intent ? { intent } : {}),
+      // Whether the execute door COULD launch it: the same lifecycle + approval
+      // test `buildVerbStates` applies to a tool verb's backing skill.
+      backingSkillExecutable: row.status === "active" && row.approved === true,
+    },
+  ];
+}
+
 // ── IS-native tool manifest (Spine 2 / 2b) ────────────────────────────────────
 // The IS publishes its in-process tool registry at GET /api/manifest/tools. We
 // fetch it (cached, TTL below) and map each tool to a `builtin-tool` capability
@@ -877,6 +988,7 @@ export async function listCapabilities(
           // the broad registry for management surfaces, but mark them so the
           // shared action projection never advertises an unlaunchable skill.
           runnable: row.status === "active",
+          verbs: buildSkillVerb(row, skillIntentByName),
         }
   );
 

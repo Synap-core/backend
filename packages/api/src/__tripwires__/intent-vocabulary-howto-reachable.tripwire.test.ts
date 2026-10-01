@@ -50,11 +50,21 @@ describe("the intent-vocabulary 'how to' is reachable", () => {
     expect(order).toMatch(new RegExp(`^${CHAPTER.replace(".", "\\.")}$`, "m"));
   });
 
-  it("SKILL.md points at it, so an agent knows to load it", () => {
+  it("SKILL.md carries it, so an agent actually receives it", () => {
+    // ⚠️ SKILL.md IS A GENERATED BUNDLE (`skills/build.mjs` assembles it from
+    // `_order.txt`), so it does NOT link the chapter by a `system/…` slug — it
+    // INLINES the chapter's body. An earlier version of this test asserted that
+    // pointer and went red the moment the bundle was rebuilt: the guard doing its
+    // job on a wrong assertion. Reachability here means the CONTENT ships in the
+    // bundle an agent downloads, so that is what is asserted — via a line only
+    // this chapter states, not merely the word "intent".
     const skill = readFileSync(join(PKG, "SKILL.md"), "utf8");
-    expect(skill).toMatch(/system\/synap-schema\/intent-vocabulary-ssot/);
-    // And it must be reachable from a TRIGGER an agent would actually hit —
-    // naming the field names is what makes the match happen, not the heading.
+    // Non-vacuity: the scan can still see a heading of the shape it hunts.
+    expect(skill).toMatch(/^## /m);
+    expect(skill).toMatch(/THE SOURCE OF TRUTH IS A TABLE, NOT A UNION/);
+    expect(skill).toMatch(/capability_intents/);
+    // And the TRIGGERS an agent would actually hit — naming the field names is
+    // what makes the match happen, more than the heading does.
     for (const trigger of [
       "intent",
       "provides",

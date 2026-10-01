@@ -124,6 +124,17 @@ function projectWithSource(
       : undefined;
 
     for (const verb of capability.verbs ?? []) {
+      // A `skill` row is NOT a tool row. It now carries ONE verb row of its own
+      // — its own name (see `buildSkillVerb`: a tool-less skill IS a verb, and
+      // the routing axis folds `capability.verbs`) — but it is projected by the
+      // dedicated arm BELOW, which is the projection's own contract for a skill:
+      // it reads `capability.skillKind` for the posture and
+      // `capability.inputSchema` for the parameters. Running it through this loop
+      // instead would classify it with `skillKind: null` (this arm's tool
+      // assumption) and hand it `{}` parameters, so a READ_ONLY builtin like
+      // `entity.query` would read `propose` and a caller would see no schema.
+      // Skipping here is what keeps the two arms from double-projecting a skill.
+      if (capability.kind === "skill") continue;
       // The execute door launches the backing skill, not the tool row. Do not
       // surface a catalog verb when that skill is missing, inactive, or draft.
       if (
@@ -174,11 +185,16 @@ function projectWithSource(
     // 33 Synap Core verbs were projected with no `verbId`, so nothing could match
     // them by name). Teaching docs are kind `teaching-doc`, never `skill`, so
     // this arm cannot reach them.
-    if (
-      capability.kind === "skill" &&
-      (capability.verbs?.length ?? 0) === 0 &&
-      !toolVerbIds.has(capability.name)
-    ) {
+    //
+    // The `verbs` guard is a TOOL-verb test, not a "has verbs" test: a skill row
+    // now carries its OWN single verb (`buildSkillVerb`, skipped by the loop
+    // above), so length is no longer the discriminator. What distinguishes a
+    // skill surfaced HERE from one governed by a tool's verb row is whether some
+    // OTHER row's tool catalog claims its name — which is `toolVerbIds`, built
+    // above and explicitly excluding `kind:"skill"` rows. That set, not
+    // `capability.verbs.length`, is the same rule `sectionCapabilities` applies
+    // and the one that keeps a backing skill from being advertised twice.
+    if (capability.kind === "skill" && !toolVerbIds.has(capability.name)) {
       const skill = capability as Capability & {
         skillKind?: string | null;
         skillMetadata?: Record<string, unknown> | null;
@@ -212,6 +228,16 @@ function projectWithSource(
               }
             : {}),
           parameters: inputSchema(capability.inputSchema),
+          // The routing intent, read off the row's OWN verb (`buildSkillVerb`),
+          // never off a name heuristic. The actions door's `?intent=` filter
+          // intersects the shared reverse index's verb ids with this list, so a
+          // skill row that reached the index but omitted the value here would be
+          // matched and then silently dropped — the exact "declared, invisible"
+          // shape this axis keeps hitting. Absent = the skill declares none,
+          // which `foldVerbsByIntent` agrees with, so the two cannot disagree.
+          ...(capability.verbs?.[0]?.intent
+            ? { intent: capability.verbs[0].intent }
+            : {}),
         },
       });
     }

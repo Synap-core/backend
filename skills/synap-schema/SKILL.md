@@ -334,12 +334,12 @@ TypeScript union:
 SELECT slug, effect, statement FROM capability_intents ORDER BY slug;
 ```
 
-| Column | Meaning |
-|---|---|
-| `slug` | the seat. `^[a-z][a-z0-9_]{0,63}$` (a CHECK constraint) |
-| `effect` | CLOSED axis a rule may key on: `read` \| `write` \| `act` |
-| `statement` | the human sentence |
-| `synonyms` | for FINDING a row, never for identity |
+| Column      | Meaning                                                   |
+| ----------- | --------------------------------------------------------- |
+| `slug`      | the seat. `^[a-z][a-z0-9_]{0,63}$` (a CHECK constraint)   |
+| `effect`    | CLOSED axis a rule may key on: `read` \| `write` \| `act` |
+| `statement` | the human sentence                                        |
+| `synonyms`  | for FINDING a row, never for identity                     |
 
 This is why every code-side copy is a **mirror** and not the source. A slug that fits
 none of the existing rows leaves `intent` UNSET; the vocabulary is deliberately not
@@ -349,15 +349,29 @@ open for developers to mint (cf. W3C Web Intents, abandoned partly for that reas
 
 There are exactly **three**. A fourth was deleted in 2026-10-01 (see below).
 
-| # | Where | Kind | Why it cannot import the SSOT |
-|---|---|---|---|
-| 1 | `synap-backend/packages/database/src/schema/tools.ts` — `ABSTRACT_VERBS` | runtime, the 0283 SEED union (13) | `@synap-core/types` **devDepends on** `@synap/database`. A reverse import is a build cycle — the same constraint that forces `GUIDELINE_SCOPE_ORDER` to be mirrored. |
-| 2 | `synap-backend/packages/types/src/capability-intents/` — `ABSTRACT_INTENTS`, `REGISTERED_EXTRAS`, `CAPABILITY_INTENTS` | runtime, published leaf | Same cycle, other direction. It is a **leaf subpath** (`@synap-core/types/capability-intents`) rather than the `./` barrel because the barrel re-exports `@synap/database` types and a VALUE import from a barrel crashes Hermes (relay ships React Native). |
-| 3 | `synap-control-plane-api/src/seeds/capability-intent-vocabulary.ts` — `ABSTRACT_VERBS`, `REGISTERED_EXTRAS`, `CAPABILITY_INTENTS` | runtime, the CP catalog seeder | The control plane is a **separate deploy target with its own `pnpm-lock.yaml`**. It resolves neither `@synap-core/types` nor the pod's packages (verified: `require.resolve('@synap-core/types')` → `MODULE_NOT_FOUND`). |
+| #   | Where                                                                                                                             | Kind                              | Why it cannot import the SSOT                                                                                                                                                                                                                                |
+| --- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | `synap-backend/packages/database/src/schema/tools.ts` — `ABSTRACT_VERBS`                                                          | runtime, the 0283 SEED union (13) | `@synap-core/types` **devDepends on** `@synap/database`. A reverse import is a build cycle — the same constraint that forces `GUIDELINE_SCOPE_ORDER` to be mirrored.                                                                                         |
+| 2   | `synap-backend/packages/types/src/capability-intents/` — `ABSTRACT_INTENTS`, `REGISTERED_EXTRAS`, `CAPABILITY_INTENTS`            | runtime, published leaf           | Same cycle, other direction. It is a **leaf subpath** (`@synap-core/types/capability-intents`) rather than the `./` barrel because the barrel re-exports `@synap/database` types and a VALUE import from a barrel crashes Hermes (relay ships React Native). |
+| 3   | `synap-control-plane-api/src/seeds/capability-intent-vocabulary.ts` — `ABSTRACT_VERBS`, `REGISTERED_EXTRAS`, `CAPABILITY_INTENTS` | runtime, the CP catalog seeder    | The control plane is a **separate deploy target with its own `pnpm-lock.yaml`**. It resolves neither `@synap-core/types` nor the pod's packages (verified: `require.resolve('@synap-core/types')` → `MODULE_NOT_FOUND`).                                     |
 
 Consumed by: `@synap/api` (`intent-registry`, `create-from-definition`,
 `schemas/playbook-definition.ts`), `synap-app/packages/workspace-templates`
 (`validate.ts` — the `taskIntents` check), and the CP's `seed-capability-templates.ts`.
+
+### Which field on which surface
+
+Search for this chapter by the field you are holding, not by the word "intent":
+
+| Field | Lives on | Means |
+|---|---|---|
+| `intent` | a **skill** in a capability definition; a `ToolVerb` catalog entry | what ONE verb does |
+| `provides` | a **capability template** | every intent the whole PACK serves — must equal the `intent` its skills declare |
+| `taskIntents` | a **workspace template** | what the SPACE needs the pod to be able to do |
+| `requiredIntents` | a **playbook** | what the PROCESS needs the pod to be able to do |
+
+All four are validated against this ONE vocabulary, so a workspace and a playbook
+cannot be spelled from two different lists.
 
 ### THE FOURTH MIRROR WAS DELETED — do not re-add it
 
