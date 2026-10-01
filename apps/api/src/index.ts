@@ -144,8 +144,11 @@ function getRunningApiVersion(): string | null {
 // Generate HTML for MCP Apps embeddable UI
 // This creates a minimal HTML document with CSP that loads the actual UI in an iframe
 function generateAppSrcdoc(kind: string, id: string, embed: boolean): string {
+  // Get base URL from env (for production behind reverse proxy) or construct from port (dev)
   const baseUrl =
-    config.server.baseUrl || `http://localhost:${config.server.port}`;
+    process.env.POD_PUBLIC_URL ||
+    process.env.SYNAP_POD_URL ||
+    `http://localhost:${config.server.port}`;
   const appUrl = `${baseUrl}/apps/${kind}/${id}?embed=${embed ? "1" : "0"}`;
 
   // CSP for secure iframe embedding
