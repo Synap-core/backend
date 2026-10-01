@@ -211,12 +211,9 @@ export function registerAiProvidersRoutes(app: HubHono): void {
         p.encryptedApiKey && isEncryptedServiceKey(p.encryptedApiKey)
           ? decryptServiceKey(p.encryptedApiKey)
           : (p.encryptedApiKey ?? undefined);
-      const apiKey = overrides.get(p.providerId) ?? decryptedKey ?? null;
-      const source = overrides.has(p.providerId)
-        ? userId
-          ? "user"
-          : "workspace"
-        : "pod-wide";
+      const override = overrides.get(p.providerId);
+      const apiKey = override?.key ?? decryptedKey ?? null;
+      const source = override?.source ?? "pod-wide";
       return {
         providerId: p.providerId,
         apiKey,

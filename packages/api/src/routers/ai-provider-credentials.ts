@@ -98,16 +98,23 @@ export async function resolveProviderCredential(
 /**
  * Batch variant of resolveProviderCredential — 2 queries total regardless of
  * how many providers are in the list (vs 2×N with the single-provider version).
- * Returns a map of providerId → decrypted key (null = no override, fall back to pod-wide).
+ *
+ * Returns a map of providerId → the resolved override. `null` key = no
+ * override (caller falls back to pod-wide). `source` records WHICH tier
+ * resolved — a workspace override is NOT "user" just because a userId var
+ * happened to be present on the request.
  */
 export async function resolveProviderCredentialsBatch(
   providerIds: string[],
   workspaceId?: string,
   userId?: string
-): Promise<Map<string, string | null>> {
-  const result = new Map<string, string | null>(
-    providerIds.map((id) => [id, null])
-  );
+): Promise<
+  Map<string, { key: string | null; source: "user" | "workspace" | "pod-wide" }>
+> {
+  const result = new Map<
+    string,
+    { key: string | null; source: "user" | "workspace" | "pod-wide" }
+  >(providerIds.map((id) => [id, { key: null, source: "pod-wide" }]));
   if (providerIds.length === 0) return result;
 
   if (userId) {
@@ -125,11 +132,16 @@ export async function resolveProviderCredentialsBatch(
         )
       );
     for (const c of userCreds) {
-      result.set(c.providerId, decrypt(c.encryptedApiKey));
+      result.set(c.providerId, {
+        key: decrypt(c.encryptedApiKey),
+        source: "user",
+      });
     }
   }
 
-  const needsWorkspace = providerIds.filter((id) => result.get(id) === null);
+  const needsWorkspace = providerIds.filter(
+    (id) => result.get(id)!.key === null
+  );
   if (workspaceId && needsWorkspace.length > 0) {
     const wsCreds = await db
       .select({
@@ -146,7 +158,10 @@ export async function resolveProviderCredentialsBatch(
         )
       );
     for (const c of wsCreds) {
-      result.set(c.providerId, decrypt(c.encryptedApiKey));
+      result.set(c.providerId, {
+        key: decrypt(c.encryptedApiKey),
+        source: "workspace",
+      });
     }
   }
 
