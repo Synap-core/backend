@@ -29,6 +29,7 @@ import {
   isSetupRequiredLike,
   SETUP_FAILURE_CLASSES,
 } from "../../../services/proposals/setup-required-error.js";
+import { mapSetupRequiredToTRPC } from "../../../utils/error-mappers.js";
 import { INTENT_SLUG_RE } from "@synap/database/schema";
 import {
   intentError,
@@ -925,7 +926,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
             connection: err.connection,
             message: err.message,
           },
-          err.failureClass === "no_connection" ? 412 : 400
+          httpStatusForTrpcError(mapSetupRequiredToTRPC(err))
         );
       logger.error({ err }, "capabilities apply failed");
       return c.json(
