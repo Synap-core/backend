@@ -446,3 +446,85 @@ describe("buildVerbStates — responseShape projection", () => {
     expect(verb.paramsSchema).toEqual({ issueId: { required: true } });
   });
 });
+
+/**
+ * Regression test for the latent defect where a tool row with an empty
+ * `capabilities` array but backing skills that declare intents would lose
+ * those intents because `buildVerbStates` returned `[]` early.
+ *
+ * This mirrors the same class of bug that was fixed for `kind:"skill"` rows
+ * by adding `buildSkillVerb` — here the defect is on the TOOL side when the
+ * verb catalog is empty but `skillIntentByName` carries the authoritative
+ * column value (migration 0292).
+ */
+describe("buildVerbStates — empty catalog with skillIntentByName", () => {
+  const emptyCatalog: Parameters<typeof buildVerbStates>[0] = [];
+
+  it("returns [] for an empty catalog when skillIntentByName is also empty (current behavior)", () => {
+    const verbs = buildVerbStates(
+      emptyCatalog,
+      undefined,
+      "builtin",
+      new Map(),
+      new Map(),
+      new Map(),
+      new Map()
+    );
+    expect(verbs).toEqual([]);
+  });
+
+  it("SURFACES intents from skillIntentByName even when catalog is empty — this is the fix", () => {
+    // A tool row with empty capabilities but a backing skill that declares an intent
+    // (e.g. a provider tool created by syncToolRows before its family template was applied,
+    // or a manually-created tool that later gets skills requiring it).
+    const skillIntentByName = new Map<string, string>([
+      ["my_tool_verb", "send_message"],
+    ]);
+    const backingSkillExecutableByName = new Map<string, boolean>([
+      ["my_tool_verb", true],
+    ]);
+
+    const verbs = buildVerbStates(
+      emptyCatalog,
+      undefined,
+      "builtin",
+      new Map(),
+      backingSkillExecutableByName,
+      new Map(),
+      skillIntentByName
+    );
+
+    // The fix should produce a verb state for the skill's intent, using the
+    // same fallback logic as buildSkillVerb: granted=false, effectiveExecMode="propose"
+    expect(verbs.length).toBe(1);
+    expect(verbs[0].id).toBe("my_tool_verb");
+    expect(verbs[0].intent).toBe("send_message");
+    expect(verbs[0].granted).toBe(false);
+    expect(verbs[0].effectiveExecMode).toBe("propose");
+    expect(verbs[0].govDefault).toBe("propose");
+    expect(verbs[0].backingSkillExecutable).toBe(true);
+  });
+
+  it("does NOT widen governance — effectiveExecMode stays 'propose' for catalog-less tool", () => {
+    const skillIntentByName = new Map<string, string>([
+      ["my_tool_verb", "send_message"],
+    ]);
+    const backingSkillExecutableByName = new Map<string, boolean>([
+      ["my_tool_verb", true],
+    ]);
+
+    const verbs = buildVerbStates(
+      emptyCatalog,
+      { execMode: "auto" }, // grant with auto mode
+      "builtin",
+      new Map(),
+      backingSkillExecutableByName,
+      new Map(),
+      skillIntentByName
+    );
+
+    // Even with a grant, a catalog-less tool must stay propose — intent is ROUTING, not authorization
+    expect(verbs[0].granted).toBe(false);
+    expect(verbs[0].effectiveExecMode).toBe("propose");
+  });
+});

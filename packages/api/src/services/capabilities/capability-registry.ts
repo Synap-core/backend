@@ -481,11 +481,40 @@ export function buildVerbStates(
    * `requires` NO tool has no catalog entry at all — so on `tools: []`
    * definitions (all of Synap Core's 47 builtins) the column is the only place
    * an intent can exist. See the fallback note in the body.
+   *
+   * ALSO used when a tool row has an empty catalog but its backing skills declare
+   * intents — the column is the only source of truth there. This mirrors the
+   * same logic in `buildSkillVerb` for tool-less skills.
    */
   skillIntentByName: Map<string, string> = new Map()
 ): CapabilityVerbStateWithResponseShape[] {
-  if (!Array.isArray(catalog) || catalog.length === 0) return [];
   const granted = !!grant;
+
+  // If catalog is empty but skillIntentByName has entries, build verb states
+  // from the skill intents (the authoritative column, migration 0292).
+  // This mirrors the logic in buildSkillVerb for tool-less skills.
+  if (!Array.isArray(catalog) || catalog.length === 0) {
+    if (skillIntentByName.size === 0) return [];
+    const verbs: CapabilityVerbStateWithResponseShape[] = [];
+    for (const [verbId, intent] of skillIntentByName.entries()) {
+      const declared = declaredReadOnlyByName.get(verbId);
+      const backingExecutable =
+        backingSkillExecutableByName.get(verbId) === true;
+      verbs.push({
+        id: verbId,
+        label: verbId,
+        kind: "action" as const, // default for tool verbs
+        granted: false, // ROUTING, NEVER AUTHORIZATION — a catalog-less tool has no grant
+        govDefault: "propose", // absent grant, the posture is propose
+        effectiveExecMode: "propose", // intent is routing; never widen authority
+        ...(intent ? { intent } : {}),
+        ...(declared !== undefined ? { declaredReadOnly: declared } : {}),
+        backingSkillExecutable: backingExecutable,
+      });
+    }
+    return verbs;
+  }
+
   return catalog.map((v) => {
     const spec =
       toolKind === "provider" ? providerSpecByName.get(v.id) : undefined;

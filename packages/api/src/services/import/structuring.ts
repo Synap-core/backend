@@ -14,9 +14,9 @@ import { createLogger } from "@synap-core/core";
 import {
   buildAvailableProfiles,
   withEffectiveProperties,
-  normalizeCapturedKnowledgeProperties,
   type AccessibleProfileLike,
 } from "../../routers/capture.js";
+import { completeKnowledgeProperties } from "@synap/database";
 import {
   adaptItems,
   parseCsvTable,
@@ -376,17 +376,23 @@ export function makeEntitySchemaValidator(
     let propsToCheck: Record<string, unknown> = { ...(properties ?? {}) };
     if (profileSlug === "knowledge") {
       try {
-        // Use the CAPTURE wrapper, not the bare normaliser: only the wrapper
-        // infers a missing knowledgeForm from the entity's own words. The bare
-        // `normalizeKnowledgeProperties` returns early when there is no legacy
-        // `ek_type`, leaving the required property absent — so a `knowledge`
-        // entity submitted through the structured `entities[]` lane was
-        // rejected by the required-field check while the SAME entity on the
-        // free-text lane (`capture.ts`) was accepted. Three lanes, three calls:
-        // two inferred the form, this one did not.
-        propsToCheck = normalizeCapturedKnowledgeProperties(
+        // Use the canonical compatibility door — it carries the same inference
+        // logic as the capture free-text lane, via inferKnowledgeForm from the
+        // entity's own words. Previously the structured `entities[]` lane called the
+        // bare `normalizeKnowledgeProperties` which silently dropped the required
+        // `knowledgeForm` when there is no legacy `ek_type`. The wrapper carries the
+        // fallback, and `completeKnowledgeProperties` is the existing write-time door
+        // designed for exactly this case.
+        //
+        // Infer from BODY, not title. A title is a much weaker discriminator than
+        // body text — "pod setup" contains no caution keywords and would default to
+        // "insight" silently, which is a quiet wrong answer. The free-text lane uses
+        // input.content.slice(0, 200); match it. Fall back to title only when the
+        // entity has no body (a structured entity that is title-only is genuinely
+        // ambiguous, and title is the best evidence we have).
+        propsToCheck = completeKnowledgeProperties(
           propsToCheck,
-          title ?? ""
+          (content ?? title ?? "").slice(0, 200)
         );
       } catch (error) {
         if (error instanceof KnowledgeFormConflictError) {
