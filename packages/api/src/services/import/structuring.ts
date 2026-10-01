@@ -5,7 +5,6 @@ import {
   ProfileResolutionService,
   PropertyValidationService,
   KnowledgeFormConflictError,
-  normalizeKnowledgeProperties,
   resolveKindWritePin,
   eq,
   workspaces,
@@ -15,6 +14,7 @@ import { createLogger } from "@synap-core/core";
 import {
   buildAvailableProfiles,
   withEffectiveProperties,
+  normalizeCapturedKnowledgeProperties,
   type AccessibleProfileLike,
 } from "../../routers/capture.js";
 import {
@@ -376,7 +376,18 @@ export function makeEntitySchemaValidator(
     let propsToCheck: Record<string, unknown> = { ...(properties ?? {}) };
     if (profileSlug === "knowledge") {
       try {
-        propsToCheck = normalizeKnowledgeProperties(propsToCheck);
+        // Use the CAPTURE wrapper, not the bare normaliser: only the wrapper
+        // infers a missing knowledgeForm from the entity's own words. The bare
+        // `normalizeKnowledgeProperties` returns early when there is no legacy
+        // `ek_type`, leaving the required property absent — so a `knowledge`
+        // entity submitted through the structured `entities[]` lane was
+        // rejected by the required-field check while the SAME entity on the
+        // free-text lane (`capture.ts`) was accepted. Three lanes, three calls:
+        // two inferred the form, this one did not.
+        propsToCheck = normalizeCapturedKnowledgeProperties(
+          propsToCheck,
+          title ?? ""
+        );
       } catch (error) {
         if (error instanceof KnowledgeFormConflictError) {
           return { valid: false, errors: [error.message] };
