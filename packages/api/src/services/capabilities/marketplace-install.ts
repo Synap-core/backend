@@ -366,28 +366,12 @@ export async function applyCapabilityDefinition(
   params: Record<string, unknown> | undefined,
   ctx: Context
 ): Promise<CreateCapabilityResult> {
-  // NORMALIZE the two collection fields the applier iterates unguarded
-  // (`for (const t of def.tools)` / `for (const s of def.skills)` in
-  // create-from-definition.ts). The INLINE path already gets `[]` from the
-  // schema's `.default([])`; the templateKey/market paths never touch that schema
-  // (parsing a CP definition through it would STRIP contentHash/emits/
-  // updatePolicy/metadata), so a tools-only CP template — e.g. `discord-bot`,
-  // which ships no `skills` key at all — would otherwise TypeError into a 500.
-  // Spread-then-override: every other CP-injected field survives untouched.
-  const normalized = {
-    ...(definition as Record<string, unknown>),
-    tools: Array.isArray((definition as { tools?: unknown }).tools)
-      ? (definition as { tools: unknown[] }).tools
-      : [],
-    skills: Array.isArray((definition as { skills?: unknown }).skills)
-      ? (definition as { skills: unknown[] }).skills
-      : [],
-  };
   return createCapabilityFromDefinition(
     // Inline defs are structurally validated by the door's schema (or `z.any()`);
     // `providerSpec` is passed through as opaque JSON (the applier re-casts it to
-    // Record), so a boundary cast to the applier's input type is safe.
-    normalized as unknown as Parameters<
+    // Record), so a boundary cast to the applier's input type is safe. The applier
+    // normalizes tools/skills itself (the ONE place every door funnels into).
+    definition as unknown as Parameters<
       typeof createCapabilityFromDefinition
     >[0],
     params ?? {},

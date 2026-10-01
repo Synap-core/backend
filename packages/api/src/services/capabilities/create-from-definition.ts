@@ -562,6 +562,16 @@ export async function createCapabilityFromDefinition(
 
   const def = interpolateDeep(rawDef, effectiveParams);
 
+  // NORMALIZE the two collection fields the applier iterates unguarded below
+  // (`for (const t of def.tools)` / `def.skills.map`). A tools-only CP template —
+  // e.g. `discord-bot`, which ships no `skills` key at all — would otherwise
+  // TypeError into a 500 here. Done at the ONE place every door funnels into,
+  // not in a wrapper only some callers use.
+  if (!Array.isArray((def as { tools?: unknown }).tools))
+    (def as { tools: unknown[] }).tools = [];
+  if (!Array.isArray((def as { skills?: unknown }).skills))
+    (def as { skills: unknown[] }).skills = [];
+
   // A skill's `providerSpec` holds RUNTIME `{{param}}` placeholders (maxResults,
   // id, calendarId, …) that `executeProviderVerb` resolves at CALL time from the
   // verb's own arguments — NOT capability-template params. interpolateDeep above
