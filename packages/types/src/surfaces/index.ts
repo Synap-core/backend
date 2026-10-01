@@ -112,17 +112,36 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     surface: "relay",
     since: SINCE,
     reason:
-      "Idea Studio section on Home deprecated: returns later as an installable template rather than baked into Home.",
-    replacedBy: "Templates (market)",
+      "Idea Studio section on Home deprecated: a content cockpit on the supervise surface is a fork of the brief. It returns as a RENDERER BOUND TO AN ENTITY KIND, not as a workspace template and not as a Home section.",
+    // ⚠️ This was recorded as `replacedBy: "Templates (market)"`, which named
+    // the wrong destination and made the section look like dead code waiting to
+    // be deleted. It is neither a template nor dead: the substrate it needs
+    // already ships — `profiles.getEffectiveRenderers({ profileSlug,
+    // contentKind })`, with `entity-detail-task` as the worked precedent for a
+    // native renderer over one kind. Do NOT delete the unmounted section in
+    // home.tsx on the strength of this row; it is the reference implementation
+    // for that renderer. Corrected 2026-10-01 (founder).
+    replacedBy: "A native entity renderer bound to the content-creation kind",
     decisionDoc: V1_PLAN_DOC,
   },
   {
     id: "gallery",
     surface: "relay",
     since: SINCE,
+    // ⚠️ WHAT IS DEPRECATED IS THE PATH, NOT DATA BROWSING. This row used to
+    // read "data browsing is a desktop job (Data app)" and name the desktop app
+    // as the replacement. The founder then put the entity browser on the phone
+    // as a first-class `data` tab (2026-10-01), so a reader of this registry —
+    // human or agent — was being told the phone has no data browser when it
+    // does. The registry's job is to keep people OFF a retired path, not to
+    // retire a capability; keep those two apart here.
+    //
+    // The `gallery` ROUTE stays registered because its doors are held outside
+    // this repo (compiled iOS widget extensions opening `relay://gallery`) or
+    // in classic-shell `mobileTabs`. See `app/(tabs)/gallery.tsx`.
     reason:
-      "Gallery tab (classic shell only) deprecated: data browsing is a desktop job (Data app).",
-    replacedBy: "Desktop Data app",
+      "The gallery PATH is superseded by the `data` tab; the route stays for classic-shell users, widgets and deep links.",
+    replacedBy: "The `data` tab on the phone, and the desktop Data app",
     decisionDoc: V1_PLAN_DOC,
   },
   {
