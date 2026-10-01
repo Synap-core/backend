@@ -547,6 +547,18 @@ describe("resolveStatusLabel", () => {
     expect(resolveStatusLabel("unavailable")).toBe("Not available");
   });
 
+  it("curates capability/composition health (ok never reads as the generic 'Ok')", () => {
+    // The three health surfaces (grid card, system map, capability dashboard)
+    // each hand-wrote this map; `ok` is the one token whose humanized fallback
+    // ("Ok") is weaker than the word users already saw ("Healthy").
+    expect(resolveStatusLabel("ok")).toBe("Healthy");
+    expect(humanizeToken("ok")).not.toBe("Healthy");
+    // The rest resolve from existing rows / the fallback — no second word.
+    expect(resolveStatusLabel("degraded")).toBe("Degraded");
+    expect(resolveStatusLabel("failed")).toBe("Failed");
+    expect(resolveStatusLabel("unknown")).toBe("Unknown");
+  });
+
   it("curates not_connected, the one connection-status word surfaces map to", () => {
     // humanizeToken("not_connected") happens to spell the same words, so the
     // label alone cannot tell a curated row from the fallback. The row is the

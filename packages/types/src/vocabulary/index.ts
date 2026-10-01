@@ -657,6 +657,13 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // covers a tool that was wanted. `wanted` needs no row (it humanizes to
   // "Wanted"); `connected` is shared with the row above.
   installable: "Ready to install",
+  // capability / composition health (`CompositionHealthStatus` — the System map,
+  // capability cards, the capability dashboard). `degraded` / `failed` /
+  // `unknown` already resolve from the rows above or the humanize fallback, so
+  // only `ok` needs a row: humanizing it yields the weak generic "Ok", while
+  // "Healthy" is the word every surface already used. One row is what lets those
+  // surfaces share ONE resolver instead of three hand-written label maps.
+  ok: "Healthy",
   // ⚠️ OVERLOADED TOKEN — deliberately rendered as the neutral word.
   // `stale` means three different things in this product: a session the reaper
   // gave up on (progress), a sync that is out of date (freshness), and a broken
