@@ -109,12 +109,11 @@ ensure_ory_databases() {
     # Compose project. Never switches stacks; only diagnoses a mismatch so the
     # operator can see why the wrong volume was selected.
     local expected_project="${COMPOSE_PROJECT_NAME:-}"
-    local actual_project
-    actual_project="$(
-        $COMPOSE_CMD ps -q "$postgres_service" 2>/dev/null \
-            | docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' 2>/dev/null \
-            | head -1
-    )"
+    local postgres_cid actual_project
+    postgres_cid="$($COMPOSE_CMD ps -q "$postgres_service" 2>/dev/null | head -1)"
+    if [ -n "$postgres_cid" ]; then
+        actual_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$postgres_cid" 2>/dev/null)"
+    fi
     if [ -n "$expected_project" ] && [ -n "$actual_project" ] && [ "$actual_project" != "$expected_project" ]; then
         echo -e "${RED}❌ PostgreSQL belongs to Compose project '${actual_project}', expected '${expected_project}'${NC}"
         return 1

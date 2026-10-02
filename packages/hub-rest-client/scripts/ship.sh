@@ -5,12 +5,11 @@
 #   ./dev ship hub-rest-client                  # interactive menu
 #   ./dev ship hub-rest-client verify           # local vs npm
 #   ./dev ship hub-rest-client build            # tsup build only
-#   ./dev ship hub-rest-client publish          # ★ happy path: build → ensure new version → npm
-#   ./dev ship hub-rest-client publish 1.2.0    # explicit version then publish
-#   ./dev ship hub-rest-client publish --bump   # patch-bump first
-#   ./dev ship hub-rest-client dry-run
+#   ./dev ship hub-rest-client dry-run          # build + pack, no upload
 #   ./dev ship hub-rest-client repin            # consumers: file:/tgz → the published semver
 #   ./dev ship hub-rest-client auth
+#
+#   ⚠️  `publish` REFUSES — npm publishing is owned by CI (publish-types.yml).
 #
 # WHY THIS SCRIPT EXISTS
 # ---------------------
@@ -635,12 +634,12 @@ if [[ -z "$MODE" ]]; then
     cat <<'EOF' >&2
 Usage: ./dev ship hub-rest-client <mode> [flags]
 
-  verify | build | publish | dry-run | repin | auth
+  verify | build | dry-run | repin | auth
+  (publish is refused — npm publishing is owned by CI: publish-types.yml)
 
-  ./dev ship hub-rest-client publish            # first publish
-  ./dev ship hub-rest-client publish --bump     # patch-bump then publish
-  ./dev ship hub-rest-client publish 1.2.0
-  ./dev ship hub-rest-client repin              # after publishing
+  ./dev ship hub-rest-client verify   # local vs npm + who still vendors it
+  ./dev ship hub-rest-client dry-run  # build + pack, no upload
+  ./dev ship hub-rest-client repin    # after a CI publish: move consumers to ^version
 EOF
     exit 1
   fi
@@ -655,12 +654,15 @@ case "$MODE" in
   auth)         cmd_auth ;;
   help|-h|--help)
     cat <<'EOF'
-Modes: verify | build | publish | dry-run | repin | auth
-Flags: --yes --bump --patch --minor --major --version X.Y.Z --otp=XXXXXX --tag <npm-tag>
+Modes: verify | build | dry-run | repin | auth | publish (refused)
 
-First publish:  ./dev ship hub-rest-client publish
-Then retire the vendoring:  ./dev ship hub-rest-client repin
-Auth help:      ./dev ship hub-rest-client auth
+npm publishing is owned by CI (.github/workflows/publish-types.yml).
+`publish` refuses by design; it has no local path back.
+
+Publish:     press the CI button in synap-backend
+Then retire: ./dev ship hub-rest-client repin
+Local check: ./dev ship hub-rest-client verify
+Auth help:   ./dev ship hub-rest-client auth
 EOF
     ;;
   *) die "unknown mode '$MODE' (verify|build|publish|dry-run|repin|auth)" ;;

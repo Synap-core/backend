@@ -5,15 +5,14 @@
 #   ./dev ship api-types                  # interactive menu
 #   ./dev ship api-types verify           # local vs npm + surface drift
 #   ./dev ship api-types bump [--force]   # regen; bump if surface changed (or always with --force)
-#   ./dev ship api-types publish          # ★ happy path: regen → ensure new version → build → npm
-#   ./dev ship api-types publish 1.27.0   # explicit version then publish
-#   ./dev ship api-types publish --force-bump  # always patch-bump even if surface unchanged
-#   ./dev ship api-types dry-run
+#   ./dev ship api-types dry-run          # build + pack, no upload
+#   ./dev ship api-types auth             # diagnose npm login / 2FA
 #   ./dev ship api-types --yes …
 #
-# Happy-path rules (UX):
-#   • `publish` is the one command you usually need.
-#   • If the router surface changed → auto patch-bump (lockstep stamps) then publish.
+#   ⚠️  `publish` REFUSES — npm publishing is owned by CI (publish-types.yml).
+#
+# Bump rules:
+#   • If the router surface changed → auto patch-bump (lockstep stamps).
 #   • If surface unchanged AND version already on npm → exit 0 "nothing to ship"
 #     (not a hard error). Use --force-bump or an explicit version to republish.
 #   • `bump` alone never lies about next steps: if nothing changed and already on
@@ -797,13 +796,13 @@ if [[ -z "$MODE" ]]; then
     cat <<'EOF' >&2
 Usage: ./dev ship api-types <mode> [flags]
 
-  verify | prepare | bump | build | publish | dry-run
+  verify | prepare | bump | build | dry-run | auth
+  (publish is refused — npm publishing is owned by CI: publish-types.yml)
 
-  ./dev ship api-types publish              # usual path
-  ./dev ship api-types publish --force-bump # new version even if surface unchanged
-  ./dev ship api-types publish 1.27.0
-  ./dev ship api-types bump --force
-  ./dev ship api-types verify
+  ./dev ship api-types verify        # local vs npm + surface drift
+  ./dev ship api-types bump --force  # version++ even if surface unchanged
+  ./dev ship api-types dry-run       # build + pack, no upload
+  ./dev ship api-types auth          # diagnose npm login / 2FA
 EOF
     exit 1
   fi
@@ -819,14 +818,16 @@ case "$MODE" in
   auth) cmd_auth ;;
   help|-h|--help)
     cat <<'EOF'
-Modes: verify | prepare | bump | build | publish | dry-run | auth
-Flags: --yes --force/--force-bump --otp=XXXXXX --patch --minor --major --full --version X.Y.Z --tag <npm-tag>
+Modes: verify | prepare | bump | build | dry-run | auth | publish (refused)
+Flags: --yes --force/--force-bump --patch --minor --major --full
 
-Usual:     ./dev ship api-types publish
-           (your npm login + terminal OTP prompt)
+npm publishing is owned by CI (.github/workflows/publish-types.yml).
+`publish` refuses by design; it has no local path back.
+
+Local:     ./dev ship api-types verify      # vs npm + surface drift
+           ./dev ship api-types bump        # regen + surface-gated bump
+           ./dev ship api-types dry-run     # build + pack, no upload
 Auth help: ./dev ship api-types auth
-Optional:  ./dev ship api-types publish --otp=XXXXXX
-Force ver: ./dev ship api-types publish --force-bump
 EOF
     ;;
   *) die "unknown mode '$MODE' (verify|prepare|bump|build|publish|dry-run|auth)" ;;

@@ -16,11 +16,8 @@ on:
       - "packages/api/src/routers/**"
       - "packages/api/src/root.ts"
 
-# Publishes are triggered on every push to `main` (plus manual
-# workflow_dispatch), so two pushes in quick succession can queue two publish
-# jobs against the SAME package versions. Serialise them: never cancel a
-# publish mid-flight (a cancelled job can leave a half-uploaded tarball that
-# later reads as a successful-but-stale version).
+# Publishing is not idempotent at the transport layer: killing a run mid-publish
+# can leave a version half-uploaded. Serialise publishes; never cancel.
 concurrency:
   group: npm-publish
   cancel-in-progress: false
@@ -28,12 +25,9 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-
     # Least privilege. `contents: read` is required because this workflow pushes
     # the version-bump commit back to main at the end. `id-token: write` is
-    # REQUIRED for npm Trusted Publishing (OIDC) — it lets the job mint a
-    # short-lived credential from GitHub's token endpoint that npm exchanges
-    # for a publish token. No secret is needed once Trusted Publishing is on.
+    # required for npm Trusted Publishing (OIDC) — see the auth note below.
     permissions:
       contents: read
       id-token: write
@@ -41,26 +35,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Version comes from the repo's `packageManager: pnpm@10.28.0`, which pins
+      # it MORE precisely than a `version: 10` input would. Passing both makes
+      # action-setup fail with "Multiple versions of pnpm specified" — which
+      # happened here and meant this pipeline never published. Do not add
+      # `version:` back.
       - uses: pnpm/action-setup@v4
-        # Version is taken from the repo's `packageManager: pnpm@10.28.0`, which
-        # pins it MORE precisely than the `version: 10` that used to sit here.
-        # That pin was not merely redundant: action-setup rejects being given
-        # both ("Multiple versions of pnpm specified") and failed at setup on
-        # every run for at least two days, so this pipeline had never published.
-        # The original concern still holds — on pnpm 9 the workspace-protocol
-        # rewrite is not the behaviour this pipeline is verified against — and
-        # `packageManager` is what enforces it. Same door as ci.yml.
 
       - uses: actions/setup-node@v4
         with:
-          # ONE source of truth: the repo's `.node-version` file (20.18.1).
-          # `engines.node` is `>=20`; the file is the precise pin.
-          #
-          # Node 20 is DELIBERATE, not merely convenient. An artifact was once
-          # published from Node 22.22.3 while this workflow pinned node 20, and
-          # the discrepancy caused broken releases. Do not "modernise" this to
-          # the latest LTS — the published artifacts must be built by the same
-          # Node major the repo's other pipelines use (ci.yml → 20).
+          # Node 20 is DELIBERATE. An artifact was once published from node
+          # 22.22.3 and broke consumers; CI pins the version `.node-version`
+          # declares so there is exactly one source of truth.
           node-version-file: ".node-version"
           registry-url: "https://registry.npmjs.org"
 
@@ -70,11 +56,11 @@ jobs:
       # BUILD THROUGH TURBO, NOT `cd <pkg> && pnpm build`.
       #
       # Those two `cd` steps built one package each and NOTHING they depend on,
-      # so this pipeline failed on every run — the very first build step, not
-      # the second:
+      # so this pipeline failed on every run — the very first build step, not the
+      # second:
       #
       #   error TS2307: Cannot find module '@synap/database' or its
-      #   corresponding type declarations   (packages/types/src/users/index.ts:23)
+      #     corresponding type declarations   (packages/types/src/users/index.ts:23)
       #
       # `packages/types` imports `@synap/database`, whose `dist/` is gitignored
       # (`.gitignore:6`, 0 files tracked). On a laptop that dist is left over
@@ -85,12 +71,8 @@ jobs:
       # The ordering is NOT hand-listed here. turbo.json declares
       # `build: { dependsOn: ["^build"] }`, so selecting a package pulls its
       # whole workspace dependency chain into the task graph, topologically
-      # ordered. Verified with `--dry=json` against this checkout:
-      #   --filter=@synap-core/types → 5 packages, and `@synap-core/types#build`
-      #     lists `@synap/database#build` among its dependencies
-      #   --filter=@synap/api        → 18 packages, `@synap/database` included
-      # A new dependency is picked up by the graph; there is no second list to
-      # keep in step with package.json.
+      # ordered. A new dependency is picked up by the graph; there is no second
+      # list to keep in step with package.json.
       #
       # `turbo`, not `pnpm --filter`, for a second reason: a `pnpm --filter` that
       # matches nothing prints "No projects matched" and EXITS 0 — a false green.
@@ -133,30 +115,24 @@ jobs:
       - name: Build api-types package
         run: cd packages/api-types && pnpm build
 
-      # ── AUTH: CURRENT vs TRUSTED PUBLISHING ────────────────────────────────────────
+      # ── Publish ────────────────────────────────────────────────────────────
+      # Auth: currently the NPM_TOKEN secret; migrating to npm Trusted Publishing.
       #
-      # RIGHT NOW these steps authenticate with a long-lived Classic npm token:
-      #   env: NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Trusted Publishing is the target. Once configured in the npm UI it needs
+      # NO secret at all — npm mints short-lived OIDC credentials for this job
+      # (see the `id-token: write` permission above) and provenance attestations
+      # come for free.
       #
-      # npm is deprecating long-lived 2FA-bypass tokens in favour of "Trusted
-      # Publishing" (OIDC). With Trusted Publishing, GitHub Actions mints a
-      # short-lived credential for the job and npm exchanges it for a publish
-      # token — no secret at all, no 2FA bypass, no token to rotate.
+      # TO FINISH THE MIGRATION (manual, npmjs.com — cannot be automated here):
+      #   for EACH package (@synap-core/types and @synap-core/api-types):
+      #     package → Settings → Trusted Publishers → Add
+      #       Organization/user : Synap-core
+      #       Repository        : Synap-core/backend
+      #       Workflow filename : publish-types.yml
+      #       Environment       : leave blank
+      # ...then delete BOTH `env:` blocks below AND the NPM_TOKEN repo secret.
       #
-      # MANUAL CONFIG REQUIRED (cannot be done from this repo):
-      #   1. npmjs.com → Access Tokens → Trusted Publishing → "Add trusted
-      #      publisher"
-      #   2. Package:  @synap-core/types  and  @synap-core/api-types
-      #   3. Repository:  Synap-core/backend
-      #   4. Workflow:   publish-types.yml
-      #   (Each package needs its own entry; the workflow filename is the same
-      #    for both.)
-      #
-      # AFTER THAT: delete the `env: NODE_AUTH_TOKEN` blocks below and remove
-      # the `secrets.NPM_TOKEN` secret from the repo. `--provenance` (below) is
-      # what makes the attestation real; it works with EITHER auth method, so it
-      # stays even after the token is gone.
-      #
+      # Do NOT delete the token before npm trusts this workflow — publishing stops.
       - name: Publish @synap-core/types
         run: cd packages/types && pnpm publish --no-git-checks --provenance
         env:
@@ -186,6 +162,9 @@ jobs:
       # check-publish-freshness.mjs's synap-app range check in ci.yml, which
       # currently only DETECTS a stale pin — it does not fix it). Needs a
       # cross-repo token (CROSS_REPO_TOKEN) with write access to synap-app.
+      # Blocked in practice while synap-app's pnpm overrides point
+      # @synap-core/api-types at a `link:` into this repo — the pin is not
+      # load-bearing there, so there is nothing to repin yet.
 
       - name: Commit version bumps
         run: |

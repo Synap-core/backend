@@ -860,6 +860,13 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           },
           version: { type: "string" },
           params: { type: "object" },
+          // Stamp uses-edges / seed filing onto an EXISTING project. The
+          // handler accepts both, so both are advertised — an accepted-but-
+          // unadvertised param is the exact undiscoverable state this catalog
+          // exists to prevent. Agents must pass projectId (gravity);
+          // projectName alone is refused for agent-initiated installs.
+          projectId: { type: "string", format: "uuid" },
+          projectName: { type: "string" },
           // RC4 payload-in: the already-resolved package definition, so a
           // private package installs without the unauthenticated by-slug CP
           // fetch (which 404s for private). Advertised because the handler

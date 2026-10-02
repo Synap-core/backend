@@ -79,6 +79,20 @@ NC='\033[0m'
 _preflight_compose_check() {
     local deploy_dir="${1:-.}"
 
+    # Canonicalize: callers pass either the repo root (…/synap-backend) or the
+    # deploy dir itself (…/synap-backend/deploy). Resolve to the deploy dir so
+    # the compose-file path below is correct from either entry point. Without
+    # this, running the CLI from inside deploy/ looked for
+    # deploy/deploy/docker-compose.yml and aborted a working update.
+    if [ -f "$deploy_dir/docker-compose.yml" ] && [ ! -f "$deploy_dir/deploy/docker-compose.yml" ]; then
+        # $deploy_dir IS the deploy dir
+        :
+    elif [ -f "$deploy_dir/deploy/docker-compose.yml" ]; then
+        deploy_dir="$deploy_dir/deploy"
+    elif [ -d "$deploy_dir/deploy" ]; then
+        deploy_dir="$deploy_dir/deploy"
+    fi
+
     echo -e "${BLUE}🔍 Preflight: resolving Compose project and Postgres service...${NC}"
 
     # 1. Log the resolved Compose project name (already pinned at script top).
@@ -89,7 +103,7 @@ _preflight_compose_check() {
     echo -e "${BLUE}  Compose project: ${project_name}${NC}"
 
     # 2. Verify the compose file exists and defines a postgres service.
-    local compose_file="$deploy_dir/deploy/docker-compose.yml"
+    local compose_file="$deploy_dir/docker-compose.yml"
     if [ ! -f "$compose_file" ]; then
         echo -e "${RED}❌ Compose file not found at ${compose_file}${NC}"
         return 1

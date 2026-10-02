@@ -26,8 +26,7 @@
 #
 # WHAT REPLACES IT
 #   npm publishing  →  .github/workflows/publish-types.yml  (CI, the only door)
-#   contract packs  →  ./dev ship <package> publish
-#                     (api-types, types, hub-protocol, hub-rest-client)
+#   local checking  →  ./dev ship <package> verify | dry-run | auth
 #
 # This file is KEPT, not deleted, so existing muscle memory and any CI
 # reference to `scripts/publish-packages.sh` do not break with "command not
@@ -49,16 +48,18 @@ cat <<'EOF'
 ║      → builds through turbo, gates api-types on a real surface diff,         ║
 ║        and refuses to re-publish an unchanged version.                       ║
 ║                                                                              ║
-║  For the contract packages (the ones this script used to publish):          ║
+║  To publish the contract packages: press the CI button. There is no local   ║
+║  publish, by design.                                                        ║
 ║                                                                              ║
-║    ./dev ship api-types publish                                             ║
-║    ./dev ship types publish                                                 ║
-║    ./dev ship hub-protocol publish                                           ║
-║    ./dev ship hub-rest-client publish                                       ║
+║  Locally you can still verify everything CI would check, without publishing:  ║
+║                                                                              ║
+║    ./dev ship api-types verify        local version vs npm + surface drift    ║
+║    ./dev ship api-types dry-run       build + pack, no upload                 ║
+║    ./dev ship api-types auth          diagnose npm login / 2FA                ║
 ║                                                                              ║
 ║  Hand-publishing from a laptop is the proven root cause of the broken        ║
 ║  releases (an artifact was published from Node 22.22.3 while CI pins         ║
-║  Node 20). Trusted Publishing makes local npm publishing impossible by      ║
+║  Node 20). Trusted Publishing makes local npm publishing impossible by       ║
 ║  design — there is no path back. Use the CI button.                          ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -73,52 +74,3 @@ if [[ "${1:-}" == "--dry-run" ]]; then
 fi
 
 exit 0
-
-# The hardcoded package list and publish loop below are dead code, kept only
-# as a record of what this script used to do. They are intentionally never
-# reached.
-
-set -e
-
-DRY_RUN=${1:-""}
-
-echo "📦 Publishing Synap packages to npm"
-echo ""
-
-# List of packages to publish (in dependency order)
-PACKAGES=(
-  "packages/core"
-  "packages/types"
-  "packages/auth"
-  "packages/auth-bootstrap"
-  "packages/hub-protocol"
-  "packages/database"
-  "packages/storage"
-  "packages/jobs"
-  "packages/hub-rest-client"
-  "packages/api"
-  "packages/api-types"
-)
-
-# Build all packages first
-echo "🔨 Building all packages..."
-pnpm build
-
-# Publish each package
-# IMPORTANT: Use --filter from workspace root so pnpm resolves workspace:* → real versions
-for package in "${PACKAGES[@]}"; do
-  echo ""
-  PKG_NAME=$(node -p "require('./$package/package.json').name")
-  echo "📤 Publishing $PKG_NAME ($package)..."
-
-  if [ "$DRY_RUN" == "--dry-run" ]; then
-    pnpm --filter "$PKG_NAME" publish --dry-run
-  else
-    pnpm --filter "$PKG_NAME" publish --no-git-checks
-  fi
-
-  echo "✅ Published $PKG_NAME"
-done
-
-echo ""
-echo "🎉 All packages published successfully!"

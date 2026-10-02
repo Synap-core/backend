@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
@@ -19,20 +19,25 @@ import { SYNAP_CORE_DEFINITION } from "./ensure-synap-core.js";
  * This asserts: every param the handler accepts (Zod key) is advertised in the
  * catalog that ships that verb, AND that exactly ONE catalog advertises it.
  *
- * ── WHY MORE THAN ONE CATALOG (widened with posthog-analytics) ──────────────
+ * ── WHY MORE THAN ONE CATALOG ───────────────────────────────────────────────
  * The pod's first-party builtins ship from an IN-REPO constant
  * (`SYNAP_CORE_DEFINITION`, boot-seeded). A MARKETPLACE capability ships as a
  * `category:"capability"` package in the Control-Plane catalog instead — its
- * param contract is the package definition kept in this repo
- * (`templates/capabilities/<key>.capability.json`), while its builtin handlers
- * still register in the SAME `BUILTIN_VERBS` map. So the invariant
- * "registered ⇒ advertised somewhere discoverable" now has to sweep both shipped
- * definitions.
+ * param contract is the package definition, while any builtin handlers still
+ * register in the SAME `BUILTIN_VERBS` map. So the invariant
+ * "registered ⇒ advertised somewhere discoverable" has to sweep every shipped
+ * definition, not just the in-repo one.
  *
- * The sweep is DERIVED from the shipped files, not hand-listed. The
- * `exactly one catalog` rule is what keeps the widening honest: a verb declared
- * in two catalogs would satisfy the param check while shipping two competing
- * rows.
+ * The sweep is DERIVED from the shipped files, not hand-listed: every
+ * `*.capability.json` under `templates/capabilities/` is read, so a capability
+ * definition added to this repo joins the scan BY EXISTING. A hand-written list
+ * would silently go stale the way a previous revision did — it named
+ * `posthog-analytics.capability.json` after that definition moved to the
+ * Control Plane catalog, leaving this file importing a path that no longer
+ * exists and the whole tripwire failing to load (guarding nothing).
+ *
+ * The `exactly one catalog` rule keeps the widening honest: a verb declared in
+ * two catalogs would satisfy the param check while shipping two competing rows.
  *
  * If it fails for a verb, advertise the missing param in ITS catalog's skill
  * `parameters.properties` — the boot reconciler / package re-apply self-heals
@@ -40,13 +45,23 @@ import { SYNAP_CORE_DEFINITION } from "./ensure-synap-core.js";
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** The marketplace capability definitions shipped from this repo. */
-const PUBLISHED_CAPABILITY_FILES = [
-  join(
-    HERE,
-    "../../../../../templates/capabilities/posthog-analytics.capability.json"
-  ),
-] as const;
+/**
+ * The marketplace capability definitions shipped from this repo, DERIVED by
+ * globbing `templates/capabilities/`. The directory is absent when this repo
+ * ships none (all marketplace definitions live in the Control Plane) — that is
+ * a legitimate state, not a scan failure, so it yields an empty list.
+ */
+function readPublishedCapabilityFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".capability.json"))
+    .sort()
+    .map((name) => join(dir, name));
+}
+
+const PUBLISHED_CAPABILITY_FILES = readPublishedCapabilityFiles(
+  join(HERE, "../../../../../templates/capabilities")
+);
 
 interface CatalogSource {
   /** Where the definition came from — named in every failure message. */
@@ -98,10 +113,24 @@ for (const catalog of CATALOGS) {
 }
 
 describe("tripwire: builtin verb catalog advertises every handler param", () => {
-  it("sweeps more than one catalog, and the sweep can still see what it hunts", () => {
-    // A sweep over zero parsed skills is green and guards nothing.
-    expect(CATALOGS.length).toBeGreaterThan(1);
+  it("sweeps the in-repo catalog, and the sweep can still see what it hunts", () => {
+    // A sweep over zero parsed skills is green and guards nothing. The in-repo
+    // definition is the one that MUST be present; published capability
+    // definitions are derived by globbing, so their count is whatever ships.
+    expect(CATALOGS.length).toBeGreaterThanOrEqual(1);
     expect([...CATALOGS[0]!.params.keys()].length).toBeGreaterThan(10);
+
+    // The derived set must agree with what is actually on disk — a glob that
+    // silently stopped matching (moved directory, wrong depth) would narrow the
+    // sweep to nothing and leave this guard vacuous.
+    const expectedPublished = existsSync(
+      join(HERE, "../../../../../templates/capabilities")
+    )
+      ? readdirSync(join(HERE, "../../../../../templates/capabilities")).filter(
+          (n) => n.endsWith(".capability.json")
+        ).length
+      : 0;
+    expect(PUBLISHED_CAPABILITY_FILES.length).toBe(expectedPublished);
   });
 
   for (const [verb, schema] of Object.entries(BUILTIN_VERB_PARAM_SCHEMAS)) {
