@@ -289,6 +289,14 @@ for script in $POD_AGENT_SCRIPTS; do
   chmod +x "$INSTALL_DIR/$script"
 done
 
+# Shared Ory database bootstrap helper — sourced by both update-pod.sh and the
+# canonical synap CLI. Both update and install paths use it so they share the same
+# fail-closed invariant (start postgres, wait, create only-missing kratos/hydra,
+# verify, abort on any failure). install.sh downloads it so install.sh deploy and
+# synap.sh deploy both have it available.
+_download "deploy/ensure-ory-databases.sh" "$INSTALL_DIR/ensure-ory-databases.sh"
+chmod +x "$INSTALL_DIR/ensure-ory-databases.sh"
+
 # Add-on installer (referenced by the post-install "Next steps" message)
 _download "deploy/setup-openclaw.sh" "$INSTALL_DIR/setup-openclaw.sh"
 chmod +x "$INSTALL_DIR/setup-openclaw.sh"
@@ -724,14 +732,37 @@ success "Images pulled"
 # ─── Start services ────────────────────────────────────────────────────────────
 heading "Starting services"
 
-info "Starting infrastructure (postgres, redis, minio, typesense, kratos)..."
-docker compose up -d postgres redis minio typesense kratos-migrate
+info "Starting infrastructure (postgres, redis, minio, typesense)..."
+docker compose up -d postgres redis minio typesense
 
-info "Waiting 8s for databases to initialize..."
-sleep 8
+info "Waiting for postgres to be ready..."
+for i in $(seq 1 30); do
+  if docker compose exec -T postgres pg_isready -U synap >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
+# ─── Shared fail-closed Ory database bootstrap ─────────────────────────────────
+# Source the canonical helper (ensure-ory-databases.sh). It starts postgres (already
+# running), waits for readiness, creates only missing kratos/hydra databases, verifies
+# each one, and aborts on any failure. Never drops a database or a volume.
+# This ensures fresh installs (brand-new volume) and existing installs (volume
+# predating Ory databases) both converge on the same postcondition before migrations.
+info "Ensuring Ory databases exist..."
+COMPOSE_PROJECT_NAME="synap-backend"
+COMPOSE_CMD="docker compose"
+# shellcheck source=/dev/null
+. "$INSTALL_DIR/ensure-ory-databases.sh" || error "Ory database bootstrap helper not found"
+if ! ensure_ory_databases; then
+  error "Ory database bootstrap failed — cannot start migrations"
+fi
 
 info "Running database migrations..."
-docker compose up -d kratos hydra-migrate hydra backend-migrate
+# Start migration one-shots and Ory services together; Docker's depends_on
+# condition:service_completed_successfully on kratos/hydra ensures they wait for their
+# migration containers to finish before starting.
+docker compose up -d kratos kratos-migrate hydra hydra-migrate backend-migrate
 
 info "Waiting 5s for migrations to complete..."
 sleep 5

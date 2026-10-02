@@ -37,10 +37,21 @@ CD="$(dirname "$0")"
 # forcing operators to bootstrap a fresh admin every time. The block has been
 # removed. NEVER reintroduce it: the canonical CLI owns project naming.
 COMPOSE="docker compose -p synap-backend -f $CD/docker-compose.yml"
+COMPOSE_PROJECT_NAME="synap-backend"
 CANARY_NAME="synap-backend-canary"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [update] $*"; }
 die() { log "ERROR: $*"; exit 1; }
+
+# ─── Shared Ory database bootstrap ────────────────────────────────────────────
+# Source the ONE fail-closed, non-destructive bootstrap (deploy/
+# ensure-ory-databases.sh) so this alternate update path and the canonical
+# `synap` CLI share the same invariant. It starts only `postgres`, waits for
+# readiness, creates only missing kratos/hydra databases, verifies each one,
+# and aborts on any failure. It never drops a database or a volume.
+COMPOSE_CMD="$COMPOSE"
+# shellcheck source=/dev/null
+. "$CD/ensure-ory-databases.sh" || die "Ory database bootstrap not found at $CD/ensure-ory-databases.sh"
 
 [ -z "$VERSION" ] && die "version required"
 log "=== Updating to ${VERSION} ==="
@@ -71,9 +82,11 @@ log "Pulling Kratos image (non-fatal)..."
 $COMPOSE pull kratos kratos-migrate 2>/dev/null || log "WARN: Kratos image pull failed — skipping Kratos update"
 
 # ─── Step 1b: Ensure Kratos/Hydra databases exist ─────────────────────────────
+# Shared fail-closed bootstrap (deploy/ensure-ory-databases.sh): starts only
+# postgres, waits for readiness, creates only missing databases, verifies each
+# one, and aborts on any failure. Never drops a database or a volume.
 log "Ensuring kratos and hydra databases exist..."
-$COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE kratos' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec" 2>/dev/null || true
-$COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hydra')\gexec" 2>/dev/null || true
+ensure_ory_databases || die "Ory database bootstrap failed — aborting update before migrations"
 
 # ─── Step 2: Run migrations (old backend still serving) ───────────────────────
 log "Running migrations (old backend still serving)..."

@@ -34,6 +34,33 @@
 # api-types, workspace-templates all live there). @synap is internal and has
 # never published. Renamed into @synap-core on 2026-09-07, before first publish.
 
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  ⛔  `publish` NO LONGER PUBLISHES.                                         ║
+# ╠══════════════════════════════════════════════════════════════════════════════╣
+# ║                                                                               ║
+# ║  npm publishing is now owned by CI:                                          ║
+# ║                                                                               ║
+# ║      .github/workflows/publish-types.yml                                      ║
+# ║                                                                               ║
+# ║  It is the ONLY publish door. Hand-publishing from a laptop is the            ║
+# ║  PROVEN ROOT CAUSE of the broken releases — an artifact was once published     ║
+# ║  from Node 22.22.3 while CI pins Node 20, and the discrepancy broke consumers.  ║
+# ║                                                                               ║
+# ║  Trusted Publishing makes local npm publishing IMPOSSIBLE BY DESIGN:          ║
+# ║  GitHub Actions mints short-lived credentials for the CI job, and there is     ║
+# ║  no secret a laptop can use to bypass that.                                   ║
+# ║                                                                               ║
+# ║  To ship:  trigger the workflow (manual button or push to main).             ║
+# ║                                                                               ║
+# ║  `repin` still works after CI publishes — it rewrites the three consumers     ║
+# ║  from file:/tgz to the published semver. That is a local edit, not a          ║
+# ║  publish, so it is unaffected.                                               ║
+# ║                                                                               ║
+# ║  This script is NOT deleted — verify / build / dry-run / repin / auth are     ║
+# ║  all genuinely useful local tooling and still work.                          ║
+# ║                                                                               ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -428,6 +455,45 @@ cmd_dry_run() {
 
 cmd_publish() {
   ensure_layout
+
+  # ── REFUSE: npm publishing is now owned by CI ────────────────────────────────
+  #
+  # This used to be the happy path: build → bump → `pnpm publish` with your
+  # laptop npm login + a 2FA OTP. That is the proven root cause of the broken
+  # releases, and Trusted Publishing makes it impossible by design.
+  #
+  # The version-resolution, build, and dry-run logic below is all still valid
+  # and still runs — only the `pnpm publish` call is refused. `dry-run`, `build`,
+  # `repin`, and `verify` work exactly as before.
+  cat <<'EOF' >&2
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  ✗  REFUSING TO PUBLISH FROM THIS MACHINE.                                  ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  npm publishing is now owned by CI — this is the ONLY publish door:          ║
+║                                                                               ║
+║      .github/workflows/publish-types.yml                                     ║
+║                                                                               ║
+║  Trigger it:                                                                   ║
+║      gh workflow run publish-types.yml                                       ║
+║      (or push to main — the workflow fires on any type-package path change)  ║
+║                                                                               ║
+║  Hand-publishing from a laptop caused the broken releases (Node 22 vs         ║
+║  Node 20), and Trusted Publishing makes local publishing impossible by        ║
+║  design. There is no flag to re-enable it here.                               ║
+║                                                                               ║
+║  Still useful from this machine:                                              ║
+║      ./dev ship hub-rest-client verify   # local vs npm + which vendors       ║
+║      ./dev ship hub-rest-client build    # tsup build only                    ║
+║      ./dev ship hub-rest-client dry-run  # build + publish --dry-run          ║
+║      ./dev ship hub-rest-client repin    # rewrite file:/tgz → semver         ║
+║                                                                               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+EOF
+  die "publish refused — use CI (publish-types.yml) instead"
+
   local ver live
   ver="$(pkg_version)"; live="$(npm_published)"
 

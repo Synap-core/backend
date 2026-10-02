@@ -16,9 +16,28 @@ on:
       - "packages/api/src/routers/**"
       - "packages/api/src/root.ts"
 
+# Publishes are triggered on every push to `main` (plus manual
+# workflow_dispatch), so two pushes in quick succession can queue two publish
+# jobs against the SAME package versions. Serialise them: never cancel a
+# publish mid-flight (a cancelled job can leave a half-uploaded tarball that
+# later reads as a successful-but-stale version).
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+
+    # Least privilege. `contents: read` is required because this workflow pushes
+    # the version-bump commit back to main at the end. `id-token: write` is
+    # REQUIRED for npm Trusted Publishing (OIDC) — it lets the job mint a
+    # short-lived credential from GitHub's token endpoint that npm exchanges
+    # for a publish token. No secret is needed once Trusted Publishing is on.
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +53,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # ONE source of truth: the repo's `.node-version` file (20.18.1).
+          # `engines.node` is `>=20`; the file is the precise pin.
+          #
+          # Node 20 is DELIBERATE, not merely convenient. An artifact was once
+          # published from Node 22.22.3 while this workflow pinned node 20, and
+          # the discrepancy caused broken releases. Do not "modernise" this to
+          # the latest LTS — the published artifacts must be built by the same
+          # Node major the repo's other pipelines use (ci.yml → 20).
+          node-version-file: ".node-version"
           registry-url: "https://registry.npmjs.org"
 
       - name: Install backend dependencies
@@ -106,14 +133,38 @@ jobs:
       - name: Build api-types package
         run: cd packages/api-types && pnpm build
 
+      # ── AUTH: CURRENT vs TRUSTED PUBLISHING ────────────────────────────────────────
+      #
+      # RIGHT NOW these steps authenticate with a long-lived Classic npm token:
+      #   env: NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      #
+      # npm is deprecating long-lived 2FA-bypass tokens in favour of "Trusted
+      # Publishing" (OIDC). With Trusted Publishing, GitHub Actions mints a
+      # short-lived credential for the job and npm exchanges it for a publish
+      # token — no secret at all, no 2FA bypass, no token to rotate.
+      #
+      # MANUAL CONFIG REQUIRED (cannot be done from this repo):
+      #   1. npmjs.com → Access Tokens → Trusted Publishing → "Add trusted
+      #      publisher"
+      #   2. Package:  @synap-core/types  and  @synap-core/api-types
+      #   3. Repository:  Synap-core/backend
+      #   4. Workflow:   publish-types.yml
+      #   (Each package needs its own entry; the workflow filename is the same
+      #    for both.)
+      #
+      # AFTER THAT: delete the `env: NODE_AUTH_TOKEN` blocks below and remove
+      # the `secrets.NPM_TOKEN` secret from the repo. `--provenance` (below) is
+      # what makes the attestation real; it works with EITHER auth method, so it
+      # stays even after the token is gone.
+      #
       - name: Publish @synap-core/types
-        run: cd packages/types && pnpm publish --no-git-checks
+        run: cd packages/types && pnpm publish --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @synap-core/api-types
         if: steps.bump-api-types.outputs.bumped == 'true'
-        run: cd packages/api-types && pnpm publish --no-git-checks
+        run: cd packages/api-types && pnpm publish --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

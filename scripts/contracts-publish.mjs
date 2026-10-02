@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 /**
- * contracts-publish.mjs — one command to ship the cross-repo contract artifacts
- * and keep every consumer's version pin in lockstep.
+ * contracts-publish.mjs — pack the file:-consumed tgz artifacts and repin
+ * every consumer in lockstep.
  *
- * Kills the contract-drift bug class: backend tRPC / type / hub-protocol changes
- * are invisible to synap-app / synap-intelligence-service until the published
- * artifact is regenerated, version-bumped, and the consumers' pins are updated.
+ * NARROWED SCOPE (2026-09-09). This script used to ALSO npm-publish
+ * @synap-core/api-types. That half is now owned by CI
+ * (.github/workflows/publish-types.yml) — the single publish door — so this
+ * script no longer touches the npm registry at all. It still does everything
+ * else:
  *
- * Artifacts handled:
- *   1. @synap-core/api-types  → npm publish      (consumed by synap-app + synap-cli)
- *   2. @synap-core/types      → pnpm pack → tgz  (consumed by synap-intelligence-service via file:)
- *   3. @synap-core/hub-protocol → pnpm pack → tgz (consumed by synap-intelligence-service via file:)
- *   4. @synap-core/hub-rest-client → pnpm pack → tgz  (consumed by synap-intelligence-service via file:)
+ *   1. @synap-core/types          → pnpm pack → tgz → copy into IS → repin file:
+ *   2. @synap-core/hub-protocol    → pnpm pack → tgz → copy into IS → repin file:
+ *   3. @synap-core/hub-rest-client → pnpm pack → tgz → copy into IS → repin file:
+ *   4. Re-pin @synap-core/api-types in synap-app (deps + catalog + overrides +
+ *      synap-client) to whatever version CI published.
+ *
+ * The api-types version this script repins is read from package.json — CI is
+ * the authority that SETS it. Do not bump it here; that would reintroduce a
+ * second version authority.
  *
  * DRY-RUN by default. Nothing is written, published, or copied without --yes.
  *
@@ -162,9 +168,17 @@ if (contractChanged) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STEP B — bump api-types version + npm publish
+// STEP B — resolve the api-types version CI will publish.
+//
+// This script used to ALSO npm-publish @synap-core/api-types here. That is now
+// owned by .github/workflows/publish-types.yml (the single publish door) —
+// this step computes the version and, in apply mode, writes it so Step D can
+// repin synap-app, but it NEVER touches the npm registry.
 // ─────────────────────────────────────────────────────────────────────────────
-step("B", "Bump @synap-core/api-types & publish to npm");
+step(
+  "B",
+  "Resolve @synap-core/api-types version (CI owns the npm publish — this step only computes the pin)"
+);
 const apiTypesPkgRaw = readFileSync(apiTypesPkgFile, "utf-8");
 const apiTypesPkg = JSON.parse(apiTypesPkgRaw);
 const apiTypesOld = apiTypesPkg.version;
@@ -187,16 +201,18 @@ if (DRY) {
   }
   sub("(version file untouched in dry-run)");
 } else {
-  // write bumped version (text-surgical to avoid reordering keys)
+  // Write the resolved version so Step D can repin synap-app to it. The npm
+  // PUBLISH itself is CI's job — this script no longer touches the registry.
   const bumped = apiTypesPkgRaw.replace(
     /("version"\s*:\s*")\d+\.\d+\.\d+(")/,
     `$1${apiTypesNew}$2`
   );
   writeFileSync(apiTypesPkgFile, bumped);
-  sub(`✓ wrote version ${apiTypesNew}`);
-  run("pnpm --filter @synap-core/api-types build");
-  run("pnpm --filter @synap-core/api-types publish --no-git-checks");
-  sub(`✓ published @synap-core/api-types@${apiTypesNew}`);
+  sub(`✓ wrote version ${apiTypesNew} (for Step D repin; CI will publish it)`);
+  sub(
+    `⚠️  NOT publishing to npm — that is now owned by .github/workflows/publish-types.yml`
+  );
+  sub(`   trigger it:  gh workflow run publish-types.yml`);
 }
 
 // The pin value consumers should adopt (caret form, matches existing convention)

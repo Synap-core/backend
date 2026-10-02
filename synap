@@ -48,12 +48,81 @@ _resolve_compose_project_name() {
 }
 export COMPOSE_PROJECT_NAME="$(_resolve_compose_project_name)"
 
+# ─── Shared Ory database bootstrap ────────────────────────────────────────────
+# Sourced once so every command (install, update, and the alternate
+# update-pod.sh) uses ONE fail-closed, non-destructive bootstrap. Resolved
+# relative to this script's own location so it works from the repo root,
+# from deploy/, or when invoked as `bash synap` from anywhere.
+_ory_bootstrap_script="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/deploy/ensure-ory-databases.sh"
+if [ -f "$_ory_bootstrap_script" ]; then
+    # shellcheck source=/dev/null
+    source "$_ory_bootstrap_script"
+else
+    echo -e "${RED}❌ Ory database bootstrap not found at ${_ory_bootstrap_script}${NC}"
+    exit 1
+fi
+unset _ory_bootstrap_script
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
+
+# ─── Read-only Compose preflight check ────────────────────────────────────────
+# Verifies the Compose project and Postgres service are resolvable BEFORE any
+# database provisioning. Purely diagnostic — never starts, stops, or recreates
+# anything, never switches stacks. If the expected Postgres service/container
+# cannot be resolved, aborts so the operator sees why rather than silently
+# creating another stack (which would orphan the real data volume).
+_preflight_compose_check() {
+    local deploy_dir="${1:-.}"
+
+    echo -e "${BLUE}🔍 Preflight: resolving Compose project and Postgres service...${NC}"
+
+    # 1. Log the resolved Compose project name (already pinned at script top).
+    local project_name="${COMPOSE_PROJECT_NAME:-}"
+    if [ -z "$project_name" ]; then
+        project_name="$(_resolve_compose_project_name)"
+    fi
+    echo -e "${BLUE}  Compose project: ${project_name}${NC}"
+
+    # 2. Verify the compose file exists and defines a postgres service.
+    local compose_file="$deploy_dir/deploy/docker-compose.yml"
+    if [ ! -f "$compose_file" ]; then
+        echo -e "${RED}❌ Compose file not found at ${compose_file}${NC}"
+        return 1
+    fi
+
+    if ! grep -qE "^\s+postgres:" "$compose_file"; then
+        echo -e "${RED}❌ Postgres service not defined in ${compose_file}${NC}"
+        return 1
+    fi
+    echo -e "${BLUE}  Postgres service: defined in ${compose_file}${NC}"
+
+    # 3. If a postgres container is already running, log its container ID and
+    #    the mounted postgres_data volume so the operator can confirm the
+    #    update will operate on the expected data volume.
+    local postgres_container
+    postgres_container="$(cd "$deploy_dir" && docker compose ps -q postgres 2>/dev/null | head -1)"
+    if [ -n "$postgres_container" ]; then
+        echo -e "${BLUE}  Postgres container: ${postgres_container}${NC}"
+
+        local volume
+        volume="$(docker inspect --format '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' "$postgres_container" 2>/dev/null)"
+        if [ -n "$volume" ]; then
+            echo -e "${BLUE}  Mounted postgres_data volume: ${volume}${NC}"
+        else
+            echo -e "${YELLOW}  ⚠️  Could not resolve postgres_data volume mount on ${postgres_container}${NC}"
+        fi
+    else
+        echo -e "${YELLOW}  Postgres container: not running (bootstrap will start it)${NC}"
+    fi
+
+    echo -e "${GREEN}  ✓ Preflight check passed${NC}"
+    return 0
+}
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -1860,8 +1929,51 @@ EOF
     # On a rerun against an existing project this is the SAFETY NET — see
     # cmd_update for the full rationale (compose's `service_completed_successfully`
     # short-circuit + any volume drift = empty kratos DB + 500s on auth).
-    docker compose run --rm kratos-migrate >/dev/null 2>&1 || true
-    docker compose run --rm hydra-migrate >/dev/null 2>&1 || true
+    #
+    # The shared bootstrap runs first so the Ory databases are guaranteed to
+    # exist before either migration. Previously these migrations were swallowed
+    # with `|| true`, which hid a missing kratos/hydra database behind the same
+    # "database does not exist" error that now surfaces at the bootstrap step.
+    #
+    # Read-only preflight first: confirm the Compose project and Postgres
+    # service are resolvable so a misconfiguration aborts BEFORE the bootstrap
+    # starts postgres — never silently creates another stack.
+    _preflight_compose_check "$deploy_dir" || {
+        echo -e "${RED}❌ Preflight check failed — aborting install before database provisioning${NC}"
+        exit 1
+    }
+    COMPOSE_CMD="docker compose" ensure_ory_databases || {
+        echo -e "${RED}❌ Ory database bootstrap failed — install aborted before migrations${NC}"
+        exit 1
+    }
+
+    echo -e "${BLUE}🔄 Running Kratos migrations...${NC}"
+    if ! docker compose run --rm kratos-migrate; then
+        echo -e "${RED}❌ Kratos migrations failed${NC}"
+        if synap_assume_yes; then
+            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run${NC}"
+            exit 1
+        fi
+        read -p "Continue anyway? (y/N): " CONTINUE
+        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+            echo "Install cancelled"
+            exit 1
+        fi
+    fi
+
+    echo -e "${BLUE}🔄 Running Hydra migrations...${NC}"
+    if ! docker compose run --rm hydra-migrate; then
+        echo -e "${RED}❌ Hydra migrations failed${NC}"
+        if synap_assume_yes; then
+            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run${NC}"
+            exit 1
+        fi
+        read -p "Continue anyway? (y/N): " CONTINUE
+        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+            echo "Install cancelled"
+            exit 1
+        fi
+    fi
 
     if [ "$ADMIN_BOOTSTRAP_MODE" = "preseed" ]; then
         echo ""
@@ -2471,18 +2583,28 @@ cmd_update() {
     echo -e "${BLUE}📝 Regenerating Kratos configuration...${NC}"
     generate_kratos_config "$domain"
 
-    # Ensure the kratos and hydra databases exist before kratos-migrate runs.
+    # Ensure the kratos and hydra databases exist before any Ory migration runs.
     # postgres's init-databases.sh only fires on a fresh data volume, so an
-    # existing volume from before kratos/hydra were added has neither db
-    # — kratos-migrate then fails with "database does not exist".
-    # Idempotent: \gexec only runs CREATE DATABASE when the row is absent.
-    echo -e "${BLUE}📝 Ensuring kratos and hydra databases exist...${NC}"
-    docker compose exec -T postgres psql -U synap -c \
-        "SELECT 'CREATE DATABASE kratos' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec" \
-        2>/dev/null || true
-    docker compose exec -T postgres psql -U synap -c \
-        "SELECT 'CREATE DATABASE hydra' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hydra')\gexec" \
-        2>/dev/null || true
+    # existing volume from before kratos/hydra were added has neither db —
+    # kratos-migrate then fails with "database does not exist".
+    #
+    # This is the shared, fail-closed bootstrap (deploy/ensure-ory-databases.sh):
+    # it starts the deployment's own Postgres service, waits for readiness,
+    # creates only missing databases, verifies each one exists, and ABORTS on
+    # ANY failure. A missing database is repaired; existing data is never
+    # dropped, and a failed prerequisite never proceeds to migration.
+    #
+    # Read-only preflight first: confirm the Compose project and Postgres
+    # service are resolvable so a misconfiguration aborts BEFORE the bootstrap
+    # starts postgres — never silently creates another stack.
+    _preflight_compose_check "$deploy_dir" || {
+        echo -e "${RED}❌ Preflight check failed — aborting update before database provisioning${NC}"
+        exit 1
+    }
+    COMPOSE_CMD="docker compose" ensure_ory_databases || {
+        echo -e "${RED}❌ Ory database bootstrap failed — aborting update before migrations${NC}"
+        exit 1
+    }
 
     # Run migrations (critical - must succeed).
     # Kratos and backend evolve their schemas independently. Both run before

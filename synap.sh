@@ -185,19 +185,22 @@ cmd_deploy() {
     echo -e "  Starting Postgres..."
     (cd "$BACKEND_DIR/deploy" && docker compose $backend_env up $detach_flag postgres)
 
-    # Wait for Postgres to be healthy
-    echo -e "  Waiting for Postgres to be ready..."
-    for i in $(seq 1 30); do
-        if (cd "$BACKEND_DIR/deploy" && docker compose $backend_env exec -T postgres pg_isready -U synap >/dev/null 2>&1); then
-            break
-        fi
-        sleep 2
-    done
+    # ─── Shared fail-closed Ory database bootstrap ─────────────────────────────────
+    # Source the canonical helper (deploy/ensure-ory-databases.sh). It starts only
+    # postgres, waits for readiness, creates only missing kratos/hydra databases,
+    # verifies each one, and aborts on any failure. Never drops a database or a
+    # volume. Replaces the swallowed psql blocks that silently hid failures.
+    COMPOSE_PROJECT_NAME="synap-backend"
+    # The helper expects COMPOSE_CMD to be a plain "docker compose …" command.
+    # We wrap it so docker compose runs from the deploy directory with the env file.
+    COMPOSE_CMD="cd '$BACKEND_DIR/deploy' && docker compose $backend_env"
+    # shellcheck source=/dev/null
+    . "$BACKEND_DIR/deploy/ensure-ory-databases.sh" || { echo -e "${RED}❌ Ory bootstrap helper missing — cannot proceed${NC}"; exit 1; }
 
-    # Ensure Kratos/Hydra databases exist (idempotent — safe on existing deploys)
-    echo -e "  Ensuring kratos and hydra databases exist..."
-    (cd "$BACKEND_DIR/deploy" && docker compose $backend_env exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE kratos' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec" 2>/dev/null || true)
-    (cd "$BACKEND_DIR/deploy" && docker compose $backend_env exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hydra')\gexec" 2>/dev/null || true)
+    if ! ensure_ory_databases; then
+        echo -e "${RED}❌ Ory database bootstrap failed — cannot proceed${NC}"
+        exit 1
+    fi
 
     # Now start all backend services
     (cd "$BACKEND_DIR/deploy" && docker compose $backend_env up $detach_flag $build_flag) &
