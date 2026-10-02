@@ -25,6 +25,8 @@ import {
   type CapabilityRegistryContext,
   type RegistryCapability,
 } from "./capability-registry.js";
+import { runPosture } from "./run-posture.js";
+import { declaredReadOnly } from "./capability-drift.js";
 
 /** One verb that declares an intent, carried with the capability it lives on. */
 export interface IntentVerbMatch {
@@ -50,43 +52,95 @@ export interface IntentVerbMatch {
  * `listCapabilities`) and the folding are independently testable.
  *
  * A verb with no `intent` is simply absent from the index — legacy catalog
- * entries predate the axis and must never be guessed into a bucket. Rows are
- * deduped by `intent:verbId`, preferring a GRANTED copy, mirroring
- * `sectionCapabilities`' union rule for an integration installed twice.
+ * entries predate the axis and must never be guessed into a bucket.
+ *
+ * DEDUPE: same verb ID can appear on multiple capability rows (a tool row +
+ * its skill row + a CP container row). We keep ONE entry per verbId globally,
+ * preferring the TOOL row (has connection state + granted flag) over skill rows.
+ *
+ * POSTURE: the index reports the GATE'S ACTUAL POSTURE (`runPosture`), not the
+ * catalog's `effectiveExecMode`. A read verb with no grant still runs `auto`
+ * when the backing skill declares `readOnly` — the gate short-circuits, so the
+ * index must match.
  */
 export function foldVerbsByIntent(
   caps: RegistryCapability[]
 ): Map<string, IntentVerbMatch[]> {
   const byIntent = new Map<string, IntentVerbMatch[]>();
-  const seen = new Map<string, IntentVerbMatch>();
+  // Global dedupe by verbId — keep the best source (tool > skill > other)
+  const bestByVerbId = new Map<string, IntentVerbMatch>();
+
   for (const c of caps) {
     for (const v of c.verbs ?? []) {
       const intent = v.intent;
       if (!intent) continue;
+
+      // Compute the gate's actual posture for this verb
+      const skillKind =
+        c.kind === "builtin-tool" ? "builtin" : (c.skillKind ?? null);
+      const declared =
+        v.declaredReadOnly ??
+        (c.skillMetadata ? declaredReadOnly(c.skillMetadata) : undefined);
+      const posture = runPosture({
+        verbId: v.id,
+        skillKind,
+        granted: v.granted === true,
+        execMode: v.effectiveExecMode,
+        declaredReadOnly: declared,
+      });
+
       const match: IntentVerbMatch = {
         intent,
         verbId: v.id,
         verbLabel: v.label,
         verbKind: v.kind,
         granted: v.granted === true,
-        effectiveExecMode: v.effectiveExecMode,
+        // Report the GATE'S actual posture — what a run meets
+        effectiveExecMode: posture,
         backingSkillExecutable: v.backingSkillExecutable === true,
         capabilityId: c.id,
         capabilityName: c.name,
         ...(c.connection ? { connected: c.connection.connected === true } : {}),
       };
-      const key = `${intent}:${v.id}`;
-      const prior = seen.get(key);
+
+      // Dedupe by verbId globally — prefer tool rows (connected, granted)
+      const prior = bestByVerbId.get(v.id);
+      const isToolRow =
+        c.kind === "tool" ||
+        c.kind === "builtin-tool" ||
+        c.kind === "source-provider";
+      const priorIsToolRow =
+        prior?.capabilityId &&
+        caps.some(
+          (cap) =>
+            cap.id === prior!.capabilityId &&
+            (cap.kind === "tool" ||
+              cap.kind === "builtin-tool" ||
+              cap.kind === "source-provider")
+        );
+
       if (prior) {
-        // Same verb from a duplicate row — keep the granted copy.
-        if (match.granted && !prior.granted) Object.assign(prior, match);
+        if (isToolRow && !priorIsToolRow) {
+          // Replace skill/other row with tool row
+          bestByVerbId.set(v.id, match);
+        } else if (isToolRow && priorIsToolRow) {
+          // Both are tool rows — prefer the granted one
+          if (match.granted && !prior.granted) {
+            bestByVerbId.set(v.id, match);
+          }
+        }
+        // else keep prior (tool row wins, or first-seen for same kind)
         continue;
       }
-      seen.set(key, match);
-      const list = byIntent.get(intent);
-      if (list) list.push(match);
-      else byIntent.set(intent, [match]);
+      bestByVerbId.set(v.id, match);
     }
+  }
+
+  // Now build the intent index from deduped verbs
+  for (const match of bestByVerbId.values()) {
+    const list = byIntent.get(match.intent);
+    if (list) list.push(match);
+    else byIntent.set(match.intent, [match]);
   }
   return byIntent;
 }

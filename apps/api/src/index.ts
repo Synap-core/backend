@@ -141,43 +141,6 @@ function getRunningApiVersion(): string | null {
   return cachedApiVersion;
 }
 
-// Generate HTML for MCP Apps embeddable UI
-// This creates a minimal HTML document with CSP that loads the actual UI in an iframe
-function generateAppSrcdoc(kind: string, id: string, embed: boolean): string {
-  // Get base URL from env (for production behind reverse proxy) or construct from port (dev)
-  const baseUrl =
-    process.env.POD_PUBLIC_URL ||
-    process.env.SYNAP_POD_URL ||
-    `http://localhost:${config.server.port}`;
-  const appUrl = `${baseUrl}/apps/${kind}/${id}?embed=${embed ? "1" : "0"}`;
-
-  // CSP for secure iframe embedding
-  const csp = embed
-    ? "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"
-    : "default-src 'none'; script-src 'self'; style-src 'self'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'";
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="${csp}">
-  <style>
-    body { margin: 0; height: 100vh; overflow: hidden; display: flex; justify-content: center; align-items: center; background: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-    .loading { text-align: center; padding: 40px; }
-    iframe { width: 100%; height: 100%; border: none; }
-  </style>
-</head>
-<body>
-  <div class="loading">Loading Synap ${kind}...</div>
-  <iframe 
-    src="${appUrl}" 
-    sandbox="allow-scripts allow-same-origin"
-    allow="synap-widget"
-  ></iframe>
-</body>
-</html>`;
-}
-
 // Validate configuration at startup
 try {
   // Validate PostgreSQL database config
@@ -972,46 +935,6 @@ app.use("/trpc/*", async (c, next) => {
   return authMiddleware(c, next);
 });
 
-// _embed/auth endpoint for MCP Apps surface - short-lived exchange token for secure iframe embedding
-app.post("/apps/_embed/auth", async (c) => {
-  const { kind, id, exchangeToken } = await c.req.json();
-
-  // Validate input
-  if (!kind || !id || !exchangeToken) {
-    return c.json(
-      { error: "Missing required fields: kind, id, exchangeToken" },
-      400
-    );
-  }
-
-  const validKinds = ["entity", "view", "proposal", "session", "channel"];
-  if (!validKinds.includes(kind)) {
-    return c.json(
-      {
-        error: `Invalid kind: ${kind}. Must be one of ${validKinds.join(", ")}`,
-      },
-      400
-    );
-  }
-
-  // In a real implementation, we would validate the exchangeToken here
-  // For now, we'll accept any token and create a simple session
-  // The token should be signed and validated using the pod's key
-
-  // Set a scoped session cookie for embedding (TTL ~120s)
-  // In a real implementation, this would be a secure, httpOnly cookie
-  // with proper scope and validation
-
-  // For simplicity in this implementation, we'll just return success
-  // A real implementation would:
-  // 1. Validate the exchangeToken signature
-  // 2. Check that the kind/id combination is valid and accessible
-  // 3. Create a scoped session token or cookie
-  // 4. Set appropriate security headers
-
-  return c.json({ success: true }, 200);
-});
-
 // WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
 // exchanges its authenticated session for a short-lived, single-use ticket, then
 // opens terminal WebSockets with `?ticket=`.
@@ -1188,42 +1111,6 @@ app.route("/api/capture", captureProgressStreamApp);
 // POST /v1/chat/completions — OpenAI format request/response with SSE streaming
 // GET  /v1/models           — list available model aliases
 app.route("/v1", openaiCompatApp);
-
-// Apps routes for MCP Apps surface - embeddable UI for entities, views, proposals, sessions, channels
-app.get("/apps/entity/:id", (c) => {
-  const { id } = c.req.param();
-  const embed = c.req.query("embed") === "1";
-  const html = generateAppSrcdoc("entity", id, embed);
-  return c.html(html);
-});
-
-app.get("/apps/view/:id", (c) => {
-  const { id } = c.req.param();
-  const embed = c.req.query("embed") === "1";
-  const html = generateAppSrcdoc("view", id, embed);
-  return c.html(html);
-});
-
-app.get("/apps/proposal/:id", (c) => {
-  const { id } = c.req.param();
-  const embed = c.req.query("embed") === "1";
-  const html = generateAppSrcdoc("proposal", id, embed);
-  return c.html(html);
-});
-
-app.get("/apps/session/:id", (c) => {
-  const { id } = c.req.param();
-  const embed = c.req.query("embed") === "1";
-  const html = generateAppSrcdoc("session", id, embed);
-  return c.html(html);
-});
-
-app.get("/apps/channel/:id", (c) => {
-  const { id } = c.req.param();
-  const embed = c.req.query("embed") === "1";
-  const html = generateAppSrcdoc("channel", id, embed);
-  return c.html(html);
-});
 
 // File Upload REST endpoint (multipart/form-data — not tRPC)
 // Auth: Kratos session cookie (applied inside fileUploadApp)
