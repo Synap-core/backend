@@ -88,10 +88,9 @@ const withoutDescription = (s: Record<string, unknown>) => {
 };
 
 const DERIVED_ASK = (() => {
-  const j = z.toJSONSchema(AskSchema, { io: "input" }) as Record<
-    string,
-    unknown
-  >;
+  const j = z.toJSONSchema(AskSchema as unknown as z.ZodType<any, any, any>, {
+    io: "input",
+  }) as Record<string, unknown>;
   delete j.$schema;
   return j;
 })();

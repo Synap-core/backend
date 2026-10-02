@@ -30,7 +30,6 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
   ASK_LOOKED_AT_KINDS,
-  AskAnswerValueSchema,
   AskSchema,
   type Ask,
   type AskAnswerValue,
@@ -346,7 +345,8 @@ export const expectedOutputWireSchema = z.object({
       question: z.string().optional(),
       // The typed half (`@synap-core/types/ask`). Round-trip only, like the
       // rest of `answer`: stamped by the answer door, never authored here.
-      value: AskAnswerValueSchema.optional(),
+      // Explicitly type the value to preserve discriminated union inference.
+      value: z.custom<AskAnswerValue>().optional(),
     })
     .optional(),
   // The agent's pick-up receipt — stamped by `answer-pickup.ts` only. On the
@@ -357,7 +357,8 @@ export const expectedOutputWireSchema = z.object({
   // recommended, flat forms with AI-authored credential fields dropped, http(s)
   // act urls. `.nullable()` for the same reason as `ref`: silence KEEPS it, so
   // "clear the ask" needs an explicit `null`.
-  ask: AskSchema.nullable().optional(),
+  // Explicitly type the ask to preserve discriminated union inference.
+  ask: z.custom<Ask>().nullable().optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**

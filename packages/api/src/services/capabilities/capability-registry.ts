@@ -486,17 +486,31 @@ export function buildVerbStates(
    * intents — the column is the only source of truth there. This mirrors the
    * same logic in `buildSkillVerb` for tool-less skills.
    */
-  skillIntentByName: Map<string, string> = new Map()
+  skillIntentByName: Map<string, string> = new Map(),
+  /**
+   * THIS tool's own skills that declare an intent, keyed by verb id.
+   *
+   * The empty-catalog fallback below is scoped to these, and MUST be: adopting
+   * the pod-wide `skillIntentByName` here would attach every annotated skill on
+   * the pod to every catalog-less tool row, so a `twilio` connection row would
+   * advertise `gmail_send` and `isToolRowLaunchable` would judge the row on a
+   * verb it cannot run. The `requires` declaration is the real relationship —
+   * the same one `deriveToolVerbs` walks to build a catalog in the first place.
+   */
+  ownSkillIntents: Map<string, string> = new Map()
 ): CapabilityVerbStateWithResponseShape[] {
   const granted = !!grant;
 
-  // If catalog is empty but skillIntentByName has entries, build verb states
-  // from the skill intents (the authoritative column, migration 0292).
-  // This mirrors the logic in buildSkillVerb for tool-less skills.
+  // If catalog is empty but THIS tool's own skills declare intents, build verb
+  // states from the authoritative column (migration 0292). Scoped to
+  // `ownSkillIntents` — the pod-wide map would adopt every annotated skill onto
+  // every catalog-less tool row, advertising verbs the tool cannot run.
+  // A tool-less skill has no entry here by construction and is projected by
+  // `buildSkillVerb` on its own capability row instead.
   if (!Array.isArray(catalog) || catalog.length === 0) {
-    if (skillIntentByName.size === 0) return [];
+    if (ownSkillIntents.size === 0) return [];
     const verbs: CapabilityVerbStateWithResponseShape[] = [];
-    for (const [verbId, intent] of skillIntentByName.entries()) {
+    for (const [verbId, intent] of ownSkillIntents.entries()) {
       const declared = declaredReadOnlyByName.get(verbId);
       const backingExecutable =
         backingSkillExecutableByName.get(verbId) === true;
@@ -845,6 +859,32 @@ export async function listCapabilities(
         : visibleSkillsWhere(ctx.userId, ctx.workspaceId ?? undefined)
     );
 
+  // The skill→tool `requires` edges live in the `links` table, not on the skill row.
+  // Fetch them in one batched query for all visible skills.
+  const skillIds = skillRows.map((s) => s.id);
+  const skillRequiredTools = new Map<string, string[]>();
+  if (skillIds.length > 0) {
+    const requiredToolEdges = await db
+      .select({
+        skillId: links.fromId,
+        toolId: links.toId,
+      })
+      .from(links)
+      .where(
+        and(
+          eq(links.fromType, "skill"),
+          eq(links.toType, "tool"),
+          eq(links.linkType, "requires"),
+          inArray(links.fromId, skillIds)
+        )
+      );
+    for (const e of requiredToolEdges) {
+      const arr = skillRequiredTools.get(e.skillId) ?? [];
+      arr.push(e.toolId);
+      skillRequiredTools.set(e.skillId, arr);
+    }
+  }
+
   // verb id (= skill name) → providerSpec, for declarative skills only. A tool's
   // verb catalog entry id mirrors the requiring skill's name (see deriveToolVerbs
   // in create-from-definition.ts), so this is a direct lookup, no join needed.
@@ -858,6 +898,16 @@ export async function listCapabilities(
   // a skill requiring no tool has no catalog to read, which is precisely why
   // this map exists.
   const skillIntentByName = new Map<string, string>();
+  // tool id → the intent-slug-bearing skills that DECLARE that tool, i.e. the
+  // real `skills.requires` join. The empty-catalog fallback in `buildVerbStates`
+  // must be scoped to the tool being read: a pod-wide intent map would adopt
+  // every annotated skill on the pod onto every catalog-less tool row, so a
+  // `twilio` connection row would be advertised as offering `gmail_send`, and
+  // `isToolRowLaunchable` would judge it on a verb it cannot run. A skill that
+  // requires no tool belongs to NO entry here and is projected by
+  // `buildSkillVerb` on its own row instead — which is where tool-less skills
+  // were always meant to surface.
+  const skillIntentsByTool = new Map<string, Map<string, string>>();
   for (const s of skillRows) {
     const declared = declaredReadOnly(s.metadata);
     if (declared !== undefined) declaredReadOnlyByName.set(s.name, declared);
@@ -865,6 +915,16 @@ export async function listCapabilities(
     // .min(1)` — an empty intent is not a routable slug.
     if (typeof s.intent === "string" && s.intent.length > 0) {
       skillIntentByName.set(s.name, s.intent);
+      // Use the batched links query instead of s.requires (which doesn't exist on the row)
+      const requiredTools = skillRequiredTools.get(s.id) ?? [];
+      for (const requiredTool of requiredTools) {
+        let bySkill = skillIntentsByTool.get(requiredTool);
+        if (!bySkill) {
+          bySkill = new Map<string, string>();
+          skillIntentsByTool.set(requiredTool, bySkill);
+        }
+        bySkill.set(s.name, s.intent);
+      }
     }
     if (s.kind === "declarative" && s.providerSpec) {
       providerSpecByName.set(s.name, s.providerSpec as ProviderVerbSpec);
@@ -957,7 +1017,8 @@ export async function listCapabilities(
       providerSpecByName,
       backingSkillExecutableByName,
       declaredReadOnlyByName,
-      skillIntentByName
+      skillIntentByName,
+      skillIntentsByTool.get(row.id) ?? new Map()
     ),
     ...(row.kind === "provider"
       ? {

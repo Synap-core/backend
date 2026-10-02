@@ -448,23 +448,27 @@ describe("buildVerbStates — responseShape projection", () => {
 });
 
 /**
- * Regression test for the latent defect where a tool row with an empty
- * `capabilities` array but backing skills that declare intents would lose
- * those intents because `buildVerbStates` returned `[]` early.
+ * Regression tests for the empty-catalog fallback: a tool row whose `capabilities`
+ * array is empty but whose OWN skills declare intents must still surface them
+ * (the column, migration 0292, is the only place an intent can exist for such a
+ * row) — while a tool that no skill `requires` must surface NOTHING.
  *
- * This mirrors the same class of bug that was fixed for `kind:"skill"` rows
- * by adding `buildSkillVerb` — here the defect is on the TOOL side when the
- * verb catalog is empty but `skillIntentByName` carries the authoritative
- * column value (migration 0292).
+ * That second half is the load-bearing one. An earlier version of this fallback
+ * iterated the pod-wide `skillIntentByName`, so every catalog-less tool row on
+ * the pod adopted every annotated skill on it: a `twilio` connection row was
+ * advertised as offering `gmail_send`, `capabilityRowPosture` flipped from
+ * `"none"` to `"propose"`, and `isToolRowLaunchable` judged the row on a verb it
+ * cannot run. `ownSkillIntents` is the `skills.requires` join that prevents it.
  */
-describe("buildVerbStates — empty catalog with skillIntentByName", () => {
+describe("buildVerbStates — empty catalog with tool-scoped skill intents", () => {
   const emptyCatalog: Parameters<typeof buildVerbStates>[0] = [];
 
-  it("returns [] for an empty catalog when skillIntentByName is also empty (current behavior)", () => {
+  it("returns [] for an empty catalog when the tool owns no annotated skill", () => {
     const verbs = buildVerbStates(
       emptyCatalog,
       undefined,
       "builtin",
+      new Map(),
       new Map(),
       new Map(),
       new Map(),
@@ -473,11 +477,11 @@ describe("buildVerbStates — empty catalog with skillIntentByName", () => {
     expect(verbs).toEqual([]);
   });
 
-  it("SURFACES intents from skillIntentByName even when catalog is empty — this is the fix", () => {
-    // A tool row with empty capabilities but a backing skill that declares an intent
-    // (e.g. a provider tool created by syncToolRows before its family template was applied,
-    // or a manually-created tool that later gets skills requiring it).
-    const skillIntentByName = new Map<string, string>([
+  it("SURFACES the tool's own skill intents even when its catalog is empty", () => {
+    // A tool row with empty capabilities whose backing skill declares an intent
+    // (e.g. a provider tool created by syncToolRows before its family template
+    // was applied, or a manually-created tool that later gets skills).
+    const ownSkillIntents = new Map<string, string>([
       ["my_tool_verb", "send_message"],
     ]);
     const backingSkillExecutableByName = new Map<string, boolean>([
@@ -491,11 +495,11 @@ describe("buildVerbStates — empty catalog with skillIntentByName", () => {
       new Map(),
       backingSkillExecutableByName,
       new Map(),
-      skillIntentByName
+      new Map(),
+      ownSkillIntents
     );
 
-    // The fix should produce a verb state for the skill's intent, using the
-    // same fallback logic as buildSkillVerb: granted=false, effectiveExecMode="propose"
+    // Same fallback logic as buildSkillVerb: granted=false, effectiveExecMode="propose"
     expect(verbs.length).toBe(1);
     expect(verbs[0].id).toBe("my_tool_verb");
     expect(verbs[0].intent).toBe("send_message");
@@ -506,7 +510,7 @@ describe("buildVerbStates — empty catalog with skillIntentByName", () => {
   });
 
   it("does NOT widen governance — effectiveExecMode stays 'propose' for catalog-less tool", () => {
-    const skillIntentByName = new Map<string, string>([
+    const ownSkillIntents = new Map<string, string>([
       ["my_tool_verb", "send_message"],
     ]);
     const backingSkillExecutableByName = new Map<string, boolean>([
@@ -520,11 +524,42 @@ describe("buildVerbStates — empty catalog with skillIntentByName", () => {
       new Map(),
       backingSkillExecutableByName,
       new Map(),
-      skillIntentByName
+      new Map(),
+      ownSkillIntents
     );
 
     // Even with a grant, a catalog-less tool must stay propose — intent is ROUTING, not authorization
     expect(verbs[0].granted).toBe(false);
     expect(verbs[0].effectiveExecMode).toBe("propose");
+  });
+
+  /**
+   * NEGATIVE CONTROL for the scoping itself. The pod-wide map carries verbs
+   * belonging to OTHER tools; a catalog-less tool that owns none of them must
+   * still expose zero verbs, not the whole pod's inventory. This is the exact
+   * input that produced `twilio → gmail_send`.
+   */
+  it("does NOT adopt a pod-wide skill map onto a tool that owns none of those skills", () => {
+    // What `listCapabilities` computes pod-wide…
+    const skillIntentByName = new Map<string, string>([
+      ["gmail_send", "send_message"],
+      ["calendar_send", "schedule_event"],
+      ["messaging.send", "send_message"],
+    ]);
+    // …but this tool is required by NONE of them, so its own slice is empty.
+    const ownSkillIntents = new Map<string, string>();
+
+    const verbs = buildVerbStates(
+      emptyCatalog,
+      undefined,
+      "provider",
+      new Map(),
+      new Map(),
+      new Map(),
+      skillIntentByName,
+      ownSkillIntents
+    );
+
+    expect(verbs).toEqual([]);
   });
 });

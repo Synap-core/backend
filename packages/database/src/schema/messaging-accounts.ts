@@ -30,6 +30,18 @@ export const messagingAccounts = pgTable(
     /** Owner of this connected account. */
     userId: text("user_id").notNull(),
 
+    /**
+     * Workspace this connected account is pinned to. NULLABLE by design:
+     *  - legacy rows (created before this column) have none;
+     *  - accounts synced by the `account.created` webhook carry none (that path
+     *    has no workspace context);
+     *  - capability-connected accounts persisted by `runLinkedInBackfill` DO set
+     *    it, so the inbound `/messaging` webhook can pin messages to the exact
+     *    workspace instead of guessing the owner's first workspace.
+     * When null, the webhook keeps its back-compat `workspaces.ownerId` fallback.
+     */
+    workspaceId: text("workspace_id"),
+
     /** Platform identifier (e.g. 'linkedin', 'gmail', 'whatsapp'). */
     provider: text("provider").notNull(),
 

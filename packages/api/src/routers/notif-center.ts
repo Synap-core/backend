@@ -46,10 +46,7 @@ import {
   effectivePushCategories,
   type PushPrefs,
 } from "@synap-core/types/push";
-import {
-  readPushPrefs,
-  writePushPrefs,
-} from "../notifications/push-prefs.js";
+import { readPushPrefs, writePushPrefs } from "../notifications/push-prefs.js";
 
 /** What a phone's push settings render — every category, effective state. */
 function pushPrefsView(prefs: PushPrefs) {
@@ -580,12 +577,12 @@ export const notifCenterRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      const revoked = await MessagingAccountService.setStatusForUser({
-        userId,
-        provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
-        externalId: input.token,
-        status: "disconnected",
-      });
+      const revoked = await MessagingAccountService.updateStatus(
+        input.token,
+        MESSAGING_ACCOUNT_PROVIDER_EXPO,
+        "disconnected",
+        userId
+      );
 
       // `revoked: false` means there was nothing to revoke — reported rather
       // than dressed up as a success.

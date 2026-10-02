@@ -14,7 +14,10 @@ import { z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
-import { playbookDefinitionSchema } from "../../../schemas/playbook-definition.js";
+import {
+  playbookDefinitionSchema,
+  playbookExpectedOutputSchema,
+} from "../../../schemas/playbook-definition.js";
 import {
   createPlaybookDoor,
   getPlaybookDoor,
@@ -440,7 +443,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           Record<string, unknown> | undefined,
         channelSpec: body.channelSpec as Record<string, unknown> | undefined,
         expectedOutputs: body.expectedOutputs as
-          Record<string, unknown>[] | undefined,
+          z.infer<typeof playbookExpectedOutputSchema>[] | undefined,
         // Validated for real by `playbooks.update`'s `playbookStagesSchema`
         // (category required, keys unique) — this only types the untyped body.
         stages: body.stages as PlaybookStageInput[] | undefined,

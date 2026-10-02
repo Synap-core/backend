@@ -52,7 +52,7 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import { AskAnswerValueSchema } from "@synap-core/types/ask";
+import { type AskAnswerValue, type Ask } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import {
@@ -402,8 +402,9 @@ const BlockOutputBodySchema = z.object({
   /**
    * HOW the person can answer (confirm / choose / form / act / provide) — the
    * slot wire's own `ask` schema, not a copy. `null` clears; omitted leaves it.
+   * Explicit type annotation preserves discriminated union inference.
    */
-  ask: expectedOutputWireSchema.shape.ask,
+  ask: z.custom<Ask>().nullable().optional(),
 });
 
 const UnblockOutputBodySchema = z.object({
@@ -411,14 +412,12 @@ const UnblockOutputBodySchema = z.object({
 });
 
 /** The person's answer to what an agent asked about a slot. */
-// Mirrors tRPC `focusSessions.answerOutput` (W2 door contract): `text` alone
-// is a free-text answer; `value` the typed answer to the slot's ask (parsed —
-// a form's secrets redacted — by `AskAnswerValueSchema`), `text` then a note.
 const AnswerOutputBodySchema = z
   .object({
     expectedLabel: z.string().min(1).max(500),
     text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
-    value: AskAnswerValueSchema.optional(),
+    // Explicit type annotation preserves discriminated union inference.
+    value: z.custom<AskAnswerValue>().optional(),
     askFingerprint: z.string().min(1).max(64).optional(),
   })
   .refine((v) => v.value !== undefined || !!v.text?.trim(), {

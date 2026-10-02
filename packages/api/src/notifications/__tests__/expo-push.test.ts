@@ -27,7 +27,16 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 vi.mock("../../services/messaging-account-service.js", () => ({
-  MessagingAccountService: { setStatusForUser: mockSetStatusForUser },
+  MessagingAccountService: {
+    updateStatus: (
+      externalId: string,
+      provider: string,
+      status: string,
+      userId: string,
+      workspaceId?: string | null
+    ) =>
+      mockSetStatusForUser(externalId, provider, status, userId, workspaceId),
+  },
 }));
 
 import { sendExpoPush } from "../expo-push.js";
@@ -81,12 +90,13 @@ describe("sendExpoPush — DeviceNotRegistered revocation", () => {
     // `updateStatus` that matches on (externalId, provider) alone — a push
     // token is guessable, so the write must pin `user_id`.
     expect(mockSetStatusForUser).toHaveBeenCalledTimes(1);
-    expect(mockSetStatusForUser).toHaveBeenCalledWith({
-      userId: USER,
-      provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
-      externalId: DEAD,
-      status: "disconnected",
-    });
+    expect(mockSetStatusForUser).toHaveBeenCalledWith(
+      DEAD,
+      MESSAGING_ACCOUNT_PROVIDER_EXPO,
+      "disconnected",
+      USER,
+      undefined
+    );
   });
 
   it("a NON-DeviceNotRegistered ticket error does NOT revoke the device", async () => {

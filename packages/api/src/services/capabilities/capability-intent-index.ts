@@ -38,9 +38,21 @@ export interface IntentVerbMatch {
   verbKind: "read" | "write" | "action";
   /** Grant state, straight off the registry row — never re-derived here. */
   granted: boolean;
-  effectiveExecMode: string;
+  /**
+   * The GATE'S ACTUAL POSTURE for this verb — what a run meets, not the verb's
+   * declared exec mode. Named `runPosture`, NOT `effectiveExecMode`: the two are
+   * different axes. `ExecMode` is `"auto" | "propose" | "dry-run"` and comes from
+   * the grant; `RunPosture` is `"auto" | "propose"` and is what
+   * {@link runPosture} returns after short-circuiting on `granted` /
+   * `declaredReadOnly`. Keeping the old name on the new value made the field read
+   * as an exec mode while `dry-run` had silently become inexpressible — an agent
+   * consuming this would take it as a mode it can set.
+   */
+  runPosture: "auto" | "propose";
   /** False when no visible active+approved backing skill can execute the verb. */
   backingSkillExecutable: boolean;
+  /** The capability kind this verb came from — `tool` | `builtin-tool` | `source-provider` | `skill` | `teaching-doc` | `command`. Carried so `foldVerbsByIntent` can prefer tool rows in O(1) without re-scanning `caps`. */
+  sourceKind: string;
   capabilityId: string;
   capabilityName: string;
   /** Whether the provider tool is connected, when the registry knows. */
@@ -57,6 +69,16 @@ export interface IntentVerbMatch {
  * DEDUPE: same verb ID can appear on multiple capability rows (a tool row +
  * its skill row + a CP container row). We keep ONE entry per verbId globally,
  * preferring the TOOL row (has connection state + granted flag) over skill rows.
+ *
+ * WHY ONE entry per verbId, not one per (verbId × intent): a verb id IS a
+ * skill name, and `skills.intent` is a single column written once by
+ * `resolveVerbIntent`. Two rows sharing a verb id are a tool row plus its own
+ * skill row, and both read the SAME column — so the intent is identical by
+ * construction. The only other source of intent is the requiring tool's
+ * catalog mirror, and `buildVerbStates` prefers the column over it. So a
+ * conflicting-intent pair cannot reach this fold; deduping by verbId alone is
+ * sound and a guard here would be dead. If a future change ever lets a row
+ * carry an intent that is NOT the column's, this is where it breaks.
  *
  * POSTURE: the index reports the GATE'S ACTUAL POSTURE (`runPosture`), not the
  * catalog's `effectiveExecMode`. A read verb with no grant still runs `auto`
@@ -89,6 +111,13 @@ export function foldVerbsByIntent(
         declaredReadOnly: declared,
       });
 
+      // Dedupe by verbId globally — prefer tool rows (connected, granted)
+      const prior = bestByVerbId.get(v.id);
+      const isToolKind =
+        c.kind === "tool" ||
+        c.kind === "builtin-tool" ||
+        c.kind === "source-provider";
+
       const match: IntentVerbMatch = {
         intent,
         verbId: v.id,
@@ -96,34 +125,19 @@ export function foldVerbsByIntent(
         verbKind: v.kind,
         granted: v.granted === true,
         // Report the GATE'S actual posture — what a run meets
-        effectiveExecMode: posture,
+        runPosture: posture,
         backingSkillExecutable: v.backingSkillExecutable === true,
+        sourceKind: isToolKind ? "tool" : c.kind,
         capabilityId: c.id,
         capabilityName: c.name,
         ...(c.connection ? { connected: c.connection.connected === true } : {}),
       };
 
-      // Dedupe by verbId globally — prefer tool rows (connected, granted)
-      const prior = bestByVerbId.get(v.id);
-      const isToolRow =
-        c.kind === "tool" ||
-        c.kind === "builtin-tool" ||
-        c.kind === "source-provider";
-      const priorIsToolRow =
-        prior?.capabilityId &&
-        caps.some(
-          (cap) =>
-            cap.id === prior!.capabilityId &&
-            (cap.kind === "tool" ||
-              cap.kind === "builtin-tool" ||
-              cap.kind === "source-provider")
-        );
-
       if (prior) {
-        if (isToolRow && !priorIsToolRow) {
+        if (isToolKind && prior.sourceKind !== "tool") {
           // Replace skill/other row with tool row
           bestByVerbId.set(v.id, match);
-        } else if (isToolRow && priorIsToolRow) {
+        } else if (isToolKind && prior.sourceKind === "tool") {
           // Both are tool rows — prefer the granted one
           if (match.granted && !prior.granted) {
             bestByVerbId.set(v.id, match);

@@ -747,16 +747,23 @@ webhooksInboundRouter.post("/messaging", async (c) => {
       });
       if (!account) return c.json({ ok: true });
 
-      // Find the workspace owned by this user
-      const workspace = await db.query.workspaces.findFirst({
-        where: eq(workspaces.ownerId, account.userId),
-      });
-      if (!workspace) {
-        logger.warn(
-          { userId: account.userId },
-          "No workspace found for messaging account owner"
-        );
-        return c.json({ ok: true });
+      // Resolve the target workspace. Prefer the account's own pin (set when the
+      // account was backfilled / bound) — this removes the arbitrary-workspace
+      // guess for a multi-workspace owner. Only fall back to the owner's first
+      // workspace for legacy/unpinned rows (back-compat).
+      let workspaceId = account.workspaceId ?? null;
+      if (!workspaceId) {
+        const workspace = await db.query.workspaces.findFirst({
+          where: eq(workspaces.ownerId, account.userId),
+        });
+        if (!workspace) {
+          logger.warn(
+            { userId: account.userId },
+            "No workspace found for messaging account owner"
+          );
+          return c.json({ ok: true });
+        }
+        workspaceId = workspace.id;
       }
 
       const senderName = event.message.senderName;
@@ -769,7 +776,7 @@ webhooksInboundRouter.post("/messaging", async (c) => {
         provider: event.provider,
         externalId: event.threadId,
         userId: account.userId,
-        workspaceId: workspace.id,
+        workspaceId,
         text: event.message.body,
         participant: senderName,
         accountExternalId: account.externalId,
