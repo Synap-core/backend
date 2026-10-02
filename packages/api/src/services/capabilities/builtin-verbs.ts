@@ -94,11 +94,57 @@ import {
   buildPackageSkeleton,
   SCAFFOLDABLE_CATEGORIES,
 } from "./market-scaffold.js";
+// posthog-analytics — the four read-only verbs of the marketplace capability of
+// the same name. Their FIXED query program, credentialed dispatcher and failure
+// semantics live in `services/posthog-analytics/`; this module only REGISTERS
+// them, so the ONE builtin registry stays the single list of runnable verbs.
+//
+// REGISTERED AS LITERAL KEYS, NOT A SPREAD — on purpose. Three source-scanning
+// tripwires (`synap-core-risky-verbs-reenter-a-governed-door`,
+// `builtin-verb-intent-reachability`, and the durable-object derivation) REFUSE a
+// map they cannot read exactly, precisely so a spread cannot smuggle a verb past
+// them. A new verb therefore costs one literal line in each of the three
+// registries below: a verb missing from the param map is accepted by its handler
+// yet UNDISCOVERABLE to an agent, and one missing from the read-only set would
+// file an agent's analytics READ as a human review proposal.
+import {
+  runPostHogEventTrend,
+  runPostHogStepReach,
+  runPostHogTopEvents,
+  runPostHogUniqueUsers,
+} from "../posthog-analytics/verbs.js";
+import {
+  eventTrendParams as posthogEventTrendParams,
+  stepReachParams as posthogStepReachParams,
+  topEventsParams as posthogTopEventsParams,
+  uniqueUsersParams as posthogUniqueUsersParams,
+} from "../posthog-analytics/query-program.js";
 // marketplace-install.ts pulls in the full router graph (create-from-definition.ts
 // imports playbooksRouter/automationsRouter/toolsRouter/skillsRouter at top
 // level) — it and catalog-cache-query.ts are lazy-imported inside the two
 // handlers below, exactly like every other router import in this file, so this
 // module's own load graph stays light.
+
+// ── posthog-analytics handler DECLARATIONS ───────────────────────────────────
+//
+// These four `const`s exist so `BUILTIN_VERBS` stays an object literal of
+// bare identifiers declared IN THIS FILE: the source-scanning tripwires
+// (`synap-core-risky-verbs-reenter-a-governed-door`,
+// `builtin-verb-intent-reachability`, the durable-object derivation) refuse a
+// map they cannot read exactly, on purpose. Each is a one-line delegation to the
+// runner in `services/posthog-analytics/verbs.ts` where the behaviour — the
+// fixed query program, the credentialed dispatch, the read/failure
+// classification — actually lives. None of them re-enters a tRPC router: a
+// PostHog read reaches the pod's ONE credentialed dispatcher
+// (`triggerProviderAction`), so there is no second governance door to classify.
+const posthogEventTrendHandler: BuiltinVerbHandler = (params, ctx) =>
+  runPostHogEventTrend(params, ctx);
+const posthogUniqueUsersHandler: BuiltinVerbHandler = (params, ctx) =>
+  runPostHogUniqueUsers(params, ctx);
+const posthogTopEventsHandler: BuiltinVerbHandler = (params, ctx) =>
+  runPostHogTopEvents(params, ctx);
+const posthogStepReachHandler: BuiltinVerbHandler = (params, ctx) =>
+  runPostHogStepReach(params, ctx);
 
 export interface BuiltinVerbContext {
   /** The acting operator (bearer's user id). */
@@ -3844,6 +3890,14 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "skill.update_rule": skillUpdateRuleHandler,
   "profile.propose_retire": profileProposeRetireHandler,
   "property_def.propose_retire": propertyDefProposeRetireHandler,
+  // posthog-analytics — the read-only analytics verbs of the marketplace
+  // capability `posthog-analytics` (see services/posthog-analytics/). Registered
+  // here because a builtin verb is runnable ONLY when its name resolves in this
+  // map; the capability's install creates the matching `skills` rows.
+  "posthog.event_trend": posthogEventTrendHandler,
+  "posthog.unique_users": posthogUniqueUsersHandler,
+  "posthog.top_events": posthogTopEventsHandler,
+  "posthog.step_reach": posthogStepReachHandler,
 };
 
 /**
@@ -3909,6 +3963,15 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "skill.update_rule": skillUpdateRuleParams,
   "profile.propose_retire": profileProposeRetireParams,
   "property_def.propose_retire": propertyDefProposeRetireParams,
+  // posthog-analytics — the execution-time Zod validators (the SSOT
+  // `list_capabilities` derives each verb's honest `paramsSchema` from).
+  // Every schema is `.strict()`, which is also the SCOPE enforcement: a caller
+  // passing `projectId`/`host`/`hogql` is rejected outright rather than having
+  // the field silently ignored.
+  "posthog.event_trend": posthogEventTrendParams,
+  "posthog.unique_users": posthogUniqueUsersParams,
+  "posthog.top_events": posthogTopEventsParams,
+  "posthog.step_reach": posthogStepReachParams,
 };
 
 /**
@@ -3980,4 +4043,13 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // calibration cron must be able to auto-run it. A propose verdict on the verb
   // ITSELF would stall the flow that exists to surface dead automations.
   "automation.recommend_health",
+  // posthog-analytics — every analytics verb is a pure credentialed READ (a
+  // PostHog trend GET or a HogQL SELECT). Membership here is what lets an
+  // agent's analytics lookup auto-run instead of stalling on a review proposal
+  // for a query that mutates nothing; the parameterised dispatcher in
+  // `services/posthog-analytics/client.ts` is the matching half.
+  "posthog.event_trend",
+  "posthog.unique_users",
+  "posthog.top_events",
+  "posthog.step_reach",
 ]);

@@ -181,6 +181,25 @@ cmd_deploy() {
         detach_flag=""
     fi
 
+    # Ensure Postgres is up first (so we can create missing databases)
+    echo -e "  Starting Postgres..."
+    (cd "$BACKEND_DIR/deploy" && docker compose $backend_env up $detach_flag postgres)
+
+    # Wait for Postgres to be healthy
+    echo -e "  Waiting for Postgres to be ready..."
+    for i in $(seq 1 30); do
+        if (cd "$BACKEND_DIR/deploy" && docker compose $backend_env exec -T postgres pg_isready -U synap >/dev/null 2>&1); then
+            break
+        fi
+        sleep 2
+    done
+
+    # Ensure Kratos/Hydra databases exist (idempotent — safe on existing deploys)
+    echo -e "  Ensuring kratos and hydra databases exist..."
+    (cd "$BACKEND_DIR/deploy" && docker compose $backend_env exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE kratos' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec" 2>/dev/null || true)
+    (cd "$BACKEND_DIR/deploy" && docker compose $backend_env exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hydra')\gexec" 2>/dev/null || true)
+
+    # Now start all backend services
     (cd "$BACKEND_DIR/deploy" && docker compose $backend_env up $detach_flag $build_flag) &
     local backend_pid=$!
 

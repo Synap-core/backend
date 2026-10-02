@@ -140,6 +140,18 @@ export const SkillDefSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).optional(),
   category: z.string().optional(),
   /**
+   * Definition-owned keys of the skill's `metadata` bag — `readOnly` (the
+   * authored read-only declaration the capability gate auto-runs on) and
+   * `allowedHosts` (the sandbox egress allow-list). Same silent-strip class as
+   * ToolDefSchema's `metadata`, whose slot was added for exactly this reason:
+   * with no slot here zero strips the bag, `projectSkillMetadata(null, undefined)`
+   * writes neither key, and an INLINE-applied definition (`POST
+   * /capabilities/apply`, the path a private/agent-authored capability takes)
+   * installs a read verb as a write — proposing on every agent call — and a code
+   * verb with no egress, failing at run with `domain_not_approved`.
+   */
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  /**
    * ROUTING intent — what this verb MEANS, independent of its vendor. Validated
    * HERE, at the door, not only in the applier: `resolveVerbIntent` throws on an
    * unknown value, and that throw lands in this route's generic catch as a
