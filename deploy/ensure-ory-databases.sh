@@ -49,11 +49,15 @@ _ensure_ory_database() {
 
     echo -e "${BLUE}📝 Ensuring database '${database}' exists...${NC}"
 
-    # Create only when absent. Identical to init-databases.sh's \gexec pattern,
-    # but executed against the running service on the existing volume.
-    if ! $COMPOSE_CMD exec -T postgres \
-        psql -v ON_ERROR_STOP=1 -U synap -d postgres \
-        -c "SELECT 'CREATE DATABASE ${database}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${database}')\gexec"; then
+    # Create only when absent. Uses a HEREDOC (not `psql -c`) because the
+    # \gexec meta-command is only interpreted when psql reads from stdin —
+    # with `-c` it is passed as literal SQL and psql rejects it with
+    # "syntax error at or near \"\"". This matches docker/postgres/
+    # init-databases.sh, which also feeds the same query via a heredoc.
+    if ! $COMPOSE_CMD exec -T postgres psql -v ON_ERROR_STOP=1 -U synap -d postgres <<EOSQL
+SELECT 'CREATE DATABASE ${database}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${database}')\gexec
+EOSQL
+    then
         echo -e "${RED}❌ Failed to create database '${database}' (see psql output above)${NC}"
         return 1
     fi

@@ -207,10 +207,31 @@ COMPOSE: $*"
           return 0
         fi
         if [[ "$rest" == *"psql"* ]]; then
+          # The helper now feeds the CREATE DATABASE query via a HEREDOC
+          # (`psql ... <<EOSQL`), so the SQL is on stdin, not in the args.
+          # Read stdin when a heredoc is present so the CREATE DATABASE
+          # pattern can be matched.
+          #
+          # NOTE: `$COMPOSE_CMD` is expanded unquoted in the helper, so this
+          # mock runs in a subshell — mutations to FAKE_DB_*_EXISTS here are
+          # lost. Instead the CREATE branch returns the right exit code and
+          # stdout, and the subsequent verification query (which runs in the
+          # parent shell) re-checks the flags directly.
+          local _heredoc_sql=""
+          if [[ ! -t 0 ]]; then
+            _heredoc_sql="$(cat)"
+            # Log heredoc content so test assertions can find CREATE DATABASE
+            FAKE_COMPOSE_LOG="$FAKE_COMPOSE_LOG
+HEREDOC: $_heredoc_sql"
+          fi
           # Verification query: SELECT 1 FROM pg_database WHERE datname = 'X'
           # (distinguishable from CREATE: it has no 'CREATE DATABASE' string)
           if [[ "$rest" == *"SELECT 1 FROM pg_database"* ]]; then
+            # Check marker files first (from CREATE branch in subshell)
             if [[ "$rest" == *"datname = 'kratos'"* ]]; then
+              if [[ -f "/tmp/_synap_create_kratos" ]]; then
+                echo "1"; rm -f "/tmp/_synap_create_kratos"; return 0
+              fi
               if [[ "$FAKE_DB_KRATOS_EXISTS" == "1" ]]; then
                 echo "1"; return 0
               else
@@ -218,6 +239,9 @@ COMPOSE: $*"
               fi
             fi
             if [[ "$rest" == *"datname = 'hydra'"* ]]; then
+              if [[ -f "/tmp/_synap_create_hydra" ]]; then
+                echo "1"; rm -f "/tmp/_synap_create_hydra"; return 0
+              fi
               if [[ "$FAKE_DB_HYDRA_EXISTS" == "1" ]]; then
                 echo "1"; return 0
               else
@@ -225,27 +249,27 @@ COMPOSE: $*"
               fi
             fi
           fi
-          # CREATE DATABASE with \gexec
-          if [[ "$rest" == *"CREATE DATABASE"* ]]; then
-            if [[ "$FAKE_CREATE_FAIL" == "both" ]] || [[ "$FAKE_CREATE_FAIL" == "kratos" ]] && [[ "$rest" == *"kratos"* ]]; then
-              echo "ERROR: connection refused" >&2; return 1
+          # CREATE DATABASE with \gexec — may be in args (-c) or stdin (heredoc)
+          if [[ "$rest" == *"CREATE DATABASE"* ]] || [[ "$_heredoc_sql" == *"CREATE DATABASE"* ]]; then
+            local _create_target=""
+            if [[ "$_heredoc_sql" == *"kratos"* ]]; then _create_target="kratos"; fi
+            if [[ "$_heredoc_sql" == *"hydra"* ]]; then _create_target="hydra"; fi
+            if [[ -z "$_create_target" ]]; then
+              if [[ "$rest" == *"kratos"* ]]; then _create_target="kratos"; fi
+              if [[ "$rest" == *"hydra"* ]]; then _create_target="hydra"; fi
             fi
-            if [[ "$FAKE_CREATE_FAIL" == "both" ]] || [[ "$FAKE_CREATE_FAIL" == "hydra" ]] && [[ "$rest" == *"hydra"* ]]; then
+            # Simulate the side effect in the PARENT shell via a marker the
+            # next verification query can see. The CREATE branch itself does
+            # not mutate flags (subshell), so on a successful CREATE we must
+            # flip the flag HERE in the parent. Do it by writing to a temp
+            # file the parent reads after this subshell exits.
+            if [[ "$FAKE_CREATE_FAIL" == "both" ]] || [[ "$FAKE_CREATE_FAIL" == "$_create_target" ]]; then
               echo "ERROR: connection refused" >&2; return 1
             fi
             echo "CREATE DATABASE"
-            # Simulate the side effect: the database now exists for subsequent
-            # verification queries within the same test run — UNLESS this is a
-            # silent no-op, which models a CREATE that reports success but
-            # leaves the database absent.
-            if [[ "$FAKE_CREATE_SILENT_NOOP" == "kratos" ]] && [[ "$rest" == *"kratos"* ]]; then
-              : # exit 0, database NOT created
-            elif [[ "$FAKE_CREATE_SILENT_NOOP" == "hydra" ]] && [[ "$rest" == *"hydra"* ]]; then
-              : # exit 0, database NOT created
-            elif [[ "$rest" == *"kratos"* ]]; then
-              FAKE_DB_KRATOS_EXISTS=1
-            elif [[ "$rest" == *"hydra"* ]]; then
-              FAKE_DB_HYDRA_EXISTS=1
+            # Record the side effect for the parent shell via a marker file.
+            if [[ "$FAKE_CREATE_SILENT_NOOP" != "$_create_target" ]]; then
+              echo "$_create_target" > "/tmp/_synap_create_${_create_target}"
             fi
             return 0
           fi
