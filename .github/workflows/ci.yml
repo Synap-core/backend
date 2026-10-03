@@ -97,6 +97,24 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
+      # CI/CD CONFORMANCE GATE. Every publish workflow across ALL repos must
+      # satisfy the shared rules in ci/repos.yml: no dual pnpm pin, id-token: write
+      # on real npm publish jobs, publish concurrency that never cancels, no
+      # NPM_TOKEN used as an auth var, no cross-repo package-name collision, and a
+      # changeset ignore list that covers every public package.
+      #
+      # This is the guard that caught a real blocker the first pass missed: the
+      # browser repo was passing `version: 9` to pnpm/action-setup while pinning
+      # packageManager: pnpm@10.28.0, which fails every browser CI run. It also
+      # caught dfa3d884 truncating the ignore list to 116 entries, leaving 51 real
+      # packages unlisted — changesets would have published them with no decision.
+      #
+      # The scan set is DERIVED (every repo with a .github/workflows dir), never
+      # hand-listed, and both scans assert non-vacuity: an empty scan FAILS rather
+      # than silently passing. See ci/README.md.
+      - name: CI/CD conformance gate
+        run: node ci/scripts/check.mjs --quiet
+
       - name: Lint
         # Allow up to 100 warnings (errors will still fail)
         run: pnpm lint --max-warnings=100
