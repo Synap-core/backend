@@ -720,6 +720,171 @@ app.get("/open/:id", async (c) => {
   return applyOpenDispatch(c, type, id);
 });
 
+// ── MCP Apps surface — embeddable UI for entities, views, proposals, sessions, channels
+// These routes render the real object UI inside an iframe for MCP clients.
+// They REQUIRE authentication (session or API key) and scope the lookup to what the
+// caller can see. The iframe is a security boundary: CSP + sandbox + permissions-policy.
+const VALID_APP_KINDS = ["entity", "view", "proposal", "session", "channel"] as const;
+type AppKind = (typeof VALID_APP_KINDS)[number];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Helper to generate the iframe srcdoc HTML (shared with generateMcpAppHtml in mcp resources)
+function generateAppSrcdoc(kind: AppKind, id: string, embed: boolean): string {
+  // Use PUBLIC_URL from env for the absolute base URL
+  const baseUrl = process.env.PUBLIC_URL || `http://localhost:${config.server.port}`;
+  // Use ABSOLUTE URL so the iframe works when the HTML is rendered outside the pod origin
+  const appUrl = `${baseUrl}/apps/${kind}/${id}?embed=${embed ? "1" : "0"}`;
+
+  // CSP for secure iframe embedding
+  // - default-src 'none': deny everything by default
+  // - script-src 'self': only same-origin scripts (the pod-admin app)
+  // - style-src 'self' 'unsafe-inline': same-origin styles + inline (needed for pod-admin)
+  // - img-src data: blob: https:: allow data URIs, blob URLs, and HTTPS images
+  // - font-src data: https:: allow data URIs and HTTPS fonts
+  // - connect-src 'self' https://pod-admin.*.synap.live https://*.thearch.synap.live: API + pod-admin
+  // - form-action 'self': forms only to same origin
+  // - base-uri 'none': no base tag
+  // - frame-ancestors 'self' https://pod-admin.*.synap.live https://*.thearch.synap.live: only these can embed
+  // - object-src 'none': no plugins
+  const csp = embed
+    ? "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob: https:; font-src data: https:; connect-src 'self' https://pod-admin.*.synap.live https://*.thearch.synap.live; form-action 'self'; base-uri 'none'; frame-ancestors 'self' https://pod-admin.*.synap.live https://*.thearch.synap.live; object-src 'none'"
+    : "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob: https:; font-src data: https:; connect-src 'self' https://pod-admin.*.synap.live https://*.thearch.synap.live; form-action 'self'; base-uri 'none'; object-src 'none'";
+
+  // sandbox: allow-scripts (pod-admin needs JS) + allow-same-origin (needed for cookies/session)
+  // Note: allow-same-origin + allow-scripts is the standard iframe model — isolation is via
+  // CSP frame-ancestors + origin checks, not sandbox. Removing allow-same-origin would break
+  // session cookies and auth inside the iframe.
+  // allow="synap-widget" is a custom Permissions-Policy feature checked by pod-admin widgets.
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="${csp}">
+  <style>
+    body { margin: 0; height: 100vh; overflow: hidden; display: flex; justify-content: center; align-items: center; background: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .loading { text-align: center; padding: 40px; }
+    iframe { width: 100%; height: 100%; border: none; }
+  </style>
+</head>
+<body>
+  <div class="loading">Loading Synap ${kind}...</div>
+  <iframe
+    src="${appUrl}"
+    sandbox="allow-scripts allow-same-origin"
+    allow="synap-widget"
+  ></iframe>
+</body>
+</html>`;
+}
+
+// Embeddable app routes — require auth + ownership/access check
+// Order: put these BEFORE /trpc/* so they don't get caught by the tRPC middleware
+app.get("/apps/:kind/:id", authMiddleware, refuseGuestSession, async (c) => {
+  const kind = c.req.param("kind");
+  const id = c.req.param("id");
+  const embed = c.req.query("embed") === "1";
+
+  // Validate kind against closed allowlist
+  if (!VALID_APP_KINDS.includes(kind as AppKind)) {
+    return c.json(
+      { error: `Invalid kind: ${kind}. Must be one of ${VALID_APP_KINDS.join(", ")}` },
+      400
+    );
+  }
+
+  // Validate UUID format
+  if (!UUID_RE.test(id)) {
+    return c.json({ error: `Invalid id: ${id} (must be a UUID)` }, 400);
+  }
+
+  const userId = c.get("userId" as never) as string | undefined;
+  if (!userId) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  // Check access via the database — scope to what the user can see
+  // We use a service DB handle (no API key needed, already authenticated)
+  const { getDb, eq, and, isNull } = await import("@synap/database");
+  const { entities, views, proposals, sessions: sessionsTable, channels } =
+    await import("@synap/database/schema");
+  const database = await getDb();
+
+  const hasAccess = async (): Promise<boolean> => {
+    try {
+      switch (kind) {
+        case "entity": {
+          const [row] = await database
+            .select({ id: entities.id })
+            .from(entities)
+            .where(and(eq(entities.id, id), isNull(entities.deletedAt)))
+            .limit(1);
+          // Entities are pod-wide — check workspace membership via access layer
+          // For now, if the entity exists and is not deleted, the authenticated user
+          // can see it (pod-wide visibility). The access layer enforces workspace
+          // scoping at the tRPC level; this is a render route so we keep it permissive
+          // but authenticated.
+          return Boolean(row);
+        }
+        case "view": {
+          const [row] = await database
+            .select({ id: views.id, userId: views.userId })
+            .from(views)
+            .where(eq(views.id, id))
+            .limit(1);
+          // Views are user-scoped — creator can see
+          return row?.userId === userId;
+        }
+        case "proposal": {
+          const [row] = await database
+            .select({ id: proposals.id, proposedByUserId: proposals.proposedByUserId })
+            .from(proposals)
+            .where(eq(proposals.id, id))
+            .limit(1);
+          // Proposals: creator (proposedByUserId) or pod admins can see
+          // Pod admins check is done at the tRPC level; here we allow the creator
+          return row?.proposedByUserId === userId;
+        }
+        case "session": {
+          const [row] = await database
+            .select({ id: sessionsTable.id, channelId: sessionsTable.channelId })
+            .from(sessionsTable)
+            .where(eq(sessionsTable.id, id))
+            .limit(1);
+          // Sessions are channel-scoped — check channel membership
+          if (!row) return false;
+          const [channel] = await database
+            .select({ userId: channels.userId })
+            .from(channels)
+            .where(eq(channels.id, row.channelId))
+            .limit(1);
+          return channel?.userId === userId;
+        }
+        case "channel": {
+          const [row] = await database
+            .select({ id: channels.id, userId: channels.userId })
+            .from(channels)
+            .where(eq(channels.id, id))
+            .limit(1);
+          // Channels: creator can see
+          return row?.userId === userId;
+        }
+        default:
+          return false;
+      }
+    } catch {
+      return false;
+    }
+  };
+
+  if (!(await hasAccess())) {
+    return c.json({ error: "Not found or access denied" }, 404);
+  }
+
+  const html = generateAppSrcdoc(kind as AppKind, id, embed);
+  return c.html(html);
+});
+
 // Ory Kratos routes
 // Kratos handles its own routes via public API
 // We proxy the necessary endpoints for browser-based flows

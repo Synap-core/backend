@@ -577,12 +577,12 @@ export const notifCenterRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      const revoked = await MessagingAccountService.updateStatus(
-        input.token,
-        MESSAGING_ACCOUNT_PROVIDER_EXPO,
-        "disconnected",
-        userId
-      );
+      const revoked = await MessagingAccountService.setStatusForUser({
+        userId,
+        provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
+        externalId: input.token,
+        status: "disconnected",
+      });
 
       // `revoked: false` means there was nothing to revoke — reported rather
       // than dressed up as a success.

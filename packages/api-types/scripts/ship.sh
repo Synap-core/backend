@@ -337,29 +337,30 @@ menu() {
   3) bump       — regen; version++ if surface changed
                   (--force always bumps)
   4) build      — gen-types + package build
-  5) publish    — ★ regen → ensure unpublished version → npm
-  6) dry-run    — build + publish --dry-run
-  7) auth       — diagnose npm login / 2FA / OTP (E404 helper)
+  5) dry-run    — build + pack, no upload
+  6) auth       — diagnose npm login / 2FA / OTP (E404 helper)
   q) quit
 
-  Usual path:     ./dev ship api-types publish
-                  (uses your npm login; prompts for 2FA OTP in the terminal)
-  Force new ver:  ./dev ship api-types publish --force-bump
-  Explicit ver:   ./dev ship api-types publish 1.27.0
-  Auth debug:     ./dev ship api-types auth
+  npm publishing is CI-owned (publish-types.yml). There is no local publish.
+
+  Check what CI would, without uploading:
+    ./dev ship api-types verify
+    ./dev ship api-types dry-run
+    ./dev ship api-types auth
 
 EOF
   local choice
-  read -r -p "Choice [1-7/q]: " choice || true
+  read -r -p "Choice [1-6/q]: " choice || true
   case "${choice:-}" in
     1|verify) MODE=verify ;;
     2|prepare) MODE=prepare ;;
     3|bump) MODE=bump ;;
     4|build) MODE=build ;;
-    5|publish) MODE=publish ;;
-    6|dry-run|dry) MODE=dry-run ;;
-    7|auth) MODE=auth ;;
+    5|dry-run|dry) MODE=dry-run ;;
+    6|auth) MODE=auth ;;
     q|Q|quit) exit 0 ;;
+    # Kept so muscle memory lands on an explanation rather than an error.
+    7|publish) echo "  npm publishing is CI-owned. Press the button on publish-types.yml."; exit 0 ;;
     *) die "invalid choice" ;;
   esac
 }
@@ -642,29 +643,28 @@ cmd_publish() {
   # `verify` work exactly as before.
   cat <<'EOF' >&2
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║  ✗  REFUSING TO PUBLISH FROM THIS MACHINE.                                  ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  npm publishing is now owned by CI — this is the ONLY publish door:          ║
-║                                                                               ║
-║      .github/workflows/publish-types.yml                                     ║
-║                                                                               ║
-║  Trigger it:                                                                   ║
-║      gh workflow run publish-types.yml                                       ║
-║      (or push to main — the workflow fires on any type-package path change)  ║
-║                                                                               ║
-║  Hand-publishing from a laptop caused the broken releases (Node 22 vs         ║
-║  Node 20), and Trusted Publishing makes local publishing impossible by        ║
-║  design. There is no flag to re-enable it here.                               ║
-║                                                                               ║
-║  Still useful from this machine:                                              ║
-║      ./dev ship api-types verify     # local vs npm + surface drift          ║
-║      ./dev ship api-types bump       # regen + version bump                   ║
-║      ./dev ship api-types build      # gen-types + package build              ║
-║      ./dev ship api-types dry-run    # build + publish --dry-run             ║
-║                                                                               ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════╗
+║  ✗  REFUSING TO PUBLISH FROM THIS MACHINE.                      ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  npm publishing is owned by CI. The only door is:                 ║
+║      .github/workflows/publish-types.yml                        ║
+║                                                                  ║
+║  Trigger it:                                                     ║
+║      gh workflow run publish-types.yml                           ║
+║      (or push to main — it fires on type-package path changes)    ║
+║                                                                  ║
+║  Laptop publishing caused the broken releases (Node 22 vs 20),   ║
+║  and Trusted Publishing makes it impossible by design.           ║
+║                                                                  ║
+║  Still useful here:                                               ║
+║      ./dev ship api-types verify     # vs npm + surface drift    ║
+║      ./dev ship api-types bump       # regen + version bump       ║
+║      ./dev ship api-types build      # gen-types + build          ║
+║      ./dev ship api-types dry-run    # build + pack, no upload    ║
+║      ./dev ship api-types auth       # diagnose npm login / 2FA   ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
 
 EOF
   die "publish refused — use CI (publish-types.yml) instead"

@@ -222,12 +222,12 @@ export async function sendExpoPush(
         // the next send skips it — otherwise a stale token is retried on every
         // notification forever, and one uninstalled app slowly poisons the
         // circuit breaker for every other device the user owns.
-        const revoked = await MessagingAccountService.updateStatus(
-          token,
-          MESSAGING_ACCOUNT_PROVIDER_EXPO,
-          "disconnected",
-          input.userId
-        ).catch((err) => {
+        const revoked = await MessagingAccountService.setStatusForUser({
+          userId: input.userId,
+          provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
+          externalId: token,
+          status: "disconnected",
+        }).catch((err) => {
           logger.warn({ err }, "Failed to revoke dead push token (non-fatal)");
           return false;
         });

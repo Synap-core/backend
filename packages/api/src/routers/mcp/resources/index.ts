@@ -9,13 +9,23 @@ import type { Resource } from "@modelcontextprotocol/sdk/types.js";
 
 // Helper function to generate HTML for MCP App resources
 function generateMcpAppHtml(kind: string, id: string): string {
-  // Simple HTML that loads the embeddable UI from the apps route
-  // This approach leverages the existing UI routes for rendering
+  // The iframe src is now an ABSOLUTE URL (set by the /apps/:kind/:id route in apps/api)
+  // We need to know the pod's PUBLIC_URL. Since this runs in the MCP handler context,
+  // we don't have direct access to config. We'll construct it from the standard env var.
+  // This HTML is served by the MCP server and rendered in an MCP client — the iframe
+  // src MUST be absolute so it works regardless of where the MCP client renders it.
+  const baseUrl = process.env.PUBLIC_URL || `http://localhost:4000`;
+  const appUrl = `${baseUrl}/apps/${kind}/${id}?embed=1`;
+
+  // CSP for secure iframe embedding
+  // Matches the CSP in generateAppSrcdoc in apps/api/src/index.ts
+  const csp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob: https:; font-src data: https:; connect-src 'self' https://pod-admin.*.synap.live https://*.thearch.synap.live; form-action 'self'; base-uri 'none'; frame-ancestors 'self' https://pod-admin.*.synap.live https://*.thearch.synap.live; object-src 'none'";
+
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <meta http-equiv="Content-Security-Policy" content="${csp}">
   <style>
     body { margin: 0; height: 100vh; overflow: hidden; display: flex; justify-content: center; align-items: center; background: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     .loading { text-align: center; padding: 40px; }
@@ -24,8 +34,8 @@ function generateMcpAppHtml(kind: string, id: string): string {
 </head>
 <body>
   <div class="loading">Loading Synap ${kind}...</div>
-  <iframe 
-    src="/apps/${kind}/${id}?embed=1" 
+  <iframe
+    src="${appUrl}"
     sandbox="allow-scripts allow-same-origin"
     allow="synap-widget"
   ></iframe>
@@ -133,7 +143,7 @@ export const resources = {
     if (uri.startsWith("ui://synap/")) {
       const match = uri.match(/^ui:\/\/synap\/(\w+)\/(.+)$/);
       if (!match) {
-        throw new Error(`Invalid UI resource URI: ${uri}`);
+        throw new Error(`Invalid resource URI: ${uri}`);
       }
 
       const [, kind, id] = match;
@@ -146,7 +156,7 @@ export const resources = {
       ] as const;
 
       if (!validKinds.includes(kind as any)) {
-        throw new Error(`Invalid UI resource kind: ${kind}`);
+        throw new Error(`Invalid kind: ${kind}`);
       }
 
       // For UI resources, we return HTML that will be rendered in an iframe

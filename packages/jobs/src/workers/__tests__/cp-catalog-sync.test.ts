@@ -489,6 +489,13 @@ describe("handleCpCatalogSync — dedupe by (source, kind, slug) before upsert",
       }),
       expect.stringContaining("deduped duplicate slugs")
     );
+
+    // The persisted stamp must report the number of rows ACTUALLY upserted (1),
+    // not the number fetched (2). The insert was deduped; if the stamp still
+    // counted the pre-dedupe `rows`, the catalog-sync ledger would overstate
+    // what landed on every sync against a CP that ships a duplicate slug —
+    // an inflated count that reads as a successful, larger sync.
+    expect(recordStampMock).toHaveBeenCalledWith(CP, "capability", "ok", 1);
   });
 
   it("keeps both entries when slugs differ (no false dedupe)", async () => {

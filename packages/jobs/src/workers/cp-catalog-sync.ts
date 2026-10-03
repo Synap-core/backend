@@ -535,10 +535,10 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
     // the top-100 ceiling that pruned every new author's template first.
     if (!complete) {
       logger.warn(
-        { source, kind, upserted: rows.length },
+        { source, kind, upserted: dedupedRows.length },
         "Catalog fetch INCOMPLETE — upserted the retrieved page(s) but SKIPPED prune to avoid deleting entries the pod never saw. Cache left as a superset until the next full sync."
       );
-      await recordCatalogSyncStamp(source, kind, "partial", rows.length);
+      await recordCatalogSyncStamp(source, kind, "partial", dedupedRows.length);
       return;
     }
 
@@ -555,10 +555,10 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
       .returning({ slug: cpCatalogCache.slug });
 
     logger.info(
-      { source, kind, upserted: rows.length, pruned: pruned.length },
+      { source, kind, upserted: dedupedRows.length, pruned: pruned.length },
       "Synced cp_catalog_cache"
     );
-    await recordCatalogSyncStamp(source, kind, "ok", rows.length);
+    await recordCatalogSyncStamp(source, kind, "ok", dedupedRows.length);
   } catch (err) {
     logger.error(
       { err, source, kind },

@@ -3711,10 +3711,17 @@ CREATE TABLE IF NOT EXISTS messaging_accounts (
   external_id  TEXT NOT NULL,
   display_name TEXT NOT NULL DEFAULT '',
   status       TEXT NOT NULL DEFAULT 'connected',
+  -- 0216_messaging_accounts_workspace_id.sql: pins a connected account to a
+  -- workspace. Nullable — legacy rows and contextless `account.created` syncs
+  -- stay NULL and keep the webhook's owner-first fallback.
+  workspace_id TEXT,
   metadata     JSONB NOT NULL DEFAULT '{}',
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent guard for pods whose table predates the 0216 pin.
+ALTER TABLE messaging_accounts ADD COLUMN IF NOT EXISTS workspace_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_messaging_accounts_user_id
   ON messaging_accounts(user_id);

@@ -31555,7 +31555,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
-				revoked: void;
+				revoked: boolean;
 			};
 			meta: object;
 		}>;

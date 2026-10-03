@@ -342,7 +342,8 @@ cmd_repin() {
   ensure_layout
   local live
   live="$(npm_published)"
-  [[ -n "$live" ]] || die "$PKG_NAME is not on npm yet — publish first, then repin"
+  [[ -n "$live" ]] || die "$PKG_NAME is not on npm yet — publish it via CI (synap-backend:
+.publish-types.yml), then re-run repin"
 
   log "Repin consumers → $PKG_NAME@^$live"
   info "This retires the file:/tgz/bundledDependencies vendoring."
@@ -466,29 +467,28 @@ cmd_publish() {
   # `repin`, and `verify` work exactly as before.
   cat <<'EOF' >&2
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║  ✗  REFUSING TO PUBLISH FROM THIS MACHINE.                                  ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  npm publishing is now owned by CI — this is the ONLY publish door:          ║
-║                                                                               ║
-║      .github/workflows/publish-types.yml                                     ║
-║                                                                               ║
-║  Trigger it:                                                                   ║
-║      gh workflow run publish-types.yml                                       ║
-║      (or push to main — the workflow fires on any type-package path change)  ║
-║                                                                               ║
-║  Hand-publishing from a laptop caused the broken releases (Node 22 vs         ║
-║  Node 20), and Trusted Publishing makes local publishing impossible by        ║
-║  design. There is no flag to re-enable it here.                               ║
-║                                                                               ║
-║  Still useful from this machine:                                              ║
-║      ./dev ship hub-rest-client verify   # local vs npm + which vendors       ║
-║      ./dev ship hub-rest-client build    # tsup build only                    ║
-║      ./dev ship hub-rest-client dry-run  # build + publish --dry-run          ║
-║      ./dev ship hub-rest-client repin    # rewrite file:/tgz → semver         ║
-║                                                                               ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════╗
+║  ✗  REFUSING TO PUBLISH FROM THIS MACHINE.                      ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  npm publishing is owned by CI. The only door is:                 ║
+║      .github/workflows/publish-types.yml                        ║
+║                                                                  ║
+║  Trigger it:                                                     ║
+║      gh workflow run publish-types.yml                           ║
+║      (or push to main — it fires on type-package path changes)    ║
+║                                                                  ║
+║  Laptop publishing caused the broken releases (Node 22 vs 20),   ║
+║  and Trusted Publishing makes it impossible by design.           ║
+║                                                                  ║
+║  Still useful here:                                               ║
+║      ./dev ship hub-rest-client verify   # vs npm + who vendors   ║
+║      ./dev ship hub-rest-client build    # tsup build             ║
+║      ./dev ship hub-rest-client dry-run  # build + pack, no upload ║
+║      ./dev ship hub-rest-client repin    # after CI publishes      ║
+║      ./dev ship hub-rest-client auth     # diagnose npm login      ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
 
 EOF
   die "publish refused — use CI (publish-types.yml) instead"
@@ -603,26 +603,25 @@ $PKG_NAME ship helper
 
   1) verify     — local vs npm + which consumers still vendor it
   2) build      — tsup build
-  3) publish    — ★ build → publish (explicit version / --bump)
-  4) dry-run    — build + publish --dry-run
-  5) repin      — consumers: file:/tgz → published semver
-  6) auth       — diagnose npm login / 2FA
+  3) dry-run    — build + pack, no upload
+  4) repin      — consumers: file:/tgz → published semver (after a CI publish)
+  5) auth       — diagnose npm login / 2FA
   q) quit
 
-  First publish:  ./dev ship hub-rest-client publish
-  Then:           ./dev ship hub-rest-client repin
+  npm publishing is CI-owned (publish-types.yml). Publish there, then re-run repin.
 
 EOF
   local choice
-  read -r -p "Choice [1-6/q]: " choice || true
+  read -r -p "Choice [1-5/q]: " choice || true
   case "${choice:-}" in
     1|verify) MODE=verify ;;
     2|build) MODE=build ;;
-    3|publish) MODE=publish ;;
-    4|dry-run|dry) MODE=dry-run ;;
-    5|repin) MODE=repin ;;
-    6|auth) MODE=auth ;;
+    3|dry-run|dry) MODE=dry-run ;;
+    4|repin) MODE=repin ;;
+    5|auth) MODE=auth ;;
     q|Q|quit) exit 0 ;;
+    # Kept so muscle memory lands on an explanation rather than an error.
+    6|publish) echo "  npm publishing is CI-owned. Press the button on publish-types.yml."; exit 0 ;;
     *) die "invalid choice" ;;
   esac
 }

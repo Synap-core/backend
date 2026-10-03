@@ -36,33 +36,31 @@
 
 cat <<'EOF'
 
-╔══════════════════════════════════════════════════════════════════════════════╗
-║  ⛔  scripts/publish-packages.sh IS DEPRECATED — it will NOT publish.       ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  npm publishing now has exactly ONE door: CI.                               ║
-║                                                                              ║
-║    .github/workflows/publish-types.yml                                      ║
-║      → triggers on every push to `main` that touches a type package,        ║
-║        plus a manual `workflow_dispatch` button.                             ║
-║      → builds through turbo, gates api-types on a real surface diff,         ║
-║        and refuses to re-publish an unchanged version.                       ║
-║                                                                              ║
-║  To publish the contract packages: press the CI button. There is no local   ║
-║  publish, by design.                                                        ║
-║                                                                              ║
-║  Locally you can still verify everything CI would check, without publishing:  ║
-║                                                                              ║
-║    ./dev ship api-types verify        local version vs npm + surface drift    ║
-║    ./dev ship api-types dry-run       build + pack, no upload                 ║
-║    ./dev ship api-types auth          diagnose npm login / 2FA                ║
-║                                                                              ║
-║  Hand-publishing from a laptop is the proven root cause of the broken        ║
-║  releases (an artifact was published from Node 22.22.3 while CI pins         ║
-║  Node 20). Trusted Publishing makes local npm publishing impossible by       ║
-║  design — there is no path back. Use the CI button.                          ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════╗
+║  ⛔  scripts/publish-packages.sh IS DEPRECATED — it will NOT    ║
+║      publish.                                                   ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  npm publishing has exactly ONE door: CI.                       ║
+║                                                                  ║
+║    .github/workflows/publish-types.yml                           ║
+║      → fires on a push to main touching a type package,          ║
+║        or on the manual workflow_dispatch button.                ║
+║      → builds through turbo, gates api-types on a real          ║
+║        surface diff, and skips an unchanged version.             ║
+║                                                                  ║
+║  To publish: press the CI button. There is no local publish.     ║
+║                                                                  ║
+║  Locally you can still check what CI would, without uploading:   ║
+║                                                                  ║
+║    ./dev ship api-types verify    local vs npm + surface drift   ║
+║    ./dev ship api-types dry-run   build + pack, no upload        ║
+║    ./dev ship api-types auth      diagnose npm login / 2FA       ║
+║                                                                  ║
+║  Laptop publishing caused the broken releases (an artifact       ║
+║  published from Node 22.22.3 while CI pins Node 20).            ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
 
 EOF
 
