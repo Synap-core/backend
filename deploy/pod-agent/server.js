@@ -17,10 +17,12 @@ const fs = require("fs");
 const path = require("path");
 const { execFile, spawn } = require("child_process");
 const {
+  commandErrorStatus,
   normalizeHttpsUrl,
   resolveCommandName,
   resolvePodAgentTrust,
   validateSignedCommandClaims,
+  validateUpdateTargetVersion,
 } = require("./trust");
 const { consumePodAgentReceipt } = require("./replay-receipts");
 
@@ -189,7 +191,7 @@ function consumeSignedCommandReceipt(payload) {
 const COMMANDS = {
   update: {
     script: "update-pod.sh",
-    args: (p) => [p.targetVersion || "latest"],
+    args: (p) => [validateUpdateTargetVersion(p)],
     // Canary (3 min) + production health (2 min) + image pull (variable).
     // On first pull of a multi-hundred-MB image this can exceed 10 min, causing
     // a false-failed callback even though the containers kept running. 25 min.
@@ -271,6 +273,10 @@ function configureEnvironment(payload) {
 }
 
 function validateCommandPayload(commandName, payload) {
+  if (commandName === "update") {
+    validateUpdateTargetVersion(payload);
+    return;
+  }
   if (commandName !== "configure") return;
 
   const environment = configureEnvironment(payload);
@@ -723,7 +729,7 @@ http
       respond(res, 202, { accepted: true, command: commandName });
     } catch (e) {
       log(`rejected: ${e.message}`);
-      respond(res, e.code === "REPLAY_PROTECTION_UNAVAILABLE" ? 503 : 403, {
+      respond(res, commandErrorStatus(e), {
         error: e.message,
       });
     }

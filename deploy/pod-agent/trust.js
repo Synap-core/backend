@@ -141,8 +141,43 @@ function validateSignedCommandClaims(
   return resolveCommandName(payload);
 }
 
+/**
+ * An `update` command must name the release it installs. A missing version
+ * used to become `latest` — a mutable tag that silently changes meaning, so a
+ * bare update command could install anything (update-door plan P0,
+ * 2026-10-04). The value lands in update-pod.sh's `sed` and in a docker tag,
+ * so it must also be a valid docker tag.
+ */
+const DOCKER_TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+
+function invalidPayload(message) {
+  const error = new Error(message);
+  error.code = "INVALID_COMMAND_PAYLOAD";
+  return error;
+}
+
+function validateUpdateTargetVersion(payload) {
+  const version = payload ? payload.targetVersion : undefined;
+  if (typeof version !== "string" || version.length === 0) {
+    throw invalidPayload("update requires targetVersion (no implicit latest)");
+  }
+  if (!DOCKER_TAG_PATTERN.test(version)) {
+    throw invalidPayload("targetVersion is not a valid image tag");
+  }
+  return version;
+}
+
+/** HTTP status for an error thrown while validating/accepting a command. */
+function commandErrorStatus(error) {
+  if (error && error.code === "INVALID_COMMAND_PAYLOAD") return 400;
+  if (error && error.code === "REPLAY_PROTECTION_UNAVAILABLE") return 503;
+  return 403;
+}
+
 module.exports = {
   MAX_COMMAND_TOKEN_LIFETIME_SECONDS,
+  commandErrorStatus,
+  validateUpdateTargetVersion,
   normalizeHttpsUrl,
   resolvePodAgentTrust,
   resolveCommandName,
