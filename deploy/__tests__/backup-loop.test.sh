@@ -134,5 +134,39 @@ echo "── recovery"
 run 6 125
 [ ! -e "$T/backups/.alarm" ] && [ "$(dailies)" = 2 ] && ok "good dump clears the alarm and resumes rotation" || bad "recovery: alarm=$([ -e "$T/backups/.alarm" ] && echo y || echo n) dailies=$(dailies)"
 
+echo "── run lock (flock — a dead holder releases it; mkdir fallback cleared at startup)"
+# flock(1) shim: flock(2) on the INHERITED fd, exactly what util-linux does, so
+# the shell keeps the lock after the shim exits (macOS has no flock binary).
+cat > "$T/bin/flock" <<'PY'
+#!/usr/bin/env python3
+import fcntl, sys
+a = sys.argv[1:]; fd = int(a[-1])
+op = fcntl.LOCK_UN if "-u" in a else fcntl.LOCK_EX | (fcntl.LOCK_NB if "-n" in a else 0)
+try: fcntl.flock(fd, op)
+except OSError: sys.exit(1)
+PY
+chmod +x "$T/bin/flock"
+hold() {  # a live holder of the backup flock, in its own process
+    rm -f "$T/held"
+    python3 -c 'import fcntl,sys,time; f=open(sys.argv[1],"a"); fcntl.flock(f, fcntl.LOCK_EX); open(sys.argv[2],"w").close(); time.sleep(120)' \
+        "$T/backups/.backup.flock" "$T/held" & HOLDER=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -e "$T/held" ] && break; /bin/sleep 0.1; done
+}
+n_before="$(dailies)"; : > "$RUNS_LOG"
+hold; run 6 126
+[ "$(dailies)" = "$n_before" ] && grep -q "'backup', 'failed'" "$RUNS_LOG" && grep -q "held the lock" "$RUNS_LOG" \
+    && ok "flock held by another run: no dump, a 'failed' backup_runs row (not a silent skip)" || bad "held lock: dailies=$(dailies) runs=$(cat "$RUNS_LOG")"
+kill -9 "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null; : > "$RUNS_LOG"
+run 6 127
+grep -q "'backup', 'ok'" "$RUNS_LOG" && ok "holder killed: the kernel released the flock, the next run backs up" || { bad "after holder died: $(cat "$RUNS_LOG")"; cat "$T/out"; }
+[ ! -e "$T/backups/.backup.lock" ] && ok "flock path leaves no mkdir lock behind" || bad "a .backup.lock dir exists on the flock path"
+
+# mkdir fallback: a lock left by the service's previous life (fresh — far
+# younger than the 6 h staleness) must not block the restarted loop.
+mkdir "$T/backups/.backup.lock"; : > "$RUNS_LOG"
+SYNAP_LOCK_IMPL=mkdir run 6 128
+grep -q "'backup', 'ok'" "$RUNS_LOG" && [ ! -e "$T/backups/.backup.lock" ] \
+    && ok "mkdir fallback: backup_loop clears its own stale lock at startup" || { bad "mkdir fallback blocked: $(cat "$RUNS_LOG")"; cat "$T/out"; }
+
 echo; echo "RESULTS PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

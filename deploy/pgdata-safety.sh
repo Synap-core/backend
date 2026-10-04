@@ -475,20 +475,42 @@ _bk_minio_import() {
     rm -rf "$_BK_MC_CFG"
 }
 
-# One run at a time (the hourly loop vs. a manual `synap backup push|drill`).
-# A lock older than 6 h is a crashed run, not a live one.
+# One run at a time (the hourly loop vs. a manual `synap backup push|drill`,
+# which runs in its own `compose run` container on the same /backups mount).
+# flock(1) on fd 8 (util-linux, Essential in the Ubuntu-based timescaledb-ha
+# image and on every pod host): the kernel drops it when the holder dies, so a
+# crashed run never leaves it behind. Without flock (SYNAP_LOCK_IMPL=mkdir or a
+# macOS dev host): an atomic mkdir lock — stale after 6 h, and cleared by
+# backup_loop at startup (a restarted service holds nothing). A refusal is a
+# `failed` row in backup_runs, never a silent skip. <kind: backup|drill>
+_bk_lock_flock() { [ "${SYNAP_LOCK_IMPL:-}" != mkdir ] && command -v flock >/dev/null 2>&1; }
 _bk_lock() {
-    local l
-    l="$(_bk_backups_dir)/.backup.lock"
-    mkdir -p "$(_bk_backups_dir)"
-    mkdir "$l" 2>/dev/null && return 0
-    if [ -n "$(find "$l" -maxdepth 0 -mmin +360 2>/dev/null)" ]; then
-        rm -rf "$l"; mkdir "$l" 2>/dev/null && return 0
+    local b l
+    b="$(_bk_backups_dir)"
+    mkdir -p "$b"
+    if _bk_lock_flock; then
+        l="$b/.backup.flock"
+        # `exec` with a failing redirection exits a POSIX shell: prove it opens first.
+        if touch "$l" 2>/dev/null; then
+            exec 8>>"$l"
+            flock -n 8 && return 0
+            exec 8>&-
+        fi
+    else
+        l="$b/.backup.lock"
+        mkdir "$l" 2>/dev/null && return 0
+        if [ -n "$(find "$l" -maxdepth 0 -mmin +360 2>/dev/null)" ]; then
+            rm -rf "$l"; mkdir "$l" 2>/dev/null && return 0
+        fi
     fi
-    _pgs_err "another backup run holds $l"
+    _pgs_err "another backup run holds $l — this ${1:-backup} run is skipped"
+    _bk_record "$(_pgs_container)" "${1:-backup}" failed "$(_bk_now)" "" "" "" "" "skipped: another backup or drill run held the lock"
     return 1
 }
-_bk_unlock() { rmdir "$(_bk_backups_dir)/.backup.lock" 2>/dev/null || true; }
+_bk_unlock() {
+    if _bk_lock_flock; then exec 8>&-
+    else rmdir "$(_bk_backups_dir)/.backup.lock" 2>/dev/null || true; fi
+}
 
 _bk_sql_str() {
     if [ -z "$1" ]; then echo NULL; else printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; fi
@@ -534,7 +556,7 @@ _bk_prune_good() {
 backup_run() {
     local c b ts tmp d fp users rest ents last prev suspect started rc
     c="$(_pgs_container)"; b="$(_bk_backups_dir)"
-    _bk_lock || return 1
+    _bk_lock backup || return 1
     started="$(_bk_now)"; ts="$(date -u +%Y%m%dT%H%M%SZ)"; tmp="$b/$ts.partial"
     if ! _pgs_running "$c" || ! _pgs_dump_into "$c" "$tmp"; then
         rm -rf "$tmp"
@@ -649,9 +671,10 @@ backup_drill() {
             [ -n "$pgbin" ] && PATH="$pgbin:$PATH"
             mkdir -p "$work/pg" "$work/sock"
             [ "$(id -u)" = 0 ] && chown postgres:postgres "$work" "$work/pg" "$work/sock"
+            # 8>&-: the scratch postgres daemon must not inherit the backup flock.
             if ! _bk_as_pg initdb -D "$work/pg" -U synap --auth=trust -E UTF8 >/dev/null 2>&1 \
                || ! _bk_as_pg pg_ctl -D "$work/pg" -w -t 120 -l "$work/pg.log" \
-                    -o "-p $port -k $work/sock -c listen_addresses='' -c shared_preload_libraries=timescaledb" start >/dev/null; then
+                    -o "-p $port -k $work/sock -c listen_addresses='' -c shared_preload_libraries=timescaledb" start >/dev/null 8>&-; then
                 detail="the throwaway postgres did not start"
             else
                 for f in "$d"/*.dump; do
@@ -688,9 +711,12 @@ _bk_drill_due() {
 # The compose `postgres-backup` service runs this.
 backup_loop() {
     mkdir -p "$(_bk_backups_dir)" "$(_bk_state_dir)"
+    # A mkdir lock left by this service's previous life (killed mid-run) is
+    # not held by anyone now; flock needs no such cleanup.
+    _bk_lock_flock || rm -rf "$(_bk_backups_dir)/.backup.lock"
     while :; do
         if backup_run && [ -n "$(_bk_cfg BACKUP_REPOSITORY)" ] && _bk_drill_due; then
-            _bk_lock && { backup_drill latest; _bk_unlock; }
+            _bk_lock drill && { backup_drill latest; _bk_unlock; }
         fi
         sleep "${BACKUP_INTERVAL_SECONDS:-3600}"
     done
@@ -861,7 +887,7 @@ if [ -n "$_pgs_main" ]; then
         init)    backup_init ;;
         run|push) backup_run ;;
         loop)    backup_loop ;;
-        drill)   _bk_lock || exit 1; backup_drill "${2:-latest}"; _r=$?; _bk_unlock; exit $_r ;;
+        drill)   _bk_lock drill || exit 1; backup_drill "${2:-latest}"; _r=$?; _bk_unlock; exit $_r ;;
         status)  backup_status ;;
         minio-import) _bk_minio_import "${2:?usage: pgdata-safety.sh minio-import <dir>}" ;;
         restore-snapshot) backup_restore_snapshot "${2:-}" ;;
