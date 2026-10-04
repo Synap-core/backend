@@ -93,8 +93,6 @@ case "$1" in
     if [ "$confirm" = "yes" ]; then
       echo -e "${YELLOW}Stopping services...${NC}"
       docker compose down -v
-      echo -e "${YELLOW}Removing volumes...${NC}"
-      docker volume prune -f
       echo -e "${GREEN}Starting fresh...${NC}"
       docker compose up -d
       echo -e "${GREEN}✅ Database reset complete${NC}"

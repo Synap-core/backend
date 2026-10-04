@@ -300,6 +300,10 @@ chmod +x "$INSTALL_DIR/ensure-ory-databases.sh"
 # before compose may recreate postgres, and backs up/restores (see its header).
 _download "deploy/pgdata-safety.sh" "$INSTALL_DIR/pgdata-safety.sh"
 chmod +x "$INSTALL_DIR/pgdata-safety.sh"
+# Update lock — update-pod.sh (and the synap CLI) serialise pod-mutating
+# operations on state/update.lock through it; update-pod.sh refuses without it.
+_download "deploy/update-lock.sh" "$INSTALL_DIR/update-lock.sh"
+chmod +x "$INSTALL_DIR/update-lock.sh"
 
 # Add-on installer (referenced by the post-install "Next steps" message)
 _download "deploy/setup-openclaw.sh" "$INSTALL_DIR/setup-openclaw.sh"

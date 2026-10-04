@@ -15,9 +15,8 @@ docker builder prune -af
 echo "Removing all images..."
 docker image prune -af
 
-# Remove all volumes (careful - this removes data!)
-echo "Removing volumes..."
-docker volume prune -f
+# Volumes are NEVER removed here: they hold the database and files, and a
+# stopped stack's volumes count as "unused" (2026-10-02 pod wipe).
 
 # Remove the backend image specifically
 echo "Removing backend image..."

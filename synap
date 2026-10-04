@@ -17,36 +17,79 @@ set -e
 # ran every migration from scratch on the empty schema. The original data
 # was still in `deploy_postgres_data` but orphaned.
 #
-# Pick the project name that owns the actual data volume. Preference order:
-#   1. shell env override (operator knows what they're doing)
-#   2. .env override (operator pinned it)
-#   3. existing data volume — if `deploy_postgres_data` exists and a
-#      synap-backend one does NOT, USE "deploy" so postgres mounts the
-#      already-populated volume on next compose up.
-#   4. fall back to "synap-backend" (the current convention for fresh installs).
+# Resolution order (sets COMPOSE_PROJECT_NAME; called just before the command
+# router at the bottom of this file, once get_deploy_dir is defined):
+#   1. shell env override (operator / eve delegate knows what it's doing)
+#   2. <deploy_dir>/.env COMPOSE_PROJECT_NAME (the PIN — install/update write it
+#      when missing, so after one run the name is never guessed again)
+#   3. the compose projects that own a postgres container for THIS deploy dir
+#      (label com.docker.compose.project.working_dir). Exactly one → use it.
+#      TWO OR MORE → REFUSE: picking one silently is how a stray `deploy` stack
+#      shadows the real one (update-door plan 2026-10-04, team pod).
+#   4. legacy data volume sniff (no containers at all): `deploy_postgres_data`
+#      without a synap-backend one → "deploy"
+#   5. "synap-backend" (the convention for fresh installs).
+_SYNAP_PROJECT_CONFLICT=""
+_compose_projects_owning_postgres() {
+    local dir="$1" phys proj wd
+    [ -n "$dir" ] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    phys="$(cd "$dir" 2>/dev/null && pwd -P)"
+    command docker ps -a --filter label=com.docker.compose.service=postgres \
+        --format '{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null |
+    while IFS='|' read -r proj wd; do
+        [ -n "$proj" ] || continue
+        if [ "$wd" = "$dir" ] || [ "$wd" = "$phys" ]; then echo "$proj"; fi
+    done | sort -u
+}
 _resolve_compose_project_name() {
+    local deploy_dir="$1" pinned owners count
+    _SYNAP_PROJECT_CONFLICT=""
     if [ -n "${COMPOSE_PROJECT_NAME:-}" ]; then
-        echo "$COMPOSE_PROJECT_NAME"
-        return
+        return 0
     fi
-    if [ -f .env ] && grep -q "^COMPOSE_PROJECT_NAME=" .env 2>/dev/null; then
-        grep "^COMPOSE_PROJECT_NAME=" .env | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'"
-        return
+    if [ -n "$deploy_dir" ] && [ -f "$deploy_dir/.env" ]; then
+        pinned="$(grep "^COMPOSE_PROJECT_NAME=" "$deploy_dir/.env" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'")"
     fi
-    # Probe Docker for existing data volumes — only when docker is available.
+    owners="$(_compose_projects_owning_postgres "$deploy_dir")"
+    count=$(printf '%s' "$owners" | grep -c . || true)
+    if [ -n "$pinned" ]; then
+        COMPOSE_PROJECT_NAME="$pinned"
+        if [ "$count" -ge 2 ]; then
+            echo "⚠️  ${count} compose projects own a postgres container for ${deploy_dir}: $(echo $owners). Using the pinned COMPOSE_PROJECT_NAME=${pinned} from .env — inspect the others before removing anything." >&2
+        fi
+        return 0
+    fi
+    if [ "$count" -ge 2 ]; then
+        _SYNAP_PROJECT_CONFLICT="$(echo $owners)"
+        return 0
+    fi
+    if [ "$count" -eq 1 ]; then
+        COMPOSE_PROJECT_NAME="$owners"
+        return 0
+    fi
     if command -v docker >/dev/null 2>&1; then
-        local has_deploy
-        has_deploy=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^deploy_postgres_data$' || true)
-        local has_synap
-        has_synap=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^synap-backend_postgres_data$' || true)
-        if [ -n "$has_deploy" ] && [ -z "$has_synap" ]; then
-            echo "deploy"
-            return
+        local vols
+        vols=$(command docker volume ls --format '{{.Name}}' 2>/dev/null || true)
+        if printf '%s\n' "$vols" | grep -qx 'deploy_postgres_data' \
+            && ! printf '%s\n' "$vols" | grep -qx 'synap-backend_postgres_data'; then
+            COMPOSE_PROJECT_NAME="deploy"
+            return 0
         fi
     fi
-    echo "synap-backend"
+    COMPOSE_PROJECT_NAME="synap-backend"
 }
-export COMPOSE_PROJECT_NAME="$(_resolve_compose_project_name)"
+
+# Write the resolved name into .env when it is not pinned yet, so the next run
+# (and every other door that reads .env) uses it instead of guessing again.
+_pin_compose_project_name() {
+    local env_file="${1:-.env}"
+    [ -f "$env_file" ] && [ -n "${COMPOSE_PROJECT_NAME:-}" ] || return 0
+    grep -q "^COMPOSE_PROJECT_NAME=" "$env_file" && return 0
+    [ -n "$(tail -c1 "$env_file")" ] && echo >> "$env_file"
+    echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}" >> "$env_file"
+    echo -e "${BLUE}ℹ️  Pinned COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME} in ${env_file}${NC}"
+}
 
 # ─── Shared Ory database bootstrap ────────────────────────────────────────────
 # Sourced once so every command (install, update, and the alternate
@@ -80,6 +123,20 @@ else
     exit 1
 fi
 unset _pgdata_safety_script
+
+# ─── Update lock (deploy/update-lock.sh) ──────────────────────────────────────
+# install/update/rebuild/reset/restore take <deploy_dir>/state/update.lock in
+# the router below, so eve, pod-agent's update-pod.sh and an operator can never
+# run two of them against one pod at the same time.
+_update_lock_script="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/deploy/update-lock.sh"
+if [ -f "$_update_lock_script" ]; then
+    # shellcheck source=/dev/null
+    source "$_update_lock_script"
+else
+    echo -e "${RED}❌ Update lock helper not found at ${_update_lock_script}${NC}"
+    exit 1
+fi
+unset _update_lock_script
 
 _PGDATA_GUARD_DONE=0
 _run_pgdata_guard() {
@@ -514,7 +571,7 @@ generate_and_create_env() {
 
 GITHUB_REPOSITORY=synap-core/backend
 BACKEND_VERSION=${backend_version}
-COMPOSE_PROJECT_NAME=synap-backend
+COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-synap-backend}
 
 DOMAIN=${domain}
 LETSENCRYPT_EMAIL=${email:-noreply@localhost}
@@ -1906,6 +1963,10 @@ EOF
         generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "" "" "" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
     fi
     
+    # Pin the compose project in .env (no-op when already pinned) so no later
+    # door has to guess it.
+    _pin_compose_project_name .env
+
     # Generate kratos.yml with actual domain values
     echo -e "${BLUE}📝 Generating Kratos configuration...${NC}"
     generate_kratos_config "$DOMAIN"
@@ -2515,14 +2576,15 @@ cmd_update() {
             echo ""
             echo -e "Recovery options:${NC}"
             echo -e "  1. Restore .env from a backup if you have one (your secrets must match the existing volumes)."
-            echo -e "  2. If your postgres/typesense/minio volumes are empty (no data to preserve), run:"
-            echo -e "       docker volume prune -f && synap install --domain <your-domain>"
-            echo -e "     This generates a fresh .env and reinitializes all storage."
-            echo -e "  3. If you only want the synap CLI to populate the missing secrets WITHOUT touching"
+            echo -e "  2. If you only want the synap CLI to populate the missing secrets WITHOUT touching"
             echo -e "     your DOMAIN/ADMIN_* values, run \`synap install\` — non-interactive mode preserves"
             echo -e "     existing values and only regenerates secrets when .env is missing entirely."
             exit 1
         fi
+
+        # Pin the compose project in .env (no-op when already pinned) so no later
+        # door — update-pod.sh, eve, an operator in deploy/ — has to guess it.
+        _pin_compose_project_name .env
 
         # These browser-facing endpoints were added after early Pod installs.
         # Backfill before *any* Compose command: Compose deliberately refuses
@@ -3459,16 +3521,26 @@ cmd_clean() {
     cd "$deploy_dir"
     
     local what=${1:-}
+
+    # `clean` NEVER touches volumes. The 2026-10-02 pod wipe was an update
+    # episode followed by a volume-pruning `system prune`; a stopped stack's
+    # postgres/minio/kratos volumes count as "unused" to Docker. The one
+    # explicit wipe door is `synap reset --full --delete-data` (backup first,
+    # typed domain, this project's volumes only).
+    _clean_refuse_volumes() {
+        echo -e "${RED}synap clean never removes Docker volumes — they hold the pod's database and files.${NC}"
+        echo "To deliberately wipe THIS pod's data: synap reset --full --delete-data (takes a verified backup first)."
+        exit 1
+    }
     
     if [ -z "$what" ]; then
-        echo -e "${BLUE}🧹 Clean Docker Resources${NC}"
+        echo -e "${BLUE}🧹 Clean Docker Resources${NC} (volumes are never removed)"
         echo ""
         echo "  ${GREEN}[1]${NC} Remove stopped containers"
         echo "  ${GREEN}[2]${NC} Remove unused images"
-        echo "  ${GREEN}[3]${NC} Remove unused volumes"
-        echo "  ${GREEN}[4]${NC} Remove unused networks"
-        echo "  ${GREEN}[5]${NC} Prune everything (containers, images, volumes, networks)"
-        echo "  ${GREEN}[6]${NC} Remove build cache"
+        echo "  ${GREEN}[3]${NC} Remove unused networks"
+        echo "  ${GREEN}[4]${NC} Prune containers, images and networks (keeps volumes)"
+        echo "  ${GREEN}[5]${NC} Remove build cache"
         echo "  ${GREEN}[q]${NC} Quit"
         echo ""
         read -p "Select option (number/q): " choice
@@ -3481,19 +3553,16 @@ cmd_clean() {
                 docker image prune -f
                 ;;
             3)
-                docker volume prune -f
-                ;;
-            4)
                 docker network prune -f
                 ;;
-            5)
-                echo -e "${YELLOW}⚠️  This will remove all unused Docker resources${NC}"
+            4)
+                echo -e "${YELLOW}⚠️  This will remove all unused containers, images and networks (volumes are kept)${NC}"
                 read -p "Continue? (y/N): " CONFIRM
                 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
-                    docker system prune -a -f --volumes
+                    docker system prune -a -f
                 fi
                 ;;
-            6)
+            5)
                 docker builder prune -f
                 ;;
             q|Q)
@@ -3513,23 +3582,23 @@ cmd_clean() {
                 docker image prune -f
                 ;;
             volumes)
-                docker volume prune -f
+                _clean_refuse_volumes
                 ;;
             networks)
                 docker network prune -f
                 ;;
             all)
-                echo -e "${YELLOW}⚠️  This will remove all unused Docker resources${NC}"
+                echo -e "${YELLOW}⚠️  This will remove all unused containers, images and networks (volumes are kept)${NC}"
                 read -p "Continue? (y/N): " CONFIRM
                 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
-                    docker system prune -a -f --volumes
+                    docker system prune -a -f
                 fi
                 ;;
             cache)
                 docker builder prune -f
                 ;;
             *)
-                echo "Usage: synap clean [containers|images|volumes|networks|all|cache]"
+                echo "Usage: synap clean [containers|images|networks|all|cache]"
                 exit 1
                 ;;
         esac
@@ -4403,61 +4472,120 @@ cmd_reset() {
 
     cd "$deploy_dir"
 
+    # `synap reset` is the ONE explicit wipe door (update-door plan P0,
+    # 2026-10-04). Whatever the mode, it (a) requires the operator to TYPE the
+    # pod's DOMAIN — no --yes / SYNAP_ASSUME_YES bypass, an automation cannot
+    # wipe a pod — and (b) takes a verified `pgdata_backup pre-reset` of every
+    # database first, aborting if that fails. `--full` recreates the stack and
+    # keeps its volumes; only `--full --delete-data` removes THIS project's
+    # volumes (`down --volumes`, compose-scoped) — never `system prune`.
     local mode="data"
     local assume_yes="false"
+    local delete_data="false"
+    local usage="Usage: synap reset [--full|-f] [--delete-data] [--yes|-y]"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --full|-f)
                 mode="full"
                 ;;
+            --delete-data)
+                delete_data="true"
+                ;;
             --yes|-y)
+                # Only skips the "re-run install?" prompt. Never the confirmation.
                 assume_yes="true"
                 ;;
             --help|-h)
-                echo "Usage: synap reset [--full|-f] [--yes|-y]"
-                echo "  default: wipe workspace/application data only (keeps infra)"
-                echo "  --full : wipe stack state + stale docker resources and optionally rerun install"
+                echo "$usage"
+                echo "  default       : wipe workspace/application data (TRUNCATE; keeps logins + infra)"
+                echo "  --full        : stop and remove this pod's containers + networks (volumes KEPT), optionally reinstall"
+                echo "  --delete-data : with --full, ALSO remove this compose project's volumes (database, files)"
+                echo "  Every mode takes a verified database backup first and asks you to type the pod domain."
                 return 0
                 ;;
             *)
                 echo -e "${RED}Unknown option for reset: $1${NC}"
-                echo "Usage: synap reset [--full|-f] [--yes|-y]"
+                echo "$usage"
                 return 1
                 ;;
         esac
         shift
     done
+    if [ "$delete_data" = "true" ] && [ "$mode" != "full" ]; then
+        echo -e "${RED}--delete-data only applies to --full.${NC}"
+        echo "$usage"
+        return 1
+    fi
+
+    local pod_domain
+    pod_domain=$(grep "^DOMAIN=" .env 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+    if [ -z "$pod_domain" ]; then
+        echo -e "${RED}❌ DOMAIN is not set in ${deploy_dir}/.env — cannot confirm which pod this is. Nothing was changed.${NC}"
+        exit 1
+    fi
 
     if [ "$mode" = "full" ]; then
-        echo -e "${RED}⚠️  WARNING: FULL RESET will destroy this installation state.${NC}"
+        echo -e "${RED}⚠️  WARNING: FULL RESET of pod ${pod_domain} (compose project ${COMPOSE_PROJECT_NAME}).${NC}"
         echo ""
-        echo "What will be deleted:"
-        echo "  - All application data (Postgres + MinIO bucket)"
-        echo "  - All project containers, networks, and compose volumes"
-        echo "  - Stale Docker resources (system prune --volumes)"
+        echo "What will be removed:"
+        echo "  - All of this project's containers and networks"
+        if [ "$delete_data" = "true" ]; then
+            echo "  - All of this project's VOLUMES: the database (Postgres) and stored files (MinIO)"
+        else
+            echo "  - (volumes are KEPT — add --delete-data to remove the database and files)"
+        fi
         echo ""
         echo "What will be kept:"
-        echo "  - deploy/.env (unless you manually remove it)"
-        echo "  - Repository files"
+        echo "  - A verified database backup taken now, in ${deploy_dir}/backups/postgres"
+        echo "  - deploy/.env and repository files"
         echo ""
-        if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
-            read -p "Type 'recreate' to confirm full reset: " confirm
-            if [ "$confirm" != "recreate" ]; then
-                echo "Cancelled."
-                exit 0
-            fi
+    else
+        echo -e "${RED}⚠️  WARNING: This will permanently delete all workspace data on ${pod_domain}!${NC}"
+        echo ""
+        echo "What will be deleted:"
+        echo "  - All workspaces, users, and workspace members"
+        echo "  - All documents, channels, messages, entities, relations"
+        echo "  - All API keys, agent users, intelligence services"
+        echo "  - All MinIO stored files (documents, attachments)"
+        echo ""
+        echo "What will be KEPT:"
+        echo "  - A verified database backup taken now, in ${deploy_dir}/backups/postgres"
+        echo "  - Kratos identities (login accounts remain intact)"
+        echo "  - Database schema and migrations"
+        echo "  - Configuration (.env)"
+        echo ""
+    fi
+
+    local confirm=""
+    read -r -p "Type the pod domain (${pod_domain}) to confirm: " confirm || true
+    if [ "$confirm" != "$pod_domain" ]; then
+        echo "Cancelled — the domain did not match. Nothing was changed."
+        exit 1
+    fi
+
+    echo -e "${BLUE}💾 Taking a verified backup before reset...${NC}"
+    local backup_dir
+    backup_dir="$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_backup pre-reset)" || {
+        echo -e "${RED}❌ Pre-reset backup failed — aborting. Nothing was changed.${NC}"
+        echo -e "${YELLOW}   Postgres must be running for the backup (synap start postgres), then re-run.${NC}"
+        exit 1
+    }
+    (umask 077 && cp .env "$backup_dir/env.backup")
+    echo -e "${GREEN}✓ Backup: ${backup_dir}${NC}"
+
+    if [ "$mode" = "full" ]; then
+        echo ""
+        echo -e "${BLUE}🧨 Full reset in progress...${NC}"
+        if [ "$delete_data" = "true" ]; then
+            echo "  Removing this project's containers, networks and volumes..."
+            docker compose down --volumes --remove-orphans # volume-destroy-allowlisted: synap reset --full --delete-data
+        else
+            echo "  Removing this project's containers and networks (volumes kept)..."
+            docker compose down --remove-orphans
         fi
 
         echo ""
-        echo -e "${BLUE}🧨 Full cleanup in progress...${NC}"
-        echo "  Stopping and removing compose resources..."
-        docker compose down --volumes --remove-orphans 2>/dev/null || true
-
-        echo "  Pruning stale Docker resources..."
-        docker system prune -a -f --volumes 2>/dev/null || true
-
-        echo ""
-        echo -e "${GREEN}✅ Full cleanup complete.${NC}"
+        echo -e "${GREEN}✅ Full reset complete. Backup: ${backup_dir}${NC}"
         echo ""
         if [ "$assume_yes" = "true" ] || synap_assume_yes; then
             echo -e "${BLUE}🚀 Re-running install in non-interactive mode...${NC}"
@@ -4465,34 +4593,14 @@ cmd_reset() {
             return $?
         fi
 
-        read -p "Run fresh install now? (y/N): " rerun
+        local rerun=""
+        read -p "Run fresh install now? (y/N): " rerun || true
         if [ "$rerun" = "y" ] || [ "$rerun" = "Y" ]; then
             cmd_install
             return $?
         fi
         echo "Run 'synap install' when ready."
         return 0
-    fi
-
-    echo -e "${RED}⚠️  WARNING: This will permanently delete all workspace data!${NC}"
-    echo ""
-    echo "What will be deleted:"
-    echo "  - All workspaces, users, and workspace members"
-    echo "  - All documents, channels, messages, entities, relations"
-    echo "  - All API keys, agent users, intelligence services"
-    echo "  - All MinIO stored files (documents, attachments)"
-    echo ""
-    echo "What will be KEPT:"
-    echo "  - Kratos identities (login accounts remain intact)"
-    echo "  - Database schema and migrations"
-    echo "  - Configuration (.env)"
-    echo ""
-    if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
-        read -p "Type 'yes' to confirm data reset: " confirm
-        if [ "$confirm" != "yes" ]; then
-            echo "Cancelled."
-            exit 0
-        fi
     fi
 
     echo ""
@@ -4578,7 +4686,7 @@ ${YELLOW}Management:${NC}
   synap users <sub>              Manage pod users (list, add-admin, reset-password, delete)
   synap profiles <sub> [name]  Enable/disable optional compose profiles (rsshub, openclaw, monitoring)
   synap tunnel <sub>             Enable/disable Cloudflare or Pangolin tunnels (alternative to direct DNS)
-  synap reset [--full]           Reset workspace data or full cleanup + recreate
+  synap reset [--full [--delete-data]]  Wipe data (backup first, type the domain to confirm)
 
 ${YELLOW}Examples:${NC}
   # Install (auto-detects: clone if not in repo, use image by default)
@@ -4627,7 +4735,8 @@ ${YELLOW}Examples:${NC}
   synap tunnel status                              # Show active tunnel(s)
   synap tunnel disable                             # Stop all tunnels
   synap reset                      # Reset workspace/application data only
-  synap reset --full               # Full cleanup (docker stale data) + fresh install option
+  synap reset --full               # Recreate the stack (volumes kept) + fresh install option
+  synap reset --full --delete-data # Also remove this pod's volumes (backup taken first)
 
 ${YELLOW}For detailed help:${NC}
   synap install --help
@@ -4639,6 +4748,30 @@ EOF
 # ============================================================================
 # MAIN COMMAND ROUTER
 # ============================================================================
+
+_resolve_compose_project_name "$(get_deploy_dir)"
+if [ -n "$_SYNAP_PROJECT_CONFLICT" ]; then
+    case "${1:-help}" in
+        help|--help|-h) ;;
+        *)
+            echo -e "${RED}❌ Refusing to guess the compose project: these projects each own a postgres container for $(get_deploy_dir):${NC}" >&2
+            echo -e "     ${_SYNAP_PROJECT_CONFLICT}" >&2
+            echo -e "${YELLOW}   Running against the wrong one would start (or migrate) an empty database next to your data.${NC}" >&2
+            echo -e "   Inspect each before changing anything:  docker compose -p <project> ps ;  docker compose -p <project> exec postgres psql -U synap -d synap -c 'select count(*) from users'" >&2
+            echo -e "   Then pin the real one in $(get_deploy_dir)/.env:  COMPOSE_PROJECT_NAME=<project>" >&2
+            echo -e "   Nothing was changed." >&2
+            exit 2
+            ;;
+    esac
+fi
+export COMPOSE_PROJECT_NAME
+
+# Pod-mutating commands serialise on <deploy_dir>/state/update.lock.
+case "${1:-help}" in
+    install|update|rebuild|reset|restore)
+        synap_update_lock "$(get_deploy_dir)" "synap $1" || exit 1
+        ;;
+esac
 
 case "${1:-help}" in
     install)

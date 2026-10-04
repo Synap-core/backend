@@ -58,6 +58,11 @@ COMPOSE_CMD="$COMPOSE"
 . "$CD/pgdata-safety.sh" || die "Postgres data-placement guard not found at $CD/pgdata-safety.sh"
 
 [ -z "$VERSION" ] && die "version required"
+# One pod-mutating operation at a time: the same <deploy>/state/update.lock the
+# `synap` CLI takes for install/update/rebuild/reset/restore (deploy/update-lock.sh).
+# shellcheck source=/dev/null
+. "$CD/update-lock.sh" || die "Update lock helper not found at $CD/update-lock.sh"
+synap_update_lock "$CD" "update-pod.sh $VERSION" || die "another pod operation holds the update lock — not updating"
 log "=== Updating to ${VERSION} ==="
 
 # Save current version for rollback (in case production swap still fails)
