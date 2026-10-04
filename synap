@@ -3033,7 +3033,18 @@ _ue_rollback() { # <reason> <restore_db 0|1>  — never returns
         else
             _ue_log "Maintenance mode: stopping writers, restoring ${UE_BACKUP}..."
             docker compose stop backend realtime pod-admin >/dev/null 2>&1
-            if SYNAP_DEPLOY_DIR="$(pwd)" pgdata_restore "$UE_BACKUP"; then db=true
+            # pgdata_restore downgrades a pg_restore error to a warning (TimescaleDB
+            # catalog noise), so its exit status cannot prove the data came back:
+            # only the fingerprint recorded with the dump can (as restore-snapshot 5/5).
+            if SYNAP_DEPLOY_DIR="$(pwd)" pgdata_restore "$UE_BACKUP"; then
+                local want got
+                want="$(cat "$UE_BACKUP/fingerprint" 2>/dev/null)"
+                got="$(SYNAP_DEPLOY_DIR="$(pwd)" _pgs_fingerprint "$(SYNAP_DEPLOY_DIR="$(pwd)" _pgs_container)")"
+                if [ -n "$want" ] && [ "$got" = "$want" ]; then db=true
+                else
+                    _ue_err "restoring ${UE_BACKUP} did not bring the data back: the dump recorded users|entities|api_keys=${want:-<none>}, the database now has ${got:-<unreadable>}"
+                    status=rollback_failed
+                fi
             else _ue_err "restoring ${UE_BACKUP} failed"; status=rollback_failed; fi
         fi
     fi
@@ -3137,7 +3148,7 @@ synap_update_engine() {
     level_before="$(_ue_migration_level)"
 
     # 5. from here on every failure rolls back
-    trap '_ue_rollback "interrupted" "$([ "$(_ue_migration_level)" != "$level_before" ] && echo 1 || echo 0)"' INT TERM
+    trap '_ue_rollback "interrupted" "$([ "$(_ue_migration_level)" != "$level_before" ] && echo 1 || echo 0)"' INT TERM HUP
     set +e
     _ue_install_bundle || _ue_rollback "installing the release's deploy files failed" 0
     _ue_write_release_env "$m" .env || _ue_rollback "writing the release image pins failed" 0
@@ -3177,7 +3188,7 @@ synap_update_engine() {
     _ue_verify "$m" "${UE_SERVICES[@]}" || _ue_rollback "post-update verification failed" "$moved"
 
     # 9. record
-    trap - INT TERM
+    trap - INT TERM HUP
     [ -s state/current-release.json ] && cp -p state/current-release.json state/previous-release.json
     jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg backup "$UE_BACKUP" --arg edge "$UE_EDGE" \
         '. + {appliedAt:$at, preUpdateBackup:$backup, edge:$edge}' "$m" > state/current-release.json.tmp \

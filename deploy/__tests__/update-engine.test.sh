@@ -13,6 +13,8 @@
 #   canary      R1 → R2, new image fails health  → previous digests, NO DB restore
 #   migrate     R1 → R2, backend-migrate throws  → dump restored + previous digests
 #   prod        R1 → R2, canary ok, prod fails   → rollback (dump restored: level moved)
+#   restore-bad migrate throws AND pg_restore fails → rollback_failed, dbRestored:false
+#   hup         SIGHUP mid-migration             → rolled back like INT/TERM
 #   pull        a pull fails                     → nothing changes at all
 #   source      --from-source                    → synap-local/* only, never ghcr
 #   traefik     SYNAP_EDGE=traefik               → caddy never touched, every service up
@@ -78,6 +80,7 @@ case "$*" in
   "compose ps"*postgres*) echo pg1; exit 0 ;;
   "compose ps"*) exit 0 ;;
   "compose run --rm backend-migrate"*)
+    if [ -n "${FAKE_HUP_AT_MIGRATE:-}" ]; then echo "$FAKE_NEW_LEVEL" > "$F/level"; kill -HUP "$PPID"; exit 0; fi
     if [ -n "${FAKE_MIGRATE_FAIL:-}" ]; then echo "$FAKE_NEW_LEVEL" > "$F/level"; echo "migration 0012 threw" >&2; exit 1; fi
     echo "$FAKE_NEW_LEVEL" > "$F/level"; exit 0 ;;
   "compose run --rm "*) exit 0 ;;
@@ -97,11 +100,14 @@ case "$*" in
   "exec pg1 psql"*_migrations*) cat "$F/level"; exit 0 ;;
   "exec pg1 psql"*"from pg_database where not datistemplate"*) echo synap; exit 0 ;;
   "exec pg1 psql"*"datname='synap'"*) echo 1; exit 0 ;;
+  "exec pg1 psql"*"from users)||"*) echo "1|$(cut -d'|' -f1 "$F/level")|1"; exit 0 ;;  # fingerprint follows the data
   "exec pg1 psql"*) echo 1; exit 0 ;;
   "exec pg1 pg_isready"*) exit 0 ;;
   "exec pg1 pg_dump"*) echo "LEVEL $(cat "$F/level")"; exit 0 ;;
   "exec -i pg1 pg_restore -l"*) cat >/dev/null; exit 0 ;;
-  "exec -i pg1 pg_restore"*) sed -n 's/^LEVEL //p' > "$F/level"; echo RESTORED >> "$F/restores"; exit 0 ;;
+  "exec -i pg1 pg_restore"*)
+    if [ -n "${FAKE_PG_RESTORE_FAIL:-}" ]; then cat >/dev/null; echo "pg_restore: error: could not execute query" >&2; exit 1; fi
+    sed -n 's/^LEVEL //p' > "$F/level"; echo RESTORED >> "$F/restores"; exit 0 ;;
   "inspect -f {{.State.Running}} pg1") echo true; exit 0 ;;
   "inspect -f {{range .Config.Env}}"*) echo "PGDATA=/home/postgres/pgdata/data"; exit 0 ;;
   "inspect -f {{range .Mounts}}"*) echo "/home/postgres/pgdata"; exit 0 ;;
@@ -226,6 +232,24 @@ s=$(grep -n "compose stop" "$FAKE/log" | head -1 | cut -d: -f1); r=$(grep -n "pg
 cmp -s "$DEPLOY/.env" "$S/env.orig" && [ "$(cur_id)" = "$R1" ] && ok "migrate: previous digests + current-release $R1" || bad "migrate: env/current-release not restored ($(cur_id))"
 [ "$(last status)" = rolled_back ] && [ "$(last dbRestored)" = true ] && notified rolled_back && ok "migrate: rollback with DB restore recorded + notified" || { bad "migrate: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 grep -q "profile canary up" "$FAKE/log" && bad "migrate: the canary ran after a failed migration" || ok "migrate: no canary / swap after the throw"
+
+# ── 3b. migration throws AND the restore fails → never claims dbRestored ─────
+# pgdata_restore only warns on a pg_restore error; the fingerprint recorded
+# with the dump is what tells the rollback the data did not come back.
+setup restorebad r1; publish "$R2" 0012_new.sql
+FAKE_MIGRATE_FAIL=1 FAKE_PG_RESTORE_FAIL=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rollback_failed ] && [ "$(last dbRestored)" = false ] && notified rollback_failed \
+  && ok "restore-bad: a failed pg_restore records rollback_failed, dbRestored:false" || { bad "restore-bad: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+grep -q "did not bring the data back" "$S/out" && grep -q "ROLLBACK INCOMPLETE" "$S/out" \
+  && ok "restore-bad: the operator is told the data did not come back" || { bad "restore-bad: no fingerprint-mismatch message"; show; }
+grep -q "database restored" "$S/out" && bad "restore-bad: output still claims the database was restored" || ok "restore-bad: no 'database restored' claim"
+
+# ── 3c. SIGHUP (ssh drop) mid-update → rolled back like INT/TERM ─────────────
+setup hup r1; publish "$R2" 0012_new.sql
+FAKE_HUP_AT_MIGRATE=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [ "$(last reason)" = interrupted ] && [ "$(last dbRestored)" = true ] \
+  && [ "$(cat "$FAKE/level")" = "$OLD_LEVEL" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "hup: SIGHUP mid-migration rolls back (dump restored, previous digests)" || { bad "hup: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null) level=$(cat "$FAKE/level")"; show; }
 
 # ── 4. canary passes, production fails → rollback ────────────────────────────
 setup prod r1; publish "$R2" 0012_new.sql
