@@ -9,12 +9,23 @@ import {
   ensureWorkspaceForUser,
   findKratosIdentityByEmail,
 } from "./create-admin-user.js";
+import {
+  PasswordStepError,
+  parseSecretFromStdin,
+  readStdin,
+  setPasswordAndVerify,
+  verifyPasswordLogin,
+} from "./user-admin-password.js";
 
 type Action = "list" | "add-admin" | "reset-password" | "delete";
 
 const action = (process.env.ACTION || "list") as Action;
 const email = process.env.ADMIN_EMAIL || process.env.USER_EMAIL || "";
-const password = process.env.ADMIN_PASSWORD || process.env.USER_PASSWORD || "";
+// The password is a SECRET: it is read from STDIN (see main()), never from
+// argv or env. The CLI wrapper pipes it in; there is no env fallback.
+let password = "";
+const kratosPublicUrl =
+  process.env.KRATOS_PUBLIC_URL || "http://localhost:4433";
 const name = process.env.ADMIN_NAME || process.env.USER_NAME || "";
 // D7: opt-in — no blank personal workspace unless CREATE_WORKSPACE=true.
 const createWorkspace = process.env.CREATE_WORKSPACE === "true";
@@ -69,14 +80,15 @@ async function getIdentityIdByEmail(
 async function runAddAdmin() {
   if (!email || !password) {
     throw new Error(
-      "ADMIN_EMAIL/USER_EMAIL and ADMIN_PASSWORD/USER_PASSWORD are required"
+      "ADMIN_EMAIL/USER_EMAIL and a password on stdin are required"
     );
   }
   try {
     const result = await createAdminUser(email, password, name || undefined, {
       createWorkspace,
     });
-    console.log("Admin user created.");
+    await verifyPasswordLogin(kratosPublicUrl, email, password);
+    console.log("Admin user created; login verified.");
     console.log(`identity_id=${result.identityId}`);
     if (result.workspaceId) {
       console.log(`workspace_id=${result.workspaceId}`);
@@ -98,20 +110,12 @@ async function runAddAdmin() {
   }
 
   await ensureUserRow(identity.id, email, name || identity.traits?.name);
-  await kratosAdmin.updateIdentity({
-    id: identity.id,
-    updateIdentityBody: {
-      schema_id: identity.schema_id,
-      state: (identity.state ?? "active") as never,
-      traits: (identity.traits ?? { email }) as Record<string, unknown>,
-      credentials: {
-        password: {
-          config: {
-            password,
-          },
-        },
-      },
-    },
+  await setPasswordAndVerify({
+    admin: kratosAdmin as never,
+    identityId: identity.id,
+    email,
+    password,
+    publicUrl: kratosPublicUrl,
   });
 
   let workspaceId: string | null = null;
@@ -133,7 +137,7 @@ async function runAddAdmin() {
 async function runResetPassword() {
   if (!email || !password) {
     throw new Error(
-      "USER_EMAIL (or ADMIN_EMAIL) and USER_PASSWORD (or ADMIN_PASSWORD) are required"
+      "USER_EMAIL (or ADMIN_EMAIL) and a password on stdin are required"
     );
   }
 
@@ -141,7 +145,10 @@ async function runResetPassword() {
   const resolvedIdentityId =
     identityId ?? (await findKratosIdentityByEmail(email))?.id ?? null;
   if (!resolvedIdentityId)
-    throw new Error(`User not found for email: ${email}`);
+    throw new PasswordStepError(
+      "identity-not-found",
+      `No Kratos identity found for email: ${email}`
+    );
 
   const { data: identity } = await kratosAdmin.getIdentity({
     id: resolvedIdentityId,
@@ -151,23 +158,15 @@ async function runResetPassword() {
     email,
     (identity.traits as { name?: string } | undefined)?.name
   );
-  await kratosAdmin.updateIdentity({
-    id: resolvedIdentityId,
-    updateIdentityBody: {
-      schema_id: identity.schema_id,
-      state: (identity.state ?? "active") as never,
-      traits: identity.traits as Record<string, unknown>,
-      credentials: {
-        password: {
-          config: {
-            password,
-          },
-        },
-      },
-    },
+  await setPasswordAndVerify({
+    admin: kratosAdmin as never,
+    identityId: resolvedIdentityId,
+    email,
+    password,
+    publicUrl: kratosPublicUrl,
   });
 
-  console.log(`Password reset for ${email}`);
+  console.log(`Password reset for ${email}; login verified.`);
 }
 
 async function runDelete() {
@@ -185,6 +184,9 @@ async function runDelete() {
 }
 
 async function main() {
+  if (action === "add-admin" || action === "reset-password") {
+    password = parseSecretFromStdin(await readStdin(process.stdin));
+  }
   switch (action) {
     case "list":
       await runList();
@@ -204,6 +206,17 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("[user-admin-cli] failed:", error);
+  if (error instanceof PasswordStepError) {
+    console.error(
+      `[user-admin-cli] FAILED at step ${error.step}: ${error.message}`
+    );
+  } else {
+    // Message only: an axios error embeds the request body (the password)
+    // in config.data.
+    console.error(
+      "[user-admin-cli] failed:",
+      error instanceof Error ? error.message : String(error)
+    );
+  }
   process.exit(1);
 });

@@ -4199,6 +4199,38 @@ EOF
     esac
 }
 
+# Resolve a password WITHOUT putting it on argv: --password-stdin, a hidden
+# prompt (twice, mismatch aborts), or a legacy positional (warned: it already
+# leaked into shell history/ps by the time we run). Prints the secret on stdout;
+# prompts/warnings go to stderr. Single trailing newlines are not preserved.
+synap_users_secret() {
+    local from_stdin="$1" positional="$2" p1="" p2=""
+    if [ "$from_stdin" = "true" ]; then
+        IFS= read -r p1 || [ -n "$p1" ] || { echo -e "${RED}No password received on stdin${NC}" >&2; return 1; }
+    elif [ -n "$positional" ]; then
+        echo -e "${YELLOW}⚠️  Password given as an argument: it is now in your shell history and the process list. Prefer the hidden prompt or --password-stdin.${NC}" >&2
+        p1="$positional"
+    else
+        if [ ! -r /dev/tty ]; then
+            echo -e "${RED}No terminal for a hidden prompt; use --password-stdin${NC}" >&2
+            return 1
+        fi
+        printf 'New password: ' >&2
+        IFS= read -rs p1 </dev/tty; echo >&2
+        printf 'Repeat password: ' >&2
+        IFS= read -rs p2 </dev/tty; echo >&2
+        if [ "$p1" != "$p2" ]; then
+            echo -e "${RED}Passwords do not match. Nothing changed.${NC}" >&2
+            return 1
+        fi
+    fi
+    if [ -z "$p1" ]; then
+        echo -e "${RED}Empty password. Nothing changed.${NC}" >&2
+        return 1
+    fi
+    printf '%s' "$p1"
+}
+
 cmd_users() {
     local deploy_dir=$(get_deploy_dir)
     if [ -z "$deploy_dir" ]; then
@@ -4219,36 +4251,61 @@ cmd_users() {
             ;;
 
         add-admin)
-            local email="${1:-}"
-            local password="${2:-}"
-            local name="${3:-}"
-            local create_workspace="true"
-            local arg4="${4:-}"
-            if [ "$name" = "--no-workspace" ]; then
-                create_workspace="false"
-                name=""
-            elif [ "$arg4" = "--no-workspace" ]; then
-                create_workspace="false"
-            fi
-            if [ -z "$email" ] || [ -z "$password" ]; then
-                echo -e "${RED}Usage: synap users add-admin <email> <password> [name] [--no-workspace]${NC}"
+            # Password: --password-stdin, or hidden prompt, or (legacy) positional.
+            local email="" password="" name="" create_workspace="true" from_stdin="false" positional=0
+            local arg
+            for arg in "$@"; do [ "$arg" = "--password-stdin" ] && from_stdin="true"; done
+            for arg in "$@"; do
+                case "$arg" in
+                    --no-workspace) create_workspace="false" ;;
+                    --password-stdin) ;;
+                    *)
+                        positional=$((positional + 1))
+                        case "$positional" in
+                            1) email="$arg" ;;
+                            2) if [ "$from_stdin" = "true" ]; then name="$arg"; else password="$arg"; fi ;;
+                            3) name="$arg" ;;
+                        esac
+                        ;;
+                esac
+            done
+            # With --password-stdin the 2nd positional is the name, not a password.
+            # Legacy positional form `<email> <password> [name]` still works (warned).
+            if [ -z "$email" ]; then
+                echo -e "${RED}Usage: synap users add-admin <email> [name] [--password-stdin] [--no-workspace]${NC}"
                 exit 1
             fi
+            password="$(synap_users_secret "$from_stdin" "$password")" || exit 1
             echo -e "${BLUE}👤 Creating admin user ${email}...${NC}"
-            docker compose exec -T backend \
-                sh -c "ACTION=add-admin CREATE_WORKSPACE='${create_workspace}' ADMIN_EMAIL='${email}' ADMIN_PASSWORD='${password}' ADMIN_NAME='${name}' node dist/scripts/user-admin-cli.js"
+            printf '%s\n' "$password" | docker compose exec -T \
+                -e ACTION=add-admin -e "CREATE_WORKSPACE=${create_workspace}" \
+                -e "ADMIN_EMAIL=${email}" -e "ADMIN_NAME=${name}" \
+                backend node dist/scripts/user-admin-cli.js
             ;;
 
         reset-password|passwd)
-            local email="${1:-}"
-            local password="${2:-}"
-            if [ -z "$email" ] || [ -z "$password" ]; then
-                echo -e "${RED}Usage: synap users reset-password <email> <new-password>${NC}"
+            # The secret never touches argv or a shell string: it is piped on
+            # STDIN into the container; `exec` gets each value as its own argv
+            # element (no `sh -c` interpolation). Success is only reported once
+            # user-admin-cli has proven the new password with a real Kratos login.
+            local email="" password="" from_stdin="false" arg
+            for arg in "$@"; do
+                case "$arg" in
+                    --password-stdin) from_stdin="true" ;;
+                    *)
+                        if [ -z "$email" ]; then email="$arg"; else password="$arg"; fi
+                        ;;
+                esac
+            done
+            if [ -z "$email" ]; then
+                echo -e "${RED}Usage: synap users reset-password <email> [--password-stdin]${NC}"
                 exit 1
             fi
+            password="$(synap_users_secret "$from_stdin" "$password")" || exit 1
             echo -e "${BLUE}🔐 Resetting password for ${email}...${NC}"
-            docker compose exec -T backend \
-                sh -c "ACTION=reset-password USER_EMAIL='${email}' USER_PASSWORD='${password}' node dist/scripts/user-admin-cli.js"
+            printf '%s\n' "$password" | docker compose exec -T \
+                -e ACTION=reset-password -e "USER_EMAIL=${email}" \
+                backend node dist/scripts/user-admin-cli.js
             ;;
 
         delete)
@@ -4281,15 +4338,15 @@ ${BLUE}Synap Users${NC} — Manage pod users and passwords
 
 ${YELLOW}Usage:${NC}
   synap users list [limit]
-  synap users add-admin <email> <password> [name] [--no-workspace]
-  synap users reset-password <email> <new-password>
+  synap users add-admin <email> [name] [--password-stdin] [--no-workspace]
+  synap users reset-password <email> [--password-stdin]
   synap users delete [--yes|-y] <email>
 
 ${YELLOW}Examples:${NC}
   synap users list
-  synap users add-admin admin@example.com 'StrongPassw0rd!'
-  synap users add-admin admin@example.com 'StrongPassw0rd!' --no-workspace
-  synap users reset-password relay@example.com 'NewStrongPassw0rd!'
+  synap users add-admin admin@example.com --no-workspace          # prompts (hidden)
+  synap users reset-password relay@example.com                    # prompts twice (hidden)
+  printf '%s' "\$PW" | synap users reset-password relay@example.com --password-stdin
   synap users delete --yes relay@example.com
 EOF
             ;;
@@ -4528,7 +4585,7 @@ ${YELLOW}Examples:${NC}
   synap services rotate openclaw # Rotate OpenClaw API key
   synap services remove openclaw # Remove OpenClaw agent
   synap users list
-  synap users reset-password relay@example.com 'NewStrongPassw0rd!'
+  synap users reset-password relay@example.com    # hidden prompt; --password-stdin for scripts
   synap profiles enable rsshub     # RSSHub + browserless (optional stack)
   synap profiles disable openclaw  # Stop OpenClaw container
   synap tunnel enable cloudflare --token <TOKEN>   # Expose via Cloudflare Tunnel
