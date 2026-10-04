@@ -2036,7 +2036,7 @@ EOF
     generate_kratos_config "$DOMAIN"
     
     # Images come from ONE place: a release manifest (pulled by digest) or a
-    # from-source build tagged synap-local/* — the same helpers `synap update`
+    # from-source build tagged synap-dev/* — the same helpers `synap update`
     # uses (see RELEASE ENGINE). No pull-failure → build fallback: a release
     # that cannot be pulled is a failed install, never a silent host build.
     echo -e "${BLUE}🔨 Preparing images...${NC}"
@@ -2621,7 +2621,7 @@ EOF
 # and handed to an optional notify hook (SYNAP_UPDATE_NOTIFY_CMD) — U4.
 #
 # `--from-source` (U6, open to anyone) goes through the SAME backup / canary /
-# rollback. It builds `synap-local/*:<sha>` with `docker build -t` — the tag
+# rollback. It builds `synap-dev/*:<sha>` with `docker build -t` — the tag
 # is named here and nowhere else, so a host build can never carry the ghcr name
 # — and records the release as `local-<sha>`.
 #
@@ -2670,13 +2670,13 @@ _ue_fetch() { # <url> <out>
 # <manifest> <compose-file> — prints one line per violation; empty = valid.
 # A registry release must pin EVERY image by digest and cover every
 # SYNAP_IMAGE_* the compose file uses. A from-source release (source:true,
-# id local-*) may carry synap-local/* tags for its two built images only.
+# id local-*) may carry synap-dev/* tags for its two built images only.
 _ue_manifest_errors() {
     local keys
     keys="$(_ue_compose_image_keys "$2" | jq -R . | jq -sc .)"
     jq -r --argjson keys "$keys" '
       def digest: test("^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$");
-      def localref: test("^synap-local/[a-z0-9._/-]+:[A-Za-z0-9._-]+$");
+      def localref: test("^synap-dev/[a-z0-9._/-]+:[A-Za-z0-9._-]+$");
       (.source == true) as $src
       | (.images // {}) as $img
       | [ (if .schema != 1 then "schema must be 1 (got \(.schema))" else empty end),
@@ -2689,7 +2689,7 @@ _ue_manifest_errors() {
           ($img | to_entries[] | select((.value|type) == "string") | select((.value|digest|not) and (($src and (.value|localref))|not))
                 | "image \(.key) is not pinned by digest: \(.value)"),
           ($img | to_entries[] | select((.value|type) == "string") | select((.value|localref) and ([.key]|inside(["SYNAP_IMAGE_BACKEND","SYNAP_IMAGE_POD_ADMIN"])|not))
-                | "image \(.key) may not be a synap-local build"),
+                | "image \(.key) may not be a synap-dev build"),
           ((if $src then ["SYNAP_IMAGE_BACKEND","SYNAP_IMAGE_POD_ADMIN"] else ($keys + ["SYNAP_IMAGE_BACKEND","SYNAP_IMAGE_POD_ADMIN"] | unique) end)[]
                 | select($img[.] == null) | "image \(.) (used by docker-compose.yml) is missing from the manifest"),
           (if ((.migrations.last|type) != "string") or ((.migrations.last|tostring)|endswith(".sql")|not) then "migrations.last must name a .sql file" else empty end),
@@ -2837,8 +2837,8 @@ _ue_build_from_source() { # <out-manifest>
     [ -n "$(git -C "$repo_root" status --porcelain --untracked-files=no 2>/dev/null)" ] && tag="${tag}-dirty"
     # The ONE place a host build is named. Never the registry name: a local
     # build must never be mistakable for a published artifact (U6).
-    be="synap-local/backend:${tag}"
-    pa="synap-local/pod-admin:${tag}"
+    be="synap-dev/backend:${tag}"
+    pa="synap-dev/pod-admin:${tag}"
     _ue_log "Building ${be} and ${pa} from ${repo_root} (commit ${sha:0:12})..."
     docker build -f "$repo_root/deploy/Dockerfile" --build-arg "GIT_SHA=${sha}" -t "$be" "$repo_root" || { _ue_err "backend build failed. Nothing was changed."; return 1; }
     docker build -f "$repo_root/apps/pod-admin/Dockerfile" -t "$pa" "$repo_root" || { _ue_err "pod-admin build failed. Nothing was changed."; return 1; }
@@ -2950,7 +2950,7 @@ _ue_pull_images() { # <manifest> — before anything changes; a failure aborts t
             continue
         fi
         case "$ref" in
-            synap-local/*) _ue_err "local image ${ref} is missing"; return 1 ;;
+            synap-dev/*) _ue_err "local image ${ref} is missing"; return 1 ;;
         esac
         _ue_log "  pulling ${ref}"
         docker pull -q "$ref" >/dev/null || { _ue_err "pull failed: ${ref}"; return 1; }
@@ -2995,7 +2995,7 @@ _ue_prune_images() {
     keep="$(jq -r '.images[]?' state/current-release.json state/previous-release.json 2>/dev/null \
         | while read -r ref; do docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null; done | sort -u)"
     docker images --no-trunc --format '{{.ID}} {{.Repository}}' 2>/dev/null \
-        | awk '$2 ~ /^(ghcr\.io\/synap-core\/(backend|pod-admin)|synap-local\/|synap-adopted\/)/ {print $1}' | sort -u \
+        | awk '$2 ~ /^(ghcr\.io\/synap-core\/(backend|pod-admin)|synap-dev\/|synap-local\/|synap-adopted\/)/ {print $1}' | sort -u \
         | while read -r id; do
             grep -qx "$id" <<<"$keep" && continue
             docker rmi -f "$id" >/dev/null 2>&1 || true
@@ -3229,7 +3229,7 @@ synap update [--release <id|fast|stable>] [--from-source] [--force]
   --release <ref>   apply a published release: a release id (main-<sha7>, vX.Y.Z)
                     or a channel — fast (every green main push) | stable (v* tags).
                     Default: SYNAP_UPDATE_CHANNEL from deploy/.env, else stable.
-  --from-source     build THIS checkout as synap-local/*:<sha> (release local-<sha>);
+  --from-source     build THIS checkout as synap-dev/*:<sha> (release local-<sha>);
                     same backup / canary / rollback as a release.
   --force           re-apply the release the pod is already on.
 
@@ -3866,7 +3866,7 @@ cmd_rebuild() {
     fi
     
     # First-party images (backend + realtime + migrate share one image; pod-admin)
-    # are rebuilt through the update engine: the build is tagged synap-local/*
+    # are rebuilt through the update engine: the build is tagged synap-dev/*
     # (never the registry name) and goes through backup / canary / rollback (U6).
     case "$service" in
         ""|backend|realtime|backend-migrate|backend-canary|pod-admin)
@@ -5174,7 +5174,7 @@ ${YELLOW}Examples:${NC}
   synap update
   synap update --release fast          # every green main commit
   synap update --release v1.2.3        # a specific release
-  synap update --from-source           # build this checkout as synap-local/*:<sha>
+  synap update --from-source           # build this checkout as synap-dev/*:<sha>
 
   # Management
   synap health

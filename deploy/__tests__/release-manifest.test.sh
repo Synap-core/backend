@@ -61,15 +61,15 @@ reject "an image pinned by tag only"         '.images.SYNAP_IMAGE_REDIS = "redis
 reject "an image the compose file needs"     'del(.images.SYNAP_IMAGE_MINIO)'                                 "SYNAP_IMAGE_MINIO (used by docker-compose.yml) is missing"
 reject "a short commit"                      '.gitSha = "abc1234"'                                            "gitSha must be a full 40-hex commit"
 reject "a local-* id on a registry release"  '.id = "local-abc"'                                              "reserved for --from-source"
-reject "a synap-local image on a registry release" '.images.SYNAP_IMAGE_BACKEND = "synap-local/backend:abc"' "SYNAP_IMAGE_BACKEND is not pinned by digest"
+reject "a synap-dev image on a registry release" '.images.SYNAP_IMAGE_BACKEND = "synap-dev/backend:abc"' "SYNAP_IMAGE_BACKEND is not pinned by digest"
 reject "an unknown schema"                   '.schema = 2'                                                    "schema must be 1"
 reject "a missing migration level"           'del(.migrations)'                                               "migrations.last"
 reject "a malformed compose sha"             '.composeSha = "abc"'                                            "composeSha"
 reject "a path in the id"                    '.id = "../../etc"'                                              "id is missing or malformed"
-# a from-source manifest: synap-local allowed for the two built images only
-jq '.source = true | .id = "local-abc123" | .images = {SYNAP_IMAGE_BACKEND:"synap-local/backend:abc123", SYNAP_IMAGE_POD_ADMIN:"synap-local/pod-admin:abc123"}' "$TMP/good.json" > "$TMP/src.json"
-bash "$VALIDATE" "$TMP/src.json" >/dev/null 2>"$TMP/err" && ok "accepts a from-source manifest (synap-local for backend + pod-admin)" || bad "from-source manifest rejected: $(cat "$TMP/err")"
-reject "a synap-local third-party image" '.images.SYNAP_IMAGE_REDIS = "synap-local/redis:abc"' "SYNAP_IMAGE_REDIS may not be a synap-local build" "$TMP/src.json"
+# a from-source manifest: synap-dev allowed for the two built images only
+jq '.source = true | .id = "local-abc123" | .images = {SYNAP_IMAGE_BACKEND:"synap-dev/backend:abc123", SYNAP_IMAGE_POD_ADMIN:"synap-dev/pod-admin:abc123"}' "$TMP/good.json" > "$TMP/src.json"
+bash "$VALIDATE" "$TMP/src.json" >/dev/null 2>"$TMP/err" && ok "accepts a from-source manifest (synap-dev for backend + pod-admin)" || bad "from-source manifest rejected: $(cat "$TMP/err")"
+reject "a synap-dev third-party image" '.images.SYNAP_IMAGE_REDIS = "synap-dev/redis:abc"' "SYNAP_IMAGE_REDIS may not be a synap-dev build" "$TMP/src.json"
 
 # ── 3. the publish workflow keeps the P1 promises ────────────────────────────
 python3 - "$HERE/.github/workflows/docker-publish.yml" <<'PY' && ok "docker-publish.yml: pod-admin published, no :latest, no backend-realtime, digests → validated release.json, CP after release" || { bad "docker-publish.yml broke a P1 promise (see above)"; }

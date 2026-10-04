@@ -16,7 +16,7 @@
 #   restore-bad migrate throws AND pg_restore fails → rollback_failed, dbRestored:false
 #   hup         SIGHUP mid-migration             → rolled back like INT/TERM
 #   pull        a pull fails                     → nothing changes at all
-#   source      --from-source                    → synap-local/* only, never ghcr
+#   source      --from-source                    → synap-dev/* only, never ghcr
 #   traefik     SYNAP_EDGE=traefik               → caddy never touched, every service up
 #   eve-unpinned / port80 / skip-edge             → edge refusals + eve pin
 set -u
@@ -68,8 +68,8 @@ cat > "$TMP/bin/docker" <<'D'
 F="$FAKE"; echo "$*" >> "$F/log"
 envget() { grep "^$1=" "$FAKE_ENV" | tail -1 | cut -d= -f2-; }
 cur_image() { local v; v="$(envget SYNAP_IMAGE_BACKEND)"; [ -n "$v" ] && echo "$v" || echo "ghcr.io/synap-core/backend:$(envget BACKEND_VERSION)"; }
-stamp_of() { case "$1" in *"$NEW_DIGEST"*) [ -n "${FAKE_STAMP_WRONG:-}" ] && echo "$OLD_SHA" || echo "$NEW_SHA";; synap-local/*) echo "$LOCAL_SHA";; *) echo "$OLD_SHA";; esac; }
-is_new() { case "$1" in *"$NEW_DIGEST"*|synap-local/*) return 0;; esac; return 1; }
+stamp_of() { case "$1" in *"$NEW_DIGEST"*) [ -n "${FAKE_STAMP_WRONG:-}" ] && echo "$OLD_SHA" || echo "$NEW_SHA";; synap-dev/*) echo "$LOCAL_SHA";; *) echo "$OLD_SHA";; esac; }
+is_new() { case "$1" in *"$NEW_DIGEST"*|synap-dev/*) return 0;; esac; return 1; }
 case "$*" in
   "compose config --services"*|"compose --profile pod-agent config --services"*)
     printf '%s\n' postgres postgres-backup redis minio typesense kratos-migrate kratos hydra-migrate hydra backend-migrate backend realtime pod-admin caddy; exit 0 ;;
@@ -277,7 +277,7 @@ cmp -s "$DEPLOY/.env" "$S/env.orig" && cmp -s "$DEPLOY/docker-compose.yml" "$S/c
 grep -E "compose (run|stop|.* up )|compose up|pg_dump" "$FAKE/log" && bad "pull: something ran after the failed pull" || ok "pull: no compose up/run/stop, no dump"
 [ "$(cur_id)" = "$R1" ] && [ "$(last status)" = aborted ] && notified aborted && ok "pull: release unchanged, abort recorded + notified" || bad "pull: current=$(cur_id) record=$(last status)"
 
-# ── 6. --from-source: synap-local/* only, never the ghcr name ─────────────────
+# ── 6. --from-source: synap-dev/* only, never the ghcr name ─────────────────
 setup source r1
 mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations"
 cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
@@ -290,9 +290,9 @@ tag12="${LOCAL_SHA:0:12}"
 builds="$(grep '^build ' "$FAKE/log")"
 [ "$(echo "$builds" | grep -c .)" = 2 ] && ok "source: two images built" || bad "source: builds: $builds"
 echo "$builds" | grep -q ghcr && bad "source: a build mentions ghcr: $builds" || ok "source: no build is tagged with the ghcr name"
-echo "$builds" | grep -q -- "-t synap-local/backend:$tag12 " && echo "$builds" | grep -q -- "-t synap-local/pod-admin:$tag12 " && ok "source: tags are synap-local/*:$tag12" || bad "source: tags: $builds"
+echo "$builds" | grep -q -- "-t synap-dev/backend:$tag12 " && echo "$builds" | grep -q -- "-t synap-dev/pod-admin:$tag12 " && ok "source: tags are synap-dev/*:$tag12" || bad "source: tags: $builds"
 grep -qE "^(compose build|tag .* ghcr)" "$FAKE/log" && bad "source: compose build / ghcr retag used" || ok "source: no compose build, no ghcr retag"
-[ "$(envpin SYNAP_IMAGE_BACKEND)" = "synap-local/backend:$tag12" ] && [ "$(cur_id)" = "local-$tag12" ] && [ "$(jq -r .source "$DEPLOY/state/current-release.json")" = true ] \
+[ "$(envpin SYNAP_IMAGE_BACKEND)" = "synap-dev/backend:$tag12" ] && [ "$(cur_id)" = "local-$tag12" ] && [ "$(jq -r .source "$DEPLOY/state/current-release.json")" = true ] \
   && ok "source: recorded as release local-$tag12 (source:true)" || bad "source: env=$(envpin SYNAP_IMAGE_BACKEND) id=$(cur_id)"
 [ "$(envpin SYNAP_IMAGE_MINIO)" = "$(grep '^SYNAP_IMAGE_MINIO=' "$S/env.orig" | cut -d= -f2-)" ] && ok "source: third-party pins carried over from the previous release" || bad "source: minio pin lost"
 ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && grep -q "canary" "$FAKE/log" && ok "source: same backup + canary path as a release" || bad "source: skipped backup/canary"
