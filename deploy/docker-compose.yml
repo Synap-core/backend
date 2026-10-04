@@ -580,7 +580,8 @@ services:
       SECRETS_COOKIE: ${KRATOS_SECRETS_COOKIE}
       SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
       SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
-      SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
+      # Internal only — the admin API is unauthenticated and never routed publicly.
+      SERVE_ADMIN_BASE_URL: http://kratos:4434/
       # Post-success return URL — pod-admin's /login handles the Kratos flow
       # natively; on success it navigates to the return target (default: /).
       SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: ${POD_ADMIN_URL}/

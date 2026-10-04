@@ -55,3 +55,22 @@ nv = seen >= 10 and nports >= 10 and bool((svcs.get("caddy") or {}).get("ports")
 print(("  ✓ " if nv else "  ✗ ") + f"non-vacuity: {seen} services, {nports} port mappings, edge publishes")
 sys.exit(1 if fails or not nv else 0)
 PY
+rc=$?
+
+# The same exposure through the PROXY: an unauthenticated admin API must never be
+# a reverse_proxy upstream on a public site block. Kratos 4434 was routed at
+# /.ory/kratos/admin/* until 2026-10-04 — account takeover on any Caddy-fronted pod.
+# Scope: non-comment `reverse_proxy` lines of the shipped Caddyfile; it cannot see
+# a Caddyfile generated elsewhere (Eve's Traefik routes live in hestia-cli).
+CADDYFILE="${PORT_TEST_CADDYFILE:-$SCRIPT_DIR/../Caddyfile}"
+ADMIN_UPSTREAMS='kratos:4434|hydra:4445'
+nproxy=$(grep -cE '^[[:space:]]*reverse_proxy[[:space:]]' "$CADDYFILE")
+hits=$(grep -nE "^[[:space:]]*reverse_proxy[[:space:]].*($ADMIN_UPSTREAMS)" "$CADDYFILE" || true)
+if [ "$nproxy" -lt 3 ]; then
+    echo "  ✗ non-vacuity: only $nproxy reverse_proxy lines in $CADDYFILE — scan went blind"; rc=1
+elif [ -n "$hits" ]; then
+    echo "  ✗ Caddyfile proxies an unauthenticated admin API publicly:"; echo "$hits" | sed 's/^/      /'; rc=1
+else
+    echo "  ✓ no reverse_proxy to an admin upstream ($ADMIN_UPSTREAMS) across $nproxy proxy lines"
+fi
+exit $rc
