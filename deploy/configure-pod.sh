@@ -2,7 +2,14 @@
 #
 # Configure Pod — updates .env and optionally activates profiles
 #
-# Usage: configure-pod.sh <callback-url> <callback-jwt> [KEY=VALUE...] [--profile <name>]
+# Usage: configure-pod.sh <callback-url> <callback-jwt> [KEY=VALUE...] [--profile <name>] [--recreate <service>]
+#
+# Runs INSIDE the pod-agent container (busybox sh, deploy dir at /deploy).
+# .env is written ONLY through deploy/env-config.sh — the same validated door
+# as `synap config set` (update-door plan P4): unknown keys, malformed values,
+# the release block, the compose-project pin and a POD_AGENT_AUDIENCE that
+# would no longer match PUBLIC_URL are refused, ALL-or-nothing, before any
+# container is touched; the previous .env is kept as .env.bak.<ts>.
 #
 set -e
 
@@ -11,7 +18,6 @@ CALLBACK_JWT="$2"
 shift 2 2>/dev/null || true
 
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="docker compose -p synap-backend -f ${DEPLOY_DIR}/docker-compose.yml"
 ENV_FILE="${DEPLOY_DIR}/.env"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [configure] $*"; }
@@ -29,6 +35,31 @@ report() {
 }
 
 log "=== Configuring pod ==="
+
+for helper in env-config.sh update-lock.sh; do
+  if [ ! -f "${DEPLOY_DIR}/${helper}" ]; then
+    log "ERROR: ${DEPLOY_DIR}/${helper} is missing — refusing to write .env without the config door. Nothing was changed."
+    report "failed" "${helper} missing from the deploy dir"
+    exit 1
+  fi
+done
+SYNAP_DEPLOY_DIR="$DEPLOY_DIR"; export SYNAP_DEPLOY_DIR
+# shellcheck source=/dev/null
+. "${DEPLOY_DIR}/env-config.sh"
+# shellcheck source=/dev/null
+. "${DEPLOY_DIR}/update-lock.sh"
+synap_update_lock "$DEPLOY_DIR" "configure-pod" || { report "failed" "another pod operation is running"; exit 1; }
+
+# The pod's pinned compose project — never a hard-coded guess (a guess is how a
+# second, empty stack gets created next to the real one).
+PROJECT="$(envcfg_value COMPOSE_PROJECT_NAME)"
+if [ -z "$PROJECT" ]; then
+  PROJECT="synap-backend"
+  log "WARN: COMPOSE_PROJECT_NAME is not pinned in .env — using ${PROJECT} (run synap update on the host to pin it)"
+fi
+COMPOSE="docker compose -p ${PROJECT} -f ${DEPLOY_DIR}/docker-compose.yml"
+PAIRS="$(umask 077 && mktemp)"
+trap 'rm -f "$PAIRS"' EXIT
 
 PROFILES=""
 RECREATE_SERVICES=""
@@ -51,16 +82,9 @@ while [ $# -gt 0 ]; do
       log "Will force-recreate service: $1"
       ;;
     *=*)
-      KEY=$(echo "$1" | cut -d= -f1)
-      VALUE=$(echo "$1" | cut -d= -f2-)
-      # Update or append to .env
-      if grep -q "^${KEY}=" "$ENV_FILE" 2>/dev/null; then
-        sed -i "s|^${KEY}=.*|${KEY}=${VALUE}|" "$ENV_FILE"
-        log "Updated ${KEY} in .env"
-      else
-        echo "${KEY}=${VALUE}" >> "$ENV_FILE"
-        log "Added ${KEY} to .env"
-      fi
+      # Collected, then written in ONE validated batch below (the value never
+      # reaches argv of another process, and never this log).
+      printf '%s\n' "$1" >> "$PAIRS"
       ;;
     *)
       log "WARN: ignoring unknown argument: $1"
@@ -68,6 +92,15 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ -s "$PAIRS" ]; then
+  if ! CONFIG_OUT="$(envcfg_set --from-file "$PAIRS" 2>&1)"; then
+    printf '%s\n' "$CONFIG_OUT" | while IFS= read -r l; do log "$l"; done
+    report "failed" "$(printf '%s' "$CONFIG_OUT" | grep 'refused' | head -n 3 | tr '\n' ' ')"
+    exit 1
+  fi
+  printf '%s\n' "$CONFIG_OUT" | while IFS= read -r l; do log "$l"; done
+fi
 
 # Activate profiles if requested
 if [ -n "$PROFILES" ]; then

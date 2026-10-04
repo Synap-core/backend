@@ -20,13 +20,16 @@
 
 set -euo pipefail
 
-# Deploy version controls BOTH the raw.githubusercontent.com ref used to fetch
-# config files, AND the Docker image tag used for backend/realtime/pod-agent.
-# Defaults to "main" (always present on GHCR). Override via --deploy-version
-# (e.g. "v1.0.2") or SYNAP_DEPLOY_VERSION env var. Do NOT use "latest" — it
-# only exists on v* tags and will break fresh installs if no release has been cut.
-DEPLOY_VERSION="${SYNAP_DEPLOY_VERSION:-main}"
+# Deploy version: by default the LATEST STABLE RELEASE (update-door plan P4) —
+# its release.json (published by CI on every v* tag) pins every image by digest
+# and names the exact commit whose config files are fetched, so a fresh install
+# is the same artifact `synap update --release stable` would apply. An explicit
+# --deploy-version / SYNAP_DEPLOY_VERSION (a tag like v1.0.2, or "main" for the
+# development branch) keeps the previous tag-based behaviour.
+DEPLOY_VERSION="${SYNAP_DEPLOY_VERSION:-}"
 RAW_BASE_TEMPLATE="https://raw.githubusercontent.com/Synap-core/backend"
+SYNAP_RELEASE_BASE_URL="${SYNAP_RELEASE_BASE_URL:-https://github.com/synap-core/backend/releases/download}"
+RELEASE_MANIFEST=""
 
 # ─── Defaults (override via env or flags) ─────────────────────────────────────
 INSTALL_DIR="${SYNAP_DIR:-/srv/synap}"
@@ -86,11 +89,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# No explicit version → resolve the stable channel's release manifest. The
+# manifest is pretty-printed JSON (deploy/release/make-manifest.py, indent=2):
+# one "KEY": "value" per line, read without jq (not installed on a fresh host).
+RAW_REF=""
+if [[ -z "$DEPLOY_VERSION" ]]; then
+  RELEASE_MANIFEST="$(curl -fsSL --retry 2 --max-time 60 "${SYNAP_RELEASE_BASE_URL}/channel-stable/release.json" 2>/dev/null || true)"
+  DEPLOY_VERSION="$(printf '%s\n' "$RELEASE_MANIFEST" | sed -n 's/^  "id": *"\([A-Za-z0-9._-]*\)".*/\1/p' | head -n 1)"
+  RAW_REF="$(printf '%s\n' "$RELEASE_MANIFEST" | sed -n 's/^  "gitSha": *"\([0-9a-f]\{40\}\)".*/\1/p' | head -n 1)"
+  if [[ -z "$DEPLOY_VERSION" || -z "$RAW_REF" ]]; then
+    echo "✗  Could not resolve the latest stable Synap release (${SYNAP_RELEASE_BASE_URL}/channel-stable/release.json)." >&2
+    echo "   Pass an explicit version instead: --deploy-version vX.Y.Z  (or --deploy-version main for the development branch)." >&2
+    exit 1
+  fi
+fi
+
 # Image tags default to DEPLOY_VERSION when not set explicitly. This keeps the
 # three artifacts (config files, backend image, pod-agent image) version-aligned.
+# With a release manifest the images are pinned by digest below (SYNAP_IMAGE_*),
+# which the compose file prefers over these tags.
 BACKEND_VERSION="${BACKEND_VERSION_FLAG:-$DEPLOY_VERSION}"
 POD_AGENT_VERSION="${POD_AGENT_VERSION_FLAG:-$DEPLOY_VERSION}"
-RAW_BASE="${RAW_BASE_TEMPLATE}/${DEPLOY_VERSION}"
+RAW_BASE="${RAW_BASE_TEMPLATE}/${RAW_REF:-$DEPLOY_VERSION}"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -170,20 +190,10 @@ _env_value() {
   grep -E "^${key}=" "$file" 2>/dev/null | head -n 1 | cut -d= -f2-
 }
 
+# Writes go through the ONE .env writer (env-config.sh, downloaded with the
+# other deploy helpers below): atomic, file mode kept, no stray backup copies.
 _set_env_value() {
-  local key="$1"
-  local value="$2"
-  local file="$3"
-  local escaped_value
-
-  escaped_value="${value//\\/\\\\}"
-  escaped_value="${escaped_value//&/\\&}"
-  escaped_value="${escaped_value//|/\\|}"
-  if grep -q "^${key}=" "$file" 2>/dev/null; then
-    sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$file"
-  else
-    printf '\n%s=%s\n' "$key" "$value" >> "$file"
-  fi
+  SYNAP_ENV_FILE="$3" SYNAP_ENV_SCHEMA="$INSTALL_DIR/env.schema" envcfg_write_raw S "$1" "$2"
 }
 
 # Kratos uses one session cookie for both the Pod API and the bundled Pod
@@ -308,6 +318,12 @@ chmod +x "$INSTALL_DIR/pgdata-safety.sh"
 # operations on state/update.lock through it; update-pod.sh refuses without it.
 _download "deploy/update-lock.sh" "$INSTALL_DIR/update-lock.sh"
 chmod +x "$INSTALL_DIR/update-lock.sh"
+# The ONE .env writer + its schema — configure-pod.sh (pod-agent) writes .env
+# only through it, and so do this installer's re-runs.
+_download "deploy/env-config.sh" "$INSTALL_DIR/env-config.sh"
+_download "deploy/env.schema" "$INSTALL_DIR/env.schema"
+# shellcheck source=/dev/null
+. "$INSTALL_DIR/env-config.sh" || error "env-config.sh could not be loaded"
 
 # Add-on installer (referenced by the post-install "Next steps" message)
 _download "deploy/setup-openclaw.sh" "$INSTALL_DIR/setup-openclaw.sh"
@@ -600,7 +616,6 @@ else
   TYPESENSE_API_KEY=$(_gen)
   TYPESENSE_ADMIN_API_KEY=$(_gen)
   JWT_SECRET=$(_gen)
-  ENCRYPTION_KEY=$(_gen)
   KRATOS_SECRETS_COOKIE=$(_gen)
   KRATOS_SECRETS_CIPHER=$(openssl rand -hex 16)  # 32 chars = 16-byte AES key (kratos max=32)
   # KRATOS_WEBHOOK_SECRET is resolved before kratos.yml is written (above).
@@ -682,7 +697,6 @@ TYPESENSE_ADMIN_API_KEY=$TYPESENSE_ADMIN_API_KEY
 
 # ── Auth (JWT + Kratos + Hydra) ───────────────────────────────────────────────
 JWT_SECRET=$JWT_SECRET
-ENCRYPTION_KEY=$ENCRYPTION_KEY
 KRATOS_SECRETS_COOKIE=$KRATOS_SECRETS_COOKIE
 KRATOS_SECRETS_CIPHER=$KRATOS_SECRETS_CIPHER
 KRATOS_WEBHOOK_SECRET=$KRATOS_WEBHOOK_SECRET
@@ -762,6 +776,22 @@ ENV_EOF
 
   chmod 600 "$INSTALL_DIR/.env"
   success "Written $INSTALL_DIR/.env"
+fi
+
+# Pin every image of the release by digest — the same release block
+# `synap update` owns (compose prefers SYNAP_IMAGE_* over the tags above).
+if [[ -n "$RELEASE_MANIFEST" ]]; then
+  {
+    echo "# >>> synap release — managed by \`synap update\`; do not edit by hand >>>"
+    echo "SYNAP_RELEASE_ID=$DEPLOY_VERSION"
+    printf '%s\n' "$RELEASE_MANIFEST" | sed -n 's/^    "\(SYNAP_IMAGE_[A-Z0-9_]*\)": *"\([^"]*@sha256:[0-9a-f]\{64\}\)".*/\1=\2/p'
+    echo "# <<< synap release <<<"
+  } > "$INSTALL_DIR/.release-block.tmp"
+  grep -vE '^(SYNAP_IMAGE_[A-Z0-9_]+|SYNAP_RELEASE_ID)=|^# (>>>|<<<) synap release' "$INSTALL_DIR/.env" > "$INSTALL_DIR/.env.tmp" || true
+  cat "$INSTALL_DIR/.release-block.tmp" >> "$INSTALL_DIR/.env.tmp"
+  chmod 600 "$INSTALL_DIR/.env.tmp" && mv -f "$INSTALL_DIR/.env.tmp" "$INSTALL_DIR/.env"
+  rm -f "$INSTALL_DIR/.release-block.tmp"
+  success "Release $DEPLOY_VERSION: $(grep -c '^SYNAP_IMAGE_' "$INSTALL_DIR/.env") images pinned by digest"
 fi
 
 # ─── Pull images ───────────────────────────────────────────────────────────────

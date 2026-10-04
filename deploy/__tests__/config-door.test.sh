@@ -6,6 +6,7 @@
 #   • deploy/.env.example (active and commented-out assignments),
 #   • ${KEY} in deploy/docker-compose.yml,
 #   • the .env `synap install` generates (generate_and_create_env heredoc),
+#   • the .env install.sh (curl | bash) writes, and its _set_env_value keys,
 #   • every key the synap CLI writes itself (envcfg_write_raw S / update_env_value),
 #   • @eve/dna POD_SECRET_FIELDS — when a hestia-cli checkout sits beside this
 #     repo (or ENV_SCHEMA_HESTIA points at one); CI checks out only this repo,
@@ -40,12 +41,14 @@ flags_of() { awk -v k="$1" '$1 == k {print $3}' "$SCHEMA"; }
 example_keys="$(sed -nE 's/^[[:space:]]*#?[[:space:]]*([A-Z][A-Z0-9_]*)=.*/\1/p' "$HERE/deploy/.env.example" | sort -u)"
 compose_keys="$(grep -oE '\$\{[A-Z_][A-Z0-9_]*' "$HERE/deploy/docker-compose.yml" | sed 's/^\${//' | sort -u)"
 install_keys="$(awk '/cat > \.env <<EOF/{p=1;next} p&&/^EOF/{exit} p' "$HERE/synap" | sed -nE 's/^([A-Z][A-Z0-9_]*)=.*/\1/p' | sort -u)"
+installsh_keys="$( (awk '/<< ENV_EOF/{p=1;next} p&&/^ENV_EOF/{exit} p' "$HERE/install.sh"; grep -oE '_set_env_value "[A-Z_][A-Z0-9_]*' "$HERE/install.sh" | cut -d'"' -f2) | sed -nE 's/^([A-Z][A-Z0-9_]*)(=.*)?$/\1/p' | sort -u)"
 cli_written="$( (grep -oE 'envcfg_write_raw S "?[A-Z_][A-Z0-9_]*' "$HERE/synap" | awk '{print $3}'; grep -oE 'update_env_value "?[A-Z_][A-Z0-9_]*' "$HERE/synap" | awk '{print $2}') | tr -d '"' | sort -u)"
 
 n() { echo "$1" | grep -c .; }
 [ "$(n "$example_keys")" -ge 40 ] && ok "scanned $(n "$example_keys") .env.example keys" || bad ".env.example keys: only $(n "$example_keys") (scan broken?)"
 [ "$(n "$compose_keys")" -ge 70 ] && ok "scanned $(n "$compose_keys") compose \${KEY}s" || bad "compose keys: only $(n "$compose_keys")"
 [ "$(n "$install_keys")" -ge 20 ] && ok "scanned $(n "$install_keys") keys synap install generates" || bad "install keys: only $(n "$install_keys") (heredoc moved?)"
+[ "$(n "$installsh_keys")" -ge 25 ] && ok "scanned $(n "$installsh_keys") keys install.sh writes" || bad "install.sh keys: only $(n "$installsh_keys") (heredoc moved?)"
 [ "$(n "$cli_written")" -ge 10 ] && ok "scanned $(n "$cli_written") keys the CLI writes itself" || bad "CLI-written keys: only $(n "$cli_written")"
 # self-check of the matcher: it must see a literal sample of each source
 echo "$example_keys" | grep -qx BACKUP_REPOSITORY && echo "$example_keys" | grep -qx PG_BACKUP_KEEP && echo "$example_keys" | grep -qx CONTROL_PLANE_URL \
@@ -53,8 +56,8 @@ echo "$example_keys" | grep -qx BACKUP_REPOSITORY && echo "$example_keys" | grep
 echo "$compose_keys" | grep -qx POSTGRES_PASSWORD && echo "$cli_written" | grep -qx SYNAP_EDGE && echo "$install_keys" | grep -qx ORY_HYDRA_SECRETS_SYSTEM \
   && ok "self-check: compose / CLI-written / install matchers see known keys" || bad "self-check: a key matcher went blind"
 
-for src in example compose install cli; do
-  case "$src" in example) keys="$example_keys";; compose) keys="$compose_keys";; install) keys="$install_keys";; cli) keys="$cli_written";; esac
+for src in example compose install install.sh cli; do
+  case "$src" in example) keys="$example_keys";; compose) keys="$compose_keys";; install) keys="$install_keys";; install.sh) keys="$installsh_keys";; cli) keys="$cli_written";; esac
   missing=""
   for k in $keys; do in_schema "$k" || missing="$missing $k"; done
   [ -z "$missing" ] && ok "every $src key is in env.schema" || bad "$src keys missing from env.schema:$missing"
@@ -83,7 +86,7 @@ for k in $crit; do case ",$(flags_of "$k")," in *,required,*) ;; *) bad "critica
 [ -n "$crit" ] && ok "cmd_update's critical keys ($crit) are required"
 
 # No orphan: every schema key is still used somewhere.
-used_text="$(cat "$HERE/deploy/.env.example" "$HERE/deploy/docker-compose.yml" "$HERE/synap" "$HERE"/deploy/*.sh "$HERE"/deploy/pod-agent/*.js 2>/dev/null)"
+used_text="$(cat "$HERE/deploy/.env.example" "$HERE/deploy/docker-compose.yml" "$HERE/synap" "$HERE/install.sh" "$HERE"/deploy/*.sh "$HERE"/deploy/pod-agent/*.js 2>/dev/null)"
 orphans=""
 for k in $(schema_keys); do
   case "$k" in *\*) p="${k%\*}"; grep -q "$p" <<<"$used_text" || orphans="$orphans $k"; continue ;; esac
@@ -239,4 +242,32 @@ synap config set DOMAIN=claimed.example.com PUBLIC_URL=https://claimed.example.c
   ALLOWED_ORIGINS=https://claimed.example.com POD_AGENT_AUDIENCE=https://claimed.example.com OPENCLAW_HUB_API_KEY=k \
   SYNAP_AGENT_USER_ID=u SYNAP_WORKSPACE_ID=w CLOUDFLARED_TUNNEL_TOKEN=t
 [ $? = 0 ] && ok "every key the Control Plane sends via configure is accepted" || bad "CP configure keys: $(cat "$TMP/out")"
+
+# 15. configure-pod.sh (pod-agent's `configure`, run by busybox sh) writes only
+#     through the door, all-or-nothing, and uses the PINNED compose project.
+cp "$HERE/deploy/configure-pod.sh" "$DEPLOY/"
+reset_env; sed -i.x 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=pinned-proj/' "$DEPLOY/.env"; rm -f "$DEPLOY/.env.x"
+configure() { : > "$FAKE_LOG"; ( cd "$TMP"; PATH="$TMP/bin:$PATH" SYNAP_LOCK_IMPL=mkdir dash "$DEPLOY/configure-pod.sh" "" "" "$@" ) >"$TMP/out" 2>&1; }
+configure DOMAIN=new.example.com PUBLIC_URL=https://new.example.com POD_AGENT_AUDIENCE=https://new.example.com --recreate backend; rc=$?
+[ "$rc" = 0 ] && [ "$(envval PUBLIC_URL)" = https://new.example.com ] && [ "$(baks)" = 1 ] && ok "configure-pod: CP payload written through the door (backup kept)" || bad "configure-pod (rc=$rc): $(cat "$TMP/out")"
+grep -q -- "-p pinned-proj " "$FAKE_LOG" && ! grep -q -- "-p synap-backend" "$FAKE_LOG" && ok "configure-pod uses the pinned compose project" || bad "configure-pod project: $(cat "$FAKE_LOG")"
+reset_env; before="$(cat "$DEPLOY/.env")"
+configure DOMAIN=x.example.com PATH=/usr/bin --recreate backend; rc=$?
+[ "$rc" != 0 ] && [ "$(cat "$DEPLOY/.env")" = "$before" ] && ! grep -q "compose" "$FAKE_LOG" && grep -q "PATH: unknown key" "$TMP/out" \
+  && ok "configure-pod: one unknown key → nothing written, no container touched" || bad "configure-pod refusal (rc=$rc): $(cat "$TMP/out") $(cat "$FAKE_LOG")"
+configure PUBLIC_URL=https://drift.example.com; [ $? != 0 ] && [ "$(envval PUBLIC_URL)" = https://pod.example.com ] && ok "configure-pod: PUBLIC_URL without POD_AGENT_AUDIENCE refused" || bad "configure-pod audience drift accepted"
+configure OPENAI_API_KEY=sk-CONFIGSECRET; grep -q CONFIGSECRET "$TMP/out" && bad "configure-pod logged a secret" || ok "configure-pod never logs values"
+
+# 16. update-agent.sh: pod-agent comes from the release's DIGEST pin, never a host build
+cp "$HERE/deploy/update-agent.sh" "$DEPLOY/"
+agent_update() { : > "$FAKE_LOG"; ( cd "$TMP"; PATH="$TMP/bin:$PATH" dash "$DEPLOY/update-agent.sh" ) >"$TMP/out" 2>&1; }
+reset_env; D="ghcr.io/synap-core/pod-agent@sha256:$(printf 'd%.0s' $(seq 1 64))"
+printf 'SYNAP_IMAGE_POD_AGENT=%s\n' "$D" >> "$DEPLOY/.env"
+agent_update; rc=$?
+[ "$rc" = 0 ] && grep -qx "pull $D" "$FAKE_LOG" && grep -q -- "up -d --no-build --no-deps --force-recreate pod-agent" "$FAKE_LOG" \
+  && ok "update-agent pulls the pinned digest and recreates without building" || bad "update-agent (rc=$rc): $(cat "$FAKE_LOG" "$TMP/out")"
+grep -E "(^| )build( |$)" "$FAKE_LOG" && bad "update-agent built an image" || ok "update-agent never builds"
+reset_env; printf 'SYNAP_IMAGE_POD_AGENT=ghcr.io/synap-core/pod-agent:latest\n' >> "$DEPLOY/.env"
+agent_update; [ $? != 0 ] && ! grep -q "compose" "$FAKE_LOG" && ok "update-agent refuses a mutable tag" || bad "update-agent accepted a tag: $(cat "$FAKE_LOG")"
+reset_env; agent_update; [ $? != 0 ] && ! grep -q "compose" "$FAKE_LOG" && ok "update-agent refuses a pod with no pin" || bad "update-agent ran without a pin"
 exit $fail
