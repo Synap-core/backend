@@ -114,6 +114,15 @@ export function calendarDayIn(ms: number, tz: string): string {
   return new Date(wallMs(ms, tz)).toISOString().slice(0, 10);
 }
 
+/**
+ * The viewer's IANA zone — the ONE derivation every heat read and every day
+ * door uses, so a cell's count and the list it opens bucket the same day.
+ * `UTC` only when the runtime reports none.
+ */
+export function viewerTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
 /** The viewer's today in `tz`. */
 export function todayInTimeZone(tz: string, now: Date = new Date()): string {
   return calendarDayIn(now.getTime(), tz);
