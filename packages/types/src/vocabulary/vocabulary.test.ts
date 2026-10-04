@@ -754,6 +754,15 @@ describe("publish — the object-work decision verb", () => {
   });
 });
 
+describe("lens row verbs — answer / review / dismiss", () => {
+  it("carries BOTH moods (an unknown token humanizes the past as the imperative)", () => {
+    expect(resolveActionLabel("answer")).toBe("Answer");
+    expect(resolveActionLabel("answer", "past")).toBe("Answered");
+    expect(resolveActionLabel("review", "past")).toBe("Reviewed");
+    expect(resolveActionLabel("dismiss", "past")).toBe("Dismissed");
+  });
+});
+
 describe("session population lenses", () => {
   it("names the three session kinds", () => {
     // One `focus_sessions` table, three populations. A surface offering the

@@ -229,6 +229,10 @@
       "types": "./dist/needs-you/index.d.ts",
       "import": "./dist/needs-you/index.js"
     },
+    "./lens": {
+      "types": "./dist/lens/index.d.ts",
+      "import": "./dist/lens/index.js"
+    },
     "./push": {
       "types": "./dist/push/index.d.ts",
       "import": "./dist/push/index.js"

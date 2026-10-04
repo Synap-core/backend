@@ -278,6 +278,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // has no tense, so without these rows both moods render "Pin" / "Unpin".
   pin: { imperative: "Pin", past: "Pinned" },
   unpin: { imperative: "Unpin", past: "Unpinned" },
+  // The lens row verbs (`@synap-core/types/lens`): an owed slot is ANSWERED,
+  // a finished session is REVIEWED, an AI suggestion is DISMISSED. Without
+  // these rows `humanizeToken` spells the button right and the receipt wrong
+  // ("Answer" for an act already done).
+  answer: { imperative: "Answer", past: "Answered" },
+  review: { imperative: "Review", past: "Reviewed" },
+  dismiss: { imperative: "Dismiss", past: "Dismissed" },
 };
 
 /**
