@@ -19,6 +19,7 @@ import {
   lensLastActivityAt,
   lensPageCounts,
   lensPageModel,
+  lensHappenedSpan,
   type LensNeedsYouSignal,
   type LensPage,
   type LensPageClass,
@@ -44,8 +45,18 @@ function sig(id: string, over: Partial<Sig> = {}): Sig {
   };
 }
 
-function cls(rows: Sig[], over: Partial<LensPageClass<Sig>> = {}): LensPageClass<Sig> {
-  return { rows, total: rows.length, truncated: false, hasMore: false, unreadable: [], ...over };
+function cls(
+  rows: Sig[],
+  over: Partial<LensPageClass<Sig>> = {}
+): LensPageClass<Sig> {
+  return {
+    rows,
+    total: rows.length,
+    truncated: false,
+    hasMore: false,
+    unreadable: [],
+    ...over,
+  };
 }
 
 function page(over: Partial<LensPage<Sig>> = {}): LensPage<Sig> {
@@ -61,7 +72,11 @@ function page(over: Partial<LensPage<Sig>> = {}): LensPage<Sig> {
   };
 }
 
-function ledger(id: string, at: string, over: Partial<ActivityRow> = {}): ActivityRow {
+function ledger(
+  id: string,
+  at: string,
+  over: Partial<ActivityRow> = {}
+): ActivityRow {
   return {
     id,
     source: "proposal",
@@ -81,7 +96,8 @@ function ledger(id: string, at: string, over: Partial<ActivityRow> = {}): Activi
   };
 }
 
-const model = (p: LensPage<Sig>) => lensPageModel(p, { timeZone: TZ, now: NOW });
+const model = (p: LensPage<Sig>) =>
+  lensPageModel(p, { timeZone: TZ, now: NOW });
 
 describe("Happened — work AND data, counted in acts", () => {
   it("draws a data event as a data line (the ledger-only batcher dropped it)", () => {
@@ -104,7 +120,10 @@ describe("Happened — work AND data, counted in acts", () => {
 
   it("counts ACTS, not lines: a batch of 3 is 3", () => {
     const rows = [1, 2, 3].map((i) =>
-      sig(`a${i}`, { kind: "activity", activity: ledger(`l${i}`, `2026-10-04T1${i}:00:00.000Z`) })
+      sig(`a${i}`, {
+        kind: "activity",
+        activity: ledger(`l${i}`, `2026-10-04T1${i}:00:00.000Z`),
+      })
     );
     const m = model(page({ happened: cls(rows) }));
     expect(m.happened.items).toHaveLength(1);
@@ -117,7 +136,9 @@ describe("Happened — work AND data, counted in acts", () => {
     const rows = Array.from({ length: LENS_CAPS.happened + 1 }, (_, i) =>
       sig(`a${i}`, {
         kind: "activity",
-        activity: ledger(`l${i}`, "2026-10-04T10:00:00.000Z", { action: i % 2 ? "create" : "update" }),
+        activity: ledger(`l${i}`, "2026-10-04T10:00:00.000Z", {
+          action: i % 2 ? "create" : "update",
+        }),
       })
     );
     const m = model(page({ happened: cls(rows, { hasMore: true }) }));
@@ -129,15 +150,18 @@ describe("Happened — work AND data, counted in acts", () => {
 
   it("last activity is the newest item — a data change included", () => {
     const p = page({
-        happened: cls([
-          sig("event:9", {
-            kind: "event",
-            occurredAt: "2026-10-04T11:30:00.000Z",
-            event: { action: "update", objectKind: "contact", origin: null },
-          }),
-          sig("a1", { kind: "activity", activity: ledger("l1", "2026-10-04T11:00:00.000Z") }),
-        ]),
-      });
+      happened: cls([
+        sig("event:9", {
+          kind: "event",
+          occurredAt: "2026-10-04T11:30:00.000Z",
+          event: { action: "update", objectKind: "contact", origin: null },
+        }),
+        sig("a1", {
+          kind: "activity",
+          activity: ledger("l1", "2026-10-04T11:00:00.000Z"),
+        }),
+      ]),
+    });
     const m = model(p);
     expect(m.lastActivityAt).toBe("2026-10-04T11:30:00.000Z");
     expect(lensLastActivityAt(p.happened)).toBe(m.lastActivityAt);
@@ -146,7 +170,10 @@ describe("Happened — work AND data, counted in acts", () => {
 
 describe("partial reads — rows drawn, retry, never an exact count", () => {
   const partial = page({
-    blocking: cls([sig("p1"), sig("p2")], { total: 2, unreadable: ["notifications"] }),
+    blocking: cls([sig("p1"), sig("p2")], {
+      total: 2,
+      unreadable: ["notifications"],
+    }),
   });
   it("a partly failed class is PARTIAL: rows kept, count unknown, no Show all", () => {
     const m = model(partial);
@@ -169,7 +196,11 @@ describe("partial reads — rows drawn, retry, never an exact count", () => {
 describe("Show all counts the class's UNITS", () => {
   it("a session card counts its items; rows are capped, never split", () => {
     const card = [1, 2, 3].map((i) =>
-      sig(`c${i}`, { groupKey: "session:S", sessionId: "S", target: { kind: "session", id: "S" } } as Partial<Sig>)
+      sig(`c${i}`, {
+        groupKey: "session:S",
+        sessionId: "S",
+        target: { kind: "session", id: "S" },
+      } as Partial<Sig>)
     );
     const singles = [1, 2, 3, 4, 5].map((i) => sig(`x${i}`));
     const m = model(page({ blocking: cls([...card, ...singles]) }));
@@ -183,9 +214,17 @@ describe("Show all counts the class's UNITS", () => {
   });
   it("a card's items count as shown: 5 rows standing for 7 signals leave nothing out", () => {
     const card = [1, 2, 3].map((i) =>
-      sig(`c${i}`, { groupKey: "session:S", sessionId: "S", target: { kind: "session", id: "S" } } as Partial<Sig>)
+      sig(`c${i}`, {
+        groupKey: "session:S",
+        sessionId: "S",
+        target: { kind: "session", id: "S" },
+      } as Partial<Sig>)
     );
-    const m = model(page({ blocking: cls([...card, ...[1, 2, 3, 4].map((i) => sig(`x${i}`))]) }));
+    const m = model(
+      page({
+        blocking: cls([...card, ...[1, 2, 3, 4].map((i) => sig(`x${i}`))]),
+      })
+    );
     expect(m.blocking.count).toBe(7);
     expect(m.blocking.rest).toHaveLength(0);
     expect(m.blocking.showAll).toBeNull();
@@ -193,8 +232,15 @@ describe("Show all counts the class's UNITS", () => {
 });
 
 describe("dismiss — every Proposed row, never a Blocking one", () => {
-  const draft = sig("d1", { kind: "draft-asks", count: 2, target: { kind: "session", id: "sd" } });
-  const suggestion = sig("notification:n1", { kind: "notification", target: { kind: "entity", id: "e1" } });
+  const draft = sig("d1", {
+    kind: "draft-asks",
+    count: 2,
+    target: { kind: "session", id: "sd" },
+  });
+  const suggestion = sig("notification:n1", {
+    kind: "notification",
+    target: { kind: "entity", id: "e1" },
+  });
   const m = model(
     page({
       proposed: cls([draft, suggestion]),
@@ -203,8 +249,20 @@ describe("dismiss — every Proposed row, never a Blocking one", () => {
   );
   it("a draft is discarded, a suggestion dismissed", () => {
     expect(m.proposed.items.map((i) => i.dismiss)).toEqual([
-      [{ action: "discard-draft", signalId: "d1", door: { kind: "session", id: "sd" } }],
-      [{ action: "dismiss-suggestion", signalId: "notification:n1", door: { kind: "entity", id: "e1" } }],
+      [
+        {
+          action: "discard-draft",
+          signalId: "d1",
+          door: { kind: "session", id: "sd" },
+        },
+      ],
+      [
+        {
+          action: "dismiss-suggestion",
+          signalId: "notification:n1",
+          door: { kind: "entity", id: "e1" },
+        },
+      ],
     ]);
   });
   it("a Blocking notification is not dismissible", () => {
@@ -227,10 +285,19 @@ describe("the header counts ARE the section counts (non-empty page)", () => {
     });
     const m = model(
       page({
-        blocking: cls([sig("b1"), sig("b2"), sig("b3")], { total: 7, hasMore: true }),
-        happening: cls([sig("live:1", { kind: "live-session" })], { total: 4, hasMore: true }),
+        blocking: cls([sig("b1"), sig("b2"), sig("b3")], {
+          total: 7,
+          hasMore: true,
+        }),
+        happening: cls([sig("live:1", { kind: "live-session" })], {
+          total: 4,
+          hasMore: true,
+        }),
         produced: cls(
-          [sig("output:1", { kind: "output", landed: landed("d1") }), sig("output:2", { kind: "output", landed: landed("d2") })],
+          [
+            sig("output:1", { kind: "output", landed: landed("d1") }),
+            sig("output:2", { kind: "output", landed: landed("d2") }),
+          ],
           { total: 12, hasMore: true }
         ),
       })
@@ -241,18 +308,86 @@ describe("the header counts ARE the section counts (non-empty page)", () => {
       produced: m.produced.count,
     });
     expect(m.counts).toEqual({ blocking: 7, happening: 4, produced: 12 });
-    expect(lensPageCounts(page({
-      blocking: cls([], { total: 7 }),
-      happening: cls([], { total: 4 }),
-      produced: cls([], { total: 12 }),
-    }))).toEqual(m.counts);
+    expect(
+      lensPageCounts(
+        page({
+          blocking: cls([], { total: 7 }),
+          happening: cls([], { total: 4 }),
+          produced: cls([], { total: 12 }),
+        })
+      )
+    ).toEqual(m.counts);
     expect(m.produced.showAll).toBe(12);
   });
 });
 
 describe("activityActorName — one spelling", () => {
   it("names the viewer You, an unnamed agent by its noun", () => {
-    expect(activityActorName({ kind: "human", id: "u", name: "Ann", isViewer: true })).toBe("You");
-    expect(activityActorName({ kind: "agent", id: null, name: null })).toBe("Agent");
+    expect(
+      activityActorName({ kind: "human", id: "u", name: "Ann", isViewer: true })
+    ).toBe("You");
+    expect(activityActorName({ kind: "agent", id: null, name: null })).toBe(
+      "Agent"
+    );
+  });
+});
+
+describe("Happened span (session shows its whole history)", () => {
+  const old = (i: number) =>
+    sig(`o${i}`, {
+      kind: "activity",
+      activity: ledger(`ol${i}`, `2026-10-02T1${i}:00:00.000Z`, {
+        object: { kind: "doc", id: `d${i}`, name: "D" },
+        action: "create",
+        verb: "Created",
+      }),
+    });
+  const today = sig("t", {
+    kind: "activity",
+    activity: ledger("tl", "2026-10-04T10:00:00.000Z"),
+  });
+  const p = () => page({ happened: cls([today, old(1)]) });
+
+  it("is 'all' for a session only", () => {
+    expect(lensHappenedSpan({ kind: "session" })).toBe("all");
+    for (const k of ["pod", "workspace", "project", "track"])
+      expect(lensHappenedSpan({ kind: k })).toBe("today");
+  });
+  it("today (default) draws today only; all draws every day, newest first", () => {
+    const t = lensPageModel(p(), { timeZone: TZ, now: NOW });
+    expect(t.happenedDays.map((d) => d.day)).toEqual(["2026-10-04"]);
+    const a = lensPageModel(p(), { timeZone: TZ, now: NOW, happened: "all" });
+    expect(a.happenedDays.map((d) => d.day)).toEqual([
+      "2026-10-04",
+      "2026-10-02",
+    ]);
+    expect(a.happened.count).toBe(2);
+  });
+  it("caps the whole history and keeps the rest (regrouped) behind Show all", () => {
+    const rows = Array.from({ length: LENS_CAPS.happened + 2 }, (_, i) =>
+      sig(`x${i}`, {
+        kind: "activity",
+        activity: ledger(
+          `xl${i}`,
+          `2026-10-0${1 + (i % 2)}T1${i % 10}:00:00.000Z`,
+          {
+            object: { kind: i % 2 ? "doc" : "task", id: `x${i}`, name: "X" },
+            action: i % 3 ? "create" : "update",
+            verb: "V",
+          }
+        ),
+      })
+    );
+    const a = lensPageModel(page({ happened: cls(rows) }), {
+      timeZone: TZ,
+      now: NOW,
+      happened: "all",
+    });
+    const drawn = a.happenedDays.reduce((n, d) => n + d.lines.length, 0);
+    const rest = a.happenedRestDays.reduce((n, d) => n + d.lines.length, 0);
+    expect(drawn).toBe(a.happened.items.length);
+    expect(rest).toBe(a.happened.rest.length);
+    expect(rest).toBeGreaterThan(0);
+    expect(a.happened.showAll).not.toBeNull();
   });
 });

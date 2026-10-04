@@ -41,6 +41,7 @@ import {
 import {
   batchHappenedItems,
   lensRowOfNeedsYou,
+  type HappenedDay,
   type HappenedEntry,
   type HappenedItem,
   type LensDoor,
@@ -118,8 +119,12 @@ export interface LensPageModel<T> {
   happening: LensClassModel<LensRow>;
   produced: LensClassModel<LensProducedItem<T>>;
   proposed: LensClassModel<LensPageItem<T>>;
-  /** Today's lines (work + data), batched; `count` is today's acts. */
+  /** The span's lines (work + data), batched; `count` is the span's acts. */
   happened: LensClassModel<HappenedEntry>;
+  /** `happened.items` regrouped by day (the lines drawn at rest). */
+  happenedDays: HappenedDay<HappenedEntry>[];
+  /** `happened.rest` regrouped by day (unfolded in place / behind Show all). */
+  happenedRestDays: HappenedDay<HappenedEntry>[];
   /** The header's count doors — the SAME numbers as the sections' `count`. */
   counts: LensCounts;
   /** The newest Happened item's instant (ISO), or null. */
@@ -214,7 +219,8 @@ function statusOf(
   return drawn > 0 ? "partial" : "failed";
 }
 
-const unitsOf = (n: number) => (Number.isFinite(n) && n > 1 ? Math.floor(n) : 1);
+const unitsOf = (n: number) =>
+  Number.isFinite(n) && n > 1 ? Math.floor(n) : 1;
 
 /**
  * One class: cap `all` at the class's cap, count it in `units`. `extra` says
@@ -270,10 +276,32 @@ export function lensLastActivityAt(
   return happened ? lastActivityOf(happenedItems(happened.rows)) : null;
 }
 
+/**
+ * How much history Happened shows: a session is short-lived, so it shows its
+ * WHOLE history (capped, rest behind Show all); every other lens shows today.
+ * The host reads with `since` only for `"today"`.
+ */
+export type LensHappenedSpan = "today" | "all";
+
+export function lensHappenedSpan(scope: { kind: string }): LensHappenedSpan {
+  return scope.kind === "session" ? "all" : "today";
+}
+
+/** Regroup flat lines (newest first) under the days they came from. */
+function regroupDays(
+  days: readonly HappenedDay<HappenedEntry>[],
+  lines: readonly HappenedEntry[]
+): HappenedDay<HappenedEntry>[] {
+  const keep = new Set(lines);
+  return days
+    .map((d) => ({ ...d, lines: d.lines.filter((l) => keep.has(l)) }))
+    .filter((d) => d.lines.length > 0);
+}
+
 /** THE page model — see the module header for the rules it owns. */
 export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
   page: LensPage<T>,
-  opts: { timeZone: string; now?: Date }
+  opts: { timeZone: string; now?: Date; happened?: LensHappenedSpan }
 ): LensPageModel<T> {
   const blockingAll = lensItemsOfClass(page.blocking.rows, "blocking");
   const proposedAll = lensItemsOfClass(page.proposed.rows, "proposed");
@@ -285,7 +313,9 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
 
   const items = happenedItems(page.happened.rows);
   const days = batchHappenedItems(items, opts);
-  const todayLines = days.find((d) => d.isToday)?.lines ?? [];
+  const spanDays =
+    opts.happened === "all" ? days : days.filter((d) => d.isToday);
+  const todayLines = spanDays.flatMap((d) => d.lines);
   const lastActivityAt = lastActivityOf(items);
 
   const itemUnits = (i: LensPageItem<T>) => unitsOf(i.row.count);
@@ -301,7 +331,9 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
     todayLines.reduce((n, l) => n + l.count, 0),
     {
       // Older days (no `since`) live behind Show all too.
-      extra: page.happened.hasMore || days.some((d) => !d.isToday),
+      extra:
+        page.happened.hasMore ||
+        (opts.happened !== "all" && days.some((d) => !d.isToday)),
       // More acts exist than were read: today's number is a floor.
       floor: page.happened.hasMore || page.happened.truncated,
     }
@@ -345,6 +377,8 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
       ofPod(page.proposed)
     ),
     happened,
+    happenedDays: regroupDays(spanDays, happened.items),
+    happenedRestDays: regroupDays(spanDays, happened.rest),
     counts: {
       blocking: blocking.count,
       happening: happening.count,
