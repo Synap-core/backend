@@ -320,7 +320,7 @@ export function deriveRunActivity(wire: SessionActivityWire): RunActivityView {
       // which would no longer name the slot).
       objectTitle:
         item.kind === "ask"
-          ? (item.objectTitle ?? item.title)
+          ? (item.title ?? item.objectTitle)
           : item.objectTitle,
       proposalId: item.proposalId,
       error: item.error,

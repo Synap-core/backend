@@ -64,7 +64,13 @@ function steps(items: SessionActivityItem[]) {
 describe("activityStepTarget — where a step opens, one rule", () => {
   it("an ask opens its owed slot by the slot's RAW label (rules out the trimmed step label)", () => {
     const [ask] = steps([
-      item({ kind: "ask", status: "pending", title: "Confirm the budget…" }),
+      // objectTitle set too: the wire's `title` IS the slot label and wins.
+      item({
+        kind: "ask",
+        status: "pending",
+        title: "Confirm the budget…",
+        objectTitle: "Budget",
+      }),
     ]);
     expect(ask?.label).toBe("Confirm the budget");
     expect(activityStepTarget(ask!)).toEqual({
