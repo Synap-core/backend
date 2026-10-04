@@ -43,7 +43,7 @@ ALLOWLIST=(
   "backend|scripts/debug.sh|1|docker compose down -v"
   # `eve purge`: the documented "delete everything Eve installed" door, typed
   # 'purge'. NB no backup first — follow-up, out of P0 scope.
-  "hestia-cli|packages/eve-cli/src/commands/manage/purge.ts|1|await execa('docker', ['compose', 'down', '--volumes', '--remove-orphans'], {"
+  "hestia-cli|packages/eve-cli/src/commands/manage/purge.ts|1|await execa('docker', ['compose', '-p', project, 'down', '--volumes', '--remove-orphans'], {"
   # `eve remove <component>` for NON-Synap components (traefik, openwebui,
   # openwebui-pipelines); Synap keeps its volumes (removeSynap / keepVolumes).
   "hestia-cli|packages/eve-cli/src/commands/remove.ts|3|await execa('docker', ['compose', 'down', '--volumes'], {"

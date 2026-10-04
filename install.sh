@@ -541,7 +541,7 @@ SECRETS_EOF
       fi
     fi
     if [[ -n "$_base" ]]; then
-      printf '\n# Parent domain for the derived first-party CORS allowlist (backfilled on update)\nSYNAP_BASE_DOMAIN=%s\n' "$_base" >> "$INSTALL_DIR/.env"
+      _set_env_value "SYNAP_BASE_DOMAIN" "$_base" "$INSTALL_DIR/.env"   # backfilled on update
       info "Backfilled SYNAP_BASE_DOMAIN=$_base into .env (CORS allowlist self-heal)"
       # Force the env-consuming services to recreate this run so the new var is
       # injected immediately (a plain `up -d` may skip recreation on an .env-only
@@ -566,7 +566,7 @@ SECRETS_EOF
   # Generate one if missing. SAFE: never overwrite an existing key — rotating it
   # would orphan already-encrypted secrets.
   if ! grep -q "^VAULT_SERVER_KEY=" "$INSTALL_DIR/.env" 2>/dev/null; then
-    printf '\n# Secret-vault encryption key (backfilled on update)\nVAULT_SERVER_KEY=%s\n' "$(openssl rand -hex 32)" >> "$INSTALL_DIR/.env"
+    _set_env_value "VAULT_SERVER_KEY" "$(openssl rand -hex 32)" "$INSTALL_DIR/.env"   # backfilled on update
     info "Backfilled VAULT_SERVER_KEY into .env (vault self-heal)"
     RECREATE_FOR_ENV_CHANGE=1
   fi
