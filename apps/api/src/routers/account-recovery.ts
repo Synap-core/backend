@@ -56,6 +56,7 @@ import {
   REDEEM_GLOBAL,
   REDEEM_PER_EMAIL,
 } from "../account-recovery/rate-limit.js";
+import type { PodAdminConfigResult } from "../pod-admin-config.js";
 
 export interface RecoveryLogger {
   info(obj: Record<string, unknown>, msg?: string): void;
@@ -115,6 +116,8 @@ export interface AccountRecoveryDeps {
   /** A CP OIDC client is configured on this pod. */
   cloudSignInAvailable(): Promise<boolean>;
   courierStatus(): "configured" | "catchall" | "unknown";
+  /** The configured pod-admin resolution (`configuredPodAdminBase`). */
+  podAdminConfig(): PodAdminConfigResult;
   isPodAdmin(userId: string): Promise<boolean>;
 
   /** Best-effort audit append. Never receives a code. */
@@ -123,6 +126,14 @@ export interface AccountRecoveryDeps {
     change: string;
     data?: Record<string, unknown>;
   }): Promise<void>;
+}
+
+/**
+ * `/doors`' `podAdminUrl`: the validated origin, or undefined. Unresolved or
+ * invalid config → undefined — the field is omitted, never guessed.
+ */
+export function podAdminUrlFromConfig(result: PodAdminConfigResult): string | undefined {
+  return result.ok ? result.base.origin : undefined;
 }
 
 /** A wrong email and a wrong code both wait until at least this long. */
@@ -206,6 +217,14 @@ export function createAccountRecoveryRouter(
         email: deps.courierStatus() === "configured",
         cloud: trust === "sign_in_recovery" && cloudAvailable,
       };
+      // Optional, and never a reason to fail /doors: a broken resolver leaves
+      // the field out, and clients fall back to the Kratos self-service redirect.
+      try {
+        const podAdminUrl = podAdminUrlFromConfig(deps.podAdminConfig());
+        if (podAdminUrl) doors.podAdminUrl = podAdminUrl;
+      } catch (err) {
+        logger.warn({ err }, "[account-recovery] pod-admin URL unresolved");
+      }
       return c.json(doors);
     } catch (err) {
       logger.error({ err }, "[account-recovery] doors read failed");

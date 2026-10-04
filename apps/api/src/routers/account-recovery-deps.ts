@@ -28,6 +28,7 @@ import {
   type CloudTrustMode,
 } from "@synap-core/types/account-recovery";
 import { courierStatus } from "../courier-status.js";
+import { configuredPodAdminBase } from "../pod-admin-config.js";
 import { identityHasPodHeldCredential } from "../account-recovery/policy.js";
 import { readFederationOidcIssuer } from "./federation.js";
 import {
@@ -240,6 +241,7 @@ export const accountRecoveryDeps: AccountRecoveryDeps = {
   writeCloudTrust,
   cloudSignInAvailable: async () => (await readFederationOidcIssuer()) !== null,
   courierStatus: () => courierStatus().status,
+  podAdminConfig: () => configuredPodAdminBase(),
   isPodAdmin,
   audit,
 };

@@ -14,6 +14,7 @@ import {
 import {
   createAccountRecoveryRouter,
   defaultLimiters,
+  podAdminUrlFromConfig,
   REDEEM_MIN_RESPONSE_MS,
   type AccountRecoveryDeps,
   type AccountRecoveryLimiters,
@@ -118,6 +119,7 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
     },
     cloudSignInAvailable: async () => true,
     courierStatus: () => "catchall",
+    podAdminConfig: () => ({ ok: false, code: "POD_ADMIN_URL_REQUIRED" }),
     isPodAdmin: async (userId) => userId === OWNER.userId,
     audit: async (entry) => {
       audits.push(entry);
@@ -501,6 +503,51 @@ describe("GET /doors", () => {
       email: true,
       cloud: true,
     });
+  });
+
+  it("publishes podAdminUrl when the pod's admin URL is configured", async () => {
+    const world = makeWorld();
+    world.deps.podAdminConfig = () => ({ ok: true, base: new URL("https://pod-admin.example.org/") });
+    const body = await (await app(world).request("/doors")).json();
+    expect(body.podAdminUrl).toBe("https://pod-admin.example.org");
+  });
+
+  it("omits podAdminUrl when unset or invalid — never a guessed fallback", async () => {
+    const world = makeWorld();
+    for (const code of ["POD_ADMIN_URL_REQUIRED", "POD_ADMIN_URL_INVALID"] as const) {
+      world.deps.podAdminConfig = () => ({ ok: false, code });
+      const res = await app(world).request("/doors");
+      expect(res.status).toBe(200);
+      expect(Object.keys(await res.json()).sort()).toEqual(["cloud", "email", "recoveryCode"]);
+    }
+  });
+
+  it("a throwing pod-admin resolver never fails /doors", async () => {
+    const world = makeWorld();
+    world.deps.podAdminConfig = () => {
+      throw new Error("boom");
+    };
+    const res = await app(world).request("/doors");
+    expect(res.status).toBe(200);
+    expect("podAdminUrl" in (await res.json())).toBe(false);
+  });
+
+  it("the REAL resolver drives it: env POD_ADMIN_URL set → origin, unset → absent", async () => {
+    const { configuredPodAdminBase } = await import("../pod-admin-config.js");
+    const saved = { url: process.env.POD_ADMIN_URL, domain: process.env.POD_ADMIN_DOMAIN };
+    try {
+      delete process.env.POD_ADMIN_DOMAIN;
+      process.env.POD_ADMIN_URL = "https://antoinesrvt-admin.synap.live";
+      expect(podAdminUrlFromConfig(configuredPodAdminBase())).toBe("https://antoinesrvt-admin.synap.live");
+      delete process.env.POD_ADMIN_URL;
+      expect(podAdminUrlFromConfig(configuredPodAdminBase())).toBeUndefined();
+      process.env.POD_ADMIN_URL = "https://pod-admin.example.org/some/path";
+      expect(podAdminUrlFromConfig(configuredPodAdminBase())).toBeUndefined();
+    } finally {
+      if (saved.url === undefined) delete process.env.POD_ADMIN_URL;
+      else process.env.POD_ADMIN_URL = saved.url;
+      if (saved.domain !== undefined) process.env.POD_ADMIN_DOMAIN = saved.domain;
+    }
   });
 
   it("a failed read is a 503, never an all-false 'nothing works'", async () => {

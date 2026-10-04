@@ -104,6 +104,14 @@ export interface RecoveryDoors {
   email: boolean;
   /** The owner lets Synap Cloud recover accounts AND Cloud sign-in is wired. */
   cloud: boolean;
+  /**
+   * This pod's admin console origin (`POD_ADMIN_URL`, validated), e.g.
+   * `https://pod-admin.example.org` — no trailing slash. Clients open
+   * `${podAdminUrl}/recovery` (the hub) and `${podAdminUrl}/settings/security`.
+   * ABSENT when the pod has no valid admin URL configured: never guessed, and
+   * its absence never fails `/doors`. Older pods omit it too.
+   */
+  podAdminUrl?: string;
 }
 
 export interface RedeemRecoveryCodeRequest {
