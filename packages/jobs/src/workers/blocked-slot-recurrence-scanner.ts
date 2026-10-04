@@ -61,6 +61,7 @@ import {
   insertPendingProposal,
   ProposalStatus,
   GUIDELINE_KEY,
+  owedSlotPredicateSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
@@ -255,7 +256,9 @@ export function draftGuidelineText(cluster: BlockedSlotCluster): string {
 // ── DB tier ──────────────────────────────────────────────────────────────────
 
 /**
- * Every owed, blocked slot in the window, flattened in SQL.
+ * Every owed, blocked slot in the window, flattened in SQL. "Owed" is THE
+ * shared predicate (`owedSlotPredicateSql`, @synap/database) — never a local
+ * copy of its clauses, which is how this scanner once drifted from the tray.
  *
  * `jsonb_array_elements` ERRORS on a non-array value and `expected_outputs` is
  * untyped JSONB a legacy row can hold anything in, so the `jsonb_typeof` guard
@@ -287,9 +290,7 @@ async function loadBlockedSlots(): Promise<BlockedSlotRow[]> {
            THEN ${focusSessions.expectedOutputs}
            ELSE '[]'::jsonb END
     ) AS slot
-    WHERE slot->>'owner' = 'human'
-      AND slot->>'status' IS DISTINCT FROM 'done'
-      AND slot->>'retiredAt' IS NULL
+    WHERE ${owedSlotPredicateSql}
       AND slot->>'blockedReason' IS NOT NULL
       AND slot->>'owedSince' >= ${cutoff}
     LIMIT ${SCAN_LIMIT}

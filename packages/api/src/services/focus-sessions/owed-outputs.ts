@@ -63,6 +63,7 @@ import {
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { deliverableOwedBy } from "@synap-core/types/units";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
@@ -133,16 +134,13 @@ export function owedSlotOrder(): SQL {
 }
 
 /**
- * THE derivation in TypeScript — the twin of {@link owedSlotWhere}, kept in this
- * file so the two cannot drift.
- *
- * `status !== "done"` rather than `=== "pending"` for the same reason the SQL
- * uses `IS DISTINCT FROM`: absent is the common case and means pending.
+ * THE derivation in TypeScript — the shared deliverable rule itself
+ * (`deliverableOwedBy`, `@synap-core/types/units`), never a local body. The
+ * SQL {@link owedSlotWhere} mirrors it and is held to it by a PGlite parity
+ * test in `@synap/database`.
  */
 export function isOwedSlot(slot: ExpectedOutput): boolean {
-  return (
-    slot.owner === "human" && slot.status !== "done" && slot.retiredAt == null
-  );
+  return deliverableOwedBy(slot) === "you";
 }
 
 /**

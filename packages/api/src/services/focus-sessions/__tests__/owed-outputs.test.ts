@@ -8,10 +8,9 @@
  * twin — are tested for exactly that case.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { deliverableOwedBy } from "@synap-core/types/units";
 import {
   OWED_SLOT_CLAUSES,
   isOwedSlot,
@@ -124,11 +123,8 @@ describe("owedSlotOrder — the SQL ordering must agree with the TS sort", () =>
   it("shares the owed predicate with the WHERE clause, verbatim", () => {
     // Ordering on a different population than you filtered on is its own bug.
     const where = new PgDialect().sqlToQuery(owedSlotWhere()).sql;
-    for (const clause of [
-      "slot->>'owner' = 'human'",
-      "slot->>'status' IS DISTINCT FROM 'done'",
-      "slot->>'retiredAt' IS NULL",
-    ]) {
+    expect(OWED_SLOT_CLAUSES.length).toBe(3);
+    for (const clause of OWED_SLOT_CLAUSES) {
       expect(where).toContain(clause);
       expect(sql).toContain(clause);
     }
@@ -279,9 +275,9 @@ describe("the owed predicate is a SET, not three strings that happen to appear",
   const whereSql = predicateOf(new PgDialect().sqlToQuery(owedSlotWhere()).sql);
   const orderSql = predicateOf(new PgDialect().sqlToQuery(owedSlotOrder()).sql);
 
-  /** Every `slot->>'x'` key named in a blob of SQL. */
+  /** Every `slot->>'x'` / `slot->'x'` key named in a blob of SQL. */
   const keysIn = (text: string): Set<string> =>
-    new Set([...text.matchAll(/slot->>'([A-Za-z]+)'/g)].map((m) => m[1]));
+    new Set([...text.matchAll(/slot->>?'([A-Za-z]+)'/g)].map((m) => m[1]));
 
   it("the constant is not vacuous and names the fields the rule is about", () => {
     expect(OWED_SLOT_CLAUSES.length).toBe(3);
@@ -304,20 +300,29 @@ describe("the owed predicate is a SET, not three strings that happen to appear",
     }
   });
 
-  it("the SQL and its TypeScript twin read the SAME fields", () => {
-    // `isOwedSlot` is the twin the file's docblock promises cannot drift. This
-    // is what makes that true: the fields it reads are parsed out of its own
-    // source and compared to the clause set.
-    const src = readFileSync(join(__dirname, "../owed-outputs.ts"), "utf8");
-    const body = src.slice(src.indexOf("export function isOwedSlot"));
-    const twinKeys = new Set(
-      [...body.slice(0, body.indexOf("}")).matchAll(/slot\.([A-Za-z]+)/g)].map(
-        (m) => m[1]
-      )
-    );
-    // Non-vacuity: a parse that found nothing would make the comparison pass
-    // against an equally empty set on a bad regex.
-    expect(twinKeys.size).toBe(3);
-    expect(twinKeys).toEqual(keysIn(OWED_SLOT_CLAUSES.join(" ")));
+  it("the TypeScript side IS the shared rule, on every discriminating input", () => {
+    // `isOwedSlot` calls `deliverableOwedBy`; a local body re-introduced here
+    // would disagree on one of these rows (`retiredAt: ""` split the pod's old
+    // body from the shared rule).
+    // The SQL half is held to the same rule on PGlite, in @synap/database
+    // (`owed-slot-predicate.parity.pglite.test.ts`).
+    const rows: Partial<ExpectedOutput>[] = [
+      {},
+      { owner: "human" },
+      { owner: "agent" },
+      { owner: "human", status: "done" },
+      { owner: "human", status: null as never },
+      { owner: "human", retiredAt: "2026-09-08T13:00:00.000Z" },
+      { owner: "human", retiredAt: "" },
+      { owner: "human", retiredAt: null as never },
+      { owner: "agent", retiredAt: "2026-09-08T13:00:00.000Z" },
+    ];
+    for (const row of rows) {
+      const slot = { kind: "text", label: "x", ...row } as ExpectedOutput;
+      expect({ row, owed: isOwedSlot(slot) }).toEqual({
+        row,
+        owed: deliverableOwedBy(slot) === "you",
+      });
+    }
   });
 });

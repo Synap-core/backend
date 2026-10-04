@@ -17,6 +17,15 @@
  * half the rows — `IS DISTINCT FROM` is the operator that means what it says.
  * The `jsonb_typeof` guard: `jsonb_array_elements` ERRORS on a non-array, and
  * `expected_outputs` is untyped JSONB a legacy row can hold anything in.
+ *
+ * THE RULE THIS MIRRORS is `deliverableOwedBy(slot) === "you"`
+ * (`@synap-core/types/units`, `deliverable.ts`) — the one deliverable rule
+ * every surface calls; the api's `isOwedSlot` calls it directly. This package
+ * cannot import it (types depends on database), so the SQL is a mirror held to
+ * the rule by a behavioural parity test on PGlite
+ * (`owed-slot-predicate.parity.pglite.test.ts`) over the inputs where naive
+ * spellings disagree — `retiredAt: ""` above all: any stamp, even an empty
+ * one, is a retirement on both sides (`IS NULL` here, `== null` there).
  */
 
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
