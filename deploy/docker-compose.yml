@@ -456,10 +456,33 @@ services:
             pg_dump -Fc -f "$$tmp/$$db.dump" "$$db" && pg_restore -l "$$tmp/$$db.dump" >/dev/null || ok=0
           done
           if [ "$$ok" = 1 ] && ls "$$tmp"/*.dump >/dev/null 2>&1; then
-            mv "$$tmp" "$$d" && echo "[postgres-backup] ok $$d ($$(du -sh "$$d" | cut -f1))"
+            # Fingerprint every dump. A dump of an EMPTIED pod must never rotate the
+            # good ones out: while the pod is marked initialized, zero users or a
+            # loss of more than half the entities vs the last good dump is SUSPECT —
+            # kept aside, nothing pruned, alarm raised (healthcheck goes unhealthy).
+            # Intentional wipe? remove deploy/state/postgres-initialized and
+            # deploy/backups/postgres/.alarm.
             users=$$(psql -d synap -Atc "select count(*) from users" 2>/dev/null || echo 0)
-            [ "$${users:-0}" -gt 0 ] 2>/dev/null && date -u +%Y-%m-%dT%H:%M:%SZ > /synap-state/postgres-initialized
-            ls -1d /backups/*-daily 2>/dev/null | sort | head -n -"$$BACKUP_KEEP" | xargs -r rm -rf
+            ents=$$(psql -d synap -Atc "select count(*) from entities" 2>/dev/null || echo 0)
+            last=$$(ls -1d /backups/*-daily 2>/dev/null | sort | tail -n 1)
+            prev=$$(cut -d'|' -f2 "$$last/fingerprint" 2>/dev/null || echo "")
+            echo "$${users:-0}|$${ents:-0}" > "$$tmp/fingerprint"
+            suspect=""
+            if [ -e /synap-state/postgres-initialized ]; then
+              [ "$${users:-0}" -eq 0 ] 2>/dev/null && suspect="0 users"
+              [ -n "$$prev" ] && [ "$$prev" -gt 0 ] 2>/dev/null && [ $$(( $${ents:-0} * 2 )) -lt "$$prev" ] && suspect="entities $$prev -> $${ents:-0}"
+            fi
+            if [ -n "$$suspect" ]; then
+              mv "$$tmp" "$${d%-daily}-SUSPECT"
+              echo "[postgres-backup] ALARM: $$suspect — kept as SUSPECT, previous dumps NOT pruned" >&2
+              echo "$$suspect" > /backups/.alarm
+              ls -1d /backups/*-SUSPECT 2>/dev/null | sort | head -n -3 | xargs -r rm -rf
+            else
+              mv "$$tmp" "$$d" && echo "[postgres-backup] ok $$d ($$(du -sh "$$d" | cut -f1), users|entities $${users:-0}|$${ents:-0})"
+              [ "$${users:-0}" -gt 0 ] 2>/dev/null && date -u +%Y-%m-%dT%H:%M:%SZ > /synap-state/postgres-initialized
+              rm -f /backups/.alarm
+              ls -1d /backups/*-daily 2>/dev/null | sort | head -n -"$$BACKUP_KEEP" | xargs -r rm -rf
+            fi
           else
             echo "[postgres-backup] FAILED — keeping previous dumps" >&2; rm -rf "$$tmp"
           fi
@@ -469,7 +492,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "find /backups -maxdepth 1 -name '*-daily' -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
+          "test ! -e /backups/.alarm && find /backups -maxdepth 1 -name '*-daily' -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
         ]
       interval: 10m
       timeout: 10s
