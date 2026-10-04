@@ -638,6 +638,15 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0291_playbook_required_intents.sql",
   },
 
+  // Backup run ledger (0295). The backup container writes it with psql and
+  // GET /status/backup reads it; without it every run's record is lost and the
+  // pod reports "never backed up" while backups run.
+  {
+    table: "backup_runs",
+    column: "snapshot_id",
+    addedBy: "0295_backup_runs.sql",
+  },
+
   // A SKILL's own routing intent (0292). Every registry read selects it, so a
   // missing column 500s the whole capability registry — the same shape as
   // `focus_sessions.stages` below.

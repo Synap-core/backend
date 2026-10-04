@@ -4793,3 +4793,23 @@ CREATE TABLE IF NOT EXISTS "account_recovery_codes" (
 );
 CREATE INDEX IF NOT EXISTS "account_recovery_codes_user_idx"
   ON "account_recovery_codes" ("user_id");
+
+-- Backup runs (0295): one metadata row per backup / restore-drill run, written
+-- by deploy/pgdata-safety.sh, read by readBackupStatus(). No secrets.
+CREATE TABLE IF NOT EXISTS "backup_runs" (
+  "id"                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "kind"              text        NOT NULL,
+  "status"            text        NOT NULL,
+  "started_at"        timestamptz NOT NULL,
+  "finished_at"       timestamptz NOT NULL DEFAULT now(),
+  "size_bytes"        bigint,
+  "snapshot_id"       text,
+  "fingerprint"       text,
+  "drill_fingerprint" text,
+  "detail"            text,
+  "created_at"        timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "backup_runs_kind_check" CHECK ("kind" IN ('backup', 'drill')),
+  CONSTRAINT "backup_runs_status_check" CHECK ("status" IN ('ok', 'failed', 'suspect'))
+);
+CREATE INDEX IF NOT EXISTS "idx_backup_runs_kind_finished_at"
+  ON "backup_runs" ("kind", "finished_at" DESC);

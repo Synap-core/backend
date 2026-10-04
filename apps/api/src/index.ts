@@ -98,6 +98,12 @@ import {
 } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { createRequire } from "node:module";
+import {
+  DEFAULT_POD_STATE_DIR,
+  backupStatusBody,
+  cachedDataHealth,
+  healthStatusFor,
+} from "./status/pod-data-status.js";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -292,10 +298,24 @@ app.use(
   )
 );
 
-// Health check (public, no auth)
-app.get("/health", (c) => {
+// Data check for /health — see status/pod-data-status.ts for why a data alarm
+// is a body field ("degraded" + `data`) and never a non-200.
+const podDataHealth = cachedDataHealth({
+  stateDir: process.env.SYNAP_POD_STATE_DIR || DEFAULT_POD_STATE_DIR,
+  hasUsers: async () => {
+    const { sql } = await import("@synap/database");
+    const rows = await sql<Array<{ present: boolean }>>`
+      SELECT EXISTS (SELECT 1 FROM users) AS present
+    `;
+    return Boolean(rows[0]?.present);
+  },
+});
+
+// Health check (public, no auth). HTTP 200 whenever the process serves.
+app.get("/health", async (c) => {
+  const data = await podDataHealth();
   return c.json({
-    status: "ok",
+    status: healthStatusFor(data),
     timestamp: new Date().toISOString(),
     version: "0.2.0-saas",
     // Published `@synap-core/api-types` version this pod's router was built
@@ -320,8 +340,22 @@ app.get("/health", (c) => {
     // `buildStamp`). Repeated here so a single `curl /health` answers "is this
     // build actually deployed?" without a second call. "unknown" when unset.
     buildSha: process.env.SYNAP_GIT_SHA || "unknown",
+    // "empty" = this pod had users (deploy/state/postgres-initialized) and
+    // now has none: top-level status reads "degraded".
+    data,
   });
 });
+
+// GET /status/backup — backup metadata only (no secrets, no row counts),
+// public like /status/release. Rule: readBackupStatus (@synap/database).
+app.get("/status/backup", async (c) =>
+  c.json(
+    await backupStatusBody(async () => {
+      const { readBackupStatus } = await import("@synap/database");
+      return readBackupStatus();
+    })
+  )
+);
 
 // Root (direct :4000 / dev without Caddy): not the admin SPA — that lives at /admin/
 app.get("/", (c) => {

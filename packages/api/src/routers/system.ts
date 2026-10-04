@@ -27,7 +27,7 @@ import {
 import { testConnection } from "@synap/search";
 import { dynamicToolRegistry } from "@synap/ai";
 import { createSynapEvent } from "@synap-core/core";
-import { eventRepository } from "@synap/database";
+import { eventRepository, readBackupStatus } from "@synap/database";
 import { eventStreamManager } from "../event-stream-manager.js";
 import { eventVisibleWhereFor } from "../access/event-visibility.js";
 import { db, eq, and, sqlDrizzle } from "@synap/database";
@@ -38,7 +38,6 @@ import {
   documents,
   workspaceMembers,
   apiKeys,
-  podSettings,
   events as eventsTable,
 } from "@synap/database/schema";
 import { count, inArray } from "@synap/database";
@@ -1716,45 +1715,26 @@ export const systemRouter = router({
     }),
 
   /**
-   * Backup status for the pod admin dashboard.
-   *
-   * Reads from `pod_settings.settings.backup` (singleton row). When no backup
-   * job has ever run / no row exists, returns a `never` stub so the UI can
-   * render the section without crashing. The actual backup runner does not
-   * exist yet; once it lands it should write a `backup` blob into pod_settings
-   * matching the shape returned here.
-   *
-   * TODO: wire to actual backup job once implemented.
+   * Backup status for the pod admin dashboard — a view of readBackupStatus()
+   * (@synap/database), the ONE derivation over the `backup_runs` ledger that
+   * deploy/pgdata-safety.sh writes (GET /status/backup uses it too). Kept in
+   * this card's existing shape: failed and suspect (a data drop) both read
+   * "error". A failed read THROWS, so the card shows its load-failed state
+   * instead of a calm "never".
    */
   getBackupStatus: podAdminProcedure.query(async () => {
-    const [row] = await db
-      .select({ settings: podSettings.settings })
-      .from(podSettings)
-      .orderBy(podSettings.createdAt)
-      .limit(1);
-
-    const blob = (row?.settings ?? {}) as Record<string, unknown>;
-    const backup = (blob.backup ?? null) as {
-      lastBackupAt?: string | null;
-      status?: "ok" | "stale" | "never" | "error";
-      sizeBytes?: number | null;
-      location?: string | null;
-    } | null;
-
-    if (!backup) {
-      return {
-        lastBackupAt: null as Date | null,
-        status: "never" as const,
-        sizeBytes: null as number | null,
-        location: null as string | null,
-      };
-    }
-
+    const s = await readBackupStatus();
     return {
-      lastBackupAt: backup.lastBackupAt ? new Date(backup.lastBackupAt) : null,
-      status: (backup.status ?? "never") as "ok" | "stale" | "never" | "error",
-      sizeBytes: backup.sizeBytes ?? null,
-      location: backup.location ?? null,
+      lastBackupAt: s.lastSuccess ? new Date(s.lastSuccess.at) : null,
+      status: (s.status === "failed" || s.status === "suspect"
+        ? "error"
+        : s.status) as "ok" | "stale" | "never" | "error",
+      sizeBytes: s.lastSuccess?.sizeBytes ?? null,
+      location: s.lastSuccess
+        ? s.offsite
+          ? "Off-host, encrypted"
+          : "This host only"
+        : null,
     };
   }),
 });

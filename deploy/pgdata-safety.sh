@@ -500,7 +500,7 @@ _bk_record() {
     local c="$1" size="$5"
     case "$size" in ''|*[!0-9]*) size=NULL ;; esac
     _pgs_psql "$c" synap "insert into backup_runs (kind, status, started_at, finished_at, size_bytes, snapshot_id, fingerprint, drill_fingerprint, detail) values ($(_bk_sql_str "$2"), $(_bk_sql_str "$3"), $(_bk_sql_str "$4")::timestamptz, now(), $size, $(_bk_sql_str "$6"), $(_bk_sql_str "$7"), $(_bk_sql_str "$8"), $(_bk_sql_str "$9"))" >/dev/null 2>&1 \
-        || _pgs_warn "could not record this $2 run ($3) in backup_runs — is migration 0294 applied?"
+        || _pgs_warn "could not record this $2 run ($3) in backup_runs — is migration 0295 applied?"
 }
 
 _bk_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -744,7 +744,7 @@ backup_status() {
     if [ -n "$c" ] && runs="$(_pgs_psql "$c" synap "select kind, status, to_char(finished_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI') || 'Z', coalesce(snapshot_id, '-'), coalesce(fingerprint, '-'), coalesce(detail, '') from backup_runs order by finished_at desc limit 8" 2>/dev/null)"; then
         printf '%s\n' "${runs:-(none yet)}" | sed 's/^/  /; s/|/  /g'
     else
-        printf '%s\n' "  could not read backup_runs (postgres down, or migration 0294 not applied)"
+        printf '%s\n' "  could not read backup_runs (postgres down, or migration 0295 not applied)"
     fi
 }
 
