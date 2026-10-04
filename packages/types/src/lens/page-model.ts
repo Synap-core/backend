@@ -42,6 +42,7 @@ import {
   batchHappenedItems,
   lensRowOfNeedsYou,
   type HappenedEntry,
+  type HappenedItem,
   type LensDoor,
   type LensNeedsYouSignal,
   type LensOutput,
@@ -251,6 +252,24 @@ function isoOf(at: string | Date | null | undefined): string | null {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
+function lastActivityOf(items: readonly HappenedItem[]): string | null {
+  const first = items[0];
+  if (!first) return null;
+  return isoOf(
+    first.kind === "ledger" ? first.row.occurredAt : first.event.occurredAt
+  );
+}
+
+/**
+ * "Last activity": the newest Happened item — work OR data (a non-record
+ * event is no item). The header reads this when it holds the page alone.
+ */
+export function lensLastActivityAt(
+  happened: Pick<LensPageClass<LensPageSignal>, "rows"> | null
+): string | null {
+  return happened ? lastActivityOf(happenedItems(happened.rows)) : null;
+}
+
 /** THE page model — see the module header for the rules it owns. */
 export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
   page: LensPage<T>,
@@ -267,12 +286,7 @@ export function lensPageModel<T extends LensPageSignal & LensNeedsYouSignal>(
   const items = happenedItems(page.happened.rows);
   const days = batchHappenedItems(items, opts);
   const todayLines = days.find((d) => d.isToday)?.lines ?? [];
-  const first = items[0];
-  const lastActivityAt = first
-    ? isoOf(
-        first.kind === "ledger" ? first.row.occurredAt : first.event.occurredAt
-      )
-    : null;
+  const lastActivityAt = lastActivityOf(items);
 
   const itemUnits = (i: LensPageItem<T>) => unitsOf(i.row.count);
   const ofPod = (cls: LensPageClass<unknown>) => ({

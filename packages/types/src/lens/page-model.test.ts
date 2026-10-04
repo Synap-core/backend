@@ -16,6 +16,7 @@ import { resolveUnitState } from "../units/state.js";
 import {
   LENS_CAPS,
   isHappenedDataLine,
+  lensLastActivityAt,
   lensPageCounts,
   lensPageModel,
   type LensNeedsYouSignal,
@@ -127,8 +128,7 @@ describe("Happened — work AND data, counted in acts", () => {
   });
 
   it("last activity is the newest item — a data change included", () => {
-    const m = model(
-      page({
+    const p = page({
         happened: cls([
           sig("event:9", {
             kind: "event",
@@ -137,9 +137,10 @@ describe("Happened — work AND data, counted in acts", () => {
           }),
           sig("a1", { kind: "activity", activity: ledger("l1", "2026-10-04T11:00:00.000Z") }),
         ]),
-      })
-    );
+      });
+    const m = model(p);
     expect(m.lastActivityAt).toBe("2026-10-04T11:30:00.000Z");
+    expect(lensLastActivityAt(p.happened)).toBe(m.lastActivityAt);
   });
 });
 
