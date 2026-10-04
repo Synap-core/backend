@@ -307,6 +307,8 @@ export class ViewFilterCompiler {
         );
     }
 
+    const isTextColumn = field !== "createdAt" && field !== "updatedAt";
+
     // A date-only value on a timestamp column compares by DAY.
     if (
       (field === "createdAt" || field === "updatedAt") &&
@@ -329,10 +331,22 @@ export class ViewFilterCompiler {
           sql: sql`${column} ILIKE ${`%${value}%`}`,
           usesIndex: false,
         };
+      // Text columns read "" as empty, like a property (jsonbEmpty); the
+      // timestamp columns can only be NULL.
       case "is_empty":
-        return { sql: sql`${column} IS NULL`, usesIndex: false };
+        return {
+          sql: isTextColumn
+            ? sql`(${column} IS NULL OR ${column} = '')`
+            : sql`${column} IS NULL`,
+          usesIndex: false,
+        };
       case "is_not_empty":
-        return { sql: sql`${column} IS NOT NULL`, usesIndex: false };
+        return {
+          sql: isTextColumn
+            ? sql`(${column} IS NOT NULL AND ${column} <> '')`
+            : sql`${column} IS NOT NULL`,
+          usesIndex: false,
+        };
       case "in":
         if (Array.isArray(value)) {
           // Drizzle expands a JS array into `($1, $2)`: valid for IN, not ANY().

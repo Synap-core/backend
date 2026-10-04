@@ -256,6 +256,22 @@ describe("ViewFilterCompiler — indexed path + core fields, executed", () => {
     expect(inList.ids).toEqual(["b", "e"]);
   });
 
+  it('core text field: is_empty counts "" and NULL, is_not_empty excludes both', async () => {
+    await pg.exec(`
+      ALTER TABLE entities ADD COLUMN preview text;
+      UPDATE entities SET preview = CASE id
+        WHEN 'a' THEN NULL WHEN 'b' THEN '' ELSE 'text' END;
+    `);
+    const c = new ViewFilterCompiler({} as never);
+    const empty = await run(c, { field: "preview", operator: "is_empty" });
+    expect(empty.ids).toEqual(["a", "b"]);
+    const notEmpty = await run(c, {
+      field: "preview",
+      operator: "is_not_empty",
+    });
+    expect(notEmpty.ids).toEqual(["c", "d", "e"]);
+  });
+
   it("core-field in / not_in bind a 2-element array", async () => {
     const c = new ViewFilterCompiler({} as never);
     const inIds = await run(c, {

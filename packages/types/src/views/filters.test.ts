@@ -49,7 +49,7 @@ describe("view filter grammar (@synap-core/types/views)", () => {
     }
     expect(VIEW_FILTER_OPERATORS_BY_VALUE_TYPE.secret).toEqual([]);
     expect(VIEW_FILTER_OPERATORS_BY_VALUE_TYPE.date).not.toContain("in");
-    expect(VIEW_FILTER_OPERATORS_BY_VALUE_TYPE.array).not.toContain("is_empty");
+    expect(VIEW_FILTER_OPERATORS_BY_VALUE_TYPE.array).toContain("is_empty");
   });
 
   it("an unknown value type falls back to the string operators", () => {

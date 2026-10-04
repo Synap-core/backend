@@ -97,9 +97,8 @@ export const VIEW_FILTER_VALUE_SHAPE: Readonly<
  *     about dates; ranges carry the meaning (labelled before/after).
  *   - `entity_id`: identity only — a UUID substring is meaningless.
  *   - `array`: stored as JSON, read as text by the JSONB path, so only the
- *     substring test means something. NOT `is_empty`: an empty list is stored
- *     as `[]`, which is not NULL, so "is empty" would miss exactly the rows a
- *     reader means.
+ *     substring test means something — plus `is_empty`, which the compiler
+ *     reads as absent, null, "" or `[]`.
  *   - `object`: present / absent only.
  *   - `secret`: none. Filtering is an oracle over the value; a secret is never
  *     offered as a filter field.
@@ -148,7 +147,7 @@ export const VIEW_FILTER_OPERATORS_BY_VALUE_TYPE: Readonly<
     "is_empty",
     "is_not_empty",
   ],
-  array: ["contains", "not_contains"],
+  array: ["contains", "not_contains", "is_empty", "is_not_empty"],
   object: ["is_empty", "is_not_empty"],
   secret: [],
 };
