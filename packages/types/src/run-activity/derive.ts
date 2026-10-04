@@ -31,9 +31,9 @@ import {
   sentenceCaseLabel,
 } from "../vocabulary/index.js";
 import type {
-  ActivityActor,
-  ActivityKind,
-  ActivitySource,
+  SessionActivityActor,
+  SessionActivityKind,
+  SessionActivitySource,
   SessionActivityItem,
   SessionActivityWire,
 } from "./wire.js";
@@ -63,7 +63,7 @@ export type StepPhase = (typeof STEP_PHASES)[number];
 export interface ActivityStep {
   id: string;
   at: Date;
-  kind: ActivityKind;
+  kind: SessionActivityKind;
   phase: StepPhase;
   /** The words a surface renders. Never a raw token. */
   label: string;
@@ -74,7 +74,7 @@ export interface ActivityStep {
   objectTitle: string | null;
   proposalId: string | null;
   error: string | null;
-  actor: ActivityActor | null;
+  actor: SessionActivityActor | null;
 }
 
 /**
@@ -85,7 +85,7 @@ export interface ActivityStep {
 export interface ActivityGroup {
   /** The first member's id — stable while the group only grows. */
   id: string;
-  kind: ActivityKind;
+  kind: SessionActivityKind;
   phase: StepPhase;
   label: string;
   steps: ActivityStep[];
@@ -124,7 +124,7 @@ export interface RunActivityView {
   groups: ActivityGroup[];
   summary: RunActivitySummary;
   /** Sub-reads that failed: the list is PARTIAL, and the surface must say so. */
-  unreadable: ActivitySource[];
+  unreadable: SessionActivitySource[];
   /** The pod capped the merge; more exists than this view holds. */
   truncated: boolean;
   terminal: boolean;
@@ -222,7 +222,7 @@ function labelOf(item: SessionActivityItem, phase: StepPhase): string {
 }
 
 /** Kinds that collapse when consecutive and alike. Everything else stands alone. */
-const GROUPABLE: ReadonlySet<ActivityKind> = new Set(["tool", "write"]);
+const GROUPABLE: ReadonlySet<SessionActivityKind> = new Set(["tool", "write"]);
 
 function groupKey(step: ActivityStep): string | null {
   if (!GROUPABLE.has(step.kind) || step.phase !== "done") return null;

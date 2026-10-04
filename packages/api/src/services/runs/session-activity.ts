@@ -57,9 +57,9 @@ import { createLogger } from "@synap-core/core";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import {
   projectToolRuns,
-  type ActivityActor,
-  type ActivityItemStatus,
-  type ActivitySource,
+  type SessionActivityActor,
+  type SessionActivityStatus,
+  type SessionActivitySource,
   type SessionActivityItem,
   type SessionActivityWire,
   type ToolRunStep,
@@ -114,7 +114,7 @@ function rec(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function proposalStatus(status: string): ActivityItemStatus | null {
+function proposalStatus(status: string): SessionActivityStatus | null {
   switch (status) {
     case "pending":
       return "pending";
@@ -193,14 +193,14 @@ export async function loadSessionActivity(
     .limit(1);
   if (!session) return null;
 
-  const unreadable: ActivitySource[] = [];
+  const unreadable: SessionActivitySource[] = [];
   let truncated = false;
   const drafts: ItemDraft[] = [];
   let turnInFlight = false;
   let inFlightSince: Date | null = null;
 
   const attempt = async (
-    source: ActivitySource,
+    source: SessionActivitySource,
     read: () => Promise<void>
   ): Promise<void> => {
     try {
@@ -574,8 +574,8 @@ export async function loadSessionActivity(
  */
 async function resolveActors(
   ids: string[]
-): Promise<Map<string, ActivityActor>> {
-  const out = new Map<string, ActivityActor>();
+): Promise<Map<string, SessionActivityActor>> {
+  const out = new Map<string, SessionActivityActor>();
   if (ids.length === 0) return out;
   try {
     const rows = await db

@@ -17,7 +17,7 @@
  * onto these (action → tool/write, elicitation → ask, response → note,
  * error → error, plus our governed `decision` and the `lifecycle` bookends).
  */
-export const ACTIVITY_KINDS = [
+export const SESSION_ACTIVITY_KINDS = [
   "tool",
   "write",
   "decision",
@@ -26,31 +26,31 @@ export const ACTIVITY_KINDS = [
   "error",
   "lifecycle",
 ] as const;
-export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+export type SessionActivityKind = (typeof SESSION_ACTIVITY_KINDS)[number];
 
 /**
  * The independent sub-reads the activity is merged from. A source that could
  * not be read is NAMED in `unreadable` — never folded into "nothing happened".
  */
-export const ACTIVITY_SOURCES = [
+export const SESSION_ACTIVITY_SOURCES = [
   "turns",
   "events",
   "proposals",
   "asks",
   "notes",
 ] as const;
-export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
+export type SessionActivitySource = (typeof SESSION_ACTIVITY_SOURCES)[number];
 
 /**
  * A step's settled outcome, as the pod recorded it. `running` exists only on a
  * tool call whose result has not arrived; `pending` only on an undecided
  * decision or an open ask.
  */
-export type ActivityItemStatus =
+export type SessionActivityStatus =
   "running" | "done" | "failed" | "pending" | "approved" | "rejected";
 
 /** Who acted. `null` on the item when the ledger recorded nobody. */
-export interface ActivityActor {
+export interface SessionActivityActor {
   id: string;
   /** Display name where resolvable; null when the id names no user row. */
   name: string | null;
@@ -62,8 +62,8 @@ export interface SessionActivityItem {
   id: string;
   /** When it happened. A `Date` over superjson, an ISO string over plain JSON. */
   at: Date | string;
-  kind: ActivityKind;
-  status: ActivityItemStatus | null;
+  kind: SessionActivityKind;
+  status: SessionActivityStatus | null;
   /**
    * The IS turn this step ran in (tool / error steps). A turn boundary is a
    * grouping boundary, so it travels on the item.
@@ -88,7 +88,7 @@ export interface SessionActivityItem {
   error: string | null;
   /** The proposal behind a decision, or the receipt behind a governed write. */
   proposalId: string | null;
-  actor: ActivityActor | null;
+  actor: SessionActivityActor | null;
 }
 
 export interface SessionActivityLive {
@@ -114,5 +114,5 @@ export interface SessionActivityWire {
   terminal: boolean;
   live: SessionActivityLive;
   /** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
-  unreadable: ActivitySource[];
+  unreadable: SessionActivitySource[];
 }
