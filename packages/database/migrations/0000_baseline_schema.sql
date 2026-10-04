@@ -3908,6 +3908,8 @@ ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFA
 CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_active_channel
   ON focus_sessions (channel_id)
   WHERE status = 'active' AND channel_id IS NOT NULL;
+-- Any-status room lookup (0298): the 0297 room triggers + lens container reads.
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_channel_id ON focus_sessions (channel_id);
 
 -- proposals → focus_sessions link (placed here: FK target must exist first)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "focus_sessions"("id") ON DELETE SET NULL;

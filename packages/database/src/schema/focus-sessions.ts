@@ -310,6 +310,10 @@ export const focusSessions = pgTable(
     activeChannelIdx: uniqueIndex("idx_focus_sessions_active_channel")
       .on(table.channelId)
       .where(sql`status = 'active' AND channel_id IS NOT NULL`),
+    // Any-status room lookup (0298): the 0297 room triggers and the lens
+    // container read match `channel_id = ?` with no status filter, which the
+    // partial index above cannot serve.
+    channelIdIdx: index("idx_focus_sessions_channel_id").on(table.channelId),
   })
 );
 
