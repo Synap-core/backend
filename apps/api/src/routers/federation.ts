@@ -229,16 +229,25 @@ const CP_OIDC_PROVIDER = "cp";
  */
 async function getFederationOidcIssuer(): Promise<string | null> {
   try {
-    const db = await getDb();
-    const [row] = await db
-      .select({ settings: podSettings.settings })
-      .from(podSettings)
-      .orderBy(podSettings.createdAt)
-      .limit(1);
-    return row?.settings?.federationOidcClient?.issuer ?? null;
+    return await readFederationOidcIssuer();
   } catch {
     return null;
   }
+}
+
+/**
+ * The same read, but a DB failure THROWS instead of reading as "not
+ * configured". Callers that report state to a client (discovery) must tell a
+ * failed read apart from an absent setting.
+ */
+async function readFederationOidcIssuer(): Promise<string | null> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ settings: podSettings.settings })
+    .from(podSettings)
+    .orderBy(podSettings.createdAt)
+    .limit(1);
+  return row?.settings?.federationOidcClient?.issuer ?? null;
 }
 
 /**
@@ -341,6 +350,74 @@ export async function backfillFederationOidcCredentials(): Promise<void> {
     logger.warn({ err }, "CP OIDC credential backfill failed (best-effort)");
   }
 }
+
+/**
+ * Public sign-in discovery — the stable contract clients (pod-admin, Electron,
+ * Relay) read BEFORE sign-in to decide whether to offer "Continue with Synap
+ * Cloud" (the Kratos OIDC provider `cp`).
+ *
+ *   GET /api/federation/discovery   (no auth)
+ *   200 { cloudSignIn: { available, provider: "cp", issuerUrl, reason? } }
+ *   503 { error: "discovery_unavailable" }   — the read FAILED (never `available:false`)
+ *
+ * `available` = the pod has a CP-pushed `federationOidcClient.issuer` AND that
+ * issuer is an `approved` row in `trusted_issuers`. `reason` is present only
+ * when unavailable: `not_configured` (no usable issuer setting) or
+ * `issuer_not_approved` (setting present, issuer not approved). Nothing else is
+ * exposed — no client id, no secret, no user data. The issuer URL is the public
+ * OIDC issuer the browser is redirected to anyway.
+ */
+export type CloudSignInDiscovery = {
+  cloudSignIn: {
+    available: boolean;
+    provider: typeof CP_OIDC_PROVIDER;
+    issuerUrl: string | null;
+    reason?: "not_configured" | "issuer_not_approved";
+  };
+};
+
+federationRouter.get("/discovery", async (c) => {
+  // Config can change on the next deploy/push; never let a browser cache a
+  // stale "unavailable".
+  c.header("Cache-Control", "no-store");
+  try {
+    const rawIssuer = await readFederationOidcIssuer();
+    const issuerUrl = rawIssuer ? normalizeIssuerUrl(rawIssuer) : null;
+    if (!issuerUrl) {
+      return c.json({
+        cloudSignIn: {
+          available: false,
+          provider: CP_OIDC_PROVIDER,
+          issuerUrl: null,
+          reason: "not_configured",
+        },
+      } satisfies CloudSignInDiscovery);
+    }
+    const issuer = await new TrustedIssuerService().getByUrl(issuerUrl);
+    if (issuer?.status !== "approved") {
+      return c.json({
+        cloudSignIn: {
+          available: false,
+          provider: CP_OIDC_PROVIDER,
+          issuerUrl,
+          reason: "issuer_not_approved",
+        },
+      } satisfies CloudSignInDiscovery);
+    }
+    return c.json({
+      cloudSignIn: { available: true, provider: CP_OIDC_PROVIDER, issuerUrl },
+    } satisfies CloudSignInDiscovery);
+  } catch (err) {
+    logger.error({ err }, "Sign-in discovery read failed");
+    return c.json(
+      {
+        error: "discovery_unavailable",
+        message: "Could not read this pod's sign-in configuration. Retry.",
+      },
+      503
+    );
+  }
+});
 
 /**
  * App federation uses a query value so an exact origin/client pairing can be
