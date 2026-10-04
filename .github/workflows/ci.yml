@@ -137,6 +137,7 @@ jobs:
           bash deploy/__tests__/backup-loop.test.sh
           bash deploy/__tests__/archive-restore-failure.test.sh
           for t in no-volume-prune compose-project update-lock reset-door users-password; do bash "deploy/__tests__/$t.test.sh" </dev/null || exit 1; done && node --test deploy/pod-agent/update-target-version.test.js
+          for t in update-engine release-manifest; do bash "deploy/__tests__/$t.test.sh" </dev/null || exit 1; done
 
       - name: Check orphaned REST route files
         run: node packages/api/src/routers/hub-protocol/rest/check-orphan-routes.mjs

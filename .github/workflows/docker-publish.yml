@@ -6,17 +6,21 @@ on:
     workflows: ["CI"]
     types: [completed]
     branches: [main, develop]
-  # Fallback: direct push trigger (the smoke test still gates broken images)
+  # Tags only: branch images are built AFTER CI is green (workflow_run above),
+  # once per commit — so `sha-<full>` is written exactly once (immutable) and a
+  # red commit never becomes an image. v* tags are not covered by CI.
   push:
-    branches: [main, develop]
     tags:
       - "v*"
   workflow_dispatch:
 
-# Branch → image tag mapping:
-#   develop  → :dev  (staging ring — no CP notification)
-#   main     → :main + :latest + :sha-* (production ring — notifies CP)
-#   v*       → :vX.Y.Z + :latest (release — notifies CP)
+# Branch → image tag mapping (update-door plan P1 — pods never consume :latest):
+#   develop  → :dev + :develop-<sha7> + :sha-<full>  (staging ring — no release, no CP notification)
+#   main     → :main + :main-<sha7> + :sha-<full>     (FAST channel release main-<sha7>)
+#   v*       → :vX.Y.Z + :X.Y                         (STABLE channel release vX.Y.Z)
+# Each main/v* run publishes a release manifest (job publish-release): images
+# by DIGEST + migration level + compose sha + deploy bundle. `synap update
+# --release <id|fast|stable>` consumes it; nothing pulls a mutable tag.
 
 env:
   REGISTRY: ghcr.io
@@ -37,6 +41,7 @@ jobs:
     outputs:
       resolved_ref: ${{ steps.resolve.outputs.ref }}
       resolved_sha: ${{ steps.resolve.outputs.sha }}
+      digest: ${{ steps.push.outputs.digest }}
 
     services:
       postgres:
@@ -58,12 +63,19 @@ jobs:
         id: resolve
         run: |
           if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            echo "ref=refs/heads/${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+            REF="refs/heads/${{ github.event.workflow_run.head_branch }}"
+            SHA="${{ github.event.workflow_run.head_sha }}"
           else
-            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+            REF="${{ github.ref }}"
+            SHA="${{ github.sha }}"
           fi
+          {
+            echo "ref=${REF}"
+            echo "sha=${SHA}"
+            echo "sha7=${SHA:0:7}"
+            echo "branch=${REF#refs/heads/}"
+            echo "tag=${REF#refs/tags/}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -93,10 +105,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.full }}
           tags: |
-            type=sha,prefix={{branch}}-
             type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
             type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') || steps.resolve.outputs.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.resolve.outputs.branch }}-${{ steps.resolve.outputs.sha7 }},enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/heads/') }}
+            type=raw,value=sha-${{ steps.resolve.outputs.sha }},enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/heads/') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
@@ -108,6 +120,7 @@ jobs:
           push: false
           load: true
           tags: synap-backend:smoke-test
+          build-args: GIT_SHA=${{ steps.resolve.outputs.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -157,10 +170,14 @@ jobs:
           exit 1
 
       - name: Push Backend image to GHCR
+        id: push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./deploy/Dockerfile
+          # Stamps SYNAP_GIT_SHA → /status/release buildStamp; `synap update`
+          # refuses a release whose running image does not report its gitSha.
+          build-args: GIT_SHA=${{ steps.resolve.outputs.sha }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -177,18 +194,27 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
 
     steps:
       - name: Resolve ref and sha
         id: resolve
         run: |
           if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            echo "ref=refs/heads/${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+            REF="refs/heads/${{ github.event.workflow_run.head_branch }}"
+            SHA="${{ github.event.workflow_run.head_sha }}"
           else
-            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+            REF="${{ github.ref }}"
+            SHA="${{ github.sha }}"
           fi
+          {
+            echo "ref=${REF}"
+            echo "sha=${SHA}"
+            echo "sha7=${SHA:0:7}"
+            echo "branch=${REF#refs/heads/}"
+            echo "tag=${REF#refs/tags/}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -219,14 +245,15 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.owner }}/pod-agent
           tags: |
-            type=sha,prefix={{branch}}-
             type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
             type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') || steps.resolve.outputs.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.resolve.outputs.branch }}-${{ steps.resolve.outputs.sha7 }},enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/heads/') }}
+            type=raw,value=sha-${{ steps.resolve.outputs.sha }},enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/heads/') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push pod-agent image
+        id: push
         uses: docker/build-push-action@v5
         with:
           context: ./deploy/pod-agent
@@ -238,7 +265,10 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
-  build-and-push-realtime:
+  # pod-admin was never published (update-door plan §1 #16): every pod built it
+  # on the host. It is a generic image (POD_PUBLIC_URL is runtime env, nothing
+  # NEXT_PUBLIC_* is baked), so one artifact serves every pod.
+  build-and-push-pod-admin:
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -247,18 +277,27 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
 
     steps:
       - name: Resolve ref and sha
         id: resolve
         run: |
           if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            echo "ref=refs/heads/${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+            REF="refs/heads/${{ github.event.workflow_run.head_branch }}"
+            SHA="${{ github.event.workflow_run.head_sha }}"
           else
-            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
-            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+            REF="${{ github.ref }}"
+            SHA="${{ github.sha }}"
           fi
+          {
+            echo "ref=${REF}"
+            echo "sha=${SHA}"
+            echo "sha7=${SHA:0:7}"
+            echo "branch=${REF#refs/heads/}"
+            echo "tag=${REF#refs/tags/}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -287,20 +326,21 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.owner }}/backend-realtime
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.owner }}/pod-admin
           tags: |
-            type=sha,prefix={{branch}}-
             type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
             type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') || steps.resolve.outputs.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.resolve.outputs.branch }}-${{ steps.resolve.outputs.sha7 }},enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/heads/') }}
+            type=raw,value=sha-${{ steps.resolve.outputs.sha }},enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/heads/') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Build and push realtime image
+      - name: Build and push pod-admin image
+        id: push
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./deploy/Dockerfile.realtime
+          file: ./apps/pod-admin/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -308,29 +348,109 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
-  notify-control-plane:
+  # ── Release manifest (update-door plan P1) ─────────────────────────────────
+  # One immutable release per green main commit (channel fast, id main-<sha7>)
+  # and per v* tag (channel stable, id vX.Y.Z). Published as GitHub Release
+  # assets: the pod side needs only curl + jq (no OCI client), the repo and
+  # GHCR images are public, and the manifest's own payload is content-addressed
+  # (image digests, bundle sha256). Channel pointers are the fixed releases
+  # channel-fast / channel-stable whose release.json is replaced (--clobber)
+  # AFTER the release itself exists, so a pointer never names a missing release.
+  publish-release:
     runs-on: ubuntu-latest
     needs:
       - build-and-push-backend-api
       - build-and-push-pod-agent
-      - build-and-push-realtime
-    # Only notify CP on main branch and version tags — not on develop
+      - build-and-push-pod-admin
     if: >
-      needs.build-and-push-backend-api.outputs.resolved_ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_run' && needs.build-and-push-backend-api.outputs.resolved_ref == 'refs/heads/main') ||
       startsWith(needs.build-and-push-backend-api.outputs.resolved_ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      packages: read
+    outputs:
+      release_id: ${{ steps.id.outputs.id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-and-push-backend-api.outputs.resolved_sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Release id + channel
+        id: id
+        run: |
+          REF="${{ needs.build-and-push-backend-api.outputs.resolved_ref }}"
+          SHA="${{ needs.build-and-push-backend-api.outputs.resolved_sha }}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            echo "id=${REF#refs/tags/}" >> "$GITHUB_OUTPUT"; echo "channel=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=main-${SHA:0:7}" >> "$GITHUB_OUTPUT"; echo "channel=fast" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy bundle (synap + deploy files of this commit)
+        run: |
+          git archive --format=tar.gz -o "synap-deploy-${{ steps.id.outputs.id }}.tar.gz" HEAD \
+            synap deploy kratos hydra docker/postgres ':(exclude)deploy/__tests__'
+
+      - name: Build release.json (third-party images resolved to digests)
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          python3 deploy/release/make-manifest.py \
+            --id "${{ steps.id.outputs.id }}" --channel "${{ steps.id.outputs.channel }}" \
+            --git-sha "${{ needs.build-and-push-backend-api.outputs.resolved_sha }}" \
+            --image "SYNAP_IMAGE_BACKEND=ghcr.io/${OWNER}/backend@${{ needs.build-and-push-backend-api.outputs.digest }}" \
+            --image "SYNAP_IMAGE_POD_ADMIN=ghcr.io/${OWNER}/pod-admin@${{ needs.build-and-push-pod-admin.outputs.digest }}" \
+            --image "SYNAP_IMAGE_POD_AGENT=ghcr.io/${OWNER}/pod-agent@${{ needs.build-and-push-pod-agent.outputs.digest }}" \
+            --bundle "synap-deploy-${{ steps.id.outputs.id }}.tar.gz" > release.json
+          cat release.json
+
+      - name: Validate release.json with the engine's own rules
+        run: bash deploy/release/validate-manifest.sh release.json
+
+      - name: Every image digest resolves in its registry
+        run: |
+          for ref in $(jq -r '.images[]' release.json); do
+            docker buildx imagetools inspect "$ref" >/dev/null || { echo "::error::$ref does not resolve"; exit 1; }
+          done
+
+      - name: Publish the release, then move the channel pointer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ID: ${{ steps.id.outputs.id }}
+          CHANNEL: ${{ steps.id.outputs.channel }}
+          SHA: ${{ needs.build-and-push-backend-api.outputs.resolved_sha }}
+        run: |
+          ASSETS=(release.json "synap-deploy-${ID}.tar.gz")
+          if gh release view "$ID" >/dev/null 2>&1; then
+            gh release upload "$ID" "${ASSETS[@]}" --clobber
+          elif [ "$CHANNEL" = stable ]; then
+            gh release create "$ID" "${ASSETS[@]}" --verify-tag --title "$ID" --notes "Pod release $ID (stable). Apply: synap update --release $ID"
+          else
+            gh release create "$ID" "${ASSETS[@]}" --target "$SHA" --prerelease --latest=false \
+              --title "$ID" --notes "Pod release $ID (fast channel, commit $SHA). Apply: synap update --release $ID"
+          fi
+          POINTER="channel-${CHANNEL}"
+          gh release view "$POINTER" >/dev/null 2>&1 || gh release create "$POINTER" --target "$SHA" --prerelease --latest=false \
+            --title "$POINTER" --notes "Channel pointer: release.json here is the latest $CHANNEL release. Apply: synap update --release $CHANNEL"
+          gh release upload "$POINTER" release.json --clobber
+
+  notify-control-plane:
+    runs-on: ubuntu-latest
+    # The CP's tag is the release id (main-<sha7> / vX.Y.Z), so it is only sent
+    # once that release's manifest is published — pod-agent's update-pod.sh
+    # hands it straight to `synap update --release`.
+    needs:
+      - build-and-push-backend-api
+      - publish-release
 
     steps:
       - name: Compute image tag
         id: tag
         run: |
-          REF="${{ needs.build-and-push-backend-api.outputs.resolved_ref }}"
-          SHA="${{ needs.build-and-push-backend-api.outputs.resolved_sha }}"
-          if [[ "$REF" == refs/tags/v* ]]; then
-            TAG="${REF#refs/tags/}"
-          else
-            TAG="main-$(echo "$SHA" | cut -c1-7)"
-          fi
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "tag=${{ needs.publish-release.outputs.release_id }}" >> $GITHUB_OUTPUT
 
       - name: Notify Control Plane
         env:
