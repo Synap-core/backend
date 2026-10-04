@@ -597,6 +597,10 @@ services:
       # provision time via install.sh --smtp-uri. Self-hosted installs set it
       # in .env. Kratos reads COURIER_SMTP_CONNECTION_URI natively.
       COURIER_SMTP_CONNECTION_URI: ${SMTP_CONNECTION_URI:-smtp://localhost:1025/}
+      # Sender address. A relay only accepts a from-address on a domain it has
+      # verified — the CP email relay (R2) sets SMTP_FROM_ADDRESS to an address
+      # on the CP's Resend domain. Unset keeps kratos.yml's address.
+      COURIER_SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-noreply@synap.io}
       # Kratos itself sees only backend-originated traffic (Caddy routes
       # /.ory/kratos/public/* through backend:4000). No external CORS gate
       # needed here — ALLOWED_ORIGINS on the backend is the single source.

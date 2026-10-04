@@ -59,6 +59,10 @@ PROVISIONING_TOKEN_FLAG="${SYNAP_PROVISIONING_TOKEN:-}"
 # delivery). Managed environments can inject a real relay URI;
 # self-hosted installs can set SYNAP_SMTP_URI or pass --smtp-uri.
 SMTP_URI="${SYNAP_SMTP_URI:-}"
+# Sender address for that relay (must be on a domain the relay verified). Read
+# from the environment, not a flag, so an older installer the CP still pins
+# simply ignores it instead of refusing an unknown flag.
+SMTP_FROM_ADDRESS="${SYNAP_SMTP_FROM_ADDRESS:-}"
 
 # ─── CLI flags ─────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -741,6 +745,7 @@ INTELLIGENCE_HUB_API_KEY=${INTELLIGENCE_API_KEY:-}
 # delivered. Self-hosted installs can set SYNAP_SMTP_URI or edit this directly.
 # Without a real URI Kratos queues messages locally (never delivered).
 SMTP_CONNECTION_URI=${SMTP_URI:-smtp://localhost:1025/}
+SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS}
 # Example real relay: SMTP_CONNECTION_URI=smtps://resend:RESEND_API_KEY@smtp.resend.com:465
 
 # ── Frontend / CORS ───────────────────────────────────────────────────────────
