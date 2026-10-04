@@ -16,29 +16,70 @@
 import { useEffect, useState } from "react";
 import { Button } from "@heroui/react";
 import { ShieldAlert } from "lucide-react";
+import { CREATE_RECOVERY_CODES_LABEL } from "@synap-core/types/account-recovery";
 import { recoveryApi } from "../../../lib/account-recovery";
 
 export type RecoveryCodesState = "unknown" | "set" | "not_set";
 
 const SKIP_KEY = "pod-admin.recovery-codes-nudge.skipped";
 
-let pending: Promise<RecoveryCodesState> | null = null;
-
-/** One status read per page load, shared by the card and the top bar. */
-function readState(): Promise<RecoveryCodesState> {
-  pending ??= recoveryApi.status().then((r) =>
-    r.ok ? (r.data.recoveryCodes.set ? "set" : "not_set") : "unknown"
-  );
-  return pending;
+/**
+ * The shared status read behind the card and the top bar's mark.
+ *
+ * One read per page load — but a SUCCESSFUL read only: a failed read
+ * ("unknown") is never cached, so the next mount tries again. And creating
+ * codes (`/settings/security`) calls {@link invalidateRecoveryCodesState}, so
+ * the ⚠ does not outlive the codes on client navigation. Mounted hooks are
+ * told to re-read.
+ */
+export function createRecoveryCodesStateCache(
+  readStatus: () => Promise<{ ok: boolean; data?: { recoveryCodes: { set: boolean } } }>
+) {
+  let pending: Promise<RecoveryCodesState> | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    read(): Promise<RecoveryCodesState> {
+      if (pending) return pending;
+      const p: Promise<RecoveryCodesState> = readStatus()
+        .then((r) =>
+          r.ok && r.data ? (r.data.recoveryCodes.set ? "set" : "not_set") : "unknown"
+        )
+        .catch(() => "unknown" as const)
+        .then((state) => {
+          if (state === "unknown" && pending === p) pending = null;
+          return state;
+        });
+      pending = p;
+      return p;
+    },
+    invalidate(): void {
+      pending = null;
+      for (const l of listeners) l();
+    },
+    subscribe(listener: () => void): () => void {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 }
+
+const cache = createRecoveryCodesStateCache(() => recoveryApi.status());
+
+/** Call after codes were created (or replaced): the next read goes to the pod. */
+export const invalidateRecoveryCodesState = (): void => cache.invalidate();
 
 export function useRecoveryCodesState(): RecoveryCodesState {
   const [state, setState] = useState<RecoveryCodesState>("unknown");
   useEffect(() => {
     let live = true;
-    void readState().then((s) => live && setState(s));
+    const load = () => void cache.read().then((s) => live && setState(s));
+    load();
+    const off = cache.subscribe(load);
     return () => {
       live = false;
+      off();
     };
   }, []);
   return state;
@@ -97,7 +138,7 @@ export function RecoveryCodesNudge() {
           size="sm"
           radius="md"
         >
-          Create codes
+          {CREATE_RECOVERY_CODES_LABEL}
         </Button>
       </div>
     </div>
