@@ -298,6 +298,19 @@ describe("shared sessions — owner + human roster read, owner-only write", () =
     });
   });
 
+  it("D1: a `nextMove` row carries `live` — the liveness facts its working mark reads; a plain row does not", async () => {
+    const [row] = await caller(OWNER)
+      .list({ status: "all", nextMove: true } as never)
+      .then((rows) => rows.filter((r) => r.id === S));
+    // Reachability, not shape: the VALUE arrives from the batched read.
+    expect(row!.live).toEqual(expect.objectContaining({ turnInFlight: false }));
+    expect(row!.live).toHaveProperty("lastAt");
+    const [plain] = await caller(OWNER)
+      .list({ status: "all" } as never)
+      .then((rows) => rows.filter((r) => r.id === S));
+    expect(plain).not.toHaveProperty("live");
+  });
+
   it("a member reads the session's OUTPUTS and EVALUATIONS and runs", async () => {
     const outputs = await caller(MEMBER).outputs({ sessionId: S });
     expect(outputs.outputs.map((o) => o.title)).toEqual(["Pricing notes"]);

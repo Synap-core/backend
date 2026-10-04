@@ -25,6 +25,9 @@
  *   notes     — agent messages posted in the room that are not a turn's own
  *               reply (progress / questions via `post_message`).
  *
+ * `live` (turn in flight + newest activity) comes from `loadSessionLiveness`,
+ * the one liveness read the list rows share (D1).
+ *
  * ── EMPTY vs FAILED ────────────────────────────────────────────────────────
  * Each source is read on its own. A source that throws is NAMED in
  * `unreadable` and the rest still render; it is never folded into "nothing
@@ -71,6 +74,7 @@ import { eventVisibleWhere } from "../../access/event-visibility.js";
 import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
 import { unreadableTargetSessionIds } from "../proposals/session-content-redaction.js";
+import { loadSessionLiveness } from "./session-liveness.js";
 
 const logger = createLogger({ module: "session-activity" });
 
@@ -566,12 +570,22 @@ export async function loadSessionActivity(
   );
   const last = items[items.length - 1];
 
+  // `live` is THE liveness read (`loadSessionLiveness`) — the same function
+  // the session list rows carry — so the page's header mark, its Now line and
+  // the list mark all judge "working right now" (D1) off identical facts. If
+  // that read fails, the facts this read gathered itself stand in: the
+  // in-flight turn from the turns source and the newest item — both recorded,
+  // neither invented.
+  const measured = (
+    await loadSessionLiveness({ userId, roster }, [session])
+  ).get(session.id);
+
   return {
     sessionId,
     items,
     truncated,
     terminal: isTerminalSessionStatus(session.status),
-    live: {
+    live: measured ?? {
       turnInFlight,
       turnId: inFlightTurnId,
       since: inFlightSince,

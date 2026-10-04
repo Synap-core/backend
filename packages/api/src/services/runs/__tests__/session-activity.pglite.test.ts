@@ -21,6 +21,12 @@
  *   - a pending proposal the viewer's own agent filed in a workspace the
  *     viewer is not a member of — the bare membership lens drops it, while
  *     Needs-you (LENS ∪ OWNERSHIP) counts it.
+ *
+ * LIVENESS (`loadSessionLiveness`, D1) — the `live` facts, batched for list
+ * rows and shared with this read: a QUIET session whose NEWEST rows are a
+ * session-progress stamp and an event in a workspace the reader cannot see
+ * ("every session event is activity" / "every event regardless of who may
+ * see it" would both call it recent), and a session with nothing at all.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -47,6 +53,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { deriveRunActivity } from "@synap-core/types/run-activity";
 import { loadSessionActivity } from "../session-activity.js";
+import { loadSessionLiveness } from "../session-liveness.js";
 import { getRun } from "../index.js";
 
 const BASIC =
@@ -464,6 +471,122 @@ describe("loadSessionActivity — windows and floors", () => {
       ).toBe("pending");
     } finally {
       await q(`delete from proposals where id = $1`, [P_OWN_HIDDEN]);
+    }
+  });
+});
+
+describe("loadSessionLiveness — the facts behind 'working right now' (D1)", () => {
+  const QUIET = randomUUID();
+  const QUIET_ROOM = randomUUID();
+  const EMPTY = randomUUID();
+  const sessionsFor = async (ids: string[]) =>
+    (
+      await q(
+        `select id, channel_id as "channelId", expected_outputs as "expectedOutputs", started_at as "startedAt" from focus_sessions where id = any($1::uuid[])`,
+        [ids]
+      )
+    ).rows as Array<{
+      id: string;
+      channelId: string | null;
+      expectedOutputs: unknown;
+      startedAt: string;
+    }>;
+
+  beforeAll(async () => {
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, goal, status, metadata, expected_outputs, channel_id, created_at, updated_at, started_at)
+       values ($1, $2, $3, 'Quiet', 'active', '{}'::jsonb, '[]'::jsonb, $4, $5, $5, $5),
+              ($6, $2, $3, 'Empty', 'active', '{}'::jsonb, '[]'::jsonb, null, $5, $5, $5)`,
+      [QUIET, OWNER, WS, QUIET_ROOM, at(30), EMPTY]
+    );
+    const ev = async (
+      type: string,
+      subjectType: string,
+      min: number,
+      workspaceId = WS,
+      userId = OWNER
+    ) =>
+      q(
+        `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, is_agent, workspace_id, session_id)
+         values ($1, $2, $3, $4, $5, '{}'::jsonb, $6, true, $7, $8)`,
+        [
+          randomUUID(),
+          at(min),
+          type,
+          QUIET,
+          subjectType,
+          userId,
+          workspaceId,
+          QUIET,
+        ]
+      );
+    await ev("focus_session.create.completed", "focus_session", 31);
+    await ev("entity.create.completed", "entity", 32);
+    // NEWER than the real activity — and neither is activity the reader sees.
+    await ev("focus_session.update.completed", "focus_session", 50);
+    await ev("entity.create.completed", "entity", 51, WS_HIDDEN, STRANGER);
+  });
+
+  it("the activity wire's `live` IS this read — one function, so the page and the list rows agree", async () => {
+    const wire = await loadSessionActivity({ userId: OWNER, roster: true }, S);
+    const live = await loadSessionLiveness(
+      { userId: OWNER, roster: true },
+      await sessionsFor([S])
+    );
+    expect(wire!.live).toEqual(live.get(S));
+  });
+
+  it("names the in-flight turn; its newest activity is the turn's last write (chat_turns.updated_at, bumped by every appended frame)", async () => {
+    const wire = await loadSessionActivity({ userId: OWNER, roster: true }, S);
+    const live = wire!.live;
+    expect(live.turnInFlight).toBe(true);
+    expect(live.turnId).toBe(T2);
+    expect(new Date(live.lastAt!).toISOString()).toBe(at(20));
+  });
+
+  it("a quiet session: a progress stamp and an event the reader cannot see are NOT its newest activity", async () => {
+    const live = await loadSessionLiveness(
+      { userId: OWNER, roster: true },
+      await sessionsFor([QUIET])
+    );
+    const q1 = live.get(QUIET)!;
+    expect(q1.turnInFlight).toBe(false);
+    expect(new Date(q1.lastAt!).toISOString()).toBe(at(32));
+  });
+
+  it("batched: every id answered, nothing bleeds between sessions; nothing at all is null lastAt, not 'now'", async () => {
+    const live = await loadSessionLiveness(
+      { userId: OWNER, roster: true },
+      await sessionsFor([S, QUIET, EMPTY])
+    );
+    expect([...live.keys()].sort()).toEqual([S, QUIET, EMPTY].sort());
+    expect(live.get(S)!.turnInFlight).toBe(true);
+    expect(live.get(QUIET)!.turnInFlight).toBe(false);
+    expect(live.get(EMPTY)).toEqual({
+      turnInFlight: false,
+      turnId: null,
+      since: null,
+      lastAt: null,
+    });
+  });
+
+  it("a FAILED read is null for every session it covered — never a quiet session", async () => {
+    await h.client!.exec(`alter table messages rename to messages_gone`);
+    try {
+      const live = await loadSessionLiveness(
+        { userId: OWNER, roster: true },
+        await sessionsFor([S, QUIET])
+      );
+      expect(live.get(S)).toBeNull();
+      expect(live.get(QUIET)).toBeNull();
+      // The activity read keeps its OWN recorded facts instead.
+      const wire = await loadSessionActivity(
+        { userId: OWNER, roster: true },
+        S
+      );
+      expect(wire!.live.turnInFlight).toBe(true);
+    } finally {
+      await h.client!.exec(`alter table messages_gone rename to messages`);
     }
   });
 });

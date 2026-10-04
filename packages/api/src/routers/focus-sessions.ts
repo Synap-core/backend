@@ -66,6 +66,11 @@ import {
 import { readSessionUsage } from "../services/focus-sessions/session-usage.js";
 import { loadSessionActivity } from "../services/runs/session-activity.js";
 import {
+  loadSessionLiveness,
+  type LivenessReader,
+} from "../services/runs/session-liveness.js";
+import type { SessionActivityLive } from "@synap-core/types/run-activity";
+import {
   recordSessionArtifact,
   SESSION_ARTIFACT_KINDS,
 } from "../services/focus-sessions/record-session-artifact.js";
@@ -497,6 +502,18 @@ async function projectSessionRows(
   return attachSessionVerdicts(withParticipants);
 }
 
+/**
+ * `live` on every row — ONE batched liveness read for the page (the same
+ * function behind `focusSessions.activity`'s `live`). A failed read is `null`
+ * on each row, never a quiet session.
+ */
+async function attachSessionLiveness<
+  R extends FocusSession & { live?: SessionActivityLive | null },
+>(rows: R[], reader: LivenessReader): Promise<R[]> {
+  const live = await loadSessionLiveness(reader, rows);
+  return rows.map((r) => ({ ...r, live: live.get(r.id) ?? null }));
+}
+
 // ── Router ─────────────────────────────────────────────────────────────────
 
 /**
@@ -512,6 +529,11 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
     nextMove?: ContinuationNextMove;
     /** Present with `nextMove: true` — the counts a state mark reads. */
     unitFacts?: SessionUnitCounts;
+    /**
+     * Present with `nextMove: true` — the liveness facts the "working right
+     * now" rule reads (D1). `null` = the liveness read FAILED (never "quiet").
+     */
+    live?: SessionActivityLive | null;
     interactions?: SessionInteractionsSection;
     /**
      * `owner` | `member` (decision C) — present on every row the door returns;
@@ -588,7 +610,10 @@ export const focusSessionsRouter = router({
          * project path reads. Opt-in: four more indexed reads for the page.
          * The work map needs it to mark who owns each session's next move.
          * Also projects `unitFacts` (owed-by-you and pending-decision counts)
-         * from the same reads, so a state mark needs no second request.
+         * from the same reads, so a state mark needs no second request — and
+         * `live` (turn in flight + newest activity, `loadSessionLiveness`, the
+         * SAME read the activity door uses), so the row's "working" mark obeys
+         * the one rule (D1, `isSessionWorkingNow`) the session page does.
          */
         nextMove: z.boolean().optional(),
         /**
@@ -673,10 +698,13 @@ export const focusSessionsRouter = router({
       );
       const withParticipants = await projectSessionRows(sessions, ctx.userId);
       const withMove: SessionListRow[] = input.nextMove
-        ? await attachNextMove(withParticipants, {
-            userId: requireUserId(ctx.userId),
-            logContext: { door: "focusSessions.list" },
-          })
+        ? await attachSessionLiveness(
+            await attachNextMove(withParticipants, {
+              userId: requireUserId(ctx.userId),
+              logContext: { door: "focusSessions.list" },
+            }),
+            { userId: requireUserId(ctx.userId), roster: rosterReadFor(ctx) }
+          )
         : withParticipants;
       const withInteractions: SessionListRow[] = input.interactions
         ? await attachSessionInteractions(withMove)
