@@ -177,11 +177,21 @@ export function sessionRowInput(session: SessionRowFact): UnitStateInput {
   if (isTerminalSessionStatus(session.status)) {
     return { terminal: true, progress: { done: 1, total: 1 } };
   }
-  const input = projectAggregateInput({
+  const aggregate = projectAggregateInput({
     sessions: [session],
     unreadable: false,
   });
-  // Blocked sits below "needs you" and above "working" in the derivation, so
-  // adding the fact beside the aggregate's one leading fact is safe either way.
-  return session.blockedBy ? { ...input, blockedBy: session.blockedBy } : input;
+  // Needing you is the aggregate's one rule (owed + decisions + review, drafts
+  // never) — it outranks everything a single row could add.
+  if ((aggregate.owedFromYou ?? 0) > 0) return aggregate;
+  // Otherwise the row's own lifecycle, read the way a session reads it
+  // (`sessionUnitInput`): only active/forming is `working`; paused/scheduled
+  // are cadence states; `stale` is `unmeasured` (nothing could be observed),
+  // never a claim that work is moving. The aggregate's blanket "open ⇒
+  // running" is right for a PROJECT, wrong for one row.
+  return sessionUnitInput({
+    status: session.status,
+    owedFromYou: 0,
+    blockedBy: session.blockedBy ?? null,
+  });
 }

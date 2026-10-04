@@ -130,6 +130,28 @@ describe("sessionRowInput — one row of a project", () => {
     ).toBe("needs_you");
   });
 
+  it("a row reads its own lifecycle — paused, scheduled and stale are not `working`", () => {
+    // Rules out the aggregate's blanket "open ⇒ running" for ONE row: it drew a
+    // paused or reaper-stale session as an agent at work.
+    const stateOf = (status: string) =>
+      resolveUnitState(sessionRowInput({ status, nextMoveActor: "none" }))
+        .state;
+    expect(stateOf("paused")).toBe("paused");
+    expect(stateOf("scheduled")).toBe("scheduled");
+    expect(stateOf("stale")).toBe("unmeasured");
+    expect(stateOf("active")).toBe("working");
+    // …and needing you still outranks a quiet lifecycle (a stale session that
+    // owes the person is THEIR move — the work map's MUST 2.4).
+    expect(
+      resolveUnitState(
+        sessionRowInput({
+          status: "stale",
+          unitFacts: { owedFromYou: 2, pendingDecisions: 0 },
+        })
+      ).state
+    ).toBe("needs_you");
+  });
+
   it("an open row waiting on another open session is blocked — and needing you still outranks it", () => {
     // Rules out the aggregate verbatim, which has no blocked arm: it read a
     // waiting row as `working` (the work map's `blocked` mark had no shared home).
