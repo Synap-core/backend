@@ -1150,6 +1150,15 @@ app.route("/api/provision", provisionRouter);
 import { federationRouter } from "./routers/federation.js";
 app.route("/api/federation", federationRouter);
 
+// Account recovery (pod recovery codes, Cloud trust, "Can't sign in?" doors).
+// Contract: @synap-core/types/account-recovery.
+import { createAccountRecoveryRouter } from "./routers/account-recovery.js";
+import { accountRecoveryDeps } from "./routers/account-recovery-deps.js";
+app.route(
+  "/api/account-recovery",
+  createAccountRecoveryRouter(accountRecoveryDeps)
+);
+
 // Connector sync endpoint (ES256 JWT from CP, pulls records from Nango)
 import { connectorsRouter as connectorsRestRouter } from "./routers/connectors.js";
 app.route("/api/connectors", connectorsRestRouter);

@@ -6,6 +6,8 @@
  *   POST /                       identity.updated sync (settings hook)
  *   POST /registration/gate      blocking registration gate (pre-persist)
  *   POST /registration/complete  Cloud owner claim (post-persist, oidc only)
+ *   POST /settings/guard         Cloud-trust guard on credential changes (pre-persist)
+ *   POST /login/cloud            Cloud sign-in gate (owner set Cloud trust "off")
  *
  * The registration routes live in `./kratos-registration-gate.ts`; the real
  * dependencies are wired below.
@@ -25,6 +27,14 @@ import {
   readFederationOidcIssuer,
 } from "../routers/federation.js";
 import { createRegistrationGateRouter } from "./kratos-registration-gate.js";
+import { getKratosSession } from "@synap/auth";
+import { createCloudTrustHookRouter } from "./kratos-cloud-trust.js";
+import {
+  findAccountByIdentity,
+  kratosIdentityHasPodHeldCredential,
+  readCloudTrust,
+  recoveryCodeSummary,
+} from "../routers/account-recovery-deps.js";
 
 function safeCompare(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -141,5 +151,21 @@ kratosWebhookRouter.route(
     claimOwner: claimPodOwnerFromCloudSignIn,
     deleteKratosIdentity: (identityId) =>
       deleteKratosIdentity(kratosAdminUrl(), identityId),
+  })
+);
+
+kratosWebhookRouter.route(
+  "/",
+  createCloudTrustHookRouter({
+    readCloudTrust,
+    resolveSession: (cookieValue) =>
+      getKratosSession(`ory_kratos_session=${cookieValue}`),
+    async accountHasPodHeldFactor(identityId) {
+      if (await kratosIdentityHasPodHeldCredential(identityId)) return true;
+      const account = await findAccountByIdentity(identityId);
+      if (!account) return false;
+      return (await recoveryCodeSummary(account.userId)).remaining > 0;
+    },
+    logger,
   })
 );

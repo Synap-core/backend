@@ -57,11 +57,18 @@ import {
  */
 export { POD_ACCESS_REQUIRED, SELF_REGISTRATION_DISABLED };
 
-type GateRefusal =
-  typeof POD_ACCESS_REQUIRED | typeof SELF_REGISTRATION_DISABLED;
+/** A pod-defined Kratos message (`@synap-core/types/kratos-messages`). */
+export interface HookRefusal {
+  readonly id: number;
+  readonly text: string;
+  readonly context: Readonly<Record<string, string>>;
+}
 
-/** Kratos web_hook interrupt body (parsed by web_hook.go parseWebhookResponse). */
-function refusalBody(message: GateRefusal) {
+/**
+ * Kratos web_hook interrupt body (parsed by web_hook.go parseWebhookResponse).
+ * Shared with the Cloud-trust hooks (`kratos-cloud-trust.ts`).
+ */
+export function refusalBody(message: HookRefusal) {
   return {
     messages: [
       {
@@ -220,7 +227,8 @@ function safeCompare(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-function authorize(c: Context): Response | null {
+/** X-Webhook-Secret check shared by every Kratos hook route. */
+export function authorize(c: Context): Response | null {
   const expected = process.env.KRATOS_WEBHOOK_SECRET;
   if (!expected) {
     logger.error("KRATOS_WEBHOOK_SECRET not configured");
