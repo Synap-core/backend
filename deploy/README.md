@@ -102,11 +102,12 @@ Use the unified `synap` CLI to manage your instance:
 # Build from source
 ./synap update --build
 
-# Create backup
-./synap backup [name]
+# Backups (see "Data & backups" below)
+./synap backup init            # once: off-host repository + recovery kit
+./synap backup status
 
-# Restore from backup
-./synap restore backups/backup-20260127.tar.gz
+# Restore
+./synap restore --from-snapshot latest
 
 # Manage configuration
 ./synap config list
@@ -166,10 +167,11 @@ If provisioning/update fails, inspect packet metadata first in pod diagnostics, 
 | Data                                    | Where                                                                                                     | Survives `prune --volumes` / `down -v`? |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------- |
 | Postgres cluster (synap, kratos, hydra) | volume `<project>_postgres_data` mounted at `/home/postgres/pgdata` (`PGDATA=/home/postgres/pgdata/data`) | ❌ no — that is why dumps exist         |
-| Daily dumps                             | `deploy/backups/postgres/<UTC>-daily/<db>.dump` (host directory)                                          | ✅ yes                                  |
+| Scheduled dumps (hourly)                | `deploy/backups/postgres/<UTC>-auto/<db>.dump` (host directory; older ones are `-daily`)                  | ✅ yes                                  |
 | Pre-update / manual dumps               | `deploy/backups/postgres/<UTC>-pre-update/…`                                                              | ✅ yes                                  |
 | "This pod has data" marker              | `deploy/state/postgres-initialized` (host directory)                                                      | ✅ yes                                  |
-| Files / search                          | volumes `minio_data`, `typesense_data`                                                                    | ❌ no — cover them with host backup     |
+| Files (MinIO)                           | volume `minio_data`; exported to `deploy/backups/postgres/.minio-mirror` and pushed off-host              | ❌ no — the off-host snapshot has them  |
+| Search (Typesense)                      | volume `typesense_data` — rebuilt from Postgres                                                           | ❌ no (not backed up)                   |
 
 **2026-10-02 incident.** The volume used to be mounted at `/var/lib/postgresql/data`,
 which `timescaledb-ha` does not use. The volume stayed empty and the whole database
@@ -185,15 +187,24 @@ that — see the header of `pgdata-safety.sh`:
    dumped, committed to a `pgdata-rescue/*` image, copied onto the volume and
    verified by row counts before anything is recreated. Updates also take a
    verified `pre-update` dump of every database before migrations.
-4. `postgres-backup` dumps every database daily (`PG_BACKUP_INTERVAL_SECONDS`,
-   default 86400; keeps `PG_BACKUP_KEEP`, default 7) and turns **unhealthy** when no
-   fresh dump exists.
+4. `postgres-backup` runs `pgdata-safety.sh loop`: it dumps every database hourly
+   (`PG_BACKUP_INTERVAL_SECONDS`, default 3600), keeps the newest `PG_BACKUP_KEEP`
+   (6) plus one per day for `PG_BACKUP_KEEP_DAILY` (7) days, sets a dump of an
+   emptied pod aside as `SUSPECT` (nothing pruned, nothing pushed, `.alarm`), pushes
+   good ones off-host once a repository is set up, runs a restore drill weekly, and
+   turns **unhealthy** on no fresh dump or any of `.alarm` / `.push-failed` /
+   `.drill-failed`.
 
 ### Commands
 
 ```bash
-./synap backup [label]                         # every database → backups/postgres/<ts>-<label>/ (+ env.backup)
-./synap restore deploy/backups/postgres/<dir>  # restore a dump set (stops writers, pg_restore --clean)
+./synap backup [label]                         # every database → backups/postgres/<ts>-<label>/ (local only)
+./synap backup init                            # create the off-host repository, print the recovery kit ONCE
+./synap backup push                            # dump + encrypted snapshot now (the service does it hourly)
+./synap backup drill [snapshot]                # restore into a throwaway postgres, compare fingerprints
+./synap backup status                          # repository, last runs, alarms (also GET /status/backup)
+./synap restore --from-snapshot <id|latest>    # fresh host: .env + state → databases → files → fingerprint
+./synap restore deploy/backups/postgres/<dir>  # restore a local dump set (stops writers, pg_restore --clean)
 deploy/pgdata-safety.sh layout                 # ok | legacy | absent
 docker compose ps postgres-backup              # healthy = a dump newer than 2× the interval exists
 ```
@@ -201,9 +212,21 @@ docker compose ps postgres-backup              # healthy = a dump newer than 2×
 ### Off-host copies (required — the host is a single failure domain)
 
 On-host dumps protect against Docker accidents, not against losing the disk or
-the host. Ship `deploy/backups/postgres/` **and** `deploy/.env` (the secrets the
-data is encrypted/signed with) off the host — restic to B2/S3, or Proxmox Backup
-Server for the whole CT. A restore needs both the dump and the matching `.env`.
+the host. Set the target in `deploy/.env`, then run `./synap backup init`:
+
+```bash
+BACKUP_REPOSITORY=rest:https://vault.example:8000/my-pod   # or s3:…, b2:bucket:path, /mnt/path
+BACKUP_RESTIC_REST_USERNAME=… BACKUP_RESTIC_REST_PASSWORD=…  # or BACKUP_AWS_* / BACKUP_B2_*
+BACKUP_HEARTBEAT_URL=https://hc-ping.com/…                  # optional dead-man ping, on success only
+```
+
+Each snapshot holds every database dump, the MinIO objects, `.env` and `state/`,
+**encrypted on the pod** with a password generated by `init` and shown once in the
+recovery kit — keep it in two places you control; Synap never holds it. The pod
+only ever adds snapshots (no `forget`/`prune`): give it append-only credentials
+(rest-server `--append-only`, or a B2/S3 key without delete + Object Lock) and run
+retention where the delete-capable credentials live, e.g.
+`restic forget --keep-hourly 24 --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune`.
 
 ## Docker Compose profiles
 
