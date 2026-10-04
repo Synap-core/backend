@@ -2720,7 +2720,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "agent" | "automation" | "playbook";
+			data: "agent" | "playbook" | "automation" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -2735,7 +2735,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "human" | "agent" | "automation" | "playbook";
+			$type: "agent" | "playbook" | "automation" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -2841,7 +2841,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3303,7 +3303,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "capability" | "human" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -14567,6 +14567,18 @@ export interface Signal {
 	/** `activity` only: the ledger row, as `activity.list` returns it. */
 	activity?: ActivityRow;
 	/**
+	 * `event` only, and only when the event is a RECORD CHANGE
+	 * (`parseRecordChange`: `{subject}.{crud}.completed`): the act, the record's
+	 * kind (its profile slug when the event named one) and the writer when it is
+	 * not the default API path. The lens page draws it as a data line
+	 * (`happenedItems`, `@synap-core/types/lens`).
+	 */
+	event?: {
+		action: string;
+		objectKind: string;
+		origin: string | null;
+	};
+	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
 	 * everything a session owes the person (its owed slots, its draft-asks row,
 	 * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -17434,7 +17446,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18186,7 +18198,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18288,7 +18300,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18404,7 +18416,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -31663,7 +31675,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "ai" | "governance" | "inbox";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -37013,6 +37025,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				actor?: string | undefined;
 				projectId?: string | undefined;
 				trackId?: string | undefined;
+				sessionId?: string | undefined;
 				workspaceId?: string | null | undefined;
 				outcome?: "running" | "failed" | "proposed" | "reverted" | "rejected" | "succeeded" | "waiting" | "stopped" | undefined;
 				source?: "session" | "run" | "proposal" | "decision" | undefined;
@@ -37029,6 +37042,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				tz: string;
 				actor?: string | undefined;
 				projectId?: string | undefined;
+				trackId?: string | undefined;
+				sessionId?: string | undefined;
 				workspaceId?: string | null | undefined;
 				source?: "session" | "run" | "proposal" | "decision" | undefined;
 				days?: number | undefined;
@@ -37574,6 +37589,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | null | undefined;
 				projectId?: string | undefined;
+				trackId?: string | undefined;
+				sessionId?: string | undefined;
 				since?: string | undefined;
 				actor?: "agents" | "all" | "me" | undefined;
 				cursor?: string | undefined;
