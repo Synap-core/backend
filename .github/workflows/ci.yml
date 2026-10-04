@@ -125,6 +125,15 @@ jobs:
         run: pnpm format || echo "⚠️  Format check failed - run 'pnpm format:fix' to auto-fix"
         continue-on-error: true
 
+      # Deploy safety tripwires (daemon-free). pgdata-safety guards the
+      # 2026-10-02 pod wipe: postgres data must live on its volume, every update
+      # door must run the placement guard first, and backups must land on the host.
+      - name: Deploy safety tests
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          bash deploy/__tests__/pgdata-safety.test.sh
+          bash deploy/__tests__/ensure-ory-databases.test.sh
+
       - name: Check orphaned REST route files
         run: node packages/api/src/routers/hub-protocol/rest/check-orphan-routes.mjs
         continue-on-error: false

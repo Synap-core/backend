@@ -52,6 +52,10 @@ die() { log "ERROR: $*"; exit 1; }
 COMPOSE_CMD="$COMPOSE"
 # shellcheck source=/dev/null
 . "$CD/ensure-ory-databases.sh" || die "Ory database bootstrap not found at $CD/ensure-ory-databases.sh"
+# Postgres data-placement guard (deploy/pgdata-safety.sh) — see the header of
+# that file for the 2026-10-02 incident it closes.
+# shellcheck source=/dev/null
+. "$CD/pgdata-safety.sh" || die "Postgres data-placement guard not found at $CD/pgdata-safety.sh"
 
 [ -z "$VERSION" ] && die "version required"
 log "=== Updating to ${VERSION} ==="
@@ -85,6 +89,15 @@ $COMPOSE pull kratos kratos-migrate 2>/dev/null || log "WARN: Kratos image pull 
 # Shared fail-closed bootstrap (deploy/ensure-ory-databases.sh): starts only
 # postgres, waits for readiness, creates only missing databases, verifies each
 # one, and aborts on any failure. Never drops a database or a volume.
+# ─── Step 1a: Postgres data placement + pre-update backup ──────────────────────
+# BEFORE anything may recreate postgres: move a legacy in-layer cluster onto its
+# volume (verified by row fingerprint), then take a verified dump of every db.
+log "Checking postgres data placement..."
+SYNAP_DEPLOY_DIR="$CD" pgdata_guard || die "Postgres data-placement guard failed — aborting update; nothing was deleted"
+if [ "$(SYNAP_DEPLOY_DIR="$CD" pgdata_layout)" = "ok" ] && [ -n "$($COMPOSE ps -q --status running postgres 2>/dev/null)" ]; then
+    SYNAP_DEPLOY_DIR="$CD" pgdata_backup pre-update >/dev/null || die "Pre-update database backup failed — aborting update before migrations"
+fi
+
 log "Ensuring kratos and hydra databases exist..."
 ensure_ory_databases || die "Ory database bootstrap failed — aborting update before migrations"
 

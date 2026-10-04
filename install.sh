@@ -296,6 +296,10 @@ done
 # synap.sh deploy both have it available.
 _download "deploy/ensure-ory-databases.sh" "$INSTALL_DIR/ensure-ory-databases.sh"
 chmod +x "$INSTALL_DIR/ensure-ory-databases.sh"
+# Postgres data-placement guard — moves a legacy in-layer cluster onto its volume
+# before compose may recreate postgres, and backs up/restores (see its header).
+_download "deploy/pgdata-safety.sh" "$INSTALL_DIR/pgdata-safety.sh"
+chmod +x "$INSTALL_DIR/pgdata-safety.sh"
 
 # Add-on installer (referenced by the post-install "Next steps" message)
 _download "deploy/setup-openclaw.sh" "$INSTALL_DIR/setup-openclaw.sh"
@@ -731,6 +735,13 @@ success "Images pulled"
 
 # ─── Start services ────────────────────────────────────────────────────────────
 heading "Starting services"
+
+# A re-run on an existing pod must never recreate a postgres whose cluster
+# lives in its container layer (2026-10-02 incident) — move it onto the volume first.
+# shellcheck source=/dev/null
+. "$INSTALL_DIR/pgdata-safety.sh" || error "Postgres data-placement guard not found"
+SYNAP_DEPLOY_DIR="$INSTALL_DIR" COMPOSE_CMD="docker compose" pgdata_guard \
+  || error "Postgres data-placement guard failed — nothing was deleted; see the [pgdata] lines above"
 
 info "Starting infrastructure (postgres, redis, minio, typesense)..."
 docker compose up -d postgres redis minio typesense

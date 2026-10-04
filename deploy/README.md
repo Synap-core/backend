@@ -159,32 +159,51 @@ Synap now uses one controlled execution path for pod lifecycle operations:
 
 If provisioning/update fails, inspect packet metadata first in pod diagnostics, then follow the linked ticket.
 
-## 💾 Backups
+## 💾 Data & backups
 
-### Create Backup
+### Where the data lives (and why it matters)
+
+| Data                                    | Where                                                                                                     | Survives `prune --volumes` / `down -v`? |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| Postgres cluster (synap, kratos, hydra) | volume `<project>_postgres_data` mounted at `/home/postgres/pgdata` (`PGDATA=/home/postgres/pgdata/data`) | ❌ no — that is why dumps exist         |
+| Daily dumps                             | `deploy/backups/postgres/<UTC>-daily/<db>.dump` (host directory)                                          | ✅ yes                                  |
+| Pre-update / manual dumps               | `deploy/backups/postgres/<UTC>-pre-update/…`                                                              | ✅ yes                                  |
+| "This pod has data" marker              | `deploy/state/postgres-initialized` (host directory)                                                      | ✅ yes                                  |
+| Files / search                          | volumes `minio_data`, `typesense_data`                                                                    | ❌ no — cover them with host backup     |
+
+**2026-10-02 incident.** The volume used to be mounted at `/var/lib/postgresql/data`,
+which `timescaledb-ha` does not use. The volume stayed empty and the whole database
+lived in the container layer, so one recreate wiped a pod. Four layers now prevent
+that — see the header of `pgdata-safety.sh`:
+
+1. `PGDATA` is pinned and the volume is mounted at its parent.
+2. Postgres **refuses to start** (exit 78, `FATAL[synap]` in its logs) if that path is
+   not a mount, or if `deploy/state/postgres-initialized` exists but the cluster is
+   empty. To start blank on purpose: `SYNAP_ALLOW_PG_REINIT=1 docker compose up -d postgres`.
+3. Every update/install door (`synap`, `update-pod.sh`, `install.sh`, `eve update synap`)
+   runs `pgdata-safety.sh guard` first: a cluster still in a container layer is
+   dumped, committed to a `pgdata-rescue/*` image, copied onto the volume and
+   verified by row counts before anything is recreated. Updates also take a
+   verified `pre-update` dump of every database before migrations.
+4. `postgres-backup` dumps every database daily (`PG_BACKUP_INTERVAL_SECONDS`,
+   default 86400; keeps `PG_BACKUP_KEEP`, default 7) and turns **unhealthy** when no
+   fresh dump exists.
+
+### Commands
 
 ```bash
-./synap backup
+./synap backup [label]                         # every database → backups/postgres/<ts>-<label>/ (+ env.backup)
+./synap restore deploy/backups/postgres/<dir>  # restore a dump set (stops writers, pg_restore --clean)
+deploy/pgdata-safety.sh layout                 # ok | legacy | absent
+docker compose ps postgres-backup              # healthy = a dump newer than 2× the interval exists
 ```
 
-Backups are stored in `./backups/` and include:
+### Off-host copies (required — the host is a single failure domain)
 
-- PostgreSQL database dump
-- Environment configuration (`.env`)
-
-### Restore from Backup
-
-```bash
-./synap restore backups/backup-20260127.tar.gz
-```
-
-### Scheduled Backups
-
-Add to crontab for daily backups:
-
-```bash
-0 2 * * * cd /opt/synap-backend && ./synap backup >> /var/log/synap-backup.log 2>&1
-```
+On-host dumps protect against Docker accidents, not against losing the disk or
+the host. Ship `deploy/backups/postgres/` **and** `deploy/.env` (the secrets the
+data is encrypted/signed with) off the host — restic to B2/S3, or Proxmox Backup
+Server for the whole CT. A restore needs both the dump and the matching `.env`.
 
 ## Docker Compose profiles
 

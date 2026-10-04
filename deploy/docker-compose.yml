@@ -365,6 +365,20 @@ services:
     # ============================================================================
     # POSTGRESQL
     # ============================================================================
+  #
+  # ⚠️ DATA PLACEMENT — read before touching this block (2026-10-02 incident).
+  # timescaledb-ha keeps its cluster at /home/postgres/pgdata/data, NOT the
+  # stock /var/lib/postgresql/data. This block used to mount the volume at the
+  # stock path: the volume stayed empty, the whole pod lived in the container
+  # layer, and one recreate wiped it. Now:
+  #   • PGDATA is pinned explicitly and the volume is mounted at its parent;
+  #   • the entrypoint refuses to start unless that parent is a real mount, and
+  #     refuses to initdb a blank cluster when deploy/state/postgres-initialized
+  #     says this pod already had data (escape hatch: SYNAP_ALLOW_PG_REINIT=1);
+  #   • deploy/pgdata-safety.sh moves a legacy in-layer cluster before any door
+  #     recreates this container; postgres-backup (below) dumps it daily.
+  # Changing the image, PGDATA or the mount? Update deploy/pgdata-safety.sh and
+  # run deploy/__tests__/pgdata-safety.test.sh — it fails when they disagree.
   postgres:
     image: timescale/timescaledb-ha:pg15
     restart: always
@@ -372,8 +386,26 @@ services:
       POSTGRES_USER: synap
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: synap
+      PGDATA: /home/postgres/pgdata/data
+      SYNAP_ALLOW_PG_REINIT: ${SYNAP_ALLOW_PG_REINIT:-0}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! grep -qs ' /home/postgres/pgdata ' /proc/self/mountinfo; then
+          echo "FATAL[synap]: /home/postgres/pgdata is not a mounted volume. Refusing to start: the database would live in the container layer and vanish on the next recreate." >&2
+          exit 78
+        fi
+        if [ ! -s "$$PGDATA/PG_VERSION" ] && [ -e /synap-state/postgres-initialized ] && [ "$$SYNAP_ALLOW_PG_REINIT" != 1 ]; then
+          echo "FATAL[synap]: this pod already had a database (deploy/state/postgres-initialized) but $$PGDATA is empty. Refusing to initialize a blank one over it. Restore from deploy/backups/postgres (deploy/pgdata-safety.sh restore <dir>), or set SYNAP_ALLOW_PG_REINIT=1 to start empty on purpose." >&2
+          exit 78
+        fi
+        exec /docker-entrypoint.sh "$$@"
+      - postgres-guard
+    command: ["postgres"]
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/home/postgres/pgdata
+      - ./state:/synap-state:ro
       # POSTGRES_INIT_SCRIPT selects the init script source:
       #   (unset)   → ../docker/postgres/init-databases.sh  — source-repo deploy
       #   ./config/postgres/init-databases.sh               — install.sh/standalone deploy
@@ -387,6 +419,67 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ============================================================================
+  # POSTGRES BACKUP — daily logical dumps of EVERY database (synap, kratos,
+  # hydra, …) to deploy/backups/postgres on the HOST. A bind mount on purpose:
+  # `docker system prune --volumes` and `compose down -v` cannot touch it, and
+  # host-level backup (restic/PBS) picks it up as a plain directory.
+  # Each run writes <UTC>-daily/<db>.dump, reads every dump back (pg_restore -l)
+  # before publishing it, keeps the newest PG_BACKUP_KEEP, and marks
+  # deploy/state/postgres-initialized once the pod has users. Unhealthy when no
+  # dump newer than 2× the interval exists — a silent backup is a broken one.
+  # Restore: deploy/pgdata-safety.sh restore deploy/backups/postgres/<dir>
+  # ============================================================================
+  postgres-backup:
+    image: timescale/timescaledb-ha:pg15
+    restart: always
+    user: "0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: synap
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${PG_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${PG_BACKUP_KEEP:-7}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /backups /synap-state
+        while :; do
+          d="/backups/$$(date -u +%Y%m%dT%H%M%SZ)-daily"; tmp="$$d.partial"; ok=1
+          mkdir -p "$$tmp"
+          for db in $$(psql -d postgres -Atc "select datname from pg_database where not datistemplate and datname <> 'postgres'"); do
+            pg_dump -Fc -f "$$tmp/$$db.dump" "$$db" && pg_restore -l "$$tmp/$$db.dump" >/dev/null || ok=0
+          done
+          if [ "$$ok" = 1 ] && ls "$$tmp"/*.dump >/dev/null 2>&1; then
+            mv "$$tmp" "$$d" && echo "[postgres-backup] ok $$d ($$(du -sh "$$d" | cut -f1))"
+            users=$$(psql -d synap -Atc "select count(*) from users" 2>/dev/null || echo 0)
+            [ "$${users:-0}" -gt 0 ] 2>/dev/null && date -u +%Y-%m-%dT%H:%M:%SZ > /synap-state/postgres-initialized
+            ls -1d /backups/*-daily 2>/dev/null | sort | head -n -"$$BACKUP_KEEP" | xargs -r rm -rf
+          else
+            echo "[postgres-backup] FAILED — keeping previous dumps" >&2; rm -rf "$$tmp"
+          fi
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /backups -maxdepth 1 -name '*-daily' -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
+        ]
+      interval: 10m
+      timeout: 10s
+      start_period: 30m
+      retries: 1
+    volumes:
+      - ./backups/postgres:/backups
+      - ./state:/synap-state
+    networks:
+      - synap-net
 
   # ============================================================================
   # REDIS

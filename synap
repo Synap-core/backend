@@ -63,6 +63,49 @@ else
 fi
 unset _ory_bootstrap_script
 
+# ─── Postgres data-placement guard (deploy/pgdata-safety.sh) ──────────────────
+# 2026-10-02: the pod's database lived in the postgres container's writable
+# layer (volume mounted at the wrong path) and one recreate wiped it. Before ANY
+# `docker compose up|run|create` in this process — from any command or helper,
+# present or future — the guard moves a legacy in-layer cluster onto its volume
+# and marks the pod initialized. Intercepting `docker` itself (rather than
+# listing the commands that recreate containers) means a new call site is
+# covered by existing, not by someone remembering to add it.
+_pgdata_safety_script="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/deploy/pgdata-safety.sh"
+if [ -f "$_pgdata_safety_script" ]; then
+    # shellcheck source=/dev/null
+    source "$_pgdata_safety_script"
+else
+    echo -e "${RED}❌ Postgres data-placement guard not found at ${_pgdata_safety_script}${NC}"
+    exit 1
+fi
+unset _pgdata_safety_script
+
+_PGDATA_GUARD_DONE=0
+_run_pgdata_guard() {
+    _PGDATA_GUARD_DONE=1
+    local deploy_dir
+    deploy_dir="$(get_deploy_dir)"
+    [ -z "$deploy_dir" ] && return 0
+    SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_guard || {
+        echo -e "${RED}❌ Postgres data-placement guard failed — aborting before anything recreates postgres.${NC}"
+        echo -e "${YELLOW}   Nothing was deleted. See the [pgdata] lines above; backups live in ${deploy_dir}/backups/postgres.${NC}"
+        exit 1
+    }
+}
+
+docker() {
+    if [ "${1:-}" = compose ] && [ "$_PGDATA_GUARD_DONE" = 0 ]; then
+        local arg
+        for arg in "$@"; do
+            case "$arg" in
+                up|run|create) _run_pgdata_guard; break ;;
+            esac
+        done
+    fi
+    command docker "$@"
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -2615,6 +2658,17 @@ cmd_update() {
         echo -e "${RED}❌ Preflight check failed — aborting update before database provisioning${NC}"
         exit 1
     }
+
+    # Data placement first (moves a legacy in-layer cluster onto its volume),
+    # then a verified dump of every database before migrations touch anything.
+    _run_pgdata_guard
+    if [ "$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_layout)" = "ok" ] \
+        && [ -n "$(cd "$deploy_dir" && command docker compose ps -q --status running postgres 2>/dev/null)" ]; then
+        SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_backup pre-update >/dev/null || {
+            echo -e "${RED}❌ Pre-update database backup failed — aborting update before migrations${NC}"
+            exit 1
+        }
+    fi
     COMPOSE_CMD="docker compose" ensure_ory_databases || {
         echo -e "${RED}❌ Ory database bootstrap failed — aborting update before migrations${NC}"
         exit 1
@@ -3057,31 +3111,22 @@ cmd_backup() {
         echo -e "${RED}Error: Not in Synap installation directory${NC}"
         exit 1
     fi
-    
+
     cd "$deploy_dir"
-    
-    local backup_name=${1:-"backup-$(date +%Y%m%d-%H%M%S)"}
-    local backup_dir="./backups"
-    
-    mkdir -p "$backup_dir"
-    
-    echo -e "${BLUE}💾 Creating backup: ${backup_name}${NC}"
-    
-    # Backup database
-    docker compose exec -T postgres pg_dump -U synap synap > "$backup_dir/${backup_name}-database.sql"
-    
-    # Backup .env
-    cp .env "$backup_dir/${backup_name}.env"
-    
-    # Create tarball
-    tar -czf "$backup_dir/${backup_name}.tar.gz" \
-        -C "$backup_dir" \
-        "${backup_name}-database.sql" \
-        "${backup_name}.env"
-    
-    rm "$backup_dir/${backup_name}-database.sql" "$backup_dir/${backup_name}.env"
-    
-    echo -e "${GREEN}✅ Backup created: ${backup_dir}/${backup_name}.tar.gz${NC}"
+
+    # ONE backup door (deploy/pgdata-safety.sh): EVERY database — synap AND the
+    # kratos/hydra identity stores, without which restored users cannot log in —
+    # each dump read back before it is kept. The old path dumped `synap` only.
+    local label=${1:-manual}
+    local dir
+    dir="$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_backup "$label")" || {
+        echo -e "${RED}❌ Backup failed${NC}"
+        exit 1
+    }
+    # The .env holds the secrets the restored data was encrypted/signed with.
+    (umask 077 && cp .env "$dir/env.backup")
+    echo -e "${GREEN}✅ Backup created: ${dir}${NC}"
+    echo -e "${YELLOW}   Contains secrets (env.backup) — copy it OFF this host (restic/PBS/scp).${NC}"
 }
 
 cmd_restore() {
@@ -3096,10 +3141,21 @@ cmd_restore() {
     local backup_file=$1
     if [ -z "$backup_file" ]; then
         echo -e "${RED}Error: Backup file required${NC}"
-        echo "Usage: synap restore <backup-file.tar.gz>"
+        echo "Usage: synap restore <backups/postgres/<dir>> | <legacy-backup.tar.gz>"
         exit 1
     fi
     
+    # A directory is a `synap backup` / postgres-backup dump set (<db>.dump each).
+    if [ -d "$backup_file" ]; then
+        echo -e "${YELLOW}⚠️  WARNING: This replaces every database with the contents of ${backup_file}${NC}"
+        read -p "Continue? (yes/no): " CONFIRM
+        [ "$CONFIRM" = "yes" ] || { echo "Restore cancelled"; exit 0; }
+        SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_restore "$backup_file" || exit 1
+        docker compose up -d --remove-orphans
+        echo -e "${GREEN}✅ Restore complete!${NC}"
+        return 0
+    fi
+
     if [ ! -f "$backup_file" ]; then
         echo -e "${RED}Error: Backup file not found: $backup_file${NC}"
         exit 1
