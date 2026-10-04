@@ -548,7 +548,7 @@ describe("GET /doors", () => {
       else process.env.POD_ADMIN_URL = saved.url;
       if (saved.domain !== undefined) process.env.POD_ADMIN_DOMAIN = saved.domain;
     }
-  });
+  }, 30_000); // cold import of the @synap/api barrel takes >5s
 
   it("a failed read is a 503, never an all-false 'nothing works'", async () => {
     const world = makeWorld();
