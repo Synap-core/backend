@@ -539,6 +539,11 @@ export class ViewFilterCompiler {
 
   /**
    * Compile filter for JSONB property (fallback when not indexed)
+   *
+   * Supports every `EntityFilter` operator. An operator or value shape it
+   * cannot compile THROWS (like an unknown property in `compileFilter`; the
+   * views router maps it to BAD_REQUEST) — it never degrades to `FALSE`,
+   * which would render a broken filter as a calm, empty result.
    */
   private compileJSONBPropertyFilter(
     propertyKey: string,
@@ -563,6 +568,11 @@ export class ViewFilterCompiler {
           sql: sql`(${propertiesCol}->>${propertyKey} ILIKE ${`%${value}%`})`,
           usesIndex: false,
         };
+      case "not_contains":
+        return {
+          sql: sql`(${propertiesCol}->>${propertyKey} NOT ILIKE ${`%${value}%`})`,
+          usesIndex: false,
+        };
       case "is_empty":
         return {
           sql: sql`(${propertiesCol}->>${propertyKey} IS NULL)`,
@@ -574,21 +584,82 @@ export class ViewFilterCompiler {
           usesIndex: false,
         };
       case "in":
-        if (Array.isArray(value)) {
+      case "not_in": {
+        if (!Array.isArray(value)) {
+          throw new Error(
+            `Filter operator "${operator}" on property "${propertyKey}" requires an array value`
+          );
+        }
+        // Empty set: nothing is IN it, everything is NOT IN it.
+        if (value.length === 0) {
           return {
-            sql: sql`(${propertiesCol}->>${propertyKey} = ANY(${value})`,
+            sql: operator === "in" ? sql`FALSE` : sql`TRUE`,
             usesIndex: false,
           };
         }
+        // `->>` yields text, so compare against text. Drizzle expands a JS
+        // array into a parenthesised param list `($1, $2)` — valid for IN,
+        // NOT valid inside ANY(), which needs a single array value.
+        const texts = value.map((v) => String(v));
         return {
-          sql: sql`FALSE`,
+          sql:
+            operator === "in"
+              ? sql`(${propertiesCol}->>${propertyKey} IN ${texts})`
+              : sql`(${propertiesCol}->>${propertyKey} NOT IN ${texts})`,
           usesIndex: false,
         };
+      }
+      case "greater_than":
+      case "greater_than_or_equal":
+      case "less_than":
+      case "less_than_or_equal": {
+        // Mirrors the indexed range path: numbers compare as numeric, dates
+        // as timestamps. The JSONB path has no valueType, so the kind comes
+        // from the filter value. The CASE guard keeps a stored value that is
+        // not of that kind from aborting the whole query on a cast error —
+        // it becomes NULL and simply does not match.
+        const sqlOperator = RANGE_SQL_OPERATORS[operator] as string;
+        const text = sql`(${propertiesCol}->>${propertyKey})`;
+        if (isNumericFilterValue(value)) {
+          return {
+            sql: sql`(CASE WHEN ${text} ~ ${NUMERIC_TEXT_PATTERN} THEN ${text}::numeric END ${sql.raw(sqlOperator)} ${String(Number(value))}::numeric)`,
+            usesIndex: false,
+          };
+        }
+        if (typeof value === "string" && ISO_DATE_PREFIX.test(value)) {
+          return {
+            sql: sql`(CASE WHEN ${text} ~ ${ISO_DATE_TEXT_PATTERN} THEN ${text}::timestamptz END ${sql.raw(sqlOperator)} ${value}::timestamptz)`,
+            usesIndex: false,
+          };
+        }
+        throw new Error(
+          `Filter operator "${operator}" on property "${propertyKey}" requires a number or an ISO date value`
+        );
+      }
       default:
-        return {
-          sql: sql`FALSE`,
-          usesIndex: false,
-        };
+        throw new Error(
+          `Unsupported filter operator "${operator}" on property "${propertyKey}"`
+        );
     }
   }
+}
+
+const RANGE_SQL_OPERATORS: Record<string, string> = {
+  greater_than: ">",
+  greater_than_or_equal: ">=",
+  less_than: "<",
+  less_than_or_equal: "<=",
+};
+/** Stored text the numeric range comparison will cast (else it is NULL). */
+const NUMERIC_TEXT_PATTERN = "^\\s*-?[0-9]+(\\.[0-9]+)?([eE][-+]?[0-9]+)?\\s*$";
+/** Stored text the date range comparison will cast (else it is NULL). */
+const ISO_DATE_TEXT_PATTERN = "^[0-9]{4}-[0-9]{2}-[0-9]{2}";
+const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
+
+function isNumericFilterValue(value: unknown): boolean {
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string" && value.trim() !== "") {
+    return Number.isFinite(Number(value));
+  }
+  return false;
 }
