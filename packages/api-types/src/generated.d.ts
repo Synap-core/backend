@@ -2720,7 +2720,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "human" | "automation" | "playbook";
+			data: "agent" | "playbook" | "automation" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -2735,7 +2735,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "human" | "automation" | "playbook";
+			$type: "agent" | "playbook" | "automation" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -2841,7 +2841,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3303,7 +3303,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "capability" | "human" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -5584,15 +5584,27 @@ declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
 	"not_promoted"
 ];
 export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
-/**
- * View Query Types
- *
- * Single source of truth for all view query and filter types.
- */
-/**
- * Filter operator types
- */
-export type FilterOperator = "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "is_empty" | "is_not_empty" | "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal";
+declare const VIEW_FILTER_OPERATORS: readonly [
+	"equals",
+	"not_equals",
+	"contains",
+	"not_contains",
+	"in",
+	"not_in",
+	"greater_than",
+	"greater_than_or_equal",
+	"less_than",
+	"less_than_or_equal",
+	"is_empty",
+	"is_not_empty"
+];
+/** A view filter operator. Derived from {@link VIEW_FILTER_OPERATORS}. */
+export type FilterOperator = (typeof VIEW_FILTER_OPERATORS)[number];
+/** A stored filter that could not be repaired into the grammar, and why. */
+export interface DroppedViewFilter {
+	filter: unknown;
+	reason: string;
+}
 /**
  * Filter definition for entity queries
  */
@@ -7854,6 +7866,11 @@ export interface SessionActivityLive {
 	 * session's status — "active" is a lifecycle, not "an agent is working".
 	 */
 	turnInFlight: boolean;
+	/**
+	 * WHICH turn is in flight (`chat_turns.id`), when the pod names it. Optional:
+	 * an older pod omits it, and the derivation then infers the live turn.
+	 */
+	turnId?: string | null;
 	/** When the in-flight turn started; null when none is in flight. */
 	since: Date | string | null;
 	/** The newest activity `at`; null when nothing has happened yet. */
@@ -7982,13 +7999,14 @@ export interface RunGroup {
 /**
  * One entry in a run's activity timeline — a step (automation), a decision/trace
  * (capture), or a lifecycle marker. Rich timelines come from automation steps and
- * capture events; playbook/session runs carry a `channelId` so the UI opens the
- * channel for their message-level story instead of duplicating it here.
+ * capture events. A playbook/session run's agent work arrives as the session
+ * activity WIRE (`sessionActivity`); its flat items here carry only the words
+ * (`detail: null`), plus a `partial` item when a source was unreadable.
  */
 export interface GenericRunActivityItem {
 	id: string;
 	at: Date | null;
-	/** "step" | "ai_decision" | "capture_trace" | "lifecycle" | … */
+	/** "step" | "ai_decision" | "capture_trace" | "lifecycle" | "partial" | … */
 	kind: string;
 	status: string | null;
 	label: string;
@@ -13152,6 +13170,20 @@ export interface FunnelStep {
 	category: PlaybookStageCategory;
 	count: number;
 }
+/** One counted day. `date` is the viewer's calendar day, `YYYY-MM-DD`. */
+export interface ActivityDay {
+	date: string;
+	count: number;
+}
+/** `activity.daily`'s answer. Sparse: a day with no act is absent. */
+export interface ActivityDaily {
+	/** First day of the window (inclusive), `YYYY-MM-DD` in `tz`. */
+	from: string;
+	/** Last day of the window (inclusive) — the viewer's today. */
+	to: string;
+	tz: string;
+	days: ActivityDay[];
+}
 declare const ACTIVITY_OUTCOMES: readonly [
 	"succeeded",
 	"failed",
@@ -13518,10 +13550,6 @@ export interface TrackStageHistoryEntry {
  *   - `null`  — the track is not paused (a stale marker never leaks).
  */
 export type TrackPausedBy = "check" | "human" | null;
-type Unavailable$1 = {
-	status: "unavailable";
-	reason: string;
-};
 /** A session's deliverables, counted — the progress rail and the owed badge. */
 export interface DeliverableCounts {
 	/** Stamped done. */
@@ -13531,6 +13559,10 @@ export interface DeliverableCounts {
 	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
 	owedByYou: number;
 }
+type Unavailable$1 = {
+	status: "unavailable";
+	reason: string;
+};
 export interface ProjectPathRow {
 	id: string;
 	/** The stored name, `null` when untitled. */
@@ -17296,7 +17328,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18048,7 +18080,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18150,7 +18182,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18266,7 +18298,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -25445,7 +25477,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				scopeProfileIds?: string[] | undefined;
 				scopeMode?: "explicit" | "observed" | undefined;
 				query?: {
-					filters?: any[] | undefined;
+					filters?: unknown[] | undefined;
 					sorts?: any[] | undefined;
 					search?: string | undefined;
 					limit?: number | undefined;
@@ -25513,7 +25545,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "table" | "map" | "calendar" | "all" | "bento" | "whiteboard" | "list" | "grid" | "flow" | "sheet" | "gallery" | "kanban" | "matrix" | "masonry" | "gantt" | "timeline" | "graph" | "branch_tree" | "mindmap" | undefined;
+				type?: "table" | "map" | "calendar" | "all" | "bento" | "whiteboard" | "list" | "grid" | "flow" | "sheet" | "gallery" | "kanban" | "matrix" | "masonry" | "gantt" | "timeline" | "graph" | "branch_tree" | "mindmap" | "zoom_map" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -25700,6 +25732,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				projectId?: string | undefined;
+				filters?: unknown[] | undefined;
 			};
 			output: {
 				view: {
@@ -25737,6 +25770,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				query?: undefined;
 				config?: undefined;
 				columns?: undefined;
+				droppedFilters?: undefined;
 			} | {
 				view: {
 					description: string | null;
@@ -25811,6 +25845,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 				}[];
 				columns: ViewColumn[];
+				droppedFilters: DroppedViewFilter[];
 				content?: undefined;
 			};
 			meta: object;
@@ -25834,7 +25869,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				scopeProfileIds?: string[] | undefined;
 				scopeMode?: "explicit" | "observed" | undefined;
 				query?: {
-					filters?: any[] | undefined;
+					filters?: unknown[] | undefined;
 					sorts?: any[] | undefined;
 					search?: string | undefined;
 					limit?: number | undefined;
@@ -25880,6 +25915,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					snapshotUpdatedAt: Date | null;
 					embeddedViewIds: string[] | null;
 				};
+				droppedFilters: DroppedViewFilter[];
 			};
 			meta: object;
 		}>;
@@ -31519,7 +31555,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "ai" | "governance" | "inbox";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -36872,10 +36908,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				outcome?: "running" | "failed" | "proposed" | "reverted" | "rejected" | "succeeded" | "waiting" | "stopped" | undefined;
 				source?: "session" | "run" | "proposal" | "decision" | undefined;
 				since?: string | undefined;
+				until?: string | undefined;
 				cursor?: string | undefined;
 				limit?: number | undefined;
 			};
 			output: ActivityPage;
+			meta: object;
+		}>;
+		daily: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				tz: string;
+				actor?: string | undefined;
+				projectId?: string | undefined;
+				workspaceId?: string | null | undefined;
+				source?: "session" | "run" | "proposal" | "decision" | undefined;
+				days?: number | undefined;
+			};
+			output: ActivityDaily;
 			meta: object;
 		}>;
 		summary: import("@trpc/server").TRPCQueryProcedure<{
