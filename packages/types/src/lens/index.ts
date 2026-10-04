@@ -10,3 +10,4 @@ export * from "./scope.js";
 export * from "./classes.js";
 export * from "./rows.js";
 export * from "./header.js";
+export * from "./page.js";
