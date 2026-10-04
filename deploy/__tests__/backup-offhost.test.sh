@@ -320,6 +320,37 @@ env SYNAP_DEPLOY_DIR="$T/fresh3" COMPOSE_CMD="$T/bin/fake-compose" BACKUP_REPOSI
     PATH="$T/bin:$PATH" sh "$SAFETY" restore-snapshot latest >"$T/out" 2>&1; rc=$?
 [ "$rc" = 2 ] && [ ! -e "$T/fresh3/.env" ] && ok "no kit password → refused, nothing written" || bad "restore without password: rc=$rc"
 
+echo "── C. synap CLI → the same door"
+SYNAP_CLI="${BACKUP_TEST_SYNAP:-$SCRIPT_DIR/../../synap}"
+F4="$T/fresh4"; mkdir -p "$F4/state/bin"; cp "$T/bin/restic" "$F4/state/bin/restic"; : > "$F4/docker-compose.yml"
+echo "5|100|1" > "$T/live-fp"
+# The CLI's `docker compose …` goes through its docker() wrapper (pgdata guard)
+# to `command docker` — here a fake that answers the guard and hands compose to
+# the compose stand-in.
+mkdir -p "$T/clibin"
+cat > "$T/clibin/docker" <<'SH'
+#!/bin/sh
+if [ "$1" = compose ]; then shift; exec "$FAKE_COMPOSE" "$@"; fi
+case "$*" in
+  *".Config.Env"*) echo "PGDATA=/home/postgres/pgdata/data"; exit 0 ;;
+  *".Mounts"*) echo "/home/postgres/pgdata"; exit 0 ;;
+  "ps "*|"volume "*) exit 0 ;;
+esac
+exec "$FAKE_DOCKER" "$@"
+SH
+chmod +x "$T/clibin/docker"
+cli() { env BACKUP_REPOSITORY="$REPO" SYNAP_DEPLOY_DIR="$F4" FAKE_COMPOSE="$T/bin/fake-compose" FAKE_DOCKER="$T/bin/docker" PATH="$T/clibin:$T/bin:$PATH" bash "$SYNAP_CLI" "$@"; }
+: > "$F4/legacy.tar.gz"
+cli restore "$F4/legacy.tar.gz" >"$T/out" 2>&1 </dev/null; rc=$?
+[ "$rc" = 1 ] && grep -q "not a backup directory" "$T/out" && [ ! -e "$F4/.env" ] && ok "legacy tar.gz restore is retired (refused, nothing touched)" || bad "legacy restore: rc=$rc $(cat "$T/out")"
+m=$(mark)
+echo yes | cli restore --from-snapshot latest --password-file "$T/kit-password" >"$T/out" 2>&1; rc=$?
+cmp -s "$F4/.env" "$T/deploy/.env" && calls_since "$m" | grep -q "^restic restore" && calls_since "$m" | grep -q "EVENT minio-import ok" \
+    && calls_since "$m" | grep -q "^compose up -d --remove-orphans" \
+    && ok "synap restore --from-snapshot runs the engine with the kit password, then starts the stack" || bad "cli restore: rc=$rc $(cat "$T/out")"
+echo no | cli restore --from-snapshot latest --password-file "$T/kit-password" >"$T/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q "cancelled" "$T/out" && ok "declining the confirmation changes nothing" || bad "cancel: rc=$rc"
+
 echo "── L. compose layout = script constants"
 python3 - "$COMPOSE_FILE" "$SAFETY_SRC" <<'PY'
 import re, sys, yaml

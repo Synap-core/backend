@@ -3611,19 +3611,50 @@ cmd_backup() {
 
     cd "$deploy_dir"
 
-    # ONE backup door (deploy/pgdata-safety.sh): EVERY database — synap AND the
-    # kratos/hydra identity stores, without which restored users cannot log in —
-    # each dump read back before it is kept. The old path dumped `synap` only.
+    # ONE backup door: deploy/pgdata-safety.sh. init/status run here on the
+    # host; push/drill run inside a throwaway copy of the postgres-backup
+    # service — the exact context the hourly loop runs in (same script, same
+    # mounts, network access to postgres and minio).
+    case "${1:-}" in
+        init)
+            SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" backup_init
+            return $?
+            ;;
+        status)
+            SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" backup_status
+            return $?
+            ;;
+        push|drill)
+            docker compose run --rm --no-deps -T --entrypoint sh postgres-backup \
+                /synap-deploy/pgdata-safety.sh "$@"
+            return $?
+            ;;
+        -h|--help|help)
+            cat <<'USAGE'
+Usage:
+  synap backup [label]          local dump of every database (backups/postgres/<ts>-<label>)
+  synap backup init             create the off-host repository (BACKUP_REPOSITORY in .env)
+                                and print the recovery kit ONCE
+  synap backup push             dump + push an encrypted snapshot now (the service does it hourly)
+  synap backup drill [snap]     restore a snapshot into a throwaway postgres, compare fingerprints
+  synap backup status           repository, last runs, alarms
+USAGE
+            return 0
+            ;;
+    esac
+
+    # A local dump: EVERY database — synap AND the kratos/hydra identity
+    # stores — each read back before it is kept. Secrets are not copied next
+    # to it any more (the plaintext env.backup is retired): they travel inside
+    # the encrypted off-host snapshot (`synap backup init` / `push`).
     local label=${1:-manual}
     local dir
     dir="$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_backup "$label")" || {
         echo -e "${RED}❌ Backup failed${NC}"
         exit 1
     }
-    # The .env holds the secrets the restored data was encrypted/signed with.
-    (umask 077 && cp .env "$dir/env.backup")
     echo -e "${GREEN}✅ Backup created: ${dir}${NC}"
-    echo -e "${YELLOW}   Contains secrets (env.backup) — copy it OFF this host (restic/PBS/scp).${NC}"
+    echo -e "${YELLOW}   Local only, databases only. Off-host + files + secrets: synap backup init && synap backup push${NC}"
 }
 
 cmd_restore() {
@@ -3632,50 +3663,68 @@ cmd_restore() {
         echo -e "${RED}Error: Not in Synap installation directory${NC}"
         exit 1
     fi
-    
+
     cd "$deploy_dir"
-    
-    local backup_file=$1
-    if [ -z "$backup_file" ]; then
-        echo -e "${RED}Error: Backup file required${NC}"
-        echo "Usage: synap restore <backups/postgres/<dir>> | <legacy-backup.tar.gz>"
+
+    local target=${1:-}
+    if [ -z "$target" ]; then
+        echo -e "${RED}Error: what to restore is required${NC}"
+        echo "Usage: synap restore --from-snapshot <id|latest> [--password-file <file>]"
+        echo "       synap restore <backups/postgres/<dir>>"
         exit 1
     fi
-    
+
+    # Off-host snapshot (fresh host or rollback): secrets → databases → MinIO
+    # → fingerprint compare. The stack is only started when the fingerprint
+    # recorded at backup time matches.
+    if [ "$target" = "--from-snapshot" ]; then
+        local snap=${2:-} pwfile="" tmp_pw=""
+        [ -n "$snap" ] || { echo -e "${RED}Usage: synap restore --from-snapshot <id|latest> [--password-file <file>]${NC}"; exit 1; }
+        if [ "${3:-}" = "--password-file" ]; then
+            pwfile=${4:-}
+            [ -s "$pwfile" ] || { echo -e "${RED}Password file not found or empty: ${pwfile}${NC}"; exit 1; }
+        elif [ ! -s "$deploy_dir/state/backup/restic-password" ]; then
+            read -r -s -p "Repository password (from your recovery kit): " _kit_pw; echo
+            [ -n "$_kit_pw" ] || { echo -e "${RED}No password given${NC}"; exit 1; }
+            tmp_pw="$(umask 077 && mktemp)"
+            printf '%s' "$_kit_pw" > "$tmp_pw"; unset _kit_pw
+            pwfile="$tmp_pw"
+        fi
+        echo -e "${YELLOW}⚠️  WARNING: This replaces .env, every database and the stored files with snapshot ${snap}${NC}"
+        read -p "Continue? (yes/no): " CONFIRM
+        [ "$CONFIRM" = "yes" ] || { [ -n "$tmp_pw" ] && rm -f "$tmp_pw"; echo "Restore cancelled"; exit 0; }
+        local rc=0
+        [ -n "$pwfile" ] && export BACKUP_PASSWORD_FILE="$pwfile"
+        SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="docker compose" backup_restore_snapshot "$snap" || rc=$?
+        [ -n "$tmp_pw" ] && rm -f "$tmp_pw"
+        [ "$rc" = 0 ] || exit "$rc"
+        # backup_restore_snapshot exported the restored COMPOSE_PROJECT_NAME pin.
+        if docker compose up -d --remove-orphans; then
+            echo -e "${GREEN}✅ Restore complete — check: synap health${NC}"
+        else
+            echo -e "${YELLOW}Data restored and verified, but the stack did not start (a fresh host has no images yet): run synap update — it keeps the restored .env.${NC}"
+            exit 1
+        fi
+        return 0
+    fi
+
     # A directory is a `synap backup` / postgres-backup dump set (<db>.dump each).
-    if [ -d "$backup_file" ]; then
-        echo -e "${YELLOW}⚠️  WARNING: This replaces every database with the contents of ${backup_file}${NC}"
+    if [ -d "$target" ]; then
+        echo -e "${YELLOW}⚠️  WARNING: This replaces every database with the contents of ${target}${NC}"
         read -p "Continue? (yes/no): " CONFIRM
         [ "$CONFIRM" = "yes" ] || { echo "Restore cancelled"; exit 0; }
-        SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_restore "$backup_file" || exit 1
+        SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_restore "$target" || exit 1
         docker compose up -d --remove-orphans
         echo -e "${GREEN}✅ Restore complete!${NC}"
         return 0
     fi
 
-    if [ ! -f "$backup_file" ]; then
-        echo -e "${RED}Error: Backup file not found: $backup_file${NC}"
-        exit 1
-    fi
-    
-    echo -e "${YELLOW}⚠️  WARNING: This will overwrite current data!${NC}"
-    read -p "Continue? (yes/no): " CONFIRM
-    if [ "$CONFIRM" != "yes" ]; then
-        echo "Restore cancelled"
-        exit 0
-    fi
-    
-    local temp_dir=$(mktemp -d)
-    tar -xzf "$backup_file" -C "$temp_dir"
-    
-    docker compose stop backend
-    cat "$temp_dir"/*-database.sql | docker compose exec -T postgres psql -U synap synap
-    cp "$temp_dir"/*.env .env
-    rm -rf "$temp_dir"
-    
-    docker compose up -d --remove-orphans
-    
-    echo -e "${GREEN}✅ Restore complete!${NC}"
+    # The legacy tar.gz format (synap-db-only SQL + an .env overwrite) is
+    # retired: it was a second restore format nothing produces any more.
+    echo -e "${RED}Error: not a backup directory: ${target}${NC}"
+    echo "Usage: synap restore --from-snapshot <id|latest> [--password-file <file>]"
+    echo "       synap restore <backups/postgres/<dir>>"
+    exit 1
 }
 
 cmd_config() {
@@ -5086,8 +5135,9 @@ ${YELLOW}Management:${NC}
   synap rebuild [service]        Rebuild services (interactive if no service)
   synap start [service]          Start services (all or specific)
   synap stop [service]           Stop services (interactive if no service)
-  synap backup [name]            Create backup
-  synap restore <file>            Restore from backup
+  synap backup [label|init|push|drill|status]   Backups (synap backup --help)
+  synap restore --from-snapshot <id|latest>     Restore from the off-host repository
+  synap restore <backups/postgres/<dir>>        Restore a local dump set
   synap config [action]          Manage configuration
   synap federation <action>      External sign-in: status | connect-cloud | disable
   synap clean [type]             Clean Docker resources (interactive if no type)
@@ -5223,10 +5273,12 @@ case "${1:-help}" in
         cmd_stop "$@"
         ;;
     backup)
-        cmd_backup "${2:-}"
+        shift
+        cmd_backup "$@"
         ;;
     restore)
-        cmd_restore "${2:-}"
+        shift
+        cmd_restore "$@"
         ;;
     config)
         shift
