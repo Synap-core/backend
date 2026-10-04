@@ -14801,6 +14801,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId?: string | undefined;
 				limit?: number | undefined;
 				lean?: boolean | undefined;
+				recordChanges?: boolean | undefined;
 			};
 			output: ({
 				id: string;
@@ -31667,6 +31668,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
+				container?: {
+					sessionId?: string | undefined;
+					trackId?: string | undefined;
+					projectId?: string | undefined;
+				} | undefined;
 			};
 			output: {
 				notifications: {
