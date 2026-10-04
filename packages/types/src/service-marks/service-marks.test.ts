@@ -5,6 +5,7 @@ import {
   normalizeServiceId,
   resolveServiceMark,
   resolveServiceName,
+  resolveServiceWebUrl,
   type ServiceMarkDef,
 } from "./index.js";
 
@@ -91,5 +92,35 @@ describe("resolveServiceMark", () => {
     expect(m.fill).toBe("currentColor");
     expect(resolveServiceMark(null).name).toBe("");
     expect(resolveServiceName("sms")).toBe("SMS");
+  });
+});
+
+describe("resolveServiceWebUrl", () => {
+  it("resolves a canonical id and an alias to the same web home", () => {
+    expect(resolveServiceWebUrl("gmail")).toBe("https://mail.google.com");
+    const alias = SERVICE_MARKS.gmail.aliases?.[0];
+    if (alias)
+      expect(resolveServiceWebUrl(alias)).toBe("https://mail.google.com");
+  });
+
+  it("never guesses: unknown ids and services without one web home are null", () => {
+    expect(resolveServiceWebUrl("not-a-service")).toBeNull();
+    expect(resolveServiceWebUrl("")).toBeNull();
+    expect(resolveServiceWebUrl("email")).toBeNull();
+    expect(resolveServiceWebUrl("openwebui")).toBeNull();
+  });
+
+  it.each(ENTRIES.filter(([, def]) => def.webUrl))(
+    "%s web URL is https and parses",
+    (_id, def) => {
+      const url = new URL(def.webUrl as string);
+      expect(url.protocol).toBe("https:");
+    }
+  );
+
+  it("most brands carry one (non-vacuity)", () => {
+    expect(
+      ENTRIES.filter(([, def]) => def.webUrl).length
+    ).toBeGreaterThanOrEqual(15);
   });
 });
