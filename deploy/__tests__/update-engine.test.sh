@@ -292,6 +292,8 @@ builds="$(grep '^build ' "$FAKE/log")"
 echo "$builds" | grep -q ghcr && bad "source: a build mentions ghcr: $builds" || ok "source: no build is tagged with the ghcr name"
 echo "$builds" | grep -q -- "-t synap-dev/backend:$tag12 " && echo "$builds" | grep -q -- "-t synap-dev/pod-admin:$tag12 " && ok "source: tags are synap-dev/*:$tag12" || bad "source: tags: $builds"
 grep -qE "^(compose build|tag .* ghcr)" "$FAKE/log" && bad "source: compose build / ghcr retag used" || ok "source: no compose build, no ghcr retag"
+grep -qE "^builder prune -f --max-used-space 2gb" "$FAKE/log" && ok "source: build cache capped after the update (disk)" || bad "source: build cache never pruned — every from-source update grows it"
+! grep -qE "^builder prune .*-a|^(system|volume) prune" "$FAKE/log" && ok "source: cache prune is capped, never -a / system / volume" || bad "source: an unbounded prune ran"
 [ "$(envpin SYNAP_IMAGE_BACKEND)" = "synap-dev/backend:$tag12" ] && [ "$(cur_id)" = "local-$tag12" ] && [ "$(jq -r .source "$DEPLOY/state/current-release.json")" = true ] \
   && ok "source: recorded as release local-$tag12 (source:true)" || bad "source: env=$(envpin SYNAP_IMAGE_BACKEND) id=$(cur_id)"
 [ "$(envpin SYNAP_IMAGE_MINIO)" = "$(grep '^SYNAP_IMAGE_MINIO=' "$S/env.orig" | cut -d= -f2-)" ] && ok "source: third-party pins carried over from the previous release" || bad "source: minio pin lost"

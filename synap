@@ -3002,6 +3002,11 @@ _ue_prune_images() {
             grep -qx "$id" <<<"$keep" && continue
             docker rmi -f "$id" >/dev/null 2>&1 || true
         done
+    # A --from-source build leaves its BuildKit cache behind (10.8 GB on perso,
+    # 2026-10-04: free space 16 GB → 4.6 GB after one update). Cap it; the
+    # cache holds no data. --max-used-space is Docker 28+, --keep-storage older.
+    docker builder prune -f --max-used-space 2gb >/dev/null 2>&1 \
+        || docker builder prune -f --keep-storage 2gb >/dev/null 2>&1 || true
 }
 
 # ── the engine ────────────────────────────────────────────────────────────────
