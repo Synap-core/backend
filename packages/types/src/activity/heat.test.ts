@@ -107,19 +107,22 @@ describe("levels — quantiles of the non-zero days (D3)", () => {
     expect(activityThresholds([0, 0, 0])).toEqual([0, 0, 0]);
   });
 
-  it("max = 1: every active day is level 1 (no fake intensity)", () => {
-    const t = activityThresholds([0, 1, 0, 1, 1]);
-    expect(t).toEqual([1, 1, 1]);
-    expect(activityLevel(1, t)).toBe(1);
+  it("the busiest day is always level 4, even with few active days", () => {
+    const t = activityThresholds([0, 1, 4, 12]);
+    expect([1, 4, 12].map((c) => activityLevel(c, t))).toEqual([2, 3, 4]);
+    // Every active day ties: all are the busiest.
+    const flat = activityThresholds([0, 1, 0, 1, 1]);
+    expect(activityLevel(1, flat)).toBe(4);
   });
 
   it("one 200-act day does not flatten the year (vs quartiles of max)", () => {
     const counts = [1, 2, 2, 3, 4, 5, 6, 200];
     const t = activityThresholds(counts);
-    expect(t).toEqual([2, 3, 5]);
+    expect(t).toEqual([1, 3, 5]);
     expect(activityLevel(6, t)).toBe(4);
     expect(activityLevel(4, t)).toBe(3);
     expect(activityLevel(3, t)).toBe(2);
+    expect(activityLevel(2, t)).toBe(2);
     expect(activityLevel(1, t)).toBe(1);
     expect(activityLevel(200, t)).toBe(4);
   });

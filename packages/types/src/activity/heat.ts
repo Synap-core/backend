@@ -164,19 +164,29 @@ export type ActivityLevel = 0 | 1 | 2 | 3 | 4;
 export const ACTIVITY_LEVELS: readonly ActivityLevel[] = [0, 1, 2, 3, 4];
 
 /**
- * The upper bounds of levels 1, 2 and 3: the 25th / 50th / 75th percentile
- * (nearest rank) of the days that had ANY act. Anything above the third is
- * level 4. Quantiles, not fractions of the max: one 200-act import day must
- * not flatten every ordinary day of the year into the palest step.
+ * The upper bounds of levels 1, 2 and 3, from the days that had ANY act: a
+ * count's level is `ceil(4 × F)`, where F is the share of active days at or
+ * below it (the empirical quantile). So the busiest day is always level 4,
+ * and a quarter of the active days sit at each step. Quantiles, not fractions
+ * of the max: one 200-act import day must not flatten every ordinary day of
+ * the year into the palest step. `0` = no active day falls in that quarter.
  */
 export function activityThresholds(
   counts: readonly number[]
 ): [number, number, number] {
   const active = counts.filter((c) => c > 0).sort((a, b) => a - b);
-  if (active.length === 0) return [0, 0, 0];
-  const at = (q: number) =>
-    active[Math.min(active.length - 1, Math.ceil(q * active.length) - 1)]!;
-  return [at(0.25), at(0.5), at(0.75)];
+  const n = active.length;
+  // The largest active count whose share-at-or-below is within `q`.
+  const upTo = (q: number) => {
+    let t = 0;
+    for (let i = 0; i < n; i++) {
+      const v = active[i]!;
+      if (i + 1 < n && active[i + 1] === v) continue; // last of a tie run
+      if ((i + 1) / n <= q) t = v;
+    }
+    return t;
+  };
+  return [upTo(0.25), upTo(0.5), upTo(0.75)];
 }
 
 export function activityLevel(
