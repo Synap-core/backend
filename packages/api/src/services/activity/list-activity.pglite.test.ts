@@ -56,7 +56,9 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  activityDayRange,
   activityFilterForPreset,
+  calendarDayIn,
   type ActivityRow,
 } from "@synap-core/types/activity";
 import { activityRouter } from "../../routers/activity.js";
@@ -731,6 +733,126 @@ describe("activity.list — one ledger through the real door", () => {
 
   it("a bad cursor is a caller error, never an empty page", async () => {
     await expect(list({ cursor: "nope" })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+  });
+});
+
+// ── activity.daily — the same ledger, counted per day ──────────────────────
+
+const daily = (
+  input: Parameters<ReturnType<typeof activityRouter.createCaller>["daily"]>[0],
+  userId = USER
+) => activityRouter.createCaller(ctx(userId)).daily(input);
+
+/**
+ * A zone whose local midnight fell within the last hour, so the fixture's
+ * recent rows (1–90 minutes old) straddle two calendar days there. Chosen at
+ * run time: some zone always sits between 00:00 and 01:00.
+ */
+function midnightZone(): string {
+  const now = Date.now();
+  for (const tz of Intl.supportedValuesOf("timeZone")) {
+    const today = calendarDayIn(now, tz);
+    const since = Date.parse(activityDayRange(today, tz).since);
+    if (now - since >= 10 * 60_000 && now - since <= 50 * 60_000) return tz;
+  }
+  throw new Error("no zone has just passed midnight");
+}
+
+describe("activity.daily — parity with activity.list", () => {
+  const FILTERS = [
+    {},
+    { actor: "agents" },
+    { actor: "me" },
+    { projectId: PROJ },
+    { source: "run" as const },
+    { source: "decision" as const },
+    { workspaceId: null },
+    { workspaceId: W1 },
+  ];
+
+  it("each day's count == the rows list pages through for that day, in every zone", async () => {
+    const zones = [
+      "UTC",
+      "Pacific/Auckland",
+      "America/Los_Angeles",
+      midnightZone(),
+    ];
+    let split = 0;
+    let counted = 0;
+    for (const tz of zones) {
+      for (const filter of FILTERS) {
+        const d = await daily({ ...filter, tz, days: 30 });
+        expect(d.tz).toBe(tz);
+        let sum = 0;
+        for (const day of d.days) {
+          const range = activityDayRange(day.date, tz);
+          const rows = await readAll({ ...filter, ...range }, 7);
+          expect({ tz, filter, day: day.date, n: rows.length }).toEqual({
+            tz,
+            filter,
+            day: day.date,
+            n: day.count,
+          });
+          sum += day.count;
+        }
+        // …and no day is missing: the whole window holds exactly the sum.
+        const all = await readAll(
+          {
+            ...filter,
+            since: activityDayRange(d.from, tz).since,
+            until: activityDayRange(d.to, tz).until,
+          },
+          50
+        );
+        expect(all.length).toBe(sum);
+        counted += sum;
+        if (Object.keys(filter).length === 0) {
+          const recent = d.days.filter(
+            (x) => x.date >= calendarDayIn(Date.now() - 86_400_000 * 2, tz)
+          );
+          if (recent.length >= 2) split += 1;
+        }
+      }
+    }
+    // Non-vacuity: rows were counted, and in at least one zone the recent
+    // fixture straddled midnight (two recent days, not one).
+    expect(counted).toBeGreaterThan(50);
+    expect(split).toBeGreaterThan(0);
+  });
+
+  it("buckets by the viewer's zone: a row lands on its local day", async () => {
+    // TIE_AT = 2026-09-28T06:00Z — Sep 28 in UTC, Sep 27 in Los Angeles.
+    const utc = await daily({ tz: "UTC", days: 371, source: "proposal" });
+    const la = await daily({
+      tz: "America/Los_Angeles",
+      days: 371,
+      source: "proposal",
+    });
+    expect(
+      utc.days.find((x) => x.date === "2026-09-28")?.count
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      la.days.find((x) => x.date === "2026-09-27")?.count
+    ).toBeGreaterThanOrEqual(4);
+    expect(la.days.find((x) => x.date === "2026-09-28")).toBeUndefined();
+  });
+
+  it("the stranger's acts are never counted for USER", async () => {
+    const mine = await daily({ tz: "UTC", days: 30, workspaceId: null });
+    const theirs = await daily(
+      { tz: "UTC", days: 30, workspaceId: null },
+      STRANGER
+    );
+    const total = (d: typeof mine) => d.days.reduce((n, x) => n + x.count, 0);
+    // USER has no personal (NULL-workspace) acts; the stranger has three.
+    expect(total(mine)).toBe(0);
+    expect(total(theirs)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("an unknown zone is a caller error, never an empty grid", async () => {
+    await expect(daily({ tz: "Mars/Olympus" })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
   });

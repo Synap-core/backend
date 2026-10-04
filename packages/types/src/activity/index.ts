@@ -24,6 +24,8 @@
  */
 
 import { resolveActionLabel } from "../vocabulary/index.js";
+
+export * from "./heat.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
 
 // ── Outcome ─────────────────────────────────────────────────────────────────
@@ -312,6 +314,8 @@ export interface ActivityFilter {
   source?: ActivitySource;
   /** ISO instant: only acts at or after it. */
   since?: string;
+  /** ISO instant: only acts strictly before it (a day = `activityDayRange`). */
+  until?: string;
 }
 
 /**
@@ -416,7 +420,9 @@ export function selectAgentsToday(
       });
     }
   }
-  const all = [...byAgent.values()].sort((a, b) => newest(a.lastAct, b.lastAct));
+  const all = [...byAgent.values()].sort((a, b) =>
+    newest(a.lastAct, b.lastAct)
+  );
   return {
     agents: all.slice(0, limit),
     truncated: page.nextCursor !== null,

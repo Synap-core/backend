@@ -55,6 +55,14 @@
  *   sessions  — `scopedDb(access).predicate(focusSessions)` — the one session
  *               read rule (`sessionReadableWhere`, roster for human doors).
  * The workspace lens rides on `access` (absent = the whole floor).
+ *
+ * ── TWO PROJECTIONS, ONE FILTER ─────────────────────────────────────────────
+ * `activity.daily` (`dailyActivity`) counts the SAME rows per calendar day of
+ * the viewer's time zone. Each source reader builds its FROM + joins + WHERE
+ * once and projects it either as a page (`ORDER BY … LIMIT`) or as day counts
+ * (`GROUP BY` the day) — never a second hand-kept visibility predicate. The
+ * parity test (`list-activity.pglite.test.ts`) pins that a day's count equals
+ * the rows `list` pages through for that day's `[since, until)`.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -80,11 +88,17 @@ import {
 } from "@synap/database";
 import {
   ACTIVITY_MAX_LIMIT,
+  activityDayRange,
+  activityWindow,
+  isValidTimeZone,
+  todayInTimeZone,
   activityOutcomeForProposal,
   activityOutcomeForRun,
   activityOutcomeForSession,
   resolveActivityVerb,
   type ActivityActor,
+  type ActivityDaily,
+  type ActivityDay,
   type ActivityOutcome,
   type ActivityPage,
   type ActivityRow,
@@ -127,6 +141,8 @@ export interface ActivityQuery {
   outcome?: ActivityOutcome;
   source?: ActivitySource;
   since?: string;
+  /** Only acts strictly before this instant. */
+  until?: string;
   cursor?: string;
   limit: number;
 }
@@ -179,7 +195,7 @@ const exactAt = (at: SQL) =>
   drizzleSql<string>`to_char((${at}) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 /**
- * `(at, key) < cursor` in the shared order, plus `since` — as a ROW-VALUE
+ * `(at, key) < cursor` in the shared order, plus `[since, until)` — as a ROW-VALUE
  * comparison on `(at, id)` so each source can walk an `(at DESC, id DESC)`
  * index. Sound because a source's key is `<its constant prefix>:<uuid>`: at an
  * equal `at`, a key from ANOTHER source compares by prefix alone (all four
@@ -191,11 +207,13 @@ function window(
   prefix: ActivitySource | "run",
   at: SQL,
   id: SQL | AnyColumn,
-  cursor: ActivityCursor | null,
-  since: string | undefined
+  p: Projection,
+  q: Pick<ActivityQuery, "since" | "until">
 ): SQL[] {
   const out: SQL[] = [];
-  if (since) out.push(drizzleSql`(${at}) >= ${since}::timestamptz`);
+  const cursor = p.kind === "page" ? p.cursor : null;
+  if (q.since) out.push(drizzleSql`(${at}) >= ${q.since}::timestamptz`);
+  if (q.until) out.push(drizzleSql`(${at}) < ${q.until}::timestamptz`);
   if (cursor) {
     const cursorPrefix = cursor.key.slice(0, cursor.key.indexOf(":"));
     if (prefix === cursorPrefix) {
@@ -212,6 +230,30 @@ function window(
   }
   return out;
 }
+
+/**
+ * What a source read projects: one page of candidates past the cursor, or a
+ * count per calendar day of `tz`. Same FROM, joins and WHERE either way.
+ */
+type Projection =
+  | { kind: "page"; cursor: ActivityCursor | null; take: number }
+  | { kind: "daily"; tz: string };
+type Projected<P extends Projection> = P extends { kind: "daily" }
+  ? ActivityDay[]
+  : Candidate[];
+
+/**
+ * The day projection: `GROUP BY 1` (the day), not the expression — the time
+ * zone is a bound parameter, and `$1` in the SELECT and `$2` in the GROUP BY
+ * would be two different expressions to Postgres.
+ */
+const dayFields = (at: SQL, tz: string) => ({
+  date: drizzleSql<string>`to_char((${at}) at time zone ${tz}, 'YYYY-MM-DD')`,
+  count: drizzleSql<number>`count(*)::int`,
+});
+const byDay = drizzleSql`1`;
+const asDays = (rows: Array<{ date: string; count: number }>): ActivityDay[] =>
+  rows.map((r) => ({ date: r.date, count: Number(r.count) }));
 
 const order = (at: SQL, id: SQL | AnyColumn) => [
   drizzleSql`(${at}) desc`,
@@ -310,26 +352,46 @@ function proposalFloor(viewer: string, lens: Lens): SQL {
   return and(floor, inArray(proposals.workspaceId, ids))!;
 }
 
-async function readProposalActs(
+async function readProposalActs<P extends Projection>(
   database: typeof db,
   q: ActivityQuery,
-  cursor: ActivityCursor | null,
-  take: number
-): Promise<Candidate[]> {
+  p: P
+): Promise<Projected<P>> {
+  const none = [] as unknown as Projected<P>;
   const viewer = q.access.userId;
   const statuses = statusesFor(
     proposals.status.enumValues,
     activityOutcomeForProposal,
     q.outcome
   );
-  if (statuses && statuses.length === 0) return [];
+  if (statuses && statuses.length === 0) return none;
   const actorId = drizzleSql<
     string | null
   >`coalesce(${proposals.agentUserId}, ${proposals.proposedByUserId}, ${proposals.createdBy})`;
   const isAgent = drizzleSql<boolean>`(${proposals.agentUserId} is not null or ${users.userType} = 'agent')`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
-  if (actor === null) return [];
+  if (actor === null) return none;
   const at = drizzleSql`${proposals.createdAt}`;
+  const where = and(
+    proposalFloor(viewer, q.workspaceLens),
+    // The session source carries a session's lifecycle once.
+    drizzleSql`not (${proposals.targetType} = 'focus_session' and ${proposals.status} = 'auto_approved')`,
+    q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
+    q.trackId ? proposalInTrack(q.trackId) : undefined,
+    statuses ? inArray(proposals.status, statuses as never[]) : undefined,
+    actor,
+    ...window("proposal", at, proposals.id, p, q)
+  );
+  if (p.kind === "daily") {
+    // Same FROM, joins and WHERE as the page read below.
+    const days = await database
+      .select(dayFields(at, p.tz))
+      .from(proposals)
+      .leftJoin(users, drizzleSql`${users.id} = ${actorId}`)
+      .where(where)
+      .groupBy(byDay);
+    return asDays(days) as Projected<P>;
+  }
   const rows = await database
     .select({
       id: proposals.id,
@@ -344,21 +406,10 @@ async function readProposalActs(
     })
     .from(proposals)
     .leftJoin(users, drizzleSql`${users.id} = ${actorId}`)
-    .where(
-      and(
-        proposalFloor(viewer, q.workspaceLens),
-        // The session source carries a session's lifecycle once.
-        drizzleSql`not (${proposals.targetType} = 'focus_session' and ${proposals.status} = 'auto_approved')`,
-        q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
-        q.trackId ? proposalInTrack(q.trackId) : undefined,
-        statuses ? inArray(proposals.status, statuses as never[]) : undefined,
-        actor,
-        ...window("proposal", at, proposals.id, cursor, q.since)
-      )
-    )
+    .where(where)
     .orderBy(...order(at, proposals.id))
-    .limit(take);
-  return rows.map((r) => ({
+    .limit(p.take);
+  const out: Candidate[] = rows.map((r) => ({
     source: "proposal" as const,
     id: r.id,
     at: r.at,
@@ -371,26 +422,47 @@ async function readProposalActs(
     sessionId: r.sessionId,
     changeCount: Number(r.changeCount),
   }));
+  return out as Projected<P>;
 }
 
-async function readDecisions(
+async function readDecisions<P extends Projection>(
   database: typeof db,
   q: ActivityQuery,
-  cursor: ActivityCursor | null,
-  take: number
-): Promise<Candidate[]> {
+  p: P
+): Promise<Projected<P>> {
+  const none = [] as unknown as Projected<P>;
   const viewer = q.access.userId;
   const statuses = statusesFor(
     DECISION_STATUSES,
     activityOutcomeForProposal,
     q.outcome
   ) ?? [...DECISION_STATUSES];
-  if (statuses.length === 0) return [];
+  if (statuses.length === 0) return none;
   const actorId = drizzleSql<string>`${proposals.reviewedBy}`;
   const isAgent = drizzleSql<boolean>`(${users.userType} = 'agent')`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
-  if (actor === null) return [];
+  if (actor === null) return none;
   const at = drizzleSql`${proposals.reviewedAt}`;
+  const where = and(
+    proposalFloor(viewer, q.workspaceLens),
+    isNotNull(proposals.reviewedBy),
+    isNotNull(proposals.reviewedAt),
+    inArray(proposals.status, statuses as never[]),
+    q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
+    q.trackId ? proposalInTrack(q.trackId) : undefined,
+    actor,
+    ...window("decision", at, proposals.id, p, q)
+  );
+  if (p.kind === "daily") {
+    // Same FROM, joins and WHERE as the page read below.
+    const days = await database
+      .select(dayFields(at, p.tz))
+      .from(proposals)
+      .leftJoin(users, eq(users.id, proposals.reviewedBy))
+      .where(where)
+      .groupBy(byDay);
+    return asDays(days) as Projected<P>;
+  }
   const rows = await database
     .select({
       id: proposals.id,
@@ -405,21 +477,10 @@ async function readDecisions(
     })
     .from(proposals)
     .leftJoin(users, eq(users.id, proposals.reviewedBy))
-    .where(
-      and(
-        proposalFloor(viewer, q.workspaceLens),
-        isNotNull(proposals.reviewedBy),
-        isNotNull(proposals.reviewedAt),
-        inArray(proposals.status, statuses as never[]),
-        q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
-        q.trackId ? proposalInTrack(q.trackId) : undefined,
-        actor,
-        ...window("decision", at, proposals.id, cursor, q.since)
-      )
-    )
+    .where(where)
     .orderBy(...order(at, proposals.id))
-    .limit(take);
-  return rows.map((r) => ({
+    .limit(p.take);
+  const out: Candidate[] = rows.map((r) => ({
     source: "decision" as const,
     id: r.id,
     at: r.at,
@@ -432,24 +493,40 @@ async function readDecisions(
     sessionId: r.sessionId,
     changeCount: Number(r.changeCount),
   }));
+  return out as Projected<P>;
 }
 
-async function readAutomationRuns(
+async function readAutomationRuns<P extends Projection>(
   database: typeof db,
   q: ActivityQuery,
-  cursor: ActivityCursor | null,
-  take: number
-): Promise<Candidate[]> {
+  p: P
+): Promise<Projected<P>> {
+  const none = [] as unknown as Projected<P>;
   // A rule acts on its own: it is never "an agent" or "me", and it has no
   // project to be filed under.
-  if (q.actor.kind !== "all" || q.projectId || q.trackId) return [];
+  if (q.actor.kind !== "all" || q.projectId || q.trackId) return none;
   const statuses = statusesFor(
     automationRuns.status.enumValues,
     activityOutcomeForRun,
     q.outcome
   );
-  if (statuses && statuses.length === 0) return [];
+  if (statuses && statuses.length === 0) return none;
   const at = drizzleSql`coalesce(${automationRuns.completedAt}, ${automationRuns.startedAt})`;
+  const where = and(
+    scopedDb(q.access).predicate(automationRuns),
+    statuses ? inArray(automationRuns.status, statuses as never[]) : undefined,
+    ...window("run", at, automationRuns.id, p, q)
+  );
+  if (p.kind === "daily") {
+    // Same FROM, joins and WHERE as the page read below.
+    const days = await database
+      .select(dayFields(at, p.tz))
+      .from(automationRuns)
+      .innerJoin(automations, eq(automations.id, automationRuns.automationId))
+      .where(where)
+      .groupBy(byDay);
+    return asDays(days) as Projected<P>;
+  }
   const rows = await database
     .select({
       id: automationRuns.id,
@@ -461,18 +538,10 @@ async function readAutomationRuns(
     })
     .from(automationRuns)
     .innerJoin(automations, eq(automations.id, automationRuns.automationId))
-    .where(
-      and(
-        scopedDb(q.access).predicate(automationRuns),
-        statuses
-          ? inArray(automationRuns.status, statuses as never[])
-          : undefined,
-        ...window("run", at, automationRuns.id, cursor, q.since)
-      )
-    )
+    .where(where)
     .orderBy(...order(at, automationRuns.id))
-    .limit(take);
-  return rows.map((r) => ({
+    .limit(p.take);
+  const out: Candidate[] = rows.map((r) => ({
     source: "run" as const,
     id: r.id,
     at: r.at,
@@ -487,6 +556,7 @@ async function readAutomationRuns(
     flowName: r.flowName,
     error: r.error ?? null,
   }));
+  return out as Projected<P>;
 }
 
 /**
@@ -507,24 +577,50 @@ function playbookRunVisible(q: ActivityQuery): SQL {
   )!;
 }
 
-async function readPlaybookRuns(
+async function readPlaybookRuns<P extends Projection>(
   database: typeof db,
   q: ActivityQuery,
-  cursor: ActivityCursor | null,
-  take: number
-): Promise<Candidate[]> {
+  p: P
+): Promise<Projected<P>> {
+  const none = [] as unknown as Projected<P>;
   const viewer = q.access.userId;
   const statuses = statusesFor(
     playbookRuns.status.enumValues,
     activityOutcomeForRun,
     q.outcome
   );
-  if (statuses && statuses.length === 0) return [];
+  if (statuses && statuses.length === 0) return none;
   const actorId = drizzleSql<string>`${playbookRuns.createdBy}`;
   const isAgent = drizzleSql<boolean>`(${users.userType} = 'agent')`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
-  if (actor === null) return [];
+  if (actor === null) return none;
   const at = drizzleSql`coalesce(${playbookRuns.completedAt}, ${playbookRuns.startedAt})`;
+  const where = and(
+    playbookRunVisible(q),
+    q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
+    q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
+    statuses ? inArray(playbookRuns.status, statuses as never[]) : undefined,
+    actor,
+    ...window("run", at, playbookRuns.id, p, q)
+  );
+  if (p.kind === "daily") {
+    // Same FROM, joins and WHERE as the page read below.
+    const days = await database
+      .select(dayFields(at, p.tz))
+      .from(playbookRuns)
+      .innerJoin(playbooks, eq(playbooks.id, playbookRuns.playbookId))
+      .leftJoin(users, eq(users.id, playbookRuns.createdBy))
+      .leftJoin(
+        focusSessions,
+        and(
+          eq(focusSessions.id, playbookRuns.sessionId),
+          sessionReadableWhere({ userId: viewer, roster: q.roster })
+        )
+      )
+      .where(where)
+      .groupBy(byDay);
+    return asDays(days) as Projected<P>;
+  }
   const rows = await database
     .select({
       id: playbookRuns.id,
@@ -549,21 +645,10 @@ async function readPlaybookRuns(
         sessionReadableWhere({ userId: viewer, roster: q.roster })
       )
     )
-    .where(
-      and(
-        playbookRunVisible(q),
-        q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
-        q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
-        statuses
-          ? inArray(playbookRuns.status, statuses as never[])
-          : undefined,
-        actor,
-        ...window("run", at, playbookRuns.id, cursor, q.since)
-      )
-    )
+    .where(where)
     .orderBy(...order(at, playbookRuns.id))
-    .limit(take);
-  return rows.map((r) => ({
+    .limit(p.take);
+  const out: Candidate[] = rows.map((r) => ({
     source: "run" as const,
     id: r.id,
     at: r.at,
@@ -578,29 +663,55 @@ async function readPlaybookRuns(
     flowName: r.flowName,
     error: r.error ?? null,
   }));
+  return out as Projected<P>;
 }
 
-async function readSessions(
+async function readSessions<P extends Projection>(
   database: typeof db,
   q: ActivityQuery,
-  cursor: ActivityCursor | null,
-  take: number
-): Promise<Candidate[]> {
+  p: P
+): Promise<Projected<P>> {
+  const none = [] as unknown as Projected<P>;
   const viewer = q.access.userId;
   const values = focusSessions.status.enumValues.filter(
     (s) => s !== "scheduled"
   );
   const statuses = statusesFor(values, activityOutcomeForSession, q.outcome);
-  if (statuses && statuses.length === 0) return [];
+  if (statuses && statuses.length === 0) return none;
   const agentId = drizzleSql<
     string | null
   >`(${focusSessions.metadata}->>'agentUserId')`;
   const isAgent = drizzleSql<boolean>`(${agentId} is not null or ${focusSessions.origin} = 'agent')`;
   const actorId = drizzleSql<string>`coalesce(${agentId}, ${focusSessions.userId})`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
-  if (actor === null) return [];
+  if (actor === null) return none;
   const live = drizzleSql`${focusSessions.status} in ('active', 'paused', 'forming')`;
   const at = drizzleSql`case when ${live} then coalesce(${focusSessions.startedAt}, ${focusSessions.createdAt}) else coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt}) end`;
+  const where = and(
+    scopedDb(q.access).predicate(focusSessions),
+    // The work population the runs feed's session flow reads.
+    // The project path's population: work, plus run sessions filed in a
+    // track (a track's stage sessions). A session carried by a playbook
+    // run the viewer SEES is left to that run, so nothing is listed
+    // twice — and a run hidden from the viewer hides nothing.
+    workAndTrackedRunsWhere(),
+    ne(focusSessions.status, "scheduled"),
+    drizzleSql`not exists (select 1 from ${playbookRuns} where ${playbookRuns.sessionId} = ${focusSessions.id} and ${playbookRunVisible(q)})`,
+    q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
+    q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
+    statuses ? inArray(focusSessions.status, statuses as never[]) : undefined,
+    actor,
+    ...window("session", at, focusSessions.id, p, q)
+  );
+  if (p.kind === "daily") {
+    // Same FROM, joins and WHERE as the page read below.
+    const days = await database
+      .select(dayFields(at, p.tz))
+      .from(focusSessions)
+      .where(where)
+      .groupBy(byDay);
+    return asDays(days) as Projected<P>;
+  }
   const rows = await database
     .select({
       id: focusSessions.id,
@@ -615,29 +726,10 @@ async function readSessions(
       projectId: focusSessions.projectId,
     })
     .from(focusSessions)
-    .where(
-      and(
-        scopedDb(q.access).predicate(focusSessions),
-        // The work population the runs feed's session flow reads.
-        // The project path's population: work, plus run sessions filed in a
-        // track (a track's stage sessions). A session carried by a playbook
-        // run the viewer SEES is left to that run, so nothing is listed
-        // twice — and a run hidden from the viewer hides nothing.
-        workAndTrackedRunsWhere(),
-        ne(focusSessions.status, "scheduled"),
-        drizzleSql`not exists (select 1 from ${playbookRuns} where ${playbookRuns.sessionId} = ${focusSessions.id} and ${playbookRunVisible(q)})`,
-        q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
-        q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
-        statuses
-          ? inArray(focusSessions.status, statuses as never[])
-          : undefined,
-        actor,
-        ...window("session", at, focusSessions.id, cursor, q.since)
-      )
-    )
+    .where(where)
     .orderBy(...order(at, focusSessions.id))
-    .limit(take);
-  return rows.map((r) => ({
+    .limit(p.take);
+  const out: Candidate[] = rows.map((r) => ({
     source: "session" as const,
     id: r.id,
     at: r.at,
@@ -650,6 +742,7 @@ async function readSessions(
     sessionTitle: resolveSessionTitle(r) || "Session",
     origin: r.origin ?? null,
   }));
+  return out as Projected<P>;
 }
 
 // ── The door ────────────────────────────────────────────────────────────────
@@ -663,9 +756,44 @@ export async function listActivity(q: ActivityQuery): Promise<ActivityPage> {
   const database = q.database ?? db;
   const limit = Math.max(1, Math.min(q.limit, ACTIVITY_MAX_LIMIT));
   const cursor = q.cursor ? decodeActivityCursor(q.cursor) : null;
+  assertInstants(q);
+  await assertProjectReadable(database, q);
+
+  const p: Projection = { kind: "page", cursor, take: limit + 1 };
+  const wants = (s: ActivitySource) => !q.source || q.source === s;
+  const reads = await Promise.all([
+    wants("proposal") ? readProposalActs(database, q, p) : [],
+    wants("decision") ? readDecisions(database, q, p) : [],
+    wants("run") ? readAutomationRuns(database, q, p) : [],
+    wants("run") ? readPlaybookRuns(database, q, p) : [],
+    wants("session") ? readSessions(database, q, p) : [],
+  ]);
+  const merged = reads.flat().sort(newerFirst);
+  const page = merged.slice(0, limit);
+  const last = page[page.length - 1];
+  const items = await enrich(database, q, page);
+  return {
+    items,
+    nextCursor:
+      merged.length > limit && last
+        ? encodeActivityCursor({ at: last.at, key: last.key })
+        : null,
+  };
+}
+
+function assertInstants(q: Pick<ActivityQuery, "since" | "until">): void {
   if (q.since && Number.isNaN(Date.parse(q.since))) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid since" });
   }
+  if (q.until && Number.isNaN(Date.parse(q.until))) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid until" });
+  }
+}
+
+async function assertProjectReadable(
+  database: typeof db,
+  q: ActivityQuery
+): Promise<void> {
   if (q.projectId) {
     const [project] = await database
       .select({ id: projects.id })
@@ -681,26 +809,56 @@ export async function listActivity(q: ActivityQuery): Promise<ActivityPage> {
       throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
     }
   }
+}
 
-  const take = limit + 1;
+/**
+ * How many acts per calendar day — `activity.daily`. The SAME five reads as
+ * `listActivity`, projected as day counts in the viewer's `tz` over the
+ * `days` calendar days ending today there. The window's bounds are the
+ * instants `activityDayRange` gives the first and last day, so a cell's count
+ * and the list its click opens (`since`/`until` of that day) cover the same
+ * rows. Sparse: a day with no act is absent.
+ */
+export async function dailyActivity(
+  q: Omit<ActivityQuery, "cursor" | "limit" | "since" | "until" | "outcome"> & {
+    tz: string;
+    days: number;
+    now?: Date;
+  }
+): Promise<ActivityDaily> {
+  const database = q.database ?? db;
+  if (!isValidTimeZone(q.tz)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid tz" });
+  }
+  const win = activityWindow(todayInTimeZone(q.tz, q.now), q.days);
+  const query: ActivityQuery = {
+    ...q,
+    since: activityDayRange(win.from, q.tz).since,
+    until: activityDayRange(win.to, q.tz).until,
+    limit: 0,
+  };
+  await assertProjectReadable(database, query);
+
+  const p: Projection = { kind: "daily", tz: q.tz };
   const wants = (s: ActivitySource) => !q.source || q.source === s;
   const reads = await Promise.all([
-    wants("proposal") ? readProposalActs(database, q, cursor, take) : [],
-    wants("decision") ? readDecisions(database, q, cursor, take) : [],
-    wants("run") ? readAutomationRuns(database, q, cursor, take) : [],
-    wants("run") ? readPlaybookRuns(database, q, cursor, take) : [],
-    wants("session") ? readSessions(database, q, cursor, take) : [],
+    wants("proposal") ? readProposalActs(database, query, p) : [],
+    wants("decision") ? readDecisions(database, query, p) : [],
+    wants("run") ? readAutomationRuns(database, query, p) : [],
+    wants("run") ? readPlaybookRuns(database, query, p) : [],
+    wants("session") ? readSessions(database, query, p) : [],
   ]);
-  const merged = reads.flat().sort(newerFirst);
-  const page = merged.slice(0, limit);
-  const last = page[page.length - 1];
-  const items = await enrich(database, q, page);
+  const byDate = new Map<string, number>();
+  for (const d of reads.flat()) {
+    byDate.set(d.date, (byDate.get(d.date) ?? 0) + d.count);
+  }
   return {
-    items,
-    nextCursor:
-      merged.length > limit && last
-        ? encodeActivityCursor({ at: last.at, key: last.key })
-        : null,
+    from: win.from,
+    to: win.to,
+    tz: q.tz,
+    days: [...byDate.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([date, count]) => ({ date, count })),
   };
 }
 

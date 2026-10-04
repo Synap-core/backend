@@ -23,6 +23,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
+  ACTIVITY_DAILY_MAX_DAYS,
   ACTIVITY_DEFAULT_LIMIT,
   ACTIVITY_MAX_LIMIT,
   ACTIVITY_OUTCOMES,
@@ -32,7 +33,10 @@ import {
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext } from "../access/index.js";
 import { rosterReadFor } from "../access/session-visibility.js";
-import { listActivity } from "../services/activity/list-activity.js";
+import {
+  dailyActivity,
+  listActivity,
+} from "../services/activity/list-activity.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalUserFloor } from "./proposals/scope-conditions.js";
 import { db, proposals, and, eq, isNotNull, count } from "@synap/database";
@@ -72,6 +76,8 @@ export const activityRouter = router({
         source: z.enum(ACTIVITY_SOURCES).optional(),
         /** ISO instant: only acts at or after it. */
         since: z.string().datetime({ offset: true }).optional(),
+        /** ISO instant: only acts strictly before it (a day's end). */
+        until: z.string().datetime({ offset: true }).optional(),
         cursor: z.string().min(1).max(1000).optional(),
         limit: z
           .number()
@@ -100,8 +106,48 @@ export const activityRouter = router({
         outcome: input.outcome,
         source: input.source,
         since: input.since,
+        until: input.until,
         cursor: input.cursor,
         limit: input.limit,
+      });
+    }),
+
+  /**
+   * How alive is it — the `list` ledger counted per calendar day of the
+   * VIEWER's time zone (`tz`, IANA), over the `days` days ending today there.
+   * Same filters and the same visibility as `list` (one WHERE, two
+   * projections: `dailyActivity`), so a day's count is exactly the rows `list`
+   * returns for that day's `activityDayRange`. Sparse; a failed read throws.
+   */
+  daily: protectedProcedure
+    .input(
+      z.object({
+        actor: z.string().max(200).default("all"),
+        projectId: z.string().uuid().optional(),
+        workspaceId: z.string().nullish(),
+        source: z.enum(ACTIVITY_SOURCES).optional(),
+        days: z.number().int().min(1).max(ACTIVITY_DAILY_MAX_DAYS).default(182),
+        tz: z.string().min(1).max(100),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      requireUserId(ctx.userId);
+      const actor = parseActivityActorFilter(input.actor);
+      if (!actor) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "actor must be all | agents | me | agent:<id>",
+        });
+      }
+      return dailyActivity({
+        access: AccessContext.from(ctx).withLens(input.workspaceId),
+        workspaceLens: input.workspaceId,
+        roster: rosterReadFor(ctx),
+        actor,
+        projectId: input.projectId,
+        source: input.source,
+        days: input.days,
+        tz: input.tz,
       });
     }),
 
