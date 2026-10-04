@@ -757,6 +757,7 @@ services:
       - SYNAP_HUB_API_KEY=${OPENCLAW_HUB_API_KEY} # Hub Protocol key (injected by provisioning flow)
       - SYNAP_AGENT_USER_ID=${SYNAP_AGENT_USER_ID} # Agent user ID for Hub Protocol attribution
       - SYNAP_WORKSPACE_ID=${SYNAP_WORKSPACE_ID} # Workspace scope for this agent
+      - SYNAP_PROJECT_ID=${SYNAP_PROJECT_ID:-} # Optional project lens (synap npm CLI `synap openclaw` writes it)
       - OPENCLAW_MODEL=anthropic/claude-sonnet-4-6 # AI model
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} # Required for the model above
     ports:
