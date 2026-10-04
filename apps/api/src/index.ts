@@ -2233,6 +2233,7 @@ try {
                 if (r.read === "ok") {
                   return api.notifyPodUpdateOutcome(r.outcome).then(() => undefined);
                 }
+                return undefined; // read === "absent": no update recorded yet
               })
               .catch((err) =>
                 apiLogger.warn({ err }, "Update outcome notification failed")
