@@ -193,7 +193,7 @@ function followsScope(input: SignalScopeInput): boolean {
 // ── Settled sub-reads ───────────────────────────────────────────────────────
 
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSource =
+export type SignalSubRead =
   | "proposals"
   | "notifications"
   | "owed"
@@ -206,12 +206,12 @@ export type SignalSource =
 
 interface Settled<T> {
   value: T;
-  failed: { source: SignalSource; error: unknown } | null;
+  failed: { source: SignalSubRead; error: unknown } | null;
 }
 
 /** Run one sub-read; a throw becomes `failed` + the empty value, NAMED. */
 async function settle<T>(
-  source: SignalSource,
+  source: SignalSubRead,
   empty: T,
   read: () => Promise<T>
 ): Promise<Settled<T>> {
@@ -225,13 +225,13 @@ async function settle<T>(
 
 function failuresOf(
   ...settled: Array<Settled<unknown>>
-): Array<{ source: SignalSource; error: unknown }> {
+): Array<{ source: SignalSubRead; error: unknown }> {
   return settled.flatMap((s) => (s.failed ? [s.failed] : []));
 }
 
 /** A single lens throws the first failure — a failed read is never empty. */
 function throwIfFailed(
-  failures: ReadonlyArray<{ source: SignalSource; error: unknown }>
+  failures: ReadonlyArray<{ source: SignalSubRead; error: unknown }>
 ): void {
   if (failures[0]) throw failures[0].error;
 }
@@ -773,7 +773,7 @@ export interface LensClassWire {
   /** More exists than `rows` shows ("Show all"). */
   hasMore: boolean;
   /** Halves that FAILED. Non-empty ⇒ partial, never "empty". */
-  unreadable: SignalSource[];
+  unreadable: SignalSubRead[];
 }
 
 export interface LensPageWire {
@@ -795,7 +795,7 @@ function lensClass(
     total?: number;
     truncated: boolean;
     hasMore?: boolean;
-    failures: ReadonlyArray<{ source: SignalSource }>;
+    failures: ReadonlyArray<{ source: SignalSubRead }>;
   }
 ): LensClassWire {
   const unreadable = [...new Set(opts.failures.map((f) => f.source))];
