@@ -41,6 +41,9 @@ export const outputsRouter = router({
          */
         workspaceId: z.string().nullish(),
         projectId: z.string().uuid().optional(),
+        /** Only what this track's / this session's work produced (a lens's "Show all"). */
+        trackId: z.string().uuid().optional(),
+        sessionId: z.string().uuid().optional(),
         /** ISO instant: only rows that landed (or were proposed) at or after it. */
         since: z.string().datetime({ offset: true }).optional(),
         actor: z.enum(LANDED_ACTOR_FILTERS).default("all"),
@@ -58,13 +61,18 @@ export const outputsRouter = router({
         access: AccessContext.from(ctx),
         workspaceLens: input.workspaceId,
         projectId: input.projectId,
+        ...(input.trackId ? { trackId: input.trackId } : {}),
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         since: input.since,
         actor: input.actor,
         cursor: input.cursor,
         limit: input.limit,
       });
       if (!page) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
       }
       return page;
     }),

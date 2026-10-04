@@ -76,6 +76,7 @@ import type { ActivityRow } from "@synap-core/types/activity";
 import type { LandedObjectRow } from "@synap-core/types/landed";
 import { isSessionWorkingNow } from "@synap-core/types/run-activity";
 import { LENS_CAPS } from "@synap-core/types/lens";
+import { parseRecordChange } from "@synap-core/types/events";
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalsRouter } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
@@ -652,6 +653,38 @@ function signalFromActivity(row: ActivityRow, now: Date): Signal {
 }
 
 /**
+ * The event as a DATA line (`Signal.event`), when it is a record change
+ * (`parseRecordChange` — the ONE rule; the governance phases of the same
+ * change and connector families are not). The record's kind is its profile
+ * slug when the event payload named one, else the normalised subject. The
+ * writer is named only when it is not the column default (`api`, a direct
+ * write) — "Sync created 101 contacts", never "Api created…".
+ */
+export function dataEventOf(e: {
+  type: string;
+  subjectType: string | null;
+  source?: string | null;
+  data?: unknown;
+}): { event: NonNullable<Signal["event"]> } | Record<string, never> {
+  const change = parseRecordChange(e.type);
+  if (!change) return {};
+  const data = (e.data ?? null) as { profileSlug?: unknown } | null;
+  const profileSlug =
+    data && typeof data.profileSlug === "string" && data.profileSlug
+      ? data.profileSlug
+      : null;
+  const source = e.source?.trim() || null;
+  return {
+    event: {
+      action: change.action,
+      objectKind:
+        profileSlug ?? normalizeObjectKind(e.subjectType ?? change.subject),
+      origin: source && source !== "api" ? source : null,
+    },
+  };
+}
+
+/**
  * What CHANGED — the `activity.list` ledger (governed acts, decisions, runs,
  * session lifecycles; `listActivity`, its own floors) merged with the data
  * `events` stream. Events carry a workspace and a session and nothing else,
@@ -696,12 +729,16 @@ async function readHappened(
         type: string;
         subjectType: string | null;
         subjectId: string | null;
+        source?: string | null;
+        data?: unknown;
       }>,
       async () =>
         eventsNarrow
           ? await eventsRouter.createCaller(ctx).read({
               limit: opts.limit,
-              lean: true,
+              // Full rows: a data line names the record's kind (`data.profileSlug`)
+              // and its writer (`source`) — both absent from the lean shape.
+              lean: false,
               // `read` takes a plain optional string: null and undefined both
               // mean "do not narrow" (events carry no pod-wide sibling).
               ...(typeof input.workspaceId === "string"
@@ -742,6 +779,7 @@ async function readHappened(
           ? { kind: e.subjectType, id: e.subjectId }
           : null,
       category: "data",
+      ...dataEventOf(e),
       groupKey: null,
       ageBucket: ageBucketOf(e.timestamp, now),
       repeatCount: 1,

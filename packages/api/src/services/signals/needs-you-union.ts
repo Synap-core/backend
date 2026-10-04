@@ -243,6 +243,14 @@ export interface Signal {
   /** `activity` only: the ledger row, as `activity.list` returns it. */
   activity?: ActivityRow;
   /**
+   * `event` only, and only when the event is a RECORD CHANGE
+   * (`parseRecordChange`: `{subject}.{crud}.completed`): the act, the record's
+   * kind (its profile slug when the event named one) and the writer when it is
+   * not the default API path. The lens page draws it as a data line
+   * (`happenedItems`, `@synap-core/types/lens`).
+   */
+  event?: { action: string; objectKind: string; origin: string | null };
+  /**
    * WHICH block this row belongs to on a needs-you page. `session:<id>` for
    * everything a session owes the person (its owed slots, its draft-asks row,
    * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -305,6 +313,7 @@ const KIND_SPECIFIC_SIGNAL_FIELDS = [
   "live",
   "landed",
   "activity",
+  "event",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =

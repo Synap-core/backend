@@ -66,6 +66,8 @@ export const activityRouter = router({
         projectId: z.string().uuid().optional(),
         /** Only acts inside this track's sessions. */
         trackId: z.string().uuid().optional(),
+        /** Only acts inside this ONE session (a session lens's "Show all"). */
+        sessionId: z.string().uuid().optional(),
         /**
          * Same three-state lens as `signals`: a string = that workspace,
          * `null` = pod-personal only, absent = the WHOLE floor (never the
@@ -103,6 +105,7 @@ export const activityRouter = router({
         actor,
         projectId: input.projectId,
         trackId: input.trackId,
+        sessionId: input.sessionId,
         outcome: input.outcome,
         source: input.source,
         since: input.since,
@@ -124,6 +127,9 @@ export const activityRouter = router({
       z.object({
         actor: z.string().max(200).default("all"),
         projectId: z.string().uuid().optional(),
+        /** Same narrowing as `list` — a track / session lens's pulse. */
+        trackId: z.string().uuid().optional(),
+        sessionId: z.string().uuid().optional(),
         workspaceId: z.string().nullish(),
         source: z.enum(ACTIVITY_SOURCES).optional(),
         days: z.number().int().min(1).max(ACTIVITY_DAILY_MAX_DAYS).default(182),
@@ -145,6 +151,8 @@ export const activityRouter = router({
         roster: rosterReadFor(ctx),
         actor,
         projectId: input.projectId,
+        trackId: input.trackId,
+        sessionId: input.sessionId,
         source: input.source,
         days: input.days,
         tz: input.tz,

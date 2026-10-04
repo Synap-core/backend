@@ -393,3 +393,55 @@ describe("signals.countByProject — the rail's badges, one round-trip", () => {
     });
   });
 });
+
+describe("signals.list — a data change is a DATA line (work + data)", () => {
+  const at = new Date("2026-10-04T10:00:00.000Z");
+  const row = (over: Record<string, unknown>) => ({
+    id: "ev",
+    timestamp: at,
+    type: "entity.create.completed",
+    subjectType: "entity",
+    subjectId: "e1",
+    source: "sync",
+    data: { profileSlug: "contact" },
+    ...over,
+  });
+
+  it("reads full rows and names the act, the record's kind and a non-default writer", async () => {
+    eventsReadSpy.mockResolvedValue([
+      row({ id: "a" }),
+      row({
+        id: "b",
+        type: "entities.update.completed",
+        source: "api",
+        data: {},
+      }),
+    ]);
+    const r = await caller().list({ lens: "history" });
+    expect(eventsReadSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ lean: false })
+    );
+    const byId = new Map(r.signals.map((s) => [s.id, s]));
+    expect(byId.get("event:a")?.event).toEqual({
+      action: "create",
+      objectKind: "contact",
+      origin: "sync",
+    });
+    // Plural subject normalised; the column default writer is no name.
+    expect(byId.get("event:b")?.event).toEqual({
+      action: "update",
+      objectKind: "entity",
+      origin: null,
+    });
+  });
+
+  it("the governance phases of a change carry no data line (one change = one line)", async () => {
+    eventsReadSpy.mockResolvedValue([
+      row({ id: "r", type: "entity.create.requested" }),
+      row({ id: "v", type: "entity.create.validated" }),
+    ]);
+    const r = await caller().list({ lens: "history" });
+    expect(r.signals.filter((s) => s.kind === "event")).toHaveLength(2);
+    expect(r.signals.every((s) => s.event === undefined)).toBe(true);
+  });
+});
