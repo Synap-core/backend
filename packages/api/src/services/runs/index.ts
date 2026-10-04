@@ -87,6 +87,11 @@ import { validateFlowDefinition } from "../automations/validate-flow.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 import {
+  deriveRunActivity,
+  type SessionActivityWire,
+} from "@synap-core/types/run-activity";
+import { loadSessionActivity } from "./session-activity.js";
+import {
   CAPABILITY_RUN_EVENT_KIND,
   capabilityRunEventWhere,
   capabilityRunProposalWhere,
@@ -2216,40 +2221,75 @@ export async function getRun(
     };
   }
 
-  // playbook / session — the run's story is its channel; return the run with a
-  // single lifecycle marker (the UI opens `run.channelId` for the messages).
+  // playbook / session — the run's story is what its agents DID: the SAME
+  // session-activity read the session pages use, bookended by the run's own
+  // lifecycle marker. (Until 2026-10-04 this returned the marker ALONE, so
+  // run-detail's spine was empty for exactly the runs agents do.)
   const [run] =
     flowType === "playbook"
       ? await listPlaybookRuns(userId, undefined, {}, 1, undefined, id, roster)
       : await listSessionRuns(userId, {}, 1, undefined, id, roster);
   if (!run) return null;
-  const activity: RunActivityItem[] = [
-    {
-      id: run.id,
-      at: run.startedAt,
-      kind: "lifecycle",
-      status: run.status,
-      label: run.summary ?? run.flowName,
-      hint: run.error ?? null,
-      detail: null,
-    },
-  ];
   // Playbook runs get the rich per-kind footprint: produced / proposals / agents
-  // / session card. Session runs (no playbook_run row) keep the lifecycle-only
-  // shape — their story is their channel.
+  // / session card. Session runs (no playbook_run row) ARE their session.
   const playbookDetail =
     flowType === "playbook"
       ? await loadPlaybookRunDetail(userId, run.id, roster)
       : null;
+  const activitySessionId =
+    flowType === "playbook" ? (playbookDetail?.session?.id ?? null) : run.id;
+  const sessionActivity = activitySessionId
+    ? await loadSessionActivity({ userId, roster }, activitySessionId)
+    : null;
+  const lifecycle: RunActivityItem = {
+    id: run.id,
+    at: run.startedAt,
+    kind: "lifecycle",
+    status: run.status,
+    label: run.summary ?? run.flowName,
+    hint: run.error ?? null,
+    detail: null,
+  };
+  const activity: RunActivityItem[] = [
+    lifecycle,
+    ...sessionActivityItems(sessionActivity),
+  ];
   return {
     run: { ...run, flowType },
     activity,
     trigger: null,
     outputSummary: null,
     playbookDetail,
+    sessionActivity,
     definitionSnapshot: null,
     pathTaken: null,
   };
+}
+
+/**
+ * The session activity as flat run-activity items, labelled by the ONE
+ * derivation — so a reader of the flat list (the CLI, the diagnose door)
+ * sees the same words run-detail groups. `detail` carries the wire item.
+ */
+function sessionActivityItems(
+  wire: SessionActivityWire | null
+): RunActivityItem[] {
+  if (!wire) return [];
+  const view = deriveRunActivity(wire);
+  const labelled = new Map<string, string>();
+  for (const s of view.waiting) labelled.set(s.id, s.label);
+  for (const g of view.groups)
+    for (const s of g.steps) labelled.set(s.id, s.label);
+  if (view.now?.step) labelled.set(view.now.step.id, view.now.step.label);
+  return wire.items.map((item) => ({
+    id: item.id,
+    at: item.at instanceof Date ? item.at : new Date(item.at),
+    kind: item.kind,
+    status: item.status,
+    label: labelled.get(item.id) ?? item.title ?? item.kind,
+    hint: item.error,
+    detail: { ...item } as Record<string, unknown>,
+  }));
 }
 
 // ── Playbook run detail (produced / proposals / agents / session card) ────────

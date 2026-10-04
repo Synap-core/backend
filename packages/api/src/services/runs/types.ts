@@ -23,6 +23,7 @@ import type {
   FlowDefinition,
   RunPathTaken,
 } from "@synap/database";
+import type { SessionActivityWire } from "@synap-core/types/run-activity";
 
 /**
  * Which ledger a run came from.
@@ -257,6 +258,14 @@ interface UnifiedRunDetailBase {
    * automation-specific block here.
    */
   playbookDetail?: PlaybookRunDetail | null;
+  /**
+   * What agents DID in a session / playbook run — the SAME read the session
+   * pages use (`loadSessionActivity`), handed to the shared derivation
+   * (`@synap-core/types/run-activity`) by run-detail for its groups and Now
+   * line. Null for every other flow, and for a playbook run whose session the
+   * viewer may not read (`playbookDetail.sessionPrivate`).
+   */
+  sessionActivity?: SessionActivityWire | null;
 }
 
 export interface AutomationRunDetail extends UnifiedRunDetailBase {

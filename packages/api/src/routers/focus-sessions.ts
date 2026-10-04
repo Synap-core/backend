@@ -64,6 +64,7 @@ import {
   type SessionLiveness,
 } from "@synap-core/types/landed";
 import { readSessionUsage } from "../services/focus-sessions/session-usage.js";
+import { loadSessionActivity } from "../services/runs/session-activity.js";
 import {
   recordSessionArtifact,
   SESSION_ARTIFACT_KINDS,
@@ -2842,6 +2843,31 @@ export const focusSessionsRouter = router({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return result;
+    }),
+
+  /**
+   * THE one door for "what did agents DO in this session?" — IS turns (tool
+   * steps through the shared projection), governed writes by any agent
+   * (events.session_id), decisions, asks handed back, agent notes; merged by
+   * time, bounded, each source read on its own. A source that failed is NAMED
+   * in `unreadable`, never folded into an empty list. Derive the view with
+   * `deriveRunActivity` (`@synap-core/types/run-activity`); never re-derive it.
+   * `runs.get` serves the SAME read for session / playbook runs.
+   */
+  activity: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const result = await loadSessionActivity(
+        { userId: requireUserId(ctx.userId), roster: rosterReadFor(ctx) },
+        input.id
+      );
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
         });
       }
       return result;
