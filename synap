@@ -784,6 +784,12 @@ generate_kratos_config() {
         fi
     fi
     kratos_ui="${pod_admin_ui}/login"
+    # Recovery and settings have their own pod-admin renderers (account
+    # recovery P0/P1): /recovery renders the Kratos recovery flow plus the
+    # "use a recovery code" door; /settings/security is where a recovered
+    # (privileged) session lands to set a new password.
+    local kratos_recovery_ui="${pod_admin_ui}/recovery"
+    local kratos_settings_ui="${pod_admin_ui}/settings/security"
 
     # Kratos public API base URL — localhost in dev, domain URL in production
     local kratos_public_base_url=""
@@ -903,11 +909,12 @@ $return_urls
       enabled: true
       config: {}
     passkey:
-      # The WebAuthn ceremony IS implemented natively by the Pod Admin login:
-      # synap-app/packages/core/auth-ui/src/webauthn.ts drives both the passkey
-      # login and settings ceremonies against Kratos v1.3.1's flow nodes.
-      # Requires the passkey credentials block in identity.schema.json — without
-      # it Kratos accepts this config but the strategy silently does nothing.
+      # Pod Admin does NOT run the WebAuthn ceremony yet: its login hides the
+      # passkey trigger (no navigator.credentials code there). The ceremony
+      # exists in synap-app/packages/core/auth-ui/src/webauthn.ts but is mounted
+      # only in synap-app/apps/studio. Kept enabled so passkeys already
+      # registered stay valid. Requires the passkey credentials block in
+      # identity.schema.json — without it the strategy silently does nothing.
       enabled: true
       config:
         rp:
@@ -927,13 +934,73 @@ $oidc_block
     error:
       ui_url: ${kratos_ui}
     settings:
-      ui_url: ${kratos_ui}
+      ui_url: ${kratos_settings_ui}
       privileged_session_max_age: 15m
+      # Synap Cloud trust (founder decision R1, 2026-10-04): Cloud may SIGN IN
+      # by default, RECOVERY is opt-in by the owner. A can_interrupt settings
+      # web_hook runs PRE-PERSIST (web_hook.go ExecuteSettingsPrePersistHook);
+      # its ctx has the request cookies but not the session, so the body
+      # forwards the session cookie and the pod reads authentication_methods
+      # (apps/api/src/webhooks/kratos-cloud-trust.ts). A Cloud-only session
+      # cannot change a sign-in method unless the owner trusts Cloud for
+      # recovery or the account has no pod-held factor yet.
+      # Body (decoded): function(ctx) { identity_id, session_cookie: ctx.request_cookies.ory_kratos_session or null }
+      after:
+        password:
+          hooks:
+            - hook: web_hook
+              config:
+                url: http://backend:4000/api/webhooks/kratos/settings/guard
+                method: POST
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IGlkZW50aXR5X2lkOiBjdHguaWRlbnRpdHkuaWQsIHNlc3Npb25fY29va2llOiBpZiBzdGQub2JqZWN0SGFzKGN0eCwgInJlcXVlc3RfY29va2llcyIpICYmIHN0ZC5pc09iamVjdChjdHgucmVxdWVzdF9jb29raWVzKSAmJiBzdGQub2JqZWN0SGFzKGN0eC5yZXF1ZXN0X2Nvb2tpZXMsICJvcnlfa3JhdG9zX3Nlc3Npb24iKSB0aGVuIGN0eC5yZXF1ZXN0X2Nvb2tpZXMub3J5X2tyYXRvc19zZXNzaW9uIGVsc2UgbnVsbCB9Cg==
+                headers:
+                  Content-Type: application/json
+                  X-Webhook-Secret: ${webhook_secret}
+                can_interrupt: true
+        passkey:
+          hooks:
+            - hook: web_hook
+              config:
+                url: http://backend:4000/api/webhooks/kratos/settings/guard
+                method: POST
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IGlkZW50aXR5X2lkOiBjdHguaWRlbnRpdHkuaWQsIHNlc3Npb25fY29va2llOiBpZiBzdGQub2JqZWN0SGFzKGN0eCwgInJlcXVlc3RfY29va2llcyIpICYmIHN0ZC5pc09iamVjdChjdHgucmVxdWVzdF9jb29raWVzKSAmJiBzdGQub2JqZWN0SGFzKGN0eC5yZXF1ZXN0X2Nvb2tpZXMsICJvcnlfa3JhdG9zX3Nlc3Npb24iKSB0aGVuIGN0eC5yZXF1ZXN0X2Nvb2tpZXMub3J5X2tyYXRvc19zZXNzaW9uIGVsc2UgbnVsbCB9Cg==
+                headers:
+                  Content-Type: application/json
+                  X-Webhook-Secret: ${webhook_secret}
+                can_interrupt: true
+        profile:
+          hooks:
+            - hook: web_hook
+              config:
+                url: http://backend:4000/api/webhooks/kratos/settings/guard
+                method: POST
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IGlkZW50aXR5X2lkOiBjdHguaWRlbnRpdHkuaWQsIHNlc3Npb25fY29va2llOiBpZiBzdGQub2JqZWN0SGFzKGN0eCwgInJlcXVlc3RfY29va2llcyIpICYmIHN0ZC5pc09iamVjdChjdHgucmVxdWVzdF9jb29raWVzKSAmJiBzdGQub2JqZWN0SGFzKGN0eC5yZXF1ZXN0X2Nvb2tpZXMsICJvcnlfa3JhdG9zX3Nlc3Npb24iKSB0aGVuIGN0eC5yZXF1ZXN0X2Nvb2tpZXMub3J5X2tyYXRvc19zZXNzaW9uIGVsc2UgbnVsbCB9Cg==
+                headers:
+                  Content-Type: application/json
+                  X-Webhook-Secret: ${webhook_secret}
+                can_interrupt: true
+        oidc:
+          hooks:
+            - hook: web_hook
+              config:
+                url: http://backend:4000/api/webhooks/kratos/settings/guard
+                method: POST
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IGlkZW50aXR5X2lkOiBjdHguaWRlbnRpdHkuaWQsIHNlc3Npb25fY29va2llOiBpZiBzdGQub2JqZWN0SGFzKGN0eCwgInJlcXVlc3RfY29va2llcyIpICYmIHN0ZC5pc09iamVjdChjdHgucmVxdWVzdF9jb29raWVzKSAmJiBzdGQub2JqZWN0SGFzKGN0eC5yZXF1ZXN0X2Nvb2tpZXMsICJvcnlfa3JhdG9zX3Nlc3Npb24iKSB0aGVuIGN0eC5yZXF1ZXN0X2Nvb2tpZXMub3J5X2tyYXRvc19zZXNzaW9uIGVsc2UgbnVsbCB9Cg==
+                headers:
+                  Content-Type: application/json
+                  X-Webhook-Secret: ${webhook_secret}
+                can_interrupt: true
     recovery:
       enabled: true
-      ui_url: ${kratos_ui}
+      use: code
+      ui_url: ${kratos_recovery_ui}
+      after:
+        hooks:
+          # A recovered account signs out everywhere else (keeps the new session).
+          - hook: revoke_active_sessions
     verification:
-      enabled: false # Disabled: mailslurper service not running
+      # Off until the pod courier delivers mail (wave 2: CP relay / BYO SMTP).
+      enabled: false
       ui_url: ${kratos_ui}
     logout:
       after:
@@ -941,6 +1008,22 @@ $oidc_block
     login:
       ui_url: ${kratos_ui}
       lifespan: 10m
+      after:
+        oidc:
+          hooks:
+            # Owner set Synap Cloud trust to "off" → refuse "Continue with Synap
+            # Cloud" before the session cookie is issued (login/hook.go runs
+            # post-login hooks, then UpsertAndIssueCookie).
+            # Body (decoded): function(ctx) { identity_id: ctx.identity.id }
+            - hook: web_hook
+              config:
+                url: http://backend:4000/api/webhooks/kratos/login/cloud
+                method: POST
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IGlkZW50aXR5X2lkOiBjdHguaWRlbnRpdHkuaWQgfQo=
+                headers:
+                  Content-Type: application/json
+                  X-Webhook-Secret: ${webhook_secret}
+                can_interrupt: true
     registration:
       lifespan: 10m
       ui_url: ${kratos_ui}
@@ -1023,9 +1106,12 @@ session:
     same_site: Lax
     # Note: secure flag is controlled by Kratos based on cookie domain
     # For production domains, Kratos automatically sets secure=true
+# The courier's connection URI has ONE source: COURIER_SMTP_CONNECTION_URI
+# (docker-compose, from SMTP_CONNECTION_URI). Env overrides this file, so a
+# URI here would be dead config — it once pointed at a mail catcher that never
+# ran. The backend self-reports the real courier (apps/api/src/courier-status.ts).
 courier:
   smtp:
-    connection_uri: smtps://test:test@mailslurper:1025/?skip_ssl_verify=true
     from_address: noreply@synap.io
 EOF
     
