@@ -63,9 +63,11 @@ describe("needsYouRows — singleton vs multi", () => {
       want: ["item:x", "session:S[s1,s2]", "item:y"],
     },
     {
-      name: "a key that reappears after another row is never merged",
+      // Needs-you duplicate cause (lens grammar 2026-10-04): non-adjacent
+      // items of ONE session used to draw the session twice.
+      name: "a key that reappears after another row joins its session's ONE row, at the first position",
       signals: [row("s1", S), row("x"), row("s2", S)],
-      want: ["item:s1", "item:x", "item:s2"],
+      want: ["session:S[s1,s2]", "item:x"],
     },
     {
       name: "cluster keys are never a session card",
@@ -102,13 +104,20 @@ describe("needsYouRows — server order, older wires", () => {
   it("keeps server order across kinds — no hoist of clusters, slots or notifications", () => {
     const out = needsYouRows([
       row("notif-newest", { kind: "notification" }),
-      row("cluster", { kind: "proposal-cluster", groupKey: "proposal-cluster:k1" }),
+      row("cluster", {
+        kind: "proposal-cluster",
+        groupKey: "proposal-cluster:k1",
+      }),
       row("slot", { groupKey: "session:s1" }),
     ]);
-    expect(shape(out.recent)).toEqual(["item:notif-newest", "item:cluster", "item:slot"]);
+    expect(shape(out.recent)).toEqual([
+      "item:notif-newest",
+      "item:cluster",
+      "item:slot",
+    ]);
   });
 
-  it("react keys stay unique when a session key reappears", () => {
+  it("a session key that reappears is still ONE row (unique react keys, every item kept)", () => {
     const out = needsYouRows([
       row("a1", { groupKey: "session:A" }),
       row("a2", { groupKey: "session:A" }),
@@ -117,8 +126,14 @@ describe("needsYouRows — server order, older wires", () => {
       row("a4", { groupKey: "session:A" }),
     ]);
     const keys = out.recent.map((r) => r.key);
-    expect(keys).toHaveLength(3);
-    expect(new Set(keys).size).toBe(3);
+    expect(keys).toEqual(["session:A", "b"]);
+    const card = out.recent[0]!;
+    expect(card.kind === "session" ? card.items.map((i) => i.id) : []).toEqual([
+      "a1",
+      "a2",
+      "a3",
+      "a4",
+    ]);
   });
 
   it("reads a pre-W2 pod (fields absent on the wire) as recent items, not a failure", () => {
@@ -154,10 +169,17 @@ describe("needsYouRows — the card", () => {
 
   it("an older pod (no sessionTitle) falls back to the goal's FIRST LINE", () => {
     const [card] = needsYouRows([
-      row("a", { groupKey: "session:S", sessionGoal: "Ship billing\nand more" }),
+      row("a", {
+        groupKey: "session:S",
+        sessionGoal: "Ship billing\nand more",
+      }),
       row("b", { groupKey: "session:S" }),
     ]).recent;
-    expect(card).toMatchObject({ kind: "session", title: "Ship billing", projectId: null });
+    expect(card).toMatchObject({
+      kind: "session",
+      title: "Ship billing",
+      projectId: null,
+    });
   });
 
   it("counts by kind, first-appearance order; a draft row counts its asks", () => {
@@ -180,20 +202,35 @@ describe("needsYouRows — the card", () => {
 
   it("item kinds: reason, else owed; draft ask; review", () => {
     expect(needsYouItemKind(row("a"))).toBe("owed");
-    expect(needsYouItemKind(row("a", { blockedReason: "Decision" }))).toBe("decision");
+    expect(needsYouItemKind(row("a", { blockedReason: "Decision" }))).toBe(
+      "decision"
+    );
     expect(needsYouItemKind(row("a", { kind: "draft-asks" }))).toBe("ask");
-    expect(needsYouItemKind(row("a", { kind: "session-review" }))).toBe("review");
-    expect(needsYouItemKind(row("a", { kind: "proposal-cluster" }))).toBe("decision");
-    expect(needsYouCountsLabel([{ kind: "decision", count: 1 }])).toBe("1 decision");
+    expect(needsYouItemKind(row("a", { kind: "session-review" }))).toBe(
+      "review"
+    );
+    expect(needsYouItemKind(row("a", { kind: "proposal-cluster" }))).toBe(
+      "decision"
+    );
+    expect(needsYouCountsLabel([{ kind: "decision", count: 1 }])).toBe(
+      "1 decision"
+    );
   });
 });
 
 describe("needsYouRows — a session appears ONCE", () => {
   it("a cluster filed under the session folds into its card, counted as its N decisions", () => {
     const out = needsYouRows([
-      row("slot", { groupKey: "session:S", blockedReason: "physical", sessionTitle: "Tracks-first" }),
+      row("slot", {
+        groupKey: "session:S",
+        blockedReason: "physical",
+        sessionTitle: "Tracks-first",
+      }),
       row("cl", { groupKey: "session:S", kind: "proposal-cluster", count: 2 }),
-      row("other-cl", { kind: "proposal-cluster", groupKey: "proposal-cluster:k" }),
+      row("other-cl", {
+        kind: "proposal-cluster",
+        groupKey: "proposal-cluster:k",
+      }),
     ]);
     expect(shape(out.recent)).toEqual(["session:S[slot,cl]", "item:other-cl"]);
     const [card] = out.recent;

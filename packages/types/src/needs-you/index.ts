@@ -9,8 +9,8 @@
  * This leaf never sorts. It only reads three fields the pod stamps on every
  * row and turns the flat page into what the reader sees:
  *
- * - `groupKey` — a run of rows sharing a `session:<id>` key belongs to ONE
- *   session: one row when it is a single item, one card when it is several
+ * - `groupKey` — every row sharing a `session:<id>` key belongs to ONE
+ *   session (adjacent or not — one session is never drawn twice): one row when it is a single item, one card when it is several
  *   ({@link needsYouRows}). Any other key, or none, is a row of its own.
  * - `ageBucket` — `'older'` rows (> 7 days) are split off into the "Older · N"
  *   fold. A fold, never a filter: they still count and still render when
@@ -67,9 +67,9 @@ export interface GroupableSignal {
   occurredAt?: string | Date;
 }
 
-/** A contiguous run of one session's rows (or a lone row) — internal. */
+/** One session's rows (or a lone row) — internal. */
 interface Run<T extends GroupableSignal> {
-  /** Stable React key: `session:<id>` (suffixed if it reappears), or the row's id. */
+  /** Stable React key: `session:<id>`, or the row's id. */
   key: string;
   /** Set only on a `session:<id>` run. */
   sessionId: string | null;
@@ -90,37 +90,48 @@ export function sessionIdOfGroupKey(
 function pushInto<T extends GroupableSignal>(
   groups: Run<T>[],
   signal: T,
-  seen: Map<string, number>
+  bySession: Map<string, Run<T>>
 ): void {
   const sessionId = sessionIdOfGroupKey(signal.groupKey);
-  const last = groups[groups.length - 1];
-  // Contiguous only: the server emits a session's block in one run. A key that
-  // reappears after another row is a NEW run — merging it would move a row
-  // the server placed, which is exactly the client re-sort this leaf refuses.
-  if (sessionId && last && last.sessionId === sessionId) {
-    last.items.push(signal);
+  // ONE row per session per fold (needs-you duplicate cause, lens grammar
+  // 2026-10-04). The server emits a session's block in one run, so this is a
+  // no-op on a well-formed page; when a page does carry the session again
+  // after another row (a client merging pages, an older pod), the item joins
+  // the session's EXISTING row at that row's position — a session drawn twice
+  // is the defect, and the first position is where the server put its newest
+  // item. Order inside the run stays the order received.
+  if (sessionId) {
+    const run = bySession.get(sessionId);
+    if (run) {
+      run.items.push(signal);
+      return;
+    }
+    const fresh: Run<T> = {
+      key: `session:${sessionId}`,
+      sessionId,
+      items: [signal],
+    };
+    bySession.set(sessionId, fresh);
+    groups.push(fresh);
     return;
   }
-  // Key by the group itself so an answered row does not re-key its siblings;
-  // a key the server repeated non-contiguously gets a suffix to stay unique.
-  let key = signal.id;
-  if (sessionId) {
-    const n = seen.get(sessionId) ?? 0;
-    seen.set(sessionId, n + 1);
-    key = n === 0 ? `session:${sessionId}` : `session:${sessionId}#${n}`;
-  }
-  groups.push({ key, sessionId, items: [signal] });
+  groups.push({ key: signal.id, sessionId: null, items: [signal] });
 }
 
-/** Split a server-ordered page into contiguous runs + the Older partition. */
+/** Split a server-ordered page into one run per session + the Older partition. */
 function runsOf<T extends GroupableSignal>(
   signals: readonly T[]
 ): { recent: Run<T>[]; older: Run<T>[] } {
   const recent: Run<T>[] = [];
   const older: Run<T>[] = [];
-  const seen = new Map<string, number>();
+  // Per fold: a session is one row in Recent and, separately, in Older (the
+  // pod lifts a session's rows into one bucket, so on its pages that never
+  // splits).
+  const recentBySession = new Map<string, Run<T>>();
+  const olderBySession = new Map<string, Run<T>>();
   for (const s of signals) {
-    pushInto(s.ageBucket === "older" ? older : recent, s, seen);
+    if (s.ageBucket === "older") pushInto(older, s, olderBySession);
+    else pushInto(recent, s, recentBySession);
   }
   return { recent, older };
 }
@@ -165,7 +176,7 @@ export function repeatLabel(signal: RepeatableSignal): string | null {
 //   - a session owing TWO OR MORE things is ONE row (a `session` card) that
 //     names the session and counts what it owes by kind, and opens the
 //     session, where the items live under "Your turn".
-// Same server order, same Older fold, same contiguity rule (`runsOf`).
+// Same server order, same Older fold, one run per session (`runsOf`).
 
 /** Which session a row came from — the provenance door of a single item. */
 export interface NeedsYouSessionRef {
@@ -193,7 +204,7 @@ export type NeedsYouRow<T extends GroupableSignal> =
     }
   | {
       kind: "session";
-      /** Stable React key: `session:<id>` (suffixed if the key reappears). */
+      /** Stable React key: `session:<id>`. */
       key: string;
       sessionId: string;
       /** Display name: the pod's `sessionTitle`, else the goal's first line. */
@@ -316,8 +327,8 @@ function toRows<T extends GroupableSignal>(
 
 /**
  * Shape a server-ordered needs-you page into ONE list of rows + the Older
- * fold. Never sorts: a card sits exactly where its session's (contiguous)
- * items sat, i.e. at its newest item's position.
+ * fold. Never sorts: a card sits exactly where its session's first item
+ * sat, i.e. at its newest item's position.
  */
 export function needsYouRows<T extends GroupableSignal>(
   signals: readonly T[]
