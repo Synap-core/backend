@@ -115,7 +115,12 @@ echo "── D. doors call the guard before compose may recreate postgres"
 first_compose_line() {
     grep -nE '(docker compose|\$COMPOSE)[^#]*[[:space:]](up|run)([[:space:]]|$)' "$1" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1
 }
-for door in "$DEPLOY_DIR/update-pod.sh" "$REPO_ROOT/install.sh"; do
+# deploy/update-pod.sh is a shim to `synap update --release` since update-door
+# P2 (it runs no compose itself) — it is covered by the synap checks below.
+grep -qE '^[^#]*exec bash "\$SYNAP" update --release' "$DEPLOY_DIR/update-pod.sh" \
+    && ok "deploy/update-pod.sh delegates to synap update (the guarded engine)" \
+    || bad "deploy/update-pod.sh neither delegates to synap update nor is scanned as a door"
+for door in "$REPO_ROOT/install.sh"; do
     name="${door#$REPO_ROOT/}"
     first="$(first_compose_line "$door")"
     guard="$(grep -nE '^[^#]*pgdata_guard' "$door" | head -1 | cut -d: -f1)"
@@ -135,7 +140,7 @@ bypass="$(grep -nE 'command docker compose[^#]*[[:space:]](up|run|create)([[:spa
 [ -z "$bypass" ] && ok "synap: no call site bypasses the wrapper with \`command docker compose up|run\`" \
     || bad "synap: wrapper bypassed: $bypass"
 # The pre-update backup runs before migrations in both update doors.
-for door in "$SYNAP_CLI" "$DEPLOY_DIR/update-pod.sh"; do
+for door in "$SYNAP_CLI"; do
     grep -q 'pgdata_backup pre-update' "$door" && ok "${door#$REPO_ROOT/}: takes a pre-update backup" \
         || bad "${door#$REPO_ROOT/}: no pre-update backup"
 done
