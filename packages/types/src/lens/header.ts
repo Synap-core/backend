@@ -103,18 +103,28 @@ export function lensHeaderModel<
   counts: LensCounts;
   lastActivityAt?: string | Date | null;
   fact?: LensScopeFactFor<K> | null;
+  /**
+   * The ONE line that says what matters most right now, in the scope's own
+   * words — "Waiting on you: <the exact ask>" or the agent's now-line. It
+   * REPLACES that section's count clause and leads the narrative, so the
+   * header never says "Waiting on you: X · 1 waiting on you". Absent ⇒ the
+   * count clauses alone.
+   */
+  lead?: { section: "blocking" | "happening"; text: string } | null;
 }): LensHeaderModel {
   const { counts } = input;
+  const lead = input.lead?.text.trim() ? input.lead : null;
   const narrative: LensNarrativePart[] = [];
+  if (lead) narrative.push({ key: lead.section, text: lead.text.trim() });
   if (counts.produced)
     narrative.push({ key: "produced", text: `${counts.produced} delivered` });
-  if (counts.blocking) {
+  if (counts.blocking && lead?.section !== "blocking") {
     narrative.push({
       key: "blocking",
       text: `${counts.blocking} waiting on you`,
     });
   }
-  if (counts.happening) {
+  if (counts.happening && lead?.section !== "happening") {
     narrative.push({
       key: "happening",
       text: `${counts.happening} in progress`,

@@ -381,6 +381,40 @@ describe("lensHeaderModel", () => {
       }).allClear
     ).toBe(true);
   });
+  it("a lead names the exact ask FIRST and replaces its own count clause", () => {
+    const m = lensHeaderModel({
+      scopeKind: "session",
+      state: { owedFromYou: 2 },
+      counts: { blocking: 2, happening: 1, produced: 3 },
+      lead: { section: "blocking", text: "Waiting on you: Approve the brief" },
+    });
+    expect(m.narrative).toEqual([
+      { key: "blocking", text: "Waiting on you: Approve the brief" },
+      { key: "produced", text: "3 delivered" },
+      { key: "happening", text: "1 in progress" },
+    ]);
+    // A happening lead swaps only the happening clause.
+    const h = lensHeaderModel({
+      scopeKind: "session",
+      state: { running: true },
+      counts: { blocking: 1, happening: 1, produced: 0 },
+      lead: { section: "happening", text: "Drafting the outline" },
+    });
+    expect(h.narrative.map((p) => ("text" in p ? p.text : p.key))).toEqual([
+      "Drafting the outline",
+      "1 waiting on you",
+    ]);
+    // A blank lead is no lead.
+    const b = lensHeaderModel({
+      scopeKind: "session",
+      state: {},
+      counts: { blocking: 1, happening: 0, produced: 0 },
+      lead: { section: "blocking", text: "  " },
+    });
+    expect(b.narrative).toEqual([
+      { key: "blocking", text: "1 waiting on you" },
+    ]);
+  });
   it("ONE scope fact per kind", () => {
     expect(LENS_SCOPE_FACT_KIND).toEqual({
       pod: null,
