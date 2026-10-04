@@ -53,6 +53,9 @@ coverage/
 
 # Self-hosting deployment
 deploy/.env
+# `synap config` keeps the previous .env (0600, newest 10) and edits a validated copy
+deploy/.env.bak.*
+deploy/.env.edit.*
 deploy/.secrets-backup.txt
 deploy/backups/
 # Local Caddyfile overrides (e.g. Cloudflare Tunnel, custom routing)

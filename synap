@@ -86,8 +86,7 @@ _pin_compose_project_name() {
     local env_file="${1:-.env}"
     [ -f "$env_file" ] && [ -n "${COMPOSE_PROJECT_NAME:-}" ] || return 0
     grep -q "^COMPOSE_PROJECT_NAME=" "$env_file" && return 0
-    [ -n "$(tail -c1 "$env_file")" ] && echo >> "$env_file"
-    echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}" >> "$env_file"
+    SYNAP_ENV_FILE="$env_file" envcfg_write_raw S COMPOSE_PROJECT_NAME "${COMPOSE_PROJECT_NAME}"
     echo -e "${BLUE}ℹ️  Pinned COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME} in ${env_file}${NC}"
 }
 
@@ -137,6 +136,20 @@ else
     exit 1
 fi
 unset _update_lock_script
+
+# ─── The ONE .env writer (deploy/env-config.sh + deploy/env.schema) ───────────
+# `synap config` / `synap apply` / `synap doctor` and every internal .env write
+# below (pins, backfills, federation, tunnel) go through it: atomic, mode kept,
+# no stray .env.bak. configure-pod.sh sources the same file inside pod-agent.
+_env_config_script="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/deploy/env-config.sh"
+if [ -f "$_env_config_script" ]; then
+    # shellcheck source=/dev/null
+    source "$_env_config_script"
+else
+    echo -e "${RED}❌ .env config door not found at ${_env_config_script}${NC}"
+    exit 1
+fi
+unset _env_config_script
 
 _PGDATA_GUARD_DONE=0
 _run_pgdata_guard() {
@@ -367,11 +380,7 @@ update_env_value() {
     if [ -z "$value" ]; then
         return 0  # Skip if value is empty
     fi
-    if grep -q "^${key}=" .env; then
-        sed -i.bak "s|^${key}=.*|${key}=${value}|" .env
-    else
-        echo "${key}=${value}" >> .env
-    fi
+    SYNAP_ENV_FILE=.env envcfg_write_raw S "$key" "$value"
 }
 
 pod_admin_domain_for_domain() {
@@ -724,13 +733,7 @@ generate_kratos_config() {
         echo -e "${BLUE}ℹ️  Generated webhook secret: ${webhook_secret:0:10}...${NC}"
         # Try to write it back to .env if we found the file
         if [ -n "$env_file" ] && [ -w "$env_file" ]; then
-            if grep -q "^KRATOS_WEBHOOK_SECRET=" "$env_file" 2>/dev/null; then
-                # Update existing
-                sed -i.bak "s|^KRATOS_WEBHOOK_SECRET=.*|KRATOS_WEBHOOK_SECRET=${webhook_secret}|" "$env_file" 2>/dev/null && rm -f "${env_file}.bak" || true
-            else
-                # Add new
-                echo "KRATOS_WEBHOOK_SECRET=${webhook_secret}" >> "$env_file" 2>/dev/null || true
-            fi
+            SYNAP_ENV_FILE="$env_file" envcfg_write_raw S KRATOS_WEBHOOK_SECRET "${webhook_secret}" 2>/dev/null || true
         fi
     fi
     
@@ -2711,8 +2714,7 @@ _ue_edge() {
     if [ -z "$edge" ] && [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
         edge=traefik
         if [ -f .env ]; then
-            [ -n "$(tail -c1 .env)" ] && echo >> .env
-            echo "SYNAP_EDGE=traefik" >> .env
+            SYNAP_ENV_FILE=.env envcfg_write_raw S SYNAP_EDGE traefik
             echo -e "${BLUE}[update] ℹ️  SYNAP_SKIP_EDGE=1 — pinned SYNAP_EDGE=traefik in deploy/.env${NC}" >&2
         fi
     fi
@@ -3283,12 +3285,11 @@ USAGE
 
     # Secrets added after early installs (backfilled once, never rotated).
     if ! grep -q "^SYNAP_SERVICE_ENCRYPTION_KEY=" .env; then
-        echo "SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
+        SYNAP_ENV_FILE=.env envcfg_write_raw S SYNAP_SERVICE_ENCRYPTION_KEY "$(openssl rand -hex 32)"
         echo -e "${YELLOW}⚠️  Added missing SYNAP_SERVICE_ENCRYPTION_KEY to .env${NC}"
     fi
     if ! grep -q "^PROVISIONING_TOKEN=." .env; then
-        sed -i.bak '/^PROVISIONING_TOKEN=\s*$/d' .env && rm -f .env.bak
-        echo "PROVISIONING_TOKEN=$(openssl rand -hex 32)" >> .env
+        SYNAP_ENV_FILE=.env envcfg_write_raw S PROVISIONING_TOKEN "$(openssl rand -hex 32)"
         echo -e "${YELLOW}⚠️  Added missing PROVISIONING_TOKEN to .env${NC}"
     fi
 
@@ -3484,8 +3485,7 @@ cmd_federation() {
             [ -z "$cp_url" ] && cp_url="$(grep '^CONTROL_PLANE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d ' \"')"
             [ -z "$cp_url" ] && cp_url="https://api.synap.live"
             update_env_value CONTROL_PLANE_URL "$cp_url"   # also auto-trusts the CP at boot (seedControlPlaneIssuer)
-            grep -q '^SYNAP_POD_FEDERATION_DISABLED=' .env && sed -i.bak '/^SYNAP_POD_FEDERATION_DISABLED=/d' .env
-            rm -f .env.bak
+            SYNAP_ENV_FILE=.env envcfg_write_raw U SYNAP_POD_FEDERATION_DISABLED
             _fed_apply
             echo -e "${BLUE}🔎 Verifying the Control Plane…${NC}"
             if curl -fsS "${cp_url%/}/.well-known/openid-configuration" >/dev/null 2>&1; then
@@ -3744,53 +3744,342 @@ cmd_config() {
         echo -e "${RED}Error: Not in Synap installation directory${NC}"
         exit 1
     fi
-    
+
     cd "$deploy_dir"
-    
+
+    # The ONE writer of deploy/.env: deploy/env-config.sh against
+    # deploy/env.schema (types, unknown-key refusal, managed/pin/immutable
+    # keys, atomic write + .env.bak.<ts>, masked output). Eve, configure-pod.sh
+    # and the synap npm CLI all write through this door.
     local action=${1:-list}
-    
+    [ $# -gt 0 ] && shift
     case "$action" in
         list)
-            if [ -f .env ]; then
-                echo -e "${BLUE}📝 Current Configuration:${NC}"
-                grep -v "^#" .env | grep -v "^$" | while IFS='=' read -r k v; do
-                    if [[ "$k" == *"SECRET"* ]] || [[ "$k" == *"KEY"* ]] || [[ "$k" == *"PASSWORD"* ]]; then
-                        echo "$k=********"
-                    else
-                        echo "$k=$v"
-                    fi
-                done
-            fi
-            ;;
-        edit)
-            ${EDITOR:-nano} .env
+            [ -f .env ] || { echo -e "${RED}No .env in ${deploy_dir}${NC}"; exit 1; }
+            local k
+            for k in $(envcfg_file_keys | awk '!seen[$0]++'); do
+                echo "${k}=$(envcfg_mask "$k" "$(envcfg_value "$k")")"
+            done
             ;;
         get)
-            local key=$2
-            if [ -z "$key" ]; then
-                echo "Usage: synap config get <key>"
-                exit 1
-            fi
-            grep "^${key}=" .env | cut -d'=' -f2-
+            envcfg_get "$@"
             ;;
         set)
-            local key=$2
-            local value=$3
-            if [ -z "$key" ] || [ -z "$value" ]; then
-                echo "Usage: synap config set <key> <value>"
-                exit 1
+            envcfg_set "$@"
+            ;;
+        unset)
+            envcfg_unset "$@"
+            ;;
+        validate)
+            local findings rc=0
+            findings="$(envcfg_validate)" || rc=1
+            if [ -n "$findings" ]; then
+                printf '%s\n' "$findings" | awk -F'|' '{ printf "%-5s %-30s %s\n", $1, $2, $3 }'
             fi
-            if grep -q "^${key}=" .env; then
-                sed -i.bak "s|^${key}=.*|${key}=${value}|" .env
-            else
-                echo "${key}=${value}" >> .env
+            [ "$rc" = 0 ] && echo -e "${GREEN}✓ .env matches deploy/env.schema${NC}"
+            return "$rc"
+            ;;
+        diff)
+            envcfg_diff "$@"
+            ;;
+        edit)
+            # Edit a COPY, validate it, then replace .env atomically with a
+            # backup — never an unvalidated in-place edit.
+            local draft
+            draft="$(umask 077 && mktemp "${deploy_dir}/.env.edit.XXXXXX")" || exit 1
+            cat .env > "$draft" 2>/dev/null || true
+            ${EDITOR:-nano} "$draft"
+            if cmp -s "$draft" .env; then rm -f "$draft"; echo "config: unchanged"; return 0; fi
+            local findings
+            if ! findings="$(envcfg_validate "$draft")"; then
+                printf '%s\n' "$findings" | grep '^error|' | awk -F'|' '{ printf "refused: %s — %s\n", $2, $3 }' >&2
+                echo -e "${RED}config: your edit is kept in ${draft}; .env was not changed.${NC}" >&2
+                return 1
             fi
-            echo -e "${GREEN}✓ Updated ${key}${NC}"
+            envcfg_backup || return 1
+            chmod "$(stat -c %a .env 2>/dev/null || stat -f %Lp .env 2>/dev/null || echo 600)" "$draft"
+            mv -f "$draft" .env
+            echo "config: .env replaced (previous kept as ${ENVCFG_LAST_BACKUP}). Recreate what reads it: synap apply"
+            ;;
+        apply)
+            cmd_apply "$@"
+            ;;
+        -h|--help|help)
+            cat <<'USAGE'
+synap config <action> — the one validated writer of deploy/.env (schema: deploy/env.schema)
+
+  list                         every key, secrets masked
+  get <KEY> [--reveal]         one value (masked unless --reveal)
+  set KEY=VALUE... | KEY VALUE validate every pair, then write atomically; .env.bak.<ts> kept
+      [--force]                allow changing an immutable secret / POD_AGENT_AUDIENCE ≠ PUBLIC_URL
+      [--stdin | --from-file F] read KEY=VALUE lines (keeps secret values out of argv)
+  unset [--force] KEY...       remove keys (same rules)
+  validate                     the whole .env against the schema; non-zero on errors
+  diff [from] [to]             masked diff (default: newest .env.bak.* → .env)
+  edit                         $EDITOR on a copy; replaced only when it validates
+  apply                        same as `synap apply`
+
+Refused: unknown keys (PATH, NODE_VERSION…), the release block (synap update owns it),
+COMPOSE_PROJECT_NAME once pinned, invalid values for the key's type.
+USAGE
             ;;
         *)
-            echo "Usage: synap config [list|edit|get|set]"
+            echo "Usage: synap config [list|get|set|unset|validate|diff|edit|apply] (synap config help)"
+            return 2
             ;;
     esac
+}
+
+# `synap apply` — make running containers see the current deploy/.env.
+# Guarded recreate: the update lock (router), the pgdata guard (the docker()
+# interceptor fires on `compose up`), kratos.yml regenerated from .env, then
+# `up -d --no-deps` of the services that are RUNNING — compose itself
+# recreates only the ones whose resolved config changed. Never prunes, never
+# touches a volume, never starts a stopped service, never removes orphans.
+cmd_apply() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    cd "$deploy_dir"
+    [ -f .env ] || { echo -e "${RED}No .env in ${deploy_dir}${NC}"; exit 1; }
+
+    local findings
+    if ! findings="$(envcfg_validate)"; then
+        printf '%s\n' "$findings" | grep '^error|' | awk -F'|' '{ printf "  %s — %s\n", $2, $3 }' >&2
+        echo -e "${RED}❌ .env does not validate (synap config validate) — not recreating anything.${NC}" >&2
+        exit 1
+    fi
+
+    local running=() svc
+    while IFS= read -r svc; do
+        [ -n "$svc" ] && running+=("$svc")
+    done < <(docker compose ps --status running --services 2>/dev/null | grep -vxE 'backend-canary|.*-migrate' || true)
+    if [ "${#running[@]}" -eq 0 ]; then
+        echo "apply: no running services — the next start/update reads the new .env."
+        return 0
+    fi
+
+    local domain kratos_before="" kratos_after=""
+    domain="$(envcfg_value DOMAIN)"; domain="${domain:-localhost}"
+    [ -f ../kratos/kratos.yml ] && kratos_before="$(cksum < ../kratos/kratos.yml)"
+    generate_kratos_config "$domain"
+    [ -f ../kratos/kratos.yml ] && kratos_after="$(cksum < ../kratos/kratos.yml)"
+
+    local profile_args=()
+    if should_start_pod_agent; then profile_args=(--profile pod-agent); fi
+    echo -e "${BLUE}🔄 apply: recreating what changed among: ${running[*]}${NC}"
+    docker compose "${profile_args[@]}" up -d --no-deps "${running[@]}" || {
+        echo -e "${RED}❌ apply: compose up failed — see: docker compose ps; the previous .env is the newest .env.bak.*${NC}" >&2
+        exit 1
+    }
+    # kratos.yml is a bind-mounted FILE: compose cannot see its content change.
+    if [ "$kratos_before" != "$kratos_after" ] && printf '%s\n' "${running[@]}" | grep -qx kratos; then
+        docker compose up -d --no-deps --force-recreate kratos || exit 1
+    fi
+    echo -e "${GREEN}✓ apply: running services match deploy/.env${NC}"
+}
+
+# `synap doctor` — READ-ONLY health of the pod's deployment, one finding per
+# problem, non-zero exit when there is any. It never starts, stops, writes or
+# pulls: only `docker ps/inspect/exec <read>`, `docker compose ls/ps`, file
+# reads, `git status`, one psql SELECT (backup runs) and one HTTP GET (PUBLIC_URL
+# /health, SYNAP_DOCTOR_PROBE=0 skips it). Checks:
+#   env       deploy/.env against deploy/env.schema (unknown keys, types,
+#             required, duplicates, PUBLIC_URL/POD_AGENT_AUDIENCE coherence)
+#   project   COMPOSE_PROJECT_NAME pinned; no second compose project on this dir
+#   checkout  no locally modified tracked files in the deploy checkout
+#   release   running backend = state/current-release.json (image + buildStamp)
+#   override  docker-compose.override.yml is Eve-managed (marker) and edge-pinned
+#   backup    off-host repository configured + initialised, no alarms, fresh dump
+#   pgdata    postgres cluster lives on its volume (pgdata guard layout)
+#   disk      ≥ 15% free where the pod writes
+#   url       PUBLIC_URL/health answers
+cmd_doctor() {
+    local json=0
+    case "${1:-}" in --json) json=1 ;; -h|--help) echo "Usage: synap doctor [--json]   (read-only; exit 1 when anything is found)"; return 0 ;; esac
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    cd "$deploy_dir"
+    command -v jq >/dev/null 2>&1 || { echo -e "${RED}synap doctor needs jq${NC}" >&2; exit 2; }
+
+    local out; out="$(umask 077 && mktemp)"
+    # check|severity|message — severity: error | warn | ok | info
+    _dr() { printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$out"; }
+
+    # ── env ──
+    local findings line
+    if [ ! -f .env ]; then
+        _dr env error "${deploy_dir}/.env does not exist"
+    else
+        findings="$(envcfg_validate || true)"
+        if [ -z "$findings" ]; then _dr env ok "deploy/.env matches deploy/env.schema"; fi
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            _dr env "${line%%|*}" "$(echo "$line" | cut -d'|' -f2): $(echo "$line" | cut -d'|' -f3-)"
+        done <<< "$findings"
+        case "$(stat -c %a .env 2>/dev/null || stat -f %Lp .env 2>/dev/null)" in
+            *[1-7]) _dr env warn ".env is readable by every local user (mode $(stat -c %a .env 2>/dev/null || stat -f %Lp .env)) — it holds the pod's secrets: chmod 600 .env" ;;
+        esac
+    fi
+
+    # ── project ──
+    local pinned owners extra
+    pinned="$(envcfg_value COMPOSE_PROJECT_NAME)"
+    if [ -n "$_SYNAP_PROJECT_CONFLICT" ]; then
+        _dr project error "projects ${_SYNAP_PROJECT_CONFLICT} each own a postgres container for this deploy dir and none is pinned — inspect both before pinning COMPOSE_PROJECT_NAME"
+    elif [ -z "$pinned" ]; then
+        _dr project error "COMPOSE_PROJECT_NAME is not pinned in .env (resolved: ${COMPOSE_PROJECT_NAME:-?}) — the next synap update pins it"
+    fi
+    owners="$(_compose_projects_owning_postgres "$deploy_dir" | tr '\n' ' ' | sed 's/ $//')"
+    local phys; phys="$(pwd -P)"
+    extra="$(command docker compose ls -a --format json 2>/dev/null \
+        | jq -r --arg d "$deploy_dir" --arg p "$phys" '.[] | select((.ConfigFiles // "") | split(",") | any(startswith($d + "/") or startswith($p + "/"))) | .Name' 2>/dev/null \
+        | grep -vx "${COMPOSE_PROJECT_NAME:-}" | tr '\n' ' ' | sed 's/ $//')" || true
+    for line in $owners; do
+        [ "$line" = "${COMPOSE_PROJECT_NAME:-}" ] && continue
+        case " $extra " in *" $line "*) ;; *) extra="${extra:+$extra }$line" ;; esac
+    done
+    if [ -n "$extra" ]; then
+        _dr project error "other compose project(s) use this deploy dir: ${extra} (this pod: ${COMPOSE_PROJECT_NAME:-?}). Inspect before removing anything: docker compose -p <name> ps"
+    elif [ -z "$_SYNAP_PROJECT_CONFLICT" ] && [ -n "$pinned" ]; then
+        _dr project ok "one compose project: ${pinned}"
+    fi
+
+    # ── checkout ──
+    local repo_root modified untracked
+    repo_root="$(git -C "$deploy_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -z "$repo_root" ]; then
+        _dr checkout info "not a git checkout (release-bundle layout)"
+    else
+        modified="$(git -C "$repo_root" status --porcelain --untracked-files=no 2>/dev/null | awk '{print $NF}' | tr '\n' ' ' | sed 's/ $//')"
+        untracked="$(git -C "$repo_root" status --porcelain 2>/dev/null | grep -c '^??' || true)"
+        if [ -n "$modified" ]; then
+            _dr checkout error "locally modified tracked files in ${repo_root}: ${modified} — a release bundle install would replace them; save them first"
+        else
+            _dr checkout ok "no locally modified tracked files (HEAD $(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null))"
+        fi
+        [ "${untracked:-0}" -gt 0 ] && _dr checkout info "${untracked} untracked, not-ignored path(s) in the checkout"
+    fi
+
+    # ── release ──
+    local rel_id rel_sha rel_img cid run_img want_img stamp
+    if [ ! -s state/current-release.json ]; then
+        _dr release error "no state/current-release.json — this pod has never been updated by the release engine (the first synap update adopts the running images)"
+    else
+        rel_id="$(jq -r '.id // empty' state/current-release.json)"
+        rel_sha="$(jq -r '.gitSha // empty' state/current-release.json)"
+        rel_img="$(jq -r '.images.SYNAP_IMAGE_BACKEND // empty' state/current-release.json)"
+        cid="$(command docker compose ps -q --status running backend 2>/dev/null | head -1)"
+        if [ -z "$cid" ]; then
+            _dr release error "release ${rel_id:-?} is recorded but no backend container is running"
+        else
+            run_img="$(command docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
+            want_img="$([ -n "$rel_img" ] && command docker image inspect -f '{{.Id}}' "$rel_img" 2>/dev/null || true)"
+            stamp="$(command docker exec "$cid" node -e "$_UE_STATUS_PROBE" 2>/dev/null | jq -r '.buildStamp // empty' 2>/dev/null)"
+            if [ -n "$rel_img" ] && [ "$run_img" != "$want_img" ]; then
+                _dr release error "running backend image ${run_img:0:19} is not release ${rel_id}'s ${rel_img}"
+            elif [ -n "$rel_sha" ] && [ -n "$stamp" ] && [ "$stamp" != "$rel_sha" ]; then
+                _dr release error "running buildStamp ${stamp:0:12} ≠ release ${rel_id} gitSha ${rel_sha:0:12}"
+            elif [ -n "$rel_sha" ] && [ -z "$stamp" ]; then
+                _dr release warn "release ${rel_id}: the running backend reports no buildStamp (could not verify ${rel_sha:0:12})"
+            else
+                _dr release ok "running release ${rel_id}${stamp:+ (buildStamp ${stamp:0:12})}"
+            fi
+        fi
+    fi
+
+    # ── override ──
+    if [ -f docker-compose.override.yml ]; then
+        if grep -qs 'eve-managed:' docker-compose.override.yml; then
+            if [ -z "$(envcfg_value SYNAP_EDGE)" ]; then
+                _dr override error "Eve-managed override present but SYNAP_EDGE is not pinned — synap update refuses until: synap config set SYNAP_EDGE=traefik"
+            else
+                _dr override ok "Eve-managed override (edge: $(envcfg_value SYNAP_EDGE))"
+            fi
+        else
+            _dr override error "docker-compose.override.yml has no eve-managed marker — an unmanaged override silently changes every compose command (services: $(awk '/^services:/{s=1;next} s&&/^  [A-Za-z0-9_.-]+:/{gsub(/[ :]/,"");printf "%s ",$0} /^[^ #]/&&!/^services:/{s=0}' docker-compose.override.yml))"
+        fi
+    else
+        _dr override ok "no docker-compose.override.yml"
+    fi
+
+    # ── backup ── (the backup door's own helpers: deploy/pgdata-safety.sh)
+    local bdir newest age m
+    bdir="$(SYNAP_DEPLOY_DIR="$deploy_dir" _bk_backups_dir)"
+    if [ -z "$(SYNAP_DEPLOY_DIR="$deploy_dir" _bk_cfg BACKUP_REPOSITORY)" ]; then
+        _dr backup warn "no off-host backup repository (BACKUP_REPOSITORY) — dumps exist on this host only: synap backup init"
+    elif [ ! -s "$(SYNAP_DEPLOY_DIR="$deploy_dir" _bk_password_file)" ]; then
+        _dr backup error "BACKUP_REPOSITORY is set but the repository is not initialised: synap backup init"
+    else
+        _dr backup ok "off-host repository $(SYNAP_DEPLOY_DIR="$deploy_dir" _bk_repo_display)"
+    fi
+    for m in alarm push-failed drill-failed; do
+        [ -e "$bdir/.$m" ] && _dr backup error "ALERT ${m}: $(head -c 200 "$bdir/.$m")"
+    done
+    newest="$(SYNAP_DEPLOY_DIR="$deploy_dir" _bk_good_dumps | tail -n 1)"
+    if [ -z "$newest" ]; then
+        _dr backup error "no hourly database dump in ${bdir} (is the postgres-backup service running?)"
+    else
+        age=$(( ( $(date +%s) - $(stat -c %Y "$newest" 2>/dev/null || stat -f %m "$newest") ) / 3600 ))
+        if [ "$age" -gt 26 ]; then _dr backup error "newest dump $(basename "$newest") is ${age}h old (the backup service runs hourly)"
+        else _dr backup ok "newest dump $(basename "$newest") (${age}h old)"; fi
+    fi
+
+    # ── pgdata ──
+    local layout
+    layout="$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_layout 2>/dev/null || echo unknown)"
+    case "$layout" in
+        ok) _dr pgdata ok "postgres cluster is on its volume" ;;
+        legacy) _dr pgdata error "postgres cluster lives in the container's writable layer — one recreate loses it; the next synap update/start moves it (pgdata guard)" ;;
+        absent)
+            if [ -e state/postgres-initialized ]; then _dr pgdata error "this pod is marked initialised but has no postgres container"
+            else _dr pgdata info "no postgres container (fresh pod)"; fi ;;
+        *) _dr pgdata warn "could not read the postgres layout" ;;
+    esac
+
+    # ── disk ──
+    local pct
+    pct="$(df -Pk "$deploy_dir" 2>/dev/null | awk 'NR==2 { gsub(/%/, "", $5); print 100 - $5 }')"
+    if [ -n "$pct" ] && [ "$pct" -lt "${SYNAP_DOCTOR_MIN_FREE_PCT:-15}" ]; then _dr disk warn "only ${pct}% free on ${deploy_dir} (updates keep 2 releases of images + dumps)"
+    elif [ -n "$pct" ]; then _dr disk ok "${pct}% free"; fi
+
+    # ── url ──
+    local pu
+    pu="$(envcfg_value PUBLIC_URL)"
+    if [ "${SYNAP_DOCTOR_PROBE:-1}" != 0 ] && [ -n "$pu" ] && command -v curl >/dev/null 2>&1; then
+        if curl -fsS -o /dev/null --max-time 8 "${pu%/}/health" 2>/dev/null; then _dr url ok "${pu}/health answers"
+        else _dr url warn "${pu}/health does not answer from this host (dead domain, DNS, or no hairpin route)"; fi
+    fi
+
+    local nfind
+    nfind="$(grep -cE '^[^|]+\|(error|warn)\|' "$out" || true)"
+    if [ "$json" = 1 ]; then
+        jq -Rn --arg dir "$deploy_dir" --arg project "${COMPOSE_PROJECT_NAME:-}" '
+            [inputs | capture("^(?<check>[^|]+)\\|(?<severity>[^|]+)\\|(?<message>.*)$")] as $all
+            | { ok: ([$all[] | select(.severity == "error" or .severity == "warn")] | length == 0),
+                deployDir: $dir, project: $project,
+                findings: [$all[] | select(.severity == "error" or .severity == "warn")],
+                checks: $all }' < "$out"
+    else
+        echo -e "${BLUE}🩺 synap doctor — ${deploy_dir} (project ${COMPOSE_PROJECT_NAME:-?})${NC}"
+        local c sev msg
+        while IFS='|' read -r c sev msg; do
+            case "$sev" in
+                ok)    echo -e "  ${GREEN}✓${NC} ${c}: ${msg}" ;;
+                info)  echo -e "  · ${c}: ${msg}" ;;
+                warn)  echo -e "  ${YELLOW}!${NC} ${c}: ${msg}" ;;
+                *)     echo -e "  ${RED}✗${NC} ${c}: ${msg}" ;;
+            esac
+        done < "$out"
+        [ "$nfind" = 0 ] && echo -e "${GREEN}No findings.${NC}" || echo -e "${YELLOW}${nfind} finding(s).${NC}"
+    fi
+    rm -f "$out"
+    [ "$nfind" = 0 ]
 }
 
 cmd_rebuild() {
@@ -4292,9 +4581,7 @@ _comment_env_value() {
     if [ ! -f ".env" ]; then
         return 0
     fi
-    if grep -q "^${key}=" .env; then
-        sed -i.bak "s|^${key}=\(.*\)$|# ${key}=\1  # ${reason} on $(date -u +%Y-%m-%d)|" .env
-    fi
+    SYNAP_ENV_FILE=.env envcfg_write_raw C "$key" "$reason"
 }
 
 # Remove a key entirely from .env; idempotent.
@@ -4304,8 +4591,7 @@ _remove_env_value() {
         return 0
     fi
     # Remove both active and already-commented variants, and our disabled marker.
-    sed -i.bak "/^${key}=/d" .env
-    sed -i.bak "/^# ${key}=.*disabled on /d" .env
+    SYNAP_ENV_FILE=.env envcfg_write_raw R "$key"
 }
 
 # Internal helper: wire up a tunnel provider (write token, start compose profile,
@@ -5041,8 +5327,31 @@ cmd_reset() {
         echo -e "${YELLOW}   Postgres must be running for the backup (synap start postgres), then re-run.${NC}"
         exit 1
     }
-    (umask 077 && cp .env "$backup_dir/env.backup")
     echo -e "${GREEN}✓ Backup: ${backup_dir}${NC}"
+
+    # The secrets (.env) are not copied in plaintext beside the dump any more
+    # (backup plan §7). With an off-host repository they travel inside the
+    # encrypted snapshot `synap backup push` takes; without one, a 0600 copy in
+    # state/reset/ (owner-only dir) is the fallback — and we say so.
+    local env_saved=""
+    if [ -n "$(envcfg_value BACKUP_REPOSITORY)" ] && [ -s state/backup/restic-password ]; then
+        echo -e "${BLUE}🔐 Pushing an encrypted off-host snapshot (.env + databases + files)...${NC}"
+        if docker compose run --rm --no-deps -T --entrypoint sh postgres-backup /synap-deploy/pgdata-safety.sh push; then
+            env_saved="the encrypted off-host snapshot just pushed"
+        else
+            echo -e "${YELLOW}⚠️  The off-host push failed — keeping a local copy of .env instead.${NC}"
+        fi
+    fi
+    if [ -z "$env_saved" ]; then
+        local env_copy="state/reset/env.$(basename "$backup_dir")"
+        (umask 077 && mkdir -p state/reset && chmod 700 state/reset && cat .env > "$env_copy" && chmod 600 "$env_copy") || {
+            echo -e "${RED}❌ Could not save a copy of .env — aborting. Nothing was changed.${NC}"
+            exit 1
+        }
+        env_saved="${deploy_dir}/${env_copy}"
+        echo -e "${YELLOW}⚠️  .env saved UNENCRYPTED (0600) at ${env_saved} — no off-host repository is configured. Set one up: synap backup init${NC}"
+    fi
+    echo -e "${GREEN}✓ Secrets (.env): ${env_saved}${NC}"
 
     if [ "$mode" = "full" ]; then
         echo ""
@@ -5149,7 +5458,9 @@ ${YELLOW}Management:${NC}
   synap backup [label|init|push|drill|status]   Backups (synap backup --help)
   synap restore --from-snapshot <id|latest>     Restore from the off-host repository
   synap restore <backups/postgres/<dir>>        Restore a local dump set
-  synap config [action]          Manage configuration
+  synap config <action>          The one validated .env writer: get|set|unset|validate|diff|list|edit (synap config help)
+  synap apply                    Recreate running services so they see the current .env (guarded; no prune)
+  synap doctor [--json]          Read-only health: env drift, compose projects, checkout, release, backups, pgdata
   synap federation <action>      External sign-in: status | connect-cloud | disable
   synap clean [type]             Clean Docker resources (interactive if no type)
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
@@ -5195,6 +5506,9 @@ ${YELLOW}Examples:${NC}
   synap shell backend           # Open shell in backend
   synap exec backend node --version # Execute command in backend
   synap config list
+  synap config set PUBLIC_URL=https://pod.example.com POD_AGENT_AUDIENCE=https://pod.example.com
+  synap config validate && synap apply
+  synap doctor --json
   synap services add openclaw   # Provision OpenClaw agent
   synap services status openclaw # Check OpenClaw status
   synap services rotate openclaw # Rotate OpenClaw API key
@@ -5224,7 +5538,7 @@ EOF
 _resolve_compose_project_name "$(get_deploy_dir)"
 if [ -n "$_SYNAP_PROJECT_CONFLICT" ]; then
     case "${1:-help}" in
-        help|--help|-h) ;;
+        help|--help|-h|doctor) ;;
         *)
             echo -e "${RED}❌ Refusing to guess the compose project: these projects each own a postgres container for $(get_deploy_dir):${NC}" >&2
             echo -e "     ${_SYNAP_PROJECT_CONFLICT}" >&2
@@ -5240,8 +5554,13 @@ export COMPOSE_PROJECT_NAME
 
 # Pod-mutating commands serialise on <deploy_dir>/state/update.lock.
 case "${1:-help}" in
-    install|update|rebuild|reset|restore)
+    install|update|rebuild|reset|restore|apply)
         synap_update_lock "$(get_deploy_dir)" "synap $1" || exit 1
+        ;;
+    config)
+        case "${2:-}" in
+            set|unset|edit|apply) synap_update_lock "$(get_deploy_dir)" "synap config $2" || exit 1 ;;
+        esac
         ;;
 esac
 
@@ -5294,6 +5613,14 @@ case "${1:-help}" in
     config)
         shift
         cmd_config "$@"
+        ;;
+    apply)
+        shift
+        cmd_apply "$@"
+        ;;
+    doctor)
+        shift
+        cmd_doctor "$@"
         ;;
     federation|fed)
         shift

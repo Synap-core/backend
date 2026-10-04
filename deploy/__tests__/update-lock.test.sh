@@ -22,7 +22,7 @@ bad() { echo "FAIL - $1"; fail=1; }
 REPO="$TMP/repo"; DEPLOY="$REPO/deploy"
 mkdir -p "$TMP/bin" "$DEPLOY"
 cp "$HERE/synap" "$REPO/synap"
-cp "$HERE/deploy/ensure-ory-databases.sh" "$HERE/deploy/pgdata-safety.sh" "$HERE/deploy/update-lock.sh" "$HERE/deploy/update-pod.sh" "$DEPLOY/"
+cp "$HERE/deploy/ensure-ory-databases.sh" "$HERE/deploy/pgdata-safety.sh" "$HERE/deploy/update-lock.sh" "$HERE/deploy/update-pod.sh" "$HERE/deploy/env-config.sh" "$HERE/deploy/env.schema" "$DEPLOY/"
 printf 'services:\n  postgres:\n    image: x\n' > "$DEPLOY/docker-compose.yml"
 
 cat > "$TMP/bin/docker" <<'D'

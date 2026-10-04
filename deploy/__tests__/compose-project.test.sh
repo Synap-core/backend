@@ -20,7 +20,7 @@ bad() { echo "FAIL - $1"; fail=1; }
 REPO="$TMP/repo"; DEPLOY="$REPO/deploy"
 mkdir -p "$TMP/bin" "$DEPLOY"
 cp "$HERE/synap" "$REPO/synap"
-cp "$HERE/deploy/ensure-ory-databases.sh" "$HERE/deploy/pgdata-safety.sh" "$HERE/deploy/update-lock.sh" "$DEPLOY/"
+cp "$HERE/deploy/ensure-ory-databases.sh" "$HERE/deploy/pgdata-safety.sh" "$HERE/deploy/update-lock.sh" "$HERE/deploy/env-config.sh" "$HERE/deploy/env.schema" "$DEPLOY/"
 printf 'services:\n  postgres:\n    image: x\n' > "$DEPLOY/docker-compose.yml"
 
 cat > "$TMP/bin/docker" <<'D'
@@ -82,7 +82,7 @@ grep -q "^project=chosen argv=compose ps" "$FAKE_LOG" && ok "env override wins" 
 awk '/^_pin_compose_project_name\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$HERE/synap" > "$TMP/pin.sh"
 grep -q '_pin_compose_project_name()' "$TMP/pin.sh" || bad "could not extract _pin_compose_project_name"
 printf 'DOMAIN=pod.example\nPOSTGRES_PASSWORD=x' > "$TMP/env1"   # no trailing newline
-( BLUE=; NC=; . "$TMP/pin.sh"; COMPOSE_PROJECT_NAME=synap-backend _pin_compose_project_name "$TMP/env1"; COMPOSE_PROJECT_NAME=other _pin_compose_project_name "$TMP/env1" ) >/dev/null
+( BLUE=; NC=; . "$HERE/deploy/env-config.sh"; . "$TMP/pin.sh"; COMPOSE_PROJECT_NAME=synap-backend _pin_compose_project_name "$TMP/env1"; COMPOSE_PROJECT_NAME=other _pin_compose_project_name "$TMP/env1" ) >/dev/null
 [ "$(cat "$TMP/env1")" = "$(printf 'DOMAIN=pod.example\nPOSTGRES_PASSWORD=x\nCOMPOSE_PROJECT_NAME=synap-backend')" ] \
   && ok "pin appended on its own line, once, never overwritten" || bad "pin writer produced: $(cat -A "$TMP/env1" 2>/dev/null || cat "$TMP/env1")"
 # both install and update call it (shape check: the call sits inside each body)
