@@ -90,6 +90,9 @@ _pgs_wait_ready() {
 #   ok     — its PGDATA lives on a mount (volume or bind)
 #   legacy — its PGDATA lives in the container's writable layer (data loss on recreate)
 pgdata_layout() {
+    # POSIX only: deploy/update-pod.sh (#!/bin/sh — busybox ash in the
+    # pod-agent image) sources this file; a bash-only `< <(...)` here was a
+    # syntax error that killed every update-pod.sh run at source time.
     local c pgdata dest
     c="$(_pgs_container)"
     if [ -z "$c" ]; then echo absent; return 0; fi
@@ -100,7 +103,9 @@ pgdata_layout() {
         if [ "$pgdata" = "$dest" ] || [ "${pgdata#"$dest"/}" != "$pgdata" ]; then
             echo ok; return 0
         fi
-    done < <(docker inspect -f '{{range .Mounts}}{{println .Destination}}{{end}}' "$c")
+    done <<EOF
+$(docker inspect -f '{{range .Mounts}}{{println .Destination}}{{end}}' "$c")
+EOF
     echo legacy
 }
 
