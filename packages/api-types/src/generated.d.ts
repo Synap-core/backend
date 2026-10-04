@@ -13426,6 +13426,15 @@ type Unavailable$1 = {
 	status: "unavailable";
 	reason: string;
 };
+/** A session's deliverables, counted — the progress rail and the owed badge. */
+export interface DeliverableCounts {
+	/** Stamped done. */
+	done: number;
+	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
+	total: number;
+	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
+	owedByYou: number;
+}
 export interface ProjectPathRow {
 	id: string;
 	/** The stored name, `null` when untitled. */
@@ -13470,6 +13479,18 @@ export interface ProjectPathRow {
 		status: "ok";
 		value: boolean;
 	} | Unavailable$1;
+	/**
+	 * The session's DECLARED deliverables (`expected_outputs`), counted by THE
+	 * shared rule (`tallyDeliverables`, `@synap-core/types/units`
+	 * `deliverable.ts`): `done` stamped, `total` = done + still owed (a retired
+	 * slot is in neither), `owedByYou` = still owed and the person's. Read off
+	 * the row itself — no extra query. A malformed column is `unavailable`,
+	 * never zeros. On a MEMBER row `owedByYou` is 0, as `unitFacts` is: owed
+	 * slots are handed to the session's owner (`viewer-role.ts`).
+	 */
+	deliverables: ({
+		status: "ok";
+	} & DeliverableCounts) | Unavailable$1;
 	nextMove: ContinuationNextMove;
 }
 export interface ProjectPathResult {

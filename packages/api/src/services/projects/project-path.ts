@@ -51,7 +51,9 @@ import {
 } from "@synap/database";
 import {
   deriveTrackStages,
+  tallyDeliverables,
   trackPausedBy,
+  type DeliverableCounts,
   type TrackPausedBy,
   type TrackStage,
 } from "@synap-core/types/units";
@@ -145,7 +147,46 @@ export interface ProjectPathRow {
   parentCount: PathCount;
   childrenCount: PathCount;
   hasOutputs: { status: "ok"; value: boolean } | Unavailable;
+  /**
+   * The session's DECLARED deliverables (`expected_outputs`), counted by THE
+   * shared rule (`tallyDeliverables`, `@synap-core/types/units`
+   * `deliverable.ts`): `done` stamped, `total` = done + still owed (a retired
+   * slot is in neither), `owedByYou` = still owed and the person's. Read off
+   * the row itself — no extra query. A malformed column is `unavailable`,
+   * never zeros. On a MEMBER row `owedByYou` is 0, as `unitFacts` is: owed
+   * slots are handed to the session's owner (`viewer-role.ts`).
+   */
+  deliverables: ({ status: "ok" } & DeliverableCounts) | Unavailable;
   nextMove: ContinuationNextMove;
+}
+
+/**
+ * A row's {@link ProjectPathRow.deliverables}. `null` / absent is "declared
+ * nothing" (zeros); anything that is not an array of objects is a column the
+ * rule cannot read, said as `unavailable` rather than guessed at.
+ */
+export function deliverableCountsOf(
+  expectedOutputs: unknown,
+  viewerRole: SessionViewerRole
+): ProjectPathRow["deliverables"] {
+  if (expectedOutputs == null) {
+    return { status: "ok", done: 0, total: 0, owedByYou: 0 };
+  }
+  if (
+    !Array.isArray(expectedOutputs) ||
+    expectedOutputs.some((s) => !s || typeof s !== "object")
+  ) {
+    return {
+      status: "unavailable",
+      reason: "Deliverables could not be read.",
+    };
+  }
+  const counts = tallyDeliverables(expectedOutputs);
+  return {
+    status: "ok",
+    ...counts,
+    owedByYou: viewerRole === "owner" ? counts.owedByYou : 0,
+  };
 }
 
 export interface ProjectPathResult {
@@ -339,33 +380,40 @@ export async function getProjectPath(
   const toCount = (s: Settled<number>): PathCount =>
     s.status === "ok" ? { status: "ok", total: s.value } : s;
 
-  const items = sectioned.map((row): ProjectPathRow => ({
+  const items = sectioned.map((row): ProjectPathRow => {
     // `owner` | `member`; on a member row `unitFacts` is neutralised so a shared
     // session never counts toward the member's needs-you (`viewer-role.ts`).
-    ...withViewerRole({ userId: row.userId, unitFacts: row.unitFacts }, userId),
-    id: row.id,
-    title: row.title ?? null,
-    displayTitle: resolveSessionTitle(row),
-    goal: row.goal,
-    status: row.status,
-    statusLabel: resolveStatusLabel(row.status),
-    kind: row.kind,
-    trackId: row.trackId ?? null,
-    trackStage: row.trackStage ?? null,
-    triage: row.triage,
-    workspace: row.workspaceId
-      ? { id: row.workspaceId, name: wsNames.get(row.workspaceId) ?? null }
-      : null,
-    startedAt: iso(row.startedAt),
-    updatedAt: iso(row.updatedAt),
-    closedAt: iso(row.closedAt),
-    blockedBy: row.blockedBy,
-    unblocks: row.unblocks,
-    parentCount: row.parentCount,
-    childrenCount: row.childrenCount,
-    hasOutputs: row.hasOutputs,
-    nextMove: row.nextMove,
-  }));
+    const viewer = withViewerRole(
+      { userId: row.userId, unitFacts: row.unitFacts },
+      userId
+    );
+    return {
+      ...viewer,
+      id: row.id,
+      title: row.title ?? null,
+      displayTitle: resolveSessionTitle(row),
+      goal: row.goal,
+      status: row.status,
+      statusLabel: resolveStatusLabel(row.status),
+      kind: row.kind,
+      trackId: row.trackId ?? null,
+      trackStage: row.trackStage ?? null,
+      triage: row.triage,
+      workspace: row.workspaceId
+        ? { id: row.workspaceId, name: wsNames.get(row.workspaceId) ?? null }
+        : null,
+      startedAt: iso(row.startedAt),
+      updatedAt: iso(row.updatedAt),
+      closedAt: iso(row.closedAt),
+      blockedBy: row.blockedBy,
+      unblocks: row.unblocks,
+      parentCount: row.parentCount,
+      childrenCount: row.childrenCount,
+      hasOutputs: row.hasOutputs,
+      deliverables: deliverableCountsOf(row.expectedOutputs, viewer.viewerRole),
+      nextMove: row.nextMove,
+    };
+  });
 
   return {
     project: {

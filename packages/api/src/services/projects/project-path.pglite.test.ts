@@ -55,8 +55,10 @@ import {
   eq,
   podMembers,
   projectMembers,
+  channels,
+  channelMembers,
 } from "@synap/database";
-import { getProjectPath } from "./project-path.js";
+import { deliverableCountsOf, getProjectPath } from "./project-path.js";
 import { attachNextMove } from "../focus-sessions/session-path-sections.js";
 import { projectContinuationPacket } from "../focus-sessions/continuation-packet.js";
 import { projectsRouter } from "../../routers/projects.js";
@@ -166,6 +168,10 @@ beforeAll(async () => {
     projectTracks,
     podMembers,
     projectMembers,
+    // The tRPC door reads with the human-roster branch (decision C), which
+    // joins the room's seats — without these two tables it cannot run.
+    channels,
+    channelMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -361,6 +367,59 @@ describe("getProjectPath", () => {
     expect(byId.get(S.a)!.hasOutputs).toEqual({ status: "ok", value: false });
   });
 
+  it("each row carries its deliverables counted by THE shared rule (the value arrives)", async () => {
+    const byId = new Map((await path())!.items.map((i) => [i.id, i]));
+    // c: one slot handed to the person, still owed.
+    expect(byId.get(S.c)!.deliverables).toEqual({
+      status: "ok",
+      done: 0,
+      total: 1,
+      owedByYou: 1,
+    });
+    // e: its one slot stamped done.
+    expect(byId.get(S.e)!.deliverables).toEqual({
+      status: "ok",
+      done: 1,
+      total: 1,
+      owedByYou: 0,
+    });
+    // a: declared nothing — zero of zero, not unavailable.
+    expect(byId.get(S.a)!.deliverables).toEqual({
+      status: "ok",
+      done: 0,
+      total: 0,
+      owedByYou: 0,
+    });
+    // …and the person's count is the SAME number the needs-you facts carry.
+    for (const row of byId.values()) {
+      if (row.deliverables.status !== "ok") continue;
+      expect(row.deliverables.owedByYou, row.id).toBe(
+        row.unitFacts.owedFromYou
+      );
+    }
+  });
+
+  it("deliverableCountsOf: a malformed column is unavailable, never zeros; a member owes nothing", () => {
+    expect(deliverableCountsOf({ label: "x" }, "owner")).toMatchObject({
+      status: "unavailable",
+    });
+    expect(deliverableCountsOf(["x"], "owner")).toMatchObject({
+      status: "unavailable",
+    });
+    expect(deliverableCountsOf(null, "owner")).toEqual({
+      status: "ok",
+      done: 0,
+      total: 0,
+      owedByYou: 0,
+    });
+    const slots = [{ kind: "doc", label: "K", owner: "human" }];
+    expect(deliverableCountsOf(slots, "owner")).toMatchObject({ owedByYou: 1 });
+    expect(deliverableCountsOf(slots, "member")).toMatchObject({
+      total: 1,
+      owedByYou: 0,
+    });
+  });
+
   it("SEAM (list door): attachNextMove gives every row the packet's nextMove and keeps the row's own blockedBy", async () => {
     // `focusSessions.list` rows already carry `blockedBy` as an ID LIST; the
     // work map asks for `nextMove` on top. The wrapper must add the rule's
@@ -507,8 +566,17 @@ describe("the doors carry the same path", () => {
       `/projects/${PROJECT}/path?workspaceIds=${W_BUILDER}`
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { items: Array<{ id: string }> };
+    const body = (await res.json()) as {
+      items: Array<{ id: string; deliverables: unknown }>;
+    };
     expect(body.items.map((i) => i.id)).toEqual([S.e, S.a]);
+    // The counts reach the door's JSON, not only the service.
+    expect(body.items[0]!.deliverables).toEqual({
+      status: "ok",
+      done: 1,
+      total: 1,
+      owedByYou: 0,
+    });
     expect(
       (await app().request(`/projects/${STRANGERS_PROJECT}/path`)).status
     ).toBe(404);
