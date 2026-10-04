@@ -15,6 +15,7 @@ export type { View, NewView } from "./schema.js";
 export * from "./types.js";
 export * from "./schemas.js";
 export * from "./query.js";
+export * from "./filters.js";
 export * from "./config.js";
 export * from "./config-schemas.js";
 export * from "./config-types.js";

@@ -207,6 +207,8 @@ import {
   type EntityFilter,
   type SortRule,
   type EntityQuery,
+  ViewFiltersSchema,
+  normalizeViewFilter,
 } from "@synap-core/types";
 
 const logger = createLogger({ module: "views" });
@@ -386,7 +388,8 @@ export const viewsRouter = router({
         // NEW: Consolidated query
         query: z
           .object({
-            filters: z.array(z.any()).optional(),
+            // The ONE view-filter grammar; legacy aliases (`eq`…) normalise.
+            filters: ViewFiltersSchema.optional(),
             sorts: z.array(z.any()).optional(),
             search: z.string().optional(),
             limit: z.number().optional(),
@@ -1179,6 +1182,14 @@ export const viewsRouter = router({
       z.object({
         id: z.string().uuid(),
         projectId: z.string().uuid().optional(),
+        /**
+         * EPHEMERAL filters: when present, they REPLACE the view's stored
+         * `query.filters` for this execution only — nothing is persisted.
+         * The client holds the full effective set (starting from the stored
+         * filters) and sends it; "Save to view" is a separate `views.update`.
+         * Scope, lens and access are unchanged: filters only narrow within them.
+         */
+        filters: ViewFiltersSchema.optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -1226,12 +1237,22 @@ export const viewsRouter = router({
       // NEW: Use consolidated query structure
       const query = (view.query as EntityQuery) || {};
       const {
-        filters = [],
+        filters: storedFilters = [],
         sorts = [],
         search,
         limit = 100,
         offset = 0,
       } = query;
+
+      // Ephemeral filters (input) replace the stored ones for this run. Stored
+      // rows predate the zod door, so they are only NORMALISED (legacy `eq` →
+      // `equals`), not re-validated: an unknown operator still reaches the
+      // compiler, which rejects it by name as BAD_REQUEST below.
+      const filters: EntityFilter[] =
+        input.filters ??
+        (Array.isArray(storedFilters)
+          ? storedFilters.map(normalizeViewFilter)
+          : []);
 
       const conditions: any[] = [];
 
@@ -1325,7 +1346,7 @@ export const viewsRouter = router({
         const filterCompiler = new ViewFilterCompiler(dbInstance);
         try {
           const compiledFilters = await filterCompiler.compileFilters(
-            filters as EntityFilter[],
+            filters,
             view.scopeProfileIds,
             propertyMetaMap,
             ctx.workspaceId
@@ -1584,7 +1605,8 @@ export const viewsRouter = router({
         // NEW: Consolidated query
         query: z
           .object({
-            filters: z.array(z.any()).optional(),
+            // The ONE view-filter grammar; legacy aliases (`eq`…) normalise.
+            filters: ViewFiltersSchema.optional(),
             sorts: z.array(z.any()).optional(),
             search: z.string().optional(),
             limit: z.number().optional(),

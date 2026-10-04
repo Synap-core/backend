@@ -26,6 +26,7 @@
 import { OBJECT_KINDS, OBJECT_KIND_ALIASES } from "./object-kinds.js";
 import type { SpaceBrief } from "../space-brief/index.js";
 import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
+import type { FilterOperator } from "../views/filters.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -1298,5 +1299,68 @@ export function resolveNextRungOutcomeLabel(
   return (
     (NEXT_RUNG_OUTCOME_LABELS as Readonly<Record<string, string>>)[outcome] ??
     humanizeToken(outcome)
+  );
+}
+
+/**
+ * What a VIEW FILTER operator reads as, between the field and the value
+ * ("Status **is any of** Open, Review"). The operator set is
+ * `VIEW_FILTER_OPERATORS` (`@synap-core/types/views`); keyed by
+ * `FilterOperator`, so a new operator is a BUILD error here until it is named.
+ *
+ * Words, never symbols: `≠` / `>` / `≤` were the two retired local maps'
+ * spelling (synap-app `FilterControls.tsx`, browser `ViewConfigInspector.tsx`),
+ * and a symbol is not readable aloud or by a screen reader. One mood only — a
+ * filter chip states a condition; it is neither a command nor a past event.
+ */
+export const FILTER_OPERATOR_LABELS: Readonly<Record<FilterOperator, string>> =
+  {
+    equals: "is",
+    not_equals: "is not",
+    contains: "contains",
+    not_contains: "does not contain",
+    in: "is any of",
+    not_in: "is none of",
+    greater_than: "is greater than",
+    greater_than_or_equal: "is at least",
+    less_than: "is less than",
+    less_than_or_equal: "is at most",
+    is_empty: "is empty",
+    is_not_empty: "is not empty",
+  };
+
+/**
+ * The range operators on a DATE read as time, not magnitude: "Due is before
+ * 3 Oct", never "Due is less than 3 Oct". Only the ranges differ; every other
+ * operator reads the same on a date.
+ */
+export const DATE_FILTER_OPERATOR_LABELS: Readonly<
+  Partial<Record<FilterOperator, string>>
+> = {
+  greater_than: "is after",
+  greater_than_or_equal: "is on or after",
+  less_than: "is before",
+  less_than_or_equal: "is on or before",
+};
+
+/**
+ * A view filter operator's words. Pass the filtered property's `valueType`
+ * (`PropertyValueType`) so a date range reads as before/after. An unknown
+ * operator humanizes rather than leaks.
+ */
+export function resolveFilterOperatorLabel(
+  operator: FilterOperator | (string & {}) | null | undefined,
+  valueType?: string | null
+): string {
+  if (!operator) return "";
+  if (valueType === "date") {
+    const dateLabel = (
+      DATE_FILTER_OPERATOR_LABELS as Readonly<Record<string, string>>
+    )[operator];
+    if (dateLabel) return dateLabel;
+  }
+  return (
+    (FILTER_OPERATOR_LABELS as Readonly<Record<string, string>>)[operator] ??
+    humanizeToken(operator)
   );
 }

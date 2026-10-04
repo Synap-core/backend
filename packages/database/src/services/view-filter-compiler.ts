@@ -11,22 +11,39 @@ import { PropertyMergingService } from "./property-merging-service.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 
-// EntityFilter type definition (from @synap-core/types)
+/**
+ * The view filter operators this compiler evaluates — a RUNTIME MIRROR of
+ * `VIEW_FILTER_OPERATORS` in `@synap-core/types/views` (`views/filters.ts`),
+ * the ONE grammar the UI and the views tRPC doors use.
+ *
+ * Mirrored, not imported: `@synap-core/types` depends on `@synap/database`, so
+ * importing it here is a build cycle (same precedent as
+ * `GUIDELINE_SCOPE_ORDER`). `view-filter-operators-parity.test.ts` fails if
+ * the two sets differ, AND compiles every operator in the authored set through
+ * this class, so an operator added to the grammar cannot reach a view without
+ * a compile path.
+ */
+export const VIEW_FILTER_OPERATORS = [
+  "equals",
+  "not_equals",
+  "contains",
+  "not_contains",
+  "in",
+  "not_in",
+  "greater_than",
+  "greater_than_or_equal",
+  "less_than",
+  "less_than_or_equal",
+  "is_empty",
+  "is_not_empty",
+] as const;
+
+export type ViewFilterOperator = (typeof VIEW_FILTER_OPERATORS)[number];
+
+// EntityFilter — structurally identical to `@synap-core/types` `EntityFilter`.
 export interface EntityFilter {
   field: string;
-  operator:
-    | "equals"
-    | "not_equals"
-    | "contains"
-    | "not_contains"
-    | "is_empty"
-    | "is_not_empty"
-    | "in"
-    | "not_in"
-    | "greater_than"
-    | "less_than"
-    | "greater_than_or_equal"
-    | "less_than_or_equal";
+  operator: ViewFilterOperator;
   value?: unknown;
 }
 

@@ -8,22 +8,9 @@
 // Filter and Sort Types
 // =============================================================================
 
-/**
- * Filter operator types
- */
-export type FilterOperator =
-  | "equals"
-  | "not_equals"
-  | "contains"
-  | "not_contains"
-  | "in"
-  | "not_in"
-  | "is_empty"
-  | "is_not_empty"
-  | "greater_than"
-  | "less_than"
-  | "greater_than_or_equal"
-  | "less_than_or_equal";
+// The operator set + per-type table + zod door live in `./filters` (the ONE
+// view-filter grammar); `FilterOperator` is derived there, never re-listed.
+import type { FilterOperator } from "./filters.js";
 
 /**
  * Filter definition for entity queries
