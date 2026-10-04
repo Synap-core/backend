@@ -666,14 +666,20 @@ export class ViewFilterCompiler {
           sql: negateIncludingMissing(sql`${text} ILIKE ${`%${value}%`}`),
           usesIndex: false,
         };
+      // "Empty" = absent, JSON null, "" or []: what a reader means by a
+      // blank field (a cleared text input stores "", a cleared multi-select
+      // stores []). The indexed path has no is_empty of its own — every
+      // property, indexed or not, is answered here, so this is the ONE rule.
+      // Compared as jsonb, so a STRING "[]" is still a value. COALESCE keeps
+      // is_not_empty a plain boolean (never NULL) for the absent key.
       case "is_empty":
         return {
-          sql: sql`(${propertiesCol}->>${propertyKey} IS NULL)`,
+          sql: sql`(${jsonbEmpty(propertiesCol, propertyKey)})`,
           usesIndex: false,
         };
       case "is_not_empty":
         return {
-          sql: sql`(${propertiesCol}->>${propertyKey} IS NOT NULL)`,
+          sql: sql`(NOT ${jsonbEmpty(propertiesCol, propertyKey)})`,
           usesIndex: false,
         };
       case "in":
@@ -797,6 +803,17 @@ function compileDayCondition(
  */
 function negateIncludingMissing(positive: SQL): SQL {
   return sql`(NOT COALESCE(${positive}, FALSE))`;
+}
+
+/**
+ * A property reads as EMPTY when it is absent, JSON null, "" or [] — compared
+ * as jsonb, never as `->>` text, so a stored string "[]" stays a value.
+ */
+function jsonbEmpty(
+  propertiesCol: typeof entities.properties,
+  propertyKey: string
+): SQL {
+  return sql`COALESCE(${propertiesCol}->${propertyKey}, 'null'::jsonb) IN ('null'::jsonb, '""'::jsonb, '[]'::jsonb)`;
 }
 
 /** The text operand for comparing against `->>` output. */

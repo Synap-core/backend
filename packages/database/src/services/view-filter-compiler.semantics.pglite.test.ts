@@ -230,3 +230,89 @@ describe("ViewFilterCompiler — what it cannot compile THROWS", () => {
     ).rejects.toThrow(/Unknown filter field/);
   });
 });
+
+describe('ViewFilterCompiler semantics — is_empty / is_not_empty treat "" and [] as empty', () => {
+  // Own fixture: a blank text ("") and a cleared list ([]) are what a reader
+  // calls "empty"; a STRING "[]" and a non-empty list are values. `status` is
+  // marked indexed — the indexed path has no is_empty of its own, so this
+  // proves both meta shapes land on the same rule.
+  let db: PGlite;
+  beforeAll(async () => {
+    db = new PGlite();
+    await db.exec(`
+      CREATE TABLE entities (id text PRIMARY KEY, properties jsonb);
+      INSERT INTO entities VALUES
+        ('a', '{"status":"open","tags":["x"]}'),
+        ('b', '{"status":"","tags":[]}'),
+        ('c', '{"status":null,"tags":null}'),
+        ('d', '{}'),
+        ('e', '{"status":"[]","tags":"[]"}');
+      CREATE TABLE entity_property_index (
+        entity_id text NOT NULL, property_def_id text NOT NULL,
+        value_text text, value_num numeric, value_bool boolean,
+        value_ts timestamptz, value_entity_id text, value_jsonb jsonb
+      );
+      INSERT INTO entity_property_index (entity_id, property_def_id, value_text) VALUES
+        ('a', 'def-status', 'open'), ('b', 'def-status', ''), ('e', 'def-status', '[]');
+    `);
+  });
+  afterAll(async () => {
+    await db?.close();
+  });
+
+  async function ids(
+    slug: string,
+    operator: EntityFilter["operator"],
+    indexed: boolean
+  ): Promise<string[]> {
+    const c = new ViewFilterCompiler({} as never);
+    (c as unknown as { propertyMerging: unknown }).propertyMerging = {
+      mergePropertiesFromProfiles: async () =>
+        new Map([
+          [
+            "status",
+            {
+              valueType: "string",
+              propertyDefIds: [DEF_ID("status")],
+              indexed,
+            },
+          ],
+          [
+            "tags",
+            {
+              valueType: "array",
+              propertyDefIds: [DEF_ID("tags")],
+              indexed: false,
+            },
+          ],
+        ]),
+    };
+    const meta = new Map<string, PropertyFilterMeta>([
+      [slug, { propertyDefIds: [DEF_ID(slug)], indexed }],
+    ]);
+    const compiled = await c.compileFilter(
+      { field: `properties.${slug}`, operator },
+      ["profile-a"],
+      meta
+    );
+    if (!compiled) throw new Error("compileFilter returned null");
+    const query = dialect.sqlToQuery(
+      sql`select "id" from "entities" where ${compiled.sql} order by "id"`
+    );
+    const res = await db.query<{ id: string }>(query.sql, query.params);
+    return res.rows.map((r) => r.id);
+  }
+
+  it.each([
+    ["status", "is_empty", ["b", "c", "d"]],
+    ["status", "is_not_empty", ["a", "e"]],
+    ["tags", "is_empty", ["b", "c", "d"]],
+    ["tags", "is_not_empty", ["a", "e"]],
+  ] as Array<[string, EntityFilter["operator"], string[]]>)(
+    "properties.%s %s → %o on indexed AND JSONB meta",
+    async (slug, operator, expected) => {
+      expect(await ids(slug, operator, false)).toEqual(expected);
+      expect(await ids(slug, operator, true)).toEqual(expected);
+    }
+  );
+});
