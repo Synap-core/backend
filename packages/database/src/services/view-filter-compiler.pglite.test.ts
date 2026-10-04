@@ -152,3 +152,118 @@ describe("ViewFilterCompiler — JSONB fallback, executed", () => {
     ).rejects.toThrow(/requires a number or an ISO date value/);
   });
 });
+
+describe("ViewFilterCompiler — indexed path + core fields, executed", () => {
+  // A property shared by two profiles resolves to TWO def ids — the array
+  // that `= ANY(${propertyDefIds})` used to expand into `($1, $2)` and break.
+  const DEF_IDS = ["def-profile-a", "def-profile-b"];
+
+  beforeAll(async () => {
+    await pg.exec(`
+      ALTER TABLE entities ADD COLUMN type text;
+      UPDATE entities SET type = CASE id
+        WHEN 'a' THEN 'task' WHEN 'b' THEN 'note' WHEN 'c' THEN 'task'
+        WHEN 'd' THEN 'person' ELSE 'note' END;
+      CREATE TABLE entity_property_index (
+        entity_id text NOT NULL,
+        property_def_id text NOT NULL,
+        value_text text, value_num numeric, value_bool boolean,
+        value_ts timestamptz, value_entity_id text, value_jsonb jsonb
+      );
+      INSERT INTO entity_property_index (entity_id, property_def_id, value_text) VALUES
+        ('a', 'def-profile-a', 'lead'),
+        ('b', 'def-profile-b', 'won'),
+        ('e', 'def-profile-a', 'lost'),
+        ('c', 'def-other',     'won');
+    `);
+  });
+
+  function indexedCompiler(valueType: string) {
+    const c = new ViewFilterCompiler({} as never);
+    (c as unknown as { propertyMerging: unknown }).propertyMerging = {
+      mergePropertiesFromProfiles: async () =>
+        new Map([
+          ["stage", { valueType, propertyDefIds: DEF_IDS, indexed: true }],
+          ["status", { valueType, propertyDefIds: DEF_IDS, indexed: true }],
+        ]),
+    };
+    return c;
+  }
+
+  async function run(c: ViewFilterCompiler, filter: EntityFilter) {
+    const meta = new Map([
+      ["stage", { propertyDefIds: DEF_IDS, indexed: true }],
+      ["status", { propertyDefIds: DEF_IDS, indexed: true }],
+    ]);
+    const compiled = await c.compileFilter(
+      filter,
+      ["profile-a", "profile-b"],
+      meta
+    );
+    if (!compiled) throw new Error("compileFilter returned null");
+    const query = dialect.sqlToQuery(
+      sql`select "id" from "entities" where ${compiled.sql} order by "id"`
+    );
+    const res = await pg.query<{ id: string }>(query.sql, query.params);
+    return { ids: res.rows.map((r) => r.id), usesIndex: compiled.usesIndex };
+  }
+
+  it("indexed equals over a 2-profile property matches either def", async () => {
+    const out = await run(indexedCompiler("string"), {
+      field: "properties.stage",
+      operator: "equals",
+      value: "won",
+    });
+    expect(out).toEqual({ ids: ["b"], usesIndex: true });
+  });
+
+  it("indexed in with a 2-element value list over 2 defs", async () => {
+    const out = await run(indexedCompiler("string"), {
+      field: "properties.stage",
+      operator: "in",
+      value: ["lead", "won"],
+    });
+    expect(out).toEqual({ ids: ["a", "b"], usesIndex: true });
+  });
+
+  it("indexed in with an empty list matches nothing", async () => {
+    const out = await run(indexedCompiler("string"), {
+      field: "properties.stage",
+      operator: "in",
+      value: [],
+    });
+    expect(out.ids).toEqual([]);
+  });
+
+  it("indexed → JSONB fallback filters on the REAL property key", async () => {
+    // valueType with no index column ⇒ JSONB fallback inside the builder.
+    const eq = await run(indexedCompiler("json"), {
+      field: "properties.status",
+      operator: "equals",
+      value: "open",
+    });
+    expect(eq.ids).toEqual(["a", "c"]);
+    const inList = await run(indexedCompiler("json"), {
+      field: "properties.status",
+      operator: "in",
+      value: ["done", "archived"],
+    });
+    expect(inList.ids).toEqual(["b", "e"]);
+  });
+
+  it("core-field in / not_in bind a 2-element array", async () => {
+    const c = new ViewFilterCompiler({} as never);
+    const inIds = await run(c, {
+      field: "type",
+      operator: "in",
+      value: ["task", "person"],
+    });
+    expect(inIds.ids).toEqual(["a", "c", "d"]);
+    const notIn = await run(c, {
+      field: "type",
+      operator: "not_in",
+      value: ["task", "person"],
+    });
+    expect(notIn.ids).toEqual(["b", "e"]);
+  });
+});

@@ -283,8 +283,9 @@ export class ViewFilterCompiler {
         return { sql: sql`${column} IS NOT NULL`, usesIndex: false };
       case "in":
         if (Array.isArray(value)) {
+          // Drizzle expands a JS array into `($1, $2)`: valid for IN, not ANY().
           return {
-            sql: sql`${column} = ANY(${value})`,
+            sql: value.length === 0 ? sql`FALSE` : sql`${column} IN ${value}`,
             usesIndex: false,
           };
         }
@@ -305,7 +306,8 @@ export class ViewFilterCompiler {
       case "not_in":
         if (Array.isArray(value)) {
           return {
-            sql: sql`${column} != ALL(${value})`,
+            sql:
+              value.length === 0 ? sql`TRUE` : sql`${column} NOT IN ${value}`,
             usesIndex: false,
           };
         }
@@ -347,20 +349,23 @@ export class ViewFilterCompiler {
         return this.buildIndexedEqualsFilterMultiProfile(
           propertyDefIds,
           value,
-          valueType
+          valueType,
+          propertySlug
         );
       case "not_equals":
         return this.buildIndexedNotEqualsFilterMultiProfile(
           propertyDefIds,
           value,
-          valueType
+          valueType,
+          propertySlug
         );
       case "in":
         if (Array.isArray(value)) {
           return this.buildIndexedInFilterMultiProfile(
             propertyDefIds,
             value,
-            valueType
+            valueType,
+            propertySlug
           );
         }
         return null;
@@ -385,7 +390,8 @@ export class ViewFilterCompiler {
   private buildIndexedEqualsFilterMultiProfile(
     propertyDefIds: string[],
     value: unknown,
-    valueType: string
+    valueType: string,
+    propertySlug: string
   ): CompiledFilter {
     let valueColumn: any;
     switch (valueType) {
@@ -403,7 +409,7 @@ export class ViewFilterCompiler {
         valueColumn = entityPropertyIndex.valueTs;
         break;
       default:
-        return this.compileJSONBPropertyFilter("", "equals", value)!;
+        return this.compileJSONBPropertyFilter(propertySlug, "equals", value);
     }
 
     return {
@@ -412,7 +418,7 @@ export class ViewFilterCompiler {
           SELECT 1
           FROM ${entityPropertyIndex}
           WHERE ${entityPropertyIndex.entityId} = ${entities.id}
-            AND ${entityPropertyIndex.propertyDefId} = ANY(${propertyDefIds})
+            AND ${entityPropertyIndex.propertyDefId} IN ${propertyDefIds}
             AND ${valueColumn} = ${value}
         )
       `,
@@ -426,12 +432,14 @@ export class ViewFilterCompiler {
   private buildIndexedNotEqualsFilterMultiProfile(
     propertyDefIds: string[],
     value: unknown,
-    valueType: string
+    valueType: string,
+    propertySlug: string
   ): CompiledFilter {
     const equalsFilter = this.buildIndexedEqualsFilterMultiProfile(
       propertyDefIds,
       value,
-      valueType
+      valueType,
+      propertySlug
     );
     return {
       sql: sql`NOT ${equalsFilter.sql}`,
@@ -445,7 +453,8 @@ export class ViewFilterCompiler {
   private buildIndexedInFilterMultiProfile(
     propertyDefIds: string[],
     values: unknown[],
-    valueType: string
+    valueType: string,
+    propertySlug: string
   ): CompiledFilter {
     let valueColumn: any;
     switch (valueType) {
@@ -463,7 +472,11 @@ export class ViewFilterCompiler {
         valueColumn = entityPropertyIndex.valueTs;
         break;
       default:
-        return this.compileJSONBPropertyFilter("", "in", values)!;
+        return this.compileJSONBPropertyFilter(propertySlug, "in", values);
+    }
+
+    if (values.length === 0) {
+      return { sql: sql`FALSE`, usesIndex: true };
     }
 
     return {
@@ -472,8 +485,8 @@ export class ViewFilterCompiler {
           SELECT 1
           FROM ${entityPropertyIndex}
           WHERE ${entityPropertyIndex.entityId} = ${entities.id}
-            AND ${entityPropertyIndex.propertyDefId} = ANY(${propertyDefIds})
-            AND ${valueColumn} = ANY(${values})
+            AND ${entityPropertyIndex.propertyDefId} IN ${propertyDefIds}
+            AND ${valueColumn} IN ${values}
         )
       `,
       usesIndex: true,
@@ -529,7 +542,7 @@ export class ViewFilterCompiler {
           SELECT 1
           FROM ${entityPropertyIndex}
           WHERE ${entityPropertyIndex.entityId} = ${entities.id}
-            AND ${entityPropertyIndex.propertyDefId} = ANY(${propertyDefIds})
+            AND ${entityPropertyIndex.propertyDefId} IN ${propertyDefIds}
             AND ${valueColumn} ${sql.raw(sqlOperator)} ${value}
         )
       `,
