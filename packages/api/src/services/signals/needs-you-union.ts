@@ -43,6 +43,9 @@ import {
   isObjectNavView,
   type ObjectNavView,
 } from "@synap-core/types/navigation";
+import type { ActivityRow } from "@synap-core/types/activity";
+import type { LandedObjectRow } from "@synap-core/types/landed";
+import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
@@ -68,10 +71,26 @@ export type SignalKind =
   | "proposal-cluster"
   /** One unread, non-proposal notification. */
   | "notification"
-  /** A past `events` row (history lens). */
+  /** A past `events` row — a DATA change (history lens / Happened). */
   | "event"
-  /** A proposal that has been approved / rejected / expired (history lens). */
-  | "decided-proposal"
+  /**
+   * One `activity.list` ledger row — a governed act, a decision, a run or a
+   * session lifecycle (history lens / Happened). The ledger row itself rides
+   * in `activity`, verbatim, so its actor / verb / outcome / Undo door are
+   * never re-derived here. (Replaced `decided-proposal`: the ledger's
+   * `decision` and `proposal` sources carry every decided proposal.)
+   */
+  | "activity"
+  /**
+   * A session an agent is working on RIGHT NOW (Happening) — the one rule,
+   * `isSessionWorkingNow` over `loadSessionLiveness`. Its facts ride in `live`.
+   */
+  | "live-session"
+  /**
+   * One object a session PRODUCED (Produced) — an `outputs.landed` row,
+   * verbatim, in `landed`.
+   */
+  | "output"
   /** One deliverable an agent handed to the human and nobody has closed. */
   | "owed-slot"
   /**
@@ -209,6 +228,21 @@ export interface Signal {
    */
   lifetimeHours?: number | null;
   /**
+   * WHERE the row came from — the small provenance door (lens grammar §5: a
+   * source is shown only when it differs from the page's scope; the client
+   * decides that with `visibleSource`, `@synap-core/types/lens`). The most
+   * specific readable container: the SESSION a row belongs to, else the
+   * PROJECT a session-row sits in. Absent when the row has no readable
+   * container (a pod-level notification) — never a guessed one.
+   */
+  source?: SignalSource;
+  /** `live-session` only: the liveness facts the "working now" rule read. */
+  live?: SessionActivityLive;
+  /** `output` only: the produced object, as `outputs.landed` returns it. */
+  landed?: LandedObjectRow;
+  /** `activity` only: the ledger row, as `activity.list` returns it. */
+  activity?: ActivityRow;
+  /**
    * WHICH block this row belongs to on a needs-you page. `session:<id>` for
    * everything a session owes the person (its owed slots, its draft-asks row,
    * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -267,6 +301,10 @@ const KIND_SPECIFIC_SIGNAL_FIELDS = [
   "ask",
   "class",
   "lifetimeHours",
+  "source",
+  "live",
+  "landed",
+  "activity",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
@@ -309,6 +347,25 @@ export const SIGNAL_UNIVERSAL_FIELDS: readonly (keyof Signal)[] =
 /** See {@link Signal.ageBucket}. */
 export type SignalAgeBucket = "recent" | "older";
 
+/**
+ * A row's provenance door — the same shape as `LensSource`
+ * (`@synap-core/types/lens`): an object-nav kind, an id, a short label.
+ */
+export interface SignalSource {
+  kind: "workspace" | "project" | "track" | "session";
+  id: string;
+  label: string;
+}
+
+/** The session source of a row, when its session is named. */
+export function sessionSource(
+  sessionId: string,
+  title: string | null | undefined
+): { source: SignalSource } | Record<string, never> {
+  const label = title?.trim();
+  return label ? { source: { kind: "session", id: sessionId, label } } : {};
+}
+
 /** A needs-you row older than this folds under "Older" (7 days). */
 export const OLDER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -349,6 +406,20 @@ export interface NotificationSignalInput {
    * registry row, never a per-type map here.
    */
   actions?: unknown;
+}
+
+/**
+ * The CONTAINER a notification resolves to, derived from what it points at
+ * (`lens-containers.ts`: its session target, or the room its message was
+ * posted in) — never a stored column. Only a session the VIEWER may read is
+ * ever named, so a container never leaks a session the person cannot open.
+ */
+export interface NotificationContainer {
+  sessionId: string | null;
+  /** The session's display name (`resolveSessionTitle`), when it has one. */
+  sessionTitle: string | null;
+  projectId: string | null;
+  trackId: string | null;
 }
 
 /**
@@ -436,7 +507,14 @@ export function signalFromCluster(
   const inSession = cluster.sessionId && session ? cluster.sessionId : null;
   const sampleId = cluster.sampleProposalIds[0] ?? null;
   return {
-    id: `cluster:${cluster.fingerprint}`,
+    // A session PART of a split cluster (`splitBySession`) shares its
+    // fingerprint with the other parts, so its newest member makes the id
+    // unique. Never the session id: a session the viewer cannot read must not
+    // leak through a row id (cluster-sessions.pglite.test.ts pins it).
+    id:
+      cluster.sessionId && sampleId
+        ? `cluster:${cluster.fingerprint}@${sampleId}`
+        : `cluster:${cluster.fingerprint}`,
     kind: "proposal-cluster",
     title: buildObjectActionTitle({
       action: cluster.proposalType,
@@ -464,6 +542,7 @@ export function signalFromCluster(
     ...(inSession && session?.projectId
       ? { sessionProjectId: session.projectId }
       : {}),
+    ...(inSession ? sessionSource(inSession, session?.title) : {}),
     groupKey: inSession
       ? sessionGroupKey(inSession)
       : `proposal-cluster:${cluster.fingerprint}`,
@@ -480,8 +559,13 @@ export function signalFromCluster(
 export function signalFromNotification(
   row: NotificationSignalInput,
   now: Date = new Date(),
-  repeatCount = 1
+  repeatCount = 1,
+  container?: NotificationContainer
 ): Signal {
+  // A notification ABOUT a session the viewer can read joins that session's
+  // block, like every other row the session owes — so a session never shows
+  // as its card AND a loose notification row (needs-you duplicate cause 1).
+  const sessionId = container?.sessionId ?? null;
   return {
     id: `notification:${row.id}`,
     kind: "notification",
@@ -490,7 +574,14 @@ export function signalFromNotification(
     occurredAt: row.createdAt,
     target: targetFromNotification(row.sourceType, row.sourceId, row.actions),
     category: row.category,
-    groupKey: null,
+    ...(sessionId && container?.sessionTitle
+      ? { sessionTitle: container.sessionTitle }
+      : {}),
+    ...(sessionId && container?.projectId
+      ? { sessionProjectId: container.projectId }
+      : {}),
+    ...(sessionId ? sessionSource(sessionId, container?.sessionTitle) : {}),
+    groupKey: sessionId ? sessionGroupKey(sessionId) : null,
     ageBucket: ageBucketOf(row.createdAt, now),
     repeatCount,
   };
@@ -499,10 +590,14 @@ export function signalFromNotification(
 /**
  * Fold unread notifications per `(type, target)`: the same news about the
  * same object, raised N times, is ONE row carrying the NEWEST instance and
- * `repeatCount: N`. A row with no `sourceId` has no target to fold on and
- * stays its own row — two targetless rows of one type are not provably the
- * same news. Pure; the list and the count both fold through here, so a folded
- * row counts once in the badge exactly as it lists once.
+ * `repeatCount: N`. Pure; the list and the count both fold through here, so a
+ * folded row counts once in the badge exactly as it lists once.
+ *
+ * A row with no `sourceId` folds on `(type, sourceType, title)` instead: the
+ * registry evaluated the title from the row's data, so two targetless rows of
+ * one type with the SAME rendered title say the same thing (needs-you
+ * duplicate cause 2 — "Weekly digest ready" raised five times was five
+ * rows). Two targetless rows whose titles differ stay apart: different news.
  */
 export function foldNotifications(
   rows: readonly NotificationSignalInput[]
@@ -514,7 +609,7 @@ export function foldNotifications(
   for (const r of rows) {
     const key = r.sourceId
       ? `${r.type ?? ""}\u0000${r.sourceType}\u0000${r.sourceId}`
-      : `row\u0000${r.id}`;
+      : `untargeted\u0000${r.type ?? ""}\u0000${r.sourceType}\u0000${r.title}`;
     const seen = folds.get(key);
     if (!seen) folds.set(key, { row: r, repeatCount: 1 });
     else {
@@ -777,6 +872,7 @@ export function signalsFromDraftAsks(
       ...(goal ? { sessionGoal: goal } : {}),
       ...(name ? { sessionTitle: name } : {}),
       ...(projectId ? { sessionProjectId: projectId } : {}),
+      ...sessionSource(sessionId, name),
       groupKey: sessionGroupKey(sessionId),
       ageBucket: ageBucketOf(newest, now),
       repeatCount: 1,
@@ -834,6 +930,7 @@ export function signalFromOwedSlot(
     ...(row.criterionKey ? { criterionKey: row.criterionKey } : {}),
     ...(row.ref ? { slotRef: row.ref } : {}),
     ...(row.ask ? { ask: row.ask } : {}),
+    ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     ageBucket: ageBucketOf(occurredAt, now),
     repeatCount: 1,
@@ -846,7 +943,12 @@ export function signalFromOwedSlot(
  * notification row itself.
  */
 export interface SessionLiveNeeds {
-  /** Sessions with at least one owed slot in the scanned owed page. */
+  /**
+   * Sessions known to hold at least one owed slot: the scanned owed page's
+   * sessions, PLUS the pointer sessions measured directly
+   * (`sessionsWithOwedSlot`, uncapped) — so a pointer whose session's slots
+   * fell past the owed page's cap still folds (needs-you duplicate cause 3).
+   */
   owedSessionIds: ReadonlySet<string>;
   /**
    * Sessions whose room holds an agent question nobody has answered yet
@@ -858,12 +960,14 @@ export interface SessionLiveNeeds {
   openQuestionSessionIds?: ReadonlySet<string>;
 }
 
-/** One session awaiting the person's review/close (`listProjectSessionsAwaitingReview`). */
+/** One session awaiting the person's review/close (`listSessionsAwaitingReview`). */
 export interface ReviewSessionSignalInput {
   id: string;
   title: string | null;
   goal: string | null;
   updatedAt: Date;
+  /** The session's project — its rail colour and its provenance door. */
+  projectId?: string | null;
 }
 
 /**
@@ -886,6 +990,7 @@ export function signalFromReviewSession(
     category: "ai",
     ...(row.goal ? { sessionGoal: row.goal } : {}),
     ...(title ? { sessionTitle: title } : {}),
+    ...(row.projectId ? { sessionProjectId: row.projectId } : {}),
     groupKey: sessionGroupKey(row.id),
     ageBucket: ageBucketOf(row.updatedAt, now),
     repeatCount: 1,
@@ -956,6 +1061,8 @@ export function partitionNotifications(
 ): {
   needsYou: NotificationSignalInput[];
   suggestions: NotificationSignalInput[];
+  /** SYSTEM HEALTH rows (registry role `"status"`) — the status banner. */
+  status: NotificationSignalInput[];
 } {
   const clusteredProposalIds = new Set<string>();
   for (const c of clusters) {
@@ -963,17 +1070,19 @@ export function partitionNotifications(
   }
   const needsYou: NotificationSignalInput[] = [];
   const suggestions: NotificationSignalInput[] = [];
+  const status: NotificationSignalInput[] = [];
   for (const r of rows) {
     if (r.sourceType === "proposal") continue;
     if (r.sourceId && clusteredProposalIds.has(r.sourceId)) continue;
     const role = needsYouRole(r.type);
     if (role === "suggestion") suggestions.push(r);
+    else if (role === "status") status.push(r);
     else if (role === "item") needsYou.push(r);
     else if (role === "session-pointer" && pointerStillNeedsYou(r, live))
       needsYou.push(r);
     // "informational": in no bucket. It stays in the bell.
   }
-  return { needsYou, suggestions };
+  return { needsYou, suggestions, status };
 }
 
 /** A `"session-pointer"` row, decided from its session's live state. */
@@ -993,41 +1102,67 @@ function pointerStillNeedsYou(
  * {@link unionNeedsYou}, from the same partition. Unlike an owed slot, a
  * suggestion decays, so newest first is the right order — and the cap keeps
  * the newest. `countNeedsYou().suggestions` applies the same cap, so the
- * number equals the rows.
+ * number equals the rows. A suggestion about a session the viewer can read
+ * names it as its source (`containers`).
  */
 export function unionSuggestions(
   notifications: NotificationSignalInput[],
-  now: Date = new Date()
+  now: Date = new Date(),
+  containers?: ReadonlyMap<string, NotificationContainer>
 ): Signal[] {
   return partitionNotifications(notifications, [])
-    .suggestions.map((r) => signalFromNotification(r, now))
+    .suggestions.map((r) =>
+      signalFromNotification(r, now, 1, containers?.get(r.id))
+    )
     .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
     .slice(0, SUGGESTIONS_CAP);
 }
 
 /**
- * The `needs-you` union: owed slots, draft-asks rows, clusters and deduped,
- * folded unread notifications — ONE list in ONE order ({@link orderNeedsYou}).
- * Pure — feed it the doors' rows and it decides membership and order.
+ * PROPOSED — what an AI offers that the person may take or leave (lens grammar,
+ * founder-approved 2026-10-04): agent DRAFTS (one `draft-asks` row per
+ * undecided draft that asks something) + AI SUGGESTIONS (capped, see
+ * {@link unionSuggestions}). Ignoring any of it costs nothing, so none of it is
+ * ever a needs-you row and none of it counts toward `needsYou`. Pending
+ * approvals — a proposal an agent is paused on included — are BLOCKING
+ * ({@link unionNeedsYou}), never here. Newest first.
+ */
+export function unionProposed(args: {
+  draftAsks?: DraftAsksInput;
+  notifications: NotificationSignalInput[];
+  notificationContainers?: ReadonlyMap<string, NotificationContainer>;
+  now?: Date;
+}): Signal[] {
+  const now = args.now ?? new Date();
+  return [
+    ...(args.draftAsks ? signalsFromDraftAsks(args.draftAsks, now) : []),
+    ...unionSuggestions(args.notifications, now, args.notificationContainers),
+  ].sort(newestFirst);
+}
+
+/**
+ * The `needs-you` union — BLOCKING: owed slots, sessions awaiting review,
+ * pending proposal clusters and deduped, folded unread notifications — ONE
+ * list in ONE order ({@link orderNeedsYou}). Pure — feed it the doors' rows
+ * and it decides membership and order.
+ *
+ * Agent DRAFTS are not here (founder, lens grammar 2026-10-04: drafts are
+ * PROPOSED — {@link unionProposed}). `draftAsks` is still read, for one
+ * thing only: a draft's `session.needs_you` pointer folds into the draft (its
+ * session has an owed slot), so the pointer never resurfaces as a loose
+ * needs-you row.
  *
  * ── OWED SLOTS FOLD ONLY A SESSION POINTER, NEVER "ANY ROW ABOUT THE SESSION" ─
- * Until 2026-09-25 this said the block door creates no notification, so there
- * was no owed-slot double-count. That stopped being true: every door that hands
- * a slot to the person now writes `session.needs_you` (`notify-needs-you.ts`),
- * and that row announced the SAME need the owed-slot row already shows. So the
- * fold is keyed on the registry's `needsYou: "session-pointer"` role, never on
- * `sourceId` alone. Matching by session id alone would introduce a different
- * bug: `session.unblocked` is written with `sourceType: "system"` and `sourceId`
- * = the SESSION id (`notifications/session-unblock-reactor.ts`), so a session
- * that owes you a deliverable and just had its last blocker clear would lose the
- * unblock notification. That is separate news, and it stays. See
- * {@link dedupeNotifications}.
+ * Every door that hands a slot to the person writes `session.needs_you`
+ * (`notify-needs-you.ts`), and that row announced the SAME need the owed-slot
+ * row already shows. So the fold is keyed on the registry's
+ * `needsYou: "session-pointer"` role, never on `sourceId` alone:
+ * `session.unblocked` (`sourceType: "system"`, `sourceId` = the session id) is
+ * separate news, and it stays — in the session's block, through its
+ * container. See {@link dedupeNotifications}.
  *
  * ── ORDERING: NEWEST FIRST ACROSS EVERY KIND (W2 "calm", 2026-09-28) ─────────
- * Owed slots used to sort FIRST and OLDEST-first ("age is severity"), so a
- * fortnight-old owed slot outranked a decision filed today and the fresh work
- * was buried under a pile nobody would clear. The founder reversed it: one
- * newest-first order across kinds, a session's rows kept together, and
+ * One newest-first order across kinds, a session's rows kept together, and
  * anything older than a week folded under "Older" — see {@link orderNeedsYou}.
  */
 export function unionNeedsYou(args: {
@@ -1039,38 +1174,35 @@ export function unionNeedsYou(args: {
    */
   clusterSessions?: ReadonlyMap<string, ClusterSessionName>;
   notifications: NotificationSignalInput[];
+  /**
+   * notification id → the container it resolves to (`lens-containers.ts`).
+   * A notification whose session is named here joins that session's block.
+   * Absent ⇒ every notification is a row of its own (fail closed).
+   */
+  notificationContainers?: ReadonlyMap<string, NotificationContainer>;
   /** Required, not optional: a caller that forgets the third source ships a
    *  tray that silently under-reports, which is the defect, not a default. */
   owedSlots: OwedSlotSignalInput[];
   /** See {@link SessionLiveNeeds.openQuestionSessionIds}. Absent = unmeasured. */
   openQuestionSessionIds?: ReadonlySet<string>;
   /**
-   * Undecided drafts that ask something — one row each. Absent ⇒ none. The
-   * router always passes it; `countNeedsYou` takes the same input, so the
-   * list and the badge fold the same drafts.
+   * Pointer sessions measured to hold an owed slot, independent of the owed
+   * page's cap (`sessionsWithOwedSlot`). See {@link SessionLiveNeeds}.
    */
+  measuredOwedSessionIds?: ReadonlySet<string>;
+  /** Undecided drafts — read ONLY to fold their pointers (see above). */
   draftAsks?: DraftAsksInput;
-  /**
-   * Sessions awaiting the person's review — PROJECT scope only (the one scope
-   * `countNeedsYou` counts them under). Absent ⇒ none.
-   */
+  /** Sessions awaiting the person's review — at every scope. Absent ⇒ none. */
   reviewSessions?: readonly ReviewSessionSignalInput[];
   /** The clock `ageBucket` is measured against. Absent ⇒ now. */
   now?: Date;
 }): Signal[] {
   const now = args.now ?? new Date();
-  const draftSlots = args.draftAsks?.slots ?? [];
   const notifications = foldNotifications(
-    dedupeNotifications(args.notifications, args.clusters, {
-      // A draft's `session.needs_you` pointer folds into its draft row, the
-      // same way an owed slot's does — one entry per session.
-      owedSessionIds: owedSessionIdsOf([...args.owedSlots, ...draftSlots]),
-      openQuestionSessionIds: args.openQuestionSessionIds,
-    })
+    dedupeNotifications(args.notifications, args.clusters, liveNeedsOf(args))
   );
   return orderNeedsYou([
     ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
-    ...(args.draftAsks ? signalsFromDraftAsks(args.draftAsks, now) : []),
     ...(args.reviewSessions ?? []).map((r) => signalFromReviewSession(r, now)),
     ...args.clusters.map((c) =>
       signalFromCluster(
@@ -1080,9 +1212,118 @@ export function unionNeedsYou(args: {
       )
     ),
     ...notifications.map((f) =>
-      signalFromNotification(f.row, now, f.repeatCount)
+      signalFromNotification(
+        f.row,
+        now,
+        f.repeatCount,
+        args.notificationContainers?.get(f.row.id)
+      )
     ),
   ]);
+}
+
+/** The live needs a pointer row is decided from — ONE derivation, list and count. */
+function liveNeedsOf(args: {
+  owedSlots: readonly OwedSlotSignalInput[];
+  draftAsks?: DraftAsksInput;
+  measuredOwedSessionIds?: ReadonlySet<string>;
+  openQuestionSessionIds?: ReadonlySet<string>;
+}): SessionLiveNeeds {
+  const owed = owedSessionIdsOf([
+    ...args.owedSlots,
+    ...(args.draftAsks?.slots ?? []),
+  ]);
+  for (const id of args.measuredOwedSessionIds ?? []) owed.add(id);
+  return {
+    owedSessionIds: owed,
+    openQuestionSessionIds: args.openQuestionSessionIds,
+  };
+}
+
+/**
+ * The STATUS BANNER — system health, never a needs-you row (lens grammar,
+ * founder-approved 2026-10-04). ONE banner for the page, however many health
+ * rows are unread: each issue is folded per `(type, source)` — "Intelligence
+ * Hub degraded" raised nine times is ONE issue with `repeatCount: 9` — and the
+ * banner leads with the NEWEST issue. `null` when nothing is wrong.
+ */
+export interface StatusBannerIssue {
+  /** The registry type (`system.intelligence_degraded`, …). */
+  type: string;
+  /** The newest instance's evaluated title. */
+  title: string;
+  occurredAt: Date;
+  /** How many unread rows this issue folds. */
+  repeatCount: number;
+  /** Every folded row — what "dismiss" marks read. */
+  notificationIds: string[];
+  target: SignalTarget | null;
+}
+
+export interface StatusBanner {
+  /** The newest issue's title — what the banner says. */
+  title: string;
+  occurredAt: Date;
+  /** Distinct issues, newest first. */
+  issues: StatusBannerIssue[];
+}
+
+export function statusBanner(
+  notifications: readonly NotificationSignalInput[],
+  clusters: ProposalCluster[] = []
+): StatusBanner | null {
+  const rows = partitionNotifications([...notifications], clusters).status;
+  const issues = new Map<string, StatusBannerIssue>();
+  for (const r of rows) {
+    const key = `${r.type ?? ""}\u0000${r.sourceId ?? ""}`;
+    const seen = issues.get(key);
+    if (!seen) {
+      issues.set(key, {
+        type: r.type ?? "",
+        title: r.title,
+        occurredAt: r.createdAt,
+        repeatCount: 1,
+        notificationIds: [r.id],
+        target: targetFromNotification(r.sourceType, r.sourceId, r.actions),
+      });
+      continue;
+    }
+    seen.repeatCount += 1;
+    seen.notificationIds.push(r.id);
+    if (r.createdAt.getTime() > seen.occurredAt.getTime()) {
+      seen.title = r.title;
+      seen.occurredAt = r.createdAt;
+    }
+  }
+  if (issues.size === 0) return null;
+  const sorted = [...issues.values()].sort(
+    (a, b) => b.occurredAt.getTime() - a.occurredAt.getTime()
+  );
+  return {
+    title: sorted[0]!.title,
+    occurredAt: sorted[0]!.occurredAt,
+    issues: sorted,
+  };
+}
+
+/**
+ * Give a row whose OBJECT is a session (`session-review`, `live-session`) its
+ * provenance door: the session's PROJECT, named. A row already carrying a
+ * source, or whose project the viewer cannot see (absent from `projectNames`),
+ * is returned unchanged. Pure.
+ */
+export function withProjectSource(
+  signal: Signal,
+  projectNames: ReadonlyMap<string, string>
+): Signal {
+  if (signal.source || !signal.sessionProjectId) return signal;
+  const label = projectNames.get(signal.sessionProjectId)?.trim();
+  return label
+    ? {
+        ...signal,
+        source: { kind: "project", id: signal.sessionProjectId, label },
+      }
+    : signal;
 }
 
 /** Newest first; ties broken by id so the order is total and stable. */
@@ -1163,14 +1404,14 @@ export function orderNeedsYou(input: readonly Signal[]): Signal[] {
  * query; nothing has to run a second count, and the counting rule is not forked
  * to produce the second number.
  *
- * `decisions` / `notifications` / `blocked` / `review` / `drafts` are the PARTS
- * the badge is made of, and
- * `needsYou === decisions + notifications + blocked + review + drafts`
- * by construction (asserted in `signals.union.test.ts`). `suggestions` is
- * shipped alongside and is deliberately NOT a part: AI suggestions never count
- * toward needs-you. `review` — sessions
- * awaiting your review/close, THE needs-you rule's third population — is
- * counted under a project scope only and is 0 elsewhere. They exist so a surface
+ * `decisions` / `notifications` / `blocked` / `review` are the PARTS the badge
+ * is made of, and `needsYou === decisions + notifications + blocked + review`
+ * by construction (asserted in `signals.union.test.ts`). `suggestions` and
+ * `drafts` are shipped alongside and are deliberately NOT parts: both are
+ * PROPOSED (lens grammar, founder-approved 2026-10-04 — "AI suggestions +
+ * agent drafts = Proposed"), and ignoring them costs nothing. `review` —
+ * sessions awaiting your review/close, THE needs-you rule's third population —
+ * is counted at every scope (pod included). They exist so a surface
  * that states the number can also state what it is made of — Governance said
  * "16 decisions pending" beside a shell badge of 89 and nothing on screen could
  * reconcile the two. A client must READ each part; deriving one by subtracting
@@ -1203,6 +1444,8 @@ export function countNeedsYou(args: {
   owedTruncated: boolean;
   /** See {@link SessionLiveNeeds.openQuestionSessionIds}. Absent = unmeasured. */
   openQuestionSessionIds?: ReadonlySet<string>;
+  /** See {@link SessionLiveNeeds.owedSessionIds}. */
+  measuredOwedSessionIds?: ReadonlySet<string>;
   /**
    * Sessions finished and awaiting the person's review/close — THE needs-you
    * rule's third population (`needsYouReason === "review"`,
@@ -1224,14 +1467,17 @@ export function countNeedsYou(args: {
   decisions: number;
   /** Unread notifications that survive the dedupe. */
   notifications: number;
-  /** Sessions awaiting your review / close (project scope only; else 0). */
+  /** Sessions awaiting your review / close (every scope). */
   review: number;
   /**
    * Undecided agent drafts that ask you something — ONE per draft, however
-   * many asks it holds, exactly the `draft-asks` rows `list` returns (the
-   * same fold, `signalsFromDraftAsks`). Their asks are NOT in `blocked`.
+   * many asks it holds, exactly the `draft-asks` rows the `proposed` lens
+   * returns (the same fold, `signalsFromDraftAsks`). PROPOSED, so NOT a part
+   * of `needsYou`; their asks are not in `blocked` either.
    */
   drafts: number;
+  /** The draft-slot scan hit its cap, so `drafts` is a floor. */
+  draftsTruncated: boolean;
   /**
    * Unread AI suggestions: the sibling bucket. NOT part of `needsYou` and
    * not one of its parts. 0 under a container scope, like `notifications`.
@@ -1240,11 +1486,11 @@ export function countNeedsYou(args: {
   suggestions: number;
 } {
   const decisions = args.distinctClusters;
-  const draftSlots = args.draftAsks?.slots ?? [];
-  const buckets = partitionNotifications(args.notifications, args.clusters, {
-    owedSessionIds: owedSessionIdsOf([...args.owedSlots, ...draftSlots]),
-    openQuestionSessionIds: args.openQuestionSessionIds,
-  });
+  const buckets = partitionNotifications(
+    args.notifications,
+    args.clusters,
+    liveNeedsOf(args)
+  );
   // Folded, like the list: the same news raised N times is ONE row there, so
   // it is one here — the badge must equal the number of rows it stands for.
   const notifications = foldNotifications(buckets.needsYou).length;
@@ -1256,12 +1502,9 @@ export function countNeedsYou(args: {
     : 0;
   return {
     // THE item sum (`needsYouTotal`) over the rule's three populations, plus
-    // the notification half, which exists only at the pod/workspace floor,
-    // plus one per asking draft (founder decision 2026-09-27).
+    // the notification half. Drafts are PROPOSED (2026-10-04) and never count.
     needsYou:
-      needsYouTotal({ owed: blocked, decisions, review }) +
-      notifications +
-      drafts,
+      needsYouTotal({ owed: blocked, decisions, review }) + notifications,
     distinct: decisions,
     decisions,
     notifications,
@@ -1269,11 +1512,11 @@ export function countNeedsYou(args: {
       args.clustersTruncated ||
       args.notificationsTruncated ||
       args.owedTruncated ||
-      (args.reviewTruncated ?? false) ||
-      (args.draftAsksTruncated ?? false),
+      (args.reviewTruncated ?? false),
     blocked,
     review,
     drafts,
+    draftsTruncated: args.draftAsksTruncated ?? false,
     suggestions: Math.min(buckets.suggestions.length, SUGGESTIONS_CAP),
   };
 }

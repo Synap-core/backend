@@ -176,6 +176,7 @@ describe("needs-you union", () => {
       notifications: 0,
       review: 0,
       drafts: 0,
+      draftsTruncated: false,
       suggestions: 0,
     });
   });

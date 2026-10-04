@@ -384,14 +384,31 @@ function oneSessionOf(ids: ReadonlySet<string | null>): string | null {
  */
 export function collapseProposalsToClusters(
   rows: ClusterInputRow[],
-  opts?: { sampleCap?: number }
+  opts?: {
+    sampleCap?: number;
+    /**
+     * Cluster per (fingerprint, SESSION) instead of per fingerprint. The
+     * needs-you page passes it: everything a session owes the person sits in
+     * that session's block, so an identical-shape proposal filed in two
+     * sessions is two asks — one in each session's block — never one
+     * free-floating row beside two session cards that each leave it out
+     * (the cross-session duplicate, lens grammar 2026-10-04). Every part then
+     * carries its one `sessionId` (or `null` for the members filed under
+     * none). The governance queue does not pass it: there, one decision over
+     * every identical write is the point.
+     */
+    splitBySession?: boolean;
+  }
 ): ProposalCluster[] {
   const sampleCap = opts?.sampleCap ?? DEFAULT_SAMPLE_CAP;
   const byFingerprint = new Map<string, ClusterAccumulator>();
 
   for (const row of rows) {
     const fingerprint = computeProposalFingerprint(row);
-    let acc = byFingerprint.get(fingerprint);
+    const key = opts?.splitBySession
+      ? `${fingerprint}${SEP}${row.sessionId ?? ""}`
+      : fingerprint;
+    let acc = byFingerprint.get(key);
     if (!acc) {
       acc = {
         fingerprint,
@@ -409,7 +426,7 @@ export function collapseProposalsToClusters(
         reasonCounts: {},
         attentionFloorCount: 0,
       };
-      byFingerprint.set(fingerprint, acc);
+      byFingerprint.set(key, acc);
     }
 
     acc.count += 1;

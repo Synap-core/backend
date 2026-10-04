@@ -1,31 +1,55 @@
 /**
- * Signals Router — ONE door, two lenses.
+ * Signals Router — ONE door for every attention lens.
  *
  * Mounted as `trpc.signals.*` (NOT to be confused with the pre-existing
  * `trpc.signal.*` router, which is the inbound bridge/webhook door — a
  * different object entirely).
  *
- * WHY THIS EXISTS. "What needs me?" is currently answered by two independent
- * reads that count different things: the decisions tray reads pending proposals
- * and the bell reads unread notifications. Approving one proposal produces a
- * row in BOTH, so the two badges disagree by construction. This router is the
- * single door both surfaces switch to, so there is exactly ONE definition of
- * "needs you" and exactly ONE number behind both badges.
+ * WHY THIS EXISTS. "What needs me?" used to be answered by independent reads
+ * that counted different things: the decisions tray read pending proposals and
+ * the bell read unread notifications, so approving one proposal produced a row
+ * in BOTH and the two badges disagreed by construction. This router is the
+ * single door every attention surface reads, so there is exactly ONE definition
+ * of each attention class and exactly ONE number behind each badge.
  *
- * IT ADDS NO ACCESS LOGIC AND NO NEW QUERIES for the pending lens. It calls the
- * existing doors through their own routers (`proposals.groups`,
- * `notifCenter.list`, `focusSessions.owed`, `events.read`) via `createCaller` — the established
- * in-process reuse pattern here (`workspaces.ts`, `capture.ts`, `signal.ts`) —
- * so every predicate those doors enforce (the `userVisibleWhere` floor, the
- * editor+ gate on a named workspace, the notification user floor + the pod-wide
- * `IS NULL` fix from migration 0231) applies unchanged. A signal can never
- * expose a row the caller could not already read.
+ * ── THE LENS PAGE (lens grammar, founder-approved 2026-10-04) ───────────────
+ * A lens page is `lens(scope)`, scope ∈ pod | workspace | project | track |
+ * session, and every row on it is one of five classes:
  *
- * The one query this file owns is the DECIDED-proposal half of the history
- * lens: `proposals.list` orders by `createdAt` and has no `expired` status, so
- * it cannot answer "recently decided, newest decision first". That read uses
- * `userVisibleWhere` directly — the same access predicate `list` and `groups`
- * both start from.
+ *   Blocking  (`needs-you`) — owed slots, pending decisions (a proposal an
+ *             agent is paused on included), sessions awaiting your review,
+ *             asking notifications.
+ *   Proposed  (`proposed`)  — AI suggestions + agent drafts. Never needs-you.
+ *   Happening (`happening`) — sessions an agent is working on right now.
+ *   Produced  (`produced`)  — objects work produced (`outputs.landed`).
+ *   Happened  (`history`)   — the `activity.list` ledger + data events.
+ *
+ * System health is none of them: it is ONE deduplicated status banner.
+ * `list({ lens: "page" })` returns all five classes + the banner in ONE read;
+ * each single lens returns one class through the SAME reader, so a section and
+ * its own "Show all" page can never disagree.
+ *
+ * ── ONE DERIVATION AT EVERY SCOPE ───────────────────────────────────────────
+ * Every half narrows by NESTED predicates — workspace, then project, then
+ * track, then session — so pod ⊇ project ⊇ track ⊇ session holds by
+ * construction (a session in a track carries the track's project). Proposals,
+ * owed slots, review sessions, outputs and the ledger narrow in SQL; a
+ * notification narrows through the container its subject resolves to
+ * (`lens-containers.ts`) — derived, never a stored column.
+ *
+ * IT ADDS NO ACCESS LOGIC. It calls the existing doors (`proposals.groups`,
+ * `notifCenter.list`, `events.read`) via `createCaller` — the established
+ * in-process reuse pattern (`workspaces.ts`, `capture.ts`, `signal.ts`) — and
+ * the existing services behind the other doors (`listOwedSlots`,
+ * `listActivity`, `listLandedOutputs`, `loadSessionLiveness`), each with its
+ * own floor (`userVisibleWhere` / `proposalUserFloor`, the owner floor, the
+ * session read floor, `scopedDb`). A signal can never expose a row the caller
+ * could not already read.
+ *
+ * ── FAILED IS NOT EMPTY ─────────────────────────────────────────────────────
+ * A single lens THROWS when any half it reads fails (TanStack's `isError`). The
+ * page names every failed half per class in `unreadable` and keeps the halves
+ * that worked — a class with an unreadable half is a FLOOR, never "empty".
  *
  * The union/dedupe itself is pure and lives in
  * `../services/signals/needs-you-union.ts`, with its own unit tests.
@@ -33,126 +57,86 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { db, proposals, and, desc, inArray, drizzleSql } from "@synap/database";
-import { ProposalStatus } from "@synap/database";
-import { humanizeToken } from "@synap-core/types/vocabulary";
 import {
-  buildProposalScopeConditions,
-  resolveAutomationStepRunIds,
-} from "./proposals/scope-conditions.js";
+  db,
+  and,
+  desc,
+  eq,
+  inArray,
+  focusSessions,
+  projects,
+} from "@synap/database";
+import { createLogger } from "@synap-core/core";
+import {
+  humanizeToken,
+  normalizeObjectKind,
+} from "@synap-core/types/vocabulary";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import type { ActivityRow } from "@synap-core/types/activity";
+import type { LandedObjectRow } from "@synap-core/types/landed";
+import { isSessionWorkingNow } from "@synap-core/types/run-activity";
+import { LENS_CAPS } from "@synap-core/types/lens";
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalsRouter } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
-import { focusSessionsRouter } from "./focus-sessions.js";
 import { eventsRouter } from "./events.js";
-import { extractProposalName } from "../services/proposals/fingerprint.js";
 import {
   unionNeedsYou,
   unionSuggestions,
+  unionProposed,
   countNeedsYou,
+  statusBanner,
+  withProjectSource,
+  sessionGroupKey,
+  sessionSource,
   ageBucketOf,
+  type NotificationContainer,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
   type Signal,
+  type StatusBanner,
 } from "../services/signals/needs-you-union.js";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
-import { listProjectSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
+import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
+import {
+  inContainerLens,
+  resolveNotificationContainers,
+  sessionsWithOwedSlot,
+} from "../services/signals/lens-containers.js";
 import { needsYouRole } from "../notifications/registry.js";
 import { listDraftAskSlots } from "../services/focus-sessions/draft-asks.js";
+import { listOwedSlots } from "../services/focus-sessions/owed-outputs.js";
 import { resolveScope } from "../utils/scope-filter.js";
 import { readClusterSessions } from "../services/signals/cluster-sessions.js";
 import { rosterReadFor } from "../access/session-visibility.js";
+import { AccessContext, scopedDb } from "../access/index.js";
+import { listActivity } from "../services/activity/list-activity.js";
+import {
+  LANDED_OUTPUTS_MAX_LIMIT,
+  listLandedOutputs,
+} from "../services/outputs/landed-outputs.js";
+import { loadSessionLiveness } from "../services/runs/session-liveness.js";
+import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
+import { OPEN_SESSION_STATUSES } from "../services/focus-sessions/session-statuses.js";
 
-/**
- * The open-question read for the `"session-pointer"` rows in a notification
- * page (`session.needs_you`). The union decides those rows from the session's
- * live state (see `dedupeNotifications`). This is the half of that state the
- * owed door does not already return. Only pointer rows are looked up, so a page
- * with none costs no query.
- */
-function openQuestionSessionIdsFor(
-  rows: readonly NotificationSignalInput[]
-): Promise<Set<string>> {
-  return sessionsWithOpenQuestion(
-    rows.flatMap((r) =>
-      needsYouRole(r.type) === "session-pointer" && r.sourceId
-        ? [r.sourceId]
-        : []
-    )
-  );
-}
+const logger = createLogger({ module: "signals" });
 
 /** How many unread notifications are pulled before dedupe. A page, not a total —
  *  `truncated` reports when the cap was hit rather than hiding it. */
 const NOTIFICATION_SCAN_LIMIT = 100;
 
-/** How many owed slots the COUNT door pulls before it must call its number a
- *  floor. `focusSessions.owed` caps at 200; this is a page, not a total. */
+/** How many owed slots one read pulls before its number is a floor. */
 const OWED_SCAN_LIMIT = 100;
 
-/**
- * The DRAFT half — owed slots on undecided agent drafts, folded by the union
- * into one `draft-asks` row per draft (founder decision 2026-09-27). The SAME
- * lens and suppression rule as the owed half (`floorLens`, `isOwedNarrowable`),
- * and the SAME cap for `list` and `count`, so the two fold the same drafts
- * with the same ask counts. Read through the service rather than a tRPC door:
- * it is the owed door's own read (`listOwedSlots`) under the inverse triage
- * lens, owner-floored the same way.
- */
-async function readDraftAsks(
-  ctx: { userId?: string | null; workspaceId?: string | null },
-  input: { workspaceId?: string | null; projectId?: string }
-) {
-  const draft = await listDraftAskSlots({
-    userId: requireUserId(ctx.userId),
-    scope: resolveScope(ctx, {
-      workspaceId: floorLens(input.workspaceId),
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-    }),
-    limit: OWED_SCAN_LIMIT,
-  });
-  return {
-    draftAsks: {
-      slots: draft.slots as OwedSlotSignalInput[],
-      starterNames: draft.starterNames,
-    },
-    draftAsksTruncated: draft.slots.length >= OWED_SCAN_LIMIT,
-  };
-}
+/** Most clusters any read pulls (the `proposals.groups` maximum). */
+const CLUSTER_PAGE_LIMIT = 100;
 
-/**
- * The REVIEW half of THE needs-you rule, as ROWS, under a bare project scope
- * (`isReviewCountable`) — empty elsewhere. ONE read for `list` (which emits
- * each as a `session-review` signal) and `count` (which counts them), so the
- * project badge can never count a population its list does not show.
- */
-function readReviewSessions(
-  ctx: { userId?: string | null },
-  input: {
-    workspaceId?: string | null;
-    sessionId?: string;
-    projectId?: string;
-    automationId?: string;
-  }
-) {
-  return isReviewCountable(input)
-    ? listProjectSessionsAwaitingReview({
-        userId: requireUserId(ctx.userId),
-        projectId: input.projectId,
-      })
-    : Promise.resolve({ sessions: [], truncated: false });
-}
-
-const NO_DRAFT_ASKS = {
-  draftAsks: { slots: [], starterNames: new Map<string, string>() },
-  draftAsksTruncated: false,
-};
+/** Open sessions the Happening read measures, most recently moved first. */
+const HAPPENING_SCAN_LIMIT = 50;
 
 /**
  * The workspace lens, translated for EVERY half of the union that resolves its
- * scope through `resolveScope` — today `notifCenter.list` AND
- * `focusSessions.owed`.
+ * scope through `resolveScope` — today `notifCenter.list` and the owed reads.
  *
  * `proposals.groups` treats an ABSENT `workspaceId` as the full user floor,
  * while `resolveScope` falls back to the active-workspace HEADER when the field
@@ -178,362 +162,860 @@ const SignalScope = {
   workspaceId: z.string().nullish(),
   /**
    * NARROWING lenses — "what needs me / what happened INSIDE this container".
-   *
-   * All three are forwarded to the SAME predicate builder the proposals queue
-   * uses (`buildProposalScopeConditions` + `resolveAutomationStepRunIds`), so a
-   * scoped signal list can never admit a row the unscoped one would not. They
-   * compose with `workspaceId` and with each other.
+   * They compose with `workspaceId` and with each other; each only ANDs.
+   * `projectId` ⊇ `trackId` ⊇ `sessionId` (a track's sessions carry the
+   * track's project).
    */
   sessionId: z.string().uuid().optional(),
   projectId: z.string().uuid().optional(),
+  trackId: z.string().uuid().optional(),
+  /**
+   * An automation's runs. Only the proposal half can follow it (through
+   * `automation_step_runs`); every other half is suppressed under it rather
+   * than returned unnarrowed.
+   */
   automationId: z.string().uuid().optional(),
 };
 
-/**
- * Is this call scoped to a CONTAINER (a session, project or automation) rather
- * than to the pod/workspace floor?
- *
- * It decides whether the notification half of the needs-you union participates:
- * `notifications` carries no session/project/automation column and
- * `notifCenter.list` exposes no such filter, so under a container scope the
- * union would silently mix "this session's proposals" with "every unread
- * notification you have" — a number that grows when nothing in the container
- * changed. A scoped needs-you is therefore PROPOSALS-ONLY, and says so, rather
- * than faking a lens the notification store cannot serve.
- */
-function isContainerScoped(input: {
-  sessionId?: string;
-  projectId?: string;
-  automationId?: string;
-}): boolean {
-  return !!(input.sessionId || input.projectId || input.automationId);
+type SignalScopeInput = z.infer<z.ZodObject<typeof SignalScope>>;
+
+/** The object form of the caller context (never the lazy factory). */
+type SignalsCtx = Extract<
+  Parameters<typeof proposalsRouter.createCaller>[0],
+  { userId?: unknown }
+>;
+
+/** A half that can only follow an automation through the proposal ledger. */
+function followsScope(input: SignalScopeInput): boolean {
+  return !input.automationId;
 }
 
-/**
- * Can the OWED half honour this scope?
- *
- * `focusSessions.owed` narrows on the two lenses `sessionScopeConditions`
- * applies — workspace and project — and on nothing else. A `sessionId` or
- * `automationId` scope has no corresponding predicate on `focus_sessions`, and
- * post-filtering a `limit`-capped read is precisely what `owed-outputs.ts`
- * exists to refuse (owed slots accumulate on OLD sessions, so a page-then-filter
- * pass under-reports silently). So under those two scopes the owed half is
- * SUPPRESSED, for the same reason and by the same rule the notification half is:
- * a container-scoped tray never mixes a narrowed population with an unnarrowed
- * one. A `projectId` scope, by contrast, IS narrowable, so owed slots do
- * participate there even though notifications cannot.
- */
-function isOwedNarrowable(input: {
-  sessionId?: string;
-  automationId?: string;
-}): boolean {
-  return !input.sessionId && !input.automationId;
+// ── Settled sub-reads ───────────────────────────────────────────────────────
+
+/** A sub-read's name — what `unreadable` reports. */
+export type SignalSource =
+  | "proposals"
+  | "notifications"
+  | "owed"
+  | "drafts"
+  | "review"
+  | "liveness"
+  | "outputs"
+  | "activity"
+  | "events";
+
+interface Settled<T> {
+  value: T;
+  failed: { source: SignalSource; error: unknown } | null;
 }
 
+/** Run one sub-read; a throw becomes `failed` + the empty value, NAMED. */
+async function settle<T>(
+  source: SignalSource,
+  empty: T,
+  read: () => Promise<T>
+): Promise<Settled<T>> {
+  try {
+    return { value: await read(), failed: null };
+  } catch (error) {
+    logger.warn({ err: error, source }, "signals sub-read failed");
+    return { value: empty, failed: { source, error } };
+  }
+}
+
+function failuresOf(
+  ...settled: Array<Settled<unknown>>
+): Array<{ source: SignalSource; error: unknown }> {
+  return settled.flatMap((s) => (s.failed ? [s.failed] : []));
+}
+
+/** A single lens throws the first failure — a failed read is never empty. */
+function throwIfFailed(
+  failures: ReadonlyArray<{ source: SignalSource; error: unknown }>
+): void {
+  if (failures[0]) throw failures[0].error;
+}
+
+// ── Blocking + Proposed + status: one read ──────────────────────────────────
+
 /**
- * Does the REVIEW half of THE needs-you rule participate? Only under a bare
- * PROJECT scope. "Sessions awaiting your review/close" is read over the
- * project's session set (`projectPathConditions`); a session/automation scope
- * has no such set, and a workspace lens cannot be expressed on it faithfully
- * (a NULL-workspace session belongs to the project but to no workspace), so
- * under those scopes the half is SUPPRESSED rather than guessed — the same rule
- * the notification and owed halves follow. The pod-wide badge does not count
- * it yet (see the report of 2026-09-25): no project, no path population.
+ * Everything the needs-you union, the Proposed lane, the status banner and
+ * `count` read — ONE function, so the list, the badge and the page answer over
+ * the same population by construction.
  */
-function isReviewCountable(input: {
-  workspaceId?: string | null;
-  sessionId?: string;
-  projectId?: string;
-  automationId?: string;
-}): input is { projectId: string } {
-  return (
-    !!input.projectId &&
-    input.workspaceId === undefined &&
-    !input.sessionId &&
-    !input.automationId
+async function readAttention(
+  ctx: SignalsCtx,
+  input: SignalScopeInput,
+  clusterLimit: number
+) {
+  const userId = requireUserId(ctx.userId);
+  const reader = { userId, roster: rosterReadFor(ctx) };
+  const follows = followsScope(input);
+  const owedScope = {
+    userId,
+    scope: resolveScope(ctx, {
+      workspaceId: floorLens(input.workspaceId),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+    }),
+    limit: OWED_SCAN_LIMIT,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.trackId ? { trackId: input.trackId } : {}),
+  };
+
+  const [groups, notifs, owed, drafts, review] = await Promise.all([
+    settle(
+      "proposals",
+      { groups: [], distinct: 0, scanTruncated: false, scanned: 0 },
+      () =>
+        proposalsRouter.createCaller(ctx).groups({
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          projectId: input.projectId,
+          trackId: input.trackId,
+          automationId: input.automationId,
+          status: "pending",
+          limit: clusterLimit,
+          excludeDraftSessions: true,
+          splitBySession: true,
+        })
+    ),
+    // Read at the pod/workspace floor; a container lens narrows the rows
+    // through their resolved containers below.
+    follows
+      ? settle(
+          "notifications",
+          [] as NotificationSignalInput[],
+          async () =>
+            (
+              await notifCenterRouter.createCaller(ctx).list({
+                workspaceId: floorLens(input.workspaceId),
+                status: "unread",
+                limit: NOTIFICATION_SCAN_LIMIT,
+              })
+            ).notifications as NotificationSignalInput[]
+        )
+      : settle(
+          "notifications",
+          [] as NotificationSignalInput[],
+          async () => []
+        ),
+    // The owed read under the SAME lens and owner floor `focusSessions.owed`
+    // applies (`listOwedSlots`), plus the session/track lenses that door does
+    // not expose. Drafts never count (`excludeDrafts`).
+    follows
+      ? settle(
+          "owed",
+          [] as OwedSlotSignalInput[],
+          async () =>
+            (await listOwedSlots({
+              ...owedScope,
+              excludeDrafts: true,
+            })) as OwedSlotSignalInput[]
+        )
+      : settle("owed", [] as OwedSlotSignalInput[], async () => []),
+    // The DRAFT half — owed slots on undecided agent drafts, folded into one
+    // `draft-asks` row per draft. PROPOSED, never needs-you.
+    settle(
+      "drafts",
+      {
+        slots: [] as OwedSlotSignalInput[],
+        starterNames: new Map<string, string>(),
+      },
+      async () =>
+        follows
+          ? await listDraftAskSlots(owedScope)
+          : { slots: [], starterNames: new Map<string, string>() }
+    ),
+    // The REVIEW half — at every scope, the pod included.
+    settle("review", { sessions: [], truncated: false }, async () =>
+      follows
+        ? await listSessionsAwaitingReview({
+            userId,
+            workspaceId: input.workspaceId,
+            projectId: input.projectId,
+            trackId: input.trackId,
+            sessionId: input.sessionId,
+          })
+        : { sessions: [], truncated: false }
+    ),
+  ]);
+
+  const allNotifications = notifs.value;
+  // Containers, cluster session names — through the session READ floor.
+  const [containers, clusterSessions] = await Promise.all([
+    settle("notifications", new Map<string, NotificationContainer>(), () =>
+      resolveNotificationContainers(allNotifications, reader)
+    ),
+    settle("proposals", new Map(), () =>
+      readClusterSessions(groups.value.groups, reader)
+    ),
+  ]);
+  const lens = {
+    sessionId: input.sessionId,
+    trackId: input.trackId,
+    projectId: input.projectId,
+  };
+  const notifications = allNotifications.filter((r) =>
+    inContainerLens(containers.value.get(r.id), lens)
   );
+
+  // The live state of the `session.needs_you` pointer rows.
+  const pointerIds = notifications.flatMap((r) =>
+    needsYouRole(r.type) === "session-pointer" && r.sourceId ? [r.sourceId] : []
+  );
+  const [openQuestions, owedPointers] = await Promise.all([
+    settle("notifications", new Set<string>(), () =>
+      sessionsWithOpenQuestion(pointerIds)
+    ),
+    settle("notifications", new Set<string>(), () =>
+      sessionsWithOwedSlot(userId, pointerIds)
+    ),
+  ]);
+
+  const draftAsks = drafts.value as {
+    slots: OwedSlotSignalInput[];
+    starterNames: Map<string, string>;
+  };
+  return {
+    groups: groups.value,
+    clusterSessions: clusterSessions.value,
+    allNotifications,
+    notifications,
+    containers: containers.value,
+    notificationsTruncated: allNotifications.length >= NOTIFICATION_SCAN_LIMIT,
+    owed: owed.value,
+    owedTruncated: owed.value.length >= OWED_SCAN_LIMIT,
+    draftAsks,
+    draftAsksTruncated: draftAsks.slots.length >= OWED_SCAN_LIMIT,
+    review: review.value,
+    // An unmeasured open-question read stays `undefined` (= unmeasured).
+    openQuestionSessionIds: openQuestions.failed
+      ? undefined
+      : openQuestions.value,
+    measuredOwedSessionIds: owedPointers.value,
+    failures: {
+      // What each class read. Blocking: every half but drafts.
+      blocking: failuresOf(
+        groups,
+        notifs,
+        owed,
+        review,
+        containers,
+        clusterSessions,
+        openQuestions,
+        owedPointers
+      ),
+      proposed: failuresOf(drafts, notifs, containers),
+      status: failuresOf(notifs),
+    },
+  };
+}
+
+type Attention = Awaited<ReturnType<typeof readAttention>>;
+
+function blockingSignals(a: Attention): Signal[] {
+  return unionNeedsYou({
+    clusters: a.groups.groups,
+    clusterSessions: a.clusterSessions,
+    notifications: a.notifications,
+    notificationContainers: a.containers,
+    owedSlots: a.owed,
+    openQuestionSessionIds: a.openQuestionSessionIds,
+    measuredOwedSessionIds: a.measuredOwedSessionIds,
+    draftAsks: a.draftAsks,
+    reviewSessions: a.review.sessions,
+  });
+}
+
+function proposedSignals(a: Attention): Signal[] {
+  return unionProposed({
+    draftAsks: a.draftAsks,
+    notifications: a.notifications,
+    notificationContainers: a.containers,
+  });
+}
+
+function countOf(a: Attention) {
+  return countNeedsYou({
+    distinctClusters: a.groups.distinct,
+    clustersTruncated: a.groups.scanTruncated,
+    clusters: a.groups.groups,
+    notifications: a.notifications,
+    openQuestionSessionIds: a.openQuestionSessionIds,
+    measuredOwedSessionIds: a.measuredOwedSessionIds,
+    notificationsTruncated: a.notificationsTruncated,
+    owedSlots: a.owed,
+    owedTruncated: a.owedTruncated,
+    // Counted as ROWS — the very rows `list` emits as `session-review`.
+    reviewSessions: a.review.sessions.length,
+    reviewTruncated: a.review.truncated,
+    draftAsks: a.draftAsks,
+    draftAsksTruncated: a.draftAsksTruncated,
+  });
+}
+
+/**
+ * Project names for the provenance door of rows whose OBJECT is a session —
+ * through the project visibility predicate, so a project the viewer cannot
+ * see is never named (its row simply carries no source).
+ */
+async function readProjectNames(
+  ctx: SignalsCtx,
+  ids: ReadonlyArray<string | null | undefined>
+): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.filter((id): id is string => !!id))];
+  if (unique.length === 0) return new Map();
+  const rows = await db
+    .select({ id: projects.id, name: projects.name })
+    .from(projects)
+    .where(
+      and(
+        inArray(projects.id, unique),
+        scopedDb(AccessContext.from(ctx)).predicate(projects)
+      )
+    );
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+// ── Happening ───────────────────────────────────────────────────────────────
+
+/**
+ * Sessions an agent is working on RIGHT NOW — the one rule
+ * (`isSessionWorkingNow`, founder decision D1: an IS turn in flight, or any
+ * session activity in the last five minutes) over the one batched liveness
+ * read (`loadSessionLiveness`, the same facts `focusSessions.list` rows and
+ * the session page carry). Candidates are the scope's OPEN sessions under the
+ * same population rule as every other session read here (work + tracked runs,
+ * drafts excluded, session read floor), most recently moved first, capped —
+ * past the cap the class is a floor (`truncated`).
+ *
+ * SESSION-KIND-LENS-EXEMPT: returns `live-session` SIGNAL rows (id, title, goal, project + liveness), never a session row; the population is sessionListConditions (kind + triage lens applied in SQL).
+ */
+async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
+  if (!followsScope(input)) return { signals: [], truncated: false };
+  const userId = requireUserId(ctx.userId);
+  const reader = { userId, roster: rosterReadFor(ctx) };
+  const conditions = sessionListConditions({
+    userId,
+    scope: { workspaceLens: input.workspaceId, projectLens: input.projectId },
+    status: "all",
+    lens: "default",
+    kind: "work",
+    includeTrackedRuns: true,
+    roster: reader.roster,
+    ...(input.trackId ? { trackId: input.trackId } : {}),
+  });
+  if (input.sessionId) conditions.push(eq(focusSessions.id, input.sessionId));
+  const rows = await db
+    .select({
+      id: focusSessions.id,
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      channelId: focusSessions.channelId,
+      expectedOutputs: focusSessions.expectedOutputs,
+      startedAt: focusSessions.startedAt,
+      updatedAt: focusSessions.updatedAt,
+      projectId: focusSessions.projectId,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        ...conditions,
+        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
+      )
+    )
+    .orderBy(desc(focusSessions.updatedAt), desc(focusSessions.id))
+    .limit(HAPPENING_SCAN_LIMIT + 1);
+  const truncated = rows.length > HAPPENING_SCAN_LIMIT;
+  const candidates = rows.slice(0, HAPPENING_SCAN_LIMIT);
+  const live = await loadSessionLiveness(reader, candidates);
+  if (candidates.some((c) => live.get(c.id) === null)) {
+    // `null` = the liveness read FAILED — never a quiet session.
+    throw new Error("session liveness read failed");
+  }
+  const now = new Date();
+  const working = candidates.filter((c) =>
+    isSessionWorkingNow(live.get(c.id), now.getTime())
+  );
+  const names = await readProjectNames(
+    ctx,
+    working.map((c) => c.projectId)
+  );
+  const signals: Signal[] = working.map((c) => {
+    const facts = live.get(c.id)!;
+    const at = facts.lastAt ?? facts.since ?? c.updatedAt;
+    const occurredAt = at instanceof Date ? at : new Date(at);
+    const title = resolveSessionTitle(c);
+    return withProjectSource(
+      {
+        id: `live:${c.id}`,
+        kind: "live-session",
+        title,
+        count: 1,
+        occurredAt,
+        target: { kind: "session", id: c.id },
+        category: "ai",
+        ...(c.goal ? { sessionGoal: c.goal } : {}),
+        ...(title ? { sessionTitle: title } : {}),
+        ...(c.projectId ? { sessionProjectId: c.projectId } : {}),
+        live: facts,
+        groupKey: sessionGroupKey(c.id),
+        ageBucket: ageBucketOf(occurredAt, now),
+        repeatCount: 1,
+      },
+      names
+    );
+  });
+  signals.sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+  return { signals, truncated };
+}
+
+// ── Produced ────────────────────────────────────────────────────────────────
+
+function signalFromLanded(row: LandedObjectRow, now: Date): Signal {
+  const occurredAt = new Date(row.createdAt);
+  return {
+    id: `output:${row.id}`,
+    kind: "output",
+    title: row.title,
+    count: 1,
+    occurredAt,
+    target: { kind: row.ref.kind, id: row.ref.id },
+    category: "data",
+    sessionTitle: row.session.title,
+    ...sessionSource(row.session.id, row.session.title),
+    landed: row,
+    groupKey: null,
+    ageBucket: ageBucketOf(occurredAt, now),
+    repeatCount: 1,
+  };
+}
+
+/**
+ * What the scope's work PRODUCED — `outputs.landed` (`listLandedOutputs`, the
+ * same scan, provenance and floors as Data › Landed), narrowed by the lens.
+ * Pending creations are not produced (they are Blocking decisions). One page
+ * at the door's maximum: past it, or past the door's session scan, the class
+ * is a floor.
+ */
+async function readProduced(ctx: SignalsCtx, input: SignalScopeInput) {
+  if (!followsScope(input)) return { signals: [], truncated: false };
+  const page = await listLandedOutputs({
+    access: AccessContext.from(ctx),
+    workspaceLens: input.workspaceId,
+    projectId: input.projectId,
+    trackId: input.trackId,
+    sessionId: input.sessionId,
+    limit: LANDED_OUTPUTS_MAX_LIMIT,
+  });
+  // `null` = the project is not visible to the caller: not an empty answer.
+  if (!page) throw new Error("project not found");
+  const now = new Date();
+  return {
+    signals: page.items.map((r) => signalFromLanded(r, now)),
+    truncated: page.truncated || page.nextCursor !== null,
+  };
+}
+
+// ── Happened ────────────────────────────────────────────────────────────────
+
+function signalFromActivity(row: ActivityRow, now: Date): Signal {
+  const occurredAt = new Date(row.occurredAt);
+  const source = row.session
+    ? sessionSource(row.session.id, row.session.title)
+    : row.project?.name
+      ? {
+          source: {
+            kind: "project" as const,
+            id: row.project.id,
+            label: row.project.name,
+          },
+        }
+      : {};
+  return {
+    id: `activity:${row.id}`,
+    kind: "activity",
+    title: row.title,
+    count: 1,
+    occurredAt,
+    target: { kind: row.object.kind, id: row.object.id },
+    category:
+      row.source === "proposal" || row.source === "decision"
+        ? "governance"
+        : "ai",
+    ...source,
+    activity: row,
+    groupKey: null,
+    ageBucket: ageBucketOf(occurredAt, now),
+    repeatCount: 1,
+  };
+}
+
+/**
+ * What CHANGED — the `activity.list` ledger (governed acts, decisions, runs,
+ * session lifecycles; `listActivity`, its own floors) merged with the data
+ * `events` stream. Events carry a workspace and a session and nothing else,
+ * so they join only where they narrow faithfully (pod, workspace, session);
+ * under a project or track the ledger stands alone — a shorter honest feed,
+ * never an unnarrowed one under a scoped heading. An event about an object a
+ * ledger row on the page already names is the SAME change and is dropped
+ * (one item = one row). Neither source can follow an automation.
+ */
+async function readHappened(
+  ctx: SignalsCtx,
+  input: SignalScopeInput,
+  opts: { limit: number; until?: string; since?: string }
+) {
+  if (!followsScope(input)) {
+    return { signals: [], hasMore: false, failures: [] };
+  }
+  const eventsNarrow = !input.projectId && !input.trackId;
+  const [ledger, events] = await Promise.all([
+    settle(
+      "activity",
+      { items: [] as ActivityRow[], nextCursor: null as string | null },
+      () =>
+        listActivity({
+          access: AccessContext.from(ctx).withLens(input.workspaceId),
+          workspaceLens: input.workspaceId,
+          roster: rosterReadFor(ctx),
+          actor: { kind: "all" },
+          projectId: input.projectId,
+          trackId: input.trackId,
+          sessionId: input.sessionId,
+          since: opts.since,
+          until: opts.until,
+          limit: opts.limit,
+        })
+    ),
+    settle(
+      "events",
+      [] as Array<{
+        id: string;
+        timestamp: Date;
+        type: string;
+        subjectType: string | null;
+        subjectId: string | null;
+      }>,
+      async () =>
+        eventsNarrow
+          ? await eventsRouter.createCaller(ctx).read({
+              limit: opts.limit,
+              lean: true,
+              // `read` takes a plain optional string: null and undefined both
+              // mean "do not narrow" (events carry no pod-wide sibling).
+              ...(typeof input.workspaceId === "string"
+                ? { workspaceId: input.workspaceId }
+                : {}),
+              ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+              ...(opts.since ? { since: new Date(opts.since) } : {}),
+              ...(opts.until ? { until: new Date(opts.until) } : {}),
+            })
+          : []
+    ),
+  ]);
+  const now = new Date();
+  const named = new Set(
+    ledger.value.items.map(
+      (r) => `${normalizeObjectKind(r.object.kind)}:${r.object.id}`
+    )
+  );
+  const eventSignals: Signal[] = events.value
+    .filter(
+      (e) =>
+        !(
+          e.subjectType &&
+          e.subjectId &&
+          named.has(`${normalizeObjectKind(e.subjectType)}:${e.subjectId}`)
+        )
+    )
+    .map((e) => ({
+      id: `event:${e.id}`,
+      kind: "event" as const,
+      // `humanizeToken` is the vocabulary SSOT's fallback for any raw token —
+      // an event type is not in any label table, and must never leak verbatim.
+      title: humanizeToken(e.type),
+      count: 1,
+      occurredAt: e.timestamp,
+      target:
+        e.subjectType && e.subjectId
+          ? { kind: e.subjectType, id: e.subjectId }
+          : null,
+      category: "data",
+      groupKey: null,
+      ageBucket: ageBucketOf(e.timestamp, now),
+      repeatCount: 1,
+    }));
+  const merged = [
+    ...ledger.value.items.map((r) => signalFromActivity(r, now)),
+    ...eventSignals,
+  ].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+  return {
+    signals: merged.slice(0, opts.limit),
+    hasMore:
+      merged.length > opts.limit ||
+      ledger.value.nextCursor !== null ||
+      events.value.length >= opts.limit,
+    failures: failuresOf(ledger, events),
+  };
+}
+
+// ── The lens page ───────────────────────────────────────────────────────────
+
+/** One class of the lens page. */
+export interface LensClassWire {
+  /** The first `cap` rows, in the class's own order. */
+  rows: Signal[];
+  /** Rows in the class at this scope — the header's count door. */
+  total: number;
+  /** `total` is a FLOOR: a scan cap was hit or a half is unreadable. */
+  truncated: boolean;
+  /** More exists than `rows` shows ("Show all"). */
+  hasMore: boolean;
+  /** Halves that FAILED. Non-empty ⇒ partial, never "empty". */
+  unreadable: SignalSource[];
+}
+
+export interface LensPageWire {
+  blocking: LensClassWire;
+  proposed: LensClassWire;
+  happening: LensClassWire;
+  produced: LensClassWire;
+  happened: LensClassWire;
+  /** System health — ONE deduplicated banner, or null when nothing is wrong. */
+  status: StatusBanner | null;
+  /** The health read failed: `status: null` then means NOT MEASURED. */
+  statusUnreadable: boolean;
+}
+
+function lensClass(
+  all: Signal[],
+  cap: number,
+  opts: {
+    total?: number;
+    truncated: boolean;
+    hasMore?: boolean;
+    failures: ReadonlyArray<{ source: SignalSource }>;
+  }
+): LensClassWire {
+  const unreadable = [...new Set(opts.failures.map((f) => f.source))];
+  const total = opts.total ?? all.length;
+  const truncated = opts.truncated || unreadable.length > 0;
+  const rows = all.slice(0, cap);
+  return {
+    rows,
+    total,
+    truncated,
+    hasMore: total > rows.length || truncated || (opts.hasMore ?? false),
+    unreadable,
+  };
+}
+
+async function readLensPage(
+  ctx: SignalsCtx,
+  input: SignalScopeInput,
+  caps: Record<keyof typeof LENS_CAPS, number>,
+  since: string | undefined
+): Promise<LensPageWire> {
+  const [attention, happening, produced, happened] = await Promise.all([
+    readAttention(ctx, input, CLUSTER_PAGE_LIMIT),
+    settle("liveness", { signals: [] as Signal[], truncated: false }, () =>
+      readHappening(ctx, input)
+    ),
+    settle("outputs", { signals: [] as Signal[], truncated: false }, () =>
+      readProduced(ctx, input)
+    ),
+    readHappened(ctx, input, { limit: 100, since }),
+  ]);
+  const counts = countOf(attention);
+  const blocking = blockingSignals(attention);
+  const proposed = proposedSignals(attention);
+  const statusFailed = attention.failures.status.length > 0;
+  return {
+    blocking: lensClass(blocking, caps.blocking, {
+      // THE needs-you number (`countNeedsYou`), the same the badge shows.
+      total: counts.needsYou,
+      truncated: counts.truncated,
+      failures: attention.failures.blocking,
+    }),
+    proposed: lensClass(proposed, caps.proposed, {
+      truncated: counts.draftsTruncated || attention.notificationsTruncated,
+      failures: attention.failures.proposed,
+    }),
+    happening: lensClass(happening.value.signals, caps.happening, {
+      truncated: happening.value.truncated,
+      failures: failuresOf(happening),
+    }),
+    produced: lensClass(produced.value.signals, caps.produced, {
+      truncated: produced.value.truncated,
+      failures: failuresOf(produced),
+    }),
+    happened: lensClass(happened.signals, caps.happened, {
+      truncated: happened.hasMore,
+      hasMore: happened.hasMore,
+      failures: happened.failures,
+    }),
+    status: statusFailed ? null : statusBanner(attention.allNotifications),
+    statusUnreadable: statusFailed,
+  };
 }
 
 /**
  * The body of `signals.count` — one function so `count` and `countByProject`
  * answer over the SAME population by construction (a rail badge must equal the
- * number its project's own page shows).
+ * number its project's own page shows), and the SAME reader `list` uses.
  *
  * THE needs-you rule (`@synap-core/types/units` `needs-you.ts`): owed slots +
  * pending decisions + sessions awaiting your review, summed by `needsYouTotal`
- * inside `countNeedsYou`. Items, not sessions — the count differs from a
- * per-row `tallyNeedsYou` in two stated ways: decisions are distinct CLUSTERS
- * (a re-filed identical proposal is one decision), and a project scope also
- * counts proposals filed on the project with no session (a decision owed with
- * no session to hang it on).
+ * inside `countNeedsYou`, plus asking notifications. Items, not sessions.
+ * Decisions are distinct (shape, session) clusters.
  *
- * DRAFTS NEVER COUNT (founder decision): an undecided agent draft is a
- * suggestion, not work that needs you. All three halves apply the ONE triage
- * rule the path uses (`triage.ts`): the review half by `needsYouReason`, the
- * owed half by `excludeDrafts` (`notTriagePendingWhere`), and the decisions
- * half by `excludeDraftSessions` (a proposal filed under a draft session) —
- * each in SQL, so drafts cannot eat a scan cap. `list`'s needs-you lens
- * passes the same two flags, so the tray and the badge agree.
+ * DRAFTS NEVER COUNT (founder decision; since 2026-10-04 they are PROPOSED):
+ * the owed half by `excludeDrafts`, the decisions half by
+ * `excludeDraftSessions`, the review half by `needsYouReason` — each in SQL,
+ * so drafts cannot eat a scan cap. Asking drafts are reported beside the
+ * number (`drafts`), never inside it.
  */
-async function countSignals(
-  // The object form of the caller context (never the lazy factory) — the
-  // review half reads the caller's `userId` for its owner floor.
-  ctx: Extract<
-    Parameters<typeof proposalsRouter.createCaller>[0],
-    { userId?: unknown }
-  >,
-  input: z.infer<z.ZodObject<typeof SignalScope>>
-) {
-  const scoped = isContainerScoped(input);
-  const [groups, notifs, owed, review, drafts] = await Promise.all([
-    proposalsRouter.createCaller(ctx).groups({
-      workspaceId: input.workspaceId,
-      sessionId: input.sessionId,
-      projectId: input.projectId,
-      automationId: input.automationId,
-      status: "pending",
-      excludeDraftSessions: true,
-    }),
-    scoped
-      ? Promise.resolve({ notifications: [] })
-      : notifCenterRouter.createCaller(ctx).list({
-          workspaceId: floorLens(input.workspaceId),
-          status: "unread",
-          limit: NOTIFICATION_SCAN_LIMIT,
-        }),
-    // Same door, same lens, same suppression rule as `list` — the count and
-    // the list must answer over ONE population or the badge disagrees with
-    // the rows under it.
-    isOwedNarrowable(input)
-      ? focusSessionsRouter.createCaller(ctx).owed({
-          workspaceId: floorLens(input.workspaceId),
-          ...(input.projectId ? { projectId: input.projectId } : {}),
-          limit: OWED_SCAN_LIMIT,
-          excludeDrafts: true,
-        })
-      : Promise.resolve([]),
-    readReviewSessions(ctx, input),
-    isOwedNarrowable(input)
-      ? readDraftAsks(ctx, input)
-      : Promise.resolve(NO_DRAFT_ASKS),
+async function countSignals(ctx: SignalsCtx, input: SignalScopeInput) {
+  const attention = await readAttention(ctx, input, CLUSTER_PAGE_LIMIT);
+  throwIfFailed([
+    ...attention.failures.blocking,
+    ...attention.failures.proposed,
   ]);
-
-  const notificationRows = notifs.notifications as NotificationSignalInput[];
-  return countNeedsYou({
-    distinctClusters: groups.distinct,
-    clustersTruncated: groups.scanTruncated,
-    clusters: groups.groups,
-    notifications: notificationRows,
-    openQuestionSessionIds: await openQuestionSessionIdsFor(notificationRows),
-    notificationsTruncated:
-      notifs.notifications.length >= NOTIFICATION_SCAN_LIMIT,
-    owedSlots: owed as OwedSlotSignalInput[],
-    owedTruncated: owed.length >= OWED_SCAN_LIMIT,
-    // Counted as ROWS — the very rows `list` emits as `session-review`.
-    reviewSessions: review.sessions.length,
-    reviewTruncated: review.truncated,
-    draftAsks: drafts.draftAsks,
-    draftAsksTruncated: drafts.draftAsksTruncated,
-  });
+  return countOf(attention);
 }
+
+const LensCaps = z
+  .object({
+    blocking: z.number().int().min(1).max(100),
+    proposed: z.number().int().min(1).max(100),
+    happening: z.number().int().min(1).max(100),
+    produced: z.number().int().min(1).max(100),
+    happened: z.number().int().min(1).max(100),
+  })
+  .partial();
 
 export const signalsRouter = router({
   /**
-   * The one read behind the decisions tray (`needs-you`) and the activity feed
-   * (`history`). Both lenses return the SAME `Signal` shape.
+   * The one attention read. A single lens returns `{ signals }` for one class:
+   *
+   *   `needs-you`   — BLOCKING (the tray, "Needs you").
+   *   `proposed`    — PROPOSED: agent drafts + AI suggestions.
+   *   `suggestions` — AI suggestions alone (the capped "possibilities" lane).
+   *   `happening`   — HAPPENING: sessions an agent is working on now.
+   *   `produced`    — PRODUCED: what the scope's work made.
+   *   `history`     — HAPPENED: the activity ledger + data events (`cursor`
+   *                   pages older; `since` bounds it).
+   *
+   * `page` returns `{ signals: [], page }` — every class, capped (`caps`), with
+   * its total, `hasMore`, truncation and failed halves, plus the status
+   * banner. Every row of every class is the SAME `Signal` shape.
    */
   list: protectedProcedure
     .input(
       z.object({
         ...SignalScope,
-        /**
-         * `suggestions` = unread AI suggestions (registry role
-         * `"suggestion"`), the sibling of `needs-you` from the SAME
-         * partition (`partitionNotifications`). Never part of needs-you.
-         */
         lens: z
-          .enum(["needs-you", "suggestions", "history"])
+          .enum([
+            "needs-you",
+            "proposed",
+            "suggestions",
+            "happening",
+            "produced",
+            "history",
+            "page",
+          ])
           .default("needs-you"),
         limit: z.number().min(1).max(100).default(50),
         /** History lens only: return signals strictly older than this instant. */
         cursor: z.string().datetime().optional(),
+        /** History lens and the page's Happened: only at or after this instant. */
+        since: z.string().datetime({ offset: true }).optional(),
+        /** Page lens only: per-class caps (defaults: `LENS_CAPS`, `@synap-core/types/lens`). */
+        caps: LensCaps.optional(),
       })
     )
-    .query(async ({ ctx, input }): Promise<{ signals: Signal[] }> => {
-      if (input.lens === "suggestions") {
-        // Notifications carry no container column, so a container-scoped
-        // Suggestions list is empty, by the same rule as the needs-you half.
-        if (isContainerScoped(input)) return { signals: [] };
-        const notifs = await notifCenterRouter.createCaller(ctx).list({
-          workspaceId: floorLens(input.workspaceId),
-          status: "unread",
-          limit: NOTIFICATION_SCAN_LIMIT,
-        });
+    .query(
+      async ({
+        ctx,
+        input,
+      }): Promise<{ signals: Signal[]; page?: LensPageWire }> => {
+        if (input.lens === "page") {
+          return {
+            signals: [],
+            page: await readLensPage(
+              ctx,
+              input,
+              { ...LENS_CAPS, ...input.caps },
+              input.since
+            ),
+          };
+        }
+        if (input.lens === "happening") {
+          return {
+            signals: (await readHappening(ctx, input)).signals.slice(
+              0,
+              input.limit
+            ),
+          };
+        }
+        if (input.lens === "produced") {
+          return {
+            signals: (await readProduced(ctx, input)).signals.slice(
+              0,
+              input.limit
+            ),
+          };
+        }
+        if (input.lens === "history") {
+          const happened = await readHappened(ctx, input, {
+            limit: input.limit,
+            until: input.cursor,
+            since: input.since,
+          });
+          throwIfFailed(happened.failures);
+          return { signals: happened.signals };
+        }
+        // needs-you · proposed · suggestions — one reader.
+        const attention = await readAttention(
+          ctx,
+          input,
+          input.lens === "needs-you" ? input.limit : CLUSTER_PAGE_LIMIT
+        );
+        if (input.lens === "needs-you") {
+          throwIfFailed(attention.failures.blocking);
+          // A plain cut of the ONE order (`orderNeedsYou`).
+          return { signals: blockingSignals(attention).slice(0, input.limit) };
+        }
+        throwIfFailed(attention.failures.proposed);
         return {
-          signals: unionSuggestions(
-            notifs.notifications as NotificationSignalInput[]
+          signals: (input.lens === "proposed"
+            ? proposedSignals(attention)
+            : unionSuggestions(
+                attention.notifications,
+                new Date(),
+                attention.containers
+              )
           ).slice(0, input.limit),
         };
       }
-      if (input.lens === "needs-you") {
-        // Container-scoped → proposals only. See `isContainerScoped`.
-        const scoped = isContainerScoped(input);
-        const [groups, notifs, owed, drafts, review] = await Promise.all([
-          proposalsRouter.createCaller(ctx).groups({
-            workspaceId: input.workspaceId,
-            sessionId: input.sessionId,
-            projectId: input.projectId,
-            automationId: input.automationId,
-            status: "pending",
-            limit: input.limit,
-            excludeDraftSessions: true,
-          }),
-          scoped
-            ? Promise.resolve({ notifications: [] })
-            : notifCenterRouter.createCaller(ctx).list({
-                workspaceId: floorLens(input.workspaceId),
-                status: "unread",
-                limit: NOTIFICATION_SCAN_LIMIT,
-              }),
-          // The SAME door `focusSessions.owed` exposes, through `createCaller`
-          // like the other two halves — so the owner floor and the lens
-          // application (`sessionScopeConditions`) are the ones Wave A already
-          // shipped, not a second derivation living in this file. Read at the
-          // COUNT's cap, not the page's: the union orders newest-first across
-          // kinds and then cuts, so both doors must order the same population
-          // or the badge counts rows the list could never reach.
-          isOwedNarrowable(input)
-            ? focusSessionsRouter.createCaller(ctx).owed({
-                workspaceId: floorLens(input.workspaceId),
-                ...(input.projectId ? { projectId: input.projectId } : {}),
-                limit: OWED_SCAN_LIMIT,
-                excludeDrafts: true,
-              })
-            : Promise.resolve([]),
-          // Same half, same rule as `count` — see `readDraftAsks`.
-          isOwedNarrowable(input)
-            ? readDraftAsks(ctx, input)
-            : Promise.resolve(NO_DRAFT_ASKS),
-          // The REVIEW half, as rows — the same read `count` counts, so the
-          // project badge equals the project list (W2 review).
-          readReviewSessions(ctx, input),
-        ]);
-
-        const notificationRows =
-          notifs.notifications as NotificationSignalInput[];
-        // The clusters' sessions, named through the session READ floor with
-        // this door's roster reading — one batched read. A session the viewer
-        // cannot read is absent, so its cluster stays a plain row.
-        const clusterSessions = await readClusterSessions(groups.groups, {
-          userId: requireUserId(ctx.userId),
-          roster: rosterReadFor(ctx),
-        });
-        const signals = unionNeedsYou({
-          clusters: groups.groups,
-          clusterSessions,
-          notifications: notificationRows,
-          owedSlots: owed as OwedSlotSignalInput[],
-          // Same read as `count`, so the list and the badge fold the same rows.
-          openQuestionSessionIds:
-            await openQuestionSessionIdsFor(notificationRows),
-          draftAsks: drafts.draftAsks,
-          reviewSessions: review.sessions,
-        });
-        // A plain cut of the ONE order. The per-source reserve this used to
-        // apply (`pageNeedsYou`) existed because owed slots sorted FIRST and
-        // could evict every decision; newest-first across kinds removed that
-        // starvation, and a reserve would now re-order the page.
-        return { signals: signals.slice(0, input.limit) };
-      }
-
-      // ── history: past events merged with decided proposals ──────────────
-      const before = input.cursor ? new Date(input.cursor) : undefined;
-      // `projectId` / `automationId` have no `events` column to narrow on, so
-      // under those scopes the events half is SUPPRESSED rather than returned
-      // unnarrowed beside a narrowed proposals half — an unfiltered pod-wide
-      // feed labelled "this project" is worse than a shorter honest one. A
-      // session scope does narrow, through `events.session_id`.
-      const eventsNarrowable = !input.projectId && !input.automationId;
-      const [events, decided] = await Promise.all([
-        eventsNarrowable
-          ? eventsRouter.createCaller(ctx).read({
-              limit: input.limit,
-              lean: true,
-              // Same lens the proposals half uses. `read` takes a plain optional
-              // string, not the three-state: a `null` workspaceId means "pod-wide
-              // proposals", and events carry no pod-wide sibling — so null and
-              // undefined both mean "do not narrow" here, and the two halves agree
-              // wherever a concrete workspace is named.
-              ...(typeof input.workspaceId === "string"
-                ? { workspaceId: input.workspaceId }
-                : {}),
-              // The session lens reaches events through `events.session_id`
-              // (migration 0241) — the column's first reader outside the graph
-              // service.
-              ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-              ...(before ? { until: before } : {}),
-            })
-          : Promise.resolve([]),
-        listDecidedProposals(ctx, input, input.limit, before),
-      ]);
-
-      const now = new Date();
-      const eventSignals: Signal[] = events.map((e) => ({
-        id: `event:${e.id}`,
-        kind: "event" as const,
-        // `humanizeToken` is the vocabulary SSOT's fallback for any raw token —
-        // an event type is not in any label table, and must never leak verbatim.
-        title: humanizeToken(e.type),
-        count: 1,
-        occurredAt: e.timestamp,
-        target:
-          e.subjectType && e.subjectId
-            ? { kind: e.subjectType, id: e.subjectId }
-            : null,
-        category: "data",
-        groupKey: null,
-        ageBucket: ageBucketOf(e.timestamp, now),
-        repeatCount: 1,
-      }));
-
-      const merged = [...eventSignals, ...decided].sort(
-        (a, b) => b.occurredAt.getTime() - a.occurredAt.getTime()
-      );
-      return { signals: merged.slice(0, input.limit) };
-    }),
+    ),
 
   /**
-   * ONE number for both badges: distinct pending clusters + unread
-   * non-proposal notifications + owed slots — plus `blocked`, the owed subset,
-   * so a client can render "Needs you (needsYou)" with a BLOCKED-ONLY badge
-   * from this one query. `truncated` is inherited from
-   * `proposals.groups`.scanTruncated, the notification page cap and the owed
-   * page cap — when true, the number is a FLOOR, and a caller must render it as
+   * ONE number for both badges: distinct pending clusters + unread asking
+   * notifications + owed slots + sessions awaiting your review — plus
+   * `blocked`, the owed subset. `truncated` is inherited from every capped
+   * half; when true, the number is a FLOOR, and a caller must render it as
    * such (e.g. "99+") rather than as an exact total.
    *
-   * Takes the SAME scope as `list`, and applies the SAME proposals-only rule
-   * under a container scope — a badge that counted a container's proposals plus
-   * every unread pod notification would be a number no surface could explain.
-   * Every existing caller passes at most `workspaceId`. The pod-wide count is
-   * NO LONGER byte-identical to before: it now includes owed slots, which is the
-   * point — a deliverable blocked on you needed you and the badge did not say
-   * so.
+   * Takes the SAME scope as `list` and reads through the SAME function, so the
+   * badge always equals the Blocking rows under it at that scope.
    *
-   * The number ships WITH its parts: `decisions` (distinct pending clusters),
-   * `notifications` (deduped unread), `blocked` (owed slots) and `review`
-   * (sessions awaiting your review/close — project scope only, see
-   * `isReviewCountable`) and `drafts` (undecided agent drafts that ask you
-   * something, one per draft — the `draft-asks` rows of `list`), with
-   * `needsYou === decisions + notifications + blocked + review + drafts`. A client reads
-   * the part it needs; it never derives one by subtracting the others.
-   *
-   * `suggestions` (unread AI suggestions, the `suggestions` lens of `list`)
-   * ships in the same result but is NOT a part: it is never added into
-   * `needsYou`. It is 0 under a container scope, like `notifications`.
-   *
-   * Under a project scope `review` IS in `list`: one `session-review` row per
-   * session, from the same read (`readReviewSessions`), so the project badge
-   * equals the project list (W2 review, "one number, one predicate").
+   * The number ships WITH its parts: `decisions`, `notifications`, `blocked`
+   * and `review`, with `needsYou === decisions + notifications + blocked +
+   * review`. A client reads the part it needs; it never derives one by
+   * subtracting the others. `suggestions` and `drafts` (PROPOSED) ship in the
+   * same result and are NOT parts: they are never added into `needsYou`.
    */
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))
@@ -568,105 +1050,3 @@ export const signalsRouter = router({
       });
     }),
 });
-
-/**
- * Recently DECIDED proposals (approved / auto-approved / rejected / expired),
- * newest decision first. Access starts from the identical predicate
- * `proposals.list` and `proposals.groups` build: the `workspaceId` three-state,
- * defaulting to `proposalUserFloor` — LENS ∪ OWNERSHIP, not the bare
- * `userVisibleWhere` this comment used to name. History and the live queue must
- * answer over the SAME population, or a row visible in the queue vanishes from
- * the record of what happened to it.
- *
- * Ordered by the DECISION time, not `createdAt`: history answers "what was
- * decided, and when" — a month-old proposal decided this morning belongs at the
- * top.
- *
- * The decision time is `coalesce(reviewedAt, updatedAt)`, NOT `reviewedAt`
- * alone. Expiry is a decision that no human made: `expireLapsedProposals`
- * writes `status` + `updatedAt` and deliberately leaves `reviewedAt` NULL,
- * because stamping a reviewer on a lapse would claim a review that never
- * happened. Filtering (and paging) on `reviewedAt` therefore dropped EVERY
- * expired row out of history — the sweeper's whole output was invisible.
- * `updatedAt` is NOT NULL on every row, so the coalesce is total and no decided
- * row can fall out.
- */
-async function listDecidedProposals(
-  ctx: { userId?: string | null },
-  scope: {
-    workspaceId?: string | null;
-    sessionId?: string;
-    projectId?: string;
-    automationId?: string;
-  },
-  limit: number,
-  before: Date | undefined
-): Promise<Signal[]> {
-  const userId = requireUserId(ctx.userId);
-  // The SAME builder `proposals.list` and `proposals.groups` scope on, rather
-  // than a third hand-rolled copy of the workspace three-state. History and the
-  // queue must agree about what a user can see; three copies of a visibility
-  // predicate is two chances to tighten one and forget the others. The
-  // container lenses (session/project/automation) ride the same builder for the
-  // same reason.
-  const conditions = buildProposalScopeConditions(scope, userId);
-  if (scope.automationId) {
-    // `proposals` has no `automationId` column — the automation is reached
-    // through `automation_step_runs`. An empty id list compiles to `false`, so
-    // an automation with no runs yields an honest empty history.
-    conditions.push(
-      inArray(
-        proposals.stepRunId,
-        await resolveAutomationStepRunIds(scope.automationId)
-      )
-    );
-  }
-  conditions.push(
-    inArray(proposals.status, [
-      ProposalStatus.APPROVED,
-      ProposalStatus.AUTO_APPROVED,
-      ProposalStatus.REJECTED,
-      ProposalStatus.EXPIRED,
-    ])
-  );
-  // The one expression the filter, the cursor, the projection and the ORDER BY
-  // all use — three copies of a coalesce is how two of them end up disagreeing.
-  const decidedAt = drizzleSql<Date>`coalesce(${proposals.reviewedAt}, ${proposals.updatedAt})`;
-  if (before) conditions.push(drizzleSql`${decidedAt} < ${before}`);
-
-  const rows = await db
-    .select({
-      id: proposals.id,
-      proposalType: proposals.proposalType,
-      targetType: proposals.targetType,
-      status: proposals.status,
-      data: proposals.data,
-      decidedAt,
-    })
-    .from(proposals)
-    .where(and(...conditions))
-    .orderBy(desc(decidedAt))
-    .limit(limit);
-
-  return rows.map((r) => ({
-    id: `proposal:${r.id}`,
-    kind: "decided-proposal" as const,
-    // PAST mood: history says what already happened. Imperative ("Create
-    // company Acme") on a decided row would describe an action still pending.
-    title: buildObjectActionTitle({
-      action: r.proposalType,
-      objectKind: r.targetType,
-      objectName: extractProposalName(r.data) ?? null,
-      mood: "past",
-    }),
-    count: 1,
-    occurredAt: r.decidedAt as Date,
-    target: { kind: "proposal", id: r.id },
-    category: "governance",
-    groupKey: null,
-    // `new Date(...)`: a raw-SQL aggregate may arrive as a string from the
-    // driver; bucketing must not depend on which.
-    ageBucket: ageBucketOf(new Date(r.decidedAt as Date), new Date()),
-    repeatCount: 1,
-  }));
-}

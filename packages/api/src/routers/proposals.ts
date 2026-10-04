@@ -713,6 +713,8 @@ export const proposalsRouter = router({
         threadId: z.string().uuid().optional(),
         sessionId: z.string().uuid().optional(),
         projectId: z.string().uuid().optional(),
+        /** Only proposals filed in this track's sessions — see scope-conditions.ts. */
+        trackId: z.string().uuid().optional(),
         /** Same automationId → stepRunId walk as `list` — see scope-conditions.ts. */
         automationId: z.string().uuid().optional(),
         /** Which queue to cluster: the actionable pending queue (default), or
@@ -729,6 +731,12 @@ export const proposalsRouter = router({
          * In SQL, so drafts cannot eat the scan.
          */
         excludeDraftSessions: z.boolean().optional(),
+        /**
+         * One cluster per (shape, SESSION) — see `collapseProposalsToClusters`.
+         * The needs-you union passes it so every session's decisions sit in
+         * that session's block; `distinct` then counts the parts.
+         */
+        splitBySession: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -865,7 +873,9 @@ export const proposalsRouter = router({
         governanceReason: r.governanceReason ?? null,
       }));
 
-      let clusters = collapseProposalsToClusters(clusterRows);
+      let clusters = collapseProposalsToClusters(clusterRows, {
+        splitBySession: input.splitBySession === true,
+      });
 
       // Rejection-patterns lens only: drop clusters the pod has actively MUTED
       // ("Mark expected"). The mute is keyed on the SAME canonical fingerprint

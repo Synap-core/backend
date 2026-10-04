@@ -139,6 +139,11 @@ export interface NotificationDef {
    *   an insight, a briefing). It NEVER counts toward needs-you. It goes to
    *   its own sibling bucket instead: `signals.list({ lens: "suggestions" })`
    *   and `signals.count().suggestions`, shown as "Suggestions".
+   * - `"status"` — SYSTEM HEALTH (an AI service degraded, storage running
+   *   out). Never a needs-you row and never a suggestion (founder, lens grammar
+   *   2026-10-04): every unread row of these types folds into ONE deduplicated
+   *   status banner (`signals.list` lens page, `status`). Health is a condition
+   *   of the pod, not an ask of the person.
    *
    * Data on the row, never a list of type strings in the union. A new
    * informational type is left out of needs-you because its own row says so.
@@ -147,7 +152,7 @@ export interface NotificationDef {
 }
 
 export type NotificationNeedsYouRole =
-  "item" | "informational" | "session-pointer" | "suggestion";
+  "item" | "informational" | "session-pointer" | "suggestion" | "status";
 
 /**
  * The suppression window both session-attention types use: one notification per
@@ -761,6 +766,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "Consider archiving or cleaning up unused data.",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
+    needsYou: "status",
   },
   {
     // An intelligence service reporting degraded/unhealthy. NOT
@@ -776,6 +782,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{errorMessage}}",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
+    needsYou: "status",
   },
   {
     type: "system.issuer_pending_approval",

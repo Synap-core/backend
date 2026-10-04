@@ -225,6 +225,15 @@ export interface ListOwedSlotsParams {
    * with `excludeDrafts`; the two would select nothing.
    */
   onlyDrafts?: boolean;
+  /**
+   * CONTAINER lenses below the project: only this session's slots, or only
+   * slots of sessions in this track. In SQL, like the workspace/project lens —
+   * owed slots accumulate on OLD sessions, so a page-then-filter pass would
+   * under-report silently. A track's sessions carry the track's project
+   * (`focus_sessions.track_id` doc), so session ⊂ track ⊂ project nests.
+   */
+  sessionId?: string;
+  trackId?: string;
 }
 
 type OwedRow = {
@@ -311,6 +320,9 @@ export async function listOwedSlots(
     owedSlotPrefilter(),
     owedSlotWhere(),
   ];
+  if (params.sessionId) conditions.push(eq(focusSessions.id, params.sessionId));
+  if (params.trackId)
+    conditions.push(eq(focusSessions.trackId, params.trackId));
   if (params.excludeDrafts) conditions.push(notTriagePendingWhere());
   if (params.onlyDrafts) conditions.push(triagePendingWhere());
 

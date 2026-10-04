@@ -90,11 +90,16 @@ describe("cluster sessions are named through the session read floor", () => {
   it("reads only the sessions the viewer may read", async () => {
     const map = await readClusterSessions(clusters, { userId: USER });
     expect([...map.keys()]).toEqual([MINE]);
-    expect(map.get(MINE)).toEqual({ title: "Tracks-first", projectId: PROJECT });
+    expect(map.get(MINE)).toEqual({
+      title: "Tracks-first",
+      projectId: PROJECT,
+    });
   });
 
   it("the readable cluster joins its session; the unreadable one stays a plain row", async () => {
-    const clusterSessions = await readClusterSessions(clusters, { userId: USER });
+    const clusterSessions = await readClusterSessions(clusters, {
+      userId: USER,
+    });
     const signals = unionNeedsYou({
       clusters,
       clusterSessions,
@@ -102,8 +107,8 @@ describe("cluster sessions are named through the session read floor", () => {
       owedSlots: [],
       now: new Date("2026-09-28T12:00:00.000Z"),
     });
-    const mine = signals.find((s) => s.id === "cluster:mine")!;
-    const theirs = signals.find((s) => s.id === "cluster:theirs")!;
+    const mine = signals.find((s) => s.id === "cluster:mine@p-mine")!;
+    const theirs = signals.find((s) => s.id === "cluster:theirs@p-theirs")!;
     expect(mine.groupKey).toBe(`session:${MINE}`);
     expect(mine.sessionTitle).toBe("Tracks-first");
     expect(theirs.groupKey).toBe("proposal-cluster:theirs");

@@ -43,27 +43,35 @@ describe("history lens includes expired proposals", () => {
     }
   });
 
-  it("the history lens keys on coalesce(reviewedAt, updatedAt), not reviewedAt", () => {
+  // Since the lens grammar (2026-10-04) the history lens (Happened) reads the
+  // `activity.list` LEDGER instead of a decided-proposals query of its own.
+  // The ledger's proposal source admits EVERY status — expired included — at
+  // its filing time, and narrows statuses only under an explicit outcome
+  // filter, which the lens never passes. These pin that chain.
+  it("the history lens reads the activity ledger, with no outcome filter", () => {
     const src = read("../routers/signals.ts");
-    const fn = src.slice(src.indexOf("async function listDecidedProposals"));
+    const fn = src.slice(src.indexOf("async function readHappened"));
     const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
-
-    expect(body, "the decided-at expression must coalesce").toMatch(
-      /coalesce\(\$\{proposals\.reviewedAt\},\s*\$\{proposals\.updatedAt\}\)/
+    expect(body.length, "readHappened must exist").toBeGreaterThan(100);
+    expect(body).toMatch(/listActivity\(\{/);
+    expect(body, "an outcome filter would narrow the statuses").not.toMatch(
+      /outcome:/
     );
+    // No second, hand-rolled decided-proposal query may come back beside it.
+    expect(src).not.toMatch(/reviewedAt/);
+  });
+
+  it("the ledger's proposal source admits every status (expired included) when no outcome is asked", () => {
+    const src = read("../services/activity/list-activity.ts");
+    const fn = src.slice(src.indexOf("async function readProposalActs"));
+    const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
+    expect(body).toMatch(/statusesFor\(\s*proposals\.status\.enumValues/);
+    expect(body).toMatch(/statuses \? inArray\(proposals\.status/);
     expect(
       body,
       "excluding rows with a NULL reviewedAt drops every EXPIRED row — the bug"
     ).not.toMatch(/isNotNull\(\s*proposals\.reviewedAt\s*\)/);
-    expect(
-      body,
-      "the cursor must page on the same expression it orders by"
-    ).not.toMatch(/lt\(\s*proposals\.reviewedAt/);
-    expect(
-      body,
-      "ORDER BY must use the coalesced expression, not the raw column"
-    ).not.toMatch(/desc\(\s*proposals\.reviewedAt\s*\)/);
-    // And EXPIRED must still be one of the statuses the lens asks for.
-    expect(body).toMatch(/ProposalStatus\.EXPIRED/);
+    const statusesFor = src.slice(src.indexOf("function statusesFor"));
+    expect(statusesFor.slice(0, 300)).toMatch(/if \(!outcome\) return null;/);
   });
 });

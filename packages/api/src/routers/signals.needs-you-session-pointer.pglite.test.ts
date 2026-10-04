@@ -79,10 +79,26 @@ vi.mock("../services/projects/project-needs-you.js", () => ({
     sessions: [],
     truncated: false,
   }),
+  listSessionsAwaitingReview: async () => ({
+    sessions: [],
+    truncated: false,
+  }),
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { db, focusSessions, notifications, messages } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  notifications,
+  messages,
+  channels,
+  channelMembers,
+  users,
+  workspaces,
+  workspaceMembers,
+  podMembers,
+  projectMembers,
+} from "@synap/database";
 import { signalsRouter } from "./signals.js";
 
 const USER = "user-1";
@@ -186,7 +202,20 @@ const list = () =>
 
 describe("signals: session.needs_you in needs-you (session.room_update retired)", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, notifications, messages]) {
+    // The session READ floor (`sessionReadableWhere`, roster branch) reads the
+    // membership tables — the notification containers are resolved through it.
+    for (const t of [
+      focusSessions,
+      notifications,
+      messages,
+      channels,
+      channelMembers,
+      users,
+      workspaces,
+      workspaceMembers,
+      podMembers,
+      projectMembers,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   });
@@ -346,23 +375,61 @@ describe("signals: session.needs_you in needs-you (session.room_update retired)"
     expect(sugg.every((r) => r.kind === "notification")).toBe(true);
   });
 
-  it("a project count carries no notification half, so neither type can reach it", async () => {
+  it("a project count carries the notifications whose SESSION is in the project (pointer still folds into the slot)", async () => {
+    const P = "33333333-3333-4333-8333-333333333333";
     const s = await seedSession({ owed: true });
-    await q(`update focus_sessions set project_id = $2 where id = $1`, [
-      s,
-      "33333333-3333-4333-8333-333333333333",
-    ]);
+    await q(`update focus_sessions set project_id = $2 where id = $1`, [s, P]);
     await notify("session.needs_you", s);
     await notify("chat.mention", s);
+    // A mention about a session in ANOTHER project must not reach this one.
+    const other = await seedSession();
+    await q(`update focus_sessions set project_id = $2 where id = $1`, [
+      other,
+      "44444444-4444-4444-8444-444444444444",
+    ]);
+    await notify("chat.mention", other);
 
-    const [row] = await caller().countByProject({
-      projectIds: ["33333333-3333-4333-8333-333333333333"],
-    });
+    const [row] = await caller().countByProject({ projectIds: [P] });
     expect(row).toMatchObject({ status: "ok" });
     const c = (row as { count: { needsYou: number; notifications: number } })
       .count;
-    expect(c.notifications).toBe(0);
-    expect(c.needsYou).toBe(1);
+    expect(c.notifications).toBe(1);
+    expect(c.needsYou).toBe(2);
+    // The list says the same, and the mention joins its session's block.
+    const rows = await caller()
+      .list({ lens: "needs-you", projectId: P })
+      .then((r) => r.signals);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.groupKey))).toEqual(
+      new Set([`session:${s}`])
+    );
+  });
+
+  it("a suggestion posted in a session's ROOM survives that session's project and session scopes", async () => {
+    const P = "33333333-3333-4333-8333-333333333333";
+    const room = randomUUID();
+    const s = await seedSession({ channelId: room });
+    await q(`update focus_sessions set project_id = $2 where id = $1`, [s, P]);
+    const msg = await question(room, { kind: "update" });
+    await q(
+      `insert into notifications (id, user_id, type, category, priority, title, body, source_type, source_id, actions, status, created_at)
+       values ($1, $2, 'ai.proactive.nudge', 'ai', 'normal', 'Try this', '', 'proactive_message', $3, '[]'::jsonb, 'unread', now())`,
+      [randomUUID(), USER, msg]
+    );
+    for (const scope of [{ projectId: P }, { sessionId: s }]) {
+      const sugg = await caller()
+        .list({ lens: "suggestions", ...scope })
+        .then((r) => r.signals);
+      expect(sugg.map((x) => x.title)).toEqual(["Try this"]);
+      expect(sugg[0]!.source).toMatchObject({ kind: "session", id: s });
+    }
+    const elsewhere = await caller()
+      .list({
+        lens: "suggestions",
+        projectId: "44444444-4444-4444-8444-444444444444",
+      })
+      .then((r) => r.signals);
+    expect(elsewhere).toEqual([]);
   });
 
   it("a container-scoped suggestions list is empty, never unnarrowed", async () => {

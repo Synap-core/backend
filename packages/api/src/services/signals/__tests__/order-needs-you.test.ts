@@ -152,18 +152,26 @@ describe("session blocks are contiguous", () => {
   });
 
   it("a cluster filed entirely under a READABLE session joins that session's block; a spanning one stays its own row", () => {
-    const inS1 = { ...cluster("in-s1", ago(3)), sessionId: "s-1" } as ProposalCluster;
-    const spanning = { ...cluster("span", ago(2)), sessionId: null } as ProposalCluster;
+    const inS1 = {
+      ...cluster("in-s1", ago(3)),
+      sessionId: "s-1",
+    } as ProposalCluster;
+    const spanning = {
+      ...cluster("span", ago(2)),
+      sessionId: null,
+    } as ProposalCluster;
     const signals = unionNeedsYou({
       clusters: [inS1, spanning],
-      clusterSessions: new Map([["s-1", { title: "Tracks-first", projectId: "p-1" }]]),
+      clusterSessions: new Map([
+        ["s-1", { title: "Tracks-first", projectId: "p-1" }],
+      ]),
       notifications: [],
       owedSlots: [owed("s-1", "First", ago(1)), owed("s-2", "Other", ago(4))],
       now: NOW,
     });
     expect(ids(signals)).toEqual([
       "slot:s-1:first",
-      "cluster:in-s1",
+      "cluster:in-s1@p-in-s1",
       "cluster:span",
       "slot:s-2:other",
     ]);
@@ -173,13 +181,16 @@ describe("session blocks are contiguous", () => {
       "proposal-cluster:span",
       "session:s-2",
     ]);
-      const joined = signals.find((s) => s.id === "cluster:in-s1")!;
+    const joined = signals.find((s) => s.id === "cluster:in-s1@p-in-s1")!;
     expect(joined.sessionTitle).toBe("Tracks-first");
     expect(joined.sessionProjectId).toBe("p-1");
   });
 
   it("a cluster whose session the viewer CANNOT read stays a plain row — no key, no name", () => {
-    const hidden = { ...cluster("hidden", ago(3)), sessionId: "s-private" } as ProposalCluster;
+    const hidden = {
+      ...cluster("hidden", ago(3)),
+      sessionId: "s-private",
+    } as ProposalCluster;
     const [row] = unionNeedsYou({
       clusters: [hidden],
       clusterSessions: new Map(), // the read floor returned nothing for it
@@ -302,7 +313,10 @@ describe("age bucket", () => {
     const signals = unionNeedsYou({
       clusters: [cluster("old-decision", ago(9 * DAY))],
       notifications: [],
-      owedSlots: [owed("s-9", "Only old", ago(10 * DAY)), owed("s-1", "Fresh", ago(1))],
+      owedSlots: [
+        owed("s-9", "Only old", ago(10 * DAY)),
+        owed("s-1", "Fresh", ago(1)),
+      ],
       now: NOW,
     });
     const bucket = Object.fromEntries(signals.map((s) => [s.id, s.ageBucket]));

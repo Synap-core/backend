@@ -20,7 +20,9 @@ import {
   or,
   isNull,
   isNotNull,
+  drizzleSql,
   proposals,
+  focusSessions,
   automationStepRuns,
   automationRuns,
   db,
@@ -82,6 +84,14 @@ export interface ProposalScopeInput {
   threadId?: string;
   sessionId?: string;
   projectId?: string;
+  /**
+   * Only proposals filed into one of this TRACK's sessions. `proposals` has no
+   * track column; a track is reached through `proposals.session_id` →
+   * `focus_sessions.track_id` — the same walk `activity.list` makes
+   * (`proposalInTrack`). A proposal filed on the track's project with no
+   * session belongs to the project, not to any track.
+   */
+  trackId?: string;
   agentUserId?: string;
   agentOnly?: boolean;
 }
@@ -119,6 +129,12 @@ export function buildProposalScopeConditions(
 
   if (input.projectId) {
     conditions.push(eq(proposals.projectId, input.projectId));
+  }
+
+  if (input.trackId) {
+    conditions.push(
+      drizzleSql`exists (select 1 from ${focusSessions} where ${focusSessions.id} = ${proposals.sessionId} and ${focusSessions.trackId} = ${input.trackId})`
+    );
   }
 
   if (input.agentUserId) {

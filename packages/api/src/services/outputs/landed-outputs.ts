@@ -100,6 +100,10 @@ export interface LandedOutputsQuery {
   workspaceLens?: Lens;
   /** Narrow to one project's sessions. A project the caller cannot see ⇒ `null`. */
   projectId?: string;
+  /** Narrow to one track's sessions (the lens read's track scope). */
+  trackId?: string;
+  /** Narrow to ONE session (the lens read's session scope). */
+  sessionId?: string;
   /** Only rows that landed (or were proposed) at or after this instant (ISO). */
   since?: string;
   actor?: LandedActorFilter;
@@ -131,7 +135,8 @@ interface PendingFact {
   data: unknown;
 }
 
-const coord = (kind: string, id: string) => `${normalizeObjectKind(kind)}:${id}`;
+const coord = (kind: string, id: string) =>
+  `${normalizeObjectKind(kind)}:${id}`;
 
 /** Returns `null` when `projectId` names a project the caller cannot see. */
 export async function listLandedOutputs(
@@ -151,9 +156,7 @@ export async function listLandedOutputs(
     const [project] = await database
       .select({ id: projects.id })
       .from(projects)
-      .where(
-        and(eq(projects.id, query.projectId), scoped.predicate(projects))
-      )
+      .where(and(eq(projects.id, query.projectId), scoped.predicate(projects)))
       .limit(1);
     if (!project) return null;
   }
@@ -170,7 +173,9 @@ export async function listLandedOutputs(
       kind: "work",
       includeTrackedRuns: true,
       roster: query.access.actor === "operator",
+      ...(query.trackId ? { trackId: query.trackId } : {}),
     }),
+    ...(query.sessionId ? [eq(focusSessions.id, query.sessionId)] : []),
     scoped.predicate(focusSessions),
   ]);
 
@@ -291,7 +296,8 @@ export async function attachLandedProvenance(
   // creation; an output with no object row is bounded by when it was produced.
   const creatingQueries = new Map<string, CreatingProposalQuery>();
   for (const item of items) {
-    if (!UUID_RE.test(item.ref.id) || creatingQueries.has(item.ref.id)) continue;
+    if (!UUID_RE.test(item.ref.id) || creatingQueries.has(item.ref.id))
+      continue;
     const obj = provenance.get(coord(item.kind, item.ref.id));
     creatingQueries.set(item.ref.id, {
       id: item.ref.id,

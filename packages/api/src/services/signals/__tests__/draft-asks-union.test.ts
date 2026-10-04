@@ -2,7 +2,9 @@
  * The DRAFT row in the pure union (founder decision 2026-09-27, "draft row
  * carries its asks"): one row per undecided draft that asks something, the
  * same fold counted by `countNeedsYou`, the draft's pointer notification folded
- * into it, and the draft side paged with the owed side. Which slots ARE draft
+ * into it. Since the lens grammar (founder-approved 2026-10-04: "AI
+ * suggestions + agent drafts = Proposed") the row is PROPOSED — emitted by
+ * `unionProposed`, never by `unionNeedsYou`, and never a part of `needsYou`. Which slots ARE draft
  * slots is decided in SQL (`listOwedSlots({ onlyDrafts })`) and pinned by
  * `focus-sessions/__tests__/draft-asks.pglite.test.ts`.
  */
@@ -11,6 +13,7 @@ import {
   countNeedsYou,
   signalsFromDraftAsks,
   unionNeedsYou,
+  unionProposed,
   type DraftAsksInput,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
@@ -88,23 +91,27 @@ describe("draft-asks signal", () => {
     expect(row!.title).toBe("An agent started Ship billing · asks you 1 thing");
   });
 
-  it("list and count agree: the draft counts ONCE, as `drafts`, never in `blocked`", () => {
-    const listed = unionNeedsYou({ ...base, draftAsks: TWO_ASKS });
-    expect(listed.map((s) => s.kind)).toEqual(["draft-asks"]);
+  it("PROPOSED, not Blocking: listed by unionProposed, absent from needs-you, counted only as `drafts`", () => {
+    // Discriminating fixture: the SAME draft input, read by both unions.
+    expect(unionNeedsYou({ ...base, draftAsks: TWO_ASKS })).toEqual([]);
+    expect(
+      unionProposed({ draftAsks: TWO_ASKS, notifications: [] }).map(
+        (s) => s.kind
+      )
+    ).toEqual(["draft-asks"]);
     const counted = countNeedsYou({ ...base, draftAsks: TWO_ASKS });
     expect(counted.drafts).toBe(1);
     expect(counted.blocked).toBe(0);
-    expect(counted.needsYou).toBe(listed.length);
+    expect(counted.needsYou).toBe(0);
     expect(counted.needsYou).toBe(
       counted.decisions +
         counted.notifications +
         counted.blocked +
-        counted.review +
-        counted.drafts
+        counted.review
     );
   });
 
-  it("the draft's session.needs_you pointer folds into the draft row", () => {
+  it("the draft's session.needs_you pointer folds into the draft — it never resurfaces in needs-you", () => {
     const pointer: NotificationSignalInput = {
       id: "n1",
       type: "session.needs_you",
@@ -122,25 +129,36 @@ describe("draft-asks signal", () => {
       openQuestionSessionIds: new Set([DRAFT]),
       draftAsks: TWO_ASKS,
     };
-    expect(unionNeedsYou(args).map((s) => s.kind)).toEqual(["draft-asks"]);
-    expect(countNeedsYou(args).needsYou).toBe(1);
+    expect(unionNeedsYou(args)).toEqual([]);
+    expect(countNeedsYou(args).needsYou).toBe(0);
+    // Without the draft the same pointer IS a needs-you row (control).
+    expect(unionNeedsYou({ ...args, draftAsks: undefined })).toHaveLength(1);
   });
 
-  it("sorts with every other row by recency — its newest ask outranks an older slot", () => {
-    const owed = slot("s-2", "Sign contract", "2026-09-27T08:00:00.000Z");
-    const all = unionNeedsYou({
-      ...base,
-      owedSlots: [owed],
-      draftAsks: TWO_ASKS,
-      now: new Date("2026-09-28T00:00:00.000Z"),
-    });
-    expect(all.map((s) => s.kind)).toEqual(["draft-asks", "owed-slot"]);
-  });
-
-  it("truncation of the draft scan makes the count a floor", () => {
+  it("Proposed sorts drafts and suggestions newest first", () => {
+    const suggestion: NotificationSignalInput = {
+      id: "s1",
+      type: "ai.proactive.nudge",
+      title: "Try this",
+      category: "ai",
+      sourceType: "ai_proactive",
+      sourceId: null,
+      createdAt: new Date("2026-09-27T09:30:00Z"),
+    };
     expect(
-      countNeedsYou({ ...base, draftAsks: TWO_ASKS, draftAsksTruncated: true })
-        .truncated
-    ).toBe(true);
+      unionProposed({ draftAsks: TWO_ASKS, notifications: [suggestion] }).map(
+        (s) => s.kind
+      )
+    ).toEqual(["draft-asks", "notification"]);
+  });
+
+  it("truncation of the draft scan makes `drafts` a floor, never the needs-you number", () => {
+    const c = countNeedsYou({
+      ...base,
+      draftAsks: TWO_ASKS,
+      draftAsksTruncated: true,
+    });
+    expect(c.draftsTruncated).toBe(true);
+    expect(c.truncated).toBe(false);
   });
 });

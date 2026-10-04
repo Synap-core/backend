@@ -31,6 +31,9 @@ export async function listDraftAskSlots(params: {
   userId: string;
   scope: ResolvedScope;
   limit: number;
+  /** Container lenses below the project — see `ListOwedSlotsParams`. */
+  sessionId?: string;
+  trackId?: string;
 }): Promise<DraftAskSlots> {
   const slots = await listOwedSlots({ ...params, onlyDrafts: true });
   const sessionIds = [...new Set(slots.map((s) => s.sessionId))];

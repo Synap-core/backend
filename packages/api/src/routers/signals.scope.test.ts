@@ -1,18 +1,20 @@
 /**
- * `signals.list` / `signals.count` — CONTAINER SCOPE FORWARDING.
+ * `signals.list` / `signals.count` — SCOPE FORWARDING and FAILED-HALF
+ * REPORTING.
  *
  * The signals router owns no access logic: it calls `proposals.groups`,
- * `notifCenter.list` and `events.read` through their own routers, and the one
- * query it does own (`listDecidedProposals`) goes through the SAME predicate
- * builder the proposals queue uses. So the thing that can actually break when a
- * scope is added is not a predicate — it is a scope silently NOT being
- * forwarded, which yields a pod-wide list wearing a container's label. That is
- * the exact "declared input with no reader" severance this repo keeps paying
- * for, and it is what these tests pin.
+ * `notifCenter.list` and `events.read` through their own routers and the
+ * services behind the other doors (`listOwedSlots`, `listSessionsAwaitingReview`,
+ * `listActivity`, `listLandedOutputs`). So the thing that can actually break
+ * when a scope is added is a scope silently NOT being forwarded — a pod-wide
+ * list wearing a container's label — and a failed half silently reading as
+ * empty. Those are what these tests pin.
  *
  * DB-FREE: every downstream door is mocked at its module boundary (partial
- * mocks via `importOriginal`, so the real `ProposalStatus` / drizzle helpers
- * still resolve) and the assertions read the FORWARDED INPUT.
+ * mocks via `importOriginal`) and the assertions read the FORWARDED INPUT.
+ * The container FILTER of notifications is behavioural and lives in the
+ * PGlite suites (`signals.needs-you-session-pointer.pglite.test.ts`,
+ * `signals.lens-page.pglite.test.ts`).
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -20,8 +22,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const groupsSpy = vi.fn();
 const notifListSpy = vi.fn();
 const eventsReadSpy = vi.fn();
-const scopeConditionsSpy = vi.fn();
-const resolveAutomationStepRunIdsSpy = vi.fn();
+const owedSpy = vi.fn();
+const reviewSpy = vi.fn();
+const activitySpy = vi.fn();
+const landedSpy = vi.fn();
 
 vi.mock("./proposals.js", () => ({
   proposalsRouter: { createCaller: () => ({ groups: groupsSpy }) },
@@ -35,7 +39,6 @@ vi.mock("./events.js", () => ({
   eventsRouter: { createCaller: () => ({ read: eventsReadSpy }) },
 }));
 
-const owedSpy = vi.fn();
 vi.mock("../services/focus-sessions/owed-outputs.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   listOwedSlots: async (...args: unknown[]) => {
@@ -44,21 +47,23 @@ vi.mock("../services/focus-sessions/owed-outputs.js", async (orig) => ({
   },
 }));
 
-vi.mock("./proposals/scope-conditions.js", () => ({
-  buildProposalScopeConditions: (...args: unknown[]) => {
-    scopeConditionsSpy(...args);
-    return [];
-  },
-  resolveAutomationStepRunIds: (...args: unknown[]) => {
-    resolveAutomationStepRunIdsSpy(...args);
-    return Promise.resolve([]);
+vi.mock("../services/projects/project-needs-you.js", () => ({
+  listSessionsAwaitingReview: async (...args: unknown[]) => {
+    reviewSpy(...args);
+    return { sessions: [], truncated: false };
   },
 }));
 
-// Partial mock: keep every real export (ProposalStatus, the drizzle operators
-// the router composes with) and replace ONLY the connection. A total
-// `() => ({})` here would silently kill every other import in this module the
-// moment the router grows one — the documented failure mode.
+vi.mock("../services/activity/list-activity.js", () => ({
+  listActivity: async (...args: unknown[]) => activitySpy(...args),
+}));
+
+vi.mock("../services/outputs/landed-outputs.js", () => ({
+  LANDED_OUTPUTS_MAX_LIMIT: 100,
+  listLandedOutputs: async (...args: unknown[]) => landedSpy(...args),
+}));
+
+// Partial mock: keep every real export and replace ONLY the connection.
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const chain = {
@@ -76,6 +81,11 @@ const { signalsRouter } = await import("./signals.js");
 const ctx = { userId: "user-1", authenticated: true } as never;
 const caller = () => signalsRouter.createCaller(ctx);
 
+const S = "11111111-1111-4111-8111-111111111111";
+const P = "22222222-2222-4222-8222-222222222222";
+const A = "33333333-3333-4333-8333-333333333333";
+const T = "66666666-6666-4666-8666-666666666666";
+
 beforeEach(() => {
   vi.clearAllMocks();
   groupsSpy.mockResolvedValue({
@@ -85,126 +95,260 @@ beforeEach(() => {
   });
   notifListSpy.mockResolvedValue({ notifications: [] });
   eventsReadSpy.mockResolvedValue([]);
+  activitySpy.mockResolvedValue({ items: [], nextCursor: null });
+  landedSpy.mockResolvedValue({
+    items: [],
+    pending: { count: 0, samples: [] },
+    nextCursor: null,
+    truncated: false,
+  });
 });
 
-describe("signals.list — needs-you lens forwards the container scope", () => {
-  it("forwards sessionId / projectId / automationId to proposals.groups", async () => {
+describe("signals.list — needs-you lens forwards the scope to every half", () => {
+  it("forwards session / project / track / automation to proposals.groups, split per session", async () => {
     await caller().list({
       lens: "needs-you",
-      sessionId: "11111111-1111-4111-8111-111111111111",
-      projectId: "22222222-2222-4222-8222-222222222222",
-      automationId: "33333333-3333-4333-8333-333333333333",
+      sessionId: S,
+      projectId: P,
+      trackId: T,
+      automationId: A,
     });
-
     expect(groupsSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionId: "11111111-1111-4111-8111-111111111111",
-        projectId: "22222222-2222-4222-8222-222222222222",
-        automationId: "33333333-3333-4333-8333-333333333333",
+        sessionId: S,
+        projectId: P,
+        trackId: T,
+        automationId: A,
         status: "pending",
+        splitBySession: true,
       })
     );
   });
 
-  it("EXCLUDES the notification half under a container scope", async () => {
-    await caller().list({
-      lens: "needs-you",
-      sessionId: "11111111-1111-4111-8111-111111111111",
-    });
-    // A scoped needs-you is proposals-only: `notifications` carries no
-    // session/project/automation column, so including it would mix this
-    // container's proposals with every unread notification in the pod.
-    expect(notifListSpy).not.toHaveBeenCalled();
+  it("KEEPS the notification half under a container scope (narrowed by resolved container, not dropped)", async () => {
+    await caller().list({ lens: "needs-you", sessionId: S });
+    expect(notifListSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("KEEPS the notification half when only the workspace lens is used", async () => {
-    await caller().list({ lens: "needs-you", workspaceId: "ws-1" });
-    expect(notifListSpy).toHaveBeenCalledTimes(1);
-    expect(groupsSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: "ws-1" })
+  it("forwards session + track to the owed read and to the review read", async () => {
+    await caller().list({ lens: "needs-you", sessionId: S, trackId: T });
+    expect(owedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: S, trackId: T, excludeDrafts: true })
+    );
+    expect(reviewSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: S, trackId: T })
     );
   });
 
-  it("keeps the pod-wide call byte-identical to before the widening", async () => {
+  it("reads sessions awaiting review at POD scope too", async () => {
     await caller().list({ lens: "needs-you" });
-    expect(notifListSpy).toHaveBeenCalledTimes(1);
-    const [arg] = groupsSpy.mock.calls[0] as [Record<string, unknown>];
-    expect(arg.sessionId).toBeUndefined();
+    expect(reviewSpy).toHaveBeenCalledTimes(1);
+    const [arg] = reviewSpy.mock.calls[0] as [Record<string, unknown>];
     expect(arg.projectId).toBeUndefined();
-    expect(arg.automationId).toBeUndefined();
+    expect(arg.workspaceId).toBeUndefined();
+  });
+
+  it("under an AUTOMATION scope only the proposal half runs — nothing is returned unnarrowed", async () => {
+    await caller().list({ lens: "needs-you", automationId: A });
+    expect(groupsSpy).toHaveBeenCalledTimes(1);
+    expect(notifListSpy).not.toHaveBeenCalled();
+    expect(owedSpy).not.toHaveBeenCalled();
+    expect(reviewSpy).not.toHaveBeenCalled();
+  });
+
+  it("THROWS when a half fails — a failed read is never an empty tray", async () => {
+    notifListSpy.mockRejectedValue(new Error("notif down"));
+    await expect(caller().list({ lens: "needs-you" })).rejects.toThrow(
+      "notif down"
+    );
   });
 });
 
-describe("signals.list — history lens forwards the container scope", () => {
-  it("forwards sessionId to events.read (the first reader of events.session_id)", async () => {
-    await caller().list({
-      lens: "history",
-      sessionId: "11111111-1111-4111-8111-111111111111",
-    });
-    expect(eventsReadSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "11111111-1111-4111-8111-111111111111",
-      })
-    );
-  });
-
-  it("forwards the whole scope to the shared proposal predicate builder", async () => {
+describe("signals.list — history lens (Happened)", () => {
+  it("forwards session / project / track to the activity ledger", async () => {
     await caller().list({
       lens: "history",
       workspaceId: "ws-1",
-      sessionId: "11111111-1111-4111-8111-111111111111",
-      projectId: "22222222-2222-4222-8222-222222222222",
+      sessionId: S,
+      projectId: P,
+      trackId: T,
     });
-    expect(scopeConditionsSpy).toHaveBeenCalledWith(
+    expect(activitySpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        workspaceId: "ws-1",
-        sessionId: "11111111-1111-4111-8111-111111111111",
-        projectId: "22222222-2222-4222-8222-222222222222",
-      }),
-      "user-1"
+        workspaceLens: "ws-1",
+        sessionId: S,
+        projectId: P,
+        trackId: T,
+      })
     );
   });
 
-  it("walks automationId through step runs (proposals carries no automationId column)", async () => {
-    await caller().list({
-      lens: "history",
-      automationId: "33333333-3333-4333-8333-333333333333",
-    });
-    expect(resolveAutomationStepRunIdsSpy).toHaveBeenCalledWith(
-      "33333333-3333-4333-8333-333333333333"
+  it("forwards sessionId to events.read", async () => {
+    await caller().list({ lens: "history", sessionId: S });
+    expect(eventsReadSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: S })
     );
   });
 
-  it("SUPPRESSES the events half under a project scope rather than returning it unnarrowed", async () => {
-    await caller().list({
-      lens: "history",
-      projectId: "22222222-2222-4222-8222-222222222222",
+  for (const scope of [{ projectId: P }, { trackId: T }]) {
+    it(`SUPPRESSES the events half under ${Object.keys(scope)[0]} rather than returning it unnarrowed`, async () => {
+      await caller().list({ lens: "history", ...scope });
+      expect(eventsReadSpy).not.toHaveBeenCalled();
+      expect(activitySpy).toHaveBeenCalledTimes(1);
     });
-    // `events` has no `project_id` column. A pod-wide event feed rendered
-    // beside a project-narrowed proposals feed would misreport both.
+  }
+
+  it("passes the cursor as the ledger's and the events' exclusive upper bound", async () => {
+    const cursor = "2026-10-01T00:00:00.000Z";
+    await caller().list({ lens: "history", cursor });
+    expect(activitySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ until: cursor })
+    );
+    expect(eventsReadSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ until: new Date(cursor) })
+    );
+  });
+
+  it("follows no automation (the ledger cannot narrow by it)", async () => {
+    const r = await caller().list({ lens: "history", automationId: A });
+    expect(r.signals).toEqual([]);
+    expect(activitySpy).not.toHaveBeenCalled();
     expect(eventsReadSpy).not.toHaveBeenCalled();
-  });
-
-  it("still reads events under a plain workspace lens", async () => {
-    await caller().list({ lens: "history", workspaceId: "ws-1" });
-    expect(eventsReadSpy).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("signals.count — same scope, same proposals-only rule", () => {
-  it("forwards the container scope and drops the notification half", async () => {
-    await caller().count({
-      sessionId: "11111111-1111-4111-8111-111111111111",
+describe("signals.list — produced lens", () => {
+  it("forwards every lens to outputs.landed's service", async () => {
+    await caller().list({
+      lens: "produced",
+      workspaceId: "ws-1",
+      projectId: P,
+      trackId: T,
+      sessionId: S,
     });
-    expect(groupsSpy).toHaveBeenCalledWith(
+    expect(landedSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionId: "11111111-1111-4111-8111-111111111111",
+        workspaceLens: "ws-1",
+        projectId: P,
+        trackId: T,
+        sessionId: S,
       })
     );
-    expect(notifListSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("signals.list — page lens reports failed halves per class", () => {
+  it("a failed ledger marks ONLY Happened unreadable; the other classes stay readable", async () => {
+    activitySpy.mockRejectedValue(new Error("ledger down"));
+    const { page } = await caller().list({ lens: "page" });
+    expect(page!.happened.unreadable).toEqual(["activity"]);
+    expect(page!.happened.truncated).toBe(true);
+    expect(page!.happened.hasMore).toBe(true);
+    expect(page!.blocking.unreadable).toEqual([]);
+    expect(page!.produced.unreadable).toEqual([]);
   });
 
-  it("is unchanged for the pod-wide badge (AttentionBand / useNeedsYouCount)", async () => {
+  it("a failed notification read marks Blocking + Proposed and says the banner is NOT MEASURED", async () => {
+    notifListSpy.mockRejectedValue(new Error("notif down"));
+    const { page } = await caller().list({ lens: "page" });
+    expect(page!.blocking.unreadable).toContain("notifications");
+    expect(page!.proposed.unreadable).toContain("notifications");
+    expect(page!.status).toBeNull();
+    expect(page!.statusUnreadable).toBe(true);
+    expect(page!.happened.unreadable).toEqual([]);
+  });
+
+  it("a failed outputs read marks Produced", async () => {
+    landedSpy.mockRejectedValue(new Error("outputs down"));
+    const { page } = await caller().list({ lens: "page" });
+    expect(page!.produced.unreadable).toEqual(["outputs"]);
+    expect(page!.produced.rows).toEqual([]);
+  });
+
+  it("a project the caller cannot see is unreadable, never an empty Produced", async () => {
+    landedSpy.mockResolvedValue(null);
+    const { page } = await caller().list({ lens: "page", projectId: P });
+    expect(page!.produced.unreadable).toEqual(["outputs"]);
+  });
+
+  it("the status banner folds repeated health rows into ONE issue and keeps them out of Blocking", async () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 9, 4, 10, m));
+    const health = (id: string, m: number, title: string) => ({
+      id,
+      type: "system.intelligence_degraded",
+      category: "system",
+      title,
+      sourceType: "system",
+      sourceId: null,
+      createdAt: at(m),
+    });
+    notifListSpy.mockResolvedValue({
+      notifications: [
+        health("h1", 1, "Intelligence Hub is degraded"),
+        health("h2", 3, "Intelligence Hub is degraded"),
+        health("h3", 2, "Intelligence Hub is degraded"),
+        {
+          id: "st",
+          type: "pod.storage_warning",
+          category: "system",
+          title: "Storage at 91% capacity",
+          sourceType: "system",
+          sourceId: null,
+          createdAt: at(0),
+        },
+      ],
+    });
+    const { page } = await caller().list({ lens: "page" });
+    expect(page!.status).toMatchObject({
+      title: "Intelligence Hub is degraded",
+      issues: [
+        {
+          type: "system.intelligence_degraded",
+          repeatCount: 3,
+          notificationIds: ["h1", "h2", "h3"],
+        },
+        { type: "pod.storage_warning", repeatCount: 1 },
+      ],
+    });
+    expect(page!.blocking.total).toBe(0);
+    expect(page!.blocking.rows).toEqual([]);
+  });
+
+  it("honours per-class caps and reports totals + hasMore past them", async () => {
+    notifListSpy.mockResolvedValue({
+      notifications: Array.from({ length: 4 }, (_, i) => ({
+        id: `n${i}`,
+        type: "chat.mention",
+        category: "inbox",
+        title: `Mention ${i}`,
+        sourceType: "entity",
+        sourceId: `e${i}`,
+        createdAt: new Date(Date.UTC(2026, 9, 4, 10, i)),
+      })),
+    });
+    const { page } = await caller().list({
+      lens: "page",
+      caps: { blocking: 2 },
+    });
+    expect(page!.blocking.rows).toHaveLength(2);
+    expect(page!.blocking.total).toBe(4);
+    expect(page!.blocking.hasMore).toBe(true);
+  });
+});
+
+describe("signals.count — the same reader, the same scope", () => {
+  it("forwards the container scope to every half", async () => {
+    await caller().count({ sessionId: S });
+    expect(groupsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: S })
+    );
+    expect(notifListSpy).toHaveBeenCalledTimes(1);
+    expect(owedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: S })
+    );
+  });
+
+  it("is unchanged for the pod-wide badge's proposal call", async () => {
     await caller().count();
     expect(notifListSpy).toHaveBeenCalledTimes(1);
     const [arg] = groupsSpy.mock.calls[0] as [Record<string, unknown>];
@@ -223,8 +367,6 @@ describe("signals.countByProject — the rail's badges, one round-trip", () => {
     expect(out.map((r) => r.projectId)).toEqual([P1, P2]);
     const forwarded = groupsSpy.mock.calls.map(([a]) => a.projectId);
     expect(forwarded.sort()).toEqual([P1, P2].sort());
-    // Container-scoped ⇒ proposals + owed only, never every unread notification.
-    expect(notifListSpy).not.toHaveBeenCalled();
     expect(out.every((r) => r.status === "ok")).toBe(true);
   });
 
@@ -232,15 +374,6 @@ describe("signals.countByProject — the rail's badges, one round-trip", () => {
     await caller().countByProject({ projectIds: [P1] });
     expect(groupsSpy).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: P1, excludeDraftSessions: true })
-    );
-    expect(owedSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ excludeDrafts: true })
-    );
-    // The tray answers over the same population as the badge.
-    vi.clearAllMocks();
-    await caller().list({ lens: "needs-you", projectId: P1 });
-    expect(groupsSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ excludeDraftSessions: true })
     );
     expect(owedSpy).toHaveBeenCalledWith(
       expect.objectContaining({ excludeDrafts: true })

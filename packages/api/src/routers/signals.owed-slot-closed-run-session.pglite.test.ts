@@ -72,10 +72,26 @@ vi.mock("../services/projects/project-needs-you.js", () => ({
     sessions: [],
     truncated: false,
   }),
+  listSessionsAwaitingReview: async () => ({
+    sessions: [],
+    truncated: false,
+  }),
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { db, focusSessions, notifications, messages } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  notifications,
+  messages,
+  channels,
+  channelMembers,
+  users,
+  workspaces,
+  workspaceMembers,
+  podMembers,
+  projectMembers,
+} from "@synap/database";
 import { signalsRouter } from "./signals.js";
 
 const USER = "user-1";
@@ -149,7 +165,20 @@ const caller = () =>
 
 describe("signals: an owed decision on a closed, run-kind, null-workspace, project session", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, notifications, messages]) {
+    // The session READ floor (`sessionReadableWhere`, roster branch) reads the
+    // membership tables — the notification containers are resolved through it.
+    for (const t of [
+      focusSessions,
+      notifications,
+      messages,
+      channels,
+      channelMembers,
+      users,
+      workspaces,
+      workspaceMembers,
+      podMembers,
+      projectMembers,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   });

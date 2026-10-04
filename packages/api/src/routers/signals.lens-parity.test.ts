@@ -63,9 +63,34 @@ describe("every resolveScope-backed half of the union speaks the same lens", () 
     return blocks;
   }
 
-  for (const door of ["owed", "list"] as const) {
-    it(`${door} passes floorLens(input.workspaceId), never the raw lens`, () => {
-      const blocks = callBlocks(door);
+  /** Each `<marker>…)` argument block, walked to the matching brace. */
+  function blocksAt(marker: string): string[] {
+    const blocks: string[] = [];
+    let from = 0;
+    for (;;) {
+      const at = src.indexOf(marker, from);
+      if (at === -1) break;
+      let depth = 0;
+      let i = at + marker.length - 1;
+      for (; i < src.length; i++) {
+        if (src[i] === "{") depth++;
+        else if (src[i] === "}" && --depth === 0) break;
+      }
+      blocks.push(src.slice(at, i + 1));
+      from = i;
+    }
+    return blocks;
+  }
+
+  // Every half whose door resolves scope through `resolveScope`: the
+  // notification door (`notifCenter.list`) and the owed/draft reads (built on
+  // ONE `resolveScope(ctx, …)` scope object, `owedScope`).
+  const halves: Array<[string, string[]]> = [
+    ["notifCenter.list", callBlocks("list")],
+    ["resolveScope (owed + drafts)", blocksAt("resolveScope(ctx, {")],
+  ];
+  for (const [name, blocks] of halves) {
+    it(`${name} passes floorLens(input.workspaceId), never the raw lens`, () => {
       // Guards against the scan passing vacuously if the call is renamed away.
       expect(blocks.length).toBeGreaterThan(0);
       for (const block of blocks) {
@@ -75,9 +100,21 @@ describe("every resolveScope-backed half of the union speaks the same lens", () 
     });
   }
 
-  it("both procedures fetch the owed half at all", () => {
-    // `list` and `count` must answer over ONE population. A count that skipped
-    // the owed door would render a badge smaller than the rows beneath it.
-    expect(callBlocks("owed")).toHaveLength(2);
+  it("the owed and draft reads both take that ONE scope object", () => {
+    expect(src.match(/listOwedSlots\(\{\s*\.\.\.owedScope/g)).toHaveLength(1);
+    expect(src.match(/listDraftAskSlots\(owedScope\)/g)).toHaveLength(1);
+    // Nowhere else may the owed read be called with a scope of its own.
+    expect(src.match(/listOwedSlots\(/g)).toHaveLength(1);
+  });
+
+  it("list and count read through ONE reader, so they answer over one population", () => {
+    // `count` (via countSignals), the needs-you/proposed/suggestions lenses and
+    // the page all call `readAttention` — no second assembly of the halves.
+    const body = src.slice(src.indexOf("export const signalsRouter"));
+    expect(src).toMatch(/async function countSignals[\s\S]*?readAttention\(/);
+    expect(body.match(/readAttention\(/g)?.length ?? 0).toBeGreaterThanOrEqual(
+      1
+    );
+    expect(src.match(/createCaller\(ctx\)\.groups\(/g)).toHaveLength(1);
   });
 });

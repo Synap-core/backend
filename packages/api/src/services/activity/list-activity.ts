@@ -139,6 +139,11 @@ export interface ActivityQuery {
   projectId?: string;
   /** Only acts inside this track's sessions (automation runs never are). */
   trackId?: string;
+  /**
+   * Only acts inside this ONE session (the lens read's session scope,
+   * `signals.list`). Automation runs never are — the same rule as `trackId`.
+   */
+  sessionId?: string;
   outcome?: ActivityOutcome;
   source?: ActivitySource;
   since?: string;
@@ -379,6 +384,7 @@ async function readProposalActs<P extends Projection>(
     drizzleSql`not (${proposals.targetType} = 'focus_session' and ${proposals.status} = 'auto_approved')`,
     q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
     q.trackId ? proposalInTrack(q.trackId) : undefined,
+    q.sessionId ? eq(proposals.sessionId, q.sessionId) : undefined,
     statuses ? inArray(proposals.status, statuses as never[]) : undefined,
     actor,
     ...window("proposal", at, proposals.id, p, q)
@@ -451,6 +457,7 @@ async function readDecisions<P extends Projection>(
     inArray(proposals.status, statuses as never[]),
     q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
     q.trackId ? proposalInTrack(q.trackId) : undefined,
+    q.sessionId ? eq(proposals.sessionId, q.sessionId) : undefined,
     actor,
     ...window("decision", at, proposals.id, p, q)
   );
@@ -505,7 +512,8 @@ async function readAutomationRuns<P extends Projection>(
   const none = [] as unknown as Projected<P>;
   // A rule acts on its own: it is never "an agent" or "me", and it has no
   // project to be filed under.
-  if (q.actor.kind !== "all" || q.projectId || q.trackId) return none;
+  if (q.actor.kind !== "all" || q.projectId || q.trackId || q.sessionId)
+    return none;
   const statuses = statusesFor(
     automationRuns.status.enumValues,
     activityOutcomeForRun,
@@ -600,6 +608,7 @@ async function readPlaybookRuns<P extends Projection>(
     playbookRunVisible(q),
     q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
     q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
+    q.sessionId ? eq(playbookRuns.sessionId, q.sessionId) : undefined,
     statuses ? inArray(playbookRuns.status, statuses as never[]) : undefined,
     actor,
     ...window("run", at, playbookRuns.id, p, q)
@@ -700,6 +709,7 @@ async function readSessions<P extends Projection>(
     drizzleSql`not exists (select 1 from ${playbookRuns} where ${playbookRuns.sessionId} = ${focusSessions.id} and ${playbookRunVisible(q)})`,
     q.projectId ? eq(focusSessions.projectId, q.projectId) : undefined,
     q.trackId ? eq(focusSessions.trackId, q.trackId) : undefined,
+    q.sessionId ? eq(focusSessions.id, q.sessionId) : undefined,
     statuses ? inArray(focusSessions.status, statuses as never[]) : undefined,
     actor,
     ...window("session", at, focusSessions.id, p, q)

@@ -24,11 +24,11 @@
  * SESSION-KIND-LENS-EXEMPT: returns a count or a narrow {id, title, goal, updatedAt} projection for a needs-you signal row, never a session row; the population is projectPathConditions (kind + triage lens applied in SQL).
  */
 
-import { db, focusSessions, and, desc, inArray } from "@synap/database";
+import { db, focusSessions, and, desc, eq, inArray } from "@synap/database";
 import { needsYouReason } from "@synap-core/types/units";
 import { attachNextMove } from "../focus-sessions/session-path-sections.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
-import { projectPathConditions } from "./project-path.js";
+import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 
 /** How many open sessions one project's review scan reads before it is a floor. */
 export const REVIEW_SCAN_LIMIT = 100;
@@ -40,6 +40,10 @@ export interface ReviewSessionRow {
   goal: string | null;
   /** When the session last moved — the row's `occurredAt`. */
   updatedAt: Date;
+  /** The session's containers — the row's provenance door. */
+  workspaceId: string | null;
+  projectId: string | null;
+  trackId: string | null;
 }
 
 /**
@@ -57,22 +61,51 @@ export async function countProjectSessionsAwaitingReview(q: {
 }
 
 /** The review population as ROWS — what `signals.list` emits under a project. */
-export async function listProjectSessionsAwaitingReview(q: {
+export function listProjectSessionsAwaitingReview(q: {
   userId: string;
   projectId: string;
   database?: typeof db;
 }): Promise<{ sessions: ReviewSessionRow[]; truncated: boolean }> {
+  return listSessionsAwaitingReview(q);
+}
+
+/**
+ * The review population for ANY lens scope — pod (no lens), a workspace, a
+ * project, a track or one session. ONE predicate at every scope (the project
+ * path's population: `sessionListConditions` with the `default` triage lens,
+ * work + tracked runs, owner floor), so pod ⊇ project ⊇ track ⊇ session by
+ * construction: each lens only adds an AND. The project form above is this
+ * call with `projectId` (it used `projectPathConditions`, which is this same
+ * `sessionListConditions` call).
+ *
+ * `workspaceId` is the signals three-state: absent = no narrow, `null` =
+ * pod-personal sessions only, an id = that workspace.
+ */
+export async function listSessionsAwaitingReview(q: {
+  userId: string;
+  workspaceId?: string | null;
+  projectId?: string;
+  trackId?: string;
+  sessionId?: string;
+  database?: typeof db;
+}): Promise<{ sessions: ReviewSessionRow[]; truncated: boolean }> {
   const database = q.database ?? db;
+  const conditions = sessionListConditions({
+    userId: q.userId,
+    scope: { workspaceLens: q.workspaceId, projectLens: q.projectId },
+    status: "all",
+    lens: "default",
+    kind: "work",
+    includeTrackedRuns: true,
+    ...(q.trackId ? { trackId: q.trackId } : {}),
+  });
+  if (q.sessionId) conditions.push(eq(focusSessions.id, q.sessionId));
   const rows = await database
     .select()
     .from(focusSessions)
     .where(
       and(
-        ...projectPathConditions({
-          userId: q.userId,
-          projectId: q.projectId,
-          lens: "default",
-        }),
+        ...conditions,
         inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
       )
     )
@@ -83,7 +116,10 @@ export async function listProjectSessionsAwaitingReview(q: {
   const withFacts = await attachNextMove(page, {
     userId: q.userId,
     database,
-    logContext: { projectId: q.projectId, door: "projectNeedsYou" },
+    logContext: {
+      ...(q.projectId ? { projectId: q.projectId } : {}),
+      door: "sessionsAwaitingReview",
+    },
   });
   const sessions = withFacts
     .filter((r) => needsYouReason(r.unitFacts) === "review")
@@ -92,6 +128,9 @@ export async function listProjectSessionsAwaitingReview(q: {
       title: r.title ?? null,
       goal: r.goal ?? null,
       updatedAt: new Date(r.updatedAt),
+      workspaceId: r.workspaceId ?? null,
+      projectId: r.projectId ?? null,
+      trackId: r.trackId ?? null,
     }));
   return { sessions, truncated };
 }
