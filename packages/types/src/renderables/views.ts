@@ -477,7 +477,10 @@ const zoomMapView: ViewCapabilityDef = {
   implemented: true,
   // Prototype (D10): the map reads the workspace/project structure itself, so
   // it has nothing to configure yet. The view's own entity query is NOT a
-  // narrow on the map — see ZoomMapAdapter.
+  // narrow on the map — see ZoomMapAdapter. That is also why it is not an
+  // entity LENS: the family switcher (`LENS_VIEWS_BY_FAMILY`) never offers it
+  // as "this data, shown differently".
+  entityLens: false,
   configSchema: [],
 };
 
@@ -533,15 +536,18 @@ export const IMPLEMENTED_VIEW_TYPES = VIEW_DEFINITIONS.filter(
 
 /**
  * The one catalogue for user-created views. It deliberately excludes the
- * legacy Table creator (Sheet is the operational successor) and Branch Tree,
- * which only has meaning inside a conversation. Existing saved instances of
- * both remain fully renderable.
+ * legacy Table creator (Sheet is the operational successor), Branch Tree,
+ * which only has meaning inside a conversation, and the workspace Zoom map,
+ * retired as a new view once the project map shipped (founder-approved
+ * 2026-10-04: the zoom map now lives on the project page). Existing saved
+ * instances of all three remain fully renderable.
  */
 export const CREATABLE_VIEW_DEFINITIONS = VIEW_DEFINITIONS.filter(
   (definition) =>
     definition.implemented &&
     definition.key !== "table" &&
-    definition.key !== "branch_tree"
+    definition.key !== "branch_tree" &&
+    definition.key !== "zoom_map"
 );
 
 /** Structured view types (use entity query + render config). */
