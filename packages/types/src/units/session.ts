@@ -156,6 +156,16 @@ export function projectAggregateInput(
   return { running: true, everStarted: true, progress };
 }
 
+/** One session ROW — the aggregate fact plus what a single row can also know. */
+export interface SessionRowFact extends ProjectAggregateSessionFact {
+  /**
+   * Title of an OPEN session this one waits on (a `blocked_by` link whose
+   * target is still open). Waiting on X is not waiting on you: it reads
+   * `blocked`, below "needs you" and above "working".
+   */
+  blockedBy?: string | null;
+}
+
 /**
  * The same reduction for ONE session row — with one deliberate difference: a
  * terminal row is `done`, full stop. Owed slots outlive their session, and the
@@ -163,11 +173,15 @@ export function projectAggregateInput(
  * aggregate verbatim drew "Needs you" on a closed session. The obligation
  * belongs to the project's needs-you section, not to the finished row.
  */
-export function sessionRowInput(
-  session: ProjectAggregateSessionFact
-): UnitStateInput {
+export function sessionRowInput(session: SessionRowFact): UnitStateInput {
   if (isTerminalSessionStatus(session.status)) {
     return { terminal: true, progress: { done: 1, total: 1 } };
   }
-  return projectAggregateInput({ sessions: [session], unreadable: false });
+  const input = projectAggregateInput({
+    sessions: [session],
+    unreadable: false,
+  });
+  // Blocked sits below "needs you" and above "working" in the derivation, so
+  // adding the fact beside the aggregate's one leading fact is safe either way.
+  return session.blockedBy ? { ...input, blockedBy: session.blockedBy } : input;
 }

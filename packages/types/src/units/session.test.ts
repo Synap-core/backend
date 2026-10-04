@@ -129,4 +129,24 @@ describe("sessionRowInput — one row of a project", () => {
       ).state
     ).toBe("needs_you");
   });
+
+  it("an open row waiting on another open session is blocked — and needing you still outranks it", () => {
+    // Rules out the aggregate verbatim, which has no blocked arm: it read a
+    // waiting row as `working` (the work map's `blocked` mark had no shared home).
+    const row = (actor: "user" | "ai") =>
+      resolveUnitState(
+        sessionRowInput({
+          status: "active",
+          nextMoveActor: actor,
+          blockedBy: "Build the import",
+        })
+      ).state;
+    expect(row("ai")).toBe("blocked");
+    expect(row("user")).toBe("needs_you");
+    // A closed row is done, blocker or not.
+    expect(
+      resolveUnitState(sessionRowInput({ status: "closed", blockedBy: "x" }))
+        .state
+    ).toBe("done");
+  });
 });
