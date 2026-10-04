@@ -1149,9 +1149,13 @@ EOF
         local pod_url
         pod_url=$(_synap_pod_url)
         local token
-        token=$(_synap_bootstrap_token || true)
+        # The pod authorizes /api/hub/setup/magic-link with PROVISIONING_TOKEN
+        # (packages/api/src/routers/hub-protocol/rest/setup.ts) — NOT
+        # ADMIN_BOOTSTRAP_TOKEN, and the route lives under /api/hub. Sending
+        # either the wrong token or the bare /setup path could never succeed.
+        token=$(grep "^PROVISIONING_TOKEN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || true)
         if [ -z "$token" ]; then
-            echo -e "${RED}No ADMIN_BOOTSTRAP_TOKEN in .env — magic link cannot be authorized.${NC}"
+            echo -e "${RED}No PROVISIONING_TOKEN in .env — magic link cannot be authorized.${NC}"
             exit 1
         fi
         local body
@@ -1160,7 +1164,7 @@ EOF
             -H "Authorization: Bearer ${token}" \
             -H "Accept: application/json" \
             -d "{\"email\":\"${email}\"}" \
-            "${pod_url}/setup/magic-link" 2>&1)
+            "${pod_url}/api/hub/setup/magic-link" 2>&1)
         local status=$?
         if [ $status -ne 0 ]; then
             echo -e "${RED}Failed to mint magic link: ${body}${NC}"
