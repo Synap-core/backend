@@ -309,9 +309,17 @@ export async function readMCPResourceViaHubProtocol(
     const entityId = parts[1];
 
     if (entityId) {
-      const all = await caller.entities.getEntities({ userId, limit: 1 });
-      const entity = all.find((e: { id: string }) => e.id === entityId);
-      if (!entity) throw new Error(`Entity not found: ${uri}`);
+      // Single-entity read through the same door as `synap_get_entity` — the
+      // Hub caller has no by-id get (fetching one row and `.find`ing in it
+      // reported "not found" for almost every id).
+      const { createHubProtocolCallerContext } =
+        await import("../hub-protocol/utils.js");
+      const { entitiesRouter } = await import("../entities.js");
+      const entity = await entitiesRouter
+        .createCaller(
+          await createHubProtocolCallerContext(userId, apiKeyScopes)
+        )
+        .get({ id: entityId });
       return {
         contents: [
           { uri, mimeType: "application/json", text: JSON.stringify(entity) },
