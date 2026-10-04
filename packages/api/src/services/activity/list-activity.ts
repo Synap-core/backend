@@ -27,8 +27,9 @@
  * Date would truncate it and silently skip rows that share a millisecond) and
  * the row key `<source>:<uuid>`. Each source compares it as the row value
  * `(at, id) < (cursor.at, cursor.id)` so it can walk an `(at DESC, id DESC)`
- * index (migration 0288); see `window` for why that is the same order JS
- * merges in.
+ * index (migrations 0288, 0296 for automation runs; the session source's
+ * live/settled `CASE` has none — it scans its smaller table); see `window` for
+ * why that is the same order JS merges in.
  *
  * A SESSION's `at` is not fixed: it is its start while live and its close once
  * settled. A session that closes between two page reads moves ahead of the
