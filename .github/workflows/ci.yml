@@ -134,6 +134,7 @@ jobs:
           bash deploy/__tests__/pgdata-safety.test.sh
           bash deploy/__tests__/ensure-ory-databases.test.sh
           bash deploy/__tests__/port-exposure.test.sh
+          bash deploy/__tests__/backup-loop.test.sh
 
       - name: Check orphaned REST route files
         run: node packages/api/src/routers/hub-protocol/rest/check-orphan-routes.mjs
