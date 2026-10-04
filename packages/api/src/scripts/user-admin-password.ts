@@ -9,6 +9,7 @@
  */
 
 export type PasswordStep =
+  | "password-too-weak"
   | "identity-not-found"
   | "kratos-refused-password"
   | "verification-login-failed";
@@ -145,6 +146,14 @@ export async function verifyPasswordLogin(
   if (res.status !== 200) throw fail(`Kratos answered HTTP ${res.status}`);
 }
 
+/**
+ * Kratos enforces its password policy only on SELF-SERVICE flows — the admin
+ * API used here accepts anything (verified live 2026-10-04: "abc" was set and
+ * logged in). So the operator door enforces a floor itself, aligned with the
+ * Control Plane's 12-character minimum, BEFORE anything is changed.
+ */
+export const MIN_PASSWORD_LENGTH = 12;
+
 /** Set + prove. Resolves only when the new password really logs in. */
 export async function setPasswordAndVerify(opts: {
   admin: KratosAdminLike;
@@ -154,6 +163,12 @@ export async function setPasswordAndVerify(opts: {
   publicUrl: string;
   fetchImpl?: typeof fetch;
 }): Promise<void> {
+  if ([...opts.password].length < MIN_PASSWORD_LENGTH) {
+    throw new PasswordStepError(
+      "password-too-weak",
+      `Password must be at least ${MIN_PASSWORD_LENGTH} characters — nothing changed`
+    );
+  }
   const identity = await setIdentityPassword(
     opts.admin,
     opts.identityId,

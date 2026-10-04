@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Readable } from "node:stream";
 import {
+  MIN_PASSWORD_LENGTH,
   PasswordStepError,
   parseSecretFromStdin,
   readStdin,
@@ -110,12 +111,37 @@ describe("setPasswordAndVerify", () => {
       admin: k.admin,
       identityId: "id1",
       email: "x@y.z",
-      password: "short",
+      password: "long-enough-but-refused",
       publicUrl: URL_,
       fetchImpl: f,
     }).catch((e) => e);
     expect(err.step).toBe("kratos-refused-password");
     expect(f).not.toHaveBeenCalled();
+  });
+
+  // Kratos' admin API applies NO password policy (live 2026-10-04: "abc" was set
+  // and logged in), so the floor is ours — and it must hold before any change.
+  it("refuses a password under the minimum without touching Kratos", async () => {
+    const k = fakeKratos();
+    const f = vi.fn(k.fetchImpl);
+    const err = await setPasswordAndVerify({
+      admin: k.admin,
+      identityId: "id1",
+      email: "x@y.z",
+      password: "abc",
+      publicUrl: URL_,
+      fetchImpl: f,
+    }).catch((e) => e);
+    expect(err.step).toBe("password-too-weak");
+    expect(k.puts).toHaveLength(0);
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it("puts the floor exactly at MIN_PASSWORD_LENGTH characters", async () => {
+    expect(MIN_PASSWORD_LENGTH).toBe(12);
+    const short = await run(fakeKratos(), "x".repeat(MIN_PASSWORD_LENGTH - 1)).catch((e) => e);
+    expect(short.step).toBe("password-too-weak");
+    await expect(run(fakeKratos(), "x".repeat(MIN_PASSWORD_LENGTH))).resolves.toBeUndefined();
   });
 
   it("reports verification failure when Kratos public API is unreachable", async () => {
