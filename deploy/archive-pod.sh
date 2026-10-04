@@ -15,9 +15,11 @@ CALLBACK_JWT="$3"
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE="docker compose -p synap-backend -f ${DEPLOY_DIR}/docker-compose.yml"
 
-ARCHIVE="/tmp/pod-archive.tar.gz"
-DB_DUMP="/tmp/database.sql.gz"
-VOL_ARCHIVE="/tmp/volumes.tar.gz"
+WORK="${ARCHIVE_WORK_DIR:-/tmp}"
+ARCHIVE="${WORK}/pod-archive.tar.gz"
+DB_DUMP="${WORK}/database.sql.gz"
+DB_RAW="${WORK}/database.sql"
+VOL_ARCHIVE="${WORK}/volumes.tar.gz"
 UPLOAD_OK="false"
 ERROR=""
 
@@ -40,7 +42,7 @@ report() {
 }
 
 cleanup() {
-  rm -f "$DB_DUMP" "$VOL_ARCHIVE" "$ARCHIVE"
+  rm -f "$DB_DUMP" "$DB_RAW" "$VOL_ARCHIVE" "$ARCHIVE"
 }
 
 # Always clean up and callback, even on failure
@@ -54,15 +56,32 @@ $COMPOSE stop backend realtime redis minio typesense kratos hydra 2>&1 || true
 
 # ── Step 2: Dump database ──
 log "Dumping database..."
-if $COMPOSE exec -T postgres pg_dumpall -U synap 2>/dev/null | gzip > "$DB_DUMP"; then
-  DB_SIZE=$(wc -c < "$DB_DUMP" 2>/dev/null | tr -d ' ')
-  log "Database dump complete (${DB_SIZE} bytes compressed)"
-else
-  log "WARN: Database dump failed — archive will not contain DB data"
-  rm -f "$DB_DUMP"
-  # Create empty placeholder so tar doesn't fail
-  : > "$DB_DUMP"
+# Dump to a plain file FIRST, then gzip: in `pg_dumpall | gzip` the pipeline's
+# exit status is gzip's, so a failed pg_dumpall used to look like success.
+# An empty/zero-byte dump is also a failure — never archive a placeholder.
+dump_failed() {
+  log "ERROR: $1 — aborting archive (nothing uploaded, pod kept running)"
+  cleanup
+  # Step 1 stopped the app services; bring them back so the pod stays usable.
+  $COMPOSE up -d 2>&1 || log "WARN: could not restart services after failed dump"
+  trap - EXIT
+  report "failed" "\"$1\""
+  log "=== Pod archive finished (upload=false) ==="
+  exit 1
+}
+
+if ! $COMPOSE exec -T postgres pg_dumpall -U synap > "$DB_RAW" 2>/dev/null; then
+  dump_failed "database dump failed"
 fi
+if [ ! -s "$DB_RAW" ]; then
+  dump_failed "database dump is empty"
+fi
+if ! gzip -c "$DB_RAW" > "$DB_DUMP" || [ ! -s "$DB_DUMP" ]; then
+  dump_failed "database dump compression failed"
+fi
+rm -f "$DB_RAW"
+DB_SIZE=$(wc -c < "$DB_DUMP" 2>/dev/null | tr -d ' ')
+log "Database dump complete (${DB_SIZE} bytes compressed)"
 
 # ── Step 3: Archive Docker volumes (minio data, typesense data) ──
 log "Archiving volumes..."
@@ -91,7 +110,7 @@ fi
 
 # ── Step 4: Bundle everything into a single archive ──
 log "Creating final archive..."
-tar czf "$ARCHIVE" -C /tmp database.sql.gz volumes.tar.gz 2>&1
+tar czf "$ARCHIVE" -C "$WORK" database.sql.gz volumes.tar.gz 2>&1
 ARCHIVE_SIZE=$(wc -c < "$ARCHIVE" 2>/dev/null | tr -d ' ')
 log "Final archive: ${ARCHIVE_SIZE} bytes"
 rm -f "$DB_DUMP" "$VOL_ARCHIVE"
@@ -138,3 +157,4 @@ else
 fi
 
 log "=== Pod archive finished (upload=$UPLOAD_OK) ==="
+[ "$UPLOAD_OK" = "true" ] || exit 1
