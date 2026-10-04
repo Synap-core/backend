@@ -43,7 +43,7 @@ export const RECOVERY_CODES_LOW_AT = 2;
  * `set`. Reading `set` first would make "None left" unreachable.
  */
 export function recoveryCodesMark(
-  codes: Pick<AccountRecoveryStatus["recoveryCodes"], "set" | "remaining" | "total">
+  codes: AccountRecoveryStatus["recoveryCodes"]
 ): RecoveryMark {
   if (codes.remaining <= 0 && codes.total > 0) {
     return { tone: "error", glyph: "alert", label: "None left" };

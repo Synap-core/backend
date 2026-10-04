@@ -10,7 +10,7 @@ import {
 
 /** Shaped the way the pod's `/status` builds it: `set` is `remaining > 0`. */
 function wire(remaining: number, total: number = RECOVERY_CODE_COUNT) {
-  return { set: remaining > 0, remaining, total };
+  return { set: remaining > 0, remaining, total, createdAt: total > 0 ? "2026-10-04T00:00:00Z" : null };
 }
 
 describe("recoveryCodesMark", () => {
