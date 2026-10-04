@@ -47,7 +47,9 @@ export const LENS_SECTION_LABELS = {
   blocking: "Needs you",
   happening: "Happening",
   produced: "Produced",
-  structure: "Work",
+  // The work-structure slot (Map | Steps | Zoom) is the PLAN (founder default,
+  // 2026-10-05): "Work" already names the app, its page and its breadcrumb.
+  structure: "Plan",
   proposed: "Proposed",
   happened: "Happened",
   data: "Data",

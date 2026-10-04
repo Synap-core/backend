@@ -166,6 +166,8 @@ describe("lensBannerOfStatus — ONE banner", () => {
       tone: "error",
       title: "Hub degraded (newer)",
       more: 1,
+      target: null,
+      notificationIds: [],
     });
   });
 });

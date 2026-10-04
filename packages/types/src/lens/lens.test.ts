@@ -13,6 +13,8 @@ import type { ActivityRow } from "../activity/index.js";
 import {
   ATTENTION_CLASSES,
   LENS_CAPS,
+  LENS_SCOPE_HAS_PULSE,
+  LENS_SECTION_LABELS,
   LENS_SECTION_ORDER,
   LENS_SCOPE_FACT_KIND,
   batchHappened,
@@ -433,7 +435,53 @@ describe("lensHeaderModel", () => {
   });
 });
 
+describe("header doors point only at sections that are on the page", () => {
+  it("a READ zero omits its door; an unknown (null) keeps it, numberless", () => {
+    // Disagreeing rules: "always three doors" draws Happening 0 (a door to an
+    // omitted section); "omit falsy" also drops the null door — but a failed
+    // section still draws (with its retry), so its door must stay.
+    const m = lensHeaderModel({
+      scopeKind: "project",
+      state: {},
+      counts: { blocking: null, happening: 0, produced: 2 },
+    });
+    expect(m.doors).toEqual([
+      { section: "blocking", label: "Needs you", count: null },
+      { section: "produced", label: "Produced", count: 2 },
+    ]);
+  });
+  it("the model carries its scope kind; a session lens has NO pulse", () => {
+    expect(
+      lensHeaderModel({
+        scopeKind: "session",
+        state: {},
+        counts: { blocking: 0, happening: 0, produced: 0 },
+      }).scopeKind
+    ).toBe("session");
+    expect(LENS_SCOPE_HAS_PULSE.session).toBe(false);
+    expect(LENS_SCOPE_HAS_PULSE.project).toBe(true);
+    expect(LENS_SCOPE_HAS_PULSE.track).toBe(true);
+  });
+  it("the work-structure slot is named Plan (not Work, which names the app)", () => {
+    expect(LENS_SECTION_LABELS.structure).toBe("Plan");
+  });
+});
+
 describe("lensStatusBanner — ONE, deduplicated", () => {
+  it("carries the lead's door and EVERY folded condition's notifications", () => {
+    const b = lensStatusBanner([
+      {
+        key: "hub",
+        tone: "error",
+        title: "Hub degraded",
+        target: { kind: "app", id: "settings" },
+        notificationIds: ["n1", "n2"],
+      },
+      { key: "disk", tone: "info", title: "Disk", notificationIds: ["n3", "n1"] },
+    ]);
+    expect(b!.target).toEqual({ kind: "app", id: "settings" });
+    expect(b!.notificationIds).toEqual(["n1", "n2", "n3"]);
+  });
   it("dedupes by key and leads with the worst tone", () => {
     const b = lensStatusBanner([
       {
@@ -455,6 +503,8 @@ describe("lensStatusBanner — ONE, deduplicated", () => {
       tone: "error",
       title: "Pod unreachable",
       more: 1,
+      target: null,
+      notificationIds: [],
     });
     expect(lensStatusBanner([])).toBeNull();
   });

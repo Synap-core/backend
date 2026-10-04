@@ -21,6 +21,7 @@ import {
   type UnitStateView,
 } from "../units/state.js";
 import { LENS_SECTION_LABELS } from "./classes.js";
+import type { LensDoor } from "./rows.js";
 import type { LensScopeKind } from "./scope.js";
 
 export interface LensCounts {
@@ -55,6 +56,21 @@ export const LENS_SCOPE_FACT_KIND = {
   session: "criteria",
 } as const satisfies Record<LensScopeKind, LensScopeFact["kind"] | null>;
 
+/**
+ * Whether a lens of this scope kind carries the PULSE (the activity heatmap).
+ * A session is a short-lived object, so a weeks-long heatmap of it says
+ * nothing (founder, 2026-10-05): the session lens has NO pulse. The web kit
+ * reads this and drops a pulse handed to a session header, so a host cannot
+ * put one back.
+ */
+export const LENS_SCOPE_HAS_PULSE = {
+  pod: true,
+  workspace: true,
+  project: true,
+  track: true,
+  session: false,
+} as const satisfies Record<LensScopeKind, boolean>;
+
 /** The fact's words, or null when the fact is a date (the host formats dates). */
 export function lensScopeFactLabel(fact: LensScopeFact): string | null {
   if (fact.kind === "step") {
@@ -81,6 +97,8 @@ export interface LensCountDoor {
 }
 
 export interface LensHeaderModel {
+  /** The scope kind this header is for (decides e.g. whether it has a pulse). */
+  scopeKind: Exclude<LensScopeKind, "pod">;
   state: UnitStateView;
   narrative: LensNarrativePart[];
   doors: LensCountDoor[];
@@ -133,15 +151,22 @@ export function lensHeaderModel<
   const last = iso(input.lastActivityAt);
   if (last) narrative.push({ key: "last-activity", at: last });
 
+  // A door to a section that is not on the page is a dead door: a READ zero
+  // omits its section, so it omits its door too ("Happening 0" pointed at
+  // nothing). An unknown count (null) keeps its door — that section still
+  // draws, failed, with its retry.
   const doors: LensCountDoor[] = (
     ["blocking", "happening", "produced"] as const
-  ).map((section) => ({
-    section,
-    label: LENS_SECTION_LABELS[section],
-    count: counts[section],
-  }));
+  )
+    .filter((section) => counts[section] !== 0)
+    .map((section) => ({
+      section,
+      label: LENS_SECTION_LABELS[section],
+      count: counts[section],
+    }));
 
   return {
+    scopeKind: input.scopeKind,
     state: resolveUnitState(input.state),
     narrative,
     doors,
@@ -160,6 +185,10 @@ export interface LensBannerInput {
   tone: LensBannerTone;
   title: string;
   occurredAt?: string | Date | null;
+  /** Where the condition is looked at (the banner's door). */
+  target?: LensDoor | null;
+  /** The notifications behind it — dismissing the banner marks them read. */
+  notificationIds?: readonly string[];
 }
 
 export interface LensBanner {
@@ -168,6 +197,10 @@ export interface LensBanner {
   title: string;
   /** Other distinct conditions folded under it ("+2 more"). */
   more: number;
+  /** The lead condition's door, when it has one. */
+  target: LensDoor | null;
+  /** EVERY folded condition's notifications: one dismiss clears the banner. */
+  notificationIds: string[];
 }
 
 /**
@@ -198,5 +231,9 @@ export function lensStatusBanner(
     tone: lead.tone,
     title: lead.title,
     more: all.length - 1,
+    target: lead.target ?? null,
+    notificationIds: [
+      ...new Set(inputs.flatMap((b) => [...(b.notificationIds ?? [])])),
+    ],
   };
 }

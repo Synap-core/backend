@@ -91,6 +91,8 @@ export interface LensPageStatusIssue {
   title: string;
   occurredAt: string | Date;
   target?: LensDoor | null;
+  /** The notifications behind the condition (the banner's dismiss marks them read). */
+  notificationIds?: readonly string[];
 }
 
 /** The page — `LensPageWire`. */
@@ -247,6 +249,8 @@ export function lensBannerOfStatus(
       tone: "error" as const,
       title: i.title,
       occurredAt: i.occurredAt,
+      target: i.target ?? null,
+      notificationIds: i.notificationIds ?? [],
     }))
   );
 }
