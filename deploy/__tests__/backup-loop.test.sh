@@ -1,48 +1,73 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Behaviour of the postgres-backup loop (deploy/docker-compose.yml), executed for
-# real: the entrypoint script is EXTRACTED from the compose file (never a copy),
-# its /backups and /synap-state paths are pointed at a temp dir, and psql /
-# pg_dump / pg_restore / sleep are faked on PATH. One loop iteration per run.
+# Behaviour of the scheduled backup (compose `postgres-backup`), executed for
+# real: the service's entrypoint and environment are EXTRACTED from the
+# compose file (never a copy), its container paths (/backups, /synap-state,
+# /synap-deploy) are pointed at a temp dir holding the REAL
+# deploy/pgdata-safety.sh, and psql / pg_dump / pg_restore / pg_isready / sleep
+# are faked on PATH. One loop iteration per run.
 #
 # Pins the 2026-10-04 retention fix: a dump of an EMPTIED pod must never rotate
 # the good dumps out. Scenarios: first dump · normal rotation keeps BACKUP_KEEP ·
 # 0 users while initialized → SUSPECT + alarm + nothing pruned · entities halved
-# → SUSPECT · a good dump afterwards clears the alarm.
+# → SUSPECT · a good dump afterwards clears the alarm · every run leaves a
+# metadata row for backup_runs.
+#
+# 2026-10-04 (backup engine): the inline loop moved into pgdata-safety.sh
+# `backup_loop` (§7: the inline loop was a second implementation of
+# pgdata_backup). Changes to this test, all from that extraction: the script
+# is now run through the entrypoint instead of being the entrypoint; the
+# fingerprint is the one `_pgs_fingerprint` writes (users|entities|api_keys,
+# field 2 still entities, so pre-existing `-daily` dumps still gate); good
+# dumps are named `-auto` (the cadence is hourly) and legacy `-daily` ones
+# rotate with them. Off-host push/drill are covered in backup-offhost.test.sh.
 # NOT covered: real pg_dump/pg_restore, the healthcheck command itself.
 # ============================================================================
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${BACKUP_TEST_COMPOSE_FILE:-$SCRIPT_DIR/../docker-compose.yml}"
+SAFETY="${BACKUP_TEST_SAFETY:-$SCRIPT_DIR/../pgdata-safety.sh}"
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); echo "  ✓ $*"; }
 bad() { FAIL=$((FAIL+1)); echo "  ✗ $*"; }
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/bin" "$T/backups" "$T/state"
-python3 - "$COMPOSE_FILE" > "$T/loop.sh" <<'PY'
-import sys, yaml
+mkdir -p "$T/bin" "$T/backups" "$T/state" "$T/deploy"
+cp "$SAFETY" "$T/deploy/pgdata-safety.sh"
+: > "$T/deploy/.env"
+
+# entrypoint script + environment (KEY=VALUE lines, compose defaults resolved)
+python3 - "$COMPOSE_FILE" "$T/loop.sh" "$T/env" <<'PY'
+import re, sys, yaml
 svc = yaml.safe_load(open(sys.argv[1]))["services"]["postgres-backup"]
 ep = svc["entrypoint"]; script = ep[-1] if isinstance(ep, list) else ep
-print(script.replace("$$", "$"))       # compose escape → shell
+open(sys.argv[2], "w").write(script.replace("$$", "$"))
+env = svc.get("environment") or {}
+with open(sys.argv[3], "w") as f:
+    for k, v in env.items():
+        v = re.sub(r"\$\{[A-Z_]+:-([^}]*)\}", r"\1", str(v))
+        v = re.sub(r"\$\{[A-Z_]+\}", "", v)
+        f.write(f"{k}={v}\n")
 PY
-sed -i.bak -e "s#/backups#$T/backups#g" -e "s#/synap-state#$T/state#g" "$T/loop.sh"
-[ "$(grep -c "$T/backups" "$T/loop.sh")" -ge 3 ] && grep -q "pg_dump" "$T/loop.sh" && ok "extracted loop script and repointed paths (non-vacuity)" \
-    || { bad "could not extract/repoint the loop script"; exit 1; }
+repoint() { sed -i.bak -e "s#/synap-deploy#$T/deploy#g" -e "s#/synap-state#$T/state#g" -e "s#/backups#$T/backups#g" "$1"; }
+repoint "$T/loop.sh"; repoint "$T/env"
+grep -q "$T/deploy/pgdata-safety.sh loop" "$T/loop.sh" && grep -q "^SYNAP_BACKUPS_DIR=$T/backups$" "$T/env" \
+    && ok "extracted entrypoint runs pgdata-safety.sh loop; env repointed (non-vacuity)" \
+    || { bad "could not extract/repoint the entrypoint ($(cat "$T/loop.sh"))"; exit 1; }
 
 cat > "$T/bin/psql" <<'SH'
 #!/bin/sh
 case "$*" in
   *pg_database*) printf 'synap\nkratos\n' ;;
-  *"from users"*) echo "${FAKE_USERS:-0}" ;;
-  *"from entities"*) echo "${FAKE_ENTS:-0}" ;;
+  *"from api_keys"*) echo "${FAKE_USERS:-0}|${FAKE_ENTS:-0}|1" ;;
+  *"insert into backup_runs"*) printf '%s\n' "$*" >> "$RUNS_LOG" ;;
+  *) exit 1 ;;
 esac
 SH
-cat > "$T/bin/pg_dump" <<'SH'
-#!/bin/sh
-while [ $# -gt 0 ]; do [ "$1" = -f ] && { echo dump > "$2"; }; shift; done
-SH
-printf '#!/bin/sh\nexit 0\n' > "$T/bin/pg_restore"
+printf '#!/bin/sh\necho dump\n' > "$T/bin/pg_dump"
+printf '#!/bin/sh\ncat >/dev/null; exit 0\n' > "$T/bin/pg_restore"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/pg_isready"
+printf '#!/bin/sh\necho "restic must not run without a repository: $*" >> "$RUNS_LOG"; exit 1\n' > "$T/bin/restic"
 printf '#!/bin/sh\nkill -TERM $PPID\n' > "$T/bin/sleep"            # one iteration only
 # GNU `head -n -K` (drop last K) is used by the loop; BSD head lacks it — shim it.
 cat > "$T/bin/head" <<'SH'
@@ -56,31 +81,41 @@ else:
     import subprocess; sys.exit(subprocess.call(["/usr/bin/head", *a]))
 SH
 chmod +x "$T/bin/"*
+export RUNS_LOG="$T/runs.log"; : > "$RUNS_LOG"
 
 run() {  # users ents
     sleep 1.1   # distinct timestamps (real sleep; PATH not yet patched)
-    FAKE_USERS="$1" FAKE_ENTS="$2" BACKUP_KEEP=2 BACKUP_INTERVAL_SECONDS=60 PATH="$T/bin:$PATH" \
-        sh "$T/loop.sh" >"$T/out" 2>&1 &
+    ( set -a; . "$T/env"; set +a
+      FAKE_USERS="$1" FAKE_ENTS="$2" BACKUP_KEEP=2 PATH="$T/bin:$PATH" exec sh "$T/loop.sh" ) >"$T/out" 2>&1 &
     wait $! 2>/dev/null || true   # the fake `sleep` TERMs the loop after one pass
 }
-dailies() { ls -1d "$T/backups/"*-daily 2>/dev/null | wc -l | tr -d ' '; }
+dailies() { ls -1d "$T/backups/"*-auto 2>/dev/null | wc -l | tr -d ' '; }
 suspects() { ls -1d "$T/backups/"*-SUSPECT 2>/dev/null | wc -l | tr -d ' '; }
 
 echo "── first dumps / rotation"
-run 5 100; [ "$(dailies)" = 1 ] && [ -e "$T/state/postgres-initialized" ] && ok "first dump published, pod marked initialized" || bad "first dump: dailies=$(dailies) marker=$(ls "$T/state")"
-fp="$(cat "$(ls -1d "$T/backups/"*-daily | tail -1)/fingerprint")"; [ "$fp" = "5|100" ] && ok "fingerprint recorded ($fp)" || bad "fingerprint=$fp"
-run 5 110; run 6 120; [ "$(dailies)" = 2 ] && ok "rotation keeps BACKUP_KEEP=2 good dumps" || bad "rotation: dailies=$(dailies)"
+run 5 100; [ "$(dailies)" = 1 ] && [ -e "$T/state/postgres-initialized" ] && ok "first dump published, pod marked initialized" || { bad "first dump: dailies=$(dailies) marker=$(ls "$T/state")"; cat "$T/out"; }
+fp="$(cat "$(ls -1d "$T/backups/"*-auto | tail -1)/fingerprint")"; [ "$fp" = "5|100|1" ] && ok "fingerprint recorded ($fp)" || bad "fingerprint=$fp"
+grep -q "'backup', 'ok'" "$RUNS_LOG" && grep -q "5|100|1" "$RUNS_LOG" && ok "run recorded in backup_runs (ok, fingerprint)" || bad "no backup_runs row: $(cat "$RUNS_LOG")"
+# A legacy `-daily` dump (pre-extraction name) rotates with the new ones.
+mkdir -p "$T/backups/20000101T000000Z-daily"; echo "5|90" > "$T/backups/20000101T000000Z-daily/fingerprint"
+run 5 110; run 6 120; [ "$(dailies)" = 2 ] && [ ! -e "$T/backups/20000101T000000Z-daily" ] && ok "rotation keeps BACKUP_KEEP=2 good dumps (legacy -daily rotated out)" || bad "rotation: dailies=$(dailies) legacy=$(ls "$T/backups")"
+! grep -q "restic must not run" "$RUNS_LOG" && ok "no repository configured → restic never invoked" || bad "restic ran without a repository"
 
 echo "── emptied pod"
-before="$(ls -1d "$T/backups/"*-daily | xargs -n1 basename | tr '\n' ' ')"
+before="$(ls -1d "$T/backups/"*-auto | xargs -n1 basename | tr '\n' ' ')"
 run 0 0
-after="$(ls -1d "$T/backups/"*-daily | xargs -n1 basename | tr '\n' ' ')"
+after="$(ls -1d "$T/backups/"*-auto | xargs -n1 basename | tr '\n' ' ')"
 # Compare the SET of good dumps, not a count: the pre-fix loop kept the count at
 # BACKUP_KEEP while swapping a good dump for an empty one.
-[ "$before" = "$after" ] && ok "0 users: the same good dumps survive (none pruned or replaced)" || bad "0 users changed the good dumps: [$before] -> [$after]"
+[ -n "$before" ] && [ "$before" = "$after" ] && ok "0 users: the same good dumps survive (none pruned or replaced)" || bad "0 users changed the good dumps: [$before] -> [$after]"
 [ "$(suspects)" = 1 ] && [ -e "$T/backups/.alarm" ] && ok "0 users: kept as SUSPECT + alarm raised" || bad "0 users: suspects=$(suspects) alarm=$([ -e "$T/backups/.alarm" ] && echo y || echo n)"
+grep -q "'backup', 'suspect'" "$RUNS_LOG" && ok "SUSPECT run recorded in backup_runs" || bad "no suspect row"
 run 6 50
 [ "$(suspects)" = 2 ] && [ "$(dailies)" = 2 ] && ok "entities 120→50: SUSPECT, nothing pruned" || bad "halved: suspects=$(suspects) dailies=$(dailies)"
+# Discriminating row: users wiped while entities stay — only the 0-users rule
+# catches it (`run 0 0` above is also caught by the entities rule).
+run 0 130
+[ "$(suspects)" = 3 ] && [ "$(dailies)" = 2 ] && ok "0 users, entities intact: SUSPECT (0-users rule on its own)" || bad "users-only wipe: suspects=$(suspects) dailies=$(dailies)"
 
 echo "── recovery"
 run 6 125

@@ -104,7 +104,10 @@ if isinstance(bk, dict):
     check(("./state", "/synap-state") in bvols, "S5 backup shares ./state (writes the initialized marker)")
     check(bool(bk.get("healthcheck")), "S5 backup has a healthcheck (stale backups surface as unhealthy)")
     bscript = "\n".join(bk.get("entrypoint") or [])
-    check("pg_restore -l" in bscript and ".partial" in bscript, "S5 each dump is read back before being published")
+    # The loop is pgdata-safety.sh's backup_loop (one implementation); its
+    # read-back + gate behaviour is executed in backup-loop.test.sh.
+    check("pgdata-safety.sh loop" in bscript, "S5 backup entrypoint delegates to pgdata-safety.sh loop (no inline second implementation)")
+    check(any(t == "/synap-deploy" and s in (".", "./") for (s, t) in bvols), "S5 the deploy dir (script + .env) is mounted at /synap-deploy")
 sys.exit(1 if fails else 0)
 PY
 if [ $? -eq 0 ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi

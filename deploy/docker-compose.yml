@@ -421,15 +421,21 @@ services:
       retries: 5
 
   # ============================================================================
-  # POSTGRES BACKUP — daily logical dumps of EVERY database (synap, kratos,
-  # hydra, …) to deploy/backups/postgres on the HOST. A bind mount on purpose:
-  # `docker system prune --volumes` and `compose down -v` cannot touch it, and
-  # host-level backup (restic/PBS) picks it up as a plain directory.
-  # Each run writes <UTC>-daily/<db>.dump, reads every dump back (pg_restore -l)
-  # before publishing it, keeps the newest PG_BACKUP_KEEP, and marks
-  # deploy/state/postgres-initialized once the pod has users. Unhealthy when no
-  # dump newer than 2× the interval exists — a silent backup is a broken one.
-  # Restore: deploy/pgdata-safety.sh restore deploy/backups/postgres/<dir>
+  # POSTGRES BACKUP — the pod's ONE backup door, run on a schedule. The loop is
+  # deploy/pgdata-safety.sh `backup_loop` (mounted read-only from this dir) —
+  # the SAME functions `synap backup push|drill` run, never a second copy.
+  # Every BACKUP_INTERVAL_SECONDS (hourly) it dumps EVERY database (synap,
+  # kratos, hydra, …) to deploy/backups/postgres on the HOST (a bind mount:
+  # `prune --volumes` / `down -v` cannot touch it), reads each dump back,
+  # fingerprints it (users|entities|api_keys) and keeps the newest
+  # PG_BACKUP_KEEP. A dump of an EMPTIED pod (0 users, or entities halved while
+  # deploy/state/postgres-initialized exists) is kept aside as SUSPECT: nothing
+  # pruned, nothing pushed, .alarm raised. Once `synap backup init` ran, each
+  # good dump + MinIO objects + .env + state/ is pushed as an encrypted restic
+  # snapshot to BACKUP_REPOSITORY (append-only: the pod never forgets/prunes),
+  # and a restore drill runs weekly. Unhealthy when no recent dump exists or
+  # any of .alarm / .push-failed / .drill-failed is set.
+  # Restore: synap restore --from-snapshot <id|latest>  |  synap restore <dir>
   # ============================================================================
   postgres-backup:
     image: ${SYNAP_IMAGE_POSTGRES:-timescale/timescaledb-ha:pg15}
@@ -442,57 +448,23 @@ services:
       PGHOST: postgres
       PGUSER: synap
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      BACKUP_INTERVAL_SECONDS: ${PG_BACKUP_INTERVAL_SECONDS:-86400}
-      BACKUP_KEEP: ${PG_BACKUP_KEEP:-7}
+      SYNAP_PG_DIRECT: "1"
+      SYNAP_BACKUPS_DIR: /backups
+      SYNAP_STATE_DIR: /synap-state
+      SYNAP_ENV_FILE: /synap-deploy/.env
+      BACKUP_INTERVAL_SECONDS: ${PG_BACKUP_INTERVAL_SECONDS:-3600}
+      BACKUP_KEEP: ${PG_BACKUP_KEEP:-24}
+      BACKUP_DRILL_INTERVAL_SECONDS: ${BACKUP_DRILL_INTERVAL_SECONDS:-604800}
     entrypoint:
       - /bin/sh
       - -c
       - |
-        mkdir -p /backups /synap-state
-        while :; do
-          d="/backups/$$(date -u +%Y%m%dT%H%M%SZ)-daily"; tmp="$$d.partial"; ok=1
-          mkdir -p "$$tmp"
-          for db in $$(psql -d postgres -Atc "select datname from pg_database where not datistemplate and datname <> 'postgres'"); do
-            pg_dump -Fc -f "$$tmp/$$db.dump" "$$db" && pg_restore -l "$$tmp/$$db.dump" >/dev/null || ok=0
-          done
-          if [ "$$ok" = 1 ] && ls "$$tmp"/*.dump >/dev/null 2>&1; then
-            # Fingerprint every dump. A dump of an EMPTIED pod must never rotate the
-            # good ones out: while the pod is marked initialized, zero users or a
-            # loss of more than half the entities vs the last good dump is SUSPECT —
-            # kept aside, nothing pruned, alarm raised (healthcheck goes unhealthy).
-            # Intentional wipe? remove deploy/state/postgres-initialized and
-            # deploy/backups/postgres/.alarm.
-            users=$$(psql -d synap -Atc "select count(*) from users" 2>/dev/null || echo 0)
-            ents=$$(psql -d synap -Atc "select count(*) from entities" 2>/dev/null || echo 0)
-            last=$$(ls -1d /backups/*-daily 2>/dev/null | sort | tail -n 1)
-            prev=$$(cut -d'|' -f2 "$$last/fingerprint" 2>/dev/null || echo "")
-            echo "$${users:-0}|$${ents:-0}" > "$$tmp/fingerprint"
-            suspect=""
-            if [ -e /synap-state/postgres-initialized ]; then
-              [ "$${users:-0}" -eq 0 ] 2>/dev/null && suspect="0 users"
-              [ -n "$$prev" ] && [ "$$prev" -gt 0 ] 2>/dev/null && [ $$(( $${ents:-0} * 2 )) -lt "$$prev" ] && suspect="entities $$prev -> $${ents:-0}"
-            fi
-            if [ -n "$$suspect" ]; then
-              mv "$$tmp" "$${d%-daily}-SUSPECT"
-              echo "[postgres-backup] ALARM: $$suspect — kept as SUSPECT, previous dumps NOT pruned" >&2
-              echo "$$suspect" > /backups/.alarm
-              ls -1d /backups/*-SUSPECT 2>/dev/null | sort | head -n -3 | xargs -r rm -rf
-            else
-              mv "$$tmp" "$$d" && echo "[postgres-backup] ok $$d ($$(du -sh "$$d" | cut -f1), users|entities $${users:-0}|$${ents:-0})"
-              [ "$${users:-0}" -gt 0 ] 2>/dev/null && date -u +%Y-%m-%dT%H:%M:%SZ > /synap-state/postgres-initialized
-              rm -f /backups/.alarm
-              ls -1d /backups/*-daily 2>/dev/null | sort | head -n -"$$BACKUP_KEEP" | xargs -r rm -rf
-            fi
-          else
-            echo "[postgres-backup] FAILED — keeping previous dumps" >&2; rm -rf "$$tmp"
-          fi
-          sleep "$$BACKUP_INTERVAL_SECONDS"
-        done
+        exec sh /synap-deploy/pgdata-safety.sh loop
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "test ! -e /backups/.alarm && find /backups -maxdepth 1 -name '*-daily' -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
+          "test ! -e /backups/.alarm && test ! -e /backups/.push-failed && test ! -e /backups/.drill-failed && find /backups -maxdepth 1 \\( -name '*-auto' -o -name '*-daily' \\) -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
         ]
       interval: 10m
       timeout: 10s
@@ -501,6 +473,10 @@ services:
     volumes:
       - ./backups/postgres:/backups
       - ./state:/synap-state
+      # pgdata-safety.sh and .env (MinIO + BACKUP_* settings, and the copy of
+      # the secrets that goes into each encrypted snapshot). The directory, not
+      # the single files: a rewritten .env would otherwise go stale in here.
+      - .:/synap-deploy:ro
     networks:
       - synap-net
 
