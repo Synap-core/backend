@@ -24,6 +24,7 @@
  */
 
 import { CHECK_GATE_METADATA_KEY } from "../focus-sessions/check-gate.js";
+import { resolveObjectNoun } from "../vocabulary/index.js";
 import type { UnitStateInput, UnitTone } from "./state.js";
 import {
   projectAggregateInput,
@@ -381,3 +382,26 @@ export function partitionSessionsByTrack<
   }
   return { groups: [...live.values()], remainder };
 }
+
+/**
+ * THE stage-placement rule for a track's session, shared by every surface
+ * that draws a track's sessions by stage (browser Stages + Zoom + track page,
+ * Relay's track page): the stage it was FILED at (`focus_sessions.track_stage`)
+ * when that names a pinned stage, else `null` — the ONE "not filed at a step"
+ * group. Never the track's CURRENT stage as a stand-in: a guess drawn in a
+ * column is a claim (orchestrator decision, 2026-10-04 — the Stages board once
+ * drew an unstamped session dashed in the current column while the track page
+ * listed it apart, so one session sat in two places two clicks apart).
+ */
+export function filedStageKey(
+  trackStage: string | null | undefined,
+  stages: ReadonlyArray<{ key: string }>
+): string | null {
+  if (!trackStage) return null;
+  return stages.some((stage) => stage.key === trackStage) ? trackStage : null;
+}
+
+/** The heading of that group — ONE spelling on every surface. */
+export const NOT_FILED_AT_A_STAGE = `Not filed at a ${resolveObjectNoun(
+  "stage"
+).toLowerCase()}`;

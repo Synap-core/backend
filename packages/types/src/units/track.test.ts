@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   canTransitionTrack,
   deriveTrackStages,
+  filedStageKey,
+  NOT_FILED_AT_A_STAGE,
   partitionSessionsByTrack,
   readTrackStage,
   readTrackStageHistory,
@@ -280,5 +282,25 @@ describe("trackPausedBy", () => {
         metadata: { checkGate: { stageKey: "x" } },
       })
     ).toBeNull();
+  });
+});
+
+describe("filedStageKey — THE stage-placement rule", () => {
+  const stages = [{ key: "draft" }, { key: "review" }];
+  it("a stamp naming a pinned stage places it there", () => {
+    expect(filedStageKey("review", stages)).toBe("review");
+  });
+  it("no stamp is NOT FILED — never the track's current stage as a stand-in", () => {
+    // Rules out the Stages/Zoom stand-in, which drew an unstamped session in
+    // the current column while the track pages listed it apart.
+    expect(filedStageKey(null, stages)).toBeNull();
+    expect(filedStageKey(undefined, stages)).toBeNull();
+    expect(filedStageKey("", stages)).toBeNull();
+  });
+  it("a stamp naming no pinned stage is not filed either, never dropped", () => {
+    expect(filedStageKey("gone", stages)).toBeNull();
+  });
+  it("the group's heading uses the user word for a stage", () => {
+    expect(NOT_FILED_AT_A_STAGE).toBe("Not filed at a step");
   });
 });

@@ -4,6 +4,10 @@ import {
   sessionUnitInput,
   projectAggregateInput,
   sessionRowInput,
+  openBlockerTitle,
+  pathRowNeedsYouItems,
+  pathRowSessionFact,
+  pathRowUnitView,
   type SessionUnitFacts,
 } from "./session.js";
 
@@ -113,13 +117,31 @@ describe("projectAggregateInput — a project over its sessions", () => {
 });
 
 describe("sessionRowInput — one row of a project", () => {
-  it("a closed row with a still-owed slot is done, not needs_you", () => {
-    // Rules out reusing the aggregate verbatim for a single row.
+  it("a closed row that still owes you NEEDS YOU — the needs-you rule, not the lifecycle, decides", () => {
+    // Rules out "terminal first": the row read ✓ while needs-you.ts (and Home)
+    // counted the same session as on you. The ONE row where the two rules
+    // disagree is closed + owed.
+    const closed = (unitFacts: {
+      owedFromYou: number | null;
+      pendingDecisions?: number | null;
+      draft?: boolean;
+    }) =>
+      resolveUnitState(sessionRowInput({ status: "closed", unitFacts })).state;
+    expect(closed({ owedFromYou: 1, pendingDecisions: 0 })).toBe("needs_you");
+    expect(closed({ owedFromYou: 0, pendingDecisions: 2 })).toBe("needs_you");
+    // Rules out "any owed count ⇒ you" on a draft, closed or not.
+    expect(closed({ owedFromYou: 1, pendingDecisions: 0, draft: true })).toBe(
+      "done"
+    );
+    // Nothing owed: a closed row is done (rules out "never done while facts exist").
+    expect(closed({ owedFromYou: 0, pendingDecisions: 0 })).toBe("done");
+    // The legacy actor agrees: the pod answers `user` for an owed slot on a
+    // closed session, so the old-pod path reads the same.
     expect(
       resolveUnitState(
         sessionRowInput({ status: "closed", nextMoveActor: "user" })
       ).state
-    ).toBe("done");
+    ).toBe("needs_you");
   });
 
   it("an open row whose next move is yours needs you", () => {
@@ -170,5 +192,87 @@ describe("sessionRowInput — one row of a project", () => {
       resolveUnitState(sessionRowInput({ status: "closed", blockedBy: "x" }))
         .state
     ).toBe("done");
+  });
+});
+
+describe("pathRowSessionFact — THE door every path surface reads a row through", () => {
+  const edges = (...items: Array<{ title: string; status: string }>) => ({
+    status: "ok" as const,
+    items,
+  });
+
+  it("the blocker is the first OPEN one; a finished or unreadable blocker blocks nothing", () => {
+    // Rules out "any blocked_by edge ⇒ blocked" (a finished blocker) and
+    // "unreadable ⇒ blocked" (the chip says couldn't load; the mark never guesses).
+    expect(
+      openBlockerTitle(
+        edges(
+          { title: "Done one", status: "closed" },
+          { title: "Spec", status: "active" }
+        )
+      )
+    ).toBe("Spec");
+    expect(openBlockerTitle(edges({ title: "x", status: "cancelled" }))).toBe(
+      null
+    );
+    expect(openBlockerTitle({ status: "unavailable" })).toBeNull();
+    expect(openBlockerTitle(null)).toBeNull();
+  });
+
+  it("an open row waiting on an open session reads blocked on every path surface", () => {
+    // Rules out the track page / Relay reading, which never passed the blocker
+    // and drew the same session `working`.
+    const view = pathRowUnitView({
+      status: "active",
+      unitFacts: { owedFromYou: 0, pendingDecisions: 0 },
+      blockedBy: edges({ title: "Build the import", status: "active" }),
+    });
+    expect(view.state).toBe("blocked");
+    expect(
+      pathRowUnitView({
+        status: "active",
+        unitFacts: { owedFromYou: 0, pendingDecisions: 0 },
+        blockedBy: edges({ title: "Build the import", status: "closed" }),
+      }).state
+    ).toBe("working");
+  });
+
+  it("a triage draft never needs you, even when its unitFacts predate `draft`", () => {
+    // Rules out trusting `unitFacts` alone: an older pod projects owed counts
+    // without `draft`, and the map once read 8 "needs you" vs the sidebar's 5.
+    const row = {
+      status: "active",
+      unitFacts: { owedFromYou: 2, pendingDecisions: 0 },
+      triage: { pending: true },
+    };
+    expect(pathRowUnitView(row).state).not.toBe("needs_you");
+    expect(pathRowSessionFact(row).unitFacts?.draft).toBe(true);
+    // …and its count agrees with its mark: zero, not the two owed slots.
+    expect(pathRowNeedsYouItems(row)).toBe(0);
+    // …and on the legacy actor, which cannot see a draft at all.
+    expect(
+      pathRowUnitView({
+        status: "active",
+        nextMoveActor: "user",
+        triage: { pending: true },
+      }).state
+    ).toBe("working");
+  });
+
+  it("the legacy actor is read only when unitFacts are absent", () => {
+    expect(
+      pathRowSessionFact({
+        status: "active",
+        unitFacts: { owedFromYou: 0, pendingDecisions: 0 },
+        nextMoveActor: "user",
+      })
+    ).toEqual({
+      status: "active",
+      unitFacts: { owedFromYou: 0, pendingDecisions: 0 },
+      blockedBy: null,
+    });
+    expect(
+      pathRowUnitView({ status: "active", nextMoveActor: "user" }).state
+    ).toBe("needs_you");
   });
 });

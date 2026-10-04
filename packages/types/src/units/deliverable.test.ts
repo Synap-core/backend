@@ -13,8 +13,12 @@ const RETIRED = "2026-09-05T00:00:00.000Z";
  * Every row names the rule it RULES OUT. The candidates are the rules this one
  * replaced or nearly became:
  *   A. `owner === "agent"` for the session's side (drops the pre-`owner` corpus)
- *   B. retirement checked on the human branch only (a retired human slot then
- *      belongs to no bucket — and reads "needs you" as a state)
+ *   B1. retirement checked on the human branch only (a retired AGENT slot
+ *      then still reads owed by the session — "working")
+ *   B2. retirement checked on the agent branch only (a retired HUMAN slot
+ *      then still reads "needs you")
+ *   I. `!retiredAt` as "not retired" (a stamped-but-empty `""` reads owed,
+ *      while the pod's SQL — `retiredAt IS NULL` — reads it retired)
  *   C. `status === "pending"` as "outstanding" (an unknown status reads done)
  *   D. owner checked before done (a delivered human slot reads "needs you")
  *   E. owner checked before the agent's claim (R6's first draft: a claimed
@@ -55,7 +59,23 @@ const FIXTURES: Array<{
     terminal: true,
     owedBy: null,
     state: "done",
-    rulesOut: "B",
+    rulesOut: "B2",
+  },
+  {
+    name: "agent, retired",
+    slot: { owner: "agent", retiredAt: RETIRED },
+    terminal: false,
+    owedBy: null,
+    state: "done",
+    rulesOut: "B1",
+  },
+  {
+    name: "human, retired with an empty stamp",
+    slot: { owner: "human", retiredAt: "" },
+    terminal: false,
+    owedBy: null,
+    state: "done",
+    rulesOut: "I",
   },
   {
     name: "unknown status",
@@ -136,8 +156,8 @@ describe("deliverable state — the discriminating table", () => {
   });
 
   it("outstanding and owed-by partition: retired and done are owed by nobody, symmetrically", () => {
+    expect(isDeliverableOutstanding({ retiredAt: RETIRED })).toBe(false);
     for (const owner of ["human", "agent", undefined]) {
-      expect(isDeliverableOutstanding({ retiredAt: RETIRED })).toBe(false);
       expect(deliverableOwedBy({ owner, retiredAt: RETIRED })).toBeNull();
       expect(deliverableOwedBy({ owner, status: "done" })).toBeNull();
     }

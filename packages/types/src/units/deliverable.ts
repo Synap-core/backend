@@ -76,7 +76,11 @@ export type DeliverableOwedBy = "you" | "session";
 export function isDeliverableOutstanding(
   slot: Pick<DeliverableFacts, "status" | "retiredAt">
 ): boolean {
-  return slot.status !== "done" && !slot.retiredAt;
+  // `retiredAt == null`, never `!retiredAt`: the pod's SQL mirror reads
+  // `slot->>'retiredAt' IS NULL`, so a stamped-but-empty `""` is RETIRED there.
+  // A falsy test here read it as still owed, and the row's TS tally then
+  // disagreed with the SQL owed count on the same `projects.path` row.
+  return slot.status !== "done" && slot.retiredAt == null;
 }
 
 /**

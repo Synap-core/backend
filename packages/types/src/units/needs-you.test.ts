@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   withProjectNeedsYouCount,
   needsYouReason,
+  needsYouItems,
   needsYouTotal,
   sessionNeedsYou,
   tallyNeedsYou,
@@ -152,5 +153,33 @@ describe("withProjectNeedsYouCount — the header's ONE state mark", () => {
     const rows = { owedFromYou: 0, progress: 0.5 };
     expect(withProjectNeedsYouCount(rows, 0)).toBe(rows);
     expect(withProjectNeedsYouCount(rows, null)).toBe(rows);
+  });
+});
+
+describe("needsYouItems — the per-row number a person glyph carries", () => {
+  it("counts ITEMS the way tallyNeedsYou does, so a row and its tally can never disagree", () => {
+    const rows: NeedsYouFacts[] = [
+      { owedFromYou: 2, pendingDecisions: 1 },
+      // Review counts only when it IS the reason — rules out the Zoom card's
+      // old hand sum, which added `awaitingReview` beside owed items (3, not 2).
+      { owedFromYou: 2, pendingDecisions: 0, awaitingReview: true },
+      { owedFromYou: 0, pendingDecisions: 0, awaitingReview: true },
+      // A draft contributes nothing — rules out the hand sum that ignored drafts.
+      { owedFromYou: 4, pendingDecisions: 0, draft: true },
+    ];
+    expect(rows.map(needsYouItems)).toEqual([3, 2, 1, 0]);
+    const sum = rows.reduce((n, row) => n + (needsYouItems(row) ?? 0), 0);
+    expect(sum).toBe(tallyNeedsYou(rows).total);
+  });
+
+  it("a failed part is null, never folded into zero", () => {
+    // Rules out `pendingDecisions ?? 0` on a failed read.
+    expect(
+      needsYouItems({ owedFromYou: 1, pendingDecisions: null })
+    ).toBeNull();
+    expect(needsYouItems({ owedFromYou: null })).toBeNull();
+    expect(needsYouItems(null)).toBeNull();
+    // `undefined` = not read: no claim, so it adds nothing.
+    expect(needsYouItems({ owedFromYou: 1 })).toBe(1);
   });
 });

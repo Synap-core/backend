@@ -90,6 +90,32 @@ export function needsYouTotal(parts: NeedsYouParts): number {
   return parts.owed + parts.decisions + parts.review;
 }
 
+/**
+ * THE per-ROW needs-you number — the count a person glyph carries on ONE
+ * session (a map bar, a stage card, a Zoom session card, a track tally's sum).
+ * ITEMS, the unit of every needs-you number in the product (`signals.count`,
+ * Home's Needs you, `tallyNeedsYou().total`): owed slots + pending decisions +
+ * 1 when the session awaits your review — review counted only when it IS the
+ * reason (`needsYouReason`), exactly as `tallyNeedsYou` counts it.
+ *
+ * `0` for a draft (drafts never need you). `null` when the facts were not
+ * carried, or a part's read FAILED — a count of nothing is not zero.
+ */
+export function needsYouItems(
+  facts: NeedsYouFacts | null | undefined
+): number | null {
+  if (!facts) return null;
+  if (facts.draft) return 0;
+  if (facts.owedFromYou === null || facts.pendingDecisions === null) {
+    return null;
+  }
+  return needsYouTotal({
+    owed: facts.owedFromYou,
+    decisions: facts.pendingDecisions ?? 0,
+    review: needsYouReason(facts) === "review" ? 1 : 0,
+  });
+}
+
 export interface NeedsYouTally extends NeedsYouParts {
   /** Sessions that need you (each counted once, whatever its reason). */
   sessions: number;

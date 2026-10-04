@@ -28,8 +28,16 @@
  */
 
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
-import type { UnitStateInput } from "./state.js";
-import { sessionNeedsYou, type NeedsYouFacts } from "./needs-you.js";
+import {
+  resolveUnitState,
+  type UnitStateInput,
+  type UnitStateView,
+} from "./state.js";
+import {
+  needsYouItems,
+  sessionNeedsYou,
+  type NeedsYouFacts,
+} from "./needs-you.js";
 
 /** Lifecycle statuses meaning a person or agent is actively in the session. */
 const RUNNING_SESSION_STATUSES: ReadonlySet<string> = new Set([
@@ -107,10 +115,18 @@ export interface ProjectAggregateSessionFact {
    * `unitFacts` to get the draft exclusion.
    */
   nextMoveActor?: "user" | "ai" | "none";
+  /**
+   * An agent draft still in triage (`triage.pending`). A draft never needs
+   * you — `unitFacts.draft` says so on a current pod; this carries the row's
+   * own triage for a pod whose `unitFacts` predate `draft`, and for the
+   * legacy actor (which cannot see a draft at all).
+   */
+  draft?: boolean;
 }
 
 /** Does this session need you? `unitFacts` through the one rule, else the legacy actor. */
 function aggregateNeedsYou(session: ProjectAggregateSessionFact): boolean {
+  if (session.draft) return false;
   return session.unitFacts
     ? sessionNeedsYou(session.unitFacts)
     : session.nextMoveActor === "user";
@@ -167,31 +183,115 @@ export interface SessionRowFact extends ProjectAggregateSessionFact {
 }
 
 /**
- * The same reduction for ONE session row — with one deliberate difference: a
- * terminal row is `done`, full stop. Owed slots outlive their session, and the
- * pod reports `actor: "user"` for them before it consults terminal; reusing the
- * aggregate verbatim drew "Needs you" on a closed session. The obligation
- * belongs to the project's needs-you section, not to the finished row.
+ * The same reduction for ONE session row, in this order:
+ *   1. it needs you (THE rule — owed + decisions + review, drafts never)
+ *      → `needs_you`, WHATEVER its lifecycle. A closed session that still owes
+ *      you a slot or a decision is on you: `needs-you.ts` counts it (owed
+ *      slots outlive their session; a pending proposal is pending whatever
+ *      became of the session that filed it), Home lists it, and the row says
+ *      the same (orchestrator decision, 2026-10-04). Before this, a terminal
+ *      row returned `done` FIRST, so one session read ✓ on the map and
+ *      "needs you" on Home.
+ *   2. terminal → `done`.
+ *   3. its own lifecycle (`sessionUnitInput`) — only active/forming is
+ *      `working`; paused/scheduled are cadence states; `stale` is
+ *      `unmeasured`; an OPEN blocker reads `blocked`.
  */
 export function sessionRowInput(session: SessionRowFact): UnitStateInput {
-  if (isTerminalSessionStatus(session.status)) {
-    return { terminal: true, progress: { done: 1, total: 1 } };
-  }
   const aggregate = projectAggregateInput({
     sessions: [session],
     unreadable: false,
   });
-  // Needing you is the aggregate's one rule (owed + decisions + review, drafts
-  // never) — it outranks everything a single row could add.
   if ((aggregate.owedFromYou ?? 0) > 0) return aggregate;
-  // Otherwise the row's own lifecycle, read the way a session reads it
-  // (`sessionUnitInput`): only active/forming is `working`; paused/scheduled
-  // are cadence states; `stale` is `unmeasured` (nothing could be observed),
-  // never a claim that work is moving. The aggregate's blanket "open ⇒
-  // running" is right for a PROJECT, wrong for one row.
+  if (isTerminalSessionStatus(session.status)) {
+    return { terminal: true, progress: { done: 1, total: 1 } };
+  }
+  // The aggregate's blanket "open ⇒ running" is right for a PROJECT, wrong
+  // for one row: read the row the way a session reads itself.
   return sessionUnitInput({
     status: session.status,
     owedFromYou: 0,
     blockedBy: session.blockedBy ?? null,
   });
+}
+
+// ─── A `projects.path` row — THE one door every path surface reads ──────────
+
+/**
+ * A row's blocked-by edges as the path wire carries them: the blockers with
+ * their own status, or a section the pod could not read.
+ */
+export type BlockerEdges =
+  | {
+      status: "ok";
+      items: ReadonlyArray<{ title: string; status: string }>;
+    }
+  | { status: "unavailable" }
+  | null
+  | undefined;
+
+/**
+ * The title of the first OPEN session this row waits on, or `null`. Waiting
+ * on a finished session is waiting on nothing; an unreadable section claims
+ * no blocker (the row's edge chip says "couldn't load" — the MARK does not
+ * guess).
+ */
+export function openBlockerTitle(edges: BlockerEdges): string | null {
+  if (!edges || edges.status !== "ok") return null;
+  return (
+    edges.items.find((item) => !isTerminalSessionStatus(item.status))?.title ??
+    null
+  );
+}
+
+/** The path-row fields the row mark reads. Structural — every path row fits. */
+export interface PathRowFacts {
+  status: string;
+  /** THE needs-you facts; `null`/absent on a pod that predates them. */
+  unitFacts?: NeedsYouFacts | null;
+  /** The legacy owner of the move — read ONLY when `unitFacts` is absent. */
+  nextMoveActor?: "user" | "ai" | "none";
+  /** The row's triage (`triage.pending` = an agent draft). */
+  triage?: { pending?: boolean | null } | null;
+  /** The blocked-by edges (`projects.path` rows). */
+  blockedBy?: BlockerEdges;
+}
+
+/**
+ * ONE path row → the row fact. THE door: the project map (Zoom), the browser
+ * track page and Relay's project / track rows all read a session through it,
+ * so a blocked session reads `blocked`, and a draft never reads "needs you",
+ * on every one of them. The blocker is the first OPEN one
+ * (`openBlockerTitle`); the triage draft is folded into `unitFacts.draft` too,
+ * so the per-row item count (`needsYouItems`) excludes it the same way.
+ */
+export function pathRowSessionFact(row: PathRowFacts): SessionRowFact {
+  const draft = row.triage?.pending === true;
+  const unitFacts = row.unitFacts
+    ? draft
+      ? { ...row.unitFacts, draft: true }
+      : row.unitFacts
+    : undefined;
+  return {
+    status: row.status,
+    ...(unitFacts
+      ? { unitFacts }
+      : { nextMoveActor: row.nextMoveActor ?? "none" }),
+    ...(draft ? { draft } : {}),
+    blockedBy: openBlockerTitle(row.blockedBy),
+  };
+}
+
+/** A path row's mark — `pathRowSessionFact` → `sessionRowInput` → `resolveUnitState`. */
+export function pathRowUnitView(row: PathRowFacts): UnitStateView {
+  return resolveUnitState(sessionRowInput(pathRowSessionFact(row)));
+}
+
+/**
+ * A path row's needs-you ITEM count (`needsYouItems`) — the number its mark
+ * carries, read through the same door as the mark, so a triage draft is 0
+ * here exactly when the mark says it does not need you.
+ */
+export function pathRowNeedsYouItems(row: PathRowFacts): number | null {
+  return needsYouItems(pathRowSessionFact(row).unitFacts);
 }
