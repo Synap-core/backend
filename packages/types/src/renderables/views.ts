@@ -463,6 +463,24 @@ const mapView: ViewCapabilityDef = {
   ],
 };
 
+const zoomMapView: ViewCapabilityDef = {
+  key: "zoom_map",
+  name: "Zoom map",
+  description:
+    "Semantic-zoom map of a workspace: dive from projects to kinds to records, one level at a time",
+  icon: "Map",
+  category: "structured",
+  // Not "spatial": that family means "projected onto a PLACE" (the geographic
+  // map). This projects onto structure — the same System Map aggregates the
+  // Galaxy reads — so it sits beside Galaxy.
+  family: "relational",
+  implemented: true,
+  // Prototype (D10): the map reads the workspace/project structure itself, so
+  // it has nothing to configure yet. The view's own entity query is NOT a
+  // narrow on the map — see ZoomMapAdapter.
+  configSchema: [],
+};
+
 const mindmapView: ViewCapabilityDef = {
   key: "mindmap",
   name: "Mind Map",
@@ -495,6 +513,7 @@ export const VIEW_DEFINITIONS: ViewCapabilityDef[] = [
   graphView,
   flowView,
   mapView,
+  zoomMapView,
   branchTreeView,
   // Special
   bentoView,

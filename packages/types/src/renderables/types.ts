@@ -171,6 +171,7 @@ export const VIEW_TYPE_KEYS = [
   "whiteboard",
   "mindmap",
   "map",
+  "zoom_map",
 ] as const;
 
 /** A structured view type — derived from {@link VIEW_TYPE_KEYS}. */
@@ -1072,6 +1073,8 @@ export interface ViewConfigByType {
   whiteboard: EmptyViewConfig;
   mindmap: EmptyViewConfig;
   map: { locationField?: string; showRoutes?: boolean };
+  /** Prototype (D10): nothing to configure — the map reads structure itself. */
+  zoom_map: EmptyViewConfig;
 }
 
 // ─── Capability metadata ──────────────────────────────────────────────────────

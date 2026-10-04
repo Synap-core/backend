@@ -573,6 +573,7 @@ export const VIEW_LENS_ICONS: Record<string, string> = {
   whiteboard: "PenTool",
   map: "MapPin",
   mindmap: "BrainCircuit",
+  zoom_map: "Map",
 };
 
 // ─── Resolution ──────────────────────────────────────────────────────────────
