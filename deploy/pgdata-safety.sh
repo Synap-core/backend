@@ -57,9 +57,9 @@ PGDATA_CLUSTER_DIR="/home/postgres/pgdata/data"
 _PGS_WRITERS="backend backend-canary realtime pod-admin pod-agent kratos hydra openclaw"
 
 _pgs_deploy_dir() { echo "${SYNAP_DEPLOY_DIR:-$(pwd)}"; }
-_pgs_log()  { echo -e "${BLUE}[pgdata] $*${NC}"; }
-_pgs_warn() { echo -e "${YELLOW}[pgdata] ⚠️  $*${NC}" >&2; }
-_pgs_err()  { echo -e "${RED}[pgdata] ❌ $*${NC}" >&2; }
+_pgs_log()  { printf "%b\n" "${BLUE}[pgdata] $*${NC}"; }
+_pgs_warn() { printf "%b\n" "${YELLOW}[pgdata] ⚠️  $*${NC}" >&2; }
+_pgs_err()  { printf "%b\n" "${RED}[pgdata] ❌ $*${NC}" >&2; }
 
 # The project's postgres container id (running OR stopped), empty when none.
 _pgs_container() {
@@ -188,7 +188,7 @@ pgdata_migrate_legacy() {
     volume="${project}_postgres_data"
     ts="$(date -u +%Y%m%d%H%M%S)"
 
-    _pgs_warn "postgres cluster at ${pgdata} lives in the container layer of ${c:0:12} — moving it into volume '${volume}'"
+    _pgs_warn "postgres cluster at ${pgdata} lives in the container layer of $(printf %.12s "$c") — moving it into volume '${volume}'"
 
     running="$(docker inspect -f '{{.State.Running}}' "$c")"
     if [ "$running" != "true" ]; then
@@ -214,7 +214,7 @@ pgdata_migrate_legacy() {
     fi
     if ! docker cp "$c:$pgdata/." - | docker run --rm -i --user 0 --entrypoint sh -v "$volume":/v "$image" -c \
         'mkdir -p /v/data && tar -x -p --numeric-owner -f - -C /v/data && chown -R postgres:postgres /v && chmod 700 /v/data && test -s /v/data/PG_VERSION'; then
-        _pgs_err "copying the cluster into '${volume}' failed — legacy container ${c:0:12} is untouched"
+        _pgs_err "copying the cluster into '${volume}' failed — legacy container $(printf %.12s "$c") is untouched"
         return 1
     fi
 
@@ -249,8 +249,12 @@ pgdata_guard() {
     return 0
 }
 
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    set -uo pipefail
+# Executed directly (not sourced)? POSIX: no BASH_SOURCE in dash, so match $0 —
+# when sourced by `synap` / update-pod.sh, $0 is THEIR name.
+case "${0##*/}" in pgdata-safety.sh) _pgs_main=1 ;; *) _pgs_main= ;; esac
+if [ -n "$_pgs_main" ]; then
+    set -u
+    (set -o pipefail) 2>/dev/null && set -o pipefail
     case "${1:-}" in
         layout)  pgdata_layout ;;
         guard)   pgdata_guard ;;

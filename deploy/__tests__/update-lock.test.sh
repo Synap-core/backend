@@ -96,12 +96,25 @@ synap "$TMP/stale.log" rebuild backend >"$TMP/stale.out" 2>&1 && grep -q "stale 
 # update-pod.sh runs under /bin/sh (busybox ash in the pod-agent image): every
 # file it sources must parse as POSIX sh, or it dies before reaching the lock.
 # The sourced set is derived from update-pod.sh itself.
-POSIX_SH="$(command -v dash || echo sh)"
+# A real POSIX shell is REQUIRED: macOS `sh` is bash-in-posix-mode and accepts
+# bashisms (`${c:0:12}`, `${BASH_SOURCE[0]}`) that dash/ash reject — a fallback to
+# `sh` passed vacuously and shipped a broken update-pod.sh (2026-10-04). In CI
+# (dash is on ubuntu) a missing dash is a FAILURE; locally it is a loud SKIP.
+POSIX_SH="$(command -v dash || true)"
 sourced=$(sed -n 's|^\. "\$CD/\([^"]*\)".*|\1|p' "$HERE/deploy/update-pod.sh")
 [ "$(echo "$sourced" | grep -c .)" -ge 3 ] && ok "update-pod.sh sources $(echo $sourced)" || bad "could not derive update-pod.sh's sourced files: '$sourced'"
-for f in update-pod.sh $sourced; do
-  "$POSIX_SH" -n "$HERE/deploy/$f" 2>"$TMP/sh.err" && ok "$f parses under $(basename "$POSIX_SH")" || bad "$f is not POSIX sh: $(head -1 "$TMP/sh.err")"
-done
+if [ -z "$POSIX_SH" ]; then
+  if [ -n "${CI:-}" ]; then bad "dash not found in CI — POSIX check cannot run"; else echo "SKIP - POSIX checks: dash not installed (CI runs them)"; fi
+else
+  for f in update-pod.sh $sourced; do
+    "$POSIX_SH" -n "$HERE/deploy/$f" 2>"$TMP/sh.err" && ok "$f parses under dash" || bad "$f is not POSIX sh: $(head -1 "$TMP/sh.err")"
+  done
+  # Parsing is not enough: dash reports "Bad substitution" only when it EXPANDS,
+  # and a sourced file's top level runs at source time. Source each one for real.
+  for f in $sourced; do
+    ( cd "$HERE/deploy" && "$POSIX_SH" -c ". ./$f" ) 2>"$TMP/sh.err" && ok "$f sources under dash" || bad "$f fails when sourced by dash: $(head -1 "$TMP/sh.err")"
+  done
+fi
 
 # every door the plan names takes the lock (derived from the router, not a list here)
 for cmd in install update rebuild reset restore; do
