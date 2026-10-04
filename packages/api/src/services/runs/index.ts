@@ -90,6 +90,7 @@ import {
   deriveRunActivity,
   type SessionActivityWire,
 } from "@synap-core/types/run-activity";
+import { humanizeToken } from "@synap-core/types/vocabulary";
 import { loadSessionActivity } from "./session-activity.js";
 import {
   CAPABILITY_RUN_EVENT_KIND,
@@ -2268,8 +2269,16 @@ export async function getRun(
 
 /**
  * The session activity as flat run-activity items, labelled by the ONE
- * derivation — so a reader of the flat list (the CLI, the diagnose door)
- * sees the same words run-detail groups. `detail` carries the wire item.
+ * derivation — so a reader of the flat list (the CLI's `synap diagnose`, Hub
+ * `GET /runs/:id`) sees the same words run-detail groups.
+ *
+ * ONE representation of the facts: the wire (`sessionActivity`, beside this
+ * list) is it. A flat item is its id, time, kind, status and WORDS only —
+ * `detail` stays null rather than copying the wire item a second time.
+ *
+ * A partial read is never a silent short list: when a source was unreadable
+ * the flat list ends with a `partial` item naming the sources — the flat
+ * reader's copy of the wire's `unreadable`.
  */
 function sessionActivityItems(
   wire: SessionActivityWire | null
@@ -2281,15 +2290,27 @@ function sessionActivityItems(
   for (const g of view.groups)
     for (const s of g.steps) labelled.set(s.id, s.label);
   if (view.now?.step) labelled.set(view.now.step.id, view.now.step.label);
-  return wire.items.map((item) => ({
+  const items: RunActivityItem[] = wire.items.map((item) => ({
     id: item.id,
     at: item.at instanceof Date ? item.at : new Date(item.at),
     kind: item.kind,
     status: item.status,
     label: labelled.get(item.id) ?? item.title ?? item.kind,
     hint: item.error,
-    detail: { ...item } as Record<string, unknown>,
+    detail: null,
   }));
+  if (wire.unreadable.length > 0) {
+    items.push({
+      id: `partial:${wire.sessionId}`,
+      at: null,
+      kind: "partial",
+      status: "failed",
+      label: `Partly unreadable: ${wire.unreadable.map(humanizeToken).join(", ")}`,
+      hint: "Some of this session's activity could not be read; what is listed is not all of it.",
+      detail: { unreadable: [...wire.unreadable] },
+    });
+  }
+  return items;
 }
 
 // ── Playbook run detail (produced / proposals / agents / session card) ────────

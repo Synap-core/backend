@@ -53,6 +53,7 @@ import {
   proposals,
   users,
 } from "@synap/database";
+import { notExists } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import {
@@ -67,7 +68,7 @@ import {
 import type { ExpectedOutput } from "@synap/playbooks";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { eventVisibleWhere } from "../../access/event-visibility.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
 import { unreadableTargetSessionIds } from "../proposals/session-content-redaction.js";
 
@@ -198,6 +199,7 @@ export async function loadSessionActivity(
   const drafts: ItemDraft[] = [];
   let turnInFlight = false;
   let inFlightSince: Date | null = null;
+  let inFlightTurnId: string | null = null;
 
   const attempt = async (
     source: SessionActivitySource,
@@ -215,7 +217,6 @@ export async function loadSessionActivity(
   };
 
   const channelId = session.channelId ?? null;
-  const turnReplyIds = new Set<string>();
 
   // ── turns ────────────────────────────────────────────────────────────────
   await attempt("turns", async () => {
@@ -225,7 +226,6 @@ export async function loadSessionActivity(
         id: chatTurns.id,
         status: chatTurns.status,
         startedAt: chatTurns.startedAt,
-        assistantMessageId: chatTurns.assistantMessageId,
       })
       .from(chatTurns)
       .where(eq(chatTurns.channelId, channelId))
@@ -236,11 +236,12 @@ export async function loadSessionActivity(
       turns.length = TURN_CAP;
     }
     for (const t of turns) {
-      turnReplyIds.add(t.assistantMessageId);
       if (t.status === "running") {
         turnInFlight = true;
-        if (!inFlightSince || t.startedAt > inFlightSince)
+        if (!inFlightSince || t.startedAt > inFlightSince) {
           inFlightSince = t.startedAt;
+          inFlightTurnId = t.id;
+        }
       }
     }
     if (turns.length === 0) return;
@@ -343,7 +344,10 @@ export async function loadSessionActivity(
       .where(
         and(
           eq(proposals.sessionId, sessionId),
-          userVisibleWhere(proposals.workspaceId, userId)
+          // The floor every proposal reader shares (LENS ∪ OWNERSHIP): a
+          // pending proposal by the viewer's own agent outside a member
+          // workspace is in Needs-you, so it is in "waiting on you" here too.
+          proposalUserFloor(userId)
         )
       )
       .orderBy(desc(proposals.createdAt))
@@ -481,6 +485,9 @@ export async function loadSessionActivity(
   });
 
   // ── notes (agent messages that are not a turn's own reply) ───────────────
+  // A turn's reply is excluded in SQL against EVERY turn, not the `TURN_CAP`
+  // newest the turns source read: a window smaller than this one's would let
+  // the replies of older turns through as "notes".
   await attempt("notes", async () => {
     if (!channelId) return;
     const rows = await db
@@ -495,7 +502,13 @@ export async function loadSessionActivity(
         and(
           eq(messages.channelId, channelId),
           eq(messages.authorType, MessageAuthorType.AI_AGENT),
-          isNull(messages.deletedAt)
+          isNull(messages.deletedAt),
+          notExists(
+            db
+              .select({ id: chatTurns.id })
+              .from(chatTurns)
+              .where(eq(chatTurns.assistantMessageId, messages.id))
+          )
         )
       )
       .orderBy(desc(messages.timestamp))
@@ -505,7 +518,6 @@ export async function loadSessionActivity(
       rows.length = NOTE_CAP;
     }
     for (const m of rows) {
-      if (turnReplyIds.has(m.id)) continue;
       const firstLine =
         m.content
           .split("\n")
@@ -561,6 +573,7 @@ export async function loadSessionActivity(
     terminal: isTerminalSessionStatus(session.status),
     live: {
       turnInFlight,
+      turnId: inFlightTurnId,
       since: inFlightSince,
       lastAt: last ? last.at : null,
     },

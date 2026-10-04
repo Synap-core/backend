@@ -164,13 +164,14 @@ export interface RunGroup {
 /**
  * One entry in a run's activity timeline — a step (automation), a decision/trace
  * (capture), or a lifecycle marker. Rich timelines come from automation steps and
- * capture events; playbook/session runs carry a `channelId` so the UI opens the
- * channel for their message-level story instead of duplicating it here.
+ * capture events. A playbook/session run's agent work arrives as the session
+ * activity WIRE (`sessionActivity`); its flat items here carry only the words
+ * (`detail: null`), plus a `partial` item when a source was unreadable.
  */
 export interface GenericRunActivityItem {
   id: string;
   at: Date | null;
-  /** "step" | "ai_decision" | "capture_trace" | "lifecycle" | … */
+  /** "step" | "ai_decision" | "capture_trace" | "lifecycle" | "partial" | … */
   kind: string;
   status: string | null;
   label: string;

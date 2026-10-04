@@ -14,7 +14,13 @@
  *   - the turn's OWN assistant reply in the room — "every agent message is a
  *     note" duplicates the turn;
  *   - a session-progress update event — "every session event is lifecycle"
- *     floods the record.
+ *     floods the record;
+ *   - a session with MORE turns than the turns source reads (26 > 25), each
+ *     with its own reply — "a note is a message no READ turn replied with"
+ *     shows the oldest turn's reply as a note;
+ *   - a pending proposal the viewer's own agent filed in a workspace the
+ *     viewer is not a member of — the bare membership lens drops it, while
+ *     Needs-you (LENS ∪ OWNERSHIP) counts it.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -372,6 +378,8 @@ describe("loadSessionActivity — merge", () => {
   it("reports the in-flight turn as a FACT and names the external agent", async () => {
     const wire = await loadSessionActivity({ userId: OWNER, roster: true }, S);
     expect(wire!.live.turnInFlight).toBe(true);
+    // WHICH turn — the pod knows it; the derivation need not guess.
+    expect(wire!.live.turnId).toBe(T2);
     const write = wire!.items.find((i) => i.kind === "write");
     expect(write?.actor).toEqual({
       id: AGENT,
@@ -387,6 +395,76 @@ describe("loadSessionActivity — merge", () => {
   it("never leaks a session event from a workspace the reader cannot see", async () => {
     const wire = await loadSessionActivity({ userId: OWNER, roster: true }, S);
     expect(wire!.items.some((i) => i.objectTitle === "Secret")).toBe(false);
+  });
+});
+
+describe("loadSessionActivity — windows and floors", () => {
+  it("never shows an older turn's own reply as a note, past the turn cap", async () => {
+    const S_LONG = randomUUID();
+    const ROOM_LONG = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, goal, status, metadata, expected_outputs, channel_id, created_at, updated_at, started_at)
+       values ($1, $2, $3, 'Long chat', 'active', '{}'::jsonb, '[]'::jsonb, $4, $5, $5, $5)`,
+      [S_LONG, OWNER, WS, ROOM_LONG, at(0)]
+    );
+    // 26 finished turns — one more than the turns source reads — each with
+    // its own assistant reply in the room.
+    for (let i = 0; i < 26; i++) {
+      const reply = randomUUID();
+      await q(
+        `insert into chat_turns (id, channel_id, user_id, request_id, user_message_id, assistant_message_id, status, started_at, updated_at)
+         values ($1,$2,$3,$4,$5,$6,'completed',$7,$7)`,
+        [
+          randomUUID(),
+          ROOM_LONG,
+          OWNER,
+          randomUUID(),
+          randomUUID(),
+          reply,
+          at(i),
+        ]
+      );
+      await q(
+        `insert into messages (id, channel_id, role, author_type, content, user_id, timestamp)
+         values ($1,$2,'assistant','ai_agent',$3,$4,$5)`,
+        [reply, ROOM_LONG, `Reply ${i}`, OWNER, at(i)]
+      );
+    }
+    const wire = await loadSessionActivity(
+      { userId: OWNER, roster: true },
+      S_LONG
+    );
+    expect(wire!.unreadable).toEqual([]);
+    expect(wire!.truncated).toBe(true); // the turns source hit its cap
+    expect(wire!.items.filter((i) => i.kind === "note")).toEqual([]);
+  });
+
+  it("lists the viewer's own agent's proposal outside a member workspace", async () => {
+    const P_OWN_HIDDEN = randomUUID();
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, created_by, session_id, created_at)
+       values ($1, $2, 'entity', $3, 'create', $4::jsonb, 'pending', $5, $6, $7)`,
+      [
+        P_OWN_HIDDEN,
+        WS_HIDDEN,
+        randomUUID(),
+        JSON.stringify({ targetName: "Mine elsewhere" }),
+        OWNER,
+        S,
+        at(15),
+      ]
+    );
+    try {
+      const wire = await loadSessionActivity(
+        { userId: OWNER, roster: true },
+        S
+      );
+      expect(
+        wire!.items.find((i) => i.proposalId === P_OWN_HIDDEN)?.status
+      ).toBe("pending");
+    } finally {
+      await q(`delete from proposals where id = $1`, [P_OWN_HIDDEN]);
+    }
   });
 });
 
@@ -407,6 +485,17 @@ describe("loadSessionActivity — access and failure", () => {
       expect(wire!.unreadable).toEqual(["notes"]);
       expect(wire!.items.some((i) => i.kind === "tool")).toBe(true);
       expect(wire!.items.some((i) => i.kind === "note")).toBe(false);
+      // The flat list (CLI / Hub REST) says it is partial — never a silent
+      // short list.
+      const detail = await getRun({
+        userId: OWNER,
+        flowType: "session",
+        id: S,
+        roster: true,
+      });
+      const last = detail!.activity[detail!.activity.length - 1]!;
+      expect(last.kind).toBe("partial");
+      expect(last.label).toBe("Partly unreadable: Notes");
     } finally {
       await h.client!.exec(`alter table messages_gone rename to messages`);
     }
@@ -427,6 +516,12 @@ describe("runs.get for a session run", () => {
     expect(detail!.sessionActivity?.items.length).toBe(
       detail!.activity.length - 1
     );
+    // ONE representation: the wire carries the facts; a flat item carries
+    // the words, never a second copy of the wire item.
+    expect(detail!.activity.slice(1).every((a) => a.detail === null)).toBe(
+      true
+    );
+    expect(detail!.activity.some((a) => a.kind === "partial")).toBe(false);
     // Labelled by the ONE derivation, never the raw token.
     const write = detail!.activity.find((a) => a.kind === "write");
     expect(write?.label).toBe('Created Task "Ship it"');
