@@ -322,7 +322,14 @@ export async function backfillFederationOidcCredentials(): Promise<void> {
         subject: link.issuerSubject,
       });
       if (result.ok) linked += 1;
-      else failed += 1;
+      else {
+        failed += 1;
+        // Name the reason: a bare `failed: 1` hid a broken owner sign-in for days.
+        logger.warn(
+          { reason: result.reason, kratosIdentityId: link.userId },
+          "CP OIDC credential backfill failed for one identity — Continue with Synap Cloud will fall into Kratos account linking for this user"
+        );
+      }
     }
     if (links.length > 0) {
       logger.info(

@@ -146,6 +146,39 @@ describe("attachOidcCredentialToIdentity", () => {
     ]);
   });
 
+  it("drops a hash-less password credential instead of re-supplying it (Kratos 400s on it)", async () => {
+    // Exact shape seen live on 2026-10-04: an admin-created identity carries a
+    // `password` credential with identifiers but an EMPTY config. Re-sending it
+    // made Kratos reject the PUT ("imported password does not match any known
+    // hash format"), so the cp credential never attached.
+    const hashless = {
+      schema_id: "default",
+      state: "active",
+      traits: { email: "owner@example.com" },
+      credentials: {
+        password: {
+          type: "password",
+          identifiers: ["owner@example.com"],
+          config: {},
+        },
+      },
+    };
+    fetchMock
+      .mockResolvedValueOnce(fakeRes(200, hashless))
+      .mockResolvedValueOnce(fakeRes(200, {}));
+    const res = await attachOidcCredentialToIdentity({
+      kratosIdentityId: "id-3",
+      provider: "cp",
+      subject: "cp-1",
+    });
+    expect(res).toEqual({ ok: true });
+    const body = JSON.parse(String(fetchMock.mock.calls[1][1].body));
+    expect(body.credentials.password).toBeUndefined();
+    expect(body.credentials.oidc.config.providers).toEqual([
+      { subject: "cp-1", provider: "cp" },
+    ]);
+  });
+
   it("surfaces a reason when the identity fetch fails", async () => {
     fetchMock.mockResolvedValueOnce(fakeRes(404, null));
     const res = await attachOidcCredentialToIdentity({

@@ -167,7 +167,18 @@ export async function attachOidcCredentialToIdentity(input: {
     return { ok: false, reason: "identity-malformed" };
   }
 
-  const credentials = identity.credentials ?? {};
+  const credentials = { ...(identity.credentials ?? {}) };
+  // A `password` credential with no hash (an identity created by the admin API
+  // without a password, or restored) cannot be re-supplied: Kratos rejects the
+  // whole PUT with "The imported password does not match any known hash format".
+  // There is no secret to preserve, so drop it. Leaving it in made every attach
+  // fail, which left the identity without its `cp` credential and pushed the
+  // user into Kratos's "link accounts — enter your password" step (2026-10-04).
+  const passwordConfig = credentials.password?.config as
+    { hashed_password?: string } | undefined;
+  if (credentials.password && !passwordConfig?.hashed_password) {
+    delete credentials.password;
+  }
   const oidcConfig = (credentials.oidc?.config ?? {}) as {
     providers?: Array<{ provider?: string; subject?: string }>;
   };
