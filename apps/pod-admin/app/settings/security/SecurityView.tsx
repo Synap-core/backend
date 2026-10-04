@@ -31,12 +31,15 @@ import {
 } from "lucide-react";
 import {
   CLOUD_TRUST_OPTIONS,
+  CREATE_RECOVERY_CODES_LABEL,
+  recoveryCodesMark,
   type AccountRecoveryStatus,
   type CloudTrustMode,
   type GeneratedRecoveryCodes,
 } from "@synap-core/types/account-recovery";
 import { SectionCard } from "../../(admin)/components/section-card";
-import { StatusPill } from "../../(admin)/components/status-pill";
+import { StatusPill, type StatusKind } from "../../(admin)/components/status-pill";
+import { invalidateRecoveryCodesState } from "../../(admin)/components/recovery-codes-nudge";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import {
   createBrowserFlow,
@@ -48,11 +51,13 @@ import {
 } from "../../../lib/kratos-flow";
 import {
   recoveryApi,
+  recoveryCallDetail,
   recoveryCodesFile,
   type RecoveryCall,
 } from "../../../lib/account-recovery";
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import { initialFieldValues, KratosFields } from "../../_lib/kratos-fields";
+import { CopyButton, errorDetail } from "../../_lib/copy-button";
 
 const REAUTH_HREF = `/login?refresh=1&return=${encodeURIComponent("/settings/security")}`;
 /** Kratos v1.3.1 `text.NewRecoverySuccessful` (InfoSelfServiceSettingsRecoverySuccessful). */
@@ -61,8 +66,17 @@ const PASSWORD_GROUPS = ["password"] as const;
 
 type Load<T> =
   | { kind: "loading" }
-  | { kind: "failed"; message: string }
+  /** `detail` is for "Copy details" only — never shown as the sentence. */
+  | { kind: "failed"; detail: string }
   | { kind: "ready"; data: T };
+
+/** The shared mark's tone → this app's status palette (tokens, not colours). */
+const TONE_TO_PILL: Record<ReturnType<typeof recoveryCodesMark>["tone"], StatusKind> = {
+  success: "healthy",
+  warning: "stale",
+  error: "down",
+  neutral: "unknown",
+};
 
 export function SecurityView({
   initialFlowId,
@@ -81,7 +95,7 @@ export function SecurityView({
       window.location.assign(`/login?return=${encodeURIComponent("/settings/security")}`);
       return;
     }
-    setStatus(r.ok ? { kind: "ready", data: r.data } : { kind: "failed", message: r.message });
+    setStatus(r.ok ? { kind: "ready", data: r.data } : { kind: "failed", detail: recoveryCallDetail(r) });
   }, []);
 
   useEffect(() => {
@@ -89,6 +103,7 @@ export function SecurityView({
   }, [loadStatus]);
 
   const s = status.kind === "ready" ? status.data : null;
+  const onRecovered = useCallback(() => setRecovered(true), []);
 
   return (
     <div className="mx-auto max-w-[760px] px-6 py-10">
@@ -114,13 +129,24 @@ export function SecurityView({
           role="status"
         >
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-          <span>Account recovered. Set a new password now — this window closes in 15 minutes.</span>
+          <span>{RECOVERED_COPY}</span>
         </div>
       ) : null}
 
       <div className="flex flex-col gap-5">
-        <RecoveryCodesCard status={status} onChanged={loadStatus} email={email} />
-        <PasswordCard initialFlowId={initialFlowId} onRecovered={() => setRecovered(true)} />
+        {/* Keyed so a reorder MOVES the cards instead of remounting the flow. */}
+        {securityCardOrder(recovered).map((card) =>
+          card === "password" ? (
+            <PasswordCard
+              key="password"
+              initialFlowId={initialFlowId}
+              onRecovered={onRecovered}
+              focus={recovered}
+            />
+          ) : (
+            <RecoveryCodesCard key="codes" status={status} onChanged={loadStatus} email={email} />
+          )
+        )}
         <DevicesCard />
         {s && s.cloud.available ? (
           <CloudTrustCard status={s} onChanged={(next) => setStatus({ kind: "ready", data: next })} />
@@ -132,22 +158,57 @@ export function SecurityView({
 
 // ─── shared bits ─────────────────────────────────────────────────────────
 
-function LoadFailed({ message, onRetry }: { message: string; onRetry: () => void }) {
+/** Shown when a completed recovery lands here with a privileged session. */
+export const RECOVERED_COPY = "You're back in. Set a new password within 15 minutes.";
+
+/** Just recovered ⇒ the password comes first: it is the one job left. */
+export function securityCardOrder(recovered: boolean): Array<"password" | "codes"> {
+  return recovered ? ["password", "codes"] : ["codes", "password"];
+}
+
+function LoadFailed({
+  message,
+  detail,
+  onRetry,
+}: {
+  message: string;
+  detail?: string | null;
+  onRetry: () => void;
+}) {
   return (
     <div className="flex flex-col items-start gap-2">
       <p className="flex items-start gap-2 text-[12.5px] text-status-down">
         <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         {message}
       </p>
-      <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
-        Retry
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
+          Retry
+        </Button>
+        {detail ? <CopyButton text={detail} label="Copy details" variant="light" /> : null}
+      </div>
     </div>
   );
 }
 
+type RefusalView = { error: string; detail?: string };
+
+/** One fixed sentence per refusal code — the pod's own message is detail only. */
+function refusalSentence(error: string): string {
+  switch (error) {
+    case "reauth_required":
+      return "This needs a recent sign-in.";
+    case "cloud_session_not_allowed":
+      return "A Synap Cloud sign-in can't change this. Sign in with your pod password.";
+    case "forbidden":
+      return "Only the pod owner can change this.";
+    default:
+      return "Couldn't save that. Try again.";
+  }
+}
+
 /** A refusal the reader can act on: sign in again, or (Cloud-only) use the pod's own sign-in. */
-function Refusal({ error, message }: { error: string; message: string }) {
+function Refusal({ error, detail }: RefusalView) {
   const reauth = error === "reauth_required" || error === "cloud_session_not_allowed";
   return (
     <div
@@ -156,19 +217,22 @@ function Refusal({ error, message }: { error: string; message: string }) {
     >
       <span className="flex items-start gap-2">
         <Lock className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-        {message}
+        {refusalSentence(error)}
       </span>
-      {reauth ? (
-        <Button as="a" href={REAUTH_HREF} size="sm" variant="flat" radius="md">
-          {error === "reauth_required" ? "Sign in again" : "Sign in with your pod password"}
-        </Button>
-      ) : null}
+      <div className="flex flex-wrap gap-2">
+        {reauth ? (
+          <Button as="a" href={REAUTH_HREF} size="sm" variant="flat" radius="md">
+            {error === "reauth_required" ? "Sign in again" : "Sign in with your pod password"}
+          </Button>
+        ) : null}
+        {!reauth && detail ? <CopyButton text={detail} label="Copy details" variant="light" /> : null}
+      </div>
     </div>
   );
 }
 
-function refusalOf(r: RecoveryCall<unknown>) {
-  return r.ok ? null : { error: r.error, message: r.message };
+function refusalOf(r: RecoveryCall<unknown>): RefusalView | null {
+  return r.ok ? null : { error: r.error, detail: recoveryCallDetail(r) };
 }
 
 // ─── 1. Recovery codes ───────────────────────────────────────────────────
@@ -184,7 +248,7 @@ function RecoveryCodesCard({
 }) {
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  const [refusal, setRefusal] = useState<{ error: string; message: string } | null>(null);
+  const [refusal, setRefusal] = useState<RefusalView | null>(null);
   const [fresh, setFresh] = useState<GeneratedRecoveryCodes | null>(null);
 
   const generate = async () => {
@@ -193,30 +257,31 @@ function RecoveryCodesCard({
     const r = await recoveryApi.generateCodes();
     setBusy(false);
     setConfirm(false);
-    if (r.ok) setFresh(r.data);
-    else setRefusal(refusalOf(r));
+    if (r.ok) {
+      setFresh(r.data);
+      // The top bar's ⚠ and the Overview nudge read a cached status.
+      invalidateRecoveryCodesState();
+    } else setRefusal(refusalOf(r));
   };
 
   const codes = status.kind === "ready" ? status.data.recoveryCodes : null;
-  const mark = !codes
-    ? null
-    : !codes.set
-      ? { kind: "stale" as const, label: "Not set" }
-      : codes.remaining <= 2
-        ? { kind: "stale" as const, label: `${codes.remaining} left` }
-        : { kind: "healthy" as const, label: `${codes.remaining} of ${codes.total} left` };
+  const mark = codes ? recoveryCodesMark(codes) : null;
 
   return (
     <div id="recovery-codes">
       <SectionCard
         title="Recovery codes"
         hint="One-time codes that get you back in without email, Synap Cloud or the server"
-        actions={mark ? <StatusPill kind={mark.kind} label={mark.label} /> : undefined}
+        actions={mark ? <StatusPill kind={TONE_TO_PILL[mark.tone]} label={mark.label} /> : undefined}
       >
         {status.kind === "loading" ? (
           <div className="h-10 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
         ) : status.kind === "failed" ? (
-          <LoadFailed message={`Couldn't load your recovery status. ${status.message}`} onRetry={() => void onChanged()} />
+          <LoadFailed
+            message="Couldn't load your recovery status."
+            detail={status.detail}
+            onRetry={() => void onChanged()}
+          />
         ) : fresh ? (
           <CodesReveal
             codes={fresh}
@@ -231,11 +296,11 @@ function RecoveryCodesCard({
             {refusal ? <Refusal {...refusal} /> : null}
             {codes?.set ? (
               <Button size="sm" variant="flat" radius="md" isLoading={busy} onPress={() => setConfirm(true)}>
-                Create new codes
+                {CREATE_RECOVERY_CODES_LABEL}
               </Button>
             ) : (
               <Button color="primary" radius="md" size="md" startContent={<KeyRound className="h-4 w-4" />} isLoading={busy} onPress={() => void generate()}>
-                Create recovery codes
+                {CREATE_RECOVERY_CODES_LABEL}
               </Button>
             )}
           </div>
@@ -247,7 +312,7 @@ function RecoveryCodesCard({
         onConfirm={() => void generate()}
         title="Create new recovery codes?"
         consequence={<p>Your current codes stop working right away. Save the new ones before you leave this page.</p>}
-        confirmLabel="Create new codes"
+        confirmLabel={CREATE_RECOVERY_CODES_LABEL}
         isPending={busy}
       />
     </div>
@@ -317,15 +382,18 @@ function CodesReveal({
 
 type FlowLoad =
   | { kind: "loading" }
-  | { kind: "failed"; message: string }
+  | { kind: "failed"; detail: string }
   | { kind: "ready"; flow: KratosFlow };
 
 function PasswordCard({
   initialFlowId,
   onRecovered,
+  focus,
 }: {
   initialFlowId: string | null;
   onRecovered: () => void;
+  /** Focus the new-password input (just recovered). */
+  focus: boolean;
 }) {
   const [load, setLoad] = useState<FlowLoad>({ kind: "loading" });
   const [values, setValues] = useState<Record<string, string>>({});
@@ -353,7 +421,7 @@ function PasswordCard({
       if ("flow" in r) show(r.flow);
       else window.location.assign(`/login?return=${encodeURIComponent("/settings/security")}`);
     } catch (err) {
-      setLoad({ kind: "failed", message: err instanceof Error ? err.message : "Couldn't load password settings." });
+      setLoad({ kind: "failed", detail: errorDetail(err) });
     }
   }, [initialFlowId, onRecovered, show]);
 
@@ -376,9 +444,9 @@ function PasswordCard({
           addToast({ title: "Password saved", color: "default" });
         }
       } else if (r.kind === "redirect") window.location.assign(r.to);
-      else if (r.kind === "error") setError(r.error.message ?? "Couldn't save the password.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't save the password.");
+      else if (r.kind === "error") setError("Couldn't save the password. Try again.");
+    } catch {
+      setError("Couldn't reach this pod. Your password was not changed.");
     } finally {
       setSubmitting(false);
     }
@@ -392,14 +460,16 @@ function PasswordCard({
       {load.kind === "loading" ? (
         <div className="h-24 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
       ) : load.kind === "failed" ? (
-        <LoadFailed message={load.message} onRetry={() => void start()} />
+        <LoadFailed
+          message="Couldn't load password settings."
+          detail={load.detail}
+          onRetry={() => void start()}
+        />
       ) : !hasPasswordNode ? (
         <p className="text-[12.5px] text-foreground/55">Passwords aren&apos;t enabled on this pod.</p>
       ) : (
         <div className="flex flex-col gap-3">
-          {needsReauth ? (
-            <Refusal error="reauth_required" message="Changing your password needs a recent sign-in." />
-          ) : null}
+          {needsReauth ? <Refusal error="reauth_required" /> : null}
           <KratosFields
             flow={load.flow}
             groups={PASSWORD_GROUPS}
@@ -409,6 +479,7 @@ function PasswordCard({
             submitting={submitting}
             submitLabel="Save password"
             error={error}
+            autoFocusFirst={focus}
           />
         </div>
       )}
@@ -427,7 +498,7 @@ function DevicesCard() {
     try {
       setLoad({ kind: "ready", data: (await listOtherSessions()).length });
     } catch (err) {
-      setLoad({ kind: "failed", message: err instanceof Error ? err.message : "Couldn't list your devices." });
+      setLoad({ kind: "failed", detail: errorDetail(err) });
     }
   }, []);
 
@@ -442,7 +513,9 @@ function DevicesCard() {
       addToast({ title: n === 1 ? "Signed out 1 device" : `Signed out ${n} devices`, color: "default" });
       await refresh();
     } catch (err) {
-      addToast({ title: "Couldn't sign out other devices", description: err instanceof Error ? err.message : undefined, color: "danger" });
+      // The sentence only; the detail is for the console, not the toast.
+      console.warn("[security] sign out other devices failed:", errorDetail(err));
+      addToast({ title: "Couldn't sign out other devices. Try again.", color: "danger" });
     } finally {
       setBusy(false);
     }
@@ -453,7 +526,11 @@ function DevicesCard() {
       {load.kind === "loading" ? (
         <div className="h-10 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
       ) : load.kind === "failed" ? (
-        <LoadFailed message={load.message} onRetry={() => void refresh()} />
+        <LoadFailed
+          message="Couldn't list your devices."
+          detail={load.detail}
+          onRetry={() => void refresh()}
+        />
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <Laptop className="h-4 w-4 text-foreground/50" />
@@ -481,7 +558,7 @@ function CloudTrustCard({
   onChanged: (next: AccountRecoveryStatus) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [refusal, setRefusal] = useState<{ error: string; message: string } | null>(null);
+  const [refusal, setRefusal] = useState<RefusalView | null>(null);
   const current = status.cloud.trust;
   const currentOption = CLOUD_TRUST_OPTIONS.find((o) => o.mode === current)!;
 

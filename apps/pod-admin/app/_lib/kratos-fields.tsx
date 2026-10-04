@@ -88,6 +88,8 @@ interface KratosFieldsProps {
   submitting: boolean;
   submitLabel: string;
   error?: string | null;
+  /** Focus the first visible field on mount (e.g. a just-recovered account's new password). */
+  autoFocusFirst?: boolean;
 }
 
 export function KratosFields({
@@ -99,6 +101,7 @@ export function KratosFields({
   submitting,
   submitLabel,
   error,
+  autoFocusFirst = false,
 }: KratosFieldsProps) {
   const method = primaryMethod(flow, groups);
   const fields = flow.ui.nodes.filter(
@@ -112,6 +115,7 @@ export function KratosFields({
   const secondary = submitNodes(flow, groups).filter(
     (n) => n.attributes?.name !== "method"
   );
+  const firstVisible = fields.find((n) => n.attributes?.type !== "hidden");
   const hiddenOnly = () => {
     const out: Record<string, string> = {};
     for (const n of fields) {
@@ -185,6 +189,7 @@ export function KratosFields({
                     : undefined
             }
             inputMode={name === "code" ? "numeric" : undefined}
+            autoFocus={autoFocusFirst && node === firstVisible}
             size="sm"
             radius="md"
             variant="flat"

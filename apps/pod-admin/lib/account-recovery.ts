@@ -149,3 +149,35 @@ export function recoveryCodesFile(input: {
     "",
   ].join("\n");
 }
+
+/** The technical detail of a failed call — for "Copy details", never the sentence. */
+export function recoveryCallDetail(r: {
+  status: number;
+  error: string;
+  message: string;
+}): string {
+  return `${r.status || "no answer"} · ${r.error} · ${r.message}`;
+}
+
+/**
+ * A failed redeem as one fixed sentence. `invalid_code` never says WHICH part
+ * was wrong (enumeration); the pod's own message is never shown — it can be a
+ * bare `This pod answered 503.`
+ */
+export function redeemFailureMessage(error: AccountRecoveryErrorCode | "network"): {
+  message: string;
+  /** The pod could not answer — worth offering the detail. */
+  failed: boolean;
+} {
+  switch (error) {
+    case "invalid_code":
+    case "invalid_request":
+      return { message: "That didn't work. Check the email and the code — each code works once.", failed: false };
+    case "rate_limited":
+      return { message: "Too many tries. Wait a few minutes, then try again.", failed: false };
+    case "network":
+      return { message: "Couldn't reach this pod. Your code was not used.", failed: true };
+    default:
+      return { message: "The pod couldn't check codes right now. Your code was not used.", failed: true };
+  }
+}
