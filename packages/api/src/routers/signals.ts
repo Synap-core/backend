@@ -35,7 +35,9 @@
  * construction (a session in a track carries the track's project). Proposals,
  * owed slots, review sessions, outputs and the ledger narrow in SQL; a
  * notification narrows through the container its subject resolves to
- * (`lens-containers.ts`) — derived, never a stored column.
+ * (`lens-containers.ts`) — derived, never a stored column — prefiltered in SQL
+ * by the door (`notifCenter.list({ container })`) so a narrow scope's limit
+ * is spent on its own rows.
  *
  * IT ADDS NO ACCESS LOGIC. It calls the existing doors (`proposals.groups`,
  * `notifCenter.list`, `events.read`) via `createCaller` — the established
@@ -74,8 +76,12 @@ import {
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { ActivityRow } from "@synap-core/types/activity";
 import type { LandedObjectRow } from "@synap-core/types/landed";
-import { isSessionWorkingNow } from "@synap-core/types/run-activity";
+import {
+  isSessionWorkingNow,
+  SESSION_WORKING_WINDOW_MS,
+} from "@synap-core/types/run-activity";
 import { LENS_CAPS } from "@synap-core/types/lens";
+import { needsYouRows } from "@synap-core/types/needs-you";
 import { parseRecordChange } from "@synap-core/types/events";
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalsRouter } from "./proposals.js";
@@ -103,6 +109,7 @@ import {
   inContainerLens,
   resolveNotificationContainers,
   sessionsWithOwedSlot,
+  type ContainerLens,
 } from "../services/signals/lens-containers.js";
 import { needsYouRole } from "../notifications/registry.js";
 import { listDraftAskSlots } from "../services/focus-sessions/draft-asks.js";
@@ -186,6 +193,16 @@ type SignalsCtx = Extract<
   { userId?: unknown }
 >;
 
+/** The container lens (session ⊂ track ⊂ project), or undefined at the floor. */
+function containerLensOf(input: SignalScopeInput): ContainerLens | undefined {
+  if (!input.sessionId && !input.trackId && !input.projectId) return undefined;
+  return {
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.trackId ? { trackId: input.trackId } : {}),
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+  };
+}
+
 /** A half that can only follow an automation through the proposal ledger. */
 function followsScope(input: SignalScopeInput): boolean {
   return !input.automationId;
@@ -252,6 +269,7 @@ async function readAttention(
   const userId = requireUserId(ctx.userId);
   const reader = { userId, roster: rosterReadFor(ctx) };
   const follows = followsScope(input);
+  const container = containerLensOf(input);
   const owedScope = {
     userId,
     scope: resolveScope(ctx, {
@@ -263,7 +281,7 @@ async function readAttention(
     ...(input.trackId ? { trackId: input.trackId } : {}),
   };
 
-  const [groups, notifs, owed, drafts, review] = await Promise.all([
+  const [groups, notifs, health, owed, drafts, review] = await Promise.all([
     settle(
       "proposals",
       { groups: [], distinct: 0, scanTruncated: false, scanned: 0 },
@@ -280,8 +298,8 @@ async function readAttention(
           splitBySession: true,
         })
     ),
-    // Read at the pod/workspace floor; a container lens narrows the rows
-    // through their resolved containers below.
+    // Under a container lens the door narrows IN SQL, before its limit
+    // (`container`); the resolved containers below stay the authority.
     follows
       ? settle(
           "notifications",
@@ -292,6 +310,7 @@ async function readAttention(
                 workspaceId: floorLens(input.workspaceId),
                 status: "unread",
                 limit: NOTIFICATION_SCAN_LIMIT,
+                ...(container ? { container } : {}),
               })
             ).notifications as NotificationSignalInput[]
         )
@@ -300,6 +319,24 @@ async function readAttention(
           [] as NotificationSignalInput[],
           async () => []
         ),
+    // System HEALTH is the pod's, never a container's: under a container lens
+    // the banner reads its own rows (every status-role type is `system`,
+    // pinned in the tests); at the floor it reads the floor read above.
+    container
+      ? settle(
+          "notifications",
+          [] as NotificationSignalInput[],
+          async () =>
+            (
+              await notifCenterRouter.createCaller(ctx).list({
+                workspaceId: floorLens(input.workspaceId),
+                status: "unread",
+                category: "system",
+                limit: NOTIFICATION_SCAN_LIMIT,
+              })
+            ).notifications as NotificationSignalInput[]
+        )
+      : null,
     // The owed read under the SAME lens and owner floor `focusSessions.owed`
     // applies (`listOwedSlots`), plus the session/track lenses that door does
     // not expose. Drafts never count (`excludeDrafts`).
@@ -351,13 +388,8 @@ async function readAttention(
       readClusterSessions(groups.value.groups, reader)
     ),
   ]);
-  const lens = {
-    sessionId: input.sessionId,
-    trackId: input.trackId,
-    projectId: input.projectId,
-  };
   const notifications = allNotifications.filter((r) =>
-    inContainerLens(containers.value.get(r.id), lens)
+    inContainerLens(containers.value.get(r.id), container ?? {})
   );
 
   // The live state of the `session.needs_you` pointer rows.
@@ -381,6 +413,7 @@ async function readAttention(
     groups: groups.value,
     clusterSessions: clusterSessions.value,
     allNotifications,
+    statusNotifications: health ? health.value : allNotifications,
     notifications,
     containers: containers.value,
     notificationsTruncated: allNotifications.length >= NOTIFICATION_SCAN_LIMIT,
@@ -407,7 +440,7 @@ async function readAttention(
         owedPointers
       ),
       proposed: failuresOf(drafts, notifs, containers),
-      status: failuresOf(notifs),
+      status: failuresOf(health ?? notifs),
     },
   };
 }
@@ -529,12 +562,16 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
     .limit(HAPPENING_SCAN_LIMIT + 1);
   const truncated = rows.length > HAPPENING_SCAN_LIMIT;
   const candidates = rows.slice(0, HAPPENING_SCAN_LIMIT);
-  const live = await loadSessionLiveness(reader, candidates);
+  const now = new Date();
+  // Happening only asks "working NOW": measure activity inside the window
+  // (index-backed range scans), never each session's whole history.
+  const live = await loadSessionLiveness(reader, candidates, {
+    since: new Date(now.getTime() - SESSION_WORKING_WINDOW_MS),
+  });
   if (candidates.some((c) => live.get(c.id) === null)) {
     // `null` = the liveness read FAILED — never a quiet session.
     throw new Error("session liveness read failed");
   }
-  const now = new Date();
   const working = candidates.filter((c) =>
     isSessionWorkingNow(live.get(c.id), now.getTime())
   );
@@ -736,6 +773,10 @@ async function readHappened(
         eventsNarrow
           ? await eventsRouter.createCaller(ctx).read({
               limit: opts.limit,
+              // Only RECORD CHANGES, in SQL before the limit: a governance
+              // phase or a connector family renders no line, so it must
+              // never use up the page (it used to, then the client dropped it).
+              recordChanges: true,
               // Full rows: a data line names the record's kind (`data.profileSlug`)
               // and its writer (`source`) — both absent from the lean shape.
               lean: false,
@@ -758,6 +799,8 @@ async function readHappened(
     )
   );
   const eventSignals: Signal[] = events.value
+    // `parseRecordChange` stays the authority over the SQL prefilter.
+    .filter((e) => "event" in dataEventOf(e))
     .filter(
       (e) =>
         !(
@@ -826,6 +869,31 @@ export interface LensPageWire {
   statusUnreadable: boolean;
 }
 
+/**
+ * The first `cap` ROWS of a Blocking / Proposed list, as signals — a row is
+ * what the client draws (`needsYouRows`, the SAME grouping every surface
+ * uses): a session owing several things is ONE card, so its items are never
+ * split across the cap nor counted as several rows. A plain signal slice let
+ * one session owing 3 things eat 3 of 5 slots, and could cut a card's items
+ * ("owes 5" when it owes 8) for every client that sends no caps. Server order
+ * is kept.
+ */
+export function capByRow(
+  all: readonly Signal[],
+  cap: number
+): { rows: Signal[]; hiddenRows: number } {
+  const grouped = needsYouRows(all);
+  const shaped = [...grouped.recent, ...grouped.older];
+  const keep = new Set<string>();
+  for (const r of shaped.slice(0, cap)) {
+    for (const s of r.kind === "session" ? r.items : [r.signal]) keep.add(s.id);
+  }
+  return {
+    rows: all.filter((s) => keep.has(s.id)),
+    hiddenRows: Math.max(0, shaped.length - cap),
+  };
+}
+
 function lensClass(
   all: Signal[],
   cap: number,
@@ -833,18 +901,26 @@ function lensClass(
     total?: number;
     truncated: boolean;
     hasMore?: boolean;
+    /** Cap by drawn ROW (`capByRow`) — Blocking and Proposed. */
+    byRow?: boolean;
     failures: ReadonlyArray<{ source: SignalSubRead }>;
   }
 ): LensClassWire {
   const unreadable = [...new Set(opts.failures.map((f) => f.source))];
   const total = opts.total ?? all.length;
   const truncated = opts.truncated || unreadable.length > 0;
-  const rows = all.slice(0, cap);
+  const cut = opts.byRow
+    ? capByRow(all, cap)
+    : { rows: all.slice(0, cap), hiddenRows: Math.max(0, all.length - cap) };
   return {
-    rows,
+    rows: cut.rows,
     total,
     truncated,
-    hasMore: total > rows.length || truncated || (opts.hasMore ?? false),
+    hasMore:
+      cut.hiddenRows > 0 ||
+      total > all.length ||
+      truncated ||
+      (opts.hasMore ?? false),
     unreadable,
   };
 }
@@ -874,10 +950,12 @@ async function readLensPage(
       // THE needs-you number (`countNeedsYou`), the same the badge shows.
       total: counts.needsYou,
       truncated: counts.truncated,
+      byRow: true,
       failures: attention.failures.blocking,
     }),
     proposed: lensClass(proposed, caps.proposed, {
       truncated: counts.draftsTruncated || attention.notificationsTruncated,
+      byRow: true,
       failures: attention.failures.proposed,
     }),
     happening: lensClass(happening.value.signals, caps.happening, {
@@ -893,7 +971,7 @@ async function readLensPage(
       hasMore: happened.hasMore,
       failures: happened.failures,
     }),
-    status: statusFailed ? null : statusBanner(attention.allNotifications),
+    status: statusFailed ? null : statusBanner(attention.statusNotifications),
     statusUnreadable: statusFailed,
   };
 }

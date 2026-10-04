@@ -30,9 +30,13 @@ import {
   and,
   eq,
   inArray,
+  isNotNull,
   or,
+  drizzleSql as sql,
   focusSessions,
   messages,
+  notifications,
+  type SQL,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
@@ -174,6 +178,58 @@ export function inContainerLens(
   if (lens.trackId && container.trackId !== lens.trackId) return false;
   if (lens.projectId && container.projectId !== lens.projectId) return false;
   return true;
+}
+
+/**
+ * The container lens IN SQL — a SUPERSET prefilter for a `notifications` read,
+ * so a narrow scope spends the read's LIMIT on its own rows instead of the
+ * newest N pod-wide (a project's notification older than the pod's newest 100
+ * unread was silently absent, and every narrow page read as truncated).
+ *
+ * Mirrors `notificationRef` → `resolveNotificationContainers`: a row whose
+ * `source_id` names a session inside the lens (a session target, or a type
+ * that opens a session on its own `sourceId`), or a `proactive_message` whose
+ * message sits in such a session's room. Sessions go through the SAME read
+ * floor (`sessionReadableWhere`), and the same nesting (a track's sessions
+ * carry its project). It may over-match — a row whose `sourceId` merely
+ * equals a session id — so `inContainerLens` over the resolved containers
+ * stays the authority; it never under-matches a row that resolution places
+ * inside the lens. `undefined` = no container lens (nothing to narrow).
+ */
+export function containerNotificationWhere(
+  lens: ContainerLens,
+  reader: SessionReader
+): SQL | undefined {
+  if (!lens.sessionId && !lens.trackId && !lens.projectId) return undefined;
+  const inScope = and(
+    ...(lens.sessionId ? [eq(focusSessions.id, lens.sessionId)] : []),
+    ...(lens.trackId ? [eq(focusSessions.trackId, lens.trackId)] : []),
+    ...(lens.projectId ? [eq(focusSessions.projectId, lens.projectId)] : []),
+    sessionReadableWhere(reader)
+  );
+  const sessionIds = db
+    .select({ id: sql<string>`${focusSessions.id}::text` })
+    .from(focusSessions)
+    .where(inScope);
+  const roomMessageIds = db
+    .select({ id: sql<string>`${messages.id}::text` })
+    .from(messages)
+    .where(
+      inArray(
+        messages.channelId,
+        db
+          .select({ channelId: focusSessions.channelId })
+          .from(focusSessions)
+          .where(and(inScope, isNotNull(focusSessions.channelId)))
+      )
+    );
+  return or(
+    inArray(notifications.sourceId, sessionIds),
+    and(
+      eq(notifications.sourceType, "proactive_message"),
+      inArray(notifications.sourceId, roomMessageIds)
+    )
+  );
 }
 
 /**

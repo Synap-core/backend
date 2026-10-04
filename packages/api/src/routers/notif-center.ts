@@ -47,6 +47,8 @@ import {
   type PushPrefs,
 } from "@synap-core/types/push";
 import { readPushPrefs, writePushPrefs } from "../notifications/push-prefs.js";
+import { containerNotificationWhere } from "../services/signals/lens-containers.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 
 /** What a phone's push settings render — every category, effective state. */
 function pushPrefsView(prefs: PushPrefs) {
@@ -102,13 +104,35 @@ export const notifCenterRouter = router({
           .optional(),
         limit: z.number().min(1).max(100).default(50),
         offset: z.number().min(0).default(0),
+        /**
+         * Only rows whose subject sits INSIDE this container — a session in
+         * it (or a message in such a session's room), read through the
+         * session read floor (`containerNotificationWhere`). Applied in SQL
+         * BEFORE the limit, so a narrow lens reads its own rows, not the
+         * newest N of the whole pod. Each key only ANDs.
+         */
+        container: z
+          .object({
+            sessionId: z.string().uuid().optional(),
+            trackId: z.string().uuid().optional(),
+            projectId: z.string().uuid().optional(),
+          })
+          .optional(),
       })
     )
     .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
       // Surface any due snoozes before reading (flips them back to unread).
-      await wakeDueSnoozes(requireUserId(ctx.userId));
+      await wakeDueSnoozes(userId);
       const { workspaceLens } = resolveScope(ctx, input);
-      const conditions = [eq(notifications.userId, requireUserId(ctx.userId))];
+      const conditions = [eq(notifications.userId, userId)];
+      const inContainer = input.container
+        ? containerNotificationWhere(input.container, {
+            userId,
+            roster: rosterReadFor(ctx),
+          })
+        : undefined;
+      if (inContainer) conditions.push(inContainer);
 
       // Workspace lens narrows within the user's own rows (the floor is userId).
       if (workspaceLens === null) {

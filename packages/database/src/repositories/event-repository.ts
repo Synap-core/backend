@@ -696,6 +696,15 @@ export class EventRepository {
       /** Filter by the action verb (middle segment of type, e.g. "create", "update"). */
       actions?: string[];
       /**
+       * Filter by the PHASE — the third AND LAST segment of the type (e.g.
+       * "completed"): a type with a fourth segment never matches. With
+       * `actions` set to the CRUD verbs this is `parseRecordChange`
+       * (`@synap-core/types/events`) in SQL, so a caller paging RECORD CHANGES
+       * spends its LIMIT on rows it can render, not on governance phases or
+       * connector families it then drops.
+       */
+      phase?: string;
+      /**
        * Filter to the events one SESSION produced (`events.session_id`).
        *
        * The column and its partial index `idx_events_session_id` have existed
@@ -865,6 +874,12 @@ export class EventRepository {
         .join(", ");
       query += ` AND split_part(type, '.', 2) IN (${placeholders})`;
       params.push(...filters.actions);
+    }
+
+    if (filters.phase) {
+      query += ` AND split_part(type, '.', 3) = $${paramIndex} AND split_part(type, '.', 4) = ''`;
+      params.push(filters.phase);
+      paramIndex++;
     }
 
     if (filters.ungoverned) {

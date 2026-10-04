@@ -125,9 +125,27 @@ describe("signals.list — needs-you lens forwards the scope to every half", () 
     );
   });
 
-  it("KEEPS the notification half under a container scope (narrowed by resolved container, not dropped)", async () => {
+  it("KEEPS the notification half under a container scope — narrowed IN SQL by the door, before its limit", async () => {
     await caller().list({ lens: "needs-you", sessionId: S });
+    // The container read, plus the pod's health read for the banner.
+    expect(notifListSpy).toHaveBeenCalledTimes(2);
+    expect(notifListSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ container: { sessionId: S } })
+    );
+    expect(notifListSpy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ container: expect.anything() })
+    );
+    expect(notifListSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ category: "system" })
+    );
+  });
+
+  it("at the floor ONE notification read serves the rows and the banner, unnarrowed", async () => {
+    await caller().list({ lens: "needs-you" });
     expect(notifListSpy).toHaveBeenCalledTimes(1);
+    expect(notifListSpy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ container: expect.anything() })
+    );
   });
 
   it("forwards session + track to the owed read and to the review read", async () => {
@@ -342,7 +360,9 @@ describe("signals.count — the same reader, the same scope", () => {
     expect(groupsSpy).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: S })
     );
-    expect(notifListSpy).toHaveBeenCalledTimes(1);
+    expect(notifListSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ container: { sessionId: S } })
+    );
     expect(owedSpy).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: S })
     );
@@ -435,13 +455,18 @@ describe("signals.list — a data change is a DATA line (work + data)", () => {
     });
   });
 
-  it("the governance phases of a change carry no data line (one change = one line)", async () => {
+  it("the governance phases of a change are no line at all (one change = one line), filtered before the limit", async () => {
     eventsReadSpy.mockResolvedValue([
       row({ id: "r", type: "entity.create.requested" }),
       row({ id: "v", type: "entity.create.validated" }),
+      row({ id: "c" }),
     ]);
     const r = await caller().list({ lens: "history" });
-    expect(r.signals.filter((s) => s.kind === "event")).toHaveLength(2);
-    expect(r.signals.every((s) => s.event === undefined)).toBe(true);
+    // Asked of the door in SQL (record changes only)…
+    expect(eventsReadSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ recordChanges: true })
+    );
+    // …and `parseRecordChange` stays the authority over what came back.
+    expect(r.signals.map((s) => s.id)).toEqual(["event:c"]);
   });
 });

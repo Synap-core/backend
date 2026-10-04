@@ -14,6 +14,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 // REMOVED: Domain package - using simple string schemas instead
 // import { subjectTypeSchema, EventSourceSchema } from '@synap/domain';
 import { createSynapEvent } from "@synap-core/core";
+import { EVENT_ACTIONS } from "@synap-core/types/events";
 import { db, getEventRepository } from "@synap/database";
 import { resolveSubjectNames, subjectKey } from "./subscriptions.js";
 import { and, inArray } from "drizzle-orm";
@@ -290,6 +291,13 @@ export const eventsRouter = router({
         sessionId: z.string().uuid().optional(),
         limit: z.number().min(1).max(500).default(50),
         lean: z.boolean().default(false),
+        /**
+         * Only RECORD CHANGES — `{subject}.{create|update|delete|archive|
+         * restore}.completed` (`parseRecordChange`), filtered in SQL BEFORE
+         * the limit. The lens page's Happened reads data lines this way, so
+         * governance phases and connector families never use up its page.
+         */
+        recordChanges: z.boolean().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -309,6 +317,9 @@ export const eventsRouter = router({
         fromDate: input.since,
         toDate: input.until,
         limit: input.limit,
+        ...(input.recordChanges
+          ? { actions: [...EVENT_ACTIONS], phase: "completed" }
+          : {}),
       });
 
       return events.map((e) => {

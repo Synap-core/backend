@@ -34,10 +34,12 @@ import {
   db,
   and,
   eq,
+  gte,
   inArray,
   isNull,
   like,
   max,
+  or,
   drizzleSql as sql,
   chatTurns,
   events,
@@ -109,11 +111,20 @@ function newestAsk(session: LivenessSession): number | null {
 /**
  * Liveness for each session, keyed by id. Every id in `sessions` is present:
  * the facts, or `null` when the read failed.
+ *
+ * `since` BOUNDS the activity sources to `>= since` (index-backed range scans
+ * instead of each session's whole history) — for a caller that only asks
+ * "working now" (`signals` Happening, with `since = now − window`). The
+ * `isSessionWorkingNow` answer is unchanged by it; `lastAt` is then null for
+ * a session with no activity since then (an owed slot's hand-back, read off
+ * the row, still counts). The running-turn fact is never bounded.
  */
 export async function loadSessionLiveness(
   reader: LivenessReader,
-  sessions: readonly LivenessSession[]
+  sessions: readonly LivenessSession[],
+  opts: { since?: Date } = {}
 ): Promise<Map<string, SessionActivityLive | null>> {
+  const since = opts.since;
   const out = new Map<string, SessionActivityLive | null>();
   if (sessions.length === 0) return out;
 
@@ -134,7 +145,12 @@ export async function loadSessionLiveness(
                 at: max(chatTurns.updatedAt),
               })
               .from(chatTurns)
-              .where(inArray(chatTurns.channelId, channelIds))
+              .where(
+                and(
+                  inArray(chatTurns.channelId, channelIds),
+                  since ? gte(chatTurns.updatedAt, since) : undefined
+                )
+              )
               .groupBy(chatTurns.channelId)
           : Promise.resolve([]),
         channelIds.length
@@ -158,6 +174,7 @@ export async function loadSessionLiveness(
           .where(
             and(
               inArray(events.sessionId, ids),
+              since ? gte(events.timestamp, since) : undefined,
               like(events.type, "%.completed"),
               // Session-row bookkeeping is not activity; its lifecycle
               // bookends are (the activity read's own exclusion).
@@ -186,6 +203,12 @@ export async function loadSessionLiveness(
           .where(
             and(
               inArray(proposals.sessionId, ids),
+              since
+                ? or(
+                    gte(proposals.createdAt, since),
+                    gte(proposals.reviewedAt, since)
+                  )
+                : undefined,
               proposalUserFloor(reader.userId)
             )
           )
@@ -200,6 +223,7 @@ export async function loadSessionLiveness(
               .where(
                 and(
                   inArray(messages.channelId, channelIds),
+                  since ? gte(messages.timestamp, since) : undefined,
                   eq(messages.authorType, MessageAuthorType.AI_AGENT),
                   isNull(messages.deletedAt)
                 )
