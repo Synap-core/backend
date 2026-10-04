@@ -96,7 +96,15 @@ if [ -n "$VOLUME_LIST" ]; then
     fi
   done
   if [ -n "$VOLUME_PATHS" ]; then
-    tar czf "$VOL_ARCHIVE" $VOLUME_PATHS 2>/dev/null || true
+    # GNU tar: 1 = "file changed as we read it" (survivable — services are
+    # stopped, so this is a straggler write); >=2 = fatal. A fatal error used to
+    # be swallowed (`|| true`) and the pod archived WITHOUT its files.
+    tar czf "$VOL_ARCHIVE" $VOLUME_PATHS 2>/dev/null; tar_rc=$?
+    if [ "$tar_rc" -ge 2 ] || [ ! -s "$VOL_ARCHIVE" ]; then
+      dump_failed "volume archive failed (tar exit $tar_rc)"
+    elif [ "$tar_rc" -eq 1 ]; then
+      log "WARN: tar reported files changed while archiving volumes (exit 1) — archive kept"
+    fi
     VOL_SIZE=$(wc -c < "$VOL_ARCHIVE" 2>/dev/null | tr -d ' ')
     log "Volume archive complete (${VOL_SIZE} bytes compressed)"
   else

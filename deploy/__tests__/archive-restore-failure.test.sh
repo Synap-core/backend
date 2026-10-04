@@ -33,7 +33,8 @@ case "$*" in
       sqlerr) echo 'ERROR:  relation "x" does not exist' >&2 ;;
       exists) echo 'ERROR:  role "synap" already exists' >&2 ;;
     esac ;;
-  *"volume ls"*) : ;;
+  *"volume ls"*) [ -n "${VOL_MODE:-}" ] && echo "pod_minio_data" ;;
+  *"volume inspect"*) echo "$FAKE_VOL_DIR" ;;
 esac
 exit 0
 D
@@ -55,6 +56,15 @@ D
 cat > "$TMP/bin/curl" <<'D'
 #!/usr/bin/env bash
 echo "curl $*" >> "$UPLOAD_LOG"; exit 0
+D
+# tar wrapper: simulate an exit code ONLY for the volume archive, real tar otherwise.
+cat > "$TMP/bin/tar" <<'D'
+#!/usr/bin/env bash
+if [ -n "${VOL_TAR_RC:-}" ] && [[ "$*" == *volumes.tar.gz*"$FAKE_VOL_DIR"* ]]; then
+  [ "$VOL_TAR_RC" = 1 ] && /usr/bin/env -i PATH=/usr/bin:/bin tar "$@" 2>/dev/null
+  exit "$VOL_TAR_RC"
+fi
+exec /usr/bin/env -i PATH=/usr/bin:/bin tar "$@"
 D
 chmod +x "$TMP/bin"/*
 export CB_LOG="$TMP/cb" UPLOAD_LOG="$TMP/up" FAKE_ARCHIVE="$TMP/fake.tar.gz"
@@ -79,6 +89,18 @@ for mode in fail empty; do
   grep -q '"completed"' "$CB_LOG" && bad "archive[$mode]: reported completed" || ok "archive[$mode]: never reports completed"
   [ ! -s "$UPLOAD_LOG" ] && ok "archive[$mode]: nothing uploaded" || bad "archive[$mode]: uploaded a placeholder"
 done
+
+# ── archive: volumes (minio/typesense) ──
+export FAKE_VOL_DIR="$TMP/vol"; mkdir -p "$FAKE_VOL_DIR"; echo data > "$FAKE_VOL_DIR/obj"
+VOL_MODE=1 run_archive; rc=$?
+[ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && ok "archive[volumes ok]: completed" || bad "archive[volumes ok]: rc=$rc status=$(last_status)"
+VOL_MODE=1 VOL_TAR_RC=2 run_archive; rc=$?
+[ $rc -ne 0 ] && ok "archive[volume tar fatal]: non-zero exit" || bad "archive[volume tar fatal]: exited 0"
+[ ! -s "$UPLOAD_LOG" ] && ok "archive[volume tar fatal]: nothing uploaded" || bad "archive[volume tar fatal]: uploaded without its files"
+grep -q '"completed"' "$CB_LOG" && bad "archive[volume tar fatal]: reported completed" || ok "archive[volume tar fatal]: never reports completed"
+VOL_MODE=1 VOL_TAR_RC=1 run_archive; rc=$?
+[ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && ok "archive[tar exit 1]: survivable, completed" || bad "archive[tar exit 1]: rc=$rc status=$(last_status)"
+unset VOL_MODE VOL_TAR_RC
 
 # ── restore ──
 mkdir -p "$TMP/pk"; echo "CREATE ROLE synap;" | gzip > "$TMP/pk/database.sql.gz"
