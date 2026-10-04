@@ -67,6 +67,13 @@ x-backend-env: &backend-env
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
+  # Read by the OpenAI-compat router (routers/external/openai-compat.ts) and
+  # written by `eve ai apply`; before 2026-10-04 compose never passed them, so
+  # that wiring reached nothing.
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  DEFAULT_AI_PROVIDER: ${DEFAULT_AI_PROVIDER:-}
+  DEFAULT_AI_MODEL: ${DEFAULT_AI_MODEL:-}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
   ORY_HYDRA_SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM}
   REALTIME_URL: http://realtime:4001
   HUB_JWT_SECRET: ${HUB_JWT_SECRET:-}

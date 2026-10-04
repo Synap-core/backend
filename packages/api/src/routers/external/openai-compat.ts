@@ -1275,9 +1275,10 @@ openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), async (c) => {
  * Auth: same Bearer API key as /v1/models.
  */
 openaiCompatApp.get("/config", externalApiKeyAuth("chat.stream"), (c) => {
-  const provider = process.env.DEFAULT_AI_PROVIDER ?? null;
-  const model = process.env.DEFAULT_AI_MODEL ?? null;
-  const ollamaUrl = process.env.OLLAMA_BASE_URL ?? null;
+  // `|| null`: compose passes an unset key as "" (deploy/docker-compose.yml).
+  const provider = process.env.DEFAULT_AI_PROVIDER || null;
+  const model = process.env.DEFAULT_AI_MODEL || null;
+  const ollamaUrl = process.env.OLLAMA_BASE_URL || null;
 
   const customProviders = parseCustomProviderEnv().map((cp) => ({
     name: cp.name,
