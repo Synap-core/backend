@@ -85,6 +85,8 @@ import {
   type Settled,
 } from "../focus-sessions/session-path-sections.js";
 import { buildPaginatedResponse } from "../../utils/pagination.js";
+import { loadSessionLiveness } from "../runs/session-liveness.js";
+import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import {
   withViewerRole,
   type SessionViewerRole,
@@ -158,6 +160,15 @@ export interface ProjectPathRow {
    */
   deliverables: ({ status: "ok" } & DeliverableCounts) | Unavailable;
   nextMove: ContinuationNextMove;
+  /**
+   * The liveness facts the "working right now" rule reads (D1,
+   * `isSessionWorkingNow`) — the SAME batched read (`loadSessionLiveness`)
+   * behind `focusSessions.list` rows and the session page, so a path row's
+   * mark (`pathRowSessionFact` → `sessionRowInput`) agrees with the session
+   * header. `null` = the liveness read FAILED (the mark says "not measured",
+   * never "quiet").
+   */
+  live: SessionActivityLive | null;
 }
 
 /**
@@ -324,7 +335,7 @@ export async function getProjectPath(
   const wsIds = [
     ...new Set(page.map((r) => r.workspaceId).filter((w): w is string => !!w)),
   ];
-  const [sectioned, wsNames, open, tracks] = await Promise.all([
+  const [sectioned, wsNames, open, tracks, live] = await Promise.all([
     attachPathSections(attachSessionKind(attachTriage(page)), {
       userId,
       database,
@@ -375,6 +386,9 @@ export async function getProjectPath(
         )
         .orderBy(asc(projectTracks.createdAt), asc(projectTracks.id))
     ),
+    // D1: one batched liveness read for the page (never throws — a failed
+    // read is `null` per session).
+    loadSessionLiveness({ userId, roster: query.roster ?? false }, page),
   ]);
 
   const toCount = (s: Settled<number>): PathCount =>
@@ -412,6 +426,7 @@ export async function getProjectPath(
       hasOutputs: row.hasOutputs,
       deliverables: deliverableCountsOf(row.expectedOutputs, viewer.viewerRole),
       nextMove: row.nextMove,
+      live: live.get(row.id) ?? null,
     };
   });
 

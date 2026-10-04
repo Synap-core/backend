@@ -57,6 +57,8 @@ import {
   projectMembers,
   channels,
   channelMembers,
+  events,
+  messages,
 } from "@synap/database";
 import { deliverableCountsOf, getProjectPath } from "./project-path.js";
 import { attachNextMove } from "../focus-sessions/session-path-sections.js";
@@ -172,6 +174,10 @@ beforeAll(async () => {
     // joins the room's seats — without these two tables it cannot run.
     channels,
     channelMembers,
+    // The liveness read (D1, `loadSessionLiveness`) reads the session's
+    // events and room messages beside its turns and proposals.
+    events,
+    messages,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -397,6 +403,21 @@ describe("getProjectPath", () => {
         row.unitFacts.owedFromYou
       );
     }
+  });
+
+  it("each row carries the D1 liveness facts (the value arrives — the mark's 'working now' input)", async () => {
+    const r = (await path())!;
+    const byId = new Map(r.items.map((i) => [i.id, i]));
+    // S.b has a proposal filed just now ⇒ recent activity is MEASURED.
+    const b = byId.get(S.b)!;
+    expect(b.live).not.toBeNull();
+    expect(b.live!.turnInFlight).toBe(false);
+    expect(b.live!.lastAt).not.toBeNull();
+    // S.a has no room, no proposal, no events ⇒ measured QUIET, never null.
+    const a = byId.get(S.a)!;
+    expect(a.live).toEqual(
+      expect.objectContaining({ turnInFlight: false, lastAt: null })
+    );
   });
 
   it("deliverableCountsOf: a malformed column is unavailable, never zeros; a member owes nothing", () => {

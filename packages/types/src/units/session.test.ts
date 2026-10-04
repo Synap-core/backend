@@ -330,3 +330,77 @@ describe("sessionRowInput and sessionUnitInput are ONE derivation", () => {
     }
   });
 });
+
+/**
+ * D1 on the PATH door and the aggregate: a project / track / path row reads
+ * "working" by THE rule the session header reads (`isSessionWorkingNow`), not
+ * by an open lifecycle. Each case rules out the pre-D1 reading "open ⇒ working".
+ */
+describe("D1 — path rows and the aggregate read liveness through the one rule", () => {
+  const NOW = Date.parse("2026-10-04T12:00:00.000Z");
+  const quiet = { turnInFlight: false, lastAt: "2026-10-04T11:00:00.000Z" };
+  const recent = { turnInFlight: false, lastAt: "2026-10-04T11:58:00.000Z" };
+  const turn = { turnInFlight: true, lastAt: null };
+  const facts = {
+    owedByYou: 0,
+    owedFromYou: 0,
+    pendingDecisions: 0,
+    awaitingReview: false,
+    draft: false,
+  };
+
+  it("pathRowSessionFact passes the row's live facts through (the value arrives)", () => {
+    expect(pathRowSessionFact({ status: "active", live: quiet }).live).toEqual(
+      quiet
+    );
+    expect(
+      pathRowSessionFact({ status: "active", live: null }).live
+    ).toBeNull();
+    expect("live" in pathRowSessionFact({ status: "active" })).toBe(false);
+  });
+
+  it("a quiet open path row is paused, a working one is working, a failed read is unmeasured", () => {
+    const view = (live: typeof quiet | typeof turn | null) =>
+      resolveUnitState(
+        sessionRowInput({
+          ...pathRowSessionFact({ status: "active", unitFacts: facts, live }),
+          now: NOW,
+        })
+      ).state;
+    expect(view(quiet)).toBe("paused");
+    expect(view(turn)).toBe("working");
+    expect(view(null)).toBe("unmeasured");
+  });
+
+  it("aggregate: working anywhere ⇒ working; all quiet ⇒ paused; a failed liveness read ⇒ unmeasured", () => {
+    const agg = (lives: Array<typeof quiet | null | undefined>) =>
+      resolveUnitState(
+        projectAggregateInput({
+          sessions: lives.map((live) => ({
+            status: "active",
+            unitFacts: facts,
+            ...(live !== undefined ? { live } : {}),
+            now: NOW,
+          })),
+          unreadable: false,
+        })
+      ).state;
+    expect(agg([quiet, recent])).toBe("working");
+    expect(agg([quiet, quiet])).toBe("paused");
+    expect(agg([quiet, null])).toBe("unmeasured");
+    // An older pod (no liveness) keeps the lifecycle reading.
+    expect(agg([undefined])).toBe("working");
+    // A closed session's liveness is irrelevant: only OPEN sessions are judged.
+    expect(
+      resolveUnitState(
+        projectAggregateInput({
+          sessions: [
+            { status: "active", unitFacts: facts, live: quiet, now: NOW },
+            { status: "closed", unitFacts: facts, live: null, now: NOW },
+          ],
+          unreadable: false,
+        })
+      ).state
+    ).toBe("paused");
+  });
+});

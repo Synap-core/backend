@@ -164,6 +164,15 @@ export interface ProjectAggregateSessionFact {
    * legacy actor (which cannot see a draft at all).
    */
   draft?: boolean;
+  /**
+   * The session's liveness facts (`live` on a list / path row) — see
+   * `SessionUnitFacts.live`. Three-valued: an object ⇒ "working" requires
+   * `isSessionWorkingNow` (D1); `null` ⇒ the read FAILED; absent ⇒ not read
+   * (an older pod — the lifecycle reading stands).
+   */
+  live?: SessionLiveFacts | null;
+  /** The clock for the working window. Defaults to `Date.now()`. */
+  now?: number;
 }
 
 /** Does this session need you? `unitFacts` through the one rule, else the legacy actor. */
@@ -188,10 +197,11 @@ export interface ProjectAggregateStateInput {
  * obligation as `done`.
  *   1. any session needs you (THE rule, `sessionNeedsYou`) → `owedFromYou`
  *   2. every session is terminal → `terminal`
- *   3. otherwise, something open → `running`
- *
- * ⚠️ `running` is a best-effort stand-in: no wire field says a session is
- * actively running, so "open and not waiting on you" counts as working.
+ *   3. otherwise, something open: `running` when an agent is working on one
+ *      of them by THE rule (D1, `isSessionWorkingNow`, over each session's
+ *      `live`), else `idle` (the quiet `paused` reading) — `unmeasured` when
+ *      a liveness read failed. A session WITHOUT `live` (older pod) counts as
+ *      working, the pre-D1 lifecycle reading.
  */
 export function projectAggregateInput(
   input: ProjectAggregateStateInput
@@ -211,15 +221,23 @@ export function projectAggregateInput(
 
   if (needsYou > 0) return { owedFromYou: needsYou, progress };
   if (closed === total) return { terminal: true, progress };
-  return { running: true, everStarted: true, progress };
+  // D1: an open session is "working" only by the ONE rule when its liveness
+  // was read; a session without liveness (older pod) keeps the lifecycle
+  // reading. Working anywhere ⇒ running; else a FAILED liveness read ⇒
+  // unmeasured (never a calm "quiet"); else every open session is idle.
+  const open = input.sessions.filter((s) => !isTerminalSessionStatus(s.status));
+  const working = open.some(
+    (s) =>
+      s.live === undefined ||
+      (s.live !== null && isSessionWorkingNow(s.live, s.now ?? Date.now()))
+  );
+  if (working) return { running: true, everStarted: true, progress };
+  if (open.some((s) => s.live === null)) return { unreadable: true, progress };
+  return { idle: true, everStarted: true, progress };
 }
 
 /** One session ROW — the aggregate fact plus what a single row can also know. */
 export interface SessionRowFact extends ProjectAggregateSessionFact {
-  /** The row's liveness facts (`live` on a list row) — see `SessionUnitFacts.live`. */
-  live?: SessionLiveFacts | null;
-  /** The clock for the working window. Defaults to `Date.now()`. */
-  now?: number;
   /**
    * Title of an OPEN session this one waits on (a `blocked_by` link whose
    * target is still open). Waiting on X is not waiting on you: it reads
@@ -302,6 +320,12 @@ export interface PathRowFacts {
   triage?: { pending?: boolean | null } | null;
   /** The blocked-by edges (`projects.path` rows). */
   blockedBy?: BlockerEdges;
+  /**
+   * The row's liveness facts (`projects.path` rows carry them since D1) —
+   * passed through so a path row reads "working" by THE rule the session
+   * header and the session lists read. Absent ⇒ an older pod.
+   */
+  live?: SessionLiveFacts | null;
 }
 
 /**
@@ -326,6 +350,7 @@ export function pathRowSessionFact(row: PathRowFacts): SessionRowFact {
       : { nextMoveActor: row.nextMoveActor ?? "none" }),
     ...(draft ? { draft } : {}),
     blockedBy: openBlockerTitle(row.blockedBy),
+    ...(row.live !== undefined ? { live: row.live } : {}),
   };
 }
 
