@@ -27,6 +27,25 @@ export const SELF_REGISTRATION_DISABLED = {
 } as const;
 
 /**
+ * Pod-defined refusal (settings pre-persist hook): the session only proves a
+ * Synap Cloud sign-in, and the owner has not let Synap Cloud RECOVER accounts
+ * on this pod (founder decision R1). Changing a sign-in method then needs a
+ * pod-held factor: the password, a passkey, or a recovery code.
+ */
+export const CLOUD_SESSION_CANNOT_CHANGE_CREDENTIALS = {
+  id: 4000903,
+  text: "Signing in with Synap Cloud can't change how you sign in to this pod. Sign in with your pod password, or use a recovery code.",
+  context: { reason: "cloud_session_cannot_change_credentials" },
+} as const;
+
+/** Pod-defined refusal (login hook): the owner turned Synap Cloud sign-in off. */
+export const CLOUD_SIGN_IN_DISABLED = {
+  id: 4000904,
+  text: "Synap Cloud sign-in is turned off for this pod.",
+  context: { reason: "cloud_sign_in_disabled" },
+} as const;
+
+/**
  * Kratos v1.3.1 account-linking ids (ory/kratos@v1.3.1 `text/id.go`, values
  * obtained by compiling that file — not from memory). Kratos lands an existing
  * pod account that signs in with Synap Cloud for the first time on a LOGIN flow

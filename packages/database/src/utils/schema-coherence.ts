@@ -866,6 +866,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0205_pod_members.sql",
   },
 
+  // account_recovery_codes — pod-local recovery codes (0294). Absence means a
+  // pod is on a pre-0294 schema where /api/account-recovery/* would reference
+  // a missing table (status would 500 and redeem could never match).
+  {
+    table: "account_recovery_codes",
+    column: "code_hash",
+    addedBy: "0294_account_recovery_codes.sql",
+  },
+  {
+    table: "account_recovery_codes",
+    column: "used_at",
+    addedBy: "0294_account_recovery_codes.sql",
+  },
+
   // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
   // is on a pre-0206 schema where apiKeys.beginMcpConnect / POST /api/hub/mcp/redeem
   // would reference a missing table.

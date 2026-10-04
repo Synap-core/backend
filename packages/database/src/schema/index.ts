@@ -150,6 +150,9 @@ export * from "./trusted-issuers.js";
 // NEW: Pod Settings (singleton row holding pod-wide defaults — intelligence + proactive)
 export * from "./pod-settings.js";
 
+// Account recovery codes (pod-local one-time look-up secrets, hashed)
+export * from "./account-recovery-codes.js";
+
 // NEW: Source Configs & Subscriptions (pluggable feed source providers)
 export * from "./source-configs.js";
 

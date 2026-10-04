@@ -4780,3 +4780,16 @@ CREATE TABLE IF NOT EXISTS "capability_intents" (
   CONSTRAINT "capability_intents_effect_check" CHECK ("effect" IN ('read', 'write', 'act')),
   CONSTRAINT "capability_intents_slug_check" CHECK ("slug" ~ '^[a-z][a-z0-9_]{0,63}$')
 );
+
+-- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
+-- scrypt hash is stored. One batch per user; used_at NULL = unused.
+CREATE TABLE IF NOT EXISTS "account_recovery_codes" (
+  "id"         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"    text        NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "code_hash"  text        NOT NULL,
+  "batch_id"   uuid        NOT NULL,
+  "used_at"    timestamptz,
+  "created_at" timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "account_recovery_codes_user_idx"
+  ON "account_recovery_codes" ("user_id");

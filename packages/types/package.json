@@ -68,6 +68,10 @@
       "types": "./dist/kratos-messages/index.d.ts",
       "import": "./dist/kratos-messages/index.js"
     },
+    "./account-recovery": {
+      "types": "./dist/account-recovery/index.d.ts",
+      "import": "./dist/account-recovery/index.js"
+    },
     "./service-marks": {
       "types": "./dist/service-marks/index.d.ts",
       "import": "./dist/service-marks/index.js"

@@ -42,3 +42,4 @@ export * from "./user-resource-state-repository.js";
 export * from "./user-entity-state-repository.js";
 export * from "./agent-repository.js";
 export * from "./secrets-vault-repository.js";
+export * from "./account-recovery-code-repository.js";
