@@ -10,6 +10,12 @@ const ENTRY_FILE = join(ROOT_DIR, "src/root.ts");
 const API_TYPES_HASH_FILE = join(API_TYPES_DIR, "src/schema-hash.ts");
 const BACKEND_HASH_FILE = join(ROOT_DIR, "src/generated-schema-hash.ts");
 
+// `--check` (gen-types:check): a generation FAILURE must fail the check. Without
+// it the failure below is deliberately non-fatal (Docker build SIGSEGV), but a
+// guard that exits 0 when it could not generate proves nothing: the committed
+// file would "match" itself.
+const CHECK = process.argv.includes("--check");
+
 console.log("🛠  Generating API types...");
 
 try {
@@ -52,6 +58,12 @@ try {
   const reason = error.signal
     ? `signal ${error.signal}`
     : String(error.message ?? error);
+  if (CHECK) {
+    console.error(
+      `❌ gen-types:check could not generate types (${reason}) - nothing was verified. Fix generation (build deps, tsconfig.gen-types.json) and re-run.`
+    );
+    process.exit(1);
+  }
   console.warn(
     `⚠️  Type generation skipped (${reason}). Using existing generated.d.ts.`
   );
