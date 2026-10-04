@@ -24,6 +24,16 @@
 # Usage:
 #   deploy/verify-deploy.sh [pod-url]
 #
+# Release mode (the `synap update` engine): the expectations come from the
+# release MANIFEST, not from a checkout — a release-bundle pod has no git
+# HEAD and no migrations dir.
+#   SYNAP_EXPECT_MIGRATION  manifest migrations.last (replaces the checkout's newest file)
+#   SYNAP_EXPECT_GIT_SHA    manifest gitSha — then a null buildStamp is a FAILURE:
+#                           every release image is built with the GIT_SHA build-arg
+#   RELEASE_JSON_FILE       read /status/release from this file instead of curl
+#                           (the engine fetches it from inside the backend container,
+#                           which publishes no host port)
+#
 # pod-url defaults to http://localhost:4000 (in-cluster / on-host use). Exits
 # non-zero on ANY mismatch or unreachable pod — callers (update-pod.sh, the
 # synap CLI, CI) should treat a non-zero exit as "deploy did not actually
@@ -39,11 +49,20 @@ die() { log "FAIL: $*"; exit 1; }
 
 log "Checking ${POD_URL}/status/release against ${REPO_ROOT}..."
 
-RELEASE_JSON="$(curl -fsS --max-time 10 "${POD_URL}/status/release" 2>&1)" \
-  || die "could not reach ${POD_URL}/status/release: ${RELEASE_JSON:-no response}"
+if [ -n "${RELEASE_JSON_FILE:-}" ]; then
+  RELEASE_JSON="$(cat "$RELEASE_JSON_FILE" 2>/dev/null)" || die "cannot read ${RELEASE_JSON_FILE}"
+  [ -n "$RELEASE_JSON" ] || die "${RELEASE_JSON_FILE} is empty"
+else
+  RELEASE_JSON="$(curl -fsS --max-time 10 "${POD_URL}/status/release" 2>&1)" \
+    || die "could not reach ${POD_URL}/status/release: ${RELEASE_JSON:-no response}"
+fi
 
 # ── (a) migrations — mandatory, works on every image ───────────────────────
-EXPECTED_MIGRATION="$(cd "$REPO_ROOT" && ls packages/database/migrations/*.sql 2>/dev/null | sort | tail -1 | xargs -r basename)"
+if [ -n "${SYNAP_EXPECT_MIGRATION:-}" ]; then
+  EXPECTED_MIGRATION="$SYNAP_EXPECT_MIGRATION"
+else
+  EXPECTED_MIGRATION="$(cd "$REPO_ROOT" && ls packages/database/migrations/*.sql 2>/dev/null | sort | tail -1 | xargs -r basename)"
+fi
 [ -n "$EXPECTED_MIGRATION" ] || die "no migration files found under packages/database/migrations/*.sql"
 
 ACTUAL_MIGRATION="$(echo "$RELEASE_JSON" | grep -o '"lastApplied":"[^"]*"' | head -1 | cut -d'"' -f4)"
@@ -60,7 +79,11 @@ log "OK migrations.lastApplied = ${ACTUAL_MIGRATION}"
 # ── (b) build commit — best-effort, only when the image reports a buildStamp ──
 ACTUAL_BUILD_STAMP="$(echo "$RELEASE_JSON" | grep -o '"buildStamp":"[^"]*"' | head -1 | cut -d'"' -f4)"
 
-if [ -z "$ACTUAL_BUILD_STAMP" ]; then
+if [ -n "${SYNAP_EXPECT_GIT_SHA:-}" ]; then
+  [ -n "$ACTUAL_BUILD_STAMP" ] || die "pod reports buildStamp: null, but release ${SYNAP_EXPECT_GIT_SHA} images are stamped — this is not the release's image"
+  [ "$ACTUAL_BUILD_STAMP" = "$SYNAP_EXPECT_GIT_SHA" ] || die "buildStamp mismatch — pod reports ${ACTUAL_BUILD_STAMP}, the release is ${SYNAP_EXPECT_GIT_SHA}"
+  log "OK buildStamp = ${ACTUAL_BUILD_STAMP} (release)"
+elif [ -z "$ACTUAL_BUILD_STAMP" ]; then
   log "SKIP buildStamp check — pod reports buildStamp: null (image predates the GIT_SHA build-arg, or was pulled from the registry). Not a failure."
 else
   EXPECTED_SHA="$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || echo "")"

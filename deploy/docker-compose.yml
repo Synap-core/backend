@@ -108,7 +108,7 @@ services:
   # BACKEND API
   # ============================================================================
   backend:
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
+    image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -163,7 +163,7 @@ services:
   # Never starts automatically (profile guard + restart: "no").
   # ============================================================================
   backend-canary:
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
+    image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
     container_name: synap-backend-canary
     restart: "no"
     environment:
@@ -183,7 +183,7 @@ services:
   # Same image as backend — different working directory and entry point
   # ============================================================================
   realtime:
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
+    image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -252,7 +252,7 @@ services:
   # points to pod-admin so post-login users land directly on this app.
   # ============================================================================
   pod-admin:
-    image: ghcr.io/synap-core/pod-admin:${BACKEND_VERSION:-latest}
+    image: ${SYNAP_IMAGE_POD_ADMIN:-ghcr.io/synap-core/pod-admin:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_POD_ADMIN must be set in deploy/.env - run synap update --release}}
     build:
       context: ..
       dockerfile: apps/pod-admin/Dockerfile
@@ -287,7 +287,7 @@ services:
   # CODE MIGRATION SERVICE
   # ============================================================================
   backend-migrate:
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
+    image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -380,7 +380,7 @@ services:
   # Changing the image, PGDATA or the mount? Update deploy/pgdata-safety.sh and
   # run deploy/__tests__/pgdata-safety.test.sh — it fails when they disagree.
   postgres:
-    image: timescale/timescaledb-ha:pg15
+    image: ${SYNAP_IMAGE_POSTGRES:-timescale/timescaledb-ha:pg15}
     restart: always
     environment:
       POSTGRES_USER: synap
@@ -432,7 +432,7 @@ services:
   # Restore: deploy/pgdata-safety.sh restore deploy/backups/postgres/<dir>
   # ============================================================================
   postgres-backup:
-    image: timescale/timescaledb-ha:pg15
+    image: ${SYNAP_IMAGE_POSTGRES:-timescale/timescaledb-ha:pg15}
     restart: always
     user: "0"
     depends_on:
@@ -508,7 +508,7 @@ services:
   # REDIS
   # ============================================================================
   redis:
-    image: redis:7-alpine
+    image: ${SYNAP_IMAGE_REDIS:-redis:7-alpine}
     restart: always
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
@@ -526,7 +526,7 @@ services:
   # MINIO (Object Storage)
   # ============================================================================
   minio:
-    image: minio/minio:latest
+    image: ${SYNAP_IMAGE_MINIO:-minio/minio:latest}
     restart: always
     command: server /data --console-address ":9001"
     environment:
@@ -553,7 +553,7 @@ services:
   # TYPESENSE (Search)
   # ============================================================================
   typesense:
-    image: typesense/typesense:0.25.2
+    image: ${SYNAP_IMAGE_TYPESENSE:-typesense/typesense:0.25.2}
     restart: always
     command: >
       --data-dir /data
@@ -580,7 +580,7 @@ services:
   # ORY KRATOS (Authentication)
   # ============================================================================
   kratos-migrate:
-    image: oryd/kratos:v1.3.1
+    image: ${SYNAP_IMAGE_KRATOS:-oryd/kratos:v1.3.1}
     deploy:
       restart_policy:
         condition: on-failure
@@ -596,7 +596,7 @@ services:
       - synap-net
 
   kratos:
-    image: oryd/kratos:v1.3.1
+    image: ${SYNAP_IMAGE_KRATOS:-oryd/kratos:v1.3.1}
     restart: always
     environment:
       DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
@@ -657,7 +657,7 @@ services:
   # ORY HYDRA (OAuth2)
   # ============================================================================
   hydra-migrate:
-    image: oryd/hydra:v2.3.0
+    image: ${SYNAP_IMAGE_HYDRA:-oryd/hydra:v2.3.0}
     environment:
       DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/hydra?sslmode=disable
     command: migrate sql up -e --yes
@@ -668,7 +668,7 @@ services:
       - synap-net
 
   hydra:
-    image: oryd/hydra:v2.3.0
+    image: ${SYNAP_IMAGE_HYDRA:-oryd/hydra:v2.3.0}
     restart: always
     environment:
       DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/hydra?sslmode=disable
@@ -703,7 +703,7 @@ services:
   # CADDY (Reverse Proxy + SSL)
   # ============================================================================
   caddy:
-    image: caddy:2-alpine
+    image: ${SYNAP_IMAGE_CADDY:-caddy:2-alpine}
     restart: always
     ports:
       - "80:80"
@@ -961,7 +961,7 @@ services:
       dockerfile: Dockerfile
     # Published by .github/workflows/docker-publish.yml (job build-and-push-pod-agent).
     # Local dev: `docker compose build pod-agent` still tags this image name.
-    image: ghcr.io/synap-core/pod-agent:${POD_AGENT_VERSION:-latest}
+    image: ${SYNAP_IMAGE_POD_AGENT:-ghcr.io/synap-core/pod-agent:${POD_AGENT_VERSION:-${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_POD_AGENT must be set in deploy/.env - run synap update --release}}}
     restart: always
     environment:
       POD_AGENT_PORT: 4002

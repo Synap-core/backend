@@ -527,7 +527,7 @@ should_start_pod_agent() {
 generate_and_create_env() {
     local domain=$1
     local email=$2
-    local from_source=$3
+    # $3 (from_source) is unused: images are pinned by the release block
     local openai_key=$4
     local anthropic_key=$5
     local google_key=$6
@@ -560,10 +560,9 @@ generate_and_create_env() {
     # Backend reads it from compose env; .env.example documents it as required.
     local PROVISIONING_TOKEN=$(openssl rand -hex 32)
     
-    local backend_version="latest"
-    if [ "$from_source" = "true" ]; then
-        backend_version="local"
-    fi
+    # Placeholder until the image step pins the release block (SYNAP_IMAGE_*,
+    # BACKEND_VERSION=<release id>) — never `latest`.
+    local backend_version="unreleased"
     
     cat > .env <<EOF
 # Synap Backend Configuration
@@ -1267,8 +1266,9 @@ EOF
 # Relies on the `backend-canary` service (profile: canary, container_name
 # synap-backend-canary) and `backend-migrate` defined in docker-compose.yml.
 #
-# Returns 0 on success, non-zero on failure. On any pre-swap failure the live
-# backend is never touched and keeps serving.
+# Returns 0 on success; 1 when it failed BEFORE the swap (the live backend was
+# never touched and keeps serving); 2 when production was swapped and then
+# failed its health check (the caller must roll back).
 _swap_backend_canary() {
     local canary_name="synap-backend-canary"
     local health_probe="const r=require('http').get('http://localhost:4000/health',(s)=>{process.exit(s.statusCode===200?0:1)});r.setTimeout(4000,()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))"
@@ -1285,19 +1285,17 @@ _swap_backend_canary() {
         return $?
     fi
 
-    # Capture the live image tag for rollback BEFORE we change anything.
-    local prev_image prev_tag new_tag
-    prev_image=$(docker inspect --format '{{.Config.Image}}' "$backend_cid" 2>/dev/null || echo "")
-    prev_tag="${prev_image##*:}"
-    new_tag=$(grep "^BACKEND_VERSION=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
-
     echo -e "${BLUE}🐤 Canary-gated swap — validating the new image before touching the live backend...${NC}"
 
     # Migrations must land while the OLD backend is still serving (expand-contract).
-    echo -e "${BLUE}  Running backend migrations (live backend still serving)...${NC}"
-    if ! docker compose run --rm backend-migrate; then
-        echo -e "${RED}  ✗ Migration failed — live backend untouched. Aborting update.${NC}"
-        return 1
+    # The update engine runs them itself first (so it can measure the level and
+    # restore on a throw) and sets _UE_MIGRATED=1; install still relies on this.
+    if [ "${_UE_MIGRATED:-}" != 1 ]; then
+        echo -e "${BLUE}  Running backend migrations (live backend still serving)...${NC}"
+        if ! docker compose run --rm backend-migrate; then
+            echo -e "${RED}  ✗ Migration failed — live backend untouched. Aborting update.${NC}"
+            return 1
+        fi
     fi
 
     # Clean any leftover canary, then start it on the NEW image.
@@ -1314,7 +1312,7 @@ _swap_backend_canary() {
     echo -e "${BLUE}  Waiting for canary health (up to 3 min)...${NC}"
     local canary_ok=false i
     for i in $(seq 1 18); do
-        sleep 10
+        sleep "${SYNAP_HEALTH_INTERVAL:-10}"
         if docker exec "$canary_name" node -e "$health_probe" >/dev/null 2>&1; then
             canary_ok=true
             echo -e "${GREEN}  ✓ Canary healthy after ${i}0s — image is good${NC}"
@@ -1341,7 +1339,7 @@ _swap_backend_canary() {
     echo -e "${BLUE}  Verifying production health (up to 2 min)...${NC}"
     local prod_ok=false new_cid
     for i in $(seq 1 12); do
-        sleep 10
+        sleep "${SYNAP_HEALTH_INTERVAL:-10}"
         new_cid=$(docker compose ps -q backend 2>/dev/null | head -1)
         if [ -n "$new_cid" ] && docker exec "$new_cid" node -e "$health_probe" >/dev/null 2>&1; then
             prod_ok=true
@@ -1355,34 +1353,18 @@ _swap_backend_canary() {
         return 0
     fi
 
-    # Unexpected: the canary passed but production didn't (env diff / race). Roll
-    # back to the prior tag when it's a distinct, real version tag. A `latest` or
-    # `local` tag can't be rolled back by tag (same/sentinel tag), so we can only
-    # surface logs in that case — but the canary already caught the common case.
+    # Unexpected: the canary passed but production didn't (env diff / race).
+    # Return 2 so the caller knows production WAS touched. Rollback is the
+    # update engine's job (previous images + .env, the dump when the migration
+    # level moved) — the old by-tag rollback here could never work for `:local`.
     echo -e "${RED}  ✗ Production health failed after swap (unexpected — the canary had passed).${NC}"
-    if [ -n "$prev_tag" ] && [ -n "$new_tag" ] && [ "$prev_tag" != "$new_tag" ]; then
-        echo -e "${YELLOW}  ↩ Rolling back to ${prev_tag}...${NC}"
-        sed -i.bak "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${prev_tag}/" .env && rm -f .env.bak
-        docker compose up -d --force-recreate --remove-orphans backend realtime
-        for i in $(seq 1 12); do
-            sleep 10
-            new_cid=$(docker compose ps -q backend 2>/dev/null | head -1)
-            if [ -n "$new_cid" ] && docker exec "$new_cid" node -e "$health_probe" >/dev/null 2>&1; then
-                echo -e "${GREEN}  ✓ Rolled back to ${prev_tag} successfully — pod is serving the previous version.${NC}"
-                return 1
-            fi
-        done
-        echo -e "${RED}  ✗ Rollback also failed — pod may be down. Inspect: docker compose logs backend${NC}"
-    else
-        echo -e "${YELLOW}    Prior tag (${prev_tag:-unknown}) equals the new tag or is unknown — cannot roll back by tag.${NC}"
-        echo -e "${YELLOW}    Inspect: docker compose logs backend${NC}"
-    fi
-    return 1
+    return 2
 }
 
 cmd_install() {
     local FROM_IMAGE=""
     local FROM_SOURCE=""
+    local INSTALL_RELEASE=""
     local INSTALL_DIR=""
     local DOMAIN=""
     local EMAIL=""
@@ -1424,6 +1406,11 @@ cmd_install() {
             --from-source|--build)
                 FROM_SOURCE=true
                 shift
+                ;;
+            --release|-r)
+                FROM_IMAGE=true
+                INSTALL_RELEASE="${2:-}"
+                shift 2
                 ;;
             --dir|--directory)
                 INSTALL_DIR="$2"
@@ -1925,12 +1912,7 @@ EOF
                 update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
                 update_env_value "EMBEDDING_PROVIDER" "deterministic"
                 backfill_federation_public_urls "$DOMAIN"
-                # Update backend version based on method
-                local backend_version="latest"
-                if [ "$FROM_SOURCE" = true ]; then
-                    backend_version="local"
-                fi
-                update_env_value "BACKEND_VERSION" "$backend_version"
+                # BACKEND_VERSION + SYNAP_IMAGE_* are pinned by the image step below (release block).
                 rm -f .env.bak
             else
                 # Overwrite .env
@@ -1950,11 +1932,7 @@ EOF
             update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
             update_env_value "EMBEDDING_PROVIDER" "deterministic"
             backfill_federation_public_urls "$DOMAIN"
-            local backend_version="latest"
-            if [ "$FROM_SOURCE" = true ]; then
-                backend_version="local"
-            fi
-            update_env_value "BACKEND_VERSION" "$backend_version"
+            # BACKEND_VERSION + SYNAP_IMAGE_* are pinned by the image step below (release block).
             rm -f .env.bak
         fi
     else
@@ -1971,61 +1949,45 @@ EOF
     echo -e "${BLUE}📝 Generating Kratos configuration...${NC}"
     generate_kratos_config "$DOMAIN"
     
-    # Build/pull images FIRST (migrations need the image to exist)
-    echo -e "${BLUE}🔨 Preparing backend images...${NC}"
+    # Images come from ONE place: a release manifest (pulled by digest) or a
+    # from-source build tagged synap-local/* — the same helpers `synap update`
+    # uses (see RELEASE ENGINE). No pull-failure → build fallback: a release
+    # that cannot be pulled is a failed install, never a silent host build.
+    echo -e "${BLUE}🔨 Preparing images...${NC}"
+    mkdir -p state/update
+    local install_manifest
+    install_manifest="$(pwd)/state/update/manifest.json"
+    command -v jq >/dev/null 2>&1 || { echo -e "${RED}❌ jq is required (apt install jq)${NC}"; exit 1; }
     if [ "$FROM_SOURCE" = true ]; then
-        sync_git_before_build
-        echo -e "${BLUE}  Building backend...${NC}"
-        docker compose build backend
-        echo -e "${BLUE}  Building realtime...${NC}"
-        docker compose build realtime
-        echo -e "${BLUE}  Building pod-admin...${NC}"
-        docker compose build pod-admin
-        
-        # Verify realtime build succeeded (check for server.js)
-        # The main Dockerfile deploys realtime to /app/realtime/dist/server.js
-        echo -e "${BLUE}  Verifying realtime build...${NC}"
-        if docker compose run --rm realtime test -f /app/realtime/dist/server.js 2>/dev/null; then
-            echo -e "${GREEN}  ✓ Realtime build verified${NC}"
-        else
-            echo -e "${YELLOW}  ⚠️  Realtime verification failed, rebuilding with --no-cache...${NC}"
-            docker compose build --no-cache realtime
-            if docker compose run --rm realtime test -f /app/realtime/dist/server.js 2>/dev/null; then
-                echo -e "${GREEN}  ✓ Realtime rebuild successful${NC}"
-            else
-                echo -e "${RED}  ✗ Realtime build failed. Check logs with: docker compose logs realtime${NC}"
-                exit 1
-            fi
-        fi
+        _ue_build_from_source "$install_manifest" || exit 1
     else
-        echo -e "${BLUE}  Pulling backend...${NC}"
-        docker compose pull backend --ignore-pull-failures || {
-            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
-            sync_git_before_build
-            docker compose build backend
-        }
-        echo -e "${BLUE}  Pulling realtime...${NC}"
-        docker compose pull realtime --ignore-pull-failures || {
-            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
-            sync_git_before_build
-            docker compose build realtime
-        }
-        echo -e "${BLUE}  Pulling pod-admin...${NC}"
-        docker compose pull pod-admin --ignore-pull-failures || {
-            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
-            sync_git_before_build
-            docker compose build pod-admin
+        local install_ref="${INSTALL_RELEASE:-${SYNAP_UPDATE_CHANNEL:-$(_ue_env_get SYNAP_UPDATE_CHANNEL)}}"
+        install_ref="${install_ref:-stable}"
+        echo -e "${BLUE}  Fetching release manifest: ${install_ref}${NC}"
+        _ue_fetch "$(_ue_manifest_url "$install_ref")" "$install_manifest" || {
+            echo -e "${RED}❌ Could not fetch the release manifest for '${install_ref}'. Use --from-source to build this checkout.${NC}"
+            exit 1
         }
     fi
-    
+    local install_errors
+    install_errors="$(_ue_manifest_errors "$install_manifest" docker-compose.yml)"
+    if [ -n "$install_errors" ]; then
+        echo -e "${RED}❌ Release manifest is invalid:${NC}"; printf '   %s\n' "$install_errors"
+        exit 1
+    fi
+    _ue_pull_images "$install_manifest" || { echo -e "${RED}❌ Image pull failed — nothing was started.${NC}"; exit 1; }
+    _ue_write_release_env "$install_manifest" .env || exit 1
+    local install_edge
+    install_edge="$(_ue_edge)" || exit 1
+    _ue_edge_preflight "$install_edge" || exit 1
 
-    
     # Start services
     #
     # Caddy is the synap stack's built-in edge proxy. When the operator runs
     # behind their own edge (eve's Traefik on port 80, an external nginx,
     # cloudflared, etc.) Caddy can't bind 80/443 and aborts the install.
-    # SYNAP_SKIP_EDGE=1 brings up everything-but-caddy. Compose's depends_on
+    # SYNAP_EDGE=traefik in .env (pinned from eve's SYNAP_SKIP_EDGE=1, see
+    # _ue_edge) brings up everything-but-caddy. Compose's depends_on
     # graph still pulls in postgres / redis / minio / typesense / migrations
     # via the listed leaf services (backend, realtime, pod-admin, etc.).
     # Mirror cmd_update's behavior so install + update have one rule.
@@ -2056,8 +2018,8 @@ EOF
         echo -e "${BLUE}  Existing pod detected — bringing up support services, then canary-swapping the backend...${NC}"
         # Support services first (idempotent: compose only recreates what
         # changed). Backend + realtime are handled by the canary swap below.
-        if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
-            echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
+        if [ "$install_edge" = traefik ]; then
+            echo -e "${BLUE}  (SYNAP_EDGE=traefik: skipping Caddy — Traefik is the edge)${NC}"
             docker compose "${profile_args[@]}" up -d --remove-orphans \
                 postgres redis minio typesense "${pod_agent_args[@]}" pod-admin hydra kratos
         else
@@ -2068,8 +2030,8 @@ EOF
             echo -e "${RED}❌ Backend update aborted — the previous version is still running.${NC}"
             exit 1
         fi
-    elif [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
-        echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
+    elif [ "$install_edge" = traefik ]; then
+        echo -e "${BLUE}  (SYNAP_EDGE=traefik: skipping Caddy — Traefik is the edge)${NC}"
         docker compose "${profile_args[@]}" up -d --remove-orphans \
             postgres redis minio typesense \
             backend realtime "${pod_agent_args[@]}" pod-admin hydra kratos
@@ -2199,6 +2161,8 @@ EOF
         fi
     fi
 
+    jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg edge "$install_edge" '. + {appliedAt:$at, edge:$edge, installed:true}' \
+        "$install_manifest" > state/current-release.json || true
     echo -e "${GREEN}✅ Installation complete!${NC}"
     echo ""
     echo "Management commands:"
@@ -2548,6 +2512,592 @@ EOF
     fi
 }
 
+# ============================================================================
+# RELEASE ENGINE — `synap update` (update-door plan P2, Option A)
+# ============================================================================
+# ONE engine for every pod update. Its input is an immutable RELEASE MANIFEST
+# (release.json, published by .github/workflows/docker-publish.yml; format in
+# deploy/release/make-manifest.py, validated by _ue_manifest_errors below),
+# never a git checkout or a mutable tag. Flow (each step's failure is handled where it happens):
+#
+#   lock (router) → fetch + validate manifest → preflight (project pin, edge,
+#   disk, minFrom, compose) → PULL BY DIGEST (nothing changed yet) → snapshot
+#   .env → pgdata guard + VERIFIED pre-update dump → install the release's
+#   deploy bundle → pin images in .env → migrate → canary → swap → every other
+#   service → verify (buildStamp == gitSha, migration level == manifest) →
+#   state/{current,previous}-release.json
+#
+# Any failure after the snapshot ROLLS BACK: the previous images (still cached
+# locally — Kamal-style, the last two releases are kept), the previous .env and
+# deploy files, and — when the migration level moved — the pre-update dump,
+# restored in maintenance mode (writers stopped). Every outcome is RECORDED
+# (state/last-update.json + state/events.jsonl + a `SYNAP_EVENT {json}` line)
+# and handed to an optional notify hook (SYNAP_UPDATE_NOTIFY_CMD) — U4.
+#
+# `--from-source` (U6, open to anyone) goes through the SAME backup / canary /
+# rollback. It builds `synap-local/*:<sha>` with `docker build -t` — the tag
+# is named here and nowhere else, so a host build can never carry the ghcr name
+# — and records the release as `local-<sha>`.
+#
+# Channels: `fast` (every green main push) and `stable` (v* tags). The per-pod
+# auto-update SETTING (U3, wave 2) only has to decide WHEN to call
+# `synap update` and which channel: it sets SYNAP_UPDATE_CHANNEL in deploy/.env
+# (default: stable). The engine never decides that itself.
+SYNAP_RELEASE_BASE_URL_DEFAULT="https://github.com/synap-core/backend/releases/download"
+_UE_STATUS_PROBE="fetch('http://localhost:4000/status/release').then(r=>r.text()).then(t=>process.stdout.write(t)).catch(()=>process.exit(1))"
+
+_ue_log()  { echo -e "${BLUE}[update] $*${NC}"; }
+_ue_ok()   { echo -e "${GREEN}[update] ✓ $*${NC}"; }
+_ue_warn() { echo -e "${YELLOW}[update] ⚠️  $*${NC}" >&2; }
+_ue_err()  { echo -e "${RED}[update] ❌ $*${NC}" >&2; }
+
+# <key> [file] — last value of KEY in an env file (quotes stripped), empty when absent.
+_ue_env_get() {
+    grep "^$1=" "${2:-.env}" 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'"
+}
+
+# The image variables a compose file consumes — DERIVED from the file, so a new
+# pinned service joins the manifest contract by existing (no hand list).
+_ue_compose_image_keys() {
+    grep -oE '\$\{SYNAP_IMAGE_[A-Z0-9_]+' "${1:-docker-compose.yml}" 2>/dev/null | sed 's/^\${//' | sort -u
+}
+
+_ue_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+_ue_manifest_url() { # <fast|stable|release-id> [asset]
+    local base="${SYNAP_RELEASE_BASE_URL:-$SYNAP_RELEASE_BASE_URL_DEFAULT}" asset="${2:-release.json}"
+    case "$1" in
+        fast|stable) echo "${base}/channel-$1/${asset}" ;;
+        *)           echo "${base}/$1/${asset}" ;;
+    esac
+}
+
+_ue_fetch() { # <url> <out>
+    local auth=()
+    [ -n "${SYNAP_RELEASE_TOKEN:-}" ] && auth=(-H "Authorization: Bearer ${SYNAP_RELEASE_TOKEN}")
+    curl -fsSL --retry 2 --max-time 300 "${auth[@]}" -o "$2" "$1"
+}
+
+# <manifest> <compose-file> — prints one line per violation; empty = valid.
+# A registry release must pin EVERY image by digest and cover every
+# SYNAP_IMAGE_* the compose file uses. A from-source release (source:true,
+# id local-*) may carry synap-local/* tags for its two built images only.
+_ue_manifest_errors() {
+    local keys
+    keys="$(_ue_compose_image_keys "$2" | jq -R . | jq -sc .)"
+    jq -r --argjson keys "$keys" '
+      def digest: test("^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$");
+      def localref: test("^synap-local/[a-z0-9._/-]+:[A-Za-z0-9._-]+$");
+      (.source == true) as $src
+      | (.images // {}) as $img
+      | [ (if .schema != 1 then "schema must be 1 (got \(.schema))" else empty end),
+          (if ((.id|type) != "string") or ((.id|tostring)|test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")|not) then "id is missing or malformed" else empty end),
+          (if $src and ((.id|tostring)|startswith("local-")|not) then "a from-source release id must start with local-" else empty end),
+          (if ($src|not) and ((.id|tostring)|startswith("local-")) then "local-* ids are reserved for --from-source builds" else empty end),
+          (if ((.gitSha|type) != "string") or ((.gitSha|tostring)|test("^[0-9a-f]{40}$")|not) then "gitSha must be a full 40-hex commit" else empty end),
+          (if ($img|type) != "object" or ($img|length) == 0 then "images must be a non-empty object" else empty end),
+          ($img | to_entries[] | select((.value|type) != "string") | "image \(.key) is not a string"),
+          ($img | to_entries[] | select((.value|type) == "string") | select((.value|digest|not) and (($src and (.value|localref))|not))
+                | "image \(.key) is not pinned by digest: \(.value)"),
+          ($img | to_entries[] | select((.value|type) == "string") | select((.value|localref) and ([.key]|inside(["SYNAP_IMAGE_BACKEND","SYNAP_IMAGE_POD_ADMIN"])|not))
+                | "image \(.key) may not be a synap-local build"),
+          ((if $src then ["SYNAP_IMAGE_BACKEND","SYNAP_IMAGE_POD_ADMIN"] else ($keys + ["SYNAP_IMAGE_BACKEND","SYNAP_IMAGE_POD_ADMIN"] | unique) end)[]
+                | select($img[.] == null) | "image \(.) (used by docker-compose.yml) is missing from the manifest"),
+          (if ((.migrations.last|type) != "string") or ((.migrations.last|tostring)|endswith(".sql")|not) then "migrations.last must name a .sql file" else empty end),
+          (if ((.migrations.count|type) != "number") or (.migrations.count < 1) then "migrations.count must be a positive number" else empty end),
+          (if ((.composeSha|type) != "string") or ((.composeSha|tostring)|test("^sha256:[0-9a-f]{64}$")|not) then "composeSha must be sha256:<64 hex>" else empty end),
+          (if .minFrom != null and ((.minFrom|type) != "string") then "minFrom must be null or a migration filename" else empty end)
+        ] | .[]' "$1" 2>&1
+}
+
+# ── edge proxy ────────────────────────────────────────────────────────────────
+# SYNAP_EDGE=caddy|traefik in deploy/.env (default caddy). On an Eve-managed pod
+# Traefik IS the edge (founder decision 2026-10-04), and Caddy cannot bind :80
+# there — the 2026-10-04 perso update died exactly on that bind. Eve's delegate
+# already exports SYNAP_SKIP_EDGE=1; the first such run pins SYNAP_EDGE=traefik
+# so every later door (an operator in a shell included) agrees. An Eve pod with
+# nothing pinned is REFUSED before anything changes, never failed mid-update.
+_ue_edge() {
+    local edge="${SYNAP_EDGE:-$(_ue_env_get SYNAP_EDGE)}"
+    if [ -z "$edge" ] && [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
+        edge=traefik
+        if [ -f .env ]; then
+            [ -n "$(tail -c1 .env)" ] && echo >> .env
+            echo "SYNAP_EDGE=traefik" >> .env
+            echo -e "${BLUE}[update] ℹ️  SYNAP_SKIP_EDGE=1 — pinned SYNAP_EDGE=traefik in deploy/.env${NC}" >&2
+        fi
+    fi
+    if [ -z "$edge" ] && grep -qs 'eve-managed:' docker-compose.override.yml; then
+        _ue_err "This pod is Eve-managed (docker-compose.override.yml carries an eve-managed marker): Traefik is its edge, and Caddy cannot bind :80 next to it."
+        _ue_err "Set SYNAP_EDGE=traefik in $(pwd)/.env (or SYNAP_EDGE=caddy if Caddy really is this pod's edge), then re-run. Nothing was changed."
+        return 1
+    fi
+    edge="${edge:-caddy}"
+    case "$edge" in
+        caddy|traefik) echo "$edge" ;;
+        *) _ue_err "SYNAP_EDGE=${edge} — expected caddy or traefik. Nothing was changed."; return 1 ;;
+    esac
+}
+
+# With edge=caddy, :80/:443 must be free or held by THIS project's caddy.
+_ue_edge_preflight() {
+    [ "$1" = caddy ] || return 0
+    local holders
+    holders="$(docker ps --filter publish=80 --filter publish=443 \
+        --format '{{.Names}}|{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}' 2>/dev/null \
+        | awk -F'|' -v p="${COMPOSE_PROJECT_NAME:-}" '!($2 == p && $3 == "caddy") {print $1}' | sort -u | tr '\n' ' ')"
+    if [ -n "${holders// /}" ]; then
+        _ue_err "SYNAP_EDGE=caddy but :80/:443 is held by: ${holders}— Caddy could not start."
+        _ue_err "If that container is this pod's edge proxy (e.g. Traefik), set SYNAP_EDGE=traefik in $(pwd)/.env and re-run. Nothing was changed."
+        return 1
+    fi
+}
+
+# Long-running services the update (re)creates AFTER the backend swap — derived
+# from the compose file's active services, never a hand list. One-shots
+# (*-migrate), the canary, the updater, the swapped backend/realtime, and Caddy
+# when another proxy is the edge are excluded.
+_ue_services() { # <edge> [profile args...]
+    local edge="$1"; shift
+    docker compose "$@" config --services 2>/dev/null \
+        | grep -vxE 'backend|realtime|backend-canary|updater|.*-migrate' \
+        | { if [ "$edge" = traefik ]; then grep -vx caddy; else cat; fi; } || true
+}
+
+# "count|lastApplied" of the synap _migrations ledger; empty when unreadable.
+_ue_migration_level() {
+    local c
+    c="$(_pgs_container)"
+    [ -n "$c" ] || return 0
+    _pgs_psql "$c" synap "select count(*)||'|'||coalesce((select filename from _migrations order by applied_at desc, id desc limit 1),'') from _migrations" 2>/dev/null || true
+}
+
+_ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_INTERVAL
+    local i cid probe="const r=require('http').get('http://localhost:4000/health',(s)=>{process.exit(s.statusCode===200?0:1)});r.setTimeout(4000,()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))"
+    for i in $(seq 1 "${SYNAP_UPDATE_HEALTH_TRIES:-12}"); do
+        sleep "${SYNAP_HEALTH_INTERVAL:-10}"
+        cid="$(docker compose ps -q backend 2>/dev/null | head -1)"
+        [ -n "$cid" ] && docker exec "$cid" node -e "$probe" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
+# ── outcome record + notify (U4) ──────────────────────────────────────────────
+# state/last-update.json (latest outcome) + state/events.jsonl (append-only)
+# + a `SYNAP_EVENT {json}` stdout line for callers that capture output (eve,
+# pod-agent). The pod can surface it without a new door: the backend container
+# already mounts this deploy dir read-only at /opt/synap/deploy (compose
+# `backend.volumes`), so state/last-update.json is readable in-pod — wiring it
+# into /status/release + notif-center is the wave-2 seam. SYNAP_UPDATE_NOTIFY_CMD
+# (env or .env) receives the JSON on stdin, best-effort.
+_ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup]
+    local ev hook
+    ev="$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg status "$1" --arg from "$2" --arg to "$3" \
+        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" --arg pod "$(_ue_env_get DOMAIN)" \
+        '{ts:$ts, kind:"pod.update", status:$status, from:$from, to:$to, reason:$reason, dbRestored:$db, backup:$backup, pod:$pod}')"
+    mkdir -p state
+    printf '%s\n' "$ev" > state/last-update.json.tmp && mv -f state/last-update.json.tmp state/last-update.json
+    printf '%s\n' "$ev" >> state/events.jsonl
+    echo "SYNAP_EVENT $ev"
+    hook="${SYNAP_UPDATE_NOTIFY_CMD:-$(_ue_env_get SYNAP_UPDATE_NOTIFY_CMD)}"
+    if [ -n "$hook" ]; then
+        printf '%s\n' "$ev" | sh -c "$hook" || _ue_warn "notify hook failed (the outcome is still in state/last-update.json)"
+    fi
+}
+
+# ── current release / adoption ────────────────────────────────────────────────
+# A pod with no release record (every pod before this engine) is ADOPTED: its
+# running backend/pod-admin images are tagged synap-adopted/* so the image
+# pruner and a later rollback can never lose them, and the record names them.
+_ue_current_release_id() { jq -r '.id // empty' state/current-release.json 2>/dev/null || true; }
+
+_ue_adopt_running() {
+    [ -s state/current-release.json ] && return 0
+    local cid img short id images="{}" svc key
+    for svc in backend pod-admin; do
+        cid="$(docker compose ps -q "$svc" 2>/dev/null | head -1)"
+        [ -n "$cid" ] || continue
+        img="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null)" || continue
+        short="${img#sha256:}"; short="${short:0:12}"
+        [ -n "$short" ] || continue
+        docker tag "$img" "synap-adopted/${svc}:${short}" >/dev/null 2>&1 || continue
+        key=SYNAP_IMAGE_BACKEND; [ "$svc" = pod-admin ] && key=SYNAP_IMAGE_POD_ADMIN
+        images="$(jq -c --arg k "$key" --arg v "synap-adopted/${svc}:${short}" '. + {($k): $v}' <<<"$images")"
+        [ "$svc" = backend ] && id="adopted-${short}"
+    done
+    [ -n "${id:-}" ] || return 0
+    mkdir -p state
+    jq -n --arg id "$id" --argjson images "$images" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg bv "$(_ue_env_get BACKEND_VERSION)" \
+        '{schema:1, id:$id, adopted:true, adoptedAt:$at, backendVersion:$bv, images:$images}' > state/current-release.json
+    _ue_log "No release record — adopted the running pod as ${id} (images kept as synap-adopted/*)"
+}
+
+# ── from-source build (U6) ────────────────────────────────────────────────────
+_ue_build_from_source() { # <out-manifest>
+    local out="$1" repo_root sha tag be pa mig_dir last count carry
+    repo_root="$(get_repo_root)"
+    if [ -z "$repo_root" ] || [ ! -f "$repo_root/deploy/Dockerfile" ]; then
+        _ue_err "--from-source needs a git checkout of synap-backend around this deploy dir. Nothing was changed."
+        return 1
+    fi
+    sync_git_before_build
+    sha="${GIT_SHA:-}"
+    if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then _ue_err "could not resolve the checkout's commit"; return 1; fi
+    tag="${sha:0:12}"
+    [ -n "$(git -C "$repo_root" status --porcelain --untracked-files=no 2>/dev/null)" ] && tag="${tag}-dirty"
+    # The ONE place a host build is named. Never the registry name: a local
+    # build must never be mistakable for a published artifact (U6).
+    be="synap-local/backend:${tag}"
+    pa="synap-local/pod-admin:${tag}"
+    _ue_log "Building ${be} and ${pa} from ${repo_root} (commit ${sha:0:12})..."
+    docker build -f "$repo_root/deploy/Dockerfile" --build-arg "GIT_SHA=${sha}" -t "$be" "$repo_root" || { _ue_err "backend build failed. Nothing was changed."; return 1; }
+    docker build -f "$repo_root/apps/pod-admin/Dockerfile" -t "$pa" "$repo_root" || { _ue_err "pod-admin build failed. Nothing was changed."; return 1; }
+    mig_dir="$repo_root/packages/database/migrations"
+    last="$(ls "$mig_dir"/*.sql 2>/dev/null | sort | tail -1 | xargs -r basename)"
+    count="$(ls "$mig_dir"/*.sql 2>/dev/null | wc -l | tr -d ' ')"
+    # Third-party pins carry over from the current release (absent ⇒ compose defaults).
+    carry="$(grep -E '^SYNAP_IMAGE_[A-Z0-9_]+=' .env 2>/dev/null | grep -vE '^SYNAP_IMAGE_(BACKEND|POD_ADMIN)=' \
+        | jq -R 'split("=") | {(.[0]): (.[1:]|join("="))}' | jq -sc 'add // {}')"
+    jq -n --arg id "local-${tag}" --arg sha "$sha" --arg be "$be" --arg pa "$pa" --argjson carry "$carry" \
+        --arg last "$last" --argjson count "${count:-0}" --arg compose "sha256:$(_ue_sha256 docker-compose.yml)" \
+        --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{schema:1, id:$id, channel:"local", source:true, gitSha:$sha, createdAt:$at,
+          images: ($carry + {SYNAP_IMAGE_BACKEND:$be, SYNAP_IMAGE_POD_ADMIN:$pa}),
+          migrations:{last:$last, count:$count}, composeSha:$compose, envSchemaVersion:null, minFrom:null, bundle:null}' > "$out"
+}
+
+# ── release bundle (U5: the deploy dir is a release bundle, not a checkout) ──
+# The bundle holds the release's `synap`, deploy/, kratos/, hydra/ and
+# docker/postgres/ files. It is STAGED (downloaded, sha-verified, extracted)
+# before anything changes, INSTALLED after the backup (each file swapped in
+# with an atomic rename, so the running `synap` keeps reading its old inode),
+# and the files it replaced are kept in state/update/pre-bundle.tar for rollback.
+UE_BUNDLE_DIR=""
+UE_BUNDLE_INSTALLED=0
+_ue_stage_bundle() { # <manifest>
+    UE_BUNDLE_DIR=""
+    local m="$1" asset want got id
+    asset="$(jq -r '.bundle.asset // empty' "$m")"
+    want="$(jq -r '.bundle.sha256 // empty' "$m")"
+    id="$(jq -r .id "$m")"
+    if [ -z "$asset" ]; then
+        [ "sha256:$(_ue_sha256 docker-compose.yml)" = "$(jq -r .composeSha "$m")" ] \
+            || _ue_warn "release ${id} ships no deploy bundle and this docker-compose.yml differs from the release's — using the local one"
+        return 0
+    fi
+    if [ "$(basename "$(pwd)")" != deploy ] || [ ! -f ../synap ]; then
+        _ue_warn "deploy dir is not laid out as <root>/{synap,deploy} — not installing the release bundle"
+        return 0
+    fi
+    rm -rf state/update/bundle state/update/bundle.tgz && mkdir -p state/update/bundle
+    _ue_fetch "$(_ue_manifest_url "$id" "$asset")" state/update/bundle.tgz || { _ue_err "could not download the deploy bundle ${asset}"; return 1; }
+    got="$(_ue_sha256 state/update/bundle.tgz)"
+    [ "$got" = "$want" ] || { _ue_err "deploy bundle sha256 mismatch (manifest ${want}, got ${got})"; return 1; }
+    tar -xzf state/update/bundle.tgz -C state/update/bundle || { _ue_err "deploy bundle is not a valid tar.gz"; return 1; }
+    [ -f state/update/bundle/deploy/docker-compose.yml ] && [ -f state/update/bundle/synap ] \
+        || { _ue_err "deploy bundle lacks synap + deploy/docker-compose.yml"; return 1; }
+    UE_BUNDLE_DIR="$(pwd)/state/update/bundle"
+}
+
+_ue_install_bundle() {
+    [ -n "$UE_BUNDLE_DIR" ] || return 0
+    local root rel existing=()
+    root="$(cd .. && pwd)"
+    ( cd "$UE_BUNDLE_DIR" && find . -type f | sed 's|^\./||' | sort ) > state/update/bundle.files
+    while IFS= read -r rel; do [ -e "$root/$rel" ] && existing+=("$rel"); done < state/update/bundle.files
+    : > state/update/bundle.new
+    while IFS= read -r rel; do [ -e "$root/$rel" ] || echo "$rel" >> state/update/bundle.new; done < state/update/bundle.files
+    tar -cf state/update/pre-bundle.tar -C "$root" "${existing[@]}" || return 1
+    UE_BUNDLE_INSTALLED=1
+    while IFS= read -r rel; do
+        mkdir -p "$(dirname "$root/$rel")" || return 1
+        cp -p "$UE_BUNDLE_DIR/$rel" "$root/$rel.synap-new" && mv -f "$root/$rel.synap-new" "$root/$rel" || return 1
+    done < state/update/bundle.files
+    _ue_log "Installed the release's deploy files ($(wc -l < state/update/bundle.files | tr -d ' ') files; replaced ones kept in state/update/pre-bundle.tar)"
+}
+
+_ue_restore_bundle() {
+    [ "$UE_BUNDLE_INSTALLED" = 1 ] || return 0
+    local root tmp rel
+    root="$(cd .. && pwd)"
+    tmp="$(mktemp -d)"
+    tar -xf state/update/pre-bundle.tar -C "$tmp" || { rm -rf "$tmp"; return 1; }
+    ( cd "$tmp" && find . -type f | sed 's|^\./||' ) | while IFS= read -r rel; do
+        cp -p "$tmp/$rel" "$root/$rel.synap-new" && mv -f "$root/$rel.synap-new" "$root/$rel"
+    done
+    while IFS= read -r rel; do [ -n "$rel" ] && rm -f "$root/$rel"; done < state/update/bundle.new
+    rm -rf "$tmp"
+}
+
+# ── .env image pins ───────────────────────────────────────────────────────────
+# The release block is the ONLY part of .env the engine owns; everything else is
+# operator config (one validated writer = P3 `synap config`).
+_ue_write_release_env() { # <manifest> <env-file>
+    local m="$1" env="$2" tmp keys mode
+    keys="$( (jq -r '.images | keys[]' "$m"; echo BACKEND_VERSION; echo SYNAP_RELEASE_ID) | paste -sd'|' -)"
+    tmp="$(mktemp "${env}.XXXXXX")" || return 1
+    grep -vE "^(${keys})=|^# (>>>|<<<) synap release" "$env" > "$tmp" || true
+    {
+        echo "# >>> synap release — managed by \`synap update\`; do not edit by hand >>>"
+        echo "SYNAP_RELEASE_ID=$(jq -r .id "$m")"
+        echo "BACKEND_VERSION=$(jq -r .id "$m")"
+        jq -r '.images | to_entries[] | "\(.key)=\(.value)"' "$m"
+        echo "# <<< synap release <<<"
+    } >> "$tmp"
+    mode="$(stat -c %a "$env" 2>/dev/null || stat -f %Lp "$env" 2>/dev/null || echo 600)"
+    chmod "$mode" "$tmp" && mv -f "$tmp" "$env"
+}
+
+_ue_pull_images() { # <manifest> — before anything changes; a failure aborts the update
+    local ref
+    for ref in $(jq -r '.images[]' "$1" | sort -u); do
+        if docker image inspect "$ref" >/dev/null 2>&1; then
+            _ue_log "  cached  ${ref}"
+            continue
+        fi
+        case "$ref" in
+            synap-local/*) _ue_err "local image ${ref} is missing"; return 1 ;;
+        esac
+        _ue_log "  pulling ${ref}"
+        docker pull -q "$ref" >/dev/null || { _ue_err "pull failed: ${ref}"; return 1; }
+    done
+}
+
+_ue_disk_ok() { # every filesystem the update writes to keeps SYNAP_UPDATE_MIN_FREE_MB free
+    local min="${SYNAP_UPDATE_MIN_FREE_MB:-2048}" dir free root
+    root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+    for dir in "$(pwd)" "$root"; do
+        [ -n "$dir" ] && [ -d "$dir" ] || continue
+        free="$(df -Pk "$dir" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')"
+        [ -n "$free" ] || continue
+        if [ "$free" -lt "$min" ]; then
+            _ue_err "only ${free} MB free on ${dir} (need ${min} MB for images + the pre-update dump). Free space, or set SYNAP_UPDATE_MIN_FREE_MB. Nothing was changed."
+            return 1
+        fi
+    done
+}
+
+_ue_verify() { # <manifest> <services...>
+    local m="$1" cid svc running; shift
+    cid="$(docker compose ps -q backend 2>/dev/null | head -1)"
+    [ -n "$cid" ] || { _ue_err "verify: no backend container"; return 1; }
+    docker exec "$cid" node -e "$_UE_STATUS_PROBE" > state/update/status-release.json 2>/dev/null \
+        || { _ue_err "verify: /status/release unreachable"; return 1; }
+    RELEASE_JSON_FILE="$(pwd)/state/update/status-release.json" \
+    SYNAP_EXPECT_MIGRATION="$(jq -r .migrations.last "$m")" \
+    SYNAP_EXPECT_GIT_SHA="$(jq -r .gitSha "$m")" \
+        sh ./verify-deploy.sh || return 1
+    running="$(docker compose ps --status running --services 2>/dev/null)"
+    for svc in "$@"; do
+        grep -qx "$svc" <<<"$running" || { _ue_err "verify: service ${svc} is not running"; return 1; }
+    done
+}
+
+# Keep the images of the current and previous release (Kamal-style local
+# rollback cache); remove older first-party images. In-use images are refused
+# by docker itself.
+_ue_prune_images() {
+    local keep ref id
+    keep="$(jq -r '.images[]?' state/current-release.json state/previous-release.json 2>/dev/null \
+        | while read -r ref; do docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null; done | sort -u)"
+    docker images --no-trunc --format '{{.ID}} {{.Repository}}' 2>/dev/null \
+        | awk '$2 ~ /^(ghcr\.io\/synap-core\/(backend|pod-admin)|synap-local\/|synap-adopted\/)/ {print $1}' | sort -u \
+        | while read -r id; do
+            grep -qx "$id" <<<"$keep" && continue
+            docker rmi -f "$id" >/dev/null 2>&1 || true
+        done
+}
+
+# ── the engine ────────────────────────────────────────────────────────────────
+UE_FROM=""; UE_TO=""; UE_BACKUP=""; UE_EDGE=""; UE_PROFILE_ARGS=(); UE_SERVICES=()
+
+_ue_bring_up_rest() { # every non-backend service; never stops half-way
+    local failed=0
+    if [ "${#UE_SERVICES[@]}" -gt 0 ]; then
+        docker compose "${UE_PROFILE_ARGS[@]}" up -d --remove-orphans "${UE_SERVICES[@]}" || failed=1
+    fi
+    # kratos.yml is a bind-mounted file and pod-admin takes PUBLIC_URL at
+    # creation: neither change is seen by a plain `up`.
+    local svc
+    for svc in kratos pod-admin; do
+        printf '%s\n' "${UE_SERVICES[@]}" | grep -qx "$svc" || continue
+        docker compose up -d --force-recreate "$svc" || failed=1
+    done
+    return "$failed"
+}
+
+_ue_rollback() { # <reason> <restore_db 0|1>  — never returns
+    set +e
+    local reason="$1" restore_db="$2" status=rolled_back db=false
+    _ue_err "update ${UE_FROM:-?} → ${UE_TO} failed: ${reason}"
+    _ue_log "↩ Rolling back to ${UE_FROM:-the previous release}..."
+    docker rm -f synap-backend-canary >/dev/null 2>&1
+    if [ "$restore_db" = 1 ]; then
+        if [ -z "$UE_BACKUP" ]; then
+            _ue_err "the migration level moved but there is no pre-update dump to restore"
+            status=rollback_failed
+        else
+            _ue_log "Maintenance mode: stopping writers, restoring ${UE_BACKUP}..."
+            docker compose stop backend realtime pod-admin >/dev/null 2>&1
+            if SYNAP_DEPLOY_DIR="$(pwd)" pgdata_restore "$UE_BACKUP"; then db=true
+            else _ue_err "restoring ${UE_BACKUP} failed"; status=rollback_failed; fi
+        fi
+    fi
+    cp -p state/update/env.before .env || status=rollback_failed
+    _ue_restore_bundle || { _ue_err "could not restore the previous deploy files from state/update/pre-bundle.tar"; status=rollback_failed; }
+    docker compose up -d --force-recreate --remove-orphans backend realtime || status=rollback_failed
+    _ue_bring_up_rest || status=rollback_failed
+    if ! _ue_backend_healthy; then
+        _ue_err "the previous release is not healthy either — inspect: docker compose logs backend"
+        status=rollback_failed
+    fi
+    _ue_record "$status" "$UE_FROM" "$UE_TO" "$reason" "$db" "$UE_BACKUP"
+    if [ "$status" = rolled_back ]; then
+        _ue_warn "Rolled back: the pod is serving ${UE_FROM:-its previous release} again$([ "$db" = true ] && echo ', database restored from the pre-update dump')."
+    else
+        _ue_err "ROLLBACK INCOMPLETE — the pod needs attention. Pre-update dump: ${UE_BACKUP:-none}"
+    fi
+    exit 1
+}
+
+# <release|source> <ref> <force 0|1>  — cwd = deploy dir, update lock held
+synap_update_engine() {
+    local mode="$1" ref="$2" force="${3:-0}" m errors level_before level_after moved=0 rc
+    mkdir -p state/update
+    m="$(pwd)/state/update/manifest.json"
+    for tool in jq curl; do
+        command -v "$tool" >/dev/null 2>&1 || { _ue_err "${tool} is required by synap update. Nothing was changed."; exit 1; }
+    done
+
+    UE_EDGE="$(_ue_edge)" || exit 1
+    _ue_edge_preflight "$UE_EDGE" || exit 1
+    _ue_adopt_running
+    UE_FROM="$(_ue_current_release_id)"
+
+    # 1. the target release
+    if [ "$mode" = source ]; then
+        _ue_build_from_source "$m" || { _ue_record aborted "$UE_FROM" "local" "from-source build failed" false; exit 1; }
+    else
+        _ue_log "Fetching release manifest: ${ref}"
+        if ! _ue_fetch "$(_ue_manifest_url "$ref")" "$m"; then
+            _ue_err "could not fetch the release manifest for '${ref}' ($(_ue_manifest_url "$ref")). Nothing was changed."
+            _ue_err "To build this checkout instead: synap update --from-source"
+            _ue_record aborted "$UE_FROM" "$ref" "manifest fetch failed" false
+            exit 1
+        fi
+    fi
+    UE_TO="$(jq -r '.id // empty' "$m" 2>/dev/null)"
+    [ -n "$UE_TO" ] || UE_TO="$ref"
+    _ue_stage_bundle "$m" || { _ue_record aborted "$UE_FROM" "$UE_TO" "deploy bundle invalid" false; exit 1; }
+    errors="$(_ue_manifest_errors "$m" "${UE_BUNDLE_DIR:+$UE_BUNDLE_DIR/deploy/}docker-compose.yml")"
+    if [ -n "$errors" ]; then
+        _ue_err "release manifest ${UE_TO} is invalid — refusing it. Nothing was changed:"
+        printf '      %s\n' "$errors" >&2
+        _ue_record aborted "$UE_FROM" "$UE_TO" "invalid manifest" false
+        exit 1
+    fi
+    if [ "$UE_TO" = "$UE_FROM" ] && [ "$force" != 1 ]; then
+        _ue_ok "Already on release ${UE_TO} — nothing to do (--force re-applies it)."
+        return 0
+    fi
+    _ue_log "Updating ${UE_FROM:-unrecorded} → ${UE_TO} (git $(jq -r '.gitSha[0:12]' "$m"), migrations → $(jq -r .migrations.last "$m"))"
+
+    # 2. preflight — nothing changes before every check passed
+    local min_from current_last
+    min_from="$(jq -r '.minFrom // empty' "$m")"
+    if [ -n "$min_from" ]; then
+        current_last="$(_ue_migration_level | cut -d'|' -f2)"
+        if [ -n "$current_last" ] && [[ "$current_last" < "$min_from" ]]; then
+            _ue_err "release ${UE_TO} requires a pod already at migration ${min_from} (this pod: ${current_last}). Update to an intermediate release first. Nothing was changed."
+            _ue_record aborted "$UE_FROM" "$UE_TO" "below minFrom ${min_from}" false
+            exit 1
+        fi
+    fi
+    _ue_disk_ok || { _ue_record aborted "$UE_FROM" "$UE_TO" "not enough disk" false; exit 1; }
+    _preflight_compose_check "$(pwd)" || { _ue_record aborted "$UE_FROM" "$UE_TO" "compose preflight failed" false; exit 1; }
+
+    # 3. pull by digest — a failure here leaves the pod exactly as it was
+    _ue_log "Pulling release images by digest (nothing changed yet)..."
+    if ! _ue_pull_images "$m"; then
+        _ue_err "image pull failed — nothing was changed; the pod keeps serving ${UE_FROM:-its current release}."
+        _ue_record aborted "$UE_FROM" "$UE_TO" "image pull failed" false
+        exit 1
+    fi
+
+    # 4. snapshot + verified pre-update dump (Cloudron rule: no backup, no update)
+    (umask 077 && cp -p .env state/update/env.before) || { _ue_err "cannot snapshot .env"; exit 1; }
+    _run_pgdata_guard
+    if [ "$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_layout)" = "ok" ]; then
+        if [ -z "$(command docker compose ps -q --status running postgres 2>/dev/null)" ]; then
+            docker compose up -d postgres || { _ue_err "postgres did not start — cannot take the pre-update backup. Nothing was changed."; exit 1; }
+            _pgs_wait_ready "$(_pgs_container)" || { _ue_err "postgres not ready — no backup, no update. Nothing was changed."; exit 1; }
+        fi
+        UE_BACKUP="$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_backup pre-update)" || {
+            _ue_err "Pre-update database backup failed — aborting update before migrations. Nothing was changed."
+            _ue_record aborted "$UE_FROM" "$UE_TO" "pre-update backup failed" false
+            exit 1
+        }
+    else
+        _ue_warn "no postgres data yet (fresh pod) — no pre-update dump to take"
+    fi
+    level_before="$(_ue_migration_level)"
+
+    # 5. from here on every failure rolls back
+    trap '_ue_rollback "interrupted" "$([ "$(_ue_migration_level)" != "$level_before" ] && echo 1 || echo 0)"' INT TERM
+    set +e
+    _ue_install_bundle || _ue_rollback "installing the release's deploy files failed" 0
+    _ue_write_release_env "$m" .env || _ue_rollback "writing the release image pins failed" 0
+    UE_PROFILE_ARGS=()
+    if should_start_pod_agent; then UE_PROFILE_ARGS=(--profile pod-agent)
+    elif [ $? -eq 2 ]; then _ue_rollback "pod-agent misconfigured" 0; fi
+    UE_SERVICES=()
+    local _svc
+    while IFS= read -r _svc; do [ -n "$_svc" ] && UE_SERVICES+=("$_svc"); done < <(_ue_services "$UE_EDGE" "${UE_PROFILE_ARGS[@]}")
+
+    local domain
+    domain="$(_ue_env_get DOMAIN)"; domain="${domain:-localhost}"
+    backfill_federation_public_urls "$domain"
+    generate_kratos_config "$domain" || _ue_rollback "kratos config generation failed" 0
+    COMPOSE_CMD="docker compose" ensure_ory_databases || _ue_rollback "Ory database bootstrap failed" 0
+
+    # 6. migrations (backend, kratos, hydra) — a throw restores the dump
+    _ue_log "Running migrations..."
+    docker compose run --rm backend-migrate || _ue_rollback "backend migration failed" 1
+    docker compose run --rm kratos-migrate  || _ue_rollback "kratos migration failed" 1
+    docker compose run --rm hydra-migrate   || _ue_rollback "hydra migration failed" 1
+    level_after="$(_ue_migration_level)"
+    [ "$level_after" != "$level_before" ] && moved=1
+    _ue_log "Migration level: ${level_before:-none} → ${level_after:-none}"
+
+    # 7. canary-gated swap, then EVERY other service — never stop in between
+    _UE_MIGRATED=1 _swap_backend_canary; rc=$?
+    case "$rc" in
+        0) ;;
+        2) _ue_rollback "production backend unhealthy after the swap (the canary had passed)" "$moved" ;;
+        *) _ue_rollback "the new backend image failed its canary health check" "$moved" ;;
+    esac
+    _ue_log "Bringing up the other services (edge: ${UE_EDGE})..."
+    _ue_bring_up_rest || _ue_rollback "some services failed to start" "$moved"
+
+    # 8. verify the release actually landed
+    _ue_verify "$m" "${UE_SERVICES[@]}" || _ue_rollback "post-update verification failed" "$moved"
+
+    # 9. record
+    trap - INT TERM
+    [ -s state/current-release.json ] && cp -p state/current-release.json state/previous-release.json
+    jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg backup "$UE_BACKUP" --arg edge "$UE_EDGE" \
+        '. + {appliedAt:$at, preUpdateBackup:$backup, edge:$edge}' "$m" > state/current-release.json.tmp \
+        && mv -f state/current-release.json.tmp state/current-release.json
+    _ue_prune_images
+    _ue_record succeeded "$UE_FROM" "$UE_TO" "" false "$UE_BACKUP"
+    _ue_ok "Release ${UE_TO} is live (verified: buildStamp + migration level)."
+    set -e
+}
+
 cmd_update() {
     local deploy_dir=$(get_deploy_dir)
     if [ -z "$deploy_dir" ]; then
@@ -2557,338 +3107,101 @@ cmd_update() {
 
     cd "$deploy_dir"
 
-    # Fail fast on a stub .env that's missing the critical infrastructure
-    # secrets — running compose against it would launch postgres with a blank
-    # password and lock everyone out of the existing volume data. The
-    # `cmd_update` flow ASSUMES `.env` was already populated by `cmd_install`.
-    if [ -f .env ]; then
-        local missing_critical=""
-        for key in POSTGRES_PASSWORD JWT_SECRET KRATOS_SECRETS_COOKIE; do
-            local val=$(grep "^${key}=" .env 2>/dev/null | cut -d'=' -f2-)
-            if [ -z "$val" ]; then
-                missing_critical="${missing_critical} ${key}"
-            fi
-        done
-        if [ -n "$missing_critical" ]; then
-            echo -e "${RED}❌ .env is missing critical secrets:${missing_critical}${NC}"
-            echo -e "${YELLOW}This .env looks like a fresh template (.env.example shape) — running update against it"
-            echo -e "would launch postgres with a blank password and break authentication against existing data."
-            echo ""
-            echo -e "Recovery options:${NC}"
-            echo -e "  1. Restore .env from a backup if you have one (your secrets must match the existing volumes)."
-            echo -e "  2. If you only want the synap CLI to populate the missing secrets WITHOUT touching"
-            echo -e "     your DOMAIN/ADMIN_* values, run \`synap install\` — non-interactive mode preserves"
-            echo -e "     existing values and only regenerates secrets when .env is missing entirely."
-            exit 1
-        fi
-
-        # Pin the compose project in .env (no-op when already pinned) so no later
-        # door — update-pod.sh, eve, an operator in deploy/ — has to guess it.
-        _pin_compose_project_name .env
-
-        # These browser-facing endpoints were added after early Pod installs.
-        # Backfill before *any* Compose command: Compose deliberately refuses
-        # to start without them rather than silently using an internal host.
-        local federation_domain
-        federation_domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
-        if [ -n "$federation_domain" ]; then
-            backfill_federation_public_urls "$federation_domain"
-        fi
-    fi
-
-    cleanup_stale_synap_state "$deploy_dir"
-    
-    # Auto-detect if we're in a git repo (for smart defaults)
-    local IN_GIT_REPO=false
-    local repo_root=$(get_repo_root)
-    if [ -n "$repo_root" ] && [ "$(cd "$deploy_dir" && pwd)" = "$(cd "$repo_root/deploy" 2>/dev/null && pwd)" ]; then
-        IN_GIT_REPO=true
-    fi
-    
-    local version="latest"
-    local force_build=false
-    local force_image=false
-    local local_build=false
-    
-    # Parse arguments
+    local mode="release" ref="" force=0
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --build|-b|--from-source)
-                force_build=true
-                shift
-                ;;
+            --release|-r)
+                ref="${2:-}"; shift 2 || { echo -e "${RED}--release needs an id or a channel (fast|stable)${NC}"; exit 1; } ;;
+            --from-source|--build|-b|--local|-l)
+                mode="source"; shift ;;
             --from-image)
-                force_image=true
-                shift
-                ;;
-            --local|-l)
-                local_build=true
-                force_build=true
-                shift
-                ;;
+                # Legacy flag (eve passes it): "use a published artifact" = a release.
+                shift ;;
             --version|-v)
-                version="$2"
-                shift 2
-                ;;
+                ref="${2:-}"; shift 2 || exit 1 ;;
+            --force)
+                force=1; shift ;;
+            -h|--help)
+                cat <<'USAGE'
+synap update [--release <id|fast|stable>] [--from-source] [--force]
+
+  --release <ref>   apply a published release: a release id (main-<sha7>, vX.Y.Z)
+                    or a channel — fast (every green main push) | stable (v* tags).
+                    Default: SYNAP_UPDATE_CHANNEL from deploy/.env, else stable.
+  --from-source     build THIS checkout as synap-local/*:<sha> (release local-<sha>);
+                    same backup / canary / rollback as a release.
+  --force           re-apply the release the pod is already on.
+
+Every update: lock → manifest → preflight → pull by digest → verified backup →
+migrate → canary → swap → all services → verify → record. Any failure rolls
+back (previous images; the pre-update dump when the migration level moved) and
+is recorded in deploy/state/last-update.json.
+USAGE
+                return 0 ;;
             *)
-                if [[ "$1" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]] || [ "$1" = "latest" ]; then
-                    version="$1"
-                fi
-                shift
-                ;;
+                # positional: a release id / version, or the legacy "latest"
+                ref="$1"; shift ;;
         esac
     done
-    
-    echo -e "${BLUE}🔄 Updating Synap...${NC}"
-
-    # Smart defaults when neither --from-image nor --from-source was passed:
-    #   1. If .env has BACKEND_VERSION=local, the operator built locally
-    #      previously. The `:local` tag is a sentinel that never existed
-    #      upstream, so `docker compose pull` would always fail before
-    #      falling through to a rebuild — pure waste. Go straight to build.
-    #   2. Otherwise if we're in a git repo, default to --from-source
-    #      (the operator has source on disk and can rebuild).
-    #   3. Otherwise pull from the registry.
-    if [ "$force_build" = false ] && [ "$force_image" = false ]; then
-        if [ -f .env ] && grep -q "^BACKEND_VERSION=local" .env 2>/dev/null; then
-            force_build=true
-            echo -e "${BLUE}ℹ️  .env has BACKEND_VERSION=local — building from source (skipping wasted pull of :local sentinel)${NC}"
-        elif [ "$IN_GIT_REPO" = true ]; then
-            force_build=true
-            echo -e "${BLUE}ℹ️  In git repository, defaulting to --from-source${NC}"
-        fi
-    fi
-    
-    if [ "$force_build" = true ]; then
-        sync_git_before_build
-        echo -e "${BLUE}🔨 Building from source...${NC}"
-        echo -e "${BLUE}  Building backend...${NC}"
-        docker compose build backend
-        echo -e "${BLUE}  Building realtime...${NC}"
-        docker compose build realtime
-        echo -e "${BLUE}  Building pod-admin...${NC}"
-        docker compose build pod-admin
-        version="local"
-    else
-        echo -e "${BLUE}📥 Pulling images...${NC}"
-        echo -e "${BLUE}  Pulling backend...${NC}"
-        docker compose pull backend || {
-            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
-            sync_git_before_build
-            docker compose build backend
-            version="local"
-        }
-        echo -e "${BLUE}  Pulling realtime...${NC}"
-        docker compose pull realtime || {
-            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
-            sync_git_before_build
-            docker compose build realtime
-        }
-        # Pod-admin is a separate image (Next.js standalone). Pull failure
-        # falls back to local build so the operator console always lands.
-        echo -e "${BLUE}  Pulling pod-admin...${NC}"
-        docker compose pull pod-admin || {
-            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
-            sync_git_before_build
-            docker compose build pod-admin
-        }
-        # Refresh Kratos images so the migrate one-shot and the running
-        # kratos service line up with the new schema. Best-effort: a
-        # registry hiccup shouldn't block a backend security update, the
-        # existing local image keeps working.
-        echo -e "${BLUE}  Pulling kratos + kratos-migrate...${NC}"
-        docker compose pull kratos kratos-migrate || \
-            echo -e "${YELLOW}⚠️  Kratos image pull failed — continuing with the local image.${NC}"
-    fi
-    
-    # Update .env
-    if [ -f .env ]; then
-        if grep -q "^BACKEND_VERSION=" .env; then
-            sed -i.bak "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${version}|" .env
-            rm -f .env.bak
-        else
-            echo "BACKEND_VERSION=${version}" >> .env
-        fi
-        
-        # Ensure required encryption key exists for service credential crypto
-        if ! grep -q "^SYNAP_SERVICE_ENCRYPTION_KEY=" .env; then
-            echo "SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
-            echo -e "${YELLOW}⚠️  Added missing SYNAP_SERVICE_ENCRYPTION_KEY to .env${NC}"
-        fi
-
-        # Ensure agent-provisioning token exists. Backend reads it to auth
-        # POST /v1/agents/provision; missing or empty == agent provisioning
-        # is broken. Backfill with a fresh secret on update if absent.
-        if ! grep -q "^PROVISIONING_TOKEN=." .env; then
-            # Strip any empty placeholder line first (e.g. `PROVISIONING_TOKEN=`).
-            sed -i.bak '/^PROVISIONING_TOKEN=\s*$/d' .env && rm -f .env.bak
-            echo "PROVISIONING_TOKEN=$(openssl rand -hex 32)" >> .env
-            echo -e "${YELLOW}⚠️  Added missing PROVISIONING_TOKEN to .env${NC}"
-        fi
-
-        # Read DOMAIN from .env for kratos config regeneration
-        local domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "localhost")
-        backfill_federation_public_urls "$domain"
-    else
-        local domain="localhost"
-    fi
-    
-    # Regenerate kratos.yml (ensures it exists and has correct webhook secret)
-    echo -e "${BLUE}📝 Regenerating Kratos configuration...${NC}"
-    generate_kratos_config "$domain"
-
-    # Ensure the kratos and hydra databases exist before any Ory migration runs.
-    # postgres's init-databases.sh only fires on a fresh data volume, so an
-    # existing volume from before kratos/hydra were added has neither db —
-    # kratos-migrate then fails with "database does not exist".
-    #
-    # This is the shared, fail-closed bootstrap (deploy/ensure-ory-databases.sh):
-    # it starts the deployment's own Postgres service, waits for readiness,
-    # creates only missing databases, verifies each one exists, and ABORTS on
-    # ANY failure. A missing database is repaired; existing data is never
-    # dropped, and a failed prerequisite never proceeds to migration.
-    #
-    # Read-only preflight first: confirm the Compose project and Postgres
-    # service are resolvable so a misconfiguration aborts BEFORE the bootstrap
-    # starts postgres — never silently creates another stack.
-    _preflight_compose_check "$deploy_dir" || {
-        echo -e "${RED}❌ Preflight check failed — aborting update before database provisioning${NC}"
-        exit 1
-    }
-
-    # Data placement first (moves a legacy in-layer cluster onto its volume),
-    # then a verified dump of every database before migrations touch anything.
-    _run_pgdata_guard
-    if [ "$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_layout)" = "ok" ] \
-        && [ -n "$(cd "$deploy_dir" && command docker compose ps -q --status running postgres 2>/dev/null)" ]; then
-        SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_backup pre-update >/dev/null || {
-            echo -e "${RED}❌ Pre-update database backup failed — aborting update before migrations${NC}"
-            exit 1
-        }
-    fi
-    COMPOSE_CMD="docker compose" ensure_ory_databases || {
-        echo -e "${RED}❌ Ory database bootstrap failed — aborting update before migrations${NC}"
-        exit 1
-    }
-
-    # Run migrations (critical - must succeed).
-    # Kratos and backend evolve their schemas independently. Both run before
-    # any service is recreated so an upgrade with both schema changes lands
-    # in one go. Failures abort: continuing with mismatched schema yields
-    # 500s on /self-service/* (Kratos) and broken queries (backend).
-    echo -e "${BLUE}🔄 Running backend migrations...${NC}"
-    if ! docker compose run --rm backend-migrate; then
-        echo -e "${RED}❌ Backend migrations failed!${NC}"
-        echo -e "${YELLOW}⚠️  Backend will not start correctly without migrations${NC}"
-        if synap_assume_yes; then
-            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run \`synap update\` once migrations succeed.${NC}"
-            exit 1
-        fi
-        read -p "Continue anyway? (y/N): " CONTINUE
-        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
-            echo "Update cancelled"
-            exit 1
-        fi
+    [ "$ref" = latest ] && ref=""
+    if [ "$mode" = release ] && [ -z "$ref" ]; then
+        ref="${SYNAP_UPDATE_CHANNEL:-$(_ue_env_get SYNAP_UPDATE_CHANNEL)}"
+        ref="${ref:-stable}"
     fi
 
-    # Kratos + Hydra schema migrations. `compose run --rm` forces a fresh
-    # migrate container every time — bypasses docker compose's
-    # `service_completed_successfully` short-circuit which silently skips
-    # migrate services on subsequent `up`s after they've exited 0 once. If
-    # the kratos/hydra database is empty for ANY reason (volume drift, an
-    # `init-databases.sh` re-create, manual ops), this is the only thing
-    # that brings the schema back. Failure is interactive-blocking; CI /
-    # eve always exits non-zero so the broken state never silently ships.
-    echo -e "${BLUE}🔄 Running Kratos migrations...${NC}"
-    if ! docker compose run --rm kratos-migrate; then
-        echo -e "${YELLOW}⚠️  Kratos migrations failed — login/registration flows will 500 against the new image.${NC}"
-        if synap_assume_yes; then
-            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run.${NC}"
-            exit 1
-        fi
-        read -p "Continue anyway? (y/N): " CONTINUE
-        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
-            echo "Update cancelled"
-            exit 1
-        fi
-    fi
-
-    echo -e "${BLUE}🔄 Running Hydra migrations...${NC}"
-    if ! docker compose run --rm hydra-migrate; then
-        echo -e "${YELLOW}⚠️  Hydra migrations failed — OAuth2 flows will 500 against the new image.${NC}"
-        if synap_assume_yes; then
-            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run.${NC}"
-            exit 1
-        fi
-        read -p "Continue anyway? (y/N): " CONTINUE
-        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
-            echo "Update cancelled"
-            exit 1
-        fi
-    fi
-
-    # Restart services. Kratos is force-recreated so it picks up:
-    #   1. The new image just pulled
-    #   2. The freshly-regenerated kratos.yml (kratos reads this at startup)
-    # Without --force-recreate, kratos keeps the old image + old config and
-    # the operator hits 500s on /self-service/* until they restart by hand.
-    #
-    # Caddy is the synap stack's built-in edge proxy. When the operator runs
-    # behind their own edge (eve's Traefik on port 80, an external nginx,
-    # cloudflared, etc.) Caddy can't bind 80/443 and aborts the update.
-    # Set SYNAP_SKIP_EDGE=1 to keep Caddy stopped — backend, realtime, kratos,
-    # pod-agent and pod-admin come up regardless.
-
-    # Pod-agent is profile-gated and only restarts with its generic trust
-    # configuration. See cmd_install for the same guard.
-    local pod_agent_args=()
-    local profile_args=()
-    if should_start_pod_agent; then
-        pod_agent_args=(pod-agent)
-        profile_args=(--profile pod-agent)
-    else
-        local pod_agent_status=$?
-        if [ "$pod_agent_status" -eq 2 ]; then
-            exit 1
-        fi
-    fi
-
-    # Bring up Caddy and the optional Pod agent, then force-recreate Pod Admin
-    # and Kratos. Pod Admin receives PUBLIC_URL at container creation time, so
-    # a normal `up` would otherwise leave its browser Kratos target stale after
-    # this update repairs a legacy public URL.
-    echo -e "${BLUE}🔄 Restarting services...${NC}"
-    if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
-        echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
-        if [ "${#pod_agent_args[@]}" -gt 0 ]; then
-            docker compose "${profile_args[@]}" up -d --remove-orphans "${pod_agent_args[@]}"
-        fi
-    else
-        docker compose "${profile_args[@]}" up -d --remove-orphans caddy "${pod_agent_args[@]}"
-    fi
-    docker compose up -d --force-recreate pod-admin
-    docker compose up -d --force-recreate kratos
-
-    if ! _swap_backend_canary; then
-        echo -e "${RED}❌ Backend update aborted — the previous version is still running.${NC}"
+    # Fail fast on a stub .env that's missing the critical infrastructure
+    # secrets — running compose against it would launch postgres with a blank
+    # password and lock everyone out of the existing volume data.
+    if [ ! -f .env ]; then
+        echo -e "${RED}❌ ${deploy_dir}/.env not found — run \`synap install\` first.${NC}"
         exit 1
     fi
+    local missing_critical="" key val
+    for key in POSTGRES_PASSWORD JWT_SECRET KRATOS_SECRETS_COOKIE; do
+        val=$(grep "^${key}=" .env 2>/dev/null | cut -d'=' -f2-)
+        [ -z "$val" ] && missing_critical="${missing_critical} ${key}"
+    done
+    if [ -n "$missing_critical" ]; then
+        echo -e "${RED}❌ .env is missing critical secrets:${missing_critical}${NC}"
+        echo -e "${YELLOW}This .env looks like a fresh template (.env.example shape) — running update against it"
+        echo -e "would launch postgres with a blank password and break authentication against existing data."
+        echo ""
+        echo -e "Recovery options:${NC}"
+        echo -e "  1. Restore .env from a backup if you have one (your secrets must match the existing volumes)."
+        echo -e "  2. If you only want the synap CLI to populate the missing secrets WITHOUT touching"
+        echo -e "     your DOMAIN/ADMIN_* values, run \`synap install\` — non-interactive mode preserves"
+        echo -e "     existing values and only regenerates secrets when .env is missing entirely."
+        exit 1
+    fi
+
+    # Pin the compose project in .env (no-op when already pinned) so no later
+    # door — eve, an operator in deploy/ — has to guess it.
+    _pin_compose_project_name .env
+
+    cleanup_stale_synap_state "$deploy_dir"
+
+    # Secrets added after early installs (backfilled once, never rotated).
+    if ! grep -q "^SYNAP_SERVICE_ENCRYPTION_KEY=" .env; then
+        echo "SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
+        echo -e "${YELLOW}⚠️  Added missing SYNAP_SERVICE_ENCRYPTION_KEY to .env${NC}"
+    fi
+    if ! grep -q "^PROVISIONING_TOKEN=." .env; then
+        sed -i.bak '/^PROVISIONING_TOKEN=\s*$/d' .env && rm -f .env.bak
+        echo "PROVISIONING_TOKEN=$(openssl rand -hex 32)" >> .env
+        echo -e "${YELLOW}⚠️  Added missing PROVISIONING_TOKEN to .env${NC}"
+    fi
+
+    echo -e "${BLUE}🔄 Updating Synap (${mode}${ref:+: $ref})...${NC}"
+    synap_update_engine "$mode" "$ref" "$force"
 
     # Idempotent admin seed — ensures the users/workspace rows exist after
     # every update. create-admin-cli.js is a no-op when the admin already
-    # exists, so this is safe to run unconditionally. Without it, a fresh
-    # install followed by `synap update` would leave the pod with a Kratos
-    # identity but no users/workspace_members rows, causing 401/403 on all
-    # tRPC calls even for authenticated sessions.
-    local update_admin_email=""
-    local update_admin_password=""
-    local update_bootstrap_mode=""
-    if [ -f .env ]; then
-        update_admin_email=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2-)
-        update_admin_password=$(grep "^ADMIN_PASSWORD=" .env 2>/dev/null | cut -d'=' -f2-)
-        update_bootstrap_mode=$(grep "^ADMIN_BOOTSTRAP_MODE=" .env 2>/dev/null | cut -d'=' -f2-)
-    fi
-
+    # exists. Without it, a fresh install followed by `synap update` would
+    # leave the pod with a Kratos identity but no users rows (401/403).
+    local update_admin_email="" update_admin_password="" update_bootstrap_mode=""
+    update_admin_email=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2-)
+    update_admin_password=$(grep "^ADMIN_PASSWORD=" .env 2>/dev/null | cut -d'=' -f2-)
+    update_bootstrap_mode=$(grep "^ADMIN_BOOTSTRAP_MODE=" .env 2>/dev/null | cut -d'=' -f2-)
     if [ -n "$update_admin_email" ] && [ -n "$update_admin_password" ]; then
         echo -e "${BLUE}👤 Ensuring admin provisioning is complete...${NC}"
         if run_preseed_admin_in_container "$update_admin_email" "$update_admin_password"; then
@@ -2899,11 +3212,8 @@ cmd_update() {
         fi
         unset update_admin_password
     elif [ "$update_bootstrap_mode" = "token" ]; then
-        # Token-bootstrap: admin was set up via the browser UI — no password in
-        # .env is correct. The users/workspace rows were created during that flow.
         echo -e "${BLUE}ℹ️  Token bootstrap mode — skipping auto-provision (admin set up via browser).${NC}"
     else
-        # Preseed mode but credentials missing — something is off. Warn the operator.
         echo -e "${YELLOW}⚠️  ADMIN_EMAIL/ADMIN_PASSWORD not found in .env — skipping auto-provisioning.${NC}"
         echo "  If this is a fresh pod, run: ./synap setup admin --email <email> --password <password>"
     fi
@@ -3405,6 +3715,17 @@ cmd_rebuild() {
         esac
     fi
     
+    # First-party images (backend + realtime + migrate share one image; pod-admin)
+    # are rebuilt through the update engine: the build is tagged synap-local/*
+    # (never the registry name) and goes through backup / canary / rollback (U6).
+    case "$service" in
+        ""|backend|realtime|backend-migrate|backend-canary|pod-admin)
+            echo -e "${BLUE}🔨 Rebuilding first-party images via: synap update --from-source${NC}"
+            cmd_update --from-source --force
+            return $?
+            ;;
+    esac
+
     local build_cmd="docker compose build"
     if [ "$no_cache" = true ]; then
         build_cmd="$build_cmd --no-cache"
