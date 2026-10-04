@@ -28,6 +28,7 @@ import {
   parseLensScope,
   partitionNeedsYou,
   placeSignal,
+  STATUS_BANNER_NOTIFICATION_TYPES,
   visibleSource,
   type LensNeedsYouSignal,
   type LensScope,
@@ -56,10 +57,29 @@ describe("placeSignal — the approved Proposed definition", () => {
       "blocking"
     );
   });
-  it("a SYSTEM notification is the banner; a governance one is blocking", () => {
-    expect(
-      placeSignal({ kind: "notification", category: "system" }, "needs-you")
-    ).toBe("banner");
+  it("a system-HEALTH type is the banner; invite / unknown / untyped system rows and governance are blocking", () => {
+    expect(STATUS_BANNER_NOTIFICATION_TYPES.size).toBeGreaterThan(0);
+    for (const t of STATUS_BANNER_NOTIFICATION_TYPES) {
+      expect(
+        placeSignal(
+          { kind: "notification", category: "system", notificationType: t },
+          "needs-you"
+        )
+      ).toBe("banner");
+    }
+    for (const notificationType of [
+      "workspace.invite",
+      "system.issuer_pending_approval",
+      "system.some_future_type",
+      undefined,
+    ]) {
+      expect(
+        placeSignal(
+          { kind: "notification", category: "system", notificationType },
+          "needs-you"
+        )
+      ).toBe("blocking");
+    }
     expect(
       placeSignal({ kind: "notification", category: "governance" }, "needs-you")
     ).toBe("blocking");
@@ -78,11 +98,22 @@ describe("placeSignal — the approved Proposed definition", () => {
     const page = [
       sig({ id: "a", kind: "owed-slot" }),
       sig({ id: "b", kind: "draft-asks" }),
-      sig({ id: "c", kind: "notification", category: "system" }),
+      sig({
+        id: "c",
+        kind: "notification",
+        category: "system",
+        notificationType: "system.intelligence_degraded",
+      }),
+      sig({
+        id: "e",
+        kind: "notification",
+        category: "system",
+        notificationType: "workspace.invite",
+      }),
       sig({ id: "d", kind: "proposal-cluster" }),
     ];
     const p = partitionNeedsYou(page);
-    expect(p.blocking.map((s) => s.id)).toEqual(["a", "d"]);
+    expect(p.blocking.map((s) => s.id)).toEqual(["a", "e", "d"]);
     expect(p.proposed.map((s) => s.id)).toEqual(["b"]);
     expect(p.banners.map((s) => s.id)).toEqual(["c"]);
   });

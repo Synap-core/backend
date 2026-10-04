@@ -122,7 +122,24 @@ export interface PlaceableSignal {
   kind: string;
   /** Notification category: governance | data | ai | system | inbox. */
   category?: string | null;
+  /** The notification's registry type (`notifications.type`), when the row carries it. */
+  notificationType?: string | null;
 }
+
+/**
+ * THE list of system-HEALTH notification types — the status banner, never a
+ * Needs-you row. ONE definition: `placeSignal` reads it here, and the server
+ * read (`partitionNotifications`) reaches the same set through the registry's
+ * `needsYou: "status"` role, held equal by
+ * `api/src/notifications/__tests__/status-banner-parity.test.ts` (the api
+ * registry is the typed per-type table; the parity test stops the two drifting).
+ * A `system`-CATEGORY type that is NOT here — `workspace.invite`,
+ * `system.issuer_pending_approval` — is an ask, hence Blocking.
+ */
+export const STATUS_BANNER_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
+  "pod.storage_warning",
+  "system.intelligence_degraded",
+]);
 
 /**
  * THE classification rule. Read lens first, then the two exceptions inside
@@ -130,7 +147,10 @@ export interface PlaceableSignal {
  *
  *   - an agent DRAFT (`draft-asks`) is PROPOSED, not blocking — "drafts never
  *     need you" (`needsYouReason`), and the founder put drafts in Proposed;
- *   - a SYSTEM notification is the status BANNER — health is not a Needs-you row.
+ *   - a system-HEALTH notification ({@link STATUS_BANNER_NOTIFICATION_TYPES})
+ *     is the status BANNER — health is not a Needs-you row. The CATEGORY alone
+ *     is not health: an unknown or untyped system notification is Blocking, the
+ *     server's own rule (an unclassifiable type "might still be an ask").
  *
  * Everything else the needs-you lens returns — owed slots, pending proposal
  * clusters (an agent paused on one included), sessions awaiting review,
@@ -143,7 +163,11 @@ export function placeSignal(
   switch (lens) {
     case "needs-you":
       if (signal.kind === "draft-asks") return "proposed";
-      if (signal.kind === "notification" && signal.category === "system") {
+      if (
+        signal.kind === "notification" &&
+        signal.notificationType != null &&
+        STATUS_BANNER_NOTIFICATION_TYPES.has(signal.notificationType)
+      ) {
         return "banner";
       }
       return "blocking";

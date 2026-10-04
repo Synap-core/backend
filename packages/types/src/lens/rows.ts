@@ -85,6 +85,8 @@ function iso(at: string | Date | null | undefined): string | null {
 export interface LensNeedsYouSignal extends GroupableSignal {
   title: string;
   category?: string | null;
+  /** Notification registry type — `placeSignal` reads it for the banner rule. */
+  notificationType?: string | null;
   target?: LensDoor | null;
   /** `owed-slot`: the one line naming WHICH thing is missing — the exact ask. */
   why?: string | null;
