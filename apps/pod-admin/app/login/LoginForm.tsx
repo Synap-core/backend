@@ -18,20 +18,32 @@
  *     navigate to `returnTo` (do NOT reload the login page).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Card, CardBody, Input } from "@heroui/react";
-import { ShieldCheck, AlertCircle } from "lucide-react";
+import {
+  ShieldCheck,
+  AlertCircle,
+  KeyRound,
+  Lock,
+  UserPlus,
+} from "lucide-react";
 import {
   collectErrorMessages,
   createLoginFlow,
   extractInitialValues,
-  fetchLoginFlow,
+  fetchSelfServiceFlow,
   FLOW_RESET_ERROR_IDS,
   mergeHiddenValues,
   submitLoginFlow,
   type KratosFlow,
 } from "../../lib/kratos-flow";
+import {
+  classifySignInFlow,
+  isStateMessage,
+  type SelfServiceFlowKind,
+  type SignInState,
+} from "../../lib/sign-in-state";
 
 interface LoginFormProps {
   returnTo: string;
@@ -41,6 +53,13 @@ interface LoginFormProps {
 export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
   const router = useRouter();
   const [flow, setFlow] = useState<KratosFlow | null>(null);
+  const [flowKind, setFlowKind] = useState<SelfServiceFlowKind>("login");
+  // Kratos replaces the account-linking banner with the password error after a
+  // wrong password, on the SAME flow id — keep the explanation on screen.
+  const [linking, setLinking] = useState<{
+    flowId: string;
+    email: string | null;
+  } | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -67,8 +86,13 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
       setError(null);
       try {
         let loaded: KratosFlow;
+        let kind: SelfServiceFlowKind = "login";
         if (initialFlowId) {
-          loaded = await fetchLoginFlow(initialFlowId);
+          // A refused Cloud first sign-in returns here with a REGISTRATION
+          // flow id; fetchSelfServiceFlow resolves either kind.
+          const r = await fetchSelfServiceFlow(initialFlowId);
+          loaded = r.flow;
+          kind = r.kind;
         } else {
           // Return the browser HERE after a federated (oidc) round-trip — this
           // page's mount then detects the fresh session and routes on.
@@ -82,7 +106,10 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
         }
         if (cancelled) return;
         setFlow(loaded);
+        setFlowKind(kind);
         setValues(extractInitialValues(loaded));
+        const errors = collectErrorMessages(loaded, isStateMessage);
+        if (errors.length) setError(errors.join(" "));
       } catch (err) {
         if (!cancelled) {
           setError(
@@ -120,7 +147,7 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
         if (r.flow) {
           setFlow(r.flow);
           setValues((prev) => mergeHiddenValues(prev, r.flow!));
-          const errors = collectErrorMessages(r.flow);
+          const errors = collectErrorMessages(r.flow, isStateMessage);
           if (errors.length) setError(errors.join(" "));
           return;
         }
@@ -142,6 +169,7 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
             }
             if (fresh.flow) {
               setFlow(fresh.flow);
+              setFlowKind("login");
               setValues((prev) => mergeHiddenValues(prev, fresh.flow!));
               setError("Please sign in again.");
               return;
@@ -157,6 +185,36 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
     },
     [flow, goReturn]
   );
+
+  const classified = useMemo<SignInState>(
+    () => (flow ? classifySignInFlow(flow, flowKind) : { kind: "none" }),
+    [flow, flowKind]
+  );
+  useEffect(() => {
+    if (flow && classified.kind === "account_link") {
+      setLinking({ flowId: flow.id, email: classified.email });
+    }
+  }, [flow, classified]);
+  const signIn: SignInState =
+    classified.kind === "none" && flow && linking?.flowId === flow.id
+      ? { kind: "account_link", email: linking.email }
+      : classified;
+
+  // The flow is answered by a state panel, not the form.
+  const stateView =
+    signIn.kind === "access_required" ||
+    signIn.kind === "self_registration_disabled" ||
+    (flowKind === "registration" && flow !== null);
+
+  // Start over on a fresh login flow (drops `?flow=`; the mount effect re-runs).
+  const backToSignIn = useCallback(() => {
+    setError(null);
+    router.replace(
+      returnTo === "/"
+        ? "/login"
+        : `/login?return=${encodeURIComponent(returnTo)}`
+    );
+  }, [returnTo, router]);
 
   const onSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -185,20 +243,51 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
             />
           </span>
 
-          <div className="flex flex-col gap-1.5">
-            <h1 className="font-heading text-[20px] font-medium tracking-tight text-foreground">
-              Sign in to this Pod
-            </h1>
-            <p className="text-[13.5px] leading-relaxed text-foreground/65">
-              Your session is scoped to this Pod and this device.
-            </p>
-          </div>
+          {loading ? (
+            <SignInHeader />
+          ) : signIn.kind === "access_required" ? (
+            <RefusalPanel
+              icon={<Lock className="h-5 w-5" strokeWidth={2} />}
+              title="You don't have access to this pod yet."
+              onBack={backToSignIn}
+            >
+              <p>
+                The pod owner has to let you in. Open the Synap app (Relay or
+                the desktop app) and choose this pod to send a request, or ask
+                the owner to invite you.
+              </p>
+              {signIn.email ? (
+                <p className="text-foreground/55">
+                  Synap Cloud account:{" "}
+                  <span className="font-medium text-foreground/80">
+                    {signIn.email}
+                  </span>
+                </p>
+              ) : null}
+            </RefusalPanel>
+          ) : signIn.kind === "self_registration_disabled" ? (
+            <RefusalPanel
+              icon={<UserPlus className="h-5 w-5" strokeWidth={2} />}
+              title="New accounts on this pod are created by invitation or with Synap Cloud."
+              onBack={backToSignIn}
+            />
+          ) : flowKind === "registration" && flow ? (
+            // pod-admin renders no sign-up form; any other registration error
+            // keeps the plain banner with a way back.
+            <ErrorPanel
+              message={error ?? "Sign-in is unavailable."}
+              actionLabel="Back to sign-in"
+              onRetry={backToSignIn}
+            />
+          ) : (
+            <SignInHeader />
+          )}
 
           {loading ? (
             <div className="rounded-medium bg-foreground/[0.04] p-4 text-[13px] text-foreground/55">
               Loading sign-in…
             </div>
-          ) : flow ? (
+          ) : stateView ? null : flow ? (
             <FlowFields
               flow={flow}
               values={values}
@@ -225,6 +314,7 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
               }}
               submitting={submitting}
               error={error}
+              linking={signIn.kind === "account_link" ? signIn : null}
             />
           ) : (
             <ErrorPanel
@@ -248,6 +338,96 @@ interface FlowFieldsProps {
   onSubmitMethod: (method: string, name: string, value: string) => void;
   submitting: boolean;
   error: string | null;
+  /** Kratos account linking: explain WHICH password, and how to reset it. */
+  linking: { email: string | null } | null;
+}
+
+function SignInHeader() {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h1 className="font-heading text-[20px] font-medium tracking-tight text-foreground">
+        Sign in to this Pod
+      </h1>
+      <p className="text-[13.5px] leading-relaxed text-foreground/65">
+        Your session is scoped to this Pod and this device.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * An EXPLAIN state: the user cannot fix this from the form, so say why and
+ * what to do, with one way back. Not an error banner — nothing failed.
+ */
+function RefusalPanel({
+  icon,
+  title,
+  children,
+  onBack,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children?: React.ReactNode;
+  onBack: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4" role="status">
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden
+          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-medium bg-foreground/[0.06] text-foreground/75"
+        >
+          {icon}
+        </span>
+        <h1 className="font-heading text-[18px] font-medium leading-snug tracking-tight text-foreground">
+          {title}
+        </h1>
+      </div>
+      {children ? (
+        <div className="flex flex-col gap-2 text-[13.5px] leading-relaxed text-foreground/70">
+          {children}
+        </div>
+      ) : null}
+      <Button
+        size="sm"
+        variant="flat"
+        radius="md"
+        className="min-h-11 self-start"
+        onPress={onBack}
+      >
+        Back to sign-in
+      </Button>
+    </div>
+  );
+}
+
+function AccountLinkNotice({ email }: { email: string | null }) {
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-medium bg-primary/10 p-3 text-[13px] leading-relaxed text-foreground/80 ring-1 ring-inset ring-primary/25"
+      role="status"
+    >
+      <div className="flex items-start gap-2">
+        <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <p>
+          This pod already has an account for{" "}
+          <span className="font-medium text-foreground">
+            {email ?? "your email"}
+          </span>
+          . Enter that account&apos;s pod password once to connect your Synap
+          Cloud sign-in. You won&apos;t need it again.
+        </p>
+      </div>
+      <p className="pl-6 text-foreground/60">
+        Forgot your pod password? Ask the pod owner to reset it. On the
+        pod&apos;s server, the operator runs{" "}
+        <code className="font-mono text-[12px] text-foreground/80">
+          synap users reset-password {email ?? "<email>"}
+        </code>
+        .
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -281,6 +461,7 @@ function FlowFields({
   onSubmitMethod,
   submitting,
   error,
+  linking,
 }: FlowFieldsProps) {
   // Connection handoff is available to every Pod member, not only operators.
   // Render every Pod-configured Kratos method (password, passkey, OIDC, …)
@@ -289,6 +470,7 @@ function FlowFields({
 
   return (
     <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+      {linking ? <AccountLinkNotice email={linking.email} /> : null}
       {error ? (
         <div
           className="flex items-start gap-2 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
@@ -395,7 +577,11 @@ function FlowFields({
         isDisabled={submitting}
         isLoading={submitting}
       >
-        {submitting ? "Signing in…" : "Sign in"}
+        {submitting
+          ? "Signing in…"
+          : linking
+            ? "Connect and sign in"
+            : "Sign in"}
       </Button>
     </form>
   );
@@ -404,9 +590,11 @@ function FlowFields({
 function ErrorPanel({
   message,
   onRetry,
+  actionLabel = "Try again",
 }: {
   message: string;
   onRetry: () => void;
+  actionLabel?: string;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -424,7 +612,7 @@ function ErrorPanel({
         className="min-h-11"
         onPress={onRetry}
       >
-        Try again
+        {actionLabel}
       </Button>
     </div>
   );

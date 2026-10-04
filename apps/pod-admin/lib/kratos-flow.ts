@@ -67,10 +67,22 @@ function resolveActionUrl(action: string): string {
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * A Kratos UI message. `id` is what callers branch on (see
+ * `@synap-core/types/kratos-messages` and `lib/sign-in-state.ts`); `text` is
+ * English fallback copy.
+ */
+export interface KratosMessage {
+  id?: number;
+  type: string;
+  text: string;
+  context?: Record<string, unknown>;
+}
+
 export interface KratosUiNode {
   type: string;
   group?: string;
-  messages?: { type: string; text: string }[];
+  messages?: KratosMessage[];
   attributes?: Record<string, string | boolean | number | undefined>;
   /**
    * Presentation metadata. For an oidc method button Kratos puts the provider's
@@ -85,7 +97,7 @@ export interface KratosUi {
   action: string;
   method: string;
   nodes: KratosUiNode[];
-  messages?: { type: string; text: string }[];
+  messages?: KratosMessage[];
 }
 
 export interface KratosFlow {
@@ -205,29 +217,64 @@ export async function createLoginFlow(
   );
 }
 
-export async function fetchLoginFlow(flowId: string): Promise<KratosFlow> {
-  const res = await fetch(
+/**
+ * Fetch the flow behind a `?flow=` id. Kratos points EVERY self-service ui_url
+ * at pod-admin's /login (see `generate_kratos_config` in `synap`), so a refused
+ * Synap Cloud first sign-in lands here with a REGISTRATION flow id — the login
+ * endpoint answers 404 for it. Only a 404 falls through to the registration
+ * endpoint; any other failure is reported as-is.
+ */
+export async function fetchSelfServiceFlow(
+  flowId: string
+): Promise<{ flow: KratosFlow; kind: "login" | "registration" }> {
+  const loginRes = await fetch(
     `${kratosPublic()}/self-service/login/flows?id=${encodeURIComponent(flowId)}`,
-    {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    }
+    { credentials: "include", headers: { Accept: "application/json" } }
   );
-  if (!res.ok) {
-    let body: { error?: { message?: string; reason?: string } } = {};
+  if (loginRes.ok) {
+    return {
+      kind: "login",
+      flow: await readJsonResponse<KratosFlow>(
+        loginRes,
+        "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
+      ),
+    };
+  }
+  if (loginRes.status !== 404) {
+    let body: { error?: { message?: string } } = {};
     try {
-      body = (await res.json()) as typeof body;
+      body = (await loginRes.json()) as typeof body;
     } catch {
-      /* ignore */
+      /* not JSON */
     }
     throw new Error(
-      body.error?.message ?? `Login flow ${flowId} not found (${res.status})`
+      body.error?.message ??
+        `Login flow ${flowId} could not be loaded (${loginRes.status})`
     );
   }
-  return readJsonResponse<KratosFlow>(
-    res,
-    "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
+  const regRes = await fetch(
+    `${kratosPublic()}/self-service/registration/flows?id=${encodeURIComponent(flowId)}`,
+    { credentials: "include", headers: { Accept: "application/json" } }
   );
+  if (!regRes.ok) {
+    let body: { error?: { message?: string } } = {};
+    try {
+      body = (await regRes.json()) as typeof body;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(
+      body.error?.message ??
+        `Sign-in flow ${flowId} not found (${regRes.status})`
+    );
+  }
+  return {
+    kind: "registration",
+    flow: await readJsonResponse<KratosFlow>(
+      regRes,
+      "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
+    ),
+  };
 }
 
 export async function submitLoginFlow(
@@ -329,13 +376,20 @@ export async function submitLoginFlow(
 // Extraction helpers
 // ---------------------------------------------------------------------------
 
-export function collectErrorMessages(flow: KratosFlow): string[] {
-  const ui = (flow.ui.messages ?? [])
-    .filter((m) => m.type === "error")
-    .map((m) => m.text);
+/**
+ * Error texts to show as a banner. `exclude` drops messages the caller renders
+ * as an explicit state instead (see `isStateMessage` in `sign-in-state.ts`).
+ */
+export function collectErrorMessages(
+  flow: KratosFlow,
+  exclude?: (m: KratosMessage) => boolean
+): string[] {
+  const keep = (m: KratosMessage) =>
+    m.type === "error" && !(exclude && exclude(m));
+  const ui = (flow.ui.messages ?? []).filter(keep).map((m) => m.text);
   const node = flow.ui.nodes
     .flatMap((n) => n.messages ?? [])
-    .filter((m) => m.type === "error")
+    .filter(keep)
     .map((m) => m.text);
   return [...ui, ...node];
 }
