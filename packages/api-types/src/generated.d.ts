@@ -13625,6 +13625,15 @@ export interface ProjectPathRow {
 		status: "ok";
 	} & DeliverableCounts) | Unavailable$1;
 	nextMove: ContinuationNextMove;
+	/**
+	 * The liveness facts the "working right now" rule reads (D1,
+	 * `isSessionWorkingNow`) — the SAME batched read (`loadSessionLiveness`)
+	 * behind `focusSessions.list` rows and the session page, so a path row's
+	 * mark (`pathRowSessionFact` → `sessionRowInput`) agrees with the session
+	 * header. `null` = the liveness read FAILED (the mark says "not measured",
+	 * never "quiet").
+	 */
+	live: SessionActivityLive | null;
 }
 export interface ProjectPathResult {
 	project: {
