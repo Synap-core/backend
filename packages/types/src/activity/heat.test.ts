@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTIVITY_DAILY_MAX_DAYS,
+  ACTIVITY_MONTH_MIN_WEEKS,
+  ACTIVITY_RAMP_FLOOR,
+  type ActivityScope,
+  activityScopeFilter,
+  checkActivityRamp,
+  encodeActivityScope,
+  parseActivityScope,
+  resolveActivityRamp,
   activityCellLabel,
   activityCountLabel,
   activityDayRange,
@@ -232,5 +240,93 @@ describe("words (D5: the unit is 'activity')", () => {
     expect(activityHeatSummary({ total: 14, activeDays: 1 })).toBe(
       "14 activities · active 1 day"
     );
+  });
+});
+
+describe("month marks never collide", () => {
+  it("drops the window's leading partial month when the next starts < 3 columns later", () => {
+    // 2026-10-03 is a Saturday; 23 weeks back starts Sun Apr 26 → "Apr" at
+    // week 0, "May" (May 1, the same Sunday-week) at week 0 too; 24 weeks back
+    // starts Apr 19 → May at week 1. Both must name May only.
+    for (const weeks of [23, 24, 25]) {
+      const m = buildActivityHeat([], { to: "2026-10-03", weeks });
+      expect(m.months[0]!.month).toBe(4); // May
+      const gaps = m.months.slice(1).map((x, i) => x.week - m.months[i]!.week);
+      expect(gaps.every((g) => g >= ACTIVITY_MONTH_MIN_WEEKS)).toBe(true);
+    }
+  });
+
+  it("keeps the leading month when it has room", () => {
+    // 26 weeks back starts Sun Apr 5 → May 1 is in week 3.
+    const m = buildActivityHeat([], { to: "2026-10-03", weeks: 26 });
+    expect(m.months.slice(0, 2).map((x) => [x.month, x.week])).toEqual([
+      [3, 0],
+      [4, 3],
+    ]);
+  });
+});
+
+describe("scope travels in the address", () => {
+  it("round-trips every scope through one token", () => {
+    const scopes: ActivityScope[] = [
+      { kind: "pod" },
+      { kind: "project", projectId: "p-1" },
+      { kind: "workspace", workspaceId: "w:2" },
+    ];
+    for (const s of scopes) {
+      expect(parseActivityScope(encodeActivityScope(s))).toEqual(s);
+    }
+  });
+
+  it("an unreadable token is no override", () => {
+    for (const t of [undefined, null, "", "project:", ":x", "team:1", 3]) {
+      expect(parseActivityScope(t)).toBeUndefined();
+    }
+  });
+
+  it("pod is the WHOLE floor (no lens); a scope narrows by its own key", () => {
+    expect(activityScopeFilter({ kind: "pod" })).toEqual({});
+    expect(activityScopeFilter({ kind: "project", projectId: "p" })).toEqual({
+      projectId: "p",
+    });
+    expect(
+      activityScopeFilter({ kind: "workspace", workspaceId: "w" })
+    ).toEqual({ workspaceId: "w" });
+  });
+});
+
+describe("the ramp meets the dataviz ordinal floors", () => {
+  // The two themes' opaque page ground, ink and primary (synap-tokens.css).
+  // The charts test re-derives these from the CSS itself; here they pin the
+  // recipe's arithmetic.
+  const THEMES = {
+    light: { ground: "#f0e8d6", ink: "#1f1b17", primary: "#a86e2e" },
+    dark: { ground: "#2b2620", ink: "#f4ecdc", primary: "#c28a4a" },
+  };
+
+  for (const [mode, colors] of Object.entries(THEMES)) {
+    it(`${mode}: monotone, steps ≥ 0.06 L, faintest level ≥ 2:1, empty day visible`, () => {
+      const ramp = resolveActivityRamp(colors);
+      const report = checkActivityRamp(ramp, colors.ground);
+      expect(report.ok).toBe(true);
+      expect(Math.min(...report.stepL)).toBeGreaterThanOrEqual(
+        ACTIVITY_RAMP_FLOOR.stepL
+      );
+      expect(report.faintestContrast).toBeGreaterThanOrEqual(2);
+      // A visible grid, not a hole (the old translucent base read 1.10:1).
+      expect(report.emptyContrast).toBeGreaterThanOrEqual(1.2);
+    });
+  }
+
+  it("the checker rejects a ramp too faint at its light end (the old 30% recipe)", () => {
+    // Old light recipe, opaque: level 1 at 1.60:1.
+    const old = ["#ddd5c5", "#ceb699", "#c29d76", "#b48552", "#a86e2e"];
+    expect(checkActivityRamp(old, "#f0e8d6").ok).toBe(false);
+  });
+
+  it("the checker rejects a non-monotone ramp", () => {
+    const ramp = resolveActivityRamp(THEMES.light);
+    const swapped = [ramp[0]!, ramp[2]!, ramp[1]!, ramp[3]!, ramp[4]!];
+    expect(checkActivityRamp(swapped, THEMES.light.ground).ok).toBe(false);
   });
 });

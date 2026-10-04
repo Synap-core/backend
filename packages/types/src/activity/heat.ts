@@ -13,7 +13,11 @@
  *   - the words ("12 activities on Thu, Oct 3") — the unit is "activity"
  *     (decision D5, 2026-10-04).
  *
- * It returns levels, never colours: each surface maps a level to its own ramp.
+ * The grid returns levels, never colours. The level → colour RECIPE is one
+ * shared constant (`ACTIVITY_RAMP`): the web writes it as CSS `color-mix`,
+ * relay resolves it to hex (`resolveActivityRamp`); both are checked against
+ * the dataviz ordinal floors (`checkActivityRamp`). A day's door carries its
+ * SCOPE in the address (`ActivityScope`), never in the global project lens.
  * Pure and dependency-free (only `Intl`), so it runs in the pod, Electron and
  * React Native alike.
  */
@@ -36,6 +40,8 @@ export interface ActivityDaily {
   tz: string;
   days: ActivityDay[];
 }
+
+import { resolveObjectNoun } from "../vocabulary/index.js";
 
 // ── Calendar days (UTC arithmetic on `YYYY-MM-DD`, no time zone involved) ───
 
@@ -202,6 +208,13 @@ export function activityLevel(
 
 // ── The grid ────────────────────────────────────────────────────────────────
 
+/**
+ * The fewest columns between two month marks. A mark ("Sept", ~22–30px) is
+ * wider than a column (10–16px + gap), so marks one or two columns apart
+ * collide; three columns is ≥ 39px at the smallest cell.
+ */
+export const ACTIVITY_MONTH_MIN_WEEKS = 3;
+
 export interface ActivityHeatCell {
   date: string;
   count: number;
@@ -271,8 +284,11 @@ export function buildActivityHeat(
     if (c.date.endsWith("-01") || c === cells[0]) {
       const [y, m] = c.date.split("-").map(Number);
       const prev = months[months.length - 1];
-      // Two month starts in one column: the later one names it.
-      if (prev && prev.week === c.week) months.pop();
+      // A month mark is wider than a column: two marks closer than
+      // `ACTIVITY_MONTH_MIN_WEEKS` columns would print over each other
+      // ("AprMay"). The later one names the stretch. Month starts are ≥ 4
+      // weeks apart, so only the window's leading partial month ever drops.
+      if (prev && c.week - prev.week < ACTIVITY_MONTH_MIN_WEEKS) months.pop();
       months.push({ week: c.week, month: m! - 1, year: y! });
     }
   }
@@ -344,4 +360,211 @@ export function activityHeatSummary(
   return `${activityCountLabel(model.total)} · active ${model.activeDays} ${
     model.activeDays === 1 ? "day" : "days"
   }`;
+}
+
+/**
+ * The section's name. It counts WORK — proposals, decisions, runs and session
+ * lifecycles (the `activity.list` ledger) — not captures or edits, so it does
+ * not claim the whole pod's life (decision 2026-10-04).
+ */
+export const ACTIVITY_HEAT_TITLE = `${resolveObjectNoun("work")} activity`;
+
+// ── Scope (what a cell counted travels with its door) ───────────────────────
+
+/**
+ * WHERE a heat counted: the whole floor, one space, or one project. A day's
+ * door carries it in the ADDRESS, so the list it opens reads exactly what the
+ * cell counted — never by writing the viewer's global project lens.
+ */
+export type ActivityScope =
+  | { kind: "pod" }
+  | { kind: "workspace"; workspaceId: string }
+  | { kind: "project"; projectId: string };
+
+/** The scope as one address token: `pod`, `workspace:<id>`, `project:<id>`. */
+export function encodeActivityScope(scope: ActivityScope): string {
+  if (scope.kind === "pod") return "pod";
+  return scope.kind === "project"
+    ? `project:${scope.projectId}`
+    : `workspace:${scope.workspaceId}`;
+}
+
+/** Read an address token back. Anything else ⇒ `undefined` (no override). */
+export function parseActivityScope(token: unknown): ActivityScope | undefined {
+  if (token === "pod") return { kind: "pod" };
+  if (typeof token !== "string") return undefined;
+  const sep = token.indexOf(":");
+  const kind = token.slice(0, sep);
+  const id = token.slice(sep + 1);
+  if (sep < 1 || !id) return undefined;
+  if (kind === "project") return { kind, projectId: id };
+  if (kind === "workspace") return { kind, workspaceId: id };
+  return undefined;
+}
+
+/**
+ * The scope as the door input both `activity.daily` and `activity.list` take.
+ * `pod` is the absent lens — the WHOLE floor, never the active-space header.
+ */
+export function activityScopeFilter(scope: ActivityScope): {
+  projectId?: string;
+  workspaceId?: string;
+} {
+  if (scope.kind === "project") return { projectId: scope.projectId };
+  if (scope.kind === "workspace") return { workspaceId: scope.workspaceId };
+  return {};
+}
+
+// ── The ramp (one recipe, every surface) ────────────────────────────────────
+
+/**
+ * The colour recipe of the five levels, as mix weights in OKLab over an OPAQUE
+ * ground (the page background — a translucent surface would make a cell's
+ * colour depend on what sits under it):
+ *
+ *   0  = `ink` at `empty` over the ground (a visible empty day, not a hole)
+ *   1–3 = `primary` at `steps[i]` over level 0
+ *   4  = `ink` at `peak` over `primary` (darker than the brand fill in light,
+ *        brighter in dark — the ramp needs that room to keep its steps apart)
+ *
+ * The web writes it as `color-mix(in oklab, …)` in `activity-heatmap.css`
+ * (a test pins the CSS to these numbers); relay resolves it with
+ * `resolveActivityRamp`. Validated with the dataviz ordinal checks
+ * (`ACTIVITY_RAMP_FLOOR`) in light AND dark.
+ */
+export const ACTIVITY_RAMP = {
+  empty: 0.1,
+  steps: [0.52, 0.76, 1] as const,
+  peak: 0.28,
+} as const;
+
+/**
+ * The dataviz skill's ordinal-ramp floors: adjacent levels ≥ 0.06 apart in
+ * OKLCH lightness, and the faintest data level (1) ≥ 2:1 against the ground.
+ */
+export const ACTIVITY_RAMP_FLOOR = {
+  stepL: 0.06,
+  faintestContrast: 2,
+} as const;
+
+type Rgb = [number, number, number];
+
+function hexRgb(hex: string): Rgb {
+  const h = hex.replace("#", "");
+  const full =
+    h.length === 3
+      ? h
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : h.slice(0, 6);
+  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)) as Rgb;
+}
+
+const toLinear = (c: number) => {
+  const v = c / 255;
+  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+};
+const toByte = (c: number) => {
+  const v = Math.max(0, Math.min(1, c));
+  return 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
+};
+
+function toOklab(rgb: Rgb): Rgb {
+  const [r, g, b] = rgb.map(toLinear) as Rgb;
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [
+    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  ];
+}
+
+function fromOklab([L, a, b]: Rgb): Rgb {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ].map(toByte) as Rgb;
+}
+
+const rgbHex = (rgb: Rgb) =>
+  `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
+
+/** CSS `color-mix(in oklab, fg p, bg)` for opaque colours, as hex. */
+function mixOklab(fg: string, p: number, bg: string): string {
+  const a = toOklab(hexRgb(fg));
+  const b = toOklab(hexRgb(bg));
+  return rgbHex(fromOklab(a.map((v, i) => v * p + b[i]! * (1 - p)) as Rgb));
+}
+
+/** OKLCH/OKLab lightness of a hex colour (0–1). */
+function oklabLightness(hex: string): number {
+  return toOklab(hexRgb(hex))[0];
+}
+
+/** WCAG 2 contrast ratio of two hex colours. */
+function contrastRatio(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const [r, g, bl] = hexRgb(hex).map(toLinear) as Rgb;
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * `ACTIVITY_RAMP` resolved to five opaque hex colours (index = level), from
+ * the theme's opaque `ground` (page background), `ink` (text) and `primary`.
+ */
+export function resolveActivityRamp(colors: {
+  ground: string;
+  ink: string;
+  primary: string;
+}): [string, string, string, string, string] {
+  const empty = mixOklab(colors.ink, ACTIVITY_RAMP.empty, colors.ground);
+  const [s1, s2, s3] = ACTIVITY_RAMP.steps;
+  return [
+    empty,
+    mixOklab(colors.primary, s1, empty),
+    mixOklab(colors.primary, s2, empty),
+    mixOklab(colors.primary, s3, empty),
+    mixOklab(colors.ink, ACTIVITY_RAMP.peak, colors.primary),
+  ];
+}
+
+/**
+ * The dataviz ordinal checks on a resolved ramp (`ground` = what the cells sit
+ * on): the lightness gap between each pair of adjacent levels, ordered from
+ * level 0 up, and the contrast of the empty and faintest data levels. `ok` =
+ * every gap ≥ `ACTIVITY_RAMP_FLOOR.stepL` in the SAME direction (monotone)
+ * and level 1 ≥ `ACTIVITY_RAMP_FLOOR.faintestContrast`.
+ */
+export function checkActivityRamp(
+  ramp: readonly string[],
+  ground: string
+): {
+  stepL: number[];
+  emptyContrast: number;
+  faintestContrast: number;
+  ok: boolean;
+} {
+  const L = ramp.map(oklabLightness);
+  const gaps = L.slice(1).map((l, i) => l - L[i]!);
+  const dir = Math.sign(gaps[gaps.length - 1] ?? 0);
+  const stepL = gaps.map((g) => g * dir);
+  const faintestContrast = contrastRatio(ramp[1]!, ground);
+  return {
+    stepL,
+    emptyContrast: contrastRatio(ramp[0]!, ground),
+    faintestContrast,
+    ok:
+      stepL.every((g) => g >= ACTIVITY_RAMP_FLOOR.stepL) &&
+      faintestContrast >= ACTIVITY_RAMP_FLOOR.faintestContrast,
+  };
 }
