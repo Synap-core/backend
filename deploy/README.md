@@ -149,6 +149,39 @@ Useful when:
 - Testing local changes
 - Development workflow
 
+### Automatic updates (owner setting) and failed updates
+
+Each pod stores its owner's choice in `pod_settings.settings.updates`:
+`auto` (default **on**) and `channel` (`stable` = tagged `v*` releases, the
+default; `fast` = every green `main` build). A pod admin changes it with
+`PUT /api/pod-updates/settings` (`{ "auto": false }`), and reads it with
+`GET /api/pod-updates`. The pod is the one source of truth: the Control Plane
+only reads it (`GET /api/provision/status` → `updates`) and, when `auto` is
+off, sends an "update available" email instead of pushing the release.
+
+Every `synap update` writes its outcome to `state/last-update.json`. The
+backend reads it through its read-only deploy mount; after a rollback
+(`rolled_back`, `rollback_failed`, `failed`) every pod admin gets one in-app
+notification per update, and a managed pod's owner also gets one email from
+the Control Plane. `SYNAP_UPDATE_CHANNEL` in `.env` remains only the default
+for an operator typing a bare `synap update`.
+
+## ✉️ Email (Kratos courier)
+
+Recovery codes and verification emails are sent by Kratos through
+`SMTP_CONNECTION_URI` (+ optional `SMTP_FROM_ADDRESS`, which must be on a
+domain your relay has verified). Without them mail goes to a local catch-all
+and is never delivered; the "Email me a code" recovery door stays hidden.
+
+- **Self-hosted:** set your own SMTP in `.env`, then recreate `kratos` and
+  `backend`.
+- **Managed pods (Synap Cloud):** the Control Plane provisions a relay through
+  Resend SMTP — a per-pod key that can only send, from the Control Plane's
+  domain. **Privacy trade-off:** mail sent through this relay, recovery codes
+  included, passes through Resend and is visible to whoever operates the
+  Control Plane's Resend account. Setting your own SMTP replaces it, and the
+  Control Plane never overrides a courier configured elsewhere.
+
 ## Single Operational Path
 
 Synap now uses one controlled execution path for pod lifecycle operations:
