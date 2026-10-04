@@ -8,6 +8,11 @@ import {
   ViewFiltersSchema,
   normalizeViewFilter,
   viewFilterOperatorsFor,
+  VIEW_FILTER_CORE_FIELDS,
+  isViewFilterField,
+  repairLegacyViewFilter,
+  sanitizeStoredViewFilters,
+  resolveIncomingViewFilters,
   type FilterOperator,
 } from "./filters.js";
 import { PropertyDefSchema } from "../profiles/index.js";
@@ -72,12 +77,15 @@ describe("view filter grammar (@synap-core/types/views)", () => {
 
   it("accepts number and boolean single values", () => {
     expect(
-      ViewFilterSchema.safeParse({ field: "x", operator: "equals", value: 5 })
-        .success
+      ViewFilterSchema.safeParse({
+        field: "properties.x",
+        operator: "equals",
+        value: 5,
+      }).success
     ).toBe(true);
     expect(
       ViewFilterSchema.safeParse({
-        field: "x",
+        field: "properties.x",
         operator: "not_equals",
         value: false,
       }).success
@@ -87,8 +95,11 @@ describe("view filter grammar (@synap-core/types/views)", () => {
   it("rejects unknown operators, including the table dialect's `between`", () => {
     for (const operator of ["between", "bogus", "$eq", "EQUALS"]) {
       expect(
-        ViewFilterSchema.safeParse({ field: "x", operator, value: "a" })
-          .success,
+        ViewFilterSchema.safeParse({
+          field: "properties.x",
+          operator,
+          value: "a",
+        }).success,
         operator
       ).toBe(false);
     }
@@ -96,11 +107,11 @@ describe("view filter grammar (@synap-core/types/views)", () => {
 
   it("rejects a value of the wrong shape for its operator", () => {
     const bad = [
-      { field: "x", operator: "in", value: "open" },
-      { field: "x", operator: "not_in", value: [{ a: 1 }] },
-      { field: "x", operator: "equals" },
-      { field: "x", operator: "equals", value: null },
-      { field: "x", operator: "contains", value: ["a"] },
+      { field: "properties.x", operator: "in", value: "open" },
+      { field: "properties.x", operator: "not_in", value: [{ a: 1 }] },
+      { field: "properties.x", operator: "equals" },
+      { field: "properties.x", operator: "equals", value: null },
+      { field: "properties.x", operator: "contains", value: ["a"] },
       { field: "", operator: "equals", value: "a" },
     ];
     for (const filter of bad) {
@@ -117,7 +128,7 @@ describe("view filter grammar (@synap-core/types/views)", () => {
     for (const [legacy, canonical] of aliases) {
       const value = sampleValue(canonical);
       const parsed = ViewFilterSchema.parse({
-        field: "x",
+        field: "properties.x",
         operator: legacy,
         value,
       });
@@ -129,11 +140,130 @@ describe("view filter grammar (@synap-core/types/views)", () => {
   });
 
   it("the lenient read-path normaliser leaves non-aliases untouched", () => {
-    const keep = { field: "x", operator: "between", value: [1, 2] };
+    const keep = { field: "properties.x", operator: "between", value: [1, 2] };
     expect(normalizeViewFilter(keep)).toBe(keep);
     expect(normalizeViewFilter(null)).toBe(null);
     expect(
-      normalizeViewFilter({ field: "x", operator: "gte", value: 1 })
-    ).toEqual({ field: "x", operator: "greater_than_or_equal", value: 1 });
+      normalizeViewFilter({ field: "properties.x", operator: "gte", value: 1 })
+    ).toEqual({
+      field: "properties.x",
+      operator: "greater_than_or_equal",
+      value: 1,
+    });
+  });
+
+  it("field: core columns or properties.<slug>, nothing else", () => {
+    for (const field of [...VIEW_FILTER_CORE_FIELDS, "properties.status"]) {
+      expect(isViewFilterField(field), field).toBe(true);
+      expect(
+        ViewFilterSchema.safeParse({ field, operator: "is_empty" }).success,
+        field
+      ).toBe(true);
+    }
+    for (const field of [
+      "status",
+      "metadata.status",
+      "properties.",
+      "properties.a.b",
+      "Title",
+    ]) {
+      expect(isViewFilterField(field), field).toBe(false);
+      expect(
+        ViewFilterSchema.safeParse({ field, operator: "is_empty" }).success,
+        field
+      ).toBe(false);
+    }
+  });
+});
+
+describe("stored-filter repair (legacy rows)", () => {
+  it("repairs every written legacy shape into the grammar", () => {
+    const cases: Array<[unknown, unknown[]]> = [
+      [
+        { field: "properties.s", operator: "in", value: "open" },
+        [{ field: "properties.s", operator: "in", value: ["open"] }],
+      ],
+      [
+        { field: "properties.s", operator: "notIn", value: "open" },
+        [{ field: "properties.s", operator: "not_in", value: ["open"] }],
+      ],
+      [
+        { field: "properties.s", operator: "eq", value: ["open"] },
+        [{ field: "properties.s", operator: "equals", value: "open" }],
+      ],
+      [
+        { field: "properties.s", operator: "not_equals", value: ["a", "b"] },
+        [{ field: "properties.s", operator: "not_in", value: ["a", "b"] }],
+      ],
+      [
+        { field: "properties.n", operator: "between", value: [1, 5] },
+        [
+          {
+            field: "properties.n",
+            operator: "greater_than_or_equal",
+            value: 1,
+          },
+          { field: "properties.n", operator: "less_than_or_equal", value: 5 },
+        ],
+      ],
+      [
+        { field: "metadata.s", operator: "is", value: "x" },
+        [{ field: "properties.s", operator: "equals", value: "x" }],
+      ],
+    ];
+    for (const [legacy, expected] of cases) {
+      expect(repairLegacyViewFilter(legacy), JSON.stringify(legacy)).toEqual(
+        expected
+      );
+      expect(
+        sanitizeStoredViewFilters([legacy]),
+        JSON.stringify(legacy)
+      ).toEqual({ filters: expected, dropped: [] });
+    }
+  });
+
+  it("drops (with a reason) what it cannot repair, keeping the rest", () => {
+    const keep = { field: "title", operator: "equals", value: "a" };
+    const bare = { field: "status", operator: "equals", value: "a" };
+    const bogus = { field: "title", operator: "bogus", value: "a" };
+    const out = sanitizeStoredViewFilters([keep, bare, bogus]);
+    expect(out.filters).toEqual([keep]);
+    expect(out.dropped.map((d) => d.filter)).toEqual([bare, bogus]);
+    expect(out.dropped[0]?.reason).toMatch(/Filter field must be/);
+    expect(sanitizeStoredViewFilters(undefined)).toEqual({
+      filters: [],
+      dropped: [],
+    });
+    expect(sanitizeStoredViewFilters({}).dropped).toHaveLength(1);
+  });
+
+  it("incoming: valid kept, stored-invalid repaired/dropped, NEW invalid rejected", () => {
+    const storedBetween = {
+      operator: "between",
+      value: [1, 5],
+      field: "properties.n",
+    };
+    const storedBare = { field: "status", operator: "equals", value: "a" };
+    const stored = [storedBetween, storedBare];
+    const valid = { field: "title", operator: "contains", value: "x" };
+    const newBad = { field: "properties.s", operator: "in", value: "open" };
+    const out = resolveIncomingViewFilters(
+      // Key order differs from the stored JSONB on purpose.
+      [
+        valid,
+        { field: "properties.n", operator: "between", value: [1, 5] },
+        { ...storedBare },
+        newBad,
+      ],
+      stored
+    );
+    expect(out.filters).toEqual([
+      valid,
+      { field: "properties.n", operator: "greater_than_or_equal", value: 1 },
+      { field: "properties.n", operator: "less_than_or_equal", value: 5 },
+    ]);
+    expect(out.dropped.map((d) => d.filter)).toEqual([storedBare]);
+    expect(out.rejected.map((d) => d.filter)).toEqual([newBad]);
+    expect(out.rejected[0]?.reason).toMatch(/takes a list of values/);
   });
 });

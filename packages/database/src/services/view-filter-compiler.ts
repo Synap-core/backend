@@ -40,6 +40,21 @@ export const VIEW_FILTER_OPERATORS = [
 
 export type ViewFilterOperator = (typeof VIEW_FILTER_OPERATORS)[number];
 
+/**
+ * The entity columns a filter may name directly — a RUNTIME MIRROR of
+ * `VIEW_FILTER_CORE_FIELDS` in `@synap-core/types/views` (same build-cycle
+ * reason as {@link VIEW_FILTER_OPERATORS}; same parity tripwire). Anything
+ * else must be `properties.<slug>`; an unknown field THROWS — it never
+ * compiles to "no condition", which would return every row as if filtered.
+ */
+export const VIEW_FILTER_CORE_FIELDS = [
+  "title",
+  "preview",
+  "type",
+  "createdAt",
+  "updatedAt",
+] as const;
+
 // EntityFilter — structurally identical to `@synap-core/types` `EntityFilter`.
 export interface EntityFilter {
   field: string;
@@ -101,10 +116,12 @@ export class ViewFilterCompiler {
       return this.compileStandardFieldFilter(filter);
     }
 
-    // Extract property slug
-    const propertySlug = field.split(".")[1];
-    if (!propertySlug) {
-      return null;
+    // Extract property slug — exactly `properties.<slug>`.
+    const propertySlug = field.slice("properties.".length);
+    if (!propertySlug || propertySlug.includes(".")) {
+      throw new Error(
+        `Filter field "${field}" is not a property field (expected "properties.<slug>")`
+      );
     }
 
     // Resolve propertyDefIds + indexed flag (pre-resolved if provided,
@@ -143,7 +160,11 @@ export class ViewFilterCompiler {
       );
     }
 
-    // If no scopeProfileIds, fallback to JSONB (legacy support)
+    // No scopeProfileIds ⇒ there is no schema to check the slug against, so
+    // an absent property is not an error, it is "no entity has it": compile
+    // against the JSONB bag. DELIBERATE and narrow — `views.execute` always
+    // passes scope profiles (an unscoped structured view is refused there),
+    // so a view's unknown property always takes the throw above.
     if (propertyDefIds.length === 0) {
       return this.compileJSONBPropertyFilter(propertySlug, operator, value);
     }
@@ -281,14 +302,28 @@ export class ViewFilterCompiler {
         column = entityColumns.updatedAt;
         break;
       default:
-        return null;
+        throw new Error(
+          `Unknown filter field "${field}" (expected one of ${VIEW_FILTER_CORE_FIELDS.join(", ")} or "properties.<slug>")`
+        );
+    }
+
+    // A date-only value on a timestamp column compares by DAY.
+    if (
+      (field === "createdAt" || field === "updatedAt") &&
+      isDateOnlyValue(value)
+    ) {
+      const day = compileDayCondition(column, operator, value);
+      if (day) return { sql: day, usesIndex: false };
     }
 
     switch (operator) {
       case "equals":
         return { sql: eq(column, value as string), usesIndex: false };
       case "not_equals":
-        return { sql: sql`${column} != ${value}`, usesIndex: false };
+        return {
+          sql: sql`(${column} IS DISTINCT FROM ${value})`,
+          usesIndex: false,
+        };
       case "contains":
         return {
           sql: sql`${column} ILIKE ${`%${value}%`}`,
@@ -306,7 +341,7 @@ export class ViewFilterCompiler {
             usesIndex: false,
           };
         }
-        return null;
+        throw requiresArray(operator, field);
       case "greater_than":
         return { sql: sql`${column} > ${value}`, usesIndex: false };
       case "greater_than_or_equal":
@@ -317,20 +352,24 @@ export class ViewFilterCompiler {
         return { sql: sql`${column} <= ${value}`, usesIndex: false };
       case "not_contains":
         return {
-          sql: sql`${column} NOT ILIKE ${`%${value}%`}`,
+          sql: negateIncludingMissing(sql`${column} ILIKE ${`%${value}%`}`),
           usesIndex: false,
         };
       case "not_in":
         if (Array.isArray(value)) {
           return {
             sql:
-              value.length === 0 ? sql`TRUE` : sql`${column} NOT IN ${value}`,
+              value.length === 0
+                ? sql`TRUE`
+                : negateIncludingMissing(sql`${column} IN ${value}`),
             usesIndex: false,
           };
         }
-        return null;
+        throw requiresArray(operator, field);
       default:
-        return null;
+        throw new Error(
+          `Unsupported filter operator "${operator}" on field "${field}"`
+        );
     }
   }
 
@@ -429,6 +468,12 @@ export class ViewFilterCompiler {
         return this.compileJSONBPropertyFilter(propertySlug, "equals", value);
     }
 
+    // A date-only value means the whole day, not its midnight instant.
+    const condition =
+      valueType === "date" && isDateOnlyValue(value)
+        ? compileDayCondition(valueColumn, "equals", value)
+        : sql`${valueColumn} = ${value}`;
+
     return {
       sql: sql`
         EXISTS (
@@ -436,7 +481,7 @@ export class ViewFilterCompiler {
           FROM ${entityPropertyIndex}
           WHERE ${entityPropertyIndex.entityId} = ${entities.id}
             AND ${entityPropertyIndex.propertyDefId} IN ${propertyDefIds}
-            AND ${valueColumn} = ${value}
+            AND ${condition}
         )
       `,
       usesIndex: true,
@@ -553,6 +598,11 @@ export class ViewFilterCompiler {
         return null;
     }
 
+    const condition =
+      valueType === "date" && isDateOnlyValue(value)
+        ? compileDayCondition(valueColumn, operator, value)
+        : sql`${valueColumn} ${sql.raw(sqlOperator)} ${value}`;
+
     return {
       sql: sql`
         EXISTS (
@@ -560,7 +610,7 @@ export class ViewFilterCompiler {
           FROM ${entityPropertyIndex}
           WHERE ${entityPropertyIndex.entityId} = ${entities.id}
             AND ${entityPropertyIndex.propertyDefId} IN ${propertyDefIds}
-            AND ${valueColumn} ${sql.raw(sqlOperator)} ${value}
+            AND ${condition}
         )
       `,
       usesIndex: true,
@@ -581,26 +631,39 @@ export class ViewFilterCompiler {
     value: unknown
   ): CompiledFilter {
     const propertiesCol = entities.properties;
+    const text = sql`(${propertiesCol}->>${propertyKey})`;
+    // Stored text cast to a timestamp behind a CASE guard: a value that is not
+    // a date becomes NULL (no match) instead of aborting the query.
+    const asTimestamp = sql`(CASE WHEN ${text} ~ ${ISO_DATE_TEXT_PATTERN} THEN ${text}::timestamptz END)`;
+
+    // A date-only value compares by DAY (same rule as the indexed path).
+    if (isDateOnlyValue(value)) {
+      const day = compileDayCondition(asTimestamp, operator, value);
+      if (day) return { sql: day, usesIndex: false };
+    }
 
     switch (operator) {
+      // `->>` yields TEXT, so the operand is bound as text. A JS boolean or
+      // number is typed by postgres-js (bool / int / float8), and Postgres
+      // has no `text = boolean` operator — the query would fail.
       case "equals":
         return {
-          sql: sql`(${propertiesCol}->>${propertyKey} = ${value})`,
+          sql: sql`(${text} = ${filterText(value)})`,
           usesIndex: false,
         };
       case "not_equals":
         return {
-          sql: sql`(${propertiesCol}->>${propertyKey} != ${value})`,
+          sql: negateIncludingMissing(sql`${text} = ${filterText(value)}`),
           usesIndex: false,
         };
       case "contains":
         return {
-          sql: sql`(${propertiesCol}->>${propertyKey} ILIKE ${`%${value}%`})`,
+          sql: sql`(${text} ILIKE ${`%${value}%`})`,
           usesIndex: false,
         };
       case "not_contains":
         return {
-          sql: sql`(${propertiesCol}->>${propertyKey} NOT ILIKE ${`%${value}%`})`,
+          sql: negateIncludingMissing(sql`${text} ILIKE ${`%${value}%`}`),
           usesIndex: false,
         };
       case "is_empty":
@@ -634,8 +697,8 @@ export class ViewFilterCompiler {
         return {
           sql:
             operator === "in"
-              ? sql`(${propertiesCol}->>${propertyKey} IN ${texts})`
-              : sql`(${propertiesCol}->>${propertyKey} NOT IN ${texts})`,
+              ? sql`(${text} IN ${texts})`
+              : negateIncludingMissing(sql`${text} IN ${texts}`),
           usesIndex: false,
         };
       }
@@ -649,7 +712,6 @@ export class ViewFilterCompiler {
         // not of that kind from aborting the whole query on a cast error —
         // it becomes NULL and simply does not match.
         const sqlOperator = RANGE_SQL_OPERATORS[operator] as string;
-        const text = sql`(${propertiesCol}->>${propertyKey})`;
         if (isNumericFilterValue(value)) {
           return {
             sql: sql`(CASE WHEN ${text} ~ ${NUMERIC_TEXT_PATTERN} THEN ${text}::numeric END ${sql.raw(sqlOperator)} ${String(Number(value))}::numeric)`,
@@ -658,7 +720,7 @@ export class ViewFilterCompiler {
         }
         if (typeof value === "string" && ISO_DATE_PREFIX.test(value)) {
           return {
-            sql: sql`(CASE WHEN ${text} ~ ${ISO_DATE_TEXT_PATTERN} THEN ${text}::timestamptz END ${sql.raw(sqlOperator)} ${value}::timestamptz)`,
+            sql: sql`(${asTimestamp} ${sql.raw(sqlOperator)} ${value}::timestamptz)`,
             usesIndex: false,
           };
         }
@@ -685,6 +747,68 @@ const NUMERIC_TEXT_PATTERN = "^\\s*-?[0-9]+(\\.[0-9]+)?([eE][-+]?[0-9]+)?\\s*$";
 /** Stored text the date range comparison will cast (else it is NULL). */
 const ISO_DATE_TEXT_PATTERN = "^[0-9]{4}-[0-9]{2}-[0-9]{2}";
 const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
+
+/** `YYYY-MM-DD` exactly — a calendar day, not an instant. */
+const DATE_ONLY_VALUE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isDateOnlyValue(value: unknown): value is string {
+  return typeof value === "string" && DATE_ONLY_VALUE.test(value);
+}
+
+/**
+ * DAY semantics for a date-only value against a timestamp expression:
+ * "is" = within that day, "before"/"after" exclude the whole day,
+ * "on or before"/"on or after" include it. The day is bounded in the
+ * session time zone (`'YYYY-MM-DD'::date` → timestamptz), the same zone a
+ * stored date-only string is cast in, so stored days line up exactly.
+ * Returns null for an operator that has no day meaning (caller falls through).
+ */
+function compileDayCondition(
+  ts: unknown,
+  operator: string,
+  day: string
+): SQL | null {
+  const start = sql`(${day}::date)::timestamptz`;
+  const end = sql`(${day}::date + 1)::timestamptz`;
+  const within = sql`(${ts} >= ${start} AND ${ts} < ${end})`;
+  switch (operator) {
+    case "equals":
+      return within;
+    case "not_equals":
+      return negateIncludingMissing(within);
+    case "greater_than":
+      return sql`(${ts} >= ${end})`;
+    case "greater_than_or_equal":
+      return sql`(${ts} >= ${start})`;
+    case "less_than":
+      return sql`(${ts} < ${start})`;
+    case "less_than_or_equal":
+      return sql`(${ts} < ${end})`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Negation that INCLUDES rows whose value is missing / NULL / not comparable
+ * (Notion / Linear: "is not X" lists the items with no value). Plain SQL
+ * `x != v` is NULL — excluded — for a missing key, which made the JSONB path
+ * disagree with the indexed path's `NOT EXISTS`.
+ */
+function negateIncludingMissing(positive: SQL): SQL {
+  return sql`(NOT COALESCE(${positive}, FALSE))`;
+}
+
+/** The text operand for comparing against `->>` output. */
+function filterText(value: unknown): string {
+  return typeof value === "string" ? value : String(value);
+}
+
+function requiresArray(operator: string, field: string): Error {
+  return new Error(
+    `Filter operator "${operator}" on field "${field}" requires an array value`
+  );
+}
 
 function isNumericFilterValue(value: unknown): boolean {
   if (typeof value === "number") return Number.isFinite(value);

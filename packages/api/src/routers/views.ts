@@ -204,14 +204,55 @@ import {
   validateViewConfig,
   ViewTypeEnum,
   type ViewMetadata,
-  type EntityFilter,
   type SortRule,
   type EntityQuery,
   ViewFiltersSchema,
-  normalizeViewFilter,
+  sanitizeStoredViewFilters,
+  resolveIncomingViewFilters,
+  type DroppedViewFilter,
+  type ViewFilter,
 } from "@synap-core/types";
 
 const logger = createLogger({ module: "views" });
+
+/**
+ * Validate filters a client sends back for a view (a save, or ephemeral
+ * execute filters) against the view's STORED filters: stored rows that
+ * predate the grammar are repaired or dropped (logged + returned), never
+ * allowed to block the call; a NEW filter outside the grammar is BAD_REQUEST.
+ * See `resolveIncomingViewFilters` (`@synap-core/types/views`).
+ */
+function resolveViewFiltersOrThrow(
+  viewId: string,
+  incoming: readonly unknown[],
+  storedFilters: unknown
+): { filters: ViewFilter[]; dropped: DroppedViewFilter[] } {
+  const { filters, dropped, rejected } = resolveIncomingViewFilters(
+    incoming,
+    storedFilters
+  );
+  const [first] = rejected;
+  if (first) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Invalid filter ${JSON.stringify(first.filter)}: ${first.reason}`,
+      cause: rejected,
+    });
+  }
+  warnDroppedFilters(viewId, dropped);
+  return { filters, dropped };
+}
+
+function warnDroppedFilters(
+  viewId: string,
+  dropped: readonly DroppedViewFilter[]
+): void {
+  if (dropped.length === 0) return;
+  logger.warn(
+    { viewId, dropped },
+    "view filters: dropped stored filters that predate the filter grammar"
+  );
+}
 
 /**
  * The ONLY two renderer bindings a view may store.
@@ -1188,8 +1229,11 @@ export const viewsRouter = router({
          * The client holds the full effective set (starting from the stored
          * filters) and sends it; "Save to view" is a separate `views.update`.
          * Scope, lens and access are unchanged: filters only narrow within them.
+         * Validated in the handler against the stored filters
+         * (`resolveViewFiltersOrThrow`), so an old stored row the client
+         * echoes back cannot fail the run.
          */
-        filters: ViewFiltersSchema.optional(),
+        filters: z.array(z.unknown()).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -1245,14 +1289,14 @@ export const viewsRouter = router({
       } = query;
 
       // Ephemeral filters (input) replace the stored ones for this run. Stored
-      // rows predate the zod door, so they are only NORMALISED (legacy `eq` →
-      // `equals`), not re-validated: an unknown operator still reaches the
-      // compiler, which rejects it by name as BAD_REQUEST below.
-      const filters: EntityFilter[] =
-        input.filters ??
-        (Array.isArray(storedFilters)
-          ? storedFilters.map(normalizeViewFilter)
-          : []);
+      // rows predate the zod door: they are REPAIRED into the grammar where
+      // the meaning is unambiguous, and what cannot be repaired is dropped,
+      // logged and returned as `droppedFilters` — one old row never fails
+      // the whole view.
+      const { filters, dropped: droppedFilters } = input.filters
+        ? resolveViewFiltersOrThrow(input.id, input.filters, storedFilters)
+        : sanitizeStoredViewFilters(storedFilters);
+      if (!input.filters) warnDroppedFilters(input.id, droppedFilters);
 
       const conditions: any[] = [];
 
@@ -1487,6 +1531,9 @@ export const viewsRouter = router({
         entities: annotatedEntities,
         relations: fetchedRelations,
         columns: finalColumns,
+        // Filters that did not apply (stored rows outside the grammar). A
+        // dropped filter WIDENS the result, so a surface must say so.
+        droppedFilters,
       };
     }),
 
@@ -1605,8 +1652,10 @@ export const viewsRouter = router({
         // NEW: Consolidated query
         query: z
           .object({
-            // The ONE view-filter grammar; legacy aliases (`eq`…) normalise.
-            filters: ViewFiltersSchema.optional(),
+            // Validated in the handler against the view's STORED filters
+            // (`resolveViewFiltersOrThrow`): the ONE grammar for new filters,
+            // repair-or-drop for stored rows that predate it.
+            filters: z.array(z.unknown()).optional(),
             sorts: z.array(z.any()).optional(),
             search: z.string().optional(),
             limit: z.number().optional(),
@@ -1640,6 +1689,17 @@ export const viewsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
       await assertViewAccess(view, ctx.userId, "write");
+
+      let droppedFilters: DroppedViewFilter[] = [];
+      if (input.query?.filters) {
+        const resolved = resolveViewFiltersOrThrow(
+          input.id,
+          input.query.filters,
+          (view.query as { filters?: unknown } | null)?.filters
+        );
+        input.query.filters = resolved.filters;
+        droppedFilters = resolved.dropped;
+      }
 
       // Workspace Home (metadata.homeScope === 'workspace') is editable only by admin/owner
       const metadata = (view.metadata as Record<string, unknown>) || {};
@@ -1733,6 +1793,8 @@ export const viewsRouter = router({
         status: "updated",
         message: "View updated",
         view: updatedView,
+        // Stored filters the grammar could not repair, removed by this save.
+        droppedFilters,
       };
     }),
 

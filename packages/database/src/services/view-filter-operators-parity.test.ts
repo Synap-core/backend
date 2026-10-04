@@ -24,6 +24,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import {
   ViewFilterCompiler,
   VIEW_FILTER_OPERATORS as MIRROR,
+  VIEW_FILTER_CORE_FIELDS as CORE_FIELDS_MIRROR,
   type EntityFilter,
 } from "./view-filter-compiler.js";
 import * as authored from "../../../types/src/views/filters.js";
@@ -49,6 +50,21 @@ describe("view filter operators — authored grammar ⇔ compiler", () => {
     expect([...MIRROR].sort()).toEqual(
       [...authored.VIEW_FILTER_OPERATORS].sort()
     );
+  });
+
+  it("the compiler's core-field mirror is the authored set, and each compiles", async () => {
+    expect(authored.VIEW_FILTER_CORE_FIELDS.length).toBeGreaterThanOrEqual(5);
+    expect([...CORE_FIELDS_MIRROR].sort()).toEqual(
+      [...authored.VIEW_FILTER_CORE_FIELDS].sort()
+    );
+    for (const field of authored.VIEW_FILTER_CORE_FIELDS) {
+      expect(authored.isViewFilterField(field), field).toBe(true);
+      const compiled = await compiler.compileFilter({
+        field,
+        operator: "is_empty",
+      });
+      expect(compiled, field).not.toBeNull();
+    }
   });
 
   for (const field of ["title", "properties.status"]) {

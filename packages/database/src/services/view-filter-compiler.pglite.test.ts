@@ -72,9 +72,14 @@ describe("ViewFilterCompiler — JSONB fallback, executed", () => {
     [Omit<EntityFilter, "field"> & { key: string }, string[]]
   > = [
     [{ key: "status", operator: "equals", value: "open" }, ["a", "c"]],
-    [{ key: "status", operator: "not_equals", value: "open" }, ["b", "e"]],
+    // Negations INCLUDE rows where the value is missing (d) — Notion/Linear
+    // semantics, and what the indexed path's NOT EXISTS already returned.
+    [{ key: "status", operator: "not_equals", value: "open" }, ["b", "d", "e"]],
     [{ key: "tag", operator: "contains", value: "alp" }, ["a"]],
-    [{ key: "tag", operator: "not_contains", value: "alp" }, ["b"]],
+    [
+      { key: "tag", operator: "not_contains", value: "alp" },
+      ["b", "c", "d", "e"],
+    ],
     [{ key: "tag", operator: "is_empty" }, ["c", "d", "e"]],
     [{ key: "tag", operator: "is_not_empty" }, ["a", "b"]],
     [
@@ -84,7 +89,7 @@ describe("ViewFilterCompiler — JSONB fallback, executed", () => {
     [{ key: "status", operator: "in", value: ["done"] }, ["b"]],
     [{ key: "n", operator: "in", value: [10, 100] }, ["a", "e"]],
     [{ key: "status", operator: "in", value: [] }, []],
-    [{ key: "status", operator: "not_in", value: ["open"] }, ["b", "e"]],
+    [{ key: "status", operator: "not_in", value: ["open"] }, ["b", "d", "e"]],
     [
       { key: "status", operator: "not_in", value: [] },
       ["a", "b", "c", "d", "e"],
@@ -111,7 +116,7 @@ describe("ViewFilterCompiler — JSONB fallback, executed", () => {
       value: ["open", "done"],
     });
     const { sql: text, params } = dialect.sqlToQuery(compiled.sql);
-    expect(text).toBe(`("entities"."properties"->>$1 IN ($2, $3))`);
+    expect(text).toBe(`(("entities"."properties"->>$1) IN ($2, $3))`);
     expect(params).toEqual(["status", "open", "done"]);
     expect(text).not.toMatch(/ANY/i);
   });

@@ -7,10 +7,40 @@ import {
   getWorkspaceMembership,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
+import { sanitizeStoredViewFilters } from "@synap-core/types";
 import { viewsRouter } from "../../views.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+
+const logger = createLogger({ module: "proposal-executor-view" });
+
+/**
+ * A pending proposal's `query.filters` were authored before `views.create`
+ * validated them. Repair them with the SAME stored-filter normaliser
+ * `views.execute` / `views.update` use, and drop (logged) what cannot be
+ * repaired — so approving an old proposal still materializes the view the
+ * reviewer saw, instead of failing at the create door.
+ */
+function normaliseProposalViewQuery(
+  proposalId: string,
+  query: unknown
+): Record<string, unknown> | undefined {
+  if (!query || typeof query !== "object" || Array.isArray(query)) {
+    return undefined;
+  }
+  const q = query as Record<string, unknown>;
+  if (q.filters === undefined) return q;
+  const { filters, dropped } = sanitizeStoredViewFilters(q.filters);
+  if (dropped.length > 0) {
+    logger.warn(
+      { proposalId, dropped },
+      "view/create approval: dropped proposal filters outside the filter grammar"
+    );
+  }
+  return { ...q, filters };
+}
 
 function isUniqueViolation(err: unknown): boolean {
   let cur: unknown = err;
@@ -109,7 +139,7 @@ export function registerViewExecutors(): void {
         scopeProfileIds: innerData.scopeProfileIds as string[] | undefined,
         scopeMode: innerData.scopeMode as "explicit" | "observed" | undefined,
         description: innerData.description as string | undefined,
-        query: innerData.query as Record<string, unknown> | undefined,
+        query: normaliseProposalViewQuery(input.proposalId, innerData.query),
         config: innerData.config as Record<string, unknown> | undefined,
         embeddedViewIds: innerData.embeddedViewIds as string[] | undefined,
         metadata: innerData.metadata as Record<string, unknown> | undefined,

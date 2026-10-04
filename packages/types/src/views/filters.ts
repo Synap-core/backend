@@ -216,6 +216,31 @@ export function normalizeViewFilter<T>(filter: T): T {
 const FilterScalarSchema = z.union([z.string(), z.number(), z.boolean()]);
 
 /**
+ * The entity columns a filter may name directly. Anything else is a property
+ * and must be spelled `properties.<slug>` — a bare `status` names nothing the
+ * compiler can read, and used to compile to "no condition" (every row back,
+ * looking filtered). MIRRORED by the compiler's `VIEW_FILTER_CORE_FIELDS`
+ * (same parity tripwire as the operators).
+ */
+export const VIEW_FILTER_CORE_FIELDS = [
+  "title",
+  "preview",
+  "type",
+  "createdAt",
+  "updatedAt",
+] as const;
+
+const PROPERTY_FIELD = /^properties\.[^.]+$/;
+
+/** A field the compiler can evaluate: a core column or `properties.<slug>`. */
+export function isViewFilterField(field: string): boolean {
+  return (
+    (VIEW_FILTER_CORE_FIELDS as readonly string[]).includes(field) ||
+    PROPERTY_FIELD.test(field)
+  );
+}
+
+/**
  * One view filter, as stored in `views.query.filters` and sent to
  * `views.execute`. Legacy operator aliases are normalised BEFORE validation;
  * an unknown operator, or a value of the wrong shape for its operator, is
@@ -228,7 +253,9 @@ export const ViewFilterSchema = z.preprocess(
   normalizeViewFilter,
   z
     .object({
-      field: z.string().min(1),
+      field: z.string().refine(isViewFilterField, {
+        message: `Filter field must be one of ${VIEW_FILTER_CORE_FIELDS.join(", ")} or "properties.<slug>"`,
+      }),
       operator: z.enum(VIEW_FILTER_OPERATORS),
       value: z.unknown().optional(),
     })
@@ -257,3 +284,154 @@ export const ViewFilterSchema = z.preprocess(
 export const ViewFiltersSchema = z.array(ViewFilterSchema);
 
 export type ViewFilter = z.infer<typeof ViewFilterSchema>;
+
+// ─── Stored-filter repair (legacy rows) ─────────────────────────────────────
+
+/** A stored filter that could not be repaired into the grammar, and why. */
+export interface DroppedViewFilter {
+  filter: unknown;
+  reason: string;
+}
+
+/**
+ * Rewrite ONE stored filter from a legacy dialect into the grammar. Only
+ * repairs whose meaning is unambiguous, each a dialect that has been written:
+ *   - operator aliases (`eq`, `is`, `gte`, `notIn` …);
+ *   - `metadata.<key>` → `properties.<key>` (the table executor read both
+ *     from the properties bag);
+ *   - `in` / `not_in` with one scalar → a one-item list;
+ *   - `equals` / `not_equals` with a list → that scalar (one item) or
+ *     `in` / `not_in` (several);
+ *   - the table executor's inclusive `between [a, b]` → `>= a` AND `<= b`.
+ * Returns the repaired filter(s); the caller still validates them.
+ */
+export function repairLegacyViewFilter(raw: unknown): unknown[] {
+  const normalised = normalizeViewFilter(raw);
+  if (
+    normalised === null ||
+    typeof normalised !== "object" ||
+    Array.isArray(normalised)
+  ) {
+    return [normalised];
+  }
+  const filter = { ...(normalised as Record<string, unknown>) };
+  if (
+    typeof filter.field === "string" &&
+    filter.field.startsWith("metadata.")
+  ) {
+    filter.field = `properties.${filter.field.slice("metadata.".length)}`;
+  }
+  const { operator, value } = filter;
+  if (
+    (operator === "in" || operator === "not_in") &&
+    FilterScalarSchema.safeParse(value).success
+  ) {
+    return [{ ...filter, value: [value] }];
+  }
+  if (
+    (operator === "equals" || operator === "not_equals") &&
+    Array.isArray(value)
+  ) {
+    return value.length === 1
+      ? [{ ...filter, value: value[0] }]
+      : [{ ...filter, operator: operator === "equals" ? "in" : "not_in" }];
+  }
+  if (operator === "between" && Array.isArray(value) && value.length === 2) {
+    return [
+      { ...filter, operator: "greater_than_or_equal", value: value[0] },
+      { ...filter, operator: "less_than_or_equal", value: value[1] },
+    ];
+  }
+  return [filter];
+}
+
+function describeIssues(error: z.ZodError): string {
+  return error.issues.map((issue) => issue.message).join("; ");
+}
+
+/**
+ * LENIENT read of a stored filter list: repair what is repairable, validate
+ * the result, and DROP (with the reason) what still is not in the grammar —
+ * never fail the whole set over one old row. The caller must surface
+ * `dropped` (log + response): a dropped filter widens the result.
+ */
+export function sanitizeStoredViewFilters(raw: unknown): {
+  filters: ViewFilter[];
+  dropped: DroppedViewFilter[];
+} {
+  const filters: ViewFilter[] = [];
+  const dropped: DroppedViewFilter[] = [];
+  if (raw === undefined || raw === null) return { filters, dropped };
+  if (!Array.isArray(raw)) {
+    return {
+      filters,
+      dropped: [{ filter: raw, reason: "Stored filters are not a list" }],
+    };
+  }
+  for (const stored of raw) {
+    for (const candidate of repairLegacyViewFilter(stored)) {
+      const parsed = ViewFilterSchema.safeParse(candidate);
+      if (parsed.success) filters.push(parsed.data);
+      else
+        dropped.push({ filter: stored, reason: describeIssues(parsed.error) });
+    }
+  }
+  return { filters, dropped };
+}
+
+/** Key-order-independent identity of a filter (stored JSONB reorders keys). */
+function filterIdentity(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0
+          )
+        )
+      : v
+  );
+}
+
+/**
+ * Validate an INCOMING filter list (a `views.update` save, or `views.execute`
+ * ephemeral filters) against the view's STORED filters. A client holds the
+ * full effective set — stored rows included — and sends it back, so one old
+ * stored row the grammar now refuses would otherwise block every edit and
+ * every save of that view:
+ *   - a filter valid in the grammar is kept;
+ *   - an invalid filter that IS one of the view's stored rows is repaired
+ *     (`sanitizeStoredViewFilters` rules) or, if unrepairable, dropped and
+ *     reported — it predates the door, the user did not just author it;
+ *   - an invalid filter that is NOT stored is `rejected`: new input must be
+ *     in the grammar (the caller answers BAD_REQUEST).
+ */
+export function resolveIncomingViewFilters(
+  incoming: readonly unknown[],
+  stored: unknown
+): {
+  filters: ViewFilter[];
+  dropped: DroppedViewFilter[];
+  rejected: DroppedViewFilter[];
+} {
+  const storedIds = new Set(
+    Array.isArray(stored) ? stored.map(filterIdentity) : []
+  );
+  const filters: ViewFilter[] = [];
+  const dropped: DroppedViewFilter[] = [];
+  const rejected: DroppedViewFilter[] = [];
+  for (const filter of incoming) {
+    const parsed = ViewFilterSchema.safeParse(filter);
+    if (parsed.success) {
+      filters.push(parsed.data);
+      continue;
+    }
+    if (storedIds.has(filterIdentity(filter))) {
+      const repaired = sanitizeStoredViewFilters([filter]);
+      filters.push(...repaired.filters);
+      dropped.push(...repaired.dropped);
+      continue;
+    }
+    rejected.push({ filter, reason: describeIssues(parsed.error) });
+  }
+  return { filters, dropped, rejected };
+}
