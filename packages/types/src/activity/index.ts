@@ -23,7 +23,7 @@
  * never a sentence.
  */
 
-import { resolveActionLabel } from "../vocabulary/index.js";
+import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
 
 export * from "./heat.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
@@ -162,6 +162,18 @@ export type ActivityActor =
   | { kind: "agent"; id: string | null; name: string | null }
   | { kind: "human"; id: string; name: string | null; isViewer: boolean }
   | { kind: "system"; id: string | null; name: string | null };
+
+/**
+ * Who acted, as a short name — the ONE spelling every "what happened" line
+ * uses (web kit `ActivityRow`, relay `activity-row-model`). An agent the pod
+ * could not name is "Agent", never a guess.
+ */
+export function activityActorName(actor: ActivityActor): string {
+  if (actor.kind === "human")
+    return actor.isViewer ? "You" : (actor.name ?? resolveObjectNoun("user"));
+  if (actor.kind === "agent") return actor.name ?? resolveObjectNoun("agent");
+  return actor.name ?? resolveObjectNoun("automation");
+}
 
 /**
  * Who the list is filtered to: everyone, any agent, the viewer's own acts, or

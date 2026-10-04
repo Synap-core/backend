@@ -11,7 +11,6 @@ import { resolveUnitState } from "../units/state.js";
 import {
   batchHappenedItems,
   happenedItems,
-  happenedLedgerRows,
   isHappenedDataLine,
   lensBannerOfStatus,
   lensOutputOfSignal,
@@ -115,21 +114,6 @@ describe("lensRowOfLiveSignal", () => {
       })
     );
     expect(row.occurredAt).toBe("2026-10-04T09:59:00.000Z");
-  });
-});
-
-describe("happenedLedgerRows", () => {
-  it("keeps ledger rows in order and leaves data events out", () => {
-    const rows = happenedLedgerRows([
-      sig({ id: "a", kind: "activity", activity: LEDGER }),
-      sig({ id: "e", kind: "event", activity: null }),
-      sig({
-        id: "b",
-        kind: "activity",
-        activity: { ...LEDGER, id: "proposal:p2" },
-      }),
-    ]);
-    expect(rows.map((r) => r.id)).toEqual(["proposal:p1", "proposal:p2"]);
   });
 });
 

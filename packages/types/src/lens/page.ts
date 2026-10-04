@@ -7,7 +7,7 @@
  * module classifies NOTHING. It only shapes each class through the rules that
  * already own it:
  *   - Blocking / Proposed → `needsYouRows` (a session owing several things is
- *     ONE row) → `lensRowOfNeedsYou` ({@link lensRowsOfClass});
+ *     ONE row) → `lensRowOfNeedsYou` (`lensItemsOfClass`, `page-model.ts`);
  *   - Happening           → `lensRowOfHappening` (the pod decided "working
  *     now" with `isSessionWorkingNow`) ({@link lensRowOfLiveSignal});
  *   - Produced            → THE produced card ({@link lensOutputOfSignal});
@@ -20,14 +20,11 @@
  */
 
 import type { ActivityRow } from "../activity/index.js";
-import { needsYouRows } from "../needs-you/index.js";
 import { lensStatusBanner, type LensBanner } from "./header.js";
 import {
   type HappenedItem,
   lensRowOfHappening,
-  lensRowOfNeedsYou,
   type LensDoor,
-  type LensNeedsYouSignal,
   type LensOutput,
   type LensRow,
 } from "./rows.js";
@@ -115,34 +112,6 @@ export function lensClassReadable(
 }
 
 /**
- * Blocking or Proposed rows, grouped by the ONE needs-you rule and shaped as
- * lens rows in the pod's order (recent, then older — the page is already
- * capped, so there is no fold to draw).
- *
- * A Proposed NOTIFICATION (an AI suggestion) is optional reading: it never
- * wears the needs-you mark and never earns a verb (its act is to open it, or
- * dismiss it). Its mark is `not_started` — the same quiet state a draft
- * wears — so the lane reads as "offered", never as "owed".
- */
-export function lensRowsOfClass<T extends LensNeedsYouSignal>(
-  signals: readonly T[],
-  cls: "blocking" | "proposed"
-): LensRow[] {
-  const grouped = needsYouRows(signals);
-  return [...grouped.recent, ...grouped.older].map((r) => {
-    const row = lensRowOfNeedsYou(r, cls);
-    if (
-      cls === "proposed" &&
-      r.kind === "item" &&
-      r.signal.kind === "notification"
-    ) {
-      return { ...row, state: { everStarted: false }, verb: null };
-    }
-    return row;
-  });
-}
-
-/**
  * A `live-session` signal as a Happening row: elapsed from the in-flight
  * turn's start, else from the newest activity. `nowLine` is the host's
  * `deriveRunActivity` line when it has one.
@@ -181,19 +150,6 @@ export function lensOutputOfSignal(signal: LensPageSignal): LensOutput | null {
     byAgent: landed.actor?.kind === "agent",
     expected: false,
   };
-}
-
-/**
- * The Happened class as ledger rows, in order, for `batchHappened` — the
- * ledger alone (a surface that draws no data line). A data EVENT carries no
- * ledger row and is left out.
- */
-export function happenedLedgerRows(
-  signals: readonly LensPageSignal[]
-): ActivityRow[] {
-  const out: ActivityRow[] = [];
-  for (const s of signals) if (s.activity) out.push(s.activity);
-  return out;
 }
 
 /**
