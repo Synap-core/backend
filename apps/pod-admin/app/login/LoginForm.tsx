@@ -35,6 +35,7 @@ import {
   fetchSelfServiceFlow,
   FLOW_RESET_ERROR_IDS,
   mergeHiddenValues,
+  pageForFlow,
   submitLoginFlow,
   type KratosFlow,
 } from "../../lib/kratos-flow";
@@ -48,9 +49,15 @@ import {
 interface LoginFormProps {
   returnTo: string;
   initialFlowId: string | null;
+  /** Re-authenticate an existing session (Kratos `refresh=true`). */
+  refresh?: boolean;
 }
 
-export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
+export function LoginForm({
+  returnTo,
+  initialFlowId,
+  refresh = false,
+}: LoginFormProps) {
   const router = useRouter();
   const [flow, setFlow] = useState<KratosFlow | null>(null);
   const [flowKind, setFlowKind] = useState<SelfServiceFlowKind>("login");
@@ -91,12 +98,18 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
           // A refused Cloud first sign-in returns here with a REGISTRATION
           // flow id; fetchSelfServiceFlow resolves either kind.
           const r = await fetchSelfServiceFlow(initialFlowId);
+          // A recovery / settings id (older kratos.yml) belongs on its own page.
+          const elsewhere = pageForFlow(r.kind, initialFlowId);
+          if (elsewhere) {
+            if (!cancelled) router.replace(elsewhere);
+            return;
+          }
           loaded = r.flow;
-          kind = r.kind;
+          kind = r.kind as SelfServiceFlowKind;
         } else {
           // Return the browser HERE after a federated (oidc) round-trip — this
           // page's mount then detects the fresh session and routes on.
-          const r = await createLoginFlow(window.location.href);
+          const r = await createLoginFlow(window.location.href, { refresh });
           if (r.existingSession) {
             if (!cancelled) goReturn();
             return;
@@ -123,7 +136,7 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
     return () => {
       cancelled = true;
     };
-  }, [initialFlowId, goReturn]);
+  }, [initialFlowId, goReturn, refresh, router]);
 
   const submitFlow = useCallback(
     async (submittedValues: Record<string, string>) => {
@@ -162,7 +175,9 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
             r.structuralError.id &&
             FLOW_RESET_ERROR_IDS.has(r.structuralError.id)
           ) {
-            const fresh = await createLoginFlow(window.location.href);
+            const fresh = await createLoginFlow(window.location.href, {
+              refresh,
+            });
             if (fresh.existingSession) {
               goReturn();
               return;
@@ -183,7 +198,7 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
         setSubmitting(false);
       }
     },
-    [flow, goReturn]
+    [flow, goReturn, refresh]
   );
 
   const classified = useMemo<SignInState>(
@@ -244,7 +259,7 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
           </span>
 
           {loading ? (
-            <SignInHeader />
+            <SignInHeader refresh={refresh} />
           ) : signIn.kind === "access_required" ? (
             <RefusalPanel
               icon={<Lock className="h-5 w-5" strokeWidth={2} />}
@@ -280,7 +295,7 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
               onRetry={backToSignIn}
             />
           ) : (
-            <SignInHeader />
+            <SignInHeader refresh={refresh} />
           )}
 
           {loading ? (
@@ -322,6 +337,16 @@ export function LoginForm({ returnTo, initialFlowId }: LoginFormProps) {
               onRetry={() => router.refresh()}
             />
           )}
+
+          {/* The one door to every way back in that works on this pod. */}
+          {!loading && !refresh ? (
+            <a
+              href="/recovery"
+              className="self-start text-[12.5px] text-foreground/60 underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Can&apos;t sign in?
+            </a>
+          ) : null}
         </CardBody>
       </Card>
     </main>
@@ -342,14 +367,16 @@ interface FlowFieldsProps {
   linking: { email: string | null } | null;
 }
 
-function SignInHeader() {
+function SignInHeader({ refresh = false }: { refresh?: boolean }) {
   return (
     <div className="flex flex-col gap-1.5">
       <h1 className="font-heading text-[20px] font-medium tracking-tight text-foreground">
-        Sign in to this Pod
+        {refresh ? "Confirm it's you" : "Sign in to this Pod"}
       </h1>
       <p className="text-[13.5px] leading-relaxed text-foreground/65">
-        Your session is scoped to this Pod and this device.
+        {refresh
+          ? "Sign in again to change your security settings."
+          : "Your session is scoped to this Pod and this device."}
       </p>
     </div>
   );

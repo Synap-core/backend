@@ -18,7 +18,7 @@ import { LoginForm } from "./LoginForm";
 export const dynamic = "force-dynamic";
 
 interface LoginPageProps {
-  searchParams: Promise<{ return?: string; flow?: string }>;
+  searchParams: Promise<{ return?: string; flow?: string; refresh?: string }>;
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
@@ -26,12 +26,21 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const returnTo = safeReturnTo(sp.return);
 
   const cookie = (await headers()).get("cookie") ?? "";
+  // `?refresh=1`: a signed-in user re-confirms it's them (settings needs a
+  // sign-in inside Kratos' privileged window) — do not bounce them on.
+  const refresh = sp.refresh === "1";
   const identity = await whoamiFromCookie(cookie);
-  if (identity) {
+  if (identity && !refresh) {
     redirect(returnTo);
   }
 
-  return <LoginForm returnTo={returnTo} initialFlowId={sp.flow ?? null} />;
+  return (
+    <LoginForm
+      returnTo={returnTo}
+      initialFlowId={sp.flow ?? null}
+      refresh={refresh}
+    />
+  );
 }
 
 /**

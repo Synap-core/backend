@@ -38,6 +38,34 @@ export function isCloudTrustMode(value: unknown): value is CloudTrustMode {
   );
 }
 
+/**
+ * The ONE label set for Cloud trust (pod-admin, Relay, the desktop app):
+ * a short label and the consequence, in the order a picker shows them.
+ */
+export const CLOUD_TRUST_OPTIONS: ReadonlyArray<{
+  mode: CloudTrustMode;
+  label: string;
+  detail: string;
+}> = [
+  {
+    mode: "off",
+    label: "Off",
+    detail: "Synap Cloud can't sign anyone in to this pod.",
+  },
+  {
+    mode: "sign_in",
+    label: "Sign in",
+    detail:
+      "Synap Cloud signs you in. Changing a password or recovery codes needs this pod's own sign-in.",
+  },
+  {
+    mode: "sign_in_recovery",
+    label: "Sign in and recover",
+    detail:
+      "Synap Cloud can also recover accounts here. Whoever controls your Synap Cloud account can take over this one.",
+  },
+];
+
 /** Ten codes per batch; regenerating replaces the whole batch. */
 export const RECOVERY_CODE_COUNT = 10;
 /** 16 Crockford base32 symbols = 80 bits of entropy per code. */

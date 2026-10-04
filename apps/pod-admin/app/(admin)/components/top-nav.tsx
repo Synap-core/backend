@@ -22,10 +22,18 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@heroui/react";
-import { ExternalLink, LogOut, RefreshCw, Search } from "lucide-react";
+import {
+  ExternalLink,
+  LogOut,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import { openIn, type AccountPage } from "../../../lib/open-in";
+import { useRecoveryCodesState } from "./recovery-codes-nudge";
 
 /** The account surfaces a pod cannot host itself. Order is most-reached-first. */
 const ACCOUNT_LINKS: { page: AccountPage; label: string }[] = [
@@ -57,6 +65,9 @@ export function TopNav({
   onOpenSearch,
 }: TopNavProps) {
   const initials = (operatorEmail ?? "?").charAt(0).toUpperCase();
+  // R3: a persistent ⚠ until recovery codes are saved (the Overview card is
+  // skippable; this mark is not).
+  const codesMissing = useRecoveryCodesState() === "not_set";
   const refreshedLabel = useRelativeTime(lastRefreshed ?? null);
 
   const handleSignOut = async () => {
@@ -169,9 +180,19 @@ export function TopNav({
               variant="light"
               size="sm"
               radius="full"
-              aria-label="User menu"
-              className="ml-1 p-0"
+              aria-label={
+                codesMissing
+                  ? "User menu — recovery codes not saved"
+                  : "User menu"
+              }
+              className="relative ml-1 p-0"
             >
+              {codesMissing ? (
+                <span
+                  aria-hidden
+                  className="absolute right-0 top-0 z-10 h-2 w-2 rounded-full bg-warning ring-2 ring-background"
+                />
+              ) : null}
               <Avatar
                 size="sm"
                 showFallback
@@ -199,6 +220,22 @@ export function TopNav({
                   page: `openIn` knew these destinations, and nothing linked to
                   them. "Handed off" only counts if a door exists. These live on
                   the landing site because a pod cannot host its own billing. */}
+              <a
+                href="/settings/security"
+                className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60"
+              >
+                Security
+                {codesMissing ? (
+                  <span className="flex items-center gap-1 text-[11px] text-warning">
+                    <ShieldAlert className="h-3.5 w-3.5" />
+                    Save recovery codes
+                  </span>
+                ) : (
+                  <ShieldCheck className="h-3.5 w-3.5 text-foreground/40" />
+                )}
+              </a>
+              <div className="h-px bg-foreground/[0.05]" />
+
               {ACCOUNT_LINKS.map(({ page, label }) => (
                 <a
                   key={page}

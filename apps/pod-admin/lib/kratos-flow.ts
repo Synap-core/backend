@@ -6,9 +6,10 @@
  * parent domain, so `credentials: "include"` carries it across the subdomain
  * boundary. Kratos must be configured to allow the pod-admin origin in CORS.
  *
- * Scope is intentionally minimal: only what the login page needs (flow create,
- * flow fetch, flow submit). Recovery / settings / verification are not handled
- * here — those still live in the pod's bootstrap surface.
+ * Covers the flows pod-admin renders: login (`/login`), recovery
+ * (`/recovery`) and settings (`/settings/security`), plus the signed-in
+ * user's own session list. Verification is off on pods until the courier
+ * delivers mail.
  */
 
 import {
@@ -103,6 +104,8 @@ export interface KratosUi {
 export interface KratosFlow {
   id: string;
   type?: string;
+  /** Recovery: choose_method | sent_email | passed_challenge. Settings: show_form | success. */
+  state?: string;
   ui: KratosUi;
   return_to?: string;
 }
@@ -176,7 +179,8 @@ export async function whoami(): Promise<KratosSession | null> {
 // ---------------------------------------------------------------------------
 
 export async function createLoginFlow(
-  returnTo?: string
+  returnTo?: string,
+  opts: { refresh?: boolean } = {}
 ): Promise<CreateLoginFlowResult> {
   // `return_to` brings the browser back here after a federated (oidc) round-trip
   // through the Control Plane. It must be an allowed Kratos return URL — the
@@ -184,6 +188,10 @@ export async function createLoginFlow(
   // for a plain password login, so it is always safe to pass.
   const url = new URL(`${kratosPublic()}/self-service/login/browser`);
   if (returnTo) url.searchParams.set("return_to", returnTo);
+  // `refresh=true`: re-authenticate an EXISTING session (settings needs a
+  // sign-in within the privileged window) instead of refusing with
+  // `session_already_available`.
+  if (opts.refresh) url.searchParams.set("refresh", "true");
   const res = await fetch(url.toString(), {
     credentials: "include",
     headers: { Accept: "application/json" },
@@ -217,64 +225,261 @@ export async function createLoginFlow(
   );
 }
 
+/** Every self-service flow kind a `?flow=` id can belong to. */
+export type AnySelfServiceFlowKind =
+  | "login"
+  | "registration"
+  | "recovery"
+  | "settings";
+
 /**
- * Fetch the flow behind a `?flow=` id. Kratos points EVERY self-service ui_url
- * at pod-admin's /login (see `generate_kratos_config` in `synap`), so a refused
- * Synap Cloud first sign-in lands here with a REGISTRATION flow id — the login
- * endpoint answers 404 for it. Only a 404 falls through to the registration
- * endpoint; any other failure is reported as-is.
+ * Fetch the flow behind a `?flow=` id. Kratos sends recovery and settings
+ * flows to their own pages, but a pod whose kratos.yml predates those pages
+ * points EVERY self-service ui_url at /login — and a refused Synap Cloud first
+ * sign-in lands here with a REGISTRATION flow id. Each endpoint answers 404 for
+ * a flow of another kind, so ONLY a 404 falls through to the next kind (login →
+ * registration → recovery → settings); any other failure is reported as-is.
  */
 export async function fetchSelfServiceFlow(
   flowId: string
-): Promise<{ flow: KratosFlow; kind: "login" | "registration" }> {
-  const loginRes = await fetch(
-    `${kratosPublic()}/self-service/login/flows?id=${encodeURIComponent(flowId)}`,
+): Promise<{ flow: KratosFlow; kind: AnySelfServiceFlowKind }> {
+  const kinds: AnySelfServiceFlowKind[] = [
+    "login",
+    "registration",
+    "recovery",
+    "settings",
+  ];
+  for (const kind of kinds) {
+    const res = await fetch(
+      `${kratosPublic()}/self-service/${kind}/flows?id=${encodeURIComponent(flowId)}`,
+      { credentials: "include", headers: { Accept: "application/json" } }
+    );
+    if (res.ok) {
+      return {
+        kind,
+        flow: await readJsonResponse<KratosFlow>(res, UNEXPECTED_RESPONSE),
+      };
+    }
+    if (res.status !== 404) {
+      let body: { error?: { message?: string } } = {};
+      try {
+        body = (await res.json()) as typeof body;
+      } catch {
+        /* not JSON */
+      }
+      throw new Error(
+        body.error?.message ??
+          `${kind === "login" ? "Login" : "Sign-in"} flow ${flowId} could not be loaded (${res.status})`
+      );
+    }
+  }
+  throw new Error(`Sign-in flow ${flowId} not found (404)`);
+}
+
+/**
+ * Where a non-login flow id belongs. /login receives recovery and settings ids
+ * from a pod whose kratos.yml predates /recovery and /settings/security; the
+ * login page forwards them instead of rendering a login form over them.
+ */
+export function pageForFlow(
+  kind: AnySelfServiceFlowKind,
+  flowId: string
+): string | null {
+  const id = encodeURIComponent(flowId);
+  if (kind === "recovery") return `/recovery?flow=${id}`;
+  if (kind === "settings") return `/settings/security?flow=${id}`;
+  return null;
+}
+
+const UNEXPECTED_RESPONSE =
+  "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses.";
+
+/** Fetch a flow of a KNOWN kind (the page already knows which one it renders). */
+export async function fetchFlow(
+  kind: "recovery" | "settings",
+  flowId: string
+): Promise<KratosFlow> {
+  const res = await fetch(
+    `${kratosPublic()}/self-service/${kind}/flows?id=${encodeURIComponent(flowId)}`,
     { credentials: "include", headers: { Accept: "application/json" } }
   );
-  if (loginRes.ok) {
+  if (res.ok) return readJsonResponse<KratosFlow>(res, UNEXPECTED_RESPONSE);
+  let body: { error?: { id?: string; message?: string } } = {};
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    /* not JSON */
+  }
+  throw new FlowLoadError(
+    body.error?.message ?? `This ${kind} link could not be loaded (${res.status})`,
+    res.status,
+    body.error?.id
+  );
+}
+
+export class FlowLoadError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly id?: string
+  ) {
+    super(message);
+  }
+}
+
+export type CreateFlowResult =
+  | { flow: KratosFlow }
+  | { existingSession: true }
+  | { signInRequired: true };
+
+/**
+ * Start a recovery or settings BROWSER flow. Recovery refuses while signed in
+ * (`session_already_available`); settings needs a session (401).
+ */
+export async function createBrowserFlow(
+  kind: "recovery" | "settings",
+  returnTo?: string
+): Promise<CreateFlowResult> {
+  const url = new URL(`${kratosPublic()}/self-service/${kind}/browser`);
+  if (returnTo) url.searchParams.set("return_to", returnTo);
+  const res = await fetch(url.toString(), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (res.ok) {
+    return { flow: await readJsonResponse<KratosFlow>(res, UNEXPECTED_RESPONSE) };
+  }
+  let body: { error?: { id?: string; message?: string; reason?: string } } = {};
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    /* not JSON */
+  }
+  if (body.error?.id === "session_already_available") {
+    return { existingSession: true };
+  }
+  if (res.status === 401 || body.error?.id === "session_inactive") {
+    return { signInRequired: true };
+  }
+  throw new Error(
+    body.error?.message
+      ? `${body.error.message}${body.error.reason ? `: ${body.error.reason}` : ""}`
+      : `Failed to start ${kind} (${res.status})`
+  );
+}
+
+export type SubmitFlowResult =
+  | { kind: "flow"; flow: KratosFlow }
+  | { kind: "session"; session: KratosSession }
+  | { kind: "redirect"; to: string }
+  /** Settings needs a recent sign-in (Kratos `session_refresh_required`). */
+  | { kind: "refresh_required" }
+  | {
+      kind: "error";
+      error: { id?: string; code?: number; message?: string; reason?: string };
+    };
+
+/**
+ * Submit any self-service flow and classify the answer. Refresh-required is
+ * checked BEFORE following `redirect_browser_to`: Kratos points that redirect
+ * at a refresh login on /login, which a signed-in browser would bounce off.
+ */
+export async function submitSelfServiceFlow(
+  flow: KratosFlow,
+  body: Record<string, unknown>
+): Promise<SubmitFlowResult> {
+  const action = resolveActionUrl(flow.ui.action);
+  const method = (flow.ui.method || "POST").toUpperCase();
+  const res = await fetch(action, {
+    method,
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const isJson = isJsonResponse(res);
+  let data: unknown = null;
+  if (isJson) {
+    try {
+      data = await res.json();
+    } catch {
+      /* ignore */
+    }
+  }
+  const d = (typeof data === "object" && data !== null ? data : {}) as {
+    session?: KratosSession;
+    redirect_browser_to?: string;
+    ui?: unknown;
+    error?: { id?: string; code?: number; message?: string; reason?: string };
+  };
+
+  if (res.ok && d.session) return { kind: "session", session: d.session };
+  if (d.error?.id === "session_refresh_required") {
+    return { kind: "refresh_required" };
+  }
+  // Federated (oidc) submit, and a completed recovery code, answer HTTP 422
+  // `browser_location_change_required` with the target in
+  // `redirect_browser_to` (on some builds inside `error.reason`).
+  let redirect = d.redirect_browser_to;
+  if (!redirect && d.error?.reason) {
+    const m = d.error.reason.match(/https?:\/\/\S+/);
+    if (m) redirect = m[0];
+  }
+  if (redirect) return { kind: "redirect", to: redirect };
+  if (typeof d.ui === "object" && d.ui !== null) {
+    return { kind: "flow", flow: data as KratosFlow };
+  }
+  if (d.error) {
     return {
-      kind: "login",
-      flow: await readJsonResponse<KratosFlow>(
-        loginRes,
-        "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
-      ),
+      kind: "error",
+      error: {
+        id: d.error.id,
+        code: d.error.code ?? res.status,
+        message: d.error.message ?? `Request failed (${res.status})`,
+        reason: d.error.reason,
+      },
     };
   }
-  if (loginRes.status !== 404) {
-    let body: { error?: { message?: string } } = {};
-    try {
-      body = (await loginRes.json()) as typeof body;
-    } catch {
-      /* not JSON */
-    }
-    throw new Error(
-      body.error?.message ??
-        `Login flow ${flowId} could not be loaded (${loginRes.status})`
-    );
+  throw new Error(`Request failed (${res.status})`);
+}
+
+// ---------------------------------------------------------------------------
+// The signed-in user's own sessions (Kratos public API)
+// ---------------------------------------------------------------------------
+
+export interface KratosSessionListItem {
+  id: string;
+  authenticated_at?: string;
+  devices?: Array<{ user_agent?: string; location?: string }>;
+}
+
+/** Your OTHER active sessions (Kratos `GET /sessions` excludes the current one). Throws on failure. */
+export async function listOtherSessions(): Promise<KratosSessionListItem[]> {
+  const res = await fetch(`${kratosPublic()}/sessions`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Could not list sessions (${res.status})`);
+  return readJsonResponse<KratosSessionListItem[]>(res, UNEXPECTED_RESPONSE);
+}
+
+/** Sign out every OTHER session of yours (Kratos `DELETE /sessions`). Returns how many. */
+export async function revokeOtherSessions(): Promise<number> {
+  const res = await fetch(`${kratosPublic()}/sessions`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Could not sign out other devices (${res.status})`);
+  try {
+    const body = (await res.json()) as { count?: number };
+    return typeof body.count === "number" ? body.count : 0;
+  } catch {
+    return 0;
   }
-  const regRes = await fetch(
-    `${kratosPublic()}/self-service/registration/flows?id=${encodeURIComponent(flowId)}`,
-    { credentials: "include", headers: { Accept: "application/json" } }
-  );
-  if (!regRes.ok) {
-    let body: { error?: { message?: string } } = {};
-    try {
-      body = (await regRes.json()) as typeof body;
-    } catch {
-      /* not JSON */
-    }
-    throw new Error(
-      body.error?.message ??
-        `Sign-in flow ${flowId} not found (${regRes.status})`
-    );
-  }
-  return {
-    kind: "registration",
-    flow: await readJsonResponse<KratosFlow>(
-      regRes,
-      "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
-    ),
-  };
 }
 
 export async function submitLoginFlow(

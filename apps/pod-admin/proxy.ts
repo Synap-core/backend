@@ -37,8 +37,9 @@ export const config = {
      * - favicon, robots, etc.
      * - the /login and /forbidden pages themselves (otherwise the
      *   redirect target would loop through the auth check)
+     * - /recovery — "Can't sign in?" is read by someone who is signed out
      */
-    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|login|forbidden|setup|invite).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|login|recovery|forbidden|setup|invite).*)",
   ],
 };
 
@@ -98,6 +99,10 @@ export async function proxy(req: NextRequest) {
     // are already yours. Requiring it would lock every non-admin pod member
     // out of their own vault, the same way it would have for /oauth/consent.
     path === "/my-vault" ||
+    // Your OWN sign-in methods and recovery codes. Every call behind it is
+    // scoped to the caller's account; the one owner-only control (Synap Cloud
+    // trust) is re-checked by the pod (`PUT /api/account-recovery/cloud-trust`).
+    path === "/settings/security" ||
     path === "/oauth/consent" ||
     path.startsWith("/approve-agent") ||
     path.startsWith("/connection-requests/") ||

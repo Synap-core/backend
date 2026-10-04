@@ -41,6 +41,7 @@ import {
   ResourceRowSkeleton,
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
+import { RecoveryCodesNudge } from "../components/recovery-codes-nudge";
 import type { StatusKind } from "../components/status-pill";
 import { StatusPill } from "../components/status-pill";
 
@@ -55,6 +56,8 @@ export default function OverviewPage() {
           Operational health at a glance. Drill into any tab for detail.
         </p>
       </header>
+
+      <RecoveryCodesNudge />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <SyncCard />
