@@ -40,3 +40,13 @@ coverage
 
 # CI/CD
 .github
+
+# Pod runtime state — NEVER in a build context. The build context is the repo
+# root, so on a pod checkout these hold live data and secrets: a `synap backup`
+# tarball (with a copy of .env) was baked into three image layers on 2026-10-04.
+deploy/backups
+deploy/state
+deploy/.env*
+deploy/.secrets-backup*
+**/*.dump
+**/*.sql.gz

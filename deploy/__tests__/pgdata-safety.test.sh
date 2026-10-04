@@ -140,6 +140,14 @@ for door in "$SYNAP_CLI" "$DEPLOY_DIR/update-pod.sh"; do
         || bad "${door#$REPO_ROOT/}: no pre-update backup"
 done
 
+echo "── I. build context never ships pod data or secrets"
+# The image build context is the repo root, so on a pod checkout deploy/ holds
+# live dumps and .env. A backup tarball WITH .env was found baked into build
+# layers on CT101 (2026-10-04). Each pattern must be excluded.
+for pat in deploy/backups deploy/state 'deploy/.env*'; do
+    grep -qxF "$pat" "$REPO_ROOT/.dockerignore" && ok ".dockerignore excludes $pat" || bad ".dockerignore does not exclude $pat"
+done
+
 echo "── B. pgdata_layout against a mocked docker"
 run_layout() {  # $1=PGDATA env (may be empty) $2=newline-separated mount destinations
     ( MOCK_PGDATA="$1"; MOCK_MOUNTS="$2"
