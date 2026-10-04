@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveUnitState } from "./state.js";
+import { SESSION_STATUSES } from "../focus-sessions/statuses.js";
 import {
   sessionUnitInput,
   projectAggregateInput,
@@ -290,5 +291,42 @@ describe("pathRowSessionFact — THE door every path surface reads a row through
     expect(
       pathRowUnitView({ status: "active", nextMoveActor: "user" }).state
     ).toBe("needs_you");
+  });
+});
+
+describe("sessionRowInput and sessionUnitInput are ONE derivation", () => {
+  const row = (status: string, owed: number, blockedBy: string | null = null) =>
+    resolveUnitState(
+      sessionRowInput({
+        status,
+        unitFacts: { owedFromYou: owed, pendingDecisions: 0 },
+        blockedBy,
+      })
+    ).state;
+
+  it("a failed row reads FAILED (not done), with or without owed", () => {
+    // Rules out the old row-level terminal shortcut: failed read `done` on the
+    // map/Zoom/track pages while the header read `failed`.
+    expect(row("failed", 0)).toBe("failed");
+    expect(stateOf({ status: "failed", owedFromYou: 0 })).toBe("failed");
+    // failed + owed: failed outranks owed on BOTH doors (the old row door let
+    // owed win and read needs_you).
+    expect(row("failed", 2)).toBe("failed");
+    expect(stateOf({ status: "failed", owedFromYou: 2 })).toBe("failed");
+  });
+
+  it("agrees with the session header for every declared status, owed or not, blocked or not", () => {
+    // Derived from the status enum: a new stored status joins by existing.
+    expect(SESSION_STATUSES.length).toBeGreaterThanOrEqual(7);
+    for (const status of SESSION_STATUSES) {
+      for (const owed of [0, 1]) {
+        for (const blockedBy of [null, "Spec"]) {
+          expect(
+            row(status, owed, blockedBy),
+            `${status} owed=${owed} blocked=${blockedBy}`
+          ).toBe(stateOf({ status, owedFromYou: owed, blockedBy }));
+        }
+      }
+    }
   });
 });

@@ -190,36 +190,35 @@ export interface SessionRowFact extends ProjectAggregateSessionFact {
 }
 
 /**
- * The same reduction for ONE session row, in this order:
- *   1. it needs you (THE rule — owed + decisions + review, drafts never)
- *      → `needs_you`, WHATEVER its lifecycle. A closed session that still owes
- *      you a slot or a decision is on you: `needs-you.ts` counts it (owed
- *      slots outlive their session; a pending proposal is pending whatever
- *      became of the session that filed it), Home lists it, and the row says
- *      the same (orchestrator decision, 2026-10-04). Before this, a terminal
- *      row returned `done` FIRST, so one session read ✓ on the map and
- *      "needs you" on Home.
- *   2. terminal → `done`.
- *   3. its own lifecycle (`sessionUnitInput`) — only active/forming is
- *      `working`; paused/scheduled are cadence states; `stale` is
- *      `unmeasured`; an OPEN blocker reads `blocked`.
+ * The same reduction for ONE session row. The needs-you question is decided by
+ * THE rule (`aggregateNeedsYou` → `sessionNeedsYou`, drafts never); EVERYTHING
+ * else — failed / owed / terminal / blocked / paused / stale precedence — is
+ * decided by `sessionUnitInput`, the ONE per-session lifecycle, so the same
+ * session reads the same on the header, sidebar, Relay hero and every path row.
+ * (Before, this function kept its own terminal shortcut: a `failed` row read
+ * DONE here and FAILED on the header.)
+ *
+ * A closed session that still owes you a slot or a decision is on YOU, not
+ * done (orchestrator decision 2026-10-04) — `sessionUnitInput` encodes that.
  */
 export function sessionRowInput(session: SessionRowFact): UnitStateInput {
-  const aggregate = projectAggregateInput({
-    sessions: [session],
-    unreadable: false,
-  });
-  if ((aggregate.owedFromYou ?? 0) > 0) return aggregate;
-  if (isTerminalSessionStatus(session.status)) {
-    return { terminal: true, progress: { done: 1, total: 1 } };
-  }
-  // The aggregate's blanket "open ⇒ running" is right for a PROJECT, wrong
-  // for one row: read the row the way a session reads itself.
-  return sessionUnitInput({
+  const needsYou = aggregateNeedsYou(session);
+  const input = sessionUnitInput({
     status: session.status,
-    owedFromYou: 0,
+    owedFromYou: needsYou ? 1 : 0,
     blockedBy: session.blockedBy ?? null,
   });
+  // The rail: a finished or owing row is one unit, done or not. A failed row
+  // draws no rail (it is not progress).
+  return input.failed || (!input.terminal && !needsYou)
+    ? input
+    : {
+        ...input,
+        progress: {
+          done: isTerminalSessionStatus(session.status) ? 1 : 0,
+          total: 1,
+        },
+      };
 }
 
 // ─── A `projects.path` row — THE one door every path surface reads ──────────
