@@ -1176,3 +1176,11 @@ describe("resolveNeedsYouItemCount", () => {
     );
   });
 });
+
+describe("backup health statuses", () => {
+  it("names a data drop, not a vague suspicion", () => {
+    expect(resolveStatusLabel("suspect")).toBe("Data drop");
+    expect(resolveStatusLabel("ok")).toBe("Healthy");
+    expect(resolveStatusLabel("stale")).toBe("Stale");
+  });
+});

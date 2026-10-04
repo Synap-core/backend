@@ -690,6 +690,11 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // its domain should supply its own word (the data-sync and renderer surfaces
   // already do) rather than call this resolver.
   stale: "Stale",
+  // backup health (`readBackupStatus`, @synap/database): the newest backup run
+  // saw a DATA DROP (users/entities fell to zero). Humanized it read "Suspect",
+  // which says nothing about what is wrong; every backup surface (Relay pod row,
+  // pod-admin, desktop) renders this one word. Only the backup domain emits it.
+  suspect: "Data drop",
   // generic on/off — surfaces disagreed ("Active/Paused" vs "Enabled/Disabled"
   // vs "On/Off"). These two are the canonical pair for an enabled flag.
   enabled: "Enabled",
