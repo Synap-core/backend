@@ -74,10 +74,17 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
     ? { cron: facts.cron ?? "", enabled: facts.status !== "paused" }
     : null;
 
+  // A closed session that still owes you a slot or a decision is on YOU, not
+  // done (orchestrator decision 2026-10-04, same rule as `sessionRowInput`):
+  // the derivation checks `terminal` BEFORE `owedFromYou`, so a terminal flag
+  // here would read done on a session Home lists as "needs you". `null` (a
+  // failed read) claims nothing owed, so it stays terminal.
+  const owesYou =
+    (facts.owedFromYou ?? 0) > 0 || (facts.pendingDecisions ?? 0) > 0;
   return {
     failed: facts.status === "failed",
     // `failed` is terminal too, but the derivation checks `failed` first.
-    terminal: isTerminalSessionStatus(facts.status),
+    terminal: isTerminalSessionStatus(facts.status) && !owesYou,
     owedFromYou: facts.owedFromYou,
     pendingDecisions: facts.pendingDecisions,
     blockedBy: facts.blockedBy ?? null,

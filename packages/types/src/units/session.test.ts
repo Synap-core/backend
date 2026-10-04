@@ -58,9 +58,25 @@ describe("sessionUnitInput — one session", () => {
     expect(stateOf({ status: "failed", owedFromYou: 3 })).toBe("failed");
   });
 
-  it("closed and cancelled are done even with work owed", () => {
-    expect(stateOf({ status: "closed", owedFromYou: 2 })).toBe("done");
+  it("closed and cancelled with nothing owed are done", () => {
+    expect(stateOf({ status: "closed", owedFromYou: 0 })).toBe("done");
     expect(stateOf({ status: "cancelled", owedFromYou: 0 })).toBe("done");
+  });
+
+  it("a closed session that still owes you reads like its path row: needs you", () => {
+    // Rules out `terminal` outranking owed (the header / relay hero said done
+    // while Home and the path row said "needs you").
+    expect(stateOf({ status: "closed", owedFromYou: 2 })).toBe("needs_you");
+    expect(
+      stateOf({ status: "cancelled", owedFromYou: 0, pendingDecisions: 1 })
+    ).toBe("needs_review");
+    // One state everywhere: the session-level door and the row door agree.
+    for (const status of ["closed", "cancelled"]) {
+      const view = resolveUnitState(
+        sessionRowInput({ status, unitFacts: { owedFromYou: 2 } })
+      );
+      expect(stateOf({ status, owedFromYou: 2 })).toBe(view.state);
+    }
   });
 
   it("scheduled and paused come from the lifecycle, with no invented cadence", () => {
