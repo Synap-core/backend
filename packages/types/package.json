@@ -217,6 +217,10 @@
       "types": "./dist/activity/index.d.ts",
       "import": "./dist/activity/index.js"
     },
+    "./run-activity": {
+      "types": "./dist/run-activity/index.d.ts",
+      "import": "./dist/run-activity/index.js"
+    },
     "./space-brief": {
       "types": "./dist/space-brief/index.d.ts",
       "import": "./dist/space-brief/index.js"
