@@ -112,6 +112,9 @@ importers:
       '@synap-core/hub-protocol':
         specifier: workspace:*
         version: link:../../packages/hub-protocol
+      '@synap-core/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       '@synap-core/workspace-templates':
         specifier: '>=0.11.0 <1.0.0'
         version: 0.11.0

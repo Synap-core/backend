@@ -141,11 +141,24 @@ describe("Kratos registration gate (pre-persist, can_interrupt)", () => {
     );
   });
 
-  it("denies password self-registration outright", async () => {
+  it("denies password self-registration outright — with its OWN message", async () => {
     const deps = makeDeps({ kratosEmailExists: vi.fn(async () => true) });
-    await expectAccessDenied(
-      await post(deps, "/gate", body({ method: "password", noCloud: true }))
+    const res = await post(
+      deps,
+      "/gate",
+      body({ method: "password", noCloud: true })
     );
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as any;
+    // Distinct from 4000901: clients render "created by invitation or with
+    // Synap Cloud", not "ask the owner for access".
+    expect(json.messages[0].messages[0]).toEqual({
+      id: 4000902,
+      text: "New accounts on this pod are created by invitation or with Synap Cloud.",
+      type: "error",
+      context: { reason: "self_registration_disabled" },
+    });
+    expect(json.messages[0].instance_ptr).toBe("#/");
   });
 
   it("lets an EXISTING account through so Kratos can run account linking", async () => {

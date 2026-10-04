@@ -64,6 +64,10 @@
       "types": "./dist/agents/index.d.ts",
       "import": "./dist/agents/index.js"
     },
+    "./kratos-messages": {
+      "types": "./dist/kratos-messages/index.d.ts",
+      "import": "./dist/kratos-messages/index.js"
+    },
     "./service-marks": {
       "types": "./dist/service-marks/index.d.ts",
       "import": "./dist/service-marks/index.js"

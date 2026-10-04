@@ -8,7 +8,8 @@
  *     their email is verified, and the pod has no different human owner yet
  *     (first use, or recovery after a wipe). Everyone else is refused with
  *     {@link POD_ACCESS_REQUIRED} and clients offer "Request access" (the
- *     request itself lives on the CP).
+ *     request itself lives on the CP). A password sign-up is refused with
+ *     {@link SELF_REGISTRATION_DISABLED}.
  *
  * Two Kratos hooks call this router (see `generate_kratos_config` in `synap`):
  *
@@ -42,23 +43,25 @@
 import { timingSafeEqual } from "crypto";
 import { Hono, type Context } from "hono";
 import { createLogger } from "@synap-core/core";
+import {
+  POD_ACCESS_REQUIRED,
+  SELF_REGISTRATION_DISABLED,
+} from "@synap-core/types/kratos-messages";
 
 /**
- * The ONE definition of the "no pod access" refusal. Clients (browser, relay,
- * pod-admin) match `id === 4000901` on the Kratos registration flow's
- * `ui.messages` and render "Request access" instead of an error.
- *
- * 4000xxx is Kratos' validation-error range; 4000901 is unused by Kratos
- * v1.3.1 (its own ids stop well below 4000100).
+ * The refusal messages live in ONE place, `@synap-core/types/kratos-messages`,
+ * so the clients that match them (pod-admin, browser, relay) import the same
+ * ids this gate emits. Re-exported for existing importers.
+ *   - POD_ACCESS_REQUIRED (4000901): a Cloud user with no access to this pod.
+ *   - SELF_REGISTRATION_DISABLED (4000902): password/non-Cloud self sign-up.
  */
-export const POD_ACCESS_REQUIRED = {
-  id: 4000901,
-  text: "You don't have access to this pod yet.",
-  context: { reason: "pod_access_required" },
-} as const;
+export { POD_ACCESS_REQUIRED, SELF_REGISTRATION_DISABLED };
+
+type GateRefusal =
+  typeof POD_ACCESS_REQUIRED | typeof SELF_REGISTRATION_DISABLED;
 
 /** Kratos web_hook interrupt body (parsed by web_hook.go parseWebhookResponse). */
-export function podAccessRequiredBody() {
+function refusalBody(message: GateRefusal) {
   return {
     messages: [
       {
@@ -67,15 +70,23 @@ export function podAccessRequiredBody() {
         instance_ptr: "#/",
         messages: [
           {
-            id: POD_ACCESS_REQUIRED.id,
-            text: POD_ACCESS_REQUIRED.text,
+            id: message.id,
+            text: message.text,
             type: "error",
-            context: POD_ACCESS_REQUIRED.context,
+            context: message.context,
           },
         ],
       },
     ],
   };
+}
+
+export function podAccessRequiredBody() {
+  return refusalBody(POD_ACCESS_REQUIRED);
+}
+
+export function selfRegistrationDisabledBody() {
+  return refusalBody(SELF_REGISTRATION_DISABLED);
 }
 
 const logger = createLogger({ module: "kratos-registration-gate" });
@@ -250,7 +261,14 @@ export function createRegistrationGateRouter(deps: RegistrationGateDeps) {
       },
       "[synap:auth] registration gate decision"
     );
-    if (!decision.allow) return c.json(podAccessRequiredBody(), 403);
+    if (!decision.allow) {
+      return c.json(
+        decision.reason === "self_registration_disabled"
+          ? selfRegistrationDisabledBody()
+          : podAccessRequiredBody(),
+        403
+      );
+    }
     return c.body(null, 204);
   });
 
