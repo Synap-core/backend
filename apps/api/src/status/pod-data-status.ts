@@ -1,27 +1,17 @@
 /**
- * Two read-only answers about the pod's DATA, kept out of the liveness path:
- *
- *  1. GET /status/backup — where the backups stand (public metadata, like
- *     /status/release). The rule is `readBackupStatus` (@synap/database), the
- *     one derivation pod-admin's system.getBackupStatus also uses.
- *  2. The `data` section of GET /health — "this pod had users and now has
- *     none" (the 2026-10-02 empty-but-healthy window).
- *
- * WHY /health stays 200 on a data alarm. Every orchestrator reading /health
- * looks only at the HTTP status: the backend container healthcheck, the
- * update-pod.sh / `synap` canary swaps (which roll back on non-200), the CP
- * health-check job (→ pod "warning"), Uptime Kuma, warm-pool claims, the
- * browser's pod failover. A non-200 for EMPTY DATA would make updates roll
- * back, failover kick in and nothing get fixed — the process is fine; the data
- * is what is wrong. So the HTTP status keeps meaning "the process serves";
- * the alarm is in the body: top-level `status` becomes "degraded" (synap-cli
- * discovery already accepts it; no consumer gates on the body) and `data`
- * carries the reason. Mapped 2026-10-04 across synap-backend, CP, hestia-cli,
- * relay-app, browser, synap-cli, synap-app, IS.
+ * Pod DATA answers: GET /status/backup (via `readBackupStatus`) and /health's `data`.
+ * A data alarm is a body field, never a non-200 — canary swaps and healthchecks gate on HTTP status.
+ * Both routes are public: error detail goes to the server log, never the body.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { createLogger } from "@synap-core/core";
 import type { BackupStatus, BackupRunSummary } from "@synap/database";
+
+/** Where a public route's error detail goes instead of its response body. */
+export type ErrorLog = (err: unknown, msg: string) => void;
+const statusLogger = createLogger({ module: "pod-data-status" });
+const logToServer: ErrorLog = (err, msg) => statusLogger.error({ err }, msg);
 
 // ── /status/backup ──────────────────────────────────────────────────────────
 
@@ -65,11 +55,13 @@ export function toPublicBackupStatus(s: BackupStatus, now: Date): PublicBackupSt
  */
 export async function backupStatusBody(
   read: () => Promise<BackupStatus>,
-  now: Date = new Date()
+  now: Date = new Date(),
+  log: ErrorLog = logToServer
 ): Promise<PublicBackupStatus> {
   try {
     return toPublicBackupStatus(await read(), now);
   } catch (err) {
+    log(err, "GET /status/backup: could not read backup_runs");
     return {
       status: "unknown",
       offsite: null,
@@ -78,7 +70,7 @@ export async function backupStatusBody(
       lastDrill: null,
       staleAfterHours: null,
       checkedAt: now.toISOString(),
-      note: `Could not read backup_runs: ${err instanceof Error ? err.message : String(err)}`,
+      note: "Could not read backup_runs (details are in the server log).",
     };
   }
 }
@@ -95,6 +87,7 @@ export interface DataHealth {
   initialized: boolean | null;
   hasUsers: boolean | null;
   checkedAt: string;
+  /** A fixed public phrase; the detail is in the server log. */
   error?: string;
 }
 
@@ -104,7 +97,10 @@ export interface DataHealthDeps {
   exists?: (path: string) => boolean;
   timeoutMs?: number;
   now?: () => Date;
+  log?: ErrorLog;
 }
+
+const USERS_CHECK_TIMED_OUT = "users check timed out";
 
 export async function checkDataHealth(deps: DataHealthDeps): Promise<DataHealth> {
   const exists = deps.exists ?? existsSync;
@@ -117,16 +113,18 @@ export async function checkDataHealth(deps: DataHealthDeps): Promise<DataHealth>
     hasUsers = await Promise.race([
       deps.hasUsers(),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("users check timed out")), deps.timeoutMs ?? 2000).unref?.()
+        setTimeout(() => reject(new Error(USERS_CHECK_TIMED_OUT)), deps.timeoutMs ?? 2000).unref?.()
       ),
     ]);
   } catch (err) {
+    (deps.log ?? logToServer)(err, "GET /health: users check failed");
+    const timedOut = err instanceof Error && err.message === USERS_CHECK_TIMED_OUT;
     return {
       status: "unknown",
       initialized,
       hasUsers: null,
       checkedAt,
-      error: err instanceof Error ? err.message : String(err),
+      error: timedOut ? USERS_CHECK_TIMED_OUT : "users check failed",
     };
   }
   return {

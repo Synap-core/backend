@@ -82,10 +82,22 @@ describe("GET /status/backup body", () => {
   it("a failed ledger read is `unknown` with a note — never `never`", async () => {
     const body = await backupStatusBody(async () => {
       throw new Error('relation "backup_runs" does not exist');
-    }, NOW);
+    }, NOW, () => {});
     expect(body.status).toBe("unknown");
     expect(body.note).toMatch(/backup_runs/);
     expect(body.lastBackup).toBeNull();
+  });
+
+  it("a failed read's raw error goes to the server log, never the public body", async () => {
+    const RAW = 'connect ECONNREFUSED 10.0.3.7:5432 user "synap" password authentication failed';
+    const log = vi.fn();
+    const body = await backupStatusBody(async () => {
+      throw new Error(RAW);
+    }, NOW, log);
+    expect(JSON.stringify(body)).not.toContain("ECONNREFUSED");
+    expect(JSON.stringify(body)).not.toContain("10.0.3.7");
+    expect(log).toHaveBeenCalledTimes(1);
+    expect((log.mock.calls[0][0] as Error).message).toBe(RAW); // the detail is not lost
   });
 
   it("toPublicBackupStatus keeps `never` for an empty ledger", () => {
@@ -114,13 +126,18 @@ describe("/health data check", () => {
     const d = await checkDataHealth({ ...base, exists: exists([]), hasUsers: async () => false });
     expect(d).toMatchObject({ status: "ok", initialized: null });
   });
-  it("a failed users check is `unknown` with the error — not ok, not empty", async () => {
-    const d = await checkDataHealth({ ...base, exists: exists(["/s", "/s/postgres-initialized"]), hasUsers: async () => { throw new Error("db down"); } });
-    expect(d).toMatchObject({ status: "unknown", hasUsers: null, error: "db down" });
+  it("a failed users check is `unknown` — not ok, not empty — and its raw error stays in the log", async () => {
+    const RAW = 'password authentication failed for user "synap" at 10.0.3.7:5432';
+    const log = vi.fn();
+    const d = await checkDataHealth({ ...base, log, exists: exists(["/s", "/s/postgres-initialized"]), hasUsers: async () => { throw new Error(RAW); } });
+    expect(d).toMatchObject({ status: "unknown", hasUsers: null, error: "users check failed" });
+    expect(JSON.stringify(d)).not.toContain("password");
+    expect(JSON.stringify(d)).not.toContain("10.0.3.7");
+    expect((log.mock.calls[0]?.[0] as Error | undefined)?.message).toBe(RAW);
     expect(healthStatusFor(d)).toBe("ok");
   });
   it("a hung users check times out to `unknown` (liveness never hangs on the DB)", async () => {
-    const d = await checkDataHealth({ ...base, exists: exists(["/s"]), timeoutMs: 20, hasUsers: () => new Promise(() => {}) });
+    const d = await checkDataHealth({ ...base, log: () => {}, exists: exists(["/s"]), timeoutMs: 20, hasUsers: () => new Promise(() => {}) });
     expect(d).toMatchObject({ status: "unknown", error: "users check timed out" });
   });
 });
