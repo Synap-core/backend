@@ -7,15 +7,13 @@
  * surface paints; none of them decides what a step IS, what it is called, or
  * which steps collapse together — that is this file, once.
  *
- * ── What it deliberately does NOT decide ──────────────────────────────────
- * Whether a session is "working right now" beyond a recorded fact. The only
- * live claim made here is an IS turn the pod reports IN FLIGHT. "Activity in
- * the last N minutes means working" is PENDING A FOUNDER DECISION (agent-run
- * spec §10, "what makes an agent working right now" — the stale window and
- * the header mark). Until it lands, an idle session's Now line names what
- * waits on the reader, else its LATEST step and age ("last") — never
- * "working". The header's state mark keeps its own derivation
- * (`resolveUnitState`) unchanged.
+ * ── "Working right now" (founder decision D1, 2026-10-04) ─────────────────
+ * An IS turn in flight, OR any session activity within
+ * `SESSION_WORKING_WINDOW_MS` — the ONE rule (`isSessionWorkingNow`, ./live.ts)
+ * the session header / hero / list marks also read (`sessionUnitInput`), so
+ * the mark and this line cannot disagree. The clock is a PARAMETER
+ * (`options.now`); a surface re-derives when the window lapses
+ * (`workingFlipInMs`).
  *
  * ── Labels ────────────────────────────────────────────────────────────────
  * No local label map (vocabulary.md). A producer-authored title wins (IS tool
@@ -32,6 +30,7 @@ import {
   resolveStatusLabel,
   sentenceCaseLabel,
 } from "../vocabulary/index.js";
+import { isSessionWorkingNow } from "./live.js";
 import type {
   SessionActivityActor,
   SessionActivityKind,
@@ -97,11 +96,15 @@ export interface ActivityGroup {
 
 /**
  * The ONE line at the top, in priority order:
- *   `now`     — an IS turn is executing (a fact the pod recorded);
- *   `waiting` — nothing is in flight and the run is stopped on the READER (a
+ *   `now`     — an IS turn is executing (a fact the pod recorded) — the live
+ *               step, or "Running" before its first step;
+ *   `waiting` — no turn is in flight and the run is stopped on the READER (a
  *               decision or an ask): the line says so, instead of naming an
  *               older step as if nothing were owed;
- *   `last`    — nothing in flight, nothing owed: the latest step and when.
+ *   `now`     — (again) nothing in flight or owed, but activity landed within
+ *               the working window (D1): the session IS working — the latest
+ *               step, under the live mark;
+ *   `last`    — quiet: the latest step and when.
  */
 export const NOW_LINE_MODES = ["now", "waiting", "last"] as const;
 export type NowLineMode = (typeof NOW_LINE_MODES)[number];
@@ -143,6 +146,12 @@ export interface RunActivityView {
   /** The pod capped the merge; more exists than this view holds. */
   truncated: boolean;
   terminal: boolean;
+  /**
+   * THE "working right now" answer (D1, `isSessionWorkingNow`) for an open
+   * session — what the header mark reads, so the two agree. Always false on a
+   * terminal session.
+   */
+  workingNow: boolean;
   /** Nothing has happened AND everything was readable — the only honest "empty". */
   empty: boolean;
 }
@@ -277,8 +286,18 @@ function nowText(mode: NowLineMode, label: string, waiting: number): string {
   }
 }
 
-/** Fold the wire into what a surface renders. Pure: nothing reads the clock. */
-export function deriveRunActivity(wire: SessionActivityWire): RunActivityView {
+export interface DeriveRunActivityOptions {
+  /** The clock, for the working window. Defaults to `Date.now()`. */
+  now?: number;
+}
+
+/** Fold the wire into what a surface renders. Pure but for `options.now`. */
+export function deriveRunActivity(
+  wire: SessionActivityWire,
+  options: DeriveRunActivityOptions = {}
+): RunActivityView {
+  const clock = options.now ?? Date.now();
+  const workingNow = !wire.terminal && isSessionWorkingNow(wire.live, clock);
   // Stable sort by time; ties keep the pod's order (seq within a turn).
   const dated = wire.items
     .map((item, index) => ({ item, index, at: toDate(item.at) }))
@@ -401,7 +420,20 @@ export function deriveRunActivity(wire: SessionActivityWire): RunActivityView {
       now = line("waiting", firstWaiting.label, firstWaiting.at, firstWaiting);
     } else {
       const latest = [...history].reverse().find((s) => s.kind !== "lifecycle");
-      if (latest) now = line("last", latest.label, latest.at, latest);
+      if (workingNow) {
+        // D1: recent activity with no turn in flight (an external MCP agent,
+        // a capability run) is still WORKING — the same answer the mark gives.
+        now = latest
+          ? line("now", latest.label, latest.at, latest)
+          : line(
+              "now",
+              resolveStatusLabel("running"),
+              toDate(wire.live.lastAt),
+              null
+            );
+      } else if (latest) {
+        now = line("last", latest.label, latest.at, latest);
+      }
     }
   }
 
@@ -413,6 +445,7 @@ export function deriveRunActivity(wire: SessionActivityWire): RunActivityView {
     unreadable: [...wire.unreadable],
     truncated: wire.truncated,
     terminal: wire.terminal,
+    workingNow,
     empty: steps.length === 0 && wire.unreadable.length === 0,
   };
 }

@@ -22,12 +22,26 @@
  * because nothing could be observed happening. `unreadable` yields `unmeasured`,
  * the honest reading; the default arm would have claimed `working`.
  *
+ * **"Working" needs a LIVE fact (founder decision D1, 2026-10-04).** An open
+ * lifecycle (`active` / `forming`) is not "an agent is working". When the
+ * caller passes the pod's liveness facts (`live`), the session reads
+ * `working` only while `isSessionWorkingNow` holds — a turn in flight or
+ * activity inside `SESSION_WORKING_WINDOW_MS` — and otherwise `idle`, which
+ * the derivation renders as the existing quiet state `paused` (muted tone,
+ * pause glyph; no new tone). The Now line reads the same predicate, so the
+ * header mark and the line agree. A caller WITHOUT liveness (`live`
+ * undefined — an older pod) keeps the lifecycle reading.
+ *
  * **`pendingDecisions` is three-valued.** `undefined` = the caller did not read
  * proposals (no claim either way), `null` = the read FAILED (→ `unmeasured`
  * unless something live outranks it), a number = the count.
  */
 
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
+import {
+  isSessionWorkingNow,
+  type SessionLiveFacts,
+} from "../run-activity/live.js";
 import {
   resolveUnitState,
   type UnitStateInput,
@@ -66,6 +80,17 @@ export interface SessionUnitFacts {
   progress?: number | null;
   /** A cadence the pod stored, when it stored one. */
   cron?: string | null;
+  /**
+   * The pod's liveness facts (`live` on `focusSessions.activity` /
+   * `focusSessions.list` rows). Three-valued, like the counts: an object ⇒
+   * `working` requires `isSessionWorkingNow`; `null` ⇒ the liveness read
+   * FAILED, so neither working nor idle can be claimed (→ `unmeasured` unless
+   * something actionable outranks it); `undefined` ⇒ not read (older pod) —
+   * the lifecycle reading stands.
+   */
+  live?: SessionLiveFacts | null;
+  /** The clock for the working window. Defaults to `Date.now()`. */
+  now?: number;
 }
 
 /** One session row → the shared derivation's input. */
@@ -81,6 +106,15 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
   // failed read) claims nothing owed, so it stays terminal.
   const owesYou =
     (facts.owedFromYou ?? 0) > 0 || (facts.pendingDecisions ?? 0) > 0;
+  const open = RUNNING_SESSION_STATUSES.has(facts.status);
+  // D1: with liveness in hand, an open session is working only while the ONE
+  // rule says so; without it (older pod), the lifecycle reading stands.
+  const liveUnread = facts.live === null;
+  const working =
+    open &&
+    !liveUnread &&
+    (facts.live === undefined ||
+      isSessionWorkingNow(facts.live, facts.now ?? Date.now()));
   return {
     failed: facts.status === "failed",
     // `failed` is terminal too, but the derivation checks `failed` first.
@@ -88,9 +122,10 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
     owedFromYou: facts.owedFromYou,
     pendingDecisions: facts.pendingDecisions,
     blockedBy: facts.blockedBy ?? null,
-    running: RUNNING_SESSION_STATUSES.has(facts.status),
+    running: working,
+    idle: open && !working && !liveUnread,
     schedule: cadence,
-    unreadable: facts.status === "stale",
+    unreadable: facts.status === "stale" || (open && liveUnread),
     progress:
       typeof facts.progress === "number"
         ? { done: Math.max(0, Math.min(100, facts.progress)), total: 100 }
@@ -181,6 +216,10 @@ export function projectAggregateInput(
 
 /** One session ROW — the aggregate fact plus what a single row can also know. */
 export interface SessionRowFact extends ProjectAggregateSessionFact {
+  /** The row's liveness facts (`live` on a list row) — see `SessionUnitFacts.live`. */
+  live?: SessionLiveFacts | null;
+  /** The clock for the working window. Defaults to `Date.now()`. */
+  now?: number;
   /**
    * Title of an OPEN session this one waits on (a `blocked_by` link whose
    * target is still open). Waiting on X is not waiting on you: it reads
@@ -207,6 +246,8 @@ export function sessionRowInput(session: SessionRowFact): UnitStateInput {
     status: session.status,
     owedFromYou: needsYou ? 1 : 0,
     blockedBy: session.blockedBy ?? null,
+    ...(session.live !== undefined ? { live: session.live } : {}),
+    ...(session.now !== undefined ? { now: session.now } : {}),
   });
   // The rail: a finished or owing row is one unit, done or not. A failed row
   // draws no rail (it is not progress).

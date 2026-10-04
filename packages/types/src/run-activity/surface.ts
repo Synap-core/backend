@@ -9,6 +9,7 @@
  */
 
 import type { ActivityGroup, ActivityStep, RunActivityView } from "./derive.js";
+import { isSessionWorkingNow, SESSION_WORKING_WINDOW_MS } from "./live.js";
 import type { SessionActivityWire } from "./wire.js";
 
 // ── Doors ─────────────────────────────────────────────────────────────────
@@ -81,33 +82,53 @@ export function activityCount(view: RunActivityView): number {
 
 // ── Poll cadence ──────────────────────────────────────────────────────────
 
-// How often an open session's activity is re-read. Polling is what ships
-// today; whether the browser instead joins the session's room for live steps,
-// and whether relay gets a socket, are PENDING FOUNDER DECISIONS (agent-run
-// spec §10, "browser realtime" and "relay realtime"). This cadence is only a
-// refresh rate — it claims nothing about anyone working.
+// How often an open session's activity is re-read. Live updates come from the
+// POD's realtime stream (founder decision D2, 2026-10-04): the pod pushes
+// `focus_session:updated` (id-only, to the session's readers) whenever the
+// session's activity ledger moves — a turn starts / steps / ends, a governed
+// write lands, a proposal is filed or decided, an agent posts a note. A
+// surface with that socket invalidates the read on the push, and this cadence
+// is only the FALLBACK floor (a NOTIFY sent while no listener runs is lost):
+// slow while the socket is connected, adaptive when it is not. Relay has no
+// socket and always polls adaptively. This cadence is a refresh rate — it
+// claims nothing about anyone working (that is `isSessionWorkingNow`).
 
-/** A turn is in flight, or something happened within `ACTIVITY_RECENT_MS`. */
+/** A turn is in flight, or the session is inside its working window. */
 export const ACTIVITY_POLL_LIVE_MS = 5_000;
 /** Open but quiet. */
 export const ACTIVITY_POLL_IDLE_MS = 30_000;
-/** How recent the last step must be for the fast cadence to hold. */
-export const ACTIVITY_RECENT_MS = 2 * 60_000;
+/** The floor while the realtime socket is connected and pushing. */
+export const ACTIVITY_POLL_CONNECTED_MS = 60_000;
+/**
+ * How recent the last step must be for the fast cadence to hold — the SAME
+ * window that makes a session read as working (D1), so the fast poll lasts
+ * exactly as long as the "working" claim it refreshes.
+ */
+export const ACTIVITY_RECENT_MS = SESSION_WORKING_WINDOW_MS;
+
+export interface ActivityPollOptions {
+  /**
+   * The pod's realtime socket is connected, so pushes invalidate the read and
+   * polling is only the floor (`ACTIVITY_POLL_CONNECTED_MS`).
+   */
+  realtimeConnected?: boolean;
+}
 
 /**
- * Adaptive: fast while a turn is in flight or recent, slow otherwise, never
- * for a finished session (a record does not move). `false` stops polling.
- * Before the first answer the slow cadence applies.
+ * Adaptive: fast while the session is working (D1), slow otherwise, the slow
+ * floor whenever the realtime socket is connected, never for a finished
+ * session (a record does not move). `false` stops polling. Before the first
+ * answer the slow cadence applies.
  */
 export function activityPollMs(
   wire: SessionActivityWire | null | undefined,
-  now: number = Date.now()
+  now: number = Date.now(),
+  options: ActivityPollOptions = {}
 ): number | false {
+  if (wire?.terminal) return false;
+  if (options.realtimeConnected) return ACTIVITY_POLL_CONNECTED_MS;
   if (!wire) return ACTIVITY_POLL_IDLE_MS;
-  if (wire.terminal) return false;
-  if (wire.live.turnInFlight) return ACTIVITY_POLL_LIVE_MS;
-  const last = wire.live.lastAt ? new Date(wire.live.lastAt).getTime() : NaN;
-  return Number.isFinite(last) && now - last <= ACTIVITY_RECENT_MS
+  return isSessionWorkingNow(wire.live, now)
     ? ACTIVITY_POLL_LIVE_MS
     : ACTIVITY_POLL_IDLE_MS;
 }

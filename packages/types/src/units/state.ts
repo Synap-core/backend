@@ -113,6 +113,14 @@ export interface UnitStateInput {
   blockedBy?: string | null;
   /** An agent is actively working right now. */
   running?: boolean;
+  /**
+   * Open, but nothing is working on it right now (D1: no turn in flight and no
+   * activity inside the working window). Reads `paused` — the existing quiet
+   * state (muted tone, pause glyph) — never `working`, which the default arm
+   * would otherwise claim. Below `unmeasured`: "quiet" is a calm answer, so an
+   * unreadable count outranks it.
+   */
+  idle?: boolean;
   /** A recurring unit's cadence, straight off `playbooks.schedule`. */
   schedule?: { cron: string; enabled: boolean } | null;
   /** False = it exists but nothing has happened in it yet. */
@@ -226,6 +234,17 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       tone: "textSecondary",
       glyph: "question",
       rail: { kind: "dashed", pct: null },
+    };
+  }
+  if (input.idle) {
+    return {
+      state: "paused",
+      tone: "textMuted",
+      glyph: "pause",
+      rail:
+        pct === null
+          ? { kind: "dashed", pct: null }
+          : { kind: "determinate", pct },
     };
   }
   if (input.everStarted === false) {

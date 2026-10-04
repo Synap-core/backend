@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  ACTIVITY_POLL_CONNECTED_MS,
   ACTIVITY_POLL_IDLE_MS,
   ACTIVITY_POLL_LIVE_MS,
   activityCount,
@@ -157,6 +158,33 @@ describe("activityPollMs — adaptive, stops when ended", () => {
   });
   it("before the first answer: slow", () => {
     expect(activityPollMs(undefined, now)).toBe(ACTIVITY_POLL_IDLE_MS);
+  });
+  it("the fast window IS the working window (D1): 4m59 fast, 5m01 slow", () => {
+    const at = (ms: number) =>
+      wire([], {
+        live: { turnInFlight: false, since: null, lastAt: new Date(now - ms) },
+      });
+    expect(activityPollMs(at(4 * 60_000 + 59_000), now)).toBe(
+      ACTIVITY_POLL_LIVE_MS
+    );
+    expect(activityPollMs(at(5 * 60_000 + 1_000), now)).toBe(
+      ACTIVITY_POLL_IDLE_MS
+    );
+  });
+  it("realtime connected (D2): the slow floor, even mid-turn — pushes carry the live updates", () => {
+    const live = wire([], {
+      live: { turnInFlight: true, since: null, lastAt: null },
+    });
+    expect(activityPollMs(live, now, { realtimeConnected: true })).toBe(
+      ACTIVITY_POLL_CONNECTED_MS
+    );
+    expect(ACTIVITY_POLL_CONNECTED_MS).toBeGreaterThan(ACTIVITY_POLL_IDLE_MS);
+    // ...and still never for a finished session.
+    expect(
+      activityPollMs(wire([], { terminal: true }), now, {
+        realtimeConnected: true,
+      })
+    ).toBe(false);
   });
 });
 
