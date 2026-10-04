@@ -428,7 +428,8 @@ services:
   # kratos, hydra, …) to deploy/backups/postgres on the HOST (a bind mount:
   # `prune --volumes` / `down -v` cannot touch it), reads each dump back,
   # fingerprints it (users|entities|api_keys) and keeps the newest
-  # PG_BACKUP_KEEP. A dump of an EMPTIED pod (0 users, or entities halved while
+  # PG_BACKUP_KEEP (6) plus one per day for PG_BACKUP_KEEP_DAILY (7) days.
+  # A dump of an EMPTIED pod (0 users, or entities halved while
   # deploy/state/postgres-initialized exists) is kept aside as SUSPECT: nothing
   # pruned, nothing pushed, .alarm raised. Once `synap backup init` ran, each
   # good dump + MinIO objects + .env + state/ is pushed as an encrypted restic
@@ -453,7 +454,8 @@ services:
       SYNAP_STATE_DIR: /synap-state
       SYNAP_ENV_FILE: /synap-deploy/.env
       BACKUP_INTERVAL_SECONDS: ${PG_BACKUP_INTERVAL_SECONDS:-3600}
-      BACKUP_KEEP: ${PG_BACKUP_KEEP:-24}
+      BACKUP_KEEP: ${PG_BACKUP_KEEP:-6}
+      BACKUP_KEEP_DAILY: ${PG_BACKUP_KEEP_DAILY:-7}
       BACKUP_DRILL_INTERVAL_SECONDS: ${BACKUP_DRILL_INTERVAL_SECONDS:-604800}
     entrypoint:
       - /bin/sh

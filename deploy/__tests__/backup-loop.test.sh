@@ -86,7 +86,7 @@ export RUNS_LOG="$T/runs.log"; : > "$RUNS_LOG"
 run() {  # users ents
     sleep 1.1   # distinct timestamps (real sleep; PATH not yet patched)
     ( set -a; . "$T/env"; set +a
-      FAKE_USERS="$1" FAKE_ENTS="$2" BACKUP_KEEP=2 PATH="$T/bin:$PATH" exec sh "$T/loop.sh" ) >"$T/out" 2>&1 &
+      FAKE_USERS="$1" FAKE_ENTS="$2" BACKUP_KEEP=2 BACKUP_KEEP_DAILY="${KD:-1}" PATH="$T/bin:$PATH" exec sh "$T/loop.sh" ) >"$T/out" 2>&1 &
     wait $! 2>/dev/null || true   # the fake `sleep` TERMs the loop after one pass
 }
 dailies() { ls -1d "$T/backups/"*-auto 2>/dev/null | wc -l | tr -d ' '; }
@@ -99,6 +99,19 @@ grep -q "'backup', 'ok'" "$RUNS_LOG" && grep -q "5|100|1" "$RUNS_LOG" && ok "run
 # A legacy `-daily` dump (pre-extraction name) rotates with the new ones.
 mkdir -p "$T/backups/20000101T000000Z-daily"; echo "5|90" > "$T/backups/20000101T000000Z-daily/fingerprint"
 run 5 110; run 6 120; [ "$(dailies)" = 2 ] && [ ! -e "$T/backups/20000101T000000Z-daily" ] && ok "rotation keeps BACKUP_KEEP=2 good dumps (legacy -daily rotated out)" || bad "rotation: dailies=$(dailies) legacy=$(ls "$T/backups")"
+# Daily tier: besides the newest BACKUP_KEEP, the newest dump of each of the
+# last BACKUP_KEEP_DAILY days survives (hourly must not shrink a week of local
+# history to hours). Days 1-3 of 2001 get two dumps each.
+for d in 20010101 20010102 20010103; do for h in 01 02; do
+    mkdir -p "$T/backups/${d}T${h}0000Z-auto"; echo "6|120|1" > "$T/backups/${d}T${h}0000Z-auto/fingerprint"
+done; done
+KD=3 run 6 121
+kept="$(ls -1d "$T/backups/"*-auto | xargs -n1 basename | tr '\n' ' ')"
+case "$kept" in
+  "20010102T020000Z-auto 20010103T020000Z-auto "*) [ "$(dailies)" = 4 ] && ok "daily tier: newest per day for 3 days + 2 recent ($kept)" || bad "daily tier count: $kept" ;;
+  *) bad "daily tier kept: $kept" ;;
+esac
+run 6 122; [ "$(dailies)" = 2 ] && ok "KEEP_DAILY=1 → back to the 2 recent" || bad "after tier: $(dailies)"
 ! grep -q "restic must not run" "$RUNS_LOG" && ok "no repository configured → restic never invoked" || bad "restic ran without a repository"
 
 echo "── emptied pod"

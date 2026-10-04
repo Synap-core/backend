@@ -508,6 +508,23 @@ _bk_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # rotate out with the rest.
 _bk_good_dumps() { ls -1d "$(_bk_backups_dir)"/*-auto "$(_bk_backups_dir)"/*-daily 2>/dev/null | sort; }
 
+# Local retention of the scheduled dumps: the newest BACKUP_KEEP (hourly
+# buffer) PLUS the newest dump of each of the last BACKUP_KEEP_DAILY days, so
+# going hourly did not shrink the local history from a week to hours. Disk on
+# a 2026-10 pod: ~95 MB a set, so 6 + 7 ≈ 1.2 GB. The off-host repository is
+# the long history. Never called for a SUSPECT run.
+_bk_prune_good() {
+    local all keep d
+    all="$(_bk_good_dumps)"
+    [ -n "$all" ] || return 0
+    keep="$( { printf '%s\n' "$all" | tail -n "${BACKUP_KEEP:-6}"
+               printf '%s\n' "$all" | awk -F/ '{ last[substr($NF, 1, 8)] = $0 } END { for (k in last) print last[k] }' \
+                   | sort | tail -n "${BACKUP_KEEP_DAILY:-7}"; } | sort -u)"
+    for d in $all; do
+        printf '%s\n' "$keep" | grep -qxF "$d" || rm -rf "$d"
+    done
+}
+
 # One backup cycle: dump every database, gate it on the fingerprint, publish
 # and rotate, then push it off-host when a repository is configured.
 # Exit: 0 ok · 1 failed · 3 SUSPECT (data drop: kept aside, nothing pruned,
@@ -549,7 +566,7 @@ backup_run() {
     _pgs_log "[backup] ok $d ($(du -sh "$d" | cut -f1), users|entities|api_keys $fp)"
     [ "${users:-0}" -gt 0 ] 2>/dev/null && { mkdir -p "$(_bk_state_dir)"; _bk_now > "$(_bk_state_dir)/postgres-initialized"; }
     rm -f "$b/.alarm"
-    _bk_good_dumps | head -n -"${BACKUP_KEEP:-24}" | xargs -r rm -rf
+    _bk_prune_good
     if [ -z "$(_bk_cfg BACKUP_REPOSITORY)" ]; then
         _bk_record "$c" backup ok "$started" "$(( $(du -sk "$d" | cut -f1) * 1024 ))" "" "$fp" "" "local only — no off-host repository configured"
         _bk_unlock; return 0
