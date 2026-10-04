@@ -361,6 +361,13 @@ else
   ROOT_DOMAIN="localhost"
 fi
 
+# The Kratos webhook secret must exist BEFORE kratos.yml is written: the
+# settings hook below carries it, and the API rejects any Kratos webhook without
+# it (apps/api/src/webhooks/kratos.ts). Reuse the installed value on update;
+# otherwise generate it here (the .env writer below persists it).
+KRATOS_WEBHOOK_SECRET="$(_env_value KRATOS_WEBHOOK_SECRET "$INSTALL_DIR/.env")"
+[[ -n "$KRATOS_WEBHOOK_SECRET" ]] || KRATOS_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+
 cat > "$INSTALL_DIR/config/kratos/kratos.yml" << KRATOS_EOF
 version: v1.3.1
 
@@ -416,6 +423,15 @@ selfservice:
       ui_url: $POD_ADMIN_URL/login
       lifespan: 10m
     registration:
+      # No self sign-up (founder decision 2026-10-04): join = owner invite or
+      # Synap Cloud. This installer ships oidc DISABLED, so turning the whole
+      # registration flow off has no casualty here. If oidc is ever enabled in
+      # this file, switch to the blocking-gate hooks the \`synap\` generator
+      # uses instead — flows.registration.enabled=false also blocks the oidc
+      # first sign-in (Kratos v1.3.1 strategy_login.go -> NewRegistrationFlow).
+      # Owners and invitees are created through the Kratos ADMIN API
+      # (/api/hub/setup/first-admin, /setup/accept-invite), which this does not touch.
+      enabled: false
       ui_url: $POD_ADMIN_URL/login
       lifespan: 10m
     recovery:
@@ -429,9 +445,15 @@ selfservice:
           hooks:
             - hook: web_hook
               config:
-                url: http://backend:4000/webhooks/kratos
+                # Mounted at /api/webhooks/kratos (apps/api/src/index.ts).
+                url: http://backend:4000/api/webhooks/kratos
                 method: POST
-                body: base64://eyJmbG93X2lkIjoie3sgLkZsb3cuSUQgfX0iLCAiaWRlbnRpdHkiOiB7eyAuSWRlbnRpdHkgfCB0b0pzb24gfX19
+                # function(ctx) { type: "identity.updated", identity: { id: ctx.identity.id, traits: ctx.identity.traits } }
+                # (Kratos v1.3.1 bodies are jsonnet; the previous Go-template body did not parse.)
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IHR5cGU6ICJpZGVudGl0eS51cGRhdGVkIiwgaWRlbnRpdHk6IHsgaWQ6IGN0eC5pZGVudGl0eS5pZCwgdHJhaXRzOiBjdHguaWRlbnRpdHkudHJhaXRzIH0gfQo=
+                headers:
+                  Content-Type: application/json
+                  X-Webhook-Secret: $KRATOS_WEBHOOK_SECRET
     verification:
       enabled: false
     logout:
@@ -506,6 +528,14 @@ SECRETS_EOF
     fi
   fi
 
+  # Self-heal: older .env files may lack KRATOS_WEBHOOK_SECRET; kratos.yml was
+  # just written with the value resolved above, so persist that same value.
+  if ! grep -q "^KRATOS_WEBHOOK_SECRET=." "$INSTALL_DIR/.env" 2>/dev/null; then
+    _set_env_value "KRATOS_WEBHOOK_SECRET" "$KRATOS_WEBHOOK_SECRET" "$INSTALL_DIR/.env"
+    info "Backfilled KRATOS_WEBHOOK_SECRET into .env (matches kratos.yml)"
+    RECREATE_FOR_ENV_CHANGE=1
+  fi
+
   # Self-heal: backfill VAULT_SERVER_KEY (the secret-vault encryption key). .env
   # files from before the vault feature lack it; without it every vault write
   # (e.g. storing a Discord bot token via /capabilities/apply) fails HTTP 500.
@@ -565,7 +595,7 @@ else
   ENCRYPTION_KEY=$(_gen)
   KRATOS_SECRETS_COOKIE=$(_gen)
   KRATOS_SECRETS_CIPHER=$(openssl rand -hex 16)  # 32 chars = 16-byte AES key (kratos max=32)
-  KRATOS_WEBHOOK_SECRET=$(_gen)
+  # KRATOS_WEBHOOK_SECRET is resolved before kratos.yml is written (above).
   ORY_HYDRA_SECRETS_SYSTEM=$(_gen)
   HUB_PROTOCOL_API_KEY=$(_gen)
   HUB_JWT_SECRET=$(_gen)
