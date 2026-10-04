@@ -333,3 +333,27 @@ export function happenedAtRest(
     hiddenLines: Math.max(0, today.length - cap),
   };
 }
+
+// ── Produced: one output card model ─────────────────────────────────────────
+
+/**
+ * One produced object (or a declared slot not yet produced) — what the ONE
+ * output card draws on every lens. The noun + icon come from the host's
+ * identity door (an entity reads as its kind), so they are not carried here.
+ */
+export interface LensOutput {
+  key: string;
+  /** Object kind (an entity's profile slug when the host resolved one). */
+  objectKind: string;
+  /** Empty ⇒ the card is led by its noun, never a blank title. */
+  title: string;
+  /** Null = nothing addressable yet (the card is plain, never a dead button). */
+  door: LensDoor | null;
+  /** The session that produced it. Pass through `visibleSource` before drawing. */
+  source: LensSource | null;
+  producedAt: string | null;
+  /** An agent produced it — the one place the AI dot is earned. */
+  byAgent: boolean;
+  /** Declared, not produced yet: the dashed card. */
+  expected: boolean;
+}
