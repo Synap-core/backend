@@ -1,18 +1,30 @@
 /**
  * Kratos Webhook Handler
  *
- * Receives webhooks from Ory Kratos for identity.updated events only.
- * identity.created events only fire for self-service registration flows,
- * which we do not use — admin-API identity creation does not trigger
- * webhooks. Initial owner and federated identity projection are handled
- * synchronously by their authenticated provisioning endpoints.
+ * Mounted at /api/webhooks/kratos (apps/api/src/index.ts).
+ *
+ *   POST /                       identity.updated sync (settings hook)
+ *   POST /registration/gate      blocking registration gate (pre-persist)
+ *   POST /registration/complete  Cloud owner claim (post-persist, oidc only)
+ *
+ * The registration routes live in `./kratos-registration-gate.ts`; the real
+ * dependencies are wired below.
  */
 
 import { timingSafeEqual } from "crypto";
 import { Hono } from "hono";
-import { syncUserFromKratos } from "@synap/api";
+import { normalizeIssuerUrl, syncUserFromKratos } from "@synap/api";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
+import { eq, getDb, TrustedIssuerService } from "@synap/database";
+import { users } from "@synap/database/schema";
+import {
+  claimPodOwnerFromCloudSignIn,
+  deleteKratosIdentity,
+  hasDifferentHumanPodOwner,
+  readFederationOidcIssuer,
+} from "../routers/federation.js";
+import { createRegistrationGateRouter } from "./kratos-registration-gate.js";
 
 function safeCompare(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -25,7 +37,7 @@ export const kratosWebhookRouter = new Hono();
 
 /**
  * Kratos webhook endpoint
- * POST /webhooks/kratos
+ * POST /api/webhooks/kratos
  */
 kratosWebhookRouter.post("/", async (c) => {
   try {
@@ -93,3 +105,41 @@ kratosWebhookRouter.post("/", async (c) => {
     });
   }
 });
+
+function kratosAdminUrl(): string {
+  return process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+}
+
+kratosWebhookRouter.route(
+  "/registration",
+  createRegistrationGateRouter({
+    readFederationIssuer: readFederationOidcIssuer,
+    normalizeIssuerUrl,
+    async hasDifferentHumanOwner(issuerUrl, sub) {
+      const issuer = await new TrustedIssuerService().getByUrl(issuerUrl);
+      return hasDifferentHumanPodOwner(issuer?.id, sub);
+    },
+    async kratosEmailExists(email) {
+      const res = await fetch(
+        `${kratosAdminUrl()}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`,
+        { signal: AbortSignal.timeout(8_000) }
+      );
+      if (!res.ok) {
+        throw new Error(`Kratos admin identity lookup failed: ${res.status}`);
+      }
+      const identities = (await res.json()) as unknown;
+      return Array.isArray(identities) && identities.length > 0;
+    },
+    async podUserExists(identityId) {
+      const db = await getDb();
+      const row = await db.query.users.findFirst({
+        where: eq(users.id, identityId),
+        columns: { id: true },
+      });
+      return Boolean(row);
+    },
+    claimOwner: claimPodOwnerFromCloudSignIn,
+    deleteKratosIdentity: (identityId) =>
+      deleteKratosIdentity(kratosAdminUrl(), identityId),
+  })
+);

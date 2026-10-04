@@ -240,7 +240,7 @@ async function getFederationOidcIssuer(): Promise<string | null> {
  * configured". Callers that report state to a client (discovery) must tell a
  * failed read apart from an absent setting.
  */
-async function readFederationOidcIssuer(): Promise<string | null> {
+export async function readFederationOidcIssuer(): Promise<string | null> {
   const db = await getDb();
   const [row] = await db
     .select({ settings: podSettings.settings })
@@ -882,7 +882,7 @@ async function resolveOrCreateKratosIdentity(input: {
  * Fast-fail before creating a pending issuer record. The transactionally
  * locked guard in `seedAdminUser` remains the source of truth for races.
  */
-async function hasDifferentHumanPodOwner(
+export async function hasDifferentHumanPodOwner(
   issuerId: string | undefined,
   issuerSubject: string
 ): Promise<boolean> {
@@ -1014,7 +1014,7 @@ async function mintKratosSession(
 }
 
 /** Best-effort compensation when a newly-created auth identity cannot be granted Pod access. */
-async function deleteKratosIdentity(
+export async function deleteKratosIdentity(
   kratosAdminUrl: string,
   identityId: string
 ): Promise<boolean> {
@@ -2029,6 +2029,119 @@ federationRouter.post("/exchange", async (c) => {
   });
 });
 
+type TrustedIssuerRecord = NonNullable<
+  Awaited<ReturnType<TrustedIssuerService["getByUrl"]>>
+>;
+
+/**
+ * After a first owner is seeded, the issuer that authenticated them must hold
+ * every bootstrap capability. Shared by `/bootstrap` and the Cloud sign-in
+ * owner claim so the two owner doors grant the issuer exactly the same trust.
+ */
+async function approveBootstrapIssuer(input: {
+  issuerService: TrustedIssuerService;
+  issuer: TrustedIssuerRecord;
+  issuerUrl: string;
+  ownerUserId: string;
+}): Promise<boolean> {
+  const { issuerService, issuerUrl, ownerUserId } = input;
+  let issuer: TrustedIssuerRecord | null | undefined = input.issuer;
+  const requiredCapabilities = [...bootstrapIssuerCapabilities];
+  if (issuer.status === "pending") {
+    issuer =
+      (await issuerService.approvePending(issuer.id, ownerUserId, [
+        ...bootstrapIssuerCapabilities,
+      ])) ?? (await issuerService.getByUrl(issuerUrl));
+  }
+  const approvedIssuer = issuer?.status === "approved" ? issuer : null;
+  if (
+    approvedIssuer &&
+    !requiredCapabilities.every((capability) =>
+      approvedIssuer.allowedScopes.includes(capability)
+    )
+  ) {
+    issuer = await issuerService.approve(approvedIssuer.id, ownerUserId, [
+      ...new Set([
+        ...approvedIssuer.allowedScopes,
+        ...bootstrapIssuerCapabilities,
+      ]),
+    ]);
+  }
+  return Boolean(
+    issuer &&
+    issuer.status === "approved" &&
+    requiredCapabilities.every((capability) =>
+      issuer!.allowedScopes.includes(capability)
+    )
+  );
+}
+
+export type CloudOwnerClaimResult =
+  | { status: "claimed"; userId: string; issuerApproved: boolean }
+  | { status: "owner_exists" }
+  | { status: "issuer_unusable" }
+  | { status: "failed"; error: unknown };
+
+/**
+ * First-owner claim from a Kratos `oidc` registration with the Control Plane
+ * (the `registration.after.oidc` hook in `kratos/kratos.yml`). Same ownership
+ * rule as `/bootstrap`: only when the Pod has NO different human owner, same
+ * locked guard (`seedAdminUser({ requireUnclaimedPodOwner })`), same issuer
+ * trust grant. The caller has already verified the signed `synap_pod_owner`
+ * claim; this function establishes the Pod-side owner state for an identity
+ * Kratos has just persisted (Kratos itself attached the `cp` oidc credential).
+ */
+export async function claimPodOwnerFromCloudSignIn(input: {
+  issuerUrl: string;
+  issuerSubject: string;
+  kratosIdentityId: string;
+  email: string;
+  name?: string;
+}): Promise<CloudOwnerClaimResult> {
+  const issuerService = new TrustedIssuerService();
+  let issuer = await issuerService.getByUrl(input.issuerUrl);
+  if (await hasDifferentHumanPodOwner(issuer?.id, input.issuerSubject)) {
+    return { status: "owner_exists" };
+  }
+  if (issuer && issuer.status !== "approved" && issuer.status !== "pending") {
+    return { status: "issuer_unusable" };
+  }
+  if (!issuer) {
+    issuer = await issuerService.registerPending(
+      input.issuerUrl,
+      new URL(input.issuerUrl).hostname,
+      { requestedVia: "cloud-sign-in-owner-claim" }
+    );
+  }
+  let seeded: Awaited<ReturnType<typeof seedAdminUser>>;
+  try {
+    seeded = await seedAdminUser({
+      kratosIdentityId: input.kratosIdentityId,
+      email: input.email.trim().toLowerCase(),
+      name: input.name,
+      federatedIdentity: {
+        issuerId: issuer.id,
+        issuerSubject: input.issuerSubject,
+      },
+      requireUnclaimedPodOwner: true,
+    });
+  } catch (error) {
+    if (error instanceof PodOwnerAlreadyClaimedError) {
+      return { status: "owner_exists" };
+    }
+    return { status: "failed", error };
+  }
+  const approved = await approveBootstrapIssuer({
+    issuerService,
+    issuer,
+    issuerUrl: input.issuerUrl,
+    ownerUserId: seeded.userId,
+  });
+  // The owner row now exists either way; an unapproved issuer is reported,
+  // not rolled back (mirrors `/bootstrap`, which also seeds before approving).
+  return { status: "claimed", userId: seeded.userId, issuerApproved: approved };
+}
+
 /**
  * Install-time creation of the first local Pod owner.
  *
@@ -2173,33 +2286,13 @@ federationRouter.post("/bootstrap", async (c) => {
     kratosIdentityId: kratosIdentity.identityId,
   });
 
-  const requiredCapabilities = [...bootstrapIssuerCapabilities];
-  if (issuer.status === "pending") {
-    issuer =
-      (await issuerService.approvePending(issuer.id, seeded.userId, [
-        ...bootstrapIssuerCapabilities,
-      ])) ?? (await issuerService.getByUrl(issuerUrl));
-  }
-  const approvedIssuer = issuer?.status === "approved" ? issuer : null;
   if (
-    approvedIssuer &&
-    !requiredCapabilities.every((capability) =>
-      approvedIssuer.allowedScopes.includes(capability)
-    )
-  ) {
-    issuer = await issuerService.approve(approvedIssuer.id, seeded.userId, [
-      ...new Set([
-        ...approvedIssuer.allowedScopes,
-        ...bootstrapIssuerCapabilities,
-      ]),
-    ]);
-  }
-  if (
-    !issuer ||
-    issuer.status !== "approved" ||
-    !requiredCapabilities.every((capability) =>
-      issuer.allowedScopes.includes(capability)
-    )
+    !(await approveBootstrapIssuer({
+      issuerService,
+      issuer,
+      issuerUrl,
+      ownerUserId: seeded.userId,
+    }))
   ) {
     return c.json({ error: "Could not approve bootstrap issuer" }, 409);
   }
