@@ -162,6 +162,30 @@ export const EVENT_PHASES = [
 
 export type EventPhase = (typeof EVENT_PHASES)[number];
 
+/**
+ * A logged event read as a RECORD CHANGE — `{subject}.{action}.completed`
+ * with a CRUD action — or null.
+ *
+ * `completed` is the ONE phase a finished domain mutation writes
+ * (`recordDomainMutation`); `requested` / `validated` / `denied` are the
+ * governance phases of the same change (the activity ledger already tells
+ * those), and a connector family (`external_message.received`, …) is not a
+ * record change. Reading only `completed` is what keeps one change ONE
+ * Happened line. The subject is the raw segment (the base repository writes
+ * plural `entities.*`, the live door singular `entity.*`) — normalise it with
+ * the caller's object-kind rule.
+ */
+export function parseRecordChange(
+  type: string
+): { subject: string; action: EventAction } | null {
+  const parts = type.split(".");
+  if (parts.length !== 3) return null;
+  const [subject, action, phase] = parts as [string, string, string];
+  if (!subject || phase !== "completed") return null;
+  if (!(EVENT_ACTIONS as readonly string[]).includes(action)) return null;
+  return { subject, action: action as EventAction };
+}
+
 // ============================================================================
 // TYPE-SAFE EVENT NAME
 // ============================================================================

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  parseRecordChange,
   validateEventPattern,
   MESSAGE_ALIAS_PATTERNS,
   OBSERVATION_NAMESPACES,
@@ -101,5 +102,39 @@ describe("validateEventPattern", () => {
         /not a recognised EventAction/
       );
     });
+  });
+});
+
+describe("parseRecordChange — one change is ONE line", () => {
+  it("reads a completed CRUD mutation, plural or singular subject", () => {
+    expect(parseRecordChange("entity.create.completed")).toEqual({
+      subject: "entity",
+      action: "create",
+    });
+    expect(parseRecordChange("entities.update.completed")).toEqual({
+      subject: "entities",
+      action: "update",
+    });
+  });
+
+  it("the governance phases of the same change are not a record change", () => {
+    for (const t of [
+      "entity.create.requested",
+      "entity.create.validated",
+      "entity.create.denied",
+    ]) {
+      expect(parseRecordChange(t)).toBeNull();
+    }
+  });
+
+  it("a connector family or a malformed type is not a record change", () => {
+    for (const t of [
+      "external_message.received.completed",
+      "entity.create",
+      "",
+      "a.b.c.d",
+    ]) {
+      expect(parseRecordChange(t)).toBeNull();
+    }
   });
 });

@@ -7,17 +7,12 @@
  * scope fact, and which source doors disappear ({@link visibleSource}).
  *
  * The scope travels in the ADDRESS ({@link encodeLensScope}), never by writing
- * the viewer's global project lens. The three kinds the activity heat already
- * addresses (`pod` / `workspace:<id>` / `project:<id>`) are encoded by THAT
+ * the viewer's global project lens. Every kind is encoded by the ONE address
  * door (`encodeActivityScope`), so a Show-all door and a heat cell can never
  * spell one scope two ways.
  */
 
-import {
-  encodeActivityScope,
-  parseActivityScope,
-  type ActivityScope,
-} from "../activity/heat.js";
+import { encodeActivityScope, parseActivityScope } from "../activity/heat.js";
 
 export const LENS_SCOPE_KINDS = [
   "pod",
@@ -113,26 +108,22 @@ export function visibleSource(
 }
 
 /**
- * The scope as ONE address token: `pod`, `workspace:<id>`, `project:<id>`
- * (spelled by `encodeActivityScope`), `track:<id>`, `session:<id>`.
- * Containers do not travel — the page re-reads them from the object.
+ * The scope as ONE address token: `pod`, `workspace:<id>`, `project:<id>`,
+ * `track:<id>`, `session:<id>` — spelled by THE address door
+ * (`encodeActivityScope`), so Work reads a lens page's "Show all" and a heat
+ * cell with one reader. Containers do not travel — the page re-reads them
+ * from the object.
  */
 export function encodeLensScope(scope: LensScope): string {
-  if (scope.kind === "track") return `track:${scope.trackId}`;
-  if (scope.kind === "session") return `session:${scope.sessionId}`;
-  return encodeActivityScope(scope as ActivityScope);
+  if (scope.kind === "track")
+    return encodeActivityScope({ kind: "track", trackId: scope.trackId });
+  if (scope.kind === "session") {
+    return encodeActivityScope({ kind: "session", sessionId: scope.sessionId });
+  }
+  return encodeActivityScope(scope);
 }
 
 /** Read an address token back. Anything else ⇒ `undefined` (no override). */
 export function parseLensScope(token: unknown): LensScope | undefined {
-  if (typeof token === "string") {
-    const sep = token.indexOf(":");
-    const kind = token.slice(0, sep);
-    const id = token.slice(sep + 1);
-    if (sep > 0 && id) {
-      if (kind === "track") return { kind, trackId: id };
-      if (kind === "session") return { kind, sessionId: id };
-    }
-  }
   return parseActivityScope(token);
 }

@@ -11,8 +11,8 @@
  *   - Happening           → `lensRowOfHappening` (the pod decided "working
  *     now" with `isSessionWorkingNow`) ({@link lensRowOfLiveSignal});
  *   - Produced            → THE produced card ({@link lensOutputOfSignal});
- *   - Happened            → the ledger rows, for `batchHappened`
- *     ({@link happenedLedgerRows});
+ *   - Happened            → ledger rows AND data changes, for
+ *     `batchHappenedItems` ({@link happenedItems}) — work + data;
  *   - status              → ONE banner, deduped ({@link lensBannerOfStatus}).
  *
  * The wire types are STRUCTURAL — the subset a surface reads — so a client on
@@ -23,6 +23,7 @@ import type { ActivityRow } from "../activity/index.js";
 import { needsYouRows } from "../needs-you/index.js";
 import { lensStatusBanner, type LensBanner } from "./header.js";
 import {
+  type HappenedItem,
   lensRowOfHappening,
   lensRowOfNeedsYou,
   type LensDoor,
@@ -58,6 +59,16 @@ export interface LensPageSignal {
   } | null;
   /** `activity` only: the ledger row (`activity.list`). */
   activity?: ActivityRow | null;
+  /**
+   * `event` only: the DATA change, when the row is a completed mutation of a
+   * record (`events` log). Absent on any other event (a governance phase, a
+   * connector family) — that row is not a data line.
+   */
+  event?: {
+    action: string;
+    objectKind: string;
+    origin: string | null;
+  } | null;
 }
 
 /** One class of the page — `LensClassWire`. */
@@ -171,14 +182,54 @@ export function lensOutputOfSignal(signal: LensPageSignal): LensOutput | null {
 }
 
 /**
- * The Happened class as ledger rows, in order, for `batchHappened`. A data
- * EVENT carries no ledger row and is left out (it is not a ledger line).
+ * The Happened class as ledger rows, in order, for `batchHappened` — the
+ * ledger alone (a surface that draws no data line). A data EVENT carries no
+ * ledger row and is left out.
  */
 export function happenedLedgerRows(
   signals: readonly LensPageSignal[]
 ): ActivityRow[] {
   const out: ActivityRow[] = [];
   for (const s of signals) if (s.activity) out.push(s.activity);
+  return out;
+}
+
+/**
+ * The Happened class as WORK + DATA, in the pod's order, for
+ * `batchHappenedItems`: each ledger row, and each data change the pod named
+ * (`event` signals carrying `event`). An event the pod could not read as a
+ * record change is not a data line and is left out — never drawn as a raw
+ * token. (Under a project or track the pod sends no events: they carry no
+ * project column, so that Happened is the ledger alone.)
+ */
+export function happenedItems(
+  signals: readonly LensPageSignal[]
+): HappenedItem[] {
+  const out: HappenedItem[] = [];
+  for (const s of signals) {
+    if (s.activity) {
+      out.push({ kind: "ledger", row: s.activity });
+      continue;
+    }
+    const e = s.kind === "event" ? s.event : null;
+    const at = s.occurredAt
+      ? s.occurredAt instanceof Date
+        ? s.occurredAt.toISOString()
+        : s.occurredAt
+      : null;
+    if (!e || !at) continue;
+    out.push({
+      kind: "data",
+      event: {
+        id: s.id,
+        action: e.action,
+        objectKind: e.objectKind,
+        door: s.target ?? null,
+        occurredAt: at,
+        origin: e.origin,
+      },
+    });
+  }
   return out;
 }
 

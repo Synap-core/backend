@@ -256,11 +256,59 @@ export interface HappenedLine {
   occurredAt: string;
 }
 
-export interface HappenedDay {
+export interface HappenedDay<L = HappenedLine> {
   /** `YYYY-MM-DD` in the viewer's zone. */
   day: string;
   isToday: boolean;
-  lines: HappenedLine[];
+  lines: L[];
+}
+
+// ── Happened: data events (work + data) ─────────────────────────────────────
+
+/**
+ * One DATA change — a record created / changed / removed (the `events` log's
+ * completed mutation, `signals.list` kind `event`). Synap is work + data:
+ * the ledger says what WORK did, this says what the DATA did — "Sync created
+ * 101 contacts" is a Happened line like any other.
+ */
+export interface LensDataEvent {
+  id: string;
+  /** Vocabulary action token (`create` / `update` / `delete` / `archive` / `restore`). */
+  action: string;
+  /** The record's kind — an entity's profile slug when the pod named one. */
+  objectKind: string;
+  /** The record itself, when addressable. */
+  door: LensDoor | null;
+  /** ISO instant. */
+  occurredAt: string;
+  /**
+   * WHO wrote it when the pod named a writer other than the default API path
+   * (`sync`, `automation`, a connector id). A raw token — words through the
+   * service-name door (`resolveServiceName`). Null = no distinct writer.
+   */
+  origin: string | null;
+}
+
+/** One data line: one change, or a batch of identical ones ("Created 101 contacts"). */
+export interface HappenedDataLine {
+  key: string;
+  kind: "data";
+  action: string;
+  objectKind: string;
+  origin: string | null;
+  /** Newest first. ≥ 1. */
+  events: LensDataEvent[];
+  count: number;
+  occurredAt: string;
+}
+
+/** A Happened line of either kind — what the lens page's Happened draws. */
+export type HappenedEntry = HappenedLine | HappenedDataLine;
+
+export function isHappenedDataLine(
+  line: HappenedEntry
+): line is HappenedDataLine {
+  return (line as HappenedDataLine).kind === "data";
 }
 
 function actorKey(a: ActivityActor): string {
@@ -268,24 +316,32 @@ function actorKey(a: ActivityActor): string {
   return `${a.kind}:${a.id ?? a.name ?? "?"}`;
 }
 
+/** One newest-first item of a Happened page: a ledger row or a data change. */
+export type HappenedItem =
+  { kind: "ledger"; row: ActivityRow } | { kind: "data"; event: LensDataEvent };
+
 /**
- * Group a newest-first ledger page by calendar day (viewer's zone) and batch
- * CONSECUTIVE rows with the same actor, act and object kind into one line
- * ("Agent updated 12 tasks"). Never re-sorts: a batch is a run, so an act in
- * between splits it — merging across it would move the act the ledger placed.
- * A failed row never batches (its error is its own fact).
+ * Group a newest-first Happened page — ledger rows AND data changes — by
+ * calendar day (viewer's zone) and batch CONSECUTIVE identical acts into one
+ * line: same actor × act × kind for the ledger ("Agent updated 12 tasks"),
+ * same writer × act × kind for data ("Sync created 101 contacts"). Never
+ * re-sorts: a batch is a run, so an act in between splits it — merging across
+ * it would move the act the page placed. A failed ledger row never batches
+ * (its error is its own fact).
  */
-export function batchHappened(
-  rows: readonly ActivityRow[],
+export function batchHappenedItems(
+  items: readonly HappenedItem[],
   opts: { timeZone: string; now?: Date }
-): HappenedDay[] {
+): HappenedDay<HappenedEntry>[] {
   const today = calendarDayIn(
     (opts.now ?? new Date()).getTime(),
     opts.timeZone
   );
-  const days: HappenedDay[] = [];
-  for (const row of rows) {
-    const t = new Date(row.occurredAt).getTime();
+  const days: HappenedDay<HappenedEntry>[] = [];
+  for (const item of items) {
+    const at =
+      item.kind === "ledger" ? item.row.occurredAt : item.event.occurredAt;
+    const t = new Date(at).getTime();
     if (!Number.isFinite(t)) continue;
     const day = calendarDayIn(t, opts.timeZone);
     let bucket = days[days.length - 1];
@@ -294,10 +350,36 @@ export function batchHappened(
       days.push(bucket);
     }
     const last = bucket.lines[bucket.lines.length - 1];
-    const batchable = row.outcome !== "failed";
+    if (item.kind === "data") {
+      const e = item.event;
+      if (
+        last &&
+        isHappenedDataLine(last) &&
+        last.action === e.action &&
+        last.objectKind === e.objectKind &&
+        last.origin === e.origin
+      ) {
+        last.events.push(e);
+        last.count += 1;
+        continue;
+      }
+      bucket.lines.push({
+        key: e.id,
+        kind: "data",
+        action: e.action,
+        objectKind: e.objectKind,
+        origin: e.origin,
+        events: [e],
+        count: 1,
+        occurredAt: e.occurredAt,
+      });
+      continue;
+    }
+    const row = item.row;
     if (
-      batchable &&
+      row.outcome !== "failed" &&
       last &&
+      !isHappenedDataLine(last) &&
       last.rows[0]!.outcome !== "failed" &&
       actorKey(last.actor) === actorKey(row.actor) &&
       last.action === row.action &&
@@ -321,14 +403,29 @@ export function batchHappened(
 }
 
 /**
+ * The ledger alone, day-grouped and batched ({@link batchHappenedItems}) —
+ * for a surface that reads only `activity.list` (Work › Activity, relay).
+ */
+export function batchHappened(
+  rows: readonly ActivityRow[],
+  opts: { timeZone: string; now?: Date }
+): HappenedDay[] {
+  // Ledger in ⇒ ledger lines out: no data item exists to batch.
+  return batchHappenedItems(
+    rows.map((row) => ({ kind: "ledger" as const, row })),
+    opts
+  ) as HappenedDay[];
+}
+
+/**
  * Happened AT REST: today only, at most `LENS_CAPS.happened` lines — the
  * pulse/heatmap is the overview, the Activity page the rest. `hiddenLines`
  * counts today's lines past the cap.
  */
-export function happenedAtRest(
-  days: readonly HappenedDay[],
+export function happenedAtRest<L = HappenedLine>(
+  days: readonly HappenedDay<L>[],
   cap: number
-): { today: HappenedLine[]; hiddenLines: number } {
+): { today: L[]; hiddenLines: number } {
   const today = days.find((d) => d.isToday)?.lines ?? [];
   return {
     today: today.slice(0, cap),

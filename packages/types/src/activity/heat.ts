@@ -381,21 +381,37 @@ export const ACTIVITY_HEAT_TITLE = `${resolveObjectNoun("work")} activity`;
 // ── Scope (what a cell counted travels with its door) ───────────────────────
 
 /**
- * WHERE a heat counted: the whole floor, one space, or one project. A day's
- * door carries it in the ADDRESS, so the list it opens reads exactly what the
- * cell counted — never by writing the viewer's global project lens.
+ * WHERE a heat counted: the whole floor, one space, one project, one track or
+ * one session. A day's door carries it in the ADDRESS, so the list it opens
+ * reads exactly what the cell counted — never by writing the viewer's global
+ * project lens. It is ALSO the lens scope's address (`encodeLensScope`), so a
+ * lens page's "Show all" and a heat cell spell one scope ONE way and Work
+ * reads it with ONE reader.
  */
 export type ActivityScope =
   | { kind: "pod" }
   | { kind: "workspace"; workspaceId: string }
-  | { kind: "project"; projectId: string };
+  | { kind: "project"; projectId: string }
+  | { kind: "track"; trackId: string }
+  | { kind: "session"; sessionId: string };
 
-/** The scope as one address token: `pod`, `workspace:<id>`, `project:<id>`. */
+/**
+ * The scope as one address token: `pod`, `workspace:<id>`, `project:<id>`,
+ * `track:<id>`, `session:<id>`.
+ */
 export function encodeActivityScope(scope: ActivityScope): string {
-  if (scope.kind === "pod") return "pod";
-  return scope.kind === "project"
-    ? `project:${scope.projectId}`
-    : `workspace:${scope.workspaceId}`;
+  switch (scope.kind) {
+    case "pod":
+      return "pod";
+    case "workspace":
+      return `workspace:${scope.workspaceId}`;
+    case "project":
+      return `project:${scope.projectId}`;
+    case "track":
+      return `track:${scope.trackId}`;
+    case "session":
+      return `session:${scope.sessionId}`;
+  }
 }
 
 /** Read an address token back. Anything else ⇒ `undefined` (no override). */
@@ -408,20 +424,33 @@ export function parseActivityScope(token: unknown): ActivityScope | undefined {
   if (sep < 1 || !id) return undefined;
   if (kind === "project") return { kind, projectId: id };
   if (kind === "workspace") return { kind, workspaceId: id };
+  if (kind === "track") return { kind, trackId: id };
+  if (kind === "session") return { kind, sessionId: id };
   return undefined;
 }
 
 /**
- * The scope as the door input both `activity.daily` and `activity.list` take.
+ * The scope as the door input `activity.daily` and `activity.list` take.
  * `pod` is the absent lens — the WHOLE floor, never the active-space header.
  */
 export function activityScopeFilter(scope: ActivityScope): {
   projectId?: string;
   workspaceId?: string;
+  trackId?: string;
+  sessionId?: string;
 } {
-  if (scope.kind === "project") return { projectId: scope.projectId };
-  if (scope.kind === "workspace") return { workspaceId: scope.workspaceId };
-  return {};
+  switch (scope.kind) {
+    case "pod":
+      return {};
+    case "workspace":
+      return { workspaceId: scope.workspaceId };
+    case "project":
+      return { projectId: scope.projectId };
+    case "track":
+      return { trackId: scope.trackId };
+    case "session":
+      return { sessionId: scope.sessionId };
+  }
 }
 
 // ── The ramp (one recipe, every surface) ────────────────────────────────────

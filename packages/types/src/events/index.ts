@@ -345,6 +345,7 @@ export {
   subjectTrigger,
   validateEventPattern,
   parseEventPattern,
+  parseRecordChange,
 } from "./unified.js";
 export type {
   SubjectType,

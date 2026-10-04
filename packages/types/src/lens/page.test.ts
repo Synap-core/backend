@@ -9,7 +9,10 @@ import { describe, expect, it } from "vitest";
 import type { ActivityRow } from "../activity/index.js";
 import { resolveUnitState } from "../units/state.js";
 import {
+  batchHappenedItems,
+  happenedItems,
   happenedLedgerRows,
+  isHappenedDataLine,
   lensBannerOfStatus,
   lensOutputOfSignal,
   lensRowOfLiveSignal,
@@ -164,5 +167,88 @@ describe("lensBannerOfStatus — ONE banner", () => {
       title: "Hub degraded (newer)",
       more: 1,
     });
+  });
+});
+
+describe("happenedItems — work + data, one feed", () => {
+  const event = (id: string, at: string, over: Partial<LensPageSignal> = {}) =>
+    sig({
+      id,
+      kind: "event",
+      title: "Entity create completed",
+      occurredAt: at,
+      target: { kind: "entity", id: `e-${id}` },
+      event: { action: "create", objectKind: "contact", origin: "sync" },
+      ...over,
+    });
+
+  it("keeps the pod's order, ledger rows and data changes interleaved", () => {
+    const items = happenedItems([
+      event("a", "2026-10-04T11:00:00.000Z"),
+      sig({ id: "l", kind: "activity", activity: LEDGER }),
+      event("b", "2026-10-04T09:00:00.000Z"),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["data", "ledger", "data"]);
+    expect(items[0]).toEqual({
+      kind: "data",
+      event: {
+        id: "a",
+        action: "create",
+        objectKind: "contact",
+        door: { kind: "entity", id: "e-a" },
+        occurredAt: "2026-10-04T11:00:00.000Z",
+        origin: "sync",
+      },
+    });
+  });
+
+  it("an event the pod could not read as a record change is not a line", () => {
+    // A naive mapper would draw its humanized type ("Entity create requested").
+    expect(
+      happenedItems([event("x", "2026-10-04T11:00:00.000Z", { event: null })])
+    ).toEqual([]);
+    expect(
+      happenedItems([
+        event("y", "2026-10-04T11:00:00.000Z", { event: undefined }),
+      ])
+    ).toEqual([]);
+  });
+
+  it("batches CONSECUTIVE identical data changes — 'Sync created 3 contacts'", () => {
+    const now = new Date("2026-10-04T12:00:00.000Z");
+    const [day] = batchHappenedItems(
+      happenedItems([
+        event("a", "2026-10-04T11:00:00.000Z"),
+        event("b", "2026-10-04T10:59:00.000Z"),
+        event("c", "2026-10-04T10:58:00.000Z"),
+        // Another writer splits nothing above it but starts its own line.
+        event("d", "2026-10-04T10:57:00.000Z", {
+          event: { action: "create", objectKind: "contact", origin: null },
+        }),
+      ]),
+      { timeZone: "UTC", now }
+    );
+    expect(day!.isToday).toBe(true);
+    expect(day!.lines.map((l) => [isHappenedDataLine(l), l.count])).toEqual([
+      [true, 3],
+      [true, 1],
+    ]);
+  });
+
+  it("a ledger act between two data changes splits the batch (never re-sorts)", () => {
+    const now = new Date("2026-10-04T12:00:00.000Z");
+    const [day] = batchHappenedItems(
+      happenedItems([
+        event("a", "2026-10-04T11:00:00.000Z"),
+        sig({ id: "l", kind: "activity", activity: LEDGER }),
+        event("b", "2026-10-04T09:00:00.000Z"),
+      ]),
+      { timeZone: "UTC", now }
+    );
+    expect(
+      day!.lines.map((l) =>
+        isHappenedDataLine(l) ? `data:${l.count}` : `ledger:${l.count}`
+      )
+    ).toEqual(["data:1", "ledger:1", "data:1"]);
   });
 });

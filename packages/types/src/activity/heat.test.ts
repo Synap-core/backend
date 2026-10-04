@@ -272,6 +272,8 @@ describe("scope travels in the address", () => {
       { kind: "pod" },
       { kind: "project", projectId: "p-1" },
       { kind: "workspace", workspaceId: "w:2" },
+      { kind: "track", trackId: "t-3" },
+      { kind: "session", sessionId: "s-4" },
     ];
     for (const s of scopes) {
       expect(parseActivityScope(encodeActivityScope(s))).toEqual(s);
@@ -292,6 +294,12 @@ describe("scope travels in the address", () => {
     expect(
       activityScopeFilter({ kind: "workspace", workspaceId: "w" })
     ).toEqual({ workspaceId: "w" });
+    expect(activityScopeFilter({ kind: "track", trackId: "t" })).toEqual({
+      trackId: "t",
+    });
+    expect(activityScopeFilter({ kind: "session", sessionId: "s" })).toEqual({
+      sessionId: "s",
+    });
   });
 });
 
