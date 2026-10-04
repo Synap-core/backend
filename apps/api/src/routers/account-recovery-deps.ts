@@ -163,7 +163,7 @@ async function revokeIdentitySessions(identityId: string): Promise<void> {
   }
 }
 
-async function isPodAdmin(userId: string): Promise<boolean> {
+export async function isPodAdmin(userId: string): Promise<boolean> {
   try {
     await assertPodAdmin(userId);
     return true;
@@ -174,7 +174,7 @@ async function isPodAdmin(userId: string): Promise<boolean> {
 }
 
 /** `users.update.completed` with `data.change` — visible in pod-admin Audit. */
-async function audit(entry: {
+export async function audit(entry: {
   userId: string;
   change: string;
   data?: Record<string, unknown>;

@@ -57,6 +57,8 @@ import {
 } from "@synap/database/schema";
 
 import { courierStatus } from "../courier-status.js";
+import { buildPodUpdatesStatus, readLastUpdate } from "../pod-updates/index.js";
+import { readPodUpdateSettingsRaw } from "./pod-updates-deps.js";
 
 const logger = createLogger({ module: "provision" });
 const OPENCLAW_HUB_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
@@ -918,6 +920,14 @@ provisionRouter.get("/status", async (c) => {
       //                          to the backend container — pod may still send
       //                          mail correctly via Kratos, just can't self-report)
       courier: courierStatus(),
+      // Auto-update setting (U3) + the engine's last outcome (U4). The CP's
+      // health poll reads this to decide whether to push a release and to
+      // email the owner when an update rolled back. Metadata only — no path,
+      // no secret; each half reports its own failed read instead of a default.
+      updates: await buildPodUpdatesStatus({
+        readSettingsRaw: readPodUpdateSettingsRaw,
+        readLastUpdate: () => readLastUpdate(),
+      }),
       // Split-brain status (for frontend banner + CP dashboard)
       ...(await (async () => {
         try {

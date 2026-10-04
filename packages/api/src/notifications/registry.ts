@@ -715,6 +715,21 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ],
   },
   {
+    // U4: an update the host engine (`synap update`) could not land — rolled
+    // back, or worse. Produced once per update id per admin at backend boot
+    // (`pod-update-outcome.ts`). `headline`/`detail` are composed there from the
+    // engine's own outcome record so the bell says what state the pod is in.
+    type: "pod.update_failed",
+    category: "system",
+    label: "Update Failed",
+    icon: "alert-triangle",
+    priority: "high",
+    titleTemplate: "Update to {{version}} {{headline}}",
+    bodyTemplate: "{{detail}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+  },
+  {
     type: "system.capability_update_available",
     category: "system",
     label: "Capability Updates Available",

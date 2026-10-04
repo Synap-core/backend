@@ -1193,6 +1193,13 @@ app.route(
   createAccountRecoveryRouter(accountRecoveryDeps)
 );
 
+// Pod updates (U3 auto-update setting + U4 last outcome) — owner settings
+// door. The CP reads the same facts from /api/provision/status `updates`.
+import { createPodUpdatesRouter } from "./routers/pod-updates.js";
+import { readLastUpdate } from "./pod-updates/index.js";
+import { podUpdatesDeps } from "./routers/pod-updates-deps.js";
+app.route("/api/pod-updates", createPodUpdatesRouter(podUpdatesDeps));
+
 // Connector sync endpoint (ES256 JWT from CP, pulls records from Nango)
 import { connectorsRouter as connectorsRestRouter } from "./routers/connectors.js";
 app.route("/api/connectors", connectorsRestRouter);
@@ -2210,6 +2217,26 @@ try {
             registerNotificationCreator((input) =>
               api.NotificationService.create(input)
             );
+            // U4: a rollback recreates the backend, so this boot is when the
+            // owner learns an update did not land. Once per update id per
+            // admin (idempotent on the notification rows); a failed or absent
+            // read notifies nobody — it is logged, never guessed.
+            void readLastUpdate()
+              .then((r) => {
+                if (r.read === "failed") {
+                  apiLogger.warn(
+                    { error: r.error },
+                    "Could not read the last update outcome"
+                  );
+                  return;
+                }
+                if (r.read === "ok") {
+                  return api.notifyPodUpdateOutcome(r.outcome).then(() => undefined);
+                }
+              })
+              .catch((err) =>
+                apiLogger.warn({ err }, "Update outcome notification failed")
+              );
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
             // The 2-minute IS health cron used to only log a degraded verdict.
