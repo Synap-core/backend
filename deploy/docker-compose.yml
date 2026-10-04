@@ -32,6 +32,11 @@ x-backend-env: &backend-env
   TYPESENSE_API_KEY: ${TYPESENSE_API_KEY}
   TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_ADMIN_API_KEY}
   HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
+  # Per-user Hub sub-tokens (`eve mode multi-user`). Defaults = the backend's
+  # own defaults; before 2026-10-04 these were never passed to the container,
+  # so the .env switch eve wrote reached nothing.
+  HUB_PROTOCOL_SUB_TOKENS: ${HUB_PROTOCOL_SUB_TOKENS:-true}
+  HUB_PROTOCOL_EXTERNAL_USER_WORKSPACE_STRATEGY: ${HUB_PROTOCOL_EXTERNAL_USER_WORKSPACE_STRATEGY:-first}
   CHANNEL_GATEWAY_KEY: ${CHANNEL_GATEWAY_KEY:-}
   # Service credential encryption for optional managed service provisioning.
   # Rotating invalidates stored IS credentials.

@@ -115,13 +115,10 @@ envcfg_type_error() {
                    || { echo "must be a bare hostname (no scheme, port or path) — got '$_ec_v'"; return 1; } ;;
         email) _ec_re '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' "$_ec_v" || { echo "must be an email address"; return 1; } ;;
         origin)
+            # http:// on a public host is legal (a LAN pod without TLS) but
+            # breaks federation/pod-agent trust — validate warns about it.
             _ec_re '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$' "$_ec_v" \
-                || { echo "must be http(s)://host[:port] with no path or trailing slash — got '$_ec_v'"; return 1; }
-            case "$_ec_v" in
-                http://*)
-                    _ec_h="${_ec_v#http://}"; _ec_h="${_ec_h%%:*}"
-                    _ec_local_host "$_ec_h" || { echo "must use https:// (http is only for localhost or an IP) — got '$_ec_v'"; return 1; } ;;
-            esac ;;
+                || { echo "must be http(s)://host[:port] with no path or trailing slash — got '$_ec_v'"; return 1; } ;;
         httpsurl)
             _ec_re '^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[^?#@[:space:]]*[^/?#@[:space:]])?$' "$_ec_v" \
                 || { echo "must be a canonical https:// URL (no trailing slash, query, fragment or credentials) — got '$_ec_v'"; return 1; } ;;
@@ -476,6 +473,11 @@ envcfg_validate() {
     if [ -n "$_ec_pu" ] && [ -n "$_ec_aud" ] && [ "$_ec_pu" != "$_ec_aud" ]; then
         echo "error|POD_AGENT_AUDIENCE|differs from PUBLIC_URL ($_ec_pu): the pod-agent rejects every Control Plane command" >> "$_ec_out"
     fi
+    case "$_ec_pu" in
+        http://*)
+            _ec_h="${_ec_pu#http://}"; _ec_h="${_ec_h%%:*}"
+            _ec_local_host "$_ec_h" || echo "warn|PUBLIC_URL|is http:// on a public host — federation and the pod-agent require https" >> "$_ec_out" ;;
+    esac
     if [ -n "$_ec_pu" ] && [ -n "$_ec_dom" ]; then
         _ec_h="${_ec_pu#*://}"; _ec_h="${_ec_h%%[:/]*}"
         [ "$_ec_h" = "$_ec_dom" ] || echo "warn|PUBLIC_URL|host '$_ec_h' is not DOMAIN '$_ec_dom' (Kratos URLs and Caddy routing follow DOMAIN)" >> "$_ec_out"

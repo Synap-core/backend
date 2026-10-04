@@ -157,13 +157,15 @@ grep -q "nothing to recreate" "$TMP/out" && ok "a CLI-only key needs no recreate
 
 # 3. type checks
 reset_env
-for bad_pair in "PUBLIC_URL=https://pod.example.com/" "PUBLIC_URL=http://pod.example.com" "DOMAIN=https://pod.example.com" \
+for bad_pair in "PUBLIC_URL=https://pod.example.com/" "PUBLIC_URL=https://pod.example.com/api" "DOMAIN=https://pod.example.com" \
                 "ADMIN_EMAIL=nope" "SYNAP_EDGE=nginx" "DB_POOL_SIZE=ten" "OPENAI_API_KEY=a b"; do
   synap config set "$bad_pair"; rc=$?
   [ "$rc" != 0 ] && [ "$(baks)" = 0 ] || bad "accepted invalid $bad_pair"
 done
-ok "invalid values refused (trailing slash, http on a public host, scheme in DOMAIN, email, enum, int, token)"
+ok "invalid values refused (trailing slash, path in PUBLIC_URL, scheme in DOMAIN, email, enum, int, token)"
 synap config set PUBLIC_URL=http://localhost:4000 POD_AGENT_AUDIENCE= ; [ $? = 0 ] && ok "http is allowed for localhost" || bad "localhost http refused: $(cat "$TMP/out")"
+synap config set PUBLIC_URL=http://pod.example.com DOMAIN=pod.example.com; [ $? = 0 ] || bad "http PUBLIC_URL on a LAN-style host refused: $(cat "$TMP/out")"
+synap config validate; [ $? = 0 ] && grep -q "PUBLIC_URL.*http:// on a public host" "$TMP/out" && ok "http on a public host is accepted with a validate warning" || bad "http warning: $(cat "$TMP/out")"
 
 # 4. guarded keys
 reset_env
