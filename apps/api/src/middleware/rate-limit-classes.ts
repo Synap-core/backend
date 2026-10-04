@@ -288,6 +288,22 @@ export function buildPublicDoorKey(
 /**
  * Stable SHA-256 prefix of a bearer token. Never log the raw token.
  */
+/**
+ * The client IP every pod-edge limiter keys on. Caddy and Traefik (without
+ * trusted upstreams) replace an incoming X-Forwarded-For with the peer they
+ * saw, so its first entry is the connecting client — or the CDN edge when one
+ * fronts the pod.
+ */
+export function clientIp(c: {
+  req: { header(name: string): string | undefined };
+}): string {
+  return (
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+    c.req.header("x-real-ip") ||
+    "unknown"
+  );
+}
+
 export function hashBearerToken(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 32);
 }

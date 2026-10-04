@@ -1,13 +1,14 @@
 /**
- * Fixed-window attempt counter for the unauthenticated redeem door.
+ * Limits for the unauthenticated redeem door.
  *
- * Why not the IP limiter every other door uses: behind Cloudflare every
- * visitor can arrive from one edge IP (docker-compose.yml), so a per-IP bucket
- * is a shared bucket. The redeem door is keyed per EMAIL (a guess against one
- * account) and GLOBALLY (a spray across accounts) instead.
- *
- * In-process, like every limiter in this app: the numbers hold per pod
- * process. The pod runs one API process.
+ * An attacker who knows the owner's email must not be able to shut the door
+ * on the owner, so no bucket is keyed on the email ALONE at a low limit:
+ *   - per (email, client IP): 5 / 15 min — one guesser against one account;
+ *   - per email: 30 / 15 min — a ceiling a distributed guesser still hits;
+ *   - a cap on scrypt derivations in flight (not a global count, which any
+ *     spray could exhaust for everyone) — the CPU-exhaustion guard.
+ * Behind a CDN every visitor can share one edge IP; the per-email ceiling is
+ * then what holds. In-process: the numbers hold per pod process (one API).
  */
 
 export class FixedWindowLimiter {
@@ -40,6 +41,20 @@ export class FixedWindowLimiter {
   }
 }
 
-/** Per email: 5 attempts / 15 min. Global: 100 attempts / 15 min. */
-export const REDEEM_PER_EMAIL = { limit: 5, windowMs: 15 * 60 * 1000 };
-export const REDEEM_GLOBAL = { limit: 100, windowMs: 15 * 60 * 1000 };
+/** At most `limit` holders at once; `tryAcquire` never waits. */
+export class ConcurrencyCap {
+  private inFlight = 0;
+  constructor(private readonly limit: number) {}
+  tryAcquire(): boolean {
+    if (this.inFlight >= this.limit) return false;
+    this.inFlight += 1;
+    return true;
+  }
+  release(): void {
+    this.inFlight = Math.max(0, this.inFlight - 1);
+  }
+}
+
+export const REDEEM_PER_EMAIL_IP = { limit: 5, windowMs: 15 * 60 * 1000 };
+export const REDEEM_PER_EMAIL = { limit: 30, windowMs: 15 * 60 * 1000 };
+export const REDEEM_MAX_IN_FLIGHT = 4;

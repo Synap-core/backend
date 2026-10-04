@@ -52,11 +52,14 @@ import {
   type KratosSessionLike,
 } from "../account-recovery/policy.js";
 import {
+  ConcurrencyCap,
   FixedWindowLimiter,
-  REDEEM_GLOBAL,
+  REDEEM_MAX_IN_FLIGHT,
   REDEEM_PER_EMAIL,
+  REDEEM_PER_EMAIL_IP,
 } from "../account-recovery/rate-limit.js";
 import type { PodAdminConfigResult } from "../pod-admin-config.js";
+import { clientIp } from "../middleware/rate-limit-classes.js";
 
 export interface RecoveryLogger {
   info(obj: Record<string, unknown>, msg?: string): void;
@@ -177,22 +180,24 @@ export function buildContinueUrl(link: KratosRecoveryLink): string {
 }
 
 export interface AccountRecoveryLimiters {
+  perEmailIp: FixedWindowLimiter;
   perEmail: FixedWindowLimiter;
-  global: FixedWindowLimiter;
+  derivations: ConcurrencyCap;
 }
 
 export function defaultLimiters(now: () => number = Date.now) {
   return {
+    perEmailIp: new FixedWindowLimiter(
+      REDEEM_PER_EMAIL_IP.limit,
+      REDEEM_PER_EMAIL_IP.windowMs,
+      now
+    ),
     perEmail: new FixedWindowLimiter(
       REDEEM_PER_EMAIL.limit,
       REDEEM_PER_EMAIL.windowMs,
       now
     ),
-    global: new FixedWindowLimiter(
-      REDEEM_GLOBAL.limit,
-      REDEEM_GLOBAL.windowMs,
-      now
-    ),
+    derivations: new ConcurrencyCap(REDEEM_MAX_IN_FLIGHT),
   } satisfies AccountRecoveryLimiters;
 }
 
@@ -253,30 +258,42 @@ export function createAccountRecoveryRouter(
     }
 
     // Both buckets are charged for every attempt, known account or not, so a
-    // 429 says nothing about whether the email exists.
-    const globalOk = limiters.global.hit("global");
-    const emailOk = limiters.perEmail.hit(emailKey(email));
-    if (!globalOk || !emailOk) {
+    // 429 says nothing about whether the email exists. Neither is keyed on the
+    // email alone at a low limit: see rate-limit.ts (owner lock-out).
+    const key = emailKey(email);
+    const pairOk = limiters.perEmailIp.hit(`${key}:${clientIp(c)}`);
+    const emailOk = limiters.perEmail.hit(key);
+    const scope = !pairOk ? "email_ip" : !emailOk ? "email" : null;
+    if (scope || !limiters.derivations.tryAcquire()) {
       logger.warn(
-        { emailKey: emailKey(email), scope: globalOk ? "email" : "global" },
+        { emailKey: key, scope: scope ?? "in_flight" },
         "[account-recovery] redeem rate limited"
       );
       return fail(c, "rate_limited", 429);
     }
 
     const normalized = normalizeRecoveryCode(typed);
-    let account: PodAccount | null;
-    let candidates: CandidateCode[];
+    let account: PodAccount | null = null;
+    let candidates: CandidateCode[] = [];
+    let matchedId: string | null = null;
+    let readFailed = false;
     try {
-      account = await deps.findAccountByEmail(email);
-      candidates = account ? await deps.codes.listUnused(account.userId) : [];
-    } catch (err) {
-      logger.error({ err }, "[account-recovery] redeem read failed");
+      try {
+        account = await deps.findAccountByEmail(email);
+        candidates = account ? await deps.codes.listUnused(account.userId) : [];
+      } catch (err) {
+        logger.error({ err }, "[account-recovery] redeem read failed");
+        readFailed = true;
+      }
+      if (!readFailed) matchedId = await matchRecoveryCode(normalized, candidates);
+    } finally {
+      // Released before the response floor: the cap counts derivations, not sleeps.
+      limiters.derivations.release();
+    }
+    if (readFailed) {
       await floor();
       return fail(c, "recovery_unavailable", 503);
     }
-
-    const matchedId = await matchRecoveryCode(normalized, candidates);
     if (!account || !matchedId) {
       if (account) {
         // Not awaited: an extra write only for KNOWN accounts would put the

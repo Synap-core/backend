@@ -20,7 +20,10 @@ import {
   type AccountRecoveryLimiters,
 } from "./account-recovery.js";
 import { hashRecoveryCode, newBatchSalt } from "../account-recovery/codes.js";
-import { FixedWindowLimiter } from "../account-recovery/rate-limit.js";
+import {
+  ConcurrencyCap,
+  FixedWindowLimiter,
+} from "../account-recovery/rate-limit.js";
 
 const OWNER = { userId: "user-owner", identityId: "kratos-owner" };
 const OWNER_EMAIL = "owner@example.com";
@@ -157,11 +160,12 @@ function app(
 
 function redeem(
   router: ReturnType<typeof app>,
-  body: { email: string; code: string }
+  body: { email: string; code: string },
+  ip = "198.51.100.1"
 ) {
   return router.request("/redeem", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Forwarded-For": ip },
     body: JSON.stringify(body),
   });
 }
@@ -290,14 +294,18 @@ describe("POST /redeem — enumeration-safe", () => {
 });
 
 describe("POST /redeem — rate limits", () => {
-  it("per email: the 6th attempt in the window is refused, even for an unknown email", async () => {
+  const ATTACKER = "203.0.113.66";
+  const OWNER_IP = "198.51.100.1";
+
+  it("per (email, IP): the 6th attempt in the window is refused, even for an unknown email", async () => {
     for (const email of [OWNER_EMAIL, "ghost@example.com"]) {
       const world = makeWorld();
       await seed(world, CODES);
       let t = 0;
       const limiters = {
-        perEmail: new FixedWindowLimiter(5, 1000, () => t),
-        global: new FixedWindowLimiter(1000, 1000, () => t),
+        perEmailIp: new FixedWindowLimiter(5, 1000, () => t),
+        perEmail: new FixedWindowLimiter(1000, 1000, () => t),
+        derivations: new ConcurrencyCap(4),
       };
       const router = app(world, limiters);
       world.deps.sleep = async () => undefined;
@@ -316,19 +324,77 @@ describe("POST /redeem — rate limits", () => {
     }
   });
 
-  it("global: a spray across many emails trips the global bucket", async () => {
+  it("an attacker who knows the owner's email cannot lock the owner out (production limits)", async () => {
+    const world = makeWorld();
+    await seed(world, CODES);
+    world.deps.sleep = async () => undefined;
+    const router = app(world); // defaultLimiters(): the shipped numbers
+    for (let i = 0; i < 10; i++) {
+      await redeem(router, { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" }, ATTACKER);
+    }
+    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, ATTACKER)).status).toBe(429);
+    const owner = await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, OWNER_IP);
+    expect(owner.status).toBe(200);
+  });
+
+  it("per email ceiling: a guesser spread over many IPs still hits a wall", async () => {
     const world = makeWorld();
     world.deps.sleep = async () => undefined;
     const limiters = {
-      perEmail: new FixedWindowLimiter(5, 60_000),
-      global: new FixedWindowLimiter(3, 60_000),
+      perEmailIp: new FixedWindowLimiter(5, 60_000),
+      perEmail: new FixedWindowLimiter(3, 60_000),
+      derivations: new ConcurrencyCap(4),
     };
     const router = app(world, limiters);
     const statuses: number[] = [];
     for (let i = 0; i < 4; i++) {
-      statuses.push((await redeem(router, { email: `p${i}@example.com`, code: CODES[0]! })).status);
+      statuses.push((await redeem(router, { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" }, `192.0.2.${i}`)).status);
     }
     expect(statuses).toEqual([401, 401, 401, 429]);
+  });
+
+  it("a spray across many emails is not a global lock-out: no shared attempt count", async () => {
+    const world = makeWorld();
+    await seed(world, CODES);
+    world.deps.sleep = async () => undefined;
+    const router = app(world);
+    for (let i = 0; i < 150; i++) {
+      await redeem(router, { email: `p${i}@example.com`, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" }, ATTACKER);
+    }
+    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, OWNER_IP)).status).toBe(200);
+  });
+
+  it("derivations in flight are capped (rate_limited over the cap) and every slot is released", async () => {
+    const world = makeWorld();
+    await seed(world, CODES);
+    world.deps.sleep = async () => undefined;
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const find = world.deps.findAccountByEmail;
+    world.deps.findAccountByEmail = async (email) => {
+      await gate;
+      return find(email);
+    };
+    const limiters = {
+      perEmailIp: new FixedWindowLimiter(100, 60_000),
+      perEmail: new FixedWindowLimiter(100, 60_000),
+      derivations: new ConcurrencyCap(1),
+    };
+    const router = app(world, limiters);
+    const first = redeem(router, { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" });
+    await new Promise((r) => setTimeout(r, 0));
+    const over = await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, "192.0.2.9");
+    expect(over.status).toBe(429);
+    expect((await over.json()).error).toBe("rate_limited");
+    open();
+    expect((await first).status).toBe(401);
+    // Released after a wrong code, and after a failed read.
+    world.deps.findAccountByEmail = async () => {
+      throw new Error("db down");
+    };
+    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! })).status).toBe(503);
+    world.deps.findAccountByEmail = find;
+    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! })).status).toBe(200);
   });
 });
 

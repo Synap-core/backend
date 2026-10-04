@@ -17,6 +17,7 @@ import {
   getCalendarFeedIpCeiling,
   getPublicDoorRateConfig,
   buildPublicDoorKey,
+  clientIp,
 } from "./rate-limit-classes.js";
 
 // Re-export pure helpers so existing import sites can stay on security.js
@@ -27,14 +28,6 @@ export {
   hashBearerToken,
   type RateLimitClass,
 } from "./rate-limit-classes.js";
-
-function clientIp(c: Context): string {
-  return (
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
-    c.req.header("x-real-ip") ||
-    "unknown"
-  );
-}
 
 /**
  * Shared key-generator: class + Bearer-hash (or IP), with dev/localhost bypasses.
