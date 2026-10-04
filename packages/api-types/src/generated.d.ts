@@ -2720,7 +2720,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "agent" | "automation" | "playbook";
+			data: "agent" | "playbook" | "automation" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -2735,7 +2735,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "human" | "agent" | "automation" | "playbook";
+			$type: "agent" | "playbook" | "automation" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -2841,7 +2841,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3303,7 +3303,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "capability" | "human" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -11856,13 +11856,18 @@ export interface NotificationDef {
 	 *   an insight, a briefing). It NEVER counts toward needs-you. It goes to
 	 *   its own sibling bucket instead: `signals.list({ lens: "suggestions" })`
 	 *   and `signals.count().suggestions`, shown as "Suggestions".
+	 * - `"status"` — SYSTEM HEALTH (an AI service degraded, storage running
+	 *   out). Never a needs-you row and never a suggestion (founder, lens grammar
+	 *   2026-10-04): every unread row of these types folds into ONE deduplicated
+	 *   status banner (`signals.list` lens page, `status`). Health is a condition
+	 *   of the pod, not an ask of the person.
 	 *
 	 * Data on the row, never a list of type strings in the union. A new
 	 * informational type is left out of needs-you because its own row says so.
 	 */
 	needsYou?: NotificationNeedsYouRole;
 }
-export type NotificationNeedsYouRole = "item" | "informational" | "session-pointer" | "suggestion";
+export type NotificationNeedsYouRole = "item" | "informational" | "session-pointer" | "suggestion" | "status";
 /**
  * The five values `routingRules` has always declared, as read by
  * `NotificationService` (`"mute"` short-circuits before the row is written;
@@ -14382,10 +14387,26 @@ export type SignalKind =
 "proposal-cluster"
 /** One unread, non-proposal notification. */
  | "notification"
-/** A past `events` row (history lens). */
+/** A past `events` row — a DATA change (history lens / Happened). */
  | "event"
-/** A proposal that has been approved / rejected / expired (history lens). */
- | "decided-proposal"
+/**
+ * One `activity.list` ledger row — a governed act, a decision, a run or a
+ * session lifecycle (history lens / Happened). The ledger row itself rides
+ * in `activity`, verbatim, so its actor / verb / outcome / Undo door are
+ * never re-derived here. (Replaced `decided-proposal`: the ledger's
+ * `decision` and `proposal` sources carry every decided proposal.)
+ */
+ | "activity"
+/**
+ * A session an agent is working on RIGHT NOW (Happening) — the one rule,
+ * `isSessionWorkingNow` over `loadSessionLiveness`. Its facts ride in `live`.
+ */
+ | "live-session"
+/**
+ * One object a session PRODUCED (Produced) — an `outputs.landed` row,
+ * verbatim, in `landed`.
+ */
+ | "output"
 /** One deliverable an agent handed to the human and nobody has closed. */
  | "owed-slot"
 /**
@@ -14522,6 +14543,21 @@ export interface Signal {
 	 */
 	lifetimeHours?: number | null;
 	/**
+	 * WHERE the row came from — the small provenance door (lens grammar §5: a
+	 * source is shown only when it differs from the page's scope; the client
+	 * decides that with `visibleSource`, `@synap-core/types/lens`). The most
+	 * specific readable container: the SESSION a row belongs to, else the
+	 * PROJECT a session-row sits in. Absent when the row has no readable
+	 * container (a pod-level notification) — never a guessed one.
+	 */
+	source?: SignalSource;
+	/** `live-session` only: the liveness facts the "working now" rule read. */
+	live?: SessionActivityLive;
+	/** `output` only: the produced object, as `outputs.landed` returns it. */
+	landed?: LandedObjectRow;
+	/** `activity` only: the ledger row, as `activity.list` returns it. */
+	activity?: ActivityRow;
+	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
 	 * everything a session owes the person (its owed slots, its draft-asks row,
 	 * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -14547,6 +14583,67 @@ export interface Signal {
 }
 /** See {@link Signal.ageBucket}. */
 export type SignalAgeBucket = "recent" | "older";
+/**
+ * A row's provenance door — the same shape as `LensSource`
+ * (`@synap-core/types/lens`): an object-nav kind, an id, a short label.
+ */
+export interface SignalSource {
+	kind: "workspace" | "project" | "track" | "session";
+	id: string;
+	label: string;
+}
+/**
+ * The STATUS BANNER — system health, never a needs-you row (lens grammar,
+ * founder-approved 2026-10-04). ONE banner for the page, however many health
+ * rows are unread: each issue is folded per `(type, source)` — "Intelligence
+ * Hub degraded" raised nine times is ONE issue with `repeatCount: 9` — and the
+ * banner leads with the NEWEST issue. `null` when nothing is wrong.
+ */
+export interface StatusBannerIssue {
+	/** The registry type (`system.intelligence_degraded`, …). */
+	type: string;
+	/** The newest instance's evaluated title. */
+	title: string;
+	occurredAt: Date;
+	/** How many unread rows this issue folds. */
+	repeatCount: number;
+	/** Every folded row — what "dismiss" marks read. */
+	notificationIds: string[];
+	target: SignalTarget | null;
+}
+export interface StatusBanner {
+	/** The newest issue's title — what the banner says. */
+	title: string;
+	occurredAt: Date;
+	/** Distinct issues, newest first. */
+	issues: StatusBannerIssue[];
+}
+/** A sub-read's name — what `unreadable` reports. */
+export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "liveness" | "outputs" | "activity" | "events";
+/** One class of the lens page. */
+export interface LensClassWire {
+	/** The first `cap` rows, in the class's own order. */
+	rows: Signal[];
+	/** Rows in the class at this scope — the header's count door. */
+	total: number;
+	/** `total` is a FLOOR: a scan cap was hit or a half is unreadable. */
+	truncated: boolean;
+	/** More exists than `rows` shows ("Show all"). */
+	hasMore: boolean;
+	/** Halves that FAILED. Non-empty ⇒ partial, never "empty". */
+	unreadable: SignalSubRead[];
+}
+export interface LensPageWire {
+	blocking: LensClassWire;
+	proposed: LensClassWire;
+	happening: LensClassWire;
+	produced: LensClassWire;
+	happened: LensClassWire;
+	/** System health — ONE deduplicated banner, or null when nothing is wrong. */
+	status: StatusBanner | null;
+	/** The health read failed: `status: null` then means NOT MEASURED. */
+	statusUnreadable: boolean;
+}
 /**
  * resolveEntityOpenTarget — WHERE opening this entity should go, decided on the
  * pod so every client (browser, relay) only dispatches.
@@ -14838,7 +14935,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					chip: {
 						label: string;
 						value: string;
-						action: "confirm" | "link_entity" | "set_property" | "add_relation" | "dismiss";
+						action: "confirm" | "dismiss" | "link_entity" | "set_property" | "add_relation";
 						icon?: string | undefined;
 						recommended?: boolean | undefined;
 						description?: string | undefined;
@@ -17328,7 +17425,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18080,7 +18177,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18182,7 +18279,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18298,7 +18395,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -18766,11 +18863,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				threadId?: string | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
+				trackId?: string | undefined;
 				automationId?: string | undefined;
 				status?: "pending" | "rejected" | undefined;
 				limit?: number | undefined;
 				scanLimit?: number | undefined;
 				excludeDraftSessions?: boolean | undefined;
+				splitBySession?: boolean | undefined;
 			};
 			output: {
 				groups: ProposalCluster[];
@@ -31555,7 +31654,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "ai" | "governance" | "inbox";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -34178,6 +34277,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} & Partial<SessionEdges> & Partial<SessionOutputDependencies> & {
 				nextMove?: ContinuationNextMove;
 				unitFacts?: SessionUnitCounts;
+				live?: SessionActivityLive | null;
 				interactions?: SessionInteractionsSection;
 				viewerRole?: SessionViewerRole;
 			})[];
@@ -38297,16 +38397,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				lens?: "history" | "suggestions" | "needs-you" | undefined;
+				lens?: "proposed" | "produced" | "page" | "history" | "suggestions" | "happening" | "needs-you" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
+				since?: string | undefined;
+				caps?: {
+					blocking?: number | undefined;
+					proposed?: number | undefined;
+					happening?: number | undefined;
+					produced?: number | undefined;
+					happened?: number | undefined;
+				} | undefined;
 				workspaceId?: string | null | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
+				trackId?: string | undefined;
 				automationId?: string | undefined;
 			};
 			output: {
 				signals: Signal[];
+				page?: LensPageWire;
 			};
 			meta: object;
 		}>;
@@ -38315,6 +38425,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
+				trackId?: string | undefined;
 				automationId?: string | undefined;
 			} | undefined;
 			output: {
@@ -38326,6 +38437,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				notifications: number;
 				review: number;
 				drafts: number;
+				draftsTruncated: boolean;
 				suggestions: number;
 			};
 			meta: object;
@@ -38346,6 +38458,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notifications: number;
 					review: number;
 					drafts: number;
+					draftsTruncated: boolean;
 					suggestions: number;
 				};
 			} | {
