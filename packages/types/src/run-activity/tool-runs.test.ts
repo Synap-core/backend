@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   projectToolRuns,
   appendToolRunStep,
+  pairToolRunSteps,
   type ToolRunStep,
 } from "./tool-runs.js";
 
@@ -217,5 +218,41 @@ describe("appendToolRunStep", () => {
     appendToolRunStep(steps, call({ id: "a", status: "error" }));
     expect(steps[0]!.status).toBe("running");
     expect(steps).toHaveLength(1);
+  });
+});
+
+describe("pairToolRunSteps — the pairing a raw-step renderer reads", () => {
+  it("hands back the RAW steps, each result paired with the oldest open call", () => {
+    const steps = [
+      { id: "c1", type: "tool_call", toolName: "search", args: { q: 1 } },
+      { id: "c2", type: "tool_call", toolName: "search", args: { q: 2 } },
+      { id: "r1", type: "tool_result", toolName: "search", toolOutput: [1] },
+    ];
+    const pairs = pairToolRunSteps(steps);
+    expect(pairs.map((p) => [p.call?.id, p.result?.id ?? null])).toEqual([
+      ["c1", "r1"],
+      ["c2", null],
+    ]);
+    // Generic: the caller's own fields survive (no projection in between).
+    expect(pairs[0]!.call!.args).toEqual({ q: 1 });
+  });
+
+  it("a call that failed at birth never takes a later result; an orphan result stands alone", () => {
+    const pairs = pairToolRunSteps([
+      {
+        id: "c1",
+        type: "tool_call",
+        toolName: "send",
+        status: "error",
+        error: "no smtp",
+      },
+      { id: "r1", type: "tool_result", toolName: "send" },
+    ]);
+    expect(
+      pairs.map((p) => [p.call?.id ?? null, p.result?.id ?? null])
+    ).toEqual([
+      ["c1", null],
+      [null, "r1"],
+    ]);
   });
 });

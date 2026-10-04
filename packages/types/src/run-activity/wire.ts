@@ -98,6 +98,11 @@ export interface SessionActivityLive {
    * session's status — "active" is a lifecycle, not "an agent is working".
    */
   turnInFlight: boolean;
+  /**
+   * WHICH turn is in flight (`chat_turns.id`), when the pod names it. Optional:
+   * an older pod omits it, and the derivation then infers the live turn.
+   */
+  turnId?: string | null;
   /** When the in-flight turn started; null when none is in flight. */
   since: Date | string | null;
   /** The newest activity `at`; null when nothing has happened yet. */

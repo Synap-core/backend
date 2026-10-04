@@ -127,6 +127,129 @@ describe("the Now line — a recorded fact, never inferred from status", () => {
     const v = deriveRunActivity(wire([item({})], { terminal: true }));
     expect(v.now).toBeNull();
   });
+
+  it("composes the WHOLE line once: 'last' carries its prefix, 'now' does not", () => {
+    const idle = deriveRunActivity(wire([item({ objectTitle: "Ship it" })]));
+    expect(idle.now?.text).toBe('Last: Created Task "Ship it"');
+    const live = deriveRunActivity(
+      wire(
+        [
+          item({
+            kind: "tool",
+            turnId: "t",
+            status: "running",
+            title: "Drafting…",
+          }),
+        ],
+        { live: { turnInFlight: true, since: new Date(), lastAt: null } }
+      )
+    );
+    expect(live.now?.text).toBe("Drafting");
+  });
+});
+
+describe("the Now line when the run is stopped on YOU", () => {
+  const pending = (over: Partial<SessionActivityItem> = {}) =>
+    item({
+      kind: "decision",
+      status: "pending",
+      action: "update",
+      objectKind: "task",
+      objectTitle: "Launch date",
+      proposalId: "p1",
+      ...over,
+    });
+
+  it("rules out 'Last: <older step>': idle + a pending decision ⇒ mode 'waiting', naming it", () => {
+    // The fixture today's rule gets wrong: the latest HISTORY step is the
+    // search, so a 'last' line would read "Last: Searched…" while the run is
+    // in fact waiting on the reader.
+    const v = deriveRunActivity(
+      wire([
+        pending(),
+        item({
+          kind: "tool",
+          action: "search",
+          turnId: "t1",
+          title: "Searched",
+        }),
+      ])
+    );
+    expect(v.now?.mode).toBe("waiting");
+    expect(v.now?.step?.proposalId).toBe("p1");
+    expect(v.now?.text).toBe('Waiting on you: Update Task "Launch date"');
+  });
+
+  it("an open ask is waiting too", () => {
+    const v = deriveRunActivity(
+      wire([
+        item({ kind: "ask", status: "pending", title: "Confirm the budget" }),
+      ])
+    );
+    expect(v.now?.mode).toBe("waiting");
+  });
+
+  it("several owed: names the OLDEST and counts the rest", () => {
+    const v = deriveRunActivity(
+      wire([pending(), pending({ objectTitle: "Price", proposalId: "p2" })])
+    );
+    expect(v.now?.step?.proposalId).toBe("p1");
+    expect(v.now?.text).toBe('Waiting on you: Update Task "Launch date" (+1)');
+  });
+
+  it("a turn in flight still wins — the agent IS working", () => {
+    const v = deriveRunActivity(
+      wire([pending()], {
+        live: { turnInFlight: true, since: new Date(), lastAt: null },
+      })
+    );
+    expect(v.now?.mode).toBe("now");
+  });
+
+  it("terminal: no line, even with something owed", () => {
+    expect(
+      deriveRunActivity(wire([pending()], { terminal: true })).now
+    ).toBeNull();
+  });
+});
+
+describe("the live turn, when the pod NAMES it (`live.turnId`)", () => {
+  // A new turn has started (t2) and has no tool step yet; the older turn t1
+  // left a call dangling. Inference ("the latest turn any tool step ran in")
+  // picks t1 — the false liveness the named id exists to rule out.
+  const items = () => [
+    item({
+      kind: "tool",
+      action: "send_email",
+      turnId: "t1",
+      status: "running",
+    }),
+  ];
+
+  it("with the id: the dangling call is unsettled and the line is the turn itself", () => {
+    const v = deriveRunActivity(
+      wire(items(), {
+        live: {
+          turnInFlight: true,
+          turnId: "t2",
+          since: new Date(),
+          lastAt: null,
+        },
+      })
+    );
+    expect(v.now?.mode).toBe("now");
+    expect(v.now?.step).toBeNull();
+    expect(v.groups.map((g) => g.phase)).toEqual(["unsettled"]);
+  });
+
+  it("without it (older pod): falls back to inference, as before", () => {
+    const v = deriveRunActivity(
+      wire(items(), {
+        live: { turnInFlight: true, since: new Date(), lastAt: null },
+      })
+    );
+    expect(v.now?.step?.turnId).toBe("t1");
+  });
 });
 
 describe("waiting on you — rendered once", () => {

@@ -12,7 +12,7 @@
  */
 
 import type { UnitGlyph, UnitTone } from "../units/state.js";
-import type { StepPhase } from "./derive.js";
+import type { NowLineMode, StepPhase } from "./derive.js";
 
 export interface StepMark {
   tone: UnitTone;
@@ -32,4 +32,28 @@ const STEP_MARKS = {
 
 export function stepMark(phase: StepPhase): StepMark {
   return STEP_MARKS[phase];
+}
+
+/**
+ * The Now line's mark, by mode — ONE table for every surface (browser session
+ * page, run-detail, relay hero), so the line is never drawn three ways.
+ *   now     — the live step's mark (AI yellow: provenance of work happening).
+ *   waiting — your turn, the same mark as a step waiting on you.
+ *   last    — idle is a TIME, not a state: a muted clock, never a tick that
+ *             claims the run is "done".
+ */
+const NOW_LINE_MARKS = {
+  now: STEP_MARKS.now,
+  waiting: STEP_MARKS.waiting_on_you,
+  last: { tone: "textMuted", glyph: "clock" },
+} as const satisfies Record<NowLineMode, StepMark>;
+
+/** The glyphs a Now line can wear — a renderer's icon table is total over these. */
+export type NowLineGlyph = (typeof NOW_LINE_MARKS)[NowLineMode]["glyph"];
+
+export function nowLineMark(mode: NowLineMode): {
+  tone: UnitTone;
+  glyph: NowLineGlyph;
+} {
+  return NOW_LINE_MARKS[mode];
 }

@@ -21,8 +21,8 @@
  *
  * ── Scope: tools, not thoughts ────────────────────────────────────────────
  * Only `tool_call` / `tool_result` / a tool-attributed `error` become cards.
- * `thinking` steps are deliberately excluded (decision D3, 2026-10-04: agent
- * reasoning is hidden at rest).
+ * `thinking` steps are deliberately excluded: agent reasoning is hidden at
+ * rest — the agent-run spec's default (§10, "reasoning visibility").
  *
  * ── Labels ────────────────────────────────────────────────────────────────
  * NO local label map. The step's own `title` / `content` is server-authored and
@@ -102,64 +102,89 @@ function detailFor(output: unknown): string | undefined {
 }
 
 /**
- * Fold an ordered list of turn steps into the cards to render.
+ * One tool call and the step that settled it — THE pairing rule, generic so a
+ * renderer that needs the raw steps (a chat panel reading `toolOutput` for an
+ * inline result) pairs through it instead of keeping its own copy.
  *
- * Order is CALL order — the sequence the agent actually worked in — and a
- * result never moves a card, it only settles one in place.
+ * `call` is null for an ORPHAN result (the call frame was dropped, or the
+ * stream was joined mid-turn); `result` is null while the call is open. A call
+ * that itself failed (`status: "error"`) is closed at birth and never takes a
+ * later result — the next open call of that tool does.
  */
-export function projectToolRuns(steps: readonly ToolRunStep[]): ToolRunCard[] {
-  const cards: ToolRunCard[] = [];
+export interface ToolRunPair<T extends ToolRunStep = ToolRunStep> {
+  toolName: string;
+  call: T | null;
+  result: T | null;
+}
 
-  const settleOldest = (
-    toolName: string,
-    next: Omit<ToolRunCard, "id" | "toolName" | "label">
-  ): boolean => {
-    const target = cards.find(
-      (c) => c.toolName === toolName && c.status === "running"
-    );
-    if (!target) return false;
-    target.status = next.status;
-    if (next.detail !== undefined) target.detail = next.detail;
-    return true;
-  };
-
+/** Pairs in CALL order; a result settles the OLDEST open call of its tool. */
+export function pairToolRunSteps<T extends ToolRunStep>(
+  steps: readonly T[]
+): ToolRunPair<T>[] {
+  const pairs: ToolRunPair<T>[] = [];
+  const open: ToolRunPair<T>[] = [];
   for (const step of steps) {
     const toolName = step.toolName?.trim();
     if (!toolName) continue;
-
     if (step.type === "tool_call") {
-      cards.push({
-        id: step.id,
-        toolName,
-        label: labelFor(step, toolName),
-        status: step.status === "error" ? "failed" : "running",
-        ...(step.error ? { detail: step.error } : {}),
-      });
+      const pair: ToolRunPair<T> = { toolName, call: step, result: null };
+      pairs.push(pair);
+      if (step.status !== "error") open.push(pair);
       continue;
     }
-
     if (step.type === "tool_result" || step.type === "error") {
-      const failed = step.type === "error" || step.status === "error";
-      const settled = {
-        status: (failed ? "failed" : "done") as ToolRunStatus,
-        detail: failed
-          ? step.error?.trim() || "Failed"
-          : detailFor(step.toolOutput),
-      };
-      if (settleOldest(toolName, settled)) continue;
-      // A result with no matching call — the call frame was dropped, or the
-      // stream was joined mid-turn. Showing the result on its own is strictly
-      // better than showing nothing: the tool DID run.
-      cards.push({
-        id: step.id,
-        toolName,
-        label: labelFor(step, toolName),
-        ...settled,
-      });
+      const index = open.findIndex((p) => p.toolName === toolName);
+      if (index !== -1) {
+        open[index]!.result = step;
+        open.splice(index, 1);
+        continue;
+      }
+      pairs.push({ toolName, call: null, result: step });
     }
   }
+  return pairs;
+}
 
-  return cards;
+/** A settling step's outcome: failed on an `error` step or an error status. */
+export function toolRunResultFailed(step: ToolRunStep): boolean {
+  return step.type === "error" || step.status === "error";
+}
+
+/**
+ * Fold an ordered list of turn steps into the cards to render.
+ *
+ * Order is CALL order — the sequence the agent actually worked in — and a
+ * result never moves a card, it only settles one in place. An orphan result is
+ * shown on its own: strictly better than showing nothing, the tool DID run.
+ */
+export function projectToolRuns(steps: readonly ToolRunStep[]): ToolRunCard[] {
+  return pairToolRunSteps(steps).map(({ toolName, call, result }) => {
+    const settled = result
+      ? toolRunResultFailed(result)
+        ? {
+            status: "failed" as const,
+            detail: result.error?.trim() || "Failed",
+          }
+        : { status: "done" as const, detail: detailFor(result.toolOutput) }
+      : null;
+    if (!call) {
+      return {
+        id: result!.id,
+        toolName,
+        label: labelFor(result!, toolName),
+        ...settled!,
+      };
+    }
+    const born: ToolRunStatus = call.status === "error" ? "failed" : "running";
+    const detail = settled?.detail ?? (call.error || undefined);
+    return {
+      id: call.id,
+      toolName,
+      label: labelFor(call, toolName),
+      status: settled?.status ?? born,
+      ...(detail !== undefined ? { detail } : {}),
+    };
+  });
 }
 
 /**

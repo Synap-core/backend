@@ -10,10 +10,12 @@
  * ── What it deliberately does NOT decide ──────────────────────────────────
  * Whether a session is "working right now" beyond a recorded fact. The only
  * live claim made here is an IS turn the pod reports IN FLIGHT. "Activity in
- * the last N minutes means working" is a pending founder decision (D1,
- * 2026-10-04); until it lands, an idle session's Now line names its LATEST
- * step and its age ("last"), never "working". The header's state mark keeps
- * its own derivation (`resolveUnitState`) unchanged.
+ * the last N minutes means working" is PENDING A FOUNDER DECISION (agent-run
+ * spec §10, "what makes an agent working right now" — the stale window and
+ * the header mark). Until it lands, an idle session's Now line names what
+ * waits on the reader, else its LATEST step and age ("last") — never
+ * "working". The header's state mark keeps its own derivation
+ * (`resolveUnitState`) unchanged.
  *
  * ── Labels ────────────────────────────────────────────────────────────────
  * No local label map (vocabulary.md). A producer-authored title wins (IS tool
@@ -94,12 +96,25 @@ export interface ActivityGroup {
 }
 
 /**
- * The ONE line at the top. `now` = an IS turn is executing (a fact the pod
- * recorded); `last` = nothing is in flight, here is the latest step and when.
+ * The ONE line at the top, in priority order:
+ *   `now`     — an IS turn is executing (a fact the pod recorded);
+ *   `waiting` — nothing is in flight and the run is stopped on the READER (a
+ *               decision or an ask): the line says so, instead of naming an
+ *               older step as if nothing were owed;
+ *   `last`    — nothing in flight, nothing owed: the latest step and when.
  */
+export const NOW_LINE_MODES = ["now", "waiting", "last"] as const;
+export type NowLineMode = (typeof NOW_LINE_MODES)[number];
+
 export interface NowLine {
-  mode: "now" | "last";
+  mode: NowLineMode;
+  /** The step's own words (no mode prefix) — a tooltip, an accessible name. */
   label: string;
+  /**
+   * The WHOLE line a surface renders — "Last: …", "Waiting on you: …", or the
+   * live step's label. Composed here once so no surface prefixes its own.
+   */
+  text: string;
   /** Null only when the pod reported a turn in flight without its start time. */
   at: Date | null;
   /** The step it names; null when a turn is in flight before its first step. */
@@ -134,6 +149,13 @@ export interface RunActivityView {
 
 /** How many history groups a detail surface shows before "Show all". */
 export const ACTIVITY_HISTORY_CAP = 8;
+
+/**
+ * While a run is LIVE its history sits above what it produced; only this many
+ * of the newest groups stay there, so the outputs are not pushed below the
+ * fold (ui-composition §6: produced outranks process). The rest is "Show all".
+ */
+export const ACTIVITY_LIVE_HISTORY_CAP = 3;
 
 function toDate(value: Date | string | null | undefined): Date | null {
   if (!value) return null;
@@ -242,17 +264,21 @@ function groupLabel(steps: ActivityStep[]): string {
   return `${first.label} · ${steps.length}`;
 }
 
-/**
- * Fold the wire into what a surface renders.
- *
- * `now` is accepted for symmetry with the other unit derivations and so a
- * future liveness rule can land here without a signature change; nothing in
- * this version reads the clock (see the header — D1 is pending).
- */
-export function deriveRunActivity(
-  wire: SessionActivityWire,
-  _now: Date = new Date()
-): RunActivityView {
+function nowText(mode: NowLineMode, label: string, waiting: number): string {
+  switch (mode) {
+    case "now":
+      return label;
+    case "waiting": {
+      const head = `${resolveStatusLabel("waiting_on_you")}: ${label}`;
+      return waiting > 1 ? `${head} (+${waiting - 1})` : head;
+    }
+    case "last":
+      return `Last: ${label}`;
+  }
+}
+
+/** Fold the wire into what a surface renders. Pure: nothing reads the clock. */
+export function deriveRunActivity(wire: SessionActivityWire): RunActivityView {
   // Stable sort by time; ties keep the pod's order (seq within a turn).
   const dated = wire.items
     .map((item, index) => ({ item, index, at: toDate(item.at) }))
@@ -262,12 +288,18 @@ export function deriveRunActivity(
     )
     .sort((a, b) => a.at.getTime() - b.at.getTime() || a.index - b.index);
 
-  // The turn that is in flight is the LATEST turn any tool step ran in — a
-  // running call in an older turn is unsettled, not live.
+  // The turn in flight: the pod NAMES it when it can (`live.turnId`). An older
+  // pod omits it, and the fallback infers it as the LATEST turn any tool step
+  // ran in — which misreads a new turn that has no tool step yet, so an older
+  // turn's dangling call would read as live. The named id rules that out.
   let liveTurnId: string | null = null;
   if (wire.live.turnInFlight) {
-    for (const r of dated) {
-      if (r.item.kind === "tool" && r.item.turnId) liveTurnId = r.item.turnId;
+    if (wire.live.turnId) {
+      liveTurnId = wire.live.turnId;
+    } else {
+      for (const r of dated) {
+        if (r.item.kind === "tool" && r.item.turnId) liveTurnId = r.item.turnId;
+      }
     }
   }
 
@@ -283,7 +315,13 @@ export function deriveRunActivity(
       turnId: item.turnId,
       objectKind: item.objectKind,
       objectId: item.objectId,
-      objectTitle: item.objectTitle,
+      // An ask's object IS its owed slot, addressed by the slot's raw label —
+      // the `title`, untrimmed (the step's `label` drops a trailing ellipsis,
+      // which would no longer name the slot).
+      objectTitle:
+        item.kind === "ask"
+          ? (item.objectTitle ?? item.title)
+          : item.objectTitle,
       proposalId: item.proposalId,
       error: item.error,
       actor: item.actor,
@@ -333,31 +371,37 @@ export function deriveRunActivity(
     failed: steps.filter((s) => s.phase === "failed").length,
   };
 
+  const line = (
+    mode: NowLineMode,
+    label: string,
+    at: Date | null,
+    step: ActivityStep | null
+  ): NowLine => ({
+    mode,
+    label,
+    text: nowText(mode, label, waiting.length),
+    at,
+    step,
+  });
+
   let now: NowLine | null = null;
   if (!wire.terminal) {
+    const firstWaiting = waiting[0];
     if (nowStep) {
-      now = {
-        mode: "now",
-        label: nowStep.label,
-        at: nowStep.at,
-        step: nowStep,
-      };
+      now = line("now", nowStep.label, nowStep.at, nowStep);
     } else if (wire.live.turnInFlight) {
-      now = {
-        mode: "now",
-        label: resolveStatusLabel("running"),
-        at: toDate(wire.live.since) ?? toDate(wire.live.lastAt),
-        step: null,
-      };
+      now = line(
+        "now",
+        resolveStatusLabel("running"),
+        toDate(wire.live.since) ?? toDate(wire.live.lastAt),
+        null
+      );
+    } else if (firstWaiting) {
+      // The oldest thing owed: it is what the run stopped on.
+      now = line("waiting", firstWaiting.label, firstWaiting.at, firstWaiting);
     } else {
       const latest = [...history].reverse().find((s) => s.kind !== "lifecycle");
-      if (latest)
-        now = {
-          mode: "last",
-          label: latest.label,
-          at: latest.at,
-          step: latest,
-        };
+      if (latest) now = line("last", latest.label, latest.at, latest);
     }
   }
 
