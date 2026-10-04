@@ -6,8 +6,8 @@
 -- One batch per user (a regenerate replaces it in one transaction);
 -- `used_at` NULL = unused, set atomically at redeem.
 --
--- Numbered 0294, not 0293: 0293 is left free for the concurrent backup-engine
--- wave (`backup_runs`), so the two branches cannot collide on a number.
+-- 0293 does not exist: it was held for the concurrent backup-engine wave,
+-- which landed `backup_runs` as 0295. Comment-only edit; the SQL is unchanged.
 CREATE TABLE IF NOT EXISTS "account_recovery_codes" (
   "id"         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"    text        NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,

@@ -691,7 +691,7 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // already do) rather than call this resolver.
   stale: "Stale",
   // backup health (`readBackupStatus`, @synap/database): the newest backup run
-  // saw a DATA DROP (users/entities fell to zero). Humanized it read "Suspect",
+  // saw a DATA DROP (0 users, or entities more than halved). Humanized: "Suspect",
   // which says nothing about what is wrong; every backup surface (Relay pod row,
   // pod-admin, desktop) renders this one word. Only the backup domain emits it.
   suspect: "Data drop",
