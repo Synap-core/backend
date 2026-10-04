@@ -2811,7 +2811,11 @@ _ue_install_bundle() {
     while IFS= read -r rel; do [ -e "$root/$rel" ] && existing+=("$rel"); done < state/update/bundle.files
     : > state/update/bundle.new
     while IFS= read -r rel; do [ -e "$root/$rel" ] || echo "$rel" >> state/update/bundle.new; done < state/update/bundle.files
-    tar -cf state/update/pre-bundle.tar -C "$root" "${existing[@]}" || return 1
+    if [ "${#existing[@]}" -gt 0 ]; then
+        tar -cf state/update/pre-bundle.tar -C "$root" "${existing[@]}" || return 1
+    else
+        tar -cf state/update/pre-bundle.tar -T /dev/null || return 1
+    fi
     UE_BUNDLE_INSTALLED=1
     while IFS= read -r rel; do
         mkdir -p "$(dirname "$root/$rel")" || return 1
@@ -4991,7 +4995,7 @@ ${YELLOW}Management:${NC}
   synap logs [service] [options] View logs (interactive if no service)
   synap errors [service] [lines] Search for errors in logs
   synap diagnose                 Run comprehensive diagnostics
-  synap update [options]         Update to latest or specific version
+  synap update [options]         Apply a release (id | fast | stable): backup, canary, auto-rollback
   synap restart [service]        Restart services (interactive if no service)
   synap rebuild [service]        Rebuild services (interactive if no service)
   synap start [service]          Start services (all or specific)
@@ -5019,11 +5023,11 @@ ${YELLOW}Examples:${NC}
   # Force image even in git repo
   synap install --from-image --domain example.com --email me@example.com
 
-  # Update (auto-detects: builds if in git repo, pulls image otherwise)
+  # Update (default: SYNAP_UPDATE_CHANNEL from deploy/.env, else stable)
   synap update
-  synap update --from-image
-  synap update --from-source
-  synap update v1.2.3
+  synap update --release fast          # every green main commit
+  synap update --release v1.2.3        # a specific release
+  synap update --from-source           # build this checkout as synap-local/*:<sha>
 
   # Management
   synap health
