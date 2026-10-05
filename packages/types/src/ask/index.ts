@@ -705,6 +705,93 @@ export function validateAnswerAgainstAsk(
   }
 }
 
+// ─── The ask as answered (frozen snapshot) ──────────────────────────────────
+
+/**
+ * The ask AS IT WAS POSED, frozen onto the answer the moment it lands
+ * (`SlotAnswer.askSnapshot`, `@synap/playbooks`).
+ *
+ * WHY. Answering hands a human slot back to the agent, and the hand-back
+ * clears `ask` / `why` (`stampUnblocked`) — so the option set, the option the
+ * agent RECOMMENDED and what it looked at were gone the moment the person
+ * chose. "The AI recommended EU, the person picked US" is exactly the signal a
+ * decision mesh learns from, and it was the first thing thrown away.
+ *
+ * `chosenKey` is the picked option's identity (`askOptionKey`) for a choose,
+ * `"yes"` / `"no"` for a confirm, and `null` for anything else (a free-text
+ * "Other…", a room reply in words, a form, a provide). `followedRecommendation`
+ * is `null` when there was no recommendation to follow — NEVER `false`, which
+ * would read as the person overruling advice nobody gave.
+ *
+ * `lookedAt` is stored as `{kind, id}` only: the server-resolved `title` the
+ * owed read adds is a per-viewer projection, never data.
+ */
+export const AskSnapshotSchema = z.object({
+  mode: z.enum(ASK_MODES),
+  /** A confirm's own question line. */
+  prompt: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
+  /** The slot's `why` when it was asked (cleared by the hand-back). */
+  why: z.string().max(500).optional(),
+  /** A choose's FULL option list, `recommended` flag included. */
+  options: z.array(AskOptionSchema).max(ASK_LIMITS.optionsMax).optional(),
+  chosenKey: z.string().nullable(),
+  recommendedKey: z.string().nullable(),
+  followedRecommendation: z.boolean().nullable(),
+  lookedAt: z
+    .array(AskLookedAtRefSchema)
+    .max(ASK_LIMITS.lookedAtMax)
+    .optional(),
+});
+export type AskSnapshot = z.infer<typeof AskSnapshotSchema>;
+
+/** The confirm arm's two keys — what `chosenKey` holds for a yes / a no. */
+export const ASK_CONFIRM_KEYS = { yes: "yes", no: "no" } as const;
+
+/**
+ * Freeze an ask + the answer given to it. Pure. `value` absent ⇒ an answer in
+ * words (the room-reply entrance), whose pick is unknown.
+ */
+export function buildAskSnapshot(
+  ask: Ask,
+  value: AskAnswerValue | null | undefined,
+  why?: string | null
+): AskSnapshot {
+  const options = ask.mode === "choose" ? ask.options : undefined;
+  const recommended = options?.find((o) => o.recommended === true);
+  const recommendedKey = recommended ? askOptionKey(recommended) : null;
+  const chosenKey =
+    value?.type === "chip"
+      ? askOptionKey(value.chip)
+      : value?.type === "confirm"
+        ? value.confirmed
+          ? ASK_CONFIRM_KEYS.yes
+          : ASK_CONFIRM_KEYS.no
+        : null;
+  // Unknown pick (words, not a chip) ⇒ unknown, not "overruled".
+  const followedRecommendation =
+    recommendedKey === null
+      ? null
+      : value?.type === "chip"
+        ? chosenKey === recommendedKey
+        : value?.type === "text"
+          ? false
+          : null;
+  const prompt = ask.mode === "confirm" ? ask.prompt?.trim() : undefined;
+  const trimmedWhy = typeof why === "string" ? why.trim() : "";
+  return {
+    mode: ask.mode,
+    ...(prompt ? { prompt } : {}),
+    ...(trimmedWhy ? { why: trimmedWhy.slice(0, 500) } : {}),
+    ...(options ? { options: options.map((o) => ({ ...o })) } : {}),
+    chosenKey,
+    recommendedKey,
+    followedRecommendation,
+    ...(ask.lookedAt?.length
+      ? { lookedAt: ask.lookedAt.map(({ kind, id }) => ({ kind, id })) }
+      : {}),
+  };
+}
+
 function formatFormValue(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "string") return v;

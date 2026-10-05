@@ -55,6 +55,8 @@ import {
   type BlockGuidance,
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
+import { archivedAnswerHistory } from "./answer-history.js";
+import { logSlotsAsked } from "./slot-asked-event.js";
 
 export interface BlockExpectedOutputParams {
   sessionId: string;
@@ -200,10 +202,14 @@ export async function blockExpectedOutput(
 
   // Re-derived INSIDE the lock from the REQUESTED label, never from the array
   // this call read before it — the TOCTOU the delegation door documents.
+  // The locked base and result, captured for the `slot_asked` history row.
+  let lockedBefore: ExpectedOutput[] = [];
+  let lockedAfter: ExpectedOutput[] = [];
   const stamped = await updateExpectedOutputsLocked(
     params.sessionId,
-    (current) =>
-      stampBlocked(
+    (current) => {
+      lockedBefore = current;
+      lockedAfter = stampBlocked(
         current,
         slot.label,
         params.blockedReason,
@@ -211,9 +217,20 @@ export async function blockExpectedOutput(
         undefined,
         params.ref,
         params.ask
-      )
+      );
+      return lockedAfter;
+    }
   );
   if (!stamped) return { status: "not_found" };
+
+  // The ask AS POSED, durably — the answer's hand-back clears it from the slot.
+  await logSlotsAsked({
+    userId: params.userId,
+    sessionId: params.sessionId,
+    before: lockedBefore,
+    after: lockedAfter,
+    agentUserId: params.agentUserId ?? null,
+  });
 
   // AFTER the stamp: tell the person (once per session window) that an agent
   // handed them this. Diffed on the slot as loaded vs as stamped, so re-blocking
@@ -313,7 +330,10 @@ export function stampBlocked(
     else if (ask !== undefined) withRef.ask = ask;
     // (Re)blocking ASKS anew: an answer to an earlier ask must not survive, or
     // once this one comes back the agent reads the old answer as the new one
-    // (continuation packet `aiCanDo[].answer`, the `answered` nudge).
+    // (continuation packet `aiCanDo[].answer`, the `answered` nudge). It is
+    // ARCHIVED, never dropped: what the person decided before stays readable.
+    const answerHistory = archivedAnswerHistory(withRef);
+    if (answerHistory) withRef.answerHistory = answerHistory;
     delete withRef.answer;
     delete withRef.answerPickedUpAt;
     return reconcileOwedSince(

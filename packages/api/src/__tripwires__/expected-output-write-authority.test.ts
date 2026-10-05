@@ -71,6 +71,15 @@ const STORED: Required<
   retiredAt: "2026-09-01T13:00:00.000Z",
   retiredReason: "session_cancelled",
   answerPickedUpAt: "2026-09-01T15:00:00.000Z",
+  answerHistory: [
+    {
+      text: "Earlier: the US account",
+      messageId: null,
+      answeredBy: "22222222-2222-2222-2222-222222222222",
+      answeredAt: "2026-08-01T14:00:00.000Z",
+    },
+  ],
+  decisionId: "66666666-6666-6666-6666-666666666666",
   answer: {
     text: "Use the EU account",
     messageId: "55555555-5555-5555-5555-555555555555",
@@ -99,6 +108,10 @@ const FORGED: typeof STORED = {
   retiredReason: "session_cancelled",
   // An agent telling the person it read an answer it never read.
   answerPickedUpAt: "2026-09-08T15:00:00.000Z",
+  // An agent rewriting what the person said before.
+  answerHistory: [],
+  // An agent pointing the person's next answer at a decision it chose.
+  decisionId: "77777777-7777-7777-7777-777777777777",
   // An agent putting words in the person's mouth — and handing itself the slot.
   answer: {
     text: "Sure, ship it",

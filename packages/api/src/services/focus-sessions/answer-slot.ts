@@ -48,7 +48,8 @@ import type {
   SlotAnswer,
   SlotAnswerValue,
 } from "@synap/playbooks";
-import { askFingerprint } from "@synap-core/types/ask";
+import { askFingerprint, buildAskSnapshot } from "@synap-core/types/ask";
+import { archivedAnswerHistory } from "./answer-history.js";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { stampUnblocked } from "./block-output.js";
@@ -173,7 +174,13 @@ export function stampAnswered(
   // A new answer has not been picked up yet — the prior receipt was about the
   // prior answer (`answer-pickup.ts`).
   const { answerPickedUpAt: _stale, ...fresh } = handedBack;
-  return outputs.map((o, i) => (i === index ? { ...fresh, answer } : o));
+  // A SECOND answer archives the first instead of overwriting it.
+  const answerHistory = archivedAnswerHistory(slot);
+  return outputs.map((o, i) =>
+    i === index
+      ? { ...fresh, ...(answerHistory ? { answerHistory } : {}), answer }
+      : o
+  );
 }
 
 export async function answerExpectedOutput(
@@ -231,6 +238,17 @@ export async function answerExpectedOutput(
           ? { question: question.slice(0, SLOT_ANSWER_TEXT_MAX) }
           : {}),
         ...(params.value ? { value: params.value } : {}),
+        // The ask AS POSED — the hand-back below clears `ask`/`why`, and with
+        // them the options, the recommendation and what the agent looked at.
+        ...(before.ask
+          ? {
+              askSnapshot: buildAskSnapshot(
+                before.ask,
+                params.value,
+                before.why
+              ),
+            }
+          : {}),
       };
       const handBack = params.handBack !== false;
       const next = stampAnswered(current, chosen.index, answer, handBack);
@@ -362,5 +380,10 @@ function slotAnsweredEventData(
     // Already redacted at the parse (`AskAnswerValueSchema`) — a form's secret
     // never reaches an event row. `null` for a plain free-text answer.
     value: answer.value ?? null,
+    // The ask as posed + whether the pick followed the recommendation — the
+    // durable record of "the AI said X, the person chose Y". `null` when the
+    // slot carried no ask.
+    askSnapshot: answer.askSnapshot ?? null,
+    ...(slot.decisionId ? { decisionId: slot.decisionId } : {}),
   };
 }

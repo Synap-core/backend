@@ -852,8 +852,7 @@ export interface HubAskSpaceHint {
 
 /** Pod `AskSpacesHint` (`services/discover/space-catalog.ts`). */
 export type HubAskSpacesHint =
-  | { matches: HubAskSpaceHint[] }
-  | { status: "unavailable" };
+  { matches: HubAskSpaceHint[] } | { status: "unavailable" };
 
 // ─── Diagnose (third door alongside ask + capture) ───────────────────────────
 
@@ -1002,6 +1001,13 @@ export interface FocusSessionExpectedOutput {
    * `answer` without it = answered, still waiting for the agent.
    */
   answerPickedUpAt?: string;
+  /** Prior answers, oldest first (pod-stamped; a re-ask archives, never drops). */
+  answerHistory?: HubSlotAnswer[];
+  /**
+   * The `decision` entity this slot's answer files into (pod-stamped). Present
+   * ⇒ answering updates that decision.
+   */
+  decisionId?: string;
   /**
    * HOW the person can answer this slot — declared by the agent alongside
    * `owner: 'human'` + `blockedReason`. Absent ⇒ a plain free-text answer / "I
@@ -1068,11 +1074,7 @@ export interface HubSlotAskLookedAt {
 }
 
 export type HubSlotAskLookedAtKind =
-  | "entity"
-  | "document"
-  | "view"
-  | "automation"
-  | "playbook";
+  "entity" | "document" | "view" | "automation" | "playbook";
 
 /** One offered answer — at most ONE per ask may be `recommended`. */
 export interface HubSlotAskOption {
@@ -1110,6 +1112,21 @@ export interface HubSlotAnswer {
   question?: string;
   /** The typed answer when the slot carried an `ask`. */
   value?: HubSlotAnswerValue;
+  /**
+   * The ask AS POSED, frozen at answer time (mirrors `SlotAskSnapshot`,
+   * @synap/playbooks): the full options, the recommendation, the pick, and
+   * whether the pick followed it (`null` = no recommendation / unknown).
+   */
+  askSnapshot?: {
+    mode: HubSlotAsk["mode"];
+    prompt?: string;
+    why?: string;
+    options?: HubSlotAskOption[];
+    chosenKey: string | null;
+    recommendedKey: string | null;
+    followedRecommendation: boolean | null;
+    lookedAt?: Array<{ kind: string; id: string }>;
+  };
 }
 
 /**
@@ -1808,7 +1825,12 @@ export interface HubBuiltSpaceBrief {
   expertise?: HubSpaceBriefExpertise;
   collect?: Array<{ kind: string; what?: string; cardinality?: string }>;
   keyKinds?:
-    | Array<{ slug: string; name?: string; entityCount: number; description?: string }>
+    | Array<{
+        slug: string;
+        name?: string;
+        entityCount: number;
+        description?: string;
+      }>
     | { status: "unavailable" };
   keyKindsTotal?: number;
   /** `items` may be `[]` when the list was shed to fit; `total` stays true. */

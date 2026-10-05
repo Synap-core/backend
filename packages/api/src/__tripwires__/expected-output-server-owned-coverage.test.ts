@@ -68,6 +68,15 @@ const SAMPLE: Required<
   retiredAt: "2026-09-08T13:00:00.000Z",
   retiredReason: "session_cancelled",
   answerPickedUpAt: "2026-09-08T15:00:00.000Z",
+  answerHistory: [
+    {
+      text: "Earlier: the US account",
+      messageId: null,
+      answeredBy: "22222222-2222-2222-2222-222222222222",
+      answeredAt: "2026-08-01T14:00:00.000Z",
+    },
+  ],
+  decisionId: "66666666-6666-6666-6666-666666666666",
   answer: {
     text: "Use the EU account",
     messageId: "55555555-5555-5555-5555-555555555555",

@@ -862,6 +862,9 @@ export const sessionHandlers: McpHandlerMap = {
           // Which track/step it landed in, and — when the step names another
           // domain — that the session was filed where it is, not moved.
           ...(result.trackFiling ? { trackFiling: result.trackFiling } : {}),
+          // Same reason as `completeOutput`: part of the patch the pod did not
+          // keep as sent (an ask on a slot that is not the person's).
+          ...(result.warnings ? { warnings: result.warnings } : {}),
           ...(nudges ? { nudges } : {}),
         });
       }

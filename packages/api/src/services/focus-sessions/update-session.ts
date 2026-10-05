@@ -33,12 +33,14 @@ import {
   AskSchema,
   type Ask,
   type AskAnswerValue,
+  type AskSnapshot,
 } from "@synap-core/types/ask";
 import type {
   OutputRefKind,
   SlotAnswerValue,
   SlotAsk,
   SlotAskLookedAtKind,
+  SlotAskSnapshot,
 } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
@@ -61,6 +63,8 @@ import {
   type BlockedSlotRef,
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
+import { archivedAnswerHistory } from "./answer-history.js";
+import { logSlotsAsked } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
 import {
   normalizeSessionTitle,
@@ -229,6 +233,15 @@ export type UpdateFocusSessionResult =
        * patch carried one. `domainNote` says the step names another domain and
        * the session was filed where it is, not moved.
        */
+      /**
+       * Caller-facing notes about parts of the patch the pod did NOT keep as
+       * sent, while the rest landed. Today: an `ask` declared on a slot that
+       * is not `owner: 'human'` — an ask is how the PERSON answers, so
+       * `reconcileOwedSince` drops it from an agent-owned slot. That drop used
+       * to be silent; the agent then waited on a question nobody was shown.
+       * Absent when there is nothing to say.
+       */
+      warnings?: string[];
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -285,6 +298,21 @@ export const outputRefWireSchema = z.union([
     .strict(),
 ]);
 
+/** One stamped answer, as it round-trips on the wire (never authored). */
+const slotAnswerWireSchema = z.object({
+  text: z.string(),
+  messageId: z.string().nullable(),
+  answeredBy: z.string(),
+  answeredAt: z.string(),
+  question: z.string().optional(),
+  // The typed half (`@synap-core/types/ask`). Round-trip only, like the
+  // rest of `answer`: stamped by the answer door, never authored here.
+  // Explicitly type the value to preserve discriminated union inference.
+  value: z.custom<AskAnswerValue>().optional(),
+  // The ask as posed, frozen at answer time. Round-trip only.
+  askSnapshot: z.custom<AskSnapshot>().optional(),
+});
+
 export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
@@ -336,19 +364,12 @@ export const expectedOutputWireSchema = z.object({
   // The person's answer — stamped by `answerExpectedOutput` only. On the wire
   // for the same round-trip reason as `attestedBy`: a naive echo must not lose
   // it at the parse, and the merge refuses a client authoring one.
-  answer: z
-    .object({
-      text: z.string(),
-      messageId: z.string().nullable(),
-      answeredBy: z.string(),
-      answeredAt: z.string(),
-      question: z.string().optional(),
-      // The typed half (`@synap-core/types/ask`). Round-trip only, like the
-      // rest of `answer`: stamped by the answer door, never authored here.
-      // Explicitly type the value to preserve discriminated union inference.
-      value: z.custom<AskAnswerValue>().optional(),
-    })
-    .optional(),
+  answer: slotAnswerWireSchema.optional(),
+  // Prior answers (`answer-history.ts`) and the decision the answer files
+  // into (`services/decisions/`) — both server-stamped, on the wire for the
+  // same round-trip reason as `answer`.
+  answerHistory: z.array(slotAnswerWireSchema).optional(),
+  decisionId: z.string().optional(),
   // The agent's pick-up receipt — stamped by `answer-pickup.ts` only. On the
   // wire for the same round-trip reason as `answer`.
   answerPickedUpAt: z.string().optional(),
@@ -372,8 +393,10 @@ export const expectedOutputWireSchema = z.object({
 type _Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 const _askParity: _Mutual<SlotAsk, Ask> = true;
 const _answerValueParity: _Mutual<SlotAnswerValue, AskAnswerValue> = true;
+const _askSnapshotParity: _Mutual<SlotAskSnapshot, AskSnapshot> = true;
 void _askParity;
 void _answerValueParity;
+void _askSnapshotParity;
 // "What I looked at" cites only kinds the ref floor can adjudicate: the leaf's
 // set is a subset of OUTPUT_REF_KINDS, and the playbooks mirror names the same
 // set. A kind added to one side and not the other stops the build.
@@ -487,6 +510,12 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // The agent's "Picked up" receipt (`answer-pickup.ts`). An agent that could
   // author it would tell the person it read an answer it never read.
   "answerPickedUpAt",
+  // Prior answers (`answer-history.ts`). An agent that could author it would
+  // rewrite what the person said before.
+  "answerHistory",
+  // The decision entity the answer files into. An agent that could author it
+  // would make the person's next answer overwrite a decision it names.
+  "decisionId",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -620,6 +649,9 @@ export function mergeExpectedOutputs(
     // the previous ask must not ride along, or the agent reads it as the
     // answer to this one once the slot comes back (`stampBlocked`, same rule).
     if (prior.owner !== "human" && item.owner === "human") {
+      // Archived, never dropped (`answer-history.ts`).
+      const answerHistory = archivedAnswerHistory(prior);
+      if (answerHistory) carried.answerHistory = answerHistory;
       delete carried.answer;
       delete carried.answerPickedUpAt;
     }
@@ -869,6 +901,33 @@ export function reconcileOwedSince(
   if (item.owedSince === undefined && item.ask === undefined) return item;
   const { owedSince: _dropped, ask: _staleAsk, ...rest } = item;
   return rest;
+}
+
+/**
+ * The asks this patch DECLARED that did not survive — a slot sent with an
+ * `ask` whose stored result carries none, because the slot is not
+ * `owner: 'human'` (`reconcileOwedSince` drops it). One sentence per slot,
+ * matched by label on the written array. Pure.
+ */
+export function droppedAskWarnings(
+  declared: ReadonlyArray<Pick<OutputItem, "label" | "ask">>,
+  written: readonly OutputItem[]
+): string[] {
+  const after = new Map<string, OutputItem>();
+  for (const o of written) {
+    const key = normalizeExpectedLabel(o?.label);
+    if (key && !after.has(key)) after.set(key, o);
+  }
+  const warnings: string[] = [];
+  for (const item of declared) {
+    if (!item?.ask) continue;
+    const landed = after.get(normalizeExpectedLabel(item.label) ?? "");
+    if (!landed || landed.ask) continue;
+    warnings.push(
+      `"${item.label}": the ask was dropped — an ask is how the PERSON answers, so it only stays on a slot handed to them (owner: "human" + blockedReason). This slot is the agent's, so nobody was asked. Re-send it with owner: "human" to ask.`
+    );
+  }
+  return warnings;
 }
 
 /**
@@ -1474,6 +1533,28 @@ export async function updateFocusSession(
     slots: blockedByThisPatch,
   });
 
+  // An ask declared on a slot that is not the person's is dropped by the
+  // reconciler — said back to the caller, never silent.
+  const warnings = mutatesOutputs
+    ? droppedAskWarnings(
+        [
+          ...(params.expectedOutputs ?? []),
+          ...(params.addOutput ? [params.addOutput] : []),
+        ],
+        outputsAfter
+      )
+    : [];
+
+  // The ask AS POSED, durably (`slot-asked-event.ts`) — diffed on the same
+  // locked base, so only asks this patch posed are recorded.
+  await logSlotsAsked({
+    userId,
+    sessionId,
+    before: outputsBefore,
+    after: outputsAfter,
+    agentUserId: agentUserId ?? null,
+  });
+
   // An AGENT that handed the person a slot tells them — once per session
   // window. A no-op for the person's own write and for an unchanged array.
   await notifySessionNeedsYou({
@@ -1497,5 +1578,6 @@ export async function updateFocusSession(
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

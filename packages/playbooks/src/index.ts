@@ -508,6 +508,24 @@ export interface ExpectedOutput {
    */
   answer?: SlotAnswer;
   /**
+   * PRIOR answers to this slot, oldest first, at most
+   * {@link SLOT_ANSWER_HISTORY_MAX}. A re-ask (`stampBlocked`, or a wholesale
+   * patch handing the slot back to the person) and a second answer used to
+   * DROP the previous answer — and with it what the person decided before.
+   * Archived here instead, by the same doors that clear `answer`.
+   * SERVER-STAMPED: never authored by a client.
+   */
+  answerHistory?: SlotAnswer[];
+  /**
+   * The `decision` ENTITY this slot's answer files into (api
+   * `services/decisions/`). SERVER-STAMPED — by the answer door once it filed
+   * the decision for an answered confirm/choose, or by the decision-ask reactor
+   * when a `proposed` decision opened this slot. Present ⇒ answering UPDATES
+   * that decision instead of filing a new one. Survives the hand-back
+   * (`stampUnblocked` clears only the ownership quintet).
+   */
+  decisionId?: string;
+  /**
    * When the AGENT first read {@link answer} — the "Picked up" receipt (V1 gap
    * G5). SERVER-STAMPED by the agent answer reads (api `wait_for_answer`, the
    * Hub `GET /focus-sessions/:id/answers` poll) and never by a client: a
@@ -668,6 +686,33 @@ export interface SlotAnswer {
    * keeps working.
    */
   value?: SlotAnswerValue;
+  /**
+   * The ask AS POSED, frozen at answer time — options, the recommendation,
+   * the pick, whether the pick followed the recommendation, and what the agent
+   * looked at. See {@link SlotAskSnapshot}. Absent on an answer to a slot that
+   * carried no ask, and on every answer recorded before snapshots existed.
+   */
+  askSnapshot?: SlotAskSnapshot;
+}
+
+/** How many prior answers a slot keeps on `answerHistory`. */
+export const SLOT_ANSWER_HISTORY_MAX = 10;
+
+/**
+ * STRUCTURAL MIRROR of `AskSnapshot` (`@synap-core/types/ask`) — same reason
+ * and same compile-time parity check as {@link SlotAsk}.
+ */
+export interface SlotAskSnapshot {
+  mode: SlotAsk["mode"];
+  prompt?: string;
+  why?: string;
+  options?: SlotAskOption[];
+  /** `askOptionKey` of the pick; `"yes"`/`"no"` for a confirm; else null. */
+  chosenKey: string | null;
+  recommendedKey: string | null;
+  /** null when there was no recommendation (or the pick is unknown). */
+  followedRecommendation: boolean | null;
+  lookedAt?: Array<{ kind: SlotAskLookedAtKind; id: string }>;
 }
 
 /**

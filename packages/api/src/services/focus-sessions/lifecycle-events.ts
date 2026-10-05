@@ -69,3 +69,14 @@ export const FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE =
 export const FOCUS_SESSION_SLOT_ATTEST_ACTION = "slot_attested" as const;
 export const FOCUS_SESSION_SLOT_ATTESTED_EVENT_TYPE =
   `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_SLOT_ATTEST_ACTION}.completed` as const;
+
+/**
+ * An agent POSED an ask to the person on one slot — the slot was handed to
+ * them (`owner: 'human'`) carrying a typed `ask` (`slot-asked-event.ts`).
+ * History only: the answer clears the ask from the slot, so without this row
+ * the question as posed survived only inside the answer's snapshot — and not
+ * at all for an ask nobody ever answered.
+ */
+export const FOCUS_SESSION_SLOT_ASK_ACTION = "slot_asked" as const;
+export const FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE =
+  `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_SLOT_ASK_ACTION}.completed` as const;

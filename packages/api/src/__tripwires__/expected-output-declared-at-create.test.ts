@@ -61,6 +61,17 @@ const FORGED: Record<string, unknown> = {
   paramName: "forged-param",
   // An agent claiming it read an answer it never read.
   answerPickedUpAt: "2020-01-01T00:00:00.000Z",
+  // An agent rewriting what the person said before.
+  answerHistory: [
+    {
+      text: "forged",
+      messageId: null,
+      answeredBy: "Antoine",
+      answeredAt: "2020-01-01T00:00:00.000Z",
+    },
+  ],
+  // An agent pointing the person's answer at a decision it chose.
+  decisionId: "forged-decision",
   answer: {
     text: "forged",
     messageId: null,
