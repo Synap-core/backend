@@ -69,7 +69,10 @@ import {
   loadSessionLiveness,
   type LivenessReader,
 } from "../services/runs/session-liveness.js";
-import type { SessionActivityLive } from "@synap-core/types/run-activity";
+import {
+  SESSION_WORKING_WINDOW_MS,
+  type SessionActivityLive,
+} from "@synap-core/types/run-activity";
 import {
   recordSessionArtifact,
   SESSION_ARTIFACT_KINDS,
@@ -509,8 +512,12 @@ async function projectSessionRows(
  */
 async function attachSessionLiveness<
   R extends FocusSession & { live?: SessionActivityLive | null },
->(rows: R[], reader: LivenessReader): Promise<R[]> {
-  const live = await loadSessionLiveness(reader, rows);
+>(
+  rows: R[],
+  reader: LivenessReader,
+  opts: { since?: Date } = {}
+): Promise<R[]> {
+  const live = await loadSessionLiveness(reader, rows, opts);
   return rows.map((r) => ({ ...r, live: live.get(r.id) ?? null }));
 }
 
@@ -774,6 +781,14 @@ export const focusSessionsRouter = router({
         includeTrackedRuns: z.boolean().optional(),
         /** Only sessions filed in this track — see `SessionListQuery.trackId`. */
         trackId: z.string().uuid().optional(),
+        /**
+         * Attach `live` on every row — the D1 liveness facts the "working
+         * right now" rule (`isSessionWorkingNow`) reads, the same batched
+         * read `list` attaches under `nextMove`, BOUNDED to the working
+         * window (`lastAt` is null for a session quiet since). `null` on a
+         * row = the read FAILED, never "quiet". Absent = not requested.
+         */
+        liveness: z.boolean().optional(),
         limit: z.number().int().min(1).max(100).default(30),
       })
     )
@@ -807,10 +822,20 @@ export const focusSessionsRouter = router({
         .offset(input.offset);
       const { items, pagination } = buildPaginatedResponse(rows, input);
       const viewer = requireUserId(ctx.userId);
+      const projected: Array<
+        Awaited<ReturnType<typeof projectSessionRows>>[number] & {
+          live?: SessionActivityLive | null;
+        }
+      > = await projectSessionRows(items, ctx.userId);
+      const withLive = input.liveness
+        ? await attachSessionLiveness(
+            projected,
+            { userId: viewer, roster: rosterReadFor(ctx) },
+            { since: new Date(Date.now() - SESSION_WORKING_WINDOW_MS) }
+          )
+        : projected;
       return {
-        items: (await projectSessionRows(items, ctx.userId)).map((r) =>
-          withViewerRole(r, viewer)
-        ),
+        items: withLive.map((r) => withViewerRole(r, viewer)),
         pagination,
       };
     }),
