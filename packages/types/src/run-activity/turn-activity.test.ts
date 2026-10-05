@@ -5,6 +5,7 @@ import {
   turnMark,
   TURN_PHASES,
   TURN_TOOL_STATES,
+  type TurnActivityInput,
   type TurnActivityStep,
 } from "./turn-activity.js";
 
@@ -157,6 +158,28 @@ describe("deriveTurnActivity — tool states", () => {
     });
     expect(a.summary.proposalCount).toBe(1); // deduped across stream + tool output
     expect(a.summary.awaitingCount).toBe(1);
+  });
+
+  it("a FAILED bucket read reads its filed proposal as unknown — never calm awaiting", () => {
+    const steps = [
+      call(1, "create_entity"),
+      result(1, "create_entity", {
+        toolOutput: { status: "proposed", proposalId: "p1" },
+      }),
+    ];
+    const read = (over: Partial<TurnActivityInput>) =>
+      deriveTurnActivity({ steps, streaming: false, ...over });
+    const failed = read({ proposalBucketsUnavailable: true });
+    const tool = failed.items[0];
+    expect(tool?.kind === "tool" ? tool.state : null).toBe("unknown");
+    expect(failed.summary.awaitingCount).toBe(0);
+    // A bucket that WAS read still wins over the failed flag (partial knowledge).
+    const known = read({ proposalBucketsUnavailable: true, proposalBuckets: { p1: "applied" } }).items[0];
+    expect(known?.kind === "tool" ? known.state : null).toBe("done");
+    // An unclassified status is not "your turn" either.
+    const odd = read({ proposalBuckets: { p1: "unknown" } }).items[0];
+    expect(odd?.kind === "tool" ? odd.state : null).toBe("unknown");
+    expect(turnMark("unknown")).toEqual({ tone: "textMuted", glyph: "question" });
   });
 
   it("an unknown tool keeps the producer title before humanizing", () => {

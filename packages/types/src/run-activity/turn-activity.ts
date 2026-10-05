@@ -26,6 +26,10 @@
  *   cancelled          — open when the person pressed Stop.
  *   unsettled          — open in a turn that ENDED without a result. Nobody
  *                        saw it finish — the run side's `unsettled`, not "done".
+ *   unknown            — it filed a proposal, but where that proposal stands
+ *                        could not be read (the bucket read FAILED, or the
+ *                        status is one nobody classified). Never "awaiting":
+ *                        a failed read must not look like calm pending.
  *
  * ── Labels ────────────────────────────────────────────────────────────────
  * A known tool's words come from `resolveToolLabel` (vocabulary) in BOTH moods
@@ -70,6 +74,7 @@ export const TURN_TOOL_STATES = [
   "denied",
   "cancelled",
   "unsettled",
+  "unknown",
 ] as const;
 export type TurnToolState = (typeof TURN_TOOL_STATES)[number];
 
@@ -111,6 +116,11 @@ export interface TurnActivityInput {
   proposals?: readonly { proposalId: string }[];
   /** Current bucket per proposal id, when the caller has read it. */
   proposalBuckets?: Readonly<Record<string, TurnProposalBucket | undefined>>;
+  /**
+   * The caller's bucket read FAILED. A filed proposal with no bucket then reads
+   * `unknown`, not `awaiting_approval` — empty and failed are different facts.
+   */
+  proposalBucketsUnavailable?: boolean;
   startedAt?: string | Date;
   completedAt?: string | Date;
   /** The clock, for a live turn's elapsed time. A parameter — this stays pure. */
@@ -250,7 +260,11 @@ function labelFor(
   return { progressive: authored || fallback, past: authored || fallback };
 }
 
-function bucketState(bucket: TurnProposalBucket | undefined): TurnToolState {
+function bucketState(
+  bucket: TurnProposalBucket | undefined,
+  unavailable: boolean
+): TurnToolState {
+  if (bucket === undefined) return unavailable ? "unknown" : "awaiting_approval";
   switch (bucket) {
     case "applied":
     case "reverted": // it DID apply; the undo is the proposal's story, not the tool's
@@ -261,6 +275,8 @@ function bucketState(bucket: TurnProposalBucket | undefined): TurnToolState {
       return "denied";
     case "failed":
       return "failed";
+    case "unknown":
+      return "unknown";
     default:
       return "awaiting_approval";
   }
@@ -304,7 +320,8 @@ export function deriveTurnActivity(input: TurnActivityInput): TurnActivity {
           proposalId = filed.proposalId;
           if (proposalId) proposalIds.add(proposalId);
           state = bucketState(
-            proposalId ? input.proposalBuckets?.[proposalId] : undefined
+            proposalId ? input.proposalBuckets?.[proposalId] : undefined,
+            input.proposalBucketsUnavailable === true
           );
         } else {
           state = card?.status === "failed" ? "failed" : "done";
@@ -478,6 +495,8 @@ const TURN_MARKS = {
   // Stopped by the person: did not happen, not a fault.
   cancelled: stepMark("declined"),
   unsettled: stepMark("unsettled"),
+  // Its proposal's standing could not be read — a question, not "your turn".
+  unknown: stepMark("unsettled"),
 } as const satisfies Record<TurnMarkState, StepMark>;
 
 export function turnMark(state: TurnMarkState): {
