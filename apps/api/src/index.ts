@@ -1169,6 +1169,9 @@ app.route("/api/files", fileUploadApp);
 
 // Dictation speech-to-text (multipart — not tRPC). Pod → IS over Hub Protocol.
 // GET|POST /api/media/transcribe — auth applied inside mediaTranscribeApp.
+// Each POST is a paid Whisper call, so it shares the AI limit with chat. Hono
+// runs middleware in registration order: this MUST precede the route mount.
+app.use("/api/media/transcribe", aiRateLimitMiddleware);
 app.route("/api/media", mediaTranscribeApp);
 
 // AI rate limiting for chat/send message path
