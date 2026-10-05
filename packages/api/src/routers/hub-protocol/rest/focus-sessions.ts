@@ -105,6 +105,7 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
+  droppedAskWarnings,
 } from "../../../services/focus-sessions/update-session.js";
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -1661,8 +1662,22 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         agentUserId,
       });
 
+      // An ask declared on a slot that is not the person's is dropped by the
+      // merge — said back to the caller (the IS door), never silent. Same rule
+      // as the MCP door (`updateSession` → `warnings`).
+      const warnings =
+        patch.expectedOutputs !== undefined
+          ? droppedAskWarnings(
+              patch.expectedOutputs as Parameters<typeof droppedAskWarnings>[0],
+              (updated.expectedOutputs ?? []) as Parameters<
+                typeof droppedAskWarnings
+              >[1]
+            )
+          : [];
+
       return c.json({
         ...updated,
+        ...(warnings.length > 0 ? { warnings } : {}),
         ...(blockGuidelines ? { blockGuidelines } : {}),
         ...(nudges ? { nudges } : {}),
         // What the follow DID — which playbook, which stage, how much

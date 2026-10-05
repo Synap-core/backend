@@ -135,6 +135,7 @@ import {
   channelMembers,
   messages,
   apiKeys,
+  governanceRules,
 } from "@synap/database";
 import { FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE } from "../lifecycle-events.js";
 import { answerExpectedOutput } from "../answer-slot.js";
@@ -315,6 +316,7 @@ describe("W2 typed ask doors", () => {
       channelMembers,
       messages,
       apiKeys,
+      governanceRules,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -338,6 +340,30 @@ describe("W2 typed ask doors", () => {
     h.triggers.length = 0;
     h.failPost = false;
     h.failWake = false;
+  });
+
+  // ── update (Hub PATCH — the IS door) ───────────────────────────────────────
+
+  it("Hub PATCH says back an ask it dropped on a slot that is not the person's (warnings[])", async () => {
+    const { sessionId } = await seedAsk(null);
+    const res = await send(app(), "PATCH", `/focus-sessions/${sessionId}`, {
+      expectedOutputs: [
+        {
+          kind: "document",
+          label: IDLE,
+          ask: { mode: "confirm", prompt: "Ship it?" },
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      warnings?: string[];
+      expectedOutputs?: Array<{ label: string; ask?: unknown }>;
+    };
+    const idle = body.expectedOutputs?.find((o) => o.label === IDLE);
+    expect(idle?.ask).toBeUndefined();
+    expect(body.warnings?.length).toBe(1);
+    expect(body.warnings?.[0]).toContain(IDLE);
   });
 
   // ── answer ────────────────────────────────────────────────────────────────
