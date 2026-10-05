@@ -1,13 +1,18 @@
 /**
- * The Kratos `/upload` door must refuse a session that is not a member of the
- * target workspace (it used to write into any workspaceId). Drives the REAL
- * route through Hono; only the DB boundary and auth are mocked.
+ * The Kratos `/upload` door must refuse a session that cannot WRITE the target
+ * workspace (it used to write into any workspaceId, then let viewers write and
+ * refused owners with no member row). Drives the REAL route through Hono and the
+ * REAL `assertWorkspaceWrite` floor; only the DB boundary and auth are mocked.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
-  member: false,
-  findFirst: vi.fn(),
+  /** The caller's member-row role, or null = no member row. */
+  role: null as string | null,
+  /** workspaces.owner_id of the target workspace. */
+  ownerId: "someone-else",
+  getMembership: vi.fn(),
+  findWorkspace: vi.fn(),
   materialize: vi.fn(),
 }));
 
@@ -16,7 +21,9 @@ vi.mock("@synap/storage", () => ({
   storage: { upload: vi.fn(), delete: vi.fn() },
 }));
 vi.mock("@synap/database", () => ({
-  db: { query: { workspaceMembers: { findFirst: h.findFirst } } },
+  db: { query: { workspaces: { findFirst: h.findWorkspace } } },
+  getWorkspaceMembership: h.getMembership,
+  workspaces: { id: "id" },
   eq: vi.fn(),
   and: vi.fn(),
   entities: {},
@@ -54,24 +61,40 @@ function upload() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.findFirst.mockImplementation(async () =>
-    h.member ? { id: "m" } : undefined
+  h.role = null;
+  h.ownerId = "someone-else";
+  h.getMembership.mockImplementation(async () =>
+    h.role ? { role: h.role } : null
   );
+  h.findWorkspace.mockImplementation(async () => ({ ownerId: h.ownerId }));
 });
 
-describe("POST /upload workspace membership", () => {
+describe("POST /upload workspace write gate", () => {
   it("403s a non-member and writes nothing", async () => {
-    h.member = false;
     const res = await upload();
     expect(res.status).toBe(403);
-    expect(h.findFirst).toHaveBeenCalledTimes(1);
+    expect(h.getMembership).toHaveBeenCalledTimes(1);
     expect(h.materialize).not.toHaveBeenCalled();
   });
 
-  it("lets a member past the gate (does not 403)", async () => {
-    h.member = true;
+  it("403s a VIEWER — read access is not write access", async () => {
+    h.role = "viewer";
+    const res = await upload();
+    expect(res.status).toBe(403);
+    expect(h.materialize).not.toHaveBeenCalled();
+  });
+
+  it("lets an editor past the gate (does not 403)", async () => {
+    h.role = "editor";
     const res = await upload();
     expect(res.status).not.toBe(403);
-    expect(h.findFirst).toHaveBeenCalledTimes(1);
+    expect(h.getMembership).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the workspace OWNER past the gate even with no member row", async () => {
+    h.ownerId = "user-1";
+    const res = await upload();
+    expect(res.status).not.toBe(403);
+    expect(h.findWorkspace).toHaveBeenCalledTimes(1);
   });
 });

@@ -12,8 +12,15 @@ const h = vi.hoisted(() => ({
   getMetadata: vi.fn(),
   deleteObj: vi.fn(),
   setBody: vi.fn(),
+  deleteBody: vi.fn(),
+  materialize: vi.fn(),
+  resolveProfile: vi.fn(),
+  /** `documents` row already holding the key (read by storage_key). */
   existingRows: [] as unknown[],
+  /** The post-write re-read (read by id). */
   docRows: [] as unknown[],
+  entityRows: [] as unknown[],
+  proposalRows: [] as unknown[],
 }));
 
 vi.mock("@synap/storage", () => {
@@ -31,31 +38,54 @@ vi.mock("@synap/storage", () => {
 });
 
 vi.mock("@synap/database", () => {
-  // `select({ id })` = the already-finalized probe; `select()` = the re-read.
-  const chain = (cols?: unknown) => {
-    const rows = cols ? h.existingRows : h.docRows;
+  const documents = { id: "id", storageKey: "storage_key" };
+  const entities = { id: "id", documentId: "document_id" };
+  const proposals = { id: "id", status: "status", data: "data" };
+  // Rows are dispatched by the table the query reads FROM, and — for
+  // `documents` — by the column it filters on (`eq` returns its column):
+  // storage_key = "who owns this key?", id = the post-write re-read.
+  const chain = () => {
+    let table: unknown;
+    let cond: unknown;
     const o: Record<string, unknown> = {};
-    o.from = () => o;
-    o.where = () => o;
-    o.limit = () => Promise.resolve(rows);
+    o.from = (t: unknown) => ((table = t), o);
+    o.where = (c: unknown) => ((cond = c), o);
+    o.limit = () =>
+      Promise.resolve(
+        table === entities
+          ? h.entityRows
+          : table === proposals
+            ? h.proposalRows
+            : cond === documents.id
+              ? h.docRows
+              : h.existingRows
+      );
     return o;
   };
   return {
-    db: { select: (cols?: unknown) => chain(cols) },
-    eq: vi.fn(),
-    documents: { id: "id", storageKey: "storage_key" },
+    db: { select: () => chain() },
+    eq: (col: unknown) => col,
+    and: vi.fn(),
+    drizzleSql: vi.fn(),
+    documents,
+    entities,
+    proposals,
     eventRepository: {},
     EntityBodyService: class {
       setBody = h.setBody;
+      deleteBody = h.deleteBody;
     },
-    // file-upload.ts imports these; unused by the code under test.
-    and: vi.fn(),
-    entities: {},
+    ProfileResolutionService: class {
+      resolveProfile = h.resolveProfile;
+    },
+    // file-upload.ts imports these.
     workspaceMembers: {},
-    materializeEntity: vi.fn(),
-    resolveImportEntityPlacement: vi.fn(),
+    workspaces: {},
+    materializeEntity: h.materialize,
+    resolveImportEntityPlacement: vi.fn(async () => WS_FOR_MOCK),
   };
 });
+const WS_FOR_MOCK = "11111111-1111-4111-8111-111111111111";
 vi.mock("@synap/database/schema", () => ({ channelContextItems: {} }));
 vi.mock("@synap/auth", () => ({ authMiddleware: vi.fn() }));
 vi.mock("../../access/guest-containment.js", () => ({
@@ -68,6 +98,7 @@ import {
   parsePresignedUploadKey,
 } from "../file-upload-presign.js";
 import {
+  createFileEntityForStoredDocument,
   brandAssetKindForMimeType,
   maxUploadBytesForMimeType,
   maxBufferedUploadBytes,
@@ -85,6 +116,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.existingRows = [];
   h.docRows = [{ id: "doc-1", storageKey: "k" }];
+  h.entityRows = [];
+  h.proposalRows = [];
+  h.resolveProfile.mockResolvedValue({ id: "profile-1" });
   h.deleteObj.mockResolvedValue(undefined);
   h.getSignedUploadUrl.mockResolvedValue(
     "https://pod.example/synap-storage/k?sig"
@@ -243,14 +277,95 @@ describe("storeDocumentFromPresignedUpload", () => {
     expect(r).toMatchObject({ ok: false, status: 403 });
   });
 
-  it("refuses a token some document already owns (409)", async () => {
-    h.existingRows = [{ id: "doc-0" }];
+  const priorDoc = {
+    id: "doc-0",
+    storageKey: token,
+    storageUrl: "u0",
+    size: 400 * MB,
+    mimeType: "video/mp4",
+  };
+
+  it("a key whose document an ENTITY already references is finished — 409", async () => {
+    h.existingRows = [priorDoc];
+    h.entityRows = [{ id: "entity-0" }];
     const r = await storeDocumentFromPresignedUpload({
       userId: USER,
       uploadToken: token,
     });
     expect(r).toMatchObject({ ok: false, status: 409 });
     expect(h.setBody).not.toHaveBeenCalled();
+  });
+
+  it("a key a PENDING proposal will claim is finished too — 409", async () => {
+    h.existingRows = [priorDoc];
+    h.proposalRows = [{ id: "proposal-0" }];
+    const r = await storeDocumentFromPresignedUpload({
+      userId: USER,
+      uploadToken: token,
+    });
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(h.setBody).not.toHaveBeenCalled();
+  });
+
+  it("RESUMES an unclaimed document (retry after a failed entity create)", async () => {
+    h.existingRows = [priorDoc];
+    const r = await storeDocumentFromPresignedUpload({
+      userId: USER,
+      uploadToken: token,
+    });
+    expect(r).toMatchObject({
+      ok: true,
+      resumed: true,
+      mimeType: "video/mp4",
+      filename: "launch.mp4",
+      workspaceId: WS,
+      stored: {
+        documentId: "doc-0",
+        storageKey: token,
+        storageUrl: "u0",
+        size: 400 * MB,
+      },
+    });
+    // No second documents row, no re-HEAD of the object.
+    expect(h.setBody).not.toHaveBeenCalled();
+    expect(h.getMetadata).not.toHaveBeenCalled();
+  });
+
+  it("a concurrent finalize losing the unique index (23505) is a 409, not a 500", async () => {
+    h.getMetadata.mockResolvedValueOnce({ size: 10, contentType: "video/mp4" });
+    h.setBody.mockRejectedValueOnce(
+      Object.assign(new Error("dup"), { cause: { code: "23505" } })
+    );
+    const r = await storeDocumentFromPresignedUpload({
+      userId: USER,
+      uploadToken: token,
+    });
+    expect(r).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it("an unknown entity kind is refused BEFORE any row is written", async () => {
+    h.resolveProfile.mockResolvedValueOnce(null);
+    const r = await storeDocumentFromPresignedUpload({
+      userId: USER,
+      uploadToken: token,
+      profileSlug: "no-such-kind",
+    });
+    expect(r).toMatchObject({
+      ok: false,
+      status: 400,
+      code: "UNKNOWN_PROFILE",
+    });
+    expect(h.resolveProfile).toHaveBeenCalledWith("no-such-kind", USER, WS);
+    expect(h.getMetadata).not.toHaveBeenCalled();
+    expect(h.setBody).not.toHaveBeenCalled();
+  });
+
+  it("refuses a pod-scoped key (both request doors require a workspace)", async () => {
+    expect(
+      parsePresignedUploadKey(
+        `files/pod/uploads/${USER}/22222222-2222-4222-8222-222222222222/a.mp4`
+      )
+    ).toBeNull();
   });
 
   it("a missing object is 404; any other storage failure THROWS (never folded into 404)", async () => {
@@ -288,6 +403,7 @@ describe("storeDocumentFromPresignedUpload", () => {
     });
     expect(r).toMatchObject({
       ok: true,
+      resumed: false,
       mimeType: "video/mp4",
       filename: "launch.mp4",
       workspaceId: WS,
@@ -315,5 +431,40 @@ describe("storeDocumentFromPresignedUpload", () => {
     expect(r).toMatchObject({ ok: false, status: 415 });
     expect(h.deleteObj).toHaveBeenCalledWith(token);
     expect(h.setBody).not.toHaveBeenCalled();
+  });
+});
+
+describe("createFileEntityForStoredDocument — keepDocumentOnFailure", () => {
+  const stored = {
+    documentId: "doc-9",
+    storageKey: "k",
+    storageUrl: "u",
+    size: 10,
+    document: { id: "doc-9", storageKey: "k" },
+  };
+  const params = {
+    userId: USER,
+    workspaceId: WS,
+    mimeType: "video/mp4",
+    filename: "a.mp4",
+  };
+
+  it("the presigned finalize KEEPS the document + bytes when the create fails (so a retry resumes)", async () => {
+    h.materialize.mockRejectedValueOnce(new Error("required prop missing"));
+    await expect(
+      createFileEntityForStoredDocument(stored, {
+        ...params,
+        keepDocumentOnFailure: true,
+      })
+    ).rejects.toThrow("required prop missing");
+    expect(h.deleteBody).not.toHaveBeenCalled();
+  });
+
+  it("the buffered door still reverses the document on failure", async () => {
+    h.materialize.mockRejectedValueOnce(new Error("boom"));
+    await expect(
+      createFileEntityForStoredDocument(stored, params)
+    ).rejects.toThrow("boom");
+    expect(h.deleteBody).toHaveBeenCalledWith({ documentId: "doc-9" });
   });
 });

@@ -18,10 +18,18 @@
  *
  * The upload token IS the storage key, and it is stateless on purpose: the key
  * embeds the workspace and the uploading user
- * (`files/<workspaceId|pod>/uploads/<userId>/<uuid>/<name>`), finalize refuses a
- * key that does not name the caller, and refuses a key some document already
- * owns (so one object can never back two documents — deleting one would delete
- * the other's bytes). No table, no migration.
+ * (`files/<workspaceId>/uploads/<userId>/<uuid>/<name>`) and finalize refuses a
+ * key that does not name the caller. One object never backs two documents
+ * (deleting one would delete the other's bytes): finalize refuses a key whose
+ * document is already CLAIMED (an entity references it, or a pending proposal
+ * will create one), and migration 0300's partial unique index on
+ * `documents.storage_key` closes the concurrent-finalize race (23505 → 409).
+ *
+ * Finalize is RESUMABLE. It writes the `documents` row before the caller creates
+ * the entity, and that create can still fail (permission, required props). A
+ * retry then finds an UNCLAIMED document on the key and reuses it instead of
+ * answering 409 — so a failed create never strands a 500MB object behind a
+ * "already finalized" wall.
  */
 
 import { randomUUID } from "crypto";
@@ -30,9 +38,14 @@ import { storage, StorageUploadUnavailableError } from "@synap/storage";
 import {
   db,
   eq,
+  and,
+  drizzleSql,
   documents,
+  entities,
+  proposals,
   eventRepository,
   EntityBodyService,
+  ProfileResolutionService,
 } from "@synap/database";
 import {
   isAllowedMimeType,
@@ -60,8 +73,9 @@ const refuse = (
 ): PresignRefusal => ({ ok: false, status, code, error });
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+// Both request doors require a workspace, so a key always names one.
 const KEY_RE = new RegExp(
-  `^files/(${UUID}|pod)/uploads/([^/]+)/(${UUID})/([^/]+)$`
+  `^files/(${UUID})/uploads/([^/]+)/(${UUID})/([^/]+)$`
 );
 
 function safeFileName(filename: string): string {
@@ -71,11 +85,11 @@ function safeFileName(filename: string): string {
 /** Parse an upload token (storage key). `null` = not a presigned-upload key. */
 export function parsePresignedUploadKey(
   key: string
-): { workspaceId: string | null; userId: string; filename: string } | null {
+): { workspaceId: string; userId: string; filename: string } | null {
   const m = KEY_RE.exec(key);
   if (!m) return null;
   return {
-    workspaceId: m[1] === "pod" ? null : m[1]!,
+    workspaceId: m[1]!,
     userId: m[2]!,
     filename: m[4]!,
   };
@@ -94,12 +108,12 @@ export interface PresignedUploadTicket {
 }
 
 /**
- * Step 1. The caller has already authenticated `userId` and membership-checked
- * `workspaceId` (null = pod-personal).
+ * Step 1. The caller has already authenticated `userId` and write-checked
+ * `workspaceId`.
  */
 export async function requestPresignedUpload(params: {
   userId: string;
-  workspaceId: string | null;
+  workspaceId: string;
   filename: string;
   mimeType: string;
   size: number;
@@ -127,7 +141,7 @@ export async function requestPresignedUpload(params: {
     );
   }
 
-  const key = `files/${workspaceId ?? "pod"}/uploads/${userId}/${randomUUID()}/${safeFileName(params.filename)}`;
+  const key = `files/${workspaceId}/uploads/${userId}/${randomUUID()}/${safeFileName(params.filename)}`;
   try {
     const uploadUrl = await storage.getSignedUploadUrl(key, {
       contentType: mimeType,
@@ -164,13 +178,46 @@ export interface FinalizedUpload {
   mimeType: string;
   filename: string;
   /** The workspace bound into the token at request time. */
-  workspaceId: string | null;
+  workspaceId: string;
+  /** `true` = an unclaimed document already held this key (a retry). */
+  resumed: boolean;
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === "23505" || e?.cause?.code === "23505";
+}
+
+/**
+ * Is this document already spoken for? An entity references it, or a PENDING
+ * proposal will create one on approval (the governed create spreads its input,
+ * `documentId` included, into `proposals.data`). Either way a second finalize
+ * must not mint another entity over the same bytes.
+ */
+async function isDocumentClaimed(documentId: string): Promise<boolean> {
+  const [entity] = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(eq(entities.documentId, documentId))
+    .limit(1);
+  if (entity) return true;
+  const [pending] = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.status, "pending"),
+        drizzleSql`${proposals.data}->>'documentId' = ${documentId}`
+      )
+    )
+    .limit(1);
+  return !!pending;
 }
 
 /**
  * Step 3. Verifies the PUT landed and is what was declared, then writes the
  * `documents` row. Creates NO entity — the caller does, through the same path
- * as its buffered door. The caller must membership-check
+ * as its buffered door. The caller must write-check
  * {@link FinalizedUpload.workspaceId}; use {@link parsePresignedUploadKey} to
  * read it BEFORE calling this.
  */
@@ -180,6 +227,11 @@ export async function storeDocumentFromPresignedUpload(params: {
   title?: string;
   /** Agent-key caller — provenance is `ai_agent`, never falsified as human. */
   actorAgentUserId?: string;
+  /**
+   * The entity kind the caller will create. When given, it is resolved BEFORE
+   * any row is written, so an unknown kind is a 400 and not a stranded upload.
+   */
+  profileSlug?: string;
 }): Promise<FinalizedUpload | PresignRefusal> {
   const { userId, uploadToken } = params;
   const parsed = parsePresignedUploadKey(uploadToken);
@@ -194,17 +246,51 @@ export async function storeDocumentFromPresignedUpload(params: {
     );
   }
 
-  const [already] = await db
-    .select({ id: documents.id })
+  if (params.profileSlug) {
+    const profile = await new ProfileResolutionService(db).resolveProfile(
+      params.profileSlug,
+      userId,
+      parsed.workspaceId
+    );
+    if (!profile) {
+      return refuse(
+        400,
+        "UNKNOWN_PROFILE",
+        `No entity kind "${params.profileSlug}" in this workspace`
+      );
+    }
+  }
+
+  const alreadyFinalized = () =>
+    refuse(409, "ALREADY_FINALIZED", "This upload was already finalized");
+
+  const [existing] = await db
+    .select()
     .from(documents)
     .where(eq(documents.storageKey, uploadToken))
     .limit(1);
-  if (already) {
-    return refuse(
-      409,
-      "ALREADY_FINALIZED",
-      "This upload was already finalized"
-    );
+  if (existing) {
+    if (await isDocumentClaimed(existing.id)) return alreadyFinalized();
+    // Resume: a previous finalize wrote the row, then its entity create
+    // failed. Hand back the same document so the caller can retry the create.
+    return {
+      ok: true,
+      resumed: true,
+      mimeType: existing.mimeType ?? "application/octet-stream",
+      filename: parsed.filename,
+      workspaceId: parsed.workspaceId,
+      stored: {
+        documentId: existing.id,
+        storageKey: uploadToken,
+        storageUrl: existing.storageUrl ?? "",
+        size: existing.size,
+        document: existing as {
+          id: string;
+          storageKey: string | null;
+          [k: string]: unknown;
+        },
+      },
+    };
   }
 
   let info: { size: number; contentType: string };
@@ -247,21 +333,31 @@ export async function storeDocumentFromPresignedUpload(params: {
     );
   }
 
-  const result = await new EntityBodyService(db, eventRepository).setBody({
-    entityId: randomUUID(),
-    userId,
-    workspaceId: parsed.workspaceId,
-    title: params.title,
-    storedObject: {
-      storageKey: uploadToken,
-      size: info.size,
-      mimeType,
-      filename: parsed.filename,
-    },
-    provenance: params.actorAgentUserId
-      ? { createdByKind: "ai_agent", createdByUserId: params.actorAgentUserId }
-      : { createdByKind: "human", createdByUserId: userId },
-  });
+  let result: Awaited<ReturnType<EntityBodyService["setBody"]>>;
+  try {
+    result = await new EntityBodyService(db, eventRepository).setBody({
+      entityId: randomUUID(),
+      userId,
+      workspaceId: parsed.workspaceId,
+      title: params.title,
+      storedObject: {
+        storageKey: uploadToken,
+        size: info.size,
+        mimeType,
+        filename: parsed.filename,
+      },
+      provenance: params.actorAgentUserId
+        ? {
+            createdByKind: "ai_agent",
+            createdByUserId: params.actorAgentUserId,
+          }
+        : { createdByKind: "human", createdByUserId: userId },
+    });
+  } catch (err) {
+    // A concurrent finalize of the same key won the unique index (0300).
+    if (isUniqueViolation(err)) return alreadyFinalized();
+    throw err;
+  }
 
   const [document] = await db
     .select()
@@ -271,6 +367,7 @@ export async function storeDocumentFromPresignedUpload(params: {
 
   return {
     ok: true,
+    resumed: false,
     mimeType,
     filename: parsed.filename,
     workspaceId: parsed.workspaceId,

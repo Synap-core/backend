@@ -18,6 +18,7 @@ import {
   entities,
   documents,
   workspaceMembers,
+  workspaces,
   materializeEntity,
   resolveImportEntityPlacement,
   eventRepository,
@@ -26,6 +27,8 @@ import {
 import { channelContextItems } from "@synap/database/schema";
 import { authMiddleware } from "@synap/auth";
 import { refuseGuestSession } from "../access/guest-containment.js";
+import { TRPCError } from "@trpc/server";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   requestPresignedUpload,
   storeDocumentFromPresignedUpload,
@@ -364,6 +367,12 @@ export async function createFileEntityForStoredDocument(
     profileSlug?: string;
     storageKeyProperty?: string;
     properties?: Record<string, unknown>;
+    /**
+     * Keep the document + bytes when the entity create fails. The presigned
+     * finalize sets it: its bytes cannot be re-sent cheaply, and a retry
+     * resumes on the unclaimed document instead.
+     */
+    keepDocumentOnFailure?: boolean;
   }
 ): Promise<UploadedFileEntity> {
   const { userId, workspaceId, mimeType, filename } = params;
@@ -417,6 +426,7 @@ export async function createFileEntityForStoredDocument(
     );
     createdEntity = materialized.entity;
   } catch (createError) {
+    if (params.keepDocumentOnFailure) throw createError;
     try {
       // Reverse-cascade via the service — deletes the `documents` row AND its
       // storage objects (current + any version snapshot).
@@ -487,9 +497,9 @@ fileUploadApp.post("/upload", async (c) => {
       return c.json({ error: "workspaceId is required" }, 400);
     }
 
-    // Same membership gate as the presigned lane (`/uploads`): a session must
-    // never write into a workspace it does not belong to.
-    if (!(await isWorkspaceMember(userId, workspaceId))) {
+    // Same write gate as the presigned lane (`/uploads`): a session must
+    // never write into a workspace it cannot edit.
+    if (!(await canWriteWorkspace(userId, workspaceId))) {
       return c.json({ error: "Forbidden" }, 403);
     }
 
@@ -630,19 +640,26 @@ async function finishUpload(p: {
   };
 }
 
-/** Kratos-door membership gate (the Hub door uses `verifyWorkspaceAccess`). */
-async function isWorkspaceMember(
+/**
+ * Kratos-door write gate: the canonical `assertWorkspaceWrite` floor (an
+ * editor+ member row — a viewer cannot upload), plus the workspace OWNER, who
+ * may hold no member row at all.
+ */
+async function canWriteWorkspace(
   userId: string,
   workspaceId: string
 ): Promise<boolean> {
-  const row = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { id: true },
+  try {
+    await assertWorkspaceWrite(db, userId, { workspaceId });
+    return true;
+  } catch (err) {
+    if (!(err instanceof TRPCError && err.code === "FORBIDDEN")) throw err;
+  }
+  const ws = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+    columns: { ownerId: true },
   });
-  return !!row;
+  return ws?.ownerId === userId;
 }
 
 // ---------------------------------------------------------------------------
@@ -662,7 +679,7 @@ fileUploadApp.post("/uploads", async (c) => {
   if (typeof workspaceId !== "string" || !workspaceId) {
     return c.json({ error: "workspaceId is required" }, 400);
   }
-  if (!(await isWorkspaceMember(userId, workspaceId))) {
+  if (!(await canWriteWorkspace(userId, workspaceId))) {
     return c.json({ error: "Forbidden" }, 403);
   }
   const ticket = await requestPresignedUpload({
@@ -698,10 +715,7 @@ fileUploadApp.post("/uploads/finalize", async (c) => {
   const uploadToken =
     typeof body.uploadToken === "string" ? body.uploadToken : "";
   const bound = parsePresignedUploadKey(uploadToken);
-  if (
-    bound?.workspaceId &&
-    !(await isWorkspaceMember(userId, bound.workspaceId))
-  ) {
+  if (bound && !(await canWriteWorkspace(userId, bound.workspaceId))) {
     return c.json({ error: "Forbidden" }, 403);
   }
   try {
@@ -709,6 +723,7 @@ fileUploadApp.post("/uploads/finalize", async (c) => {
       userId,
       uploadToken,
       title: typeof body.title === "string" ? body.title : undefined,
+      profileSlug: fields.profileSlug,
     });
     if (!fin.ok) {
       return c.json({ error: fin.error, code: fin.code }, fin.status);
@@ -722,6 +737,7 @@ fileUploadApp.post("/uploads/finalize", async (c) => {
       profileSlug: fields.profileSlug,
       storageKeyProperty: fields.storageKeyProperty,
       properties: fields.properties,
+      keepDocumentOnFailure: true,
     });
     return c.json(
       await finishUpload({
