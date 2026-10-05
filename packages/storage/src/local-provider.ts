@@ -20,7 +20,9 @@ import type {
   FileMetadata,
   UploadOptions,
   FileInfo,
+  SignedUploadOptions,
 } from "./interface.js";
+import { StorageUploadUnavailableError } from "./interface.js";
 import { buildEntityPath } from "./utils.js";
 import { fileChecksum } from "./checksum.js";
 
@@ -155,6 +157,20 @@ export class LocalStorageProvider implements IFileStorage {
   ): Promise<string> {
     const absPath = this.resolve(storagePath);
     return `file://${absPath}`;
+  }
+
+  async objectUrl(storagePath: string): Promise<string> {
+    return `file://${this.resolve(storagePath)}`;
+  }
+
+  /** No HTTP server fronts local storage — there is no URL a client could PUT to. */
+  async getSignedUploadUrl(
+    _storagePath: string,
+    _options: SignedUploadOptions
+  ): Promise<string> {
+    throw new StorageUploadUnavailableError(
+      "Local filesystem storage cannot issue presigned upload URLs."
+    );
   }
 
   buildPath(

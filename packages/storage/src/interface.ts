@@ -47,6 +47,29 @@ export interface FileInfo {
   contentType: string;
 }
 
+/** Options for {@link IFileStorage.getSignedUploadUrl}. */
+export interface SignedUploadOptions {
+  /** Signed — the PUT must send exactly this Content-Type. */
+  contentType: string;
+  /** Signed — the PUT must send exactly this many bytes. */
+  contentLength: number;
+  /** Seconds until the URL expires (default 900 = 15 min). */
+  expiresIn?: number;
+}
+
+/**
+ * This storage backend cannot issue a client-reachable presigned upload URL.
+ * A typed refusal, so a caller can answer "use the small-file door" instead of
+ * handing a client a URL on an internal host it can never reach.
+ */
+export class StorageUploadUnavailableError extends Error {
+  readonly code = "STORAGE_UPLOAD_UNAVAILABLE";
+  constructor(message: string) {
+    super(message);
+    this.name = "StorageUploadUnavailableError";
+  }
+}
+
 /**
  * Storage provider interface
  *
@@ -162,6 +185,31 @@ export interface IFileStorage {
    * ```
    */
   getSignedUrl(path: string, expiresIn?: number): Promise<string>;
+
+  /**
+   * The canonical (unsigned) storage URL of an object — the same value
+   * `upload()` returns as `FileMetadata.url`. Used when the bytes arrived by a
+   * presigned PUT, so the `documents` row records the same `storageUrl` an
+   * API-side upload would have.
+   */
+  objectUrl(path: string): Promise<string>;
+
+  /**
+   * Generate a presigned PUT URL so a client can upload bytes DIRECTLY to
+   * object storage (the large-file lane — the API never buffers the body).
+   *
+   * `contentType` and `contentLength` are SIGNED: the store refuses a PUT whose
+   * Content-Type or Content-Length differs, so the declared size/type the pod
+   * validated is the only one that can land.
+   *
+   * Throws {@link StorageUploadUnavailableError} when this backend cannot hand
+   * out a URL a client can actually reach (local filesystem; MinIO with no
+   * configured public URL). Never returns an unreachable URL.
+   */
+  getSignedUploadUrl(
+    path: string,
+    options: SignedUploadOptions
+  ): Promise<string>;
 
   /**
    * Build a standardized file path for user entities

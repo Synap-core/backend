@@ -25,7 +25,9 @@ import type {
   FileMetadata,
   UploadOptions,
   FileInfo,
+  SignedUploadOptions,
 } from "./interface.js";
+import { StorageUploadUnavailableError } from "./interface.js";
 import { buildEntityPath } from "./utils.js";
 import { fileChecksum } from "./checksum.js";
 
@@ -56,6 +58,20 @@ export interface MinIOConfig {
  */
 export class MinIOStorageProvider implements IFileStorage {
   private client: S3Client;
+  /**
+   * Signs URLs handed to CLIENTS, against the configured PUBLIC endpoint.
+   *
+   * SigV4 signs the `host` header, so a URL signed by `client` (endpoint
+   * `http://minio:9000`, the compose-internal host) names a host no browser or
+   * CLI can resolve — and rewriting the host afterwards breaks the signature.
+   * A second client, configured with `publicUrl`, signs for the host the
+   * client will actually call; the edge proxy forwards `/<bucket>/*` to MinIO's
+   * S3 API (port 9000) with the Host header preserved, so MinIO recomputes the
+   * same signature. `null` = no public URL configured: GET signing keeps its
+   * historical internal-host behavior and upload presigning refuses (typed).
+   * Signing is local (no network call), so this client never talks to MinIO.
+   */
+  private publicSigner: S3Client | null;
   private bucketName: string;
   private publicUrl: string;
   private createBucketIfNotExists: boolean;
@@ -71,6 +87,18 @@ export class MinIOStorageProvider implements IFileStorage {
       },
       forcePathStyle: config.forcePathStyle !== false, // MinIO requires path-style
     });
+
+    this.publicSigner = config.publicUrl
+      ? new S3Client({
+          region: config.region || "us-east-1",
+          endpoint: config.publicUrl,
+          credentials: {
+            accessKeyId: config.accessKeyId,
+            secretAccessKey: config.secretAccessKey,
+          },
+          forcePathStyle: config.forcePathStyle !== false,
+        })
+      : null;
 
     this.bucketName = config.bucketName;
     this.publicUrl = config.publicUrl || config.endpoint;
@@ -140,7 +168,7 @@ export class MinIOStorageProvider implements IFileStorage {
 
     // For MinIO, public URL is endpoint + bucket + path
     // In local dev, this might be http://localhost:9000/bucket-name/path
-    const url = `${this.publicUrl}/${this.bucketName}/${path}`;
+    const url = await this.objectUrl(path);
 
     return {
       url,
@@ -242,7 +270,38 @@ export class MinIOStorageProvider implements IFileStorage {
       Key: path,
     });
 
-    return await getSignedUrl(this.client, command, { expiresIn });
+    return await getSignedUrl(this.publicSigner ?? this.client, command, {
+      expiresIn,
+    });
+  }
+
+  async objectUrl(path: string): Promise<string> {
+    return `${this.publicUrl}/${this.bucketName}/${path}`;
+  }
+
+  async getSignedUploadUrl(
+    path: string,
+    options: SignedUploadOptions
+  ): Promise<string> {
+    if (!this.publicSigner) {
+      throw new StorageUploadUnavailableError(
+        "MinIO has no public URL configured (MINIO_PUBLIC_URL), so a presigned " +
+          "upload URL would name the internal host. Set MINIO_PUBLIC_URL to the " +
+          "pod origin and route /<bucket>/* to MinIO :9000."
+      );
+    }
+    await this.ensureBucket();
+
+    const command = new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: path,
+      ContentType: options.contentType,
+      ContentLength: options.contentLength,
+    });
+
+    return await getSignedUrl(this.publicSigner, command, {
+      expiresIn: options.expiresIn ?? 900,
+    });
   }
 
   buildPath(

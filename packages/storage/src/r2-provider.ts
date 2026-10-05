@@ -22,6 +22,7 @@ import type {
   FileMetadata,
   UploadOptions,
   FileInfo,
+  SignedUploadOptions,
 } from "./interface.js";
 import { buildEntityPath } from "./utils.js";
 import { fileChecksum } from "./checksum.js";
@@ -82,7 +83,7 @@ export class R2StorageProvider implements IFileStorage {
     );
 
     return {
-      url: `${this.publicUrl}/${path}`,
+      url: await this.objectUrl(path),
       path,
       size: body.length,
       checksum: fileChecksum(body),
@@ -170,6 +171,27 @@ export class R2StorageProvider implements IFileStorage {
     });
 
     return await getSignedUrl(this.client, command, { expiresIn });
+  }
+
+  async objectUrl(path: string): Promise<string> {
+    return `${this.publicUrl}/${path}`;
+  }
+
+  /** R2's S3 endpoint is public, so the URL it signs is client-reachable. */
+  async getSignedUploadUrl(
+    path: string,
+    options: SignedUploadOptions
+  ): Promise<string> {
+    const command = new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: path,
+      ContentType: options.contentType,
+      ContentLength: options.contentLength,
+    });
+
+    return await getSignedUrl(this.client, command, {
+      expiresIn: options.expiresIn ?? 900,
+    });
   }
 
   buildPath(
