@@ -22,8 +22,13 @@ export interface DefaultRelationDef {
 
 /**
  * Domain-level relation types seeded into every workspace.
+ *
+ * `as const` so the slugs are a literal union: the node-neighbourhood role
+ * table (`@synap-core/types/connections` RELATION_EDGE_ROLES) is pinned to it
+ * by a compile-time floor (api `services/object-graph/edge-role-coverage.ts`)
+ * — a new default relation fails the build until it is given a zone.
  */
-export const DEFAULT_RELATION_DEFS: DefaultRelationDef[] = [
+export const DEFAULT_RELATION_DEFS = [
   {
     slug: "assigned_to",
     displayName: "Assigned To",
@@ -180,7 +185,7 @@ export const DEFAULT_RELATION_DEFS: DefaultRelationDef[] = [
     isDirectional: false,
     uiHints: { category: "social" },
   },
-];
+] as const satisfies readonly DefaultRelationDef[];
 
 /**
  * System-internal relation types — not user-facing, not shown in listTypes.

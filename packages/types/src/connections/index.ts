@@ -39,6 +39,8 @@ import {
 } from "../vocabulary/index.js";
 
 export * from "./wire.js";
+export * from "./neighbourhood.js";
+import { isProvenanceRole } from "./neighbourhood.js";
 
 export type ConnectionDirection = "outgoing" | "incoming" | "structural";
 
@@ -132,23 +134,18 @@ export interface GroupedConnections {
 }
 
 /**
- * Substrates that describe WHERE an object came from, not what it is tied to.
- * `links` is data EXCEPT its `produced` edge (the capture/session lineage).
+ * Substrates that describe WHERE an object came from, not what it is tied to:
+ * governed, produced-in, body, channel, session — and `links` EXCEPT its
+ * `produced` edge (the capture/session lineage). DECLARED once, as the
+ * `provenance` flag of the edge-role table (`./neighbourhood.ts`), so the
+ * provenance line and the node neighbourhood can never disagree.
  */
-const PROVENANCE_VIAS: ReadonlySet<string> = new Set([
-  "governed",
-  "produced-in",
-  "body",
-  "channel",
-  "session",
-]);
 const PRODUCED_EDGE = "produced";
 const CAPTURE_KIND = "capture";
 
 export function isProvenanceEdge(n: ConnectionNeighbor): boolean {
   if (n.isProvenance) return true;
-  if (n.via && PROVENANCE_VIAS.has(n.via)) return true;
-  return n.via === "links" && n.edgeType === PRODUCED_EDGE;
+  return isProvenanceRole(n.via, n.edgeType);
 }
 
 /**
