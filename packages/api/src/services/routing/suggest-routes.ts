@@ -5,10 +5,10 @@
  * (Linear triage shape), inline, never auto-run. So this module only RANKS and
  * EXPLAINS; nothing here runs a playbook or triggers an automation.
  *
- * PURE: candidates are loaded by the canonical matcher doors
- * (`playbooks.matchForEntity`, `automations.matchForEntity`) — which apply the
- * access layer — and handed in. Both doors call `rankRouteCandidates`, and the
- * capture followUp combines both lists per entity with
+ * PURE: candidates are loaded through the access layer and handed in —
+ * playbooks by `playbooks.matchForEntity` (which also calls
+ * `rankRouteCandidates`), propose-mode rules by `match-rules-for-entity.ts` —
+ * and the capture followUp combines both lists per entity with
  * `suggestRoutesForEntities`, so the ranking rule exists once.
  *
  * SIGNALS ARE LEXICAL + STRUCTURAL ONLY. Embeddings have no fallback provider
@@ -67,6 +67,16 @@ export interface RouteCandidate {
   text?: ReadonlyArray<string | null | undefined>;
   /** The kind the candidate is built for; `null` = fires for any kind. */
   subjectProfileSlug: string | null;
+  /**
+   * A RULE that PROPOSES (propose-mode `playbook_run`): confirming it files a
+   * proposal, never a run. Only rules of this mode are suggested.
+   */
+  proposes?: true;
+  /**
+   * A PLAYBOOK built for a kind with no standing propose rule yet: a host may
+   * offer "Always propose this", creating one through `skills.createRule`.
+   */
+  alwaysProposeOffer?: true;
 }
 
 export interface RouteEntity {

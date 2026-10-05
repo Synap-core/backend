@@ -165,6 +165,8 @@ export {
   // The `playbook_run` mode bookkeeping key (`__mode`) — the browser editor
   // writes it rather than re-declaring the string.
   PLAYBOOK_RUN_MODE_KEY,
+  // The standing "propose this playbook for every new <kind>" sentence.
+  proposePlaybookOnKindSentence,
   flowToConditions,
 } from "./sentence.js";
 export type {

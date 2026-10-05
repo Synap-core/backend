@@ -1,11 +1,12 @@
 /**
- * The capture follow-up's router call: candidates from BOTH matcher doors are
- * ranked into one list per entity, each with a reason — and nothing runs.
+ * The capture follow-up's router call: playbook candidates and propose-mode
+ * rule matches are ranked into one list per entity, each with a reason — and
+ * nothing runs.
  *
- * The matchers are injected at the door boundary (`playbooks.matchForEntity`,
- * `automations.matchForEntity`), shaped like those procedures' outputs. NOT
- * covered: the wiring into `capture.execute` / Hub `/capture/structure`
- * (typecheck + NEEDS-DOGFOOD).
+ * The matchers are injected at the boundary (`playbooks.matchForEntity`, and
+ * `match-rules-for-entity.ts` — whose predicate is tested on its own), shaped
+ * like their outputs. NOT covered: the wiring into `capture.execute` / Hub
+ * `/capture/structure` (typecheck + NEEDS-DOGFOOD).
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -20,7 +21,7 @@ const WS = "11111111-1111-4111-8111-111111111111";
 
 function matchers(): RouteMatchers & {
   playbooks: ReturnType<typeof vi.fn>;
-  automations: ReturnType<typeof vi.fn>;
+  rules: ReturnType<typeof vi.fn>;
 } {
   return {
     playbooks: vi.fn(async () => [
@@ -37,14 +38,17 @@ function matchers(): RouteMatchers & {
         subjectProfileSlug: "deal",
       },
     ]),
-    automations: vi.fn(async () => [
-      {
-        id: "au-any",
-        name: "Tag new items",
-        description: "",
-        signals: [{ type: "anyKind" }],
-      },
-    ]),
+    rules: vi.fn(async () => ({
+      matches: [
+        {
+          id: "au-any",
+          name: "Tag new items",
+          description: "",
+          filterProfileSlug: null,
+        },
+      ],
+      proposedPlaybookIds: new Set<string>(),
+    })),
   };
 }
 
@@ -98,7 +102,7 @@ describe("loadRouteSuggestions", () => {
     ).toEqual({ status: "skipped", reason: "no_entities" });
     expect(m.playbooks).not.toHaveBeenCalled();
 
-    m.automations.mockRejectedValueOnce(new Error("db down"));
+    m.rules.mockRejectedValueOnce(new Error("db down"));
     expect(
       await loadRouteSuggestions({
         ctx: {},
@@ -116,8 +120,74 @@ describe("loadRouteSuggestions", () => {
     );
     // Self-check: the scan can see the calls it does make.
     expect(src).toMatch(/\.matchForEntity\(/);
+    expect(src).toMatch(/matchProposeRulesForEntity\(/);
     expect(src).not.toMatch(
       /\.(run|trigger|triggerAutomation|runPlaybook|instantiate|instantiateSession|execute)\(/
     );
+  });
+});
+
+describe("loadRouteSuggestions — propose rules and the standing-rule offer", () => {
+  it("a matched propose rule is suggested as a PROPOSING candidate", async () => {
+    const m = matchers();
+    m.rules.mockResolvedValueOnce({
+      matches: [
+        {
+          id: "rule-deal",
+          name: "Qualify new deals",
+          description: null,
+          filterProfileSlug: "deal",
+        },
+      ],
+      proposedPlaybookIds: new Set<string>(),
+    });
+    const res = await loadRouteSuggestions({
+      ctx: {},
+      workspaceId: WS,
+      entities: [{ entityId: "e1", profileSlug: "deal" }],
+      matchers: m,
+    });
+    const [entity] = (res as Extract<typeof res, { status: "ok" }>).entities;
+    const rule = entity!.suggestions.find(
+      (s) => s.candidate.id === "rule-deal"
+    );
+    expect(rule?.candidate).toMatchObject({
+      kind: "automation",
+      proposes: true,
+    });
+  });
+
+  it("offers 'Always propose this' only for a kind-built playbook with no standing rule", async () => {
+    const m = matchers();
+    m.rules.mockResolvedValueOnce({
+      matches: [],
+      proposedPlaybookIds: new Set<string>(),
+    });
+    const offered = await loadRouteSuggestions({
+      ctx: {},
+      workspaceId: WS,
+      entities: [{ entityId: "e1", profileSlug: "deal" }],
+      matchers: m,
+    });
+    const pb = (
+      offered as Extract<typeof offered, { status: "ok" }>
+    ).entities[0]!.suggestions.find((s) => s.candidate.id === "pb-deal");
+    expect(pb?.candidate).toMatchObject({ alwaysProposeOffer: true });
+
+    m.rules.mockResolvedValueOnce({
+      matches: [],
+      proposedPlaybookIds: new Set(["pb-deal"]),
+    });
+    const withheld = await loadRouteSuggestions({
+      ctx: {},
+      workspaceId: WS,
+      entities: [{ entityId: "e1", profileSlug: "deal" }],
+      matchers: m,
+    });
+    const pb2 = (
+      withheld as Extract<typeof withheld, { status: "ok" }>
+    ).entities[0]!.suggestions.find((s) => s.candidate.id === "pb-deal");
+    expect(pb2).toBeDefined();
+    expect("alwaysProposeOffer" in pb2!.candidate).toBe(false);
   });
 });

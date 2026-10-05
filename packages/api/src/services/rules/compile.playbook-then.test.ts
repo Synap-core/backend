@@ -124,3 +124,21 @@ describe("compileRuleSentence — propose mode (`__mode`)", () => {
     expect(data.paramsMapping).toEqual({});
   });
 });
+
+describe("compileRuleSentence — the 'Always propose this' sentence", () => {
+  it("compiles (the capture chip's createRule input is a sentence the door accepts)", async () => {
+    const { proposePlaybookOnKindSentence } =
+      await import("@synap-core/types/automations");
+    const result = compileRuleSentence(
+      proposePlaybookOnKindSentence({ playbookId: PB, profileSlug: "deal" })
+    );
+    expect(result.ok, result.ok ? "" : result.failure.reason).toBe(true);
+    if (!result.ok) return;
+    expect(result.trigger.triggerConfig).toMatchObject({
+      eventPattern: "entity.create.completed",
+      filters: { profileSlug: "deal" },
+    });
+    const node = result.flow.nodes.find((n) => n.type === "playbook_run");
+    expect((node!.data as PlaybookRunNodeDef["data"]).mode).toBe("propose");
+  });
+});

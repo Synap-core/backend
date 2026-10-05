@@ -1,9 +1,16 @@
 /**
  * loadRouteSuggestions — the capture follow-up's call into the router
  * (intake plan §3.5): for the entities a capture created or proposed, load the
- * playbook AND automation candidates through the two canonical matcher doors
- * (`playbooks.matchForEntity`, `automations.matchForEntity` — access-layer
- * scoped) and rank them ONCE with `suggestRoutesForEntities`.
+ * candidates and rank them ONCE with `suggestRoutesForEntities`:
+ *   - PLAYBOOKS through `playbooks.matchForEntity` (the canonical playbook
+ *     matcher, access-layer scoped);
+ *   - RULES through `match-rules-for-entity.ts`: the PROPOSE-MODE rules the
+ *     capture's own `entity.create.completed` fires, decided by the trigger
+ *     matcher's pure `automationTriggerMatches` (one predicate, shared with the
+ *     live loop). Auto rules are not suggested — they already ran.
+ * A playbook built for the entity's kind with no standing propose rule yet
+ * carries `alwaysProposeOffer`, so a host may offer "Always propose this"
+ * (which creates a propose rule through `skills.createRule`, governed).
  *
  * SUGGEST ONLY. Nothing here runs a playbook or triggers an automation; the
  * suggestion carries its `reason` so the surface can show why, and the user
@@ -11,12 +18,17 @@
  *
  * HONEST STATES, never folded into "no suggestions":
  *   ok      — ranked (an entity may have an empty list: nothing matched)
- *   skipped — the matchers could not be asked (no workspace lens: both doors
- *             require one; or nothing was captured)
+ *   skipped — the matchers could not be asked (no workspace lens: both need
+ *             one — the host EXPLAINS this; or nothing was captured)
  *   failed  — a matcher threw; the error is named
  */
 
 import { createLogger } from "@synap-core/core";
+import {
+  loadRuleCandidates,
+  matchProposeRulesForEntity,
+  type ProposeRuleMatches,
+} from "./match-rules-for-entity.js";
 import {
   suggestRoutesForEntities,
   type EntityRouteSuggestions,
@@ -40,12 +52,6 @@ type PlaybookMatch = {
   subjectProfileSlug: string | null;
   signals?: ReadonlyArray<{ type: string; profileSlug?: string }>;
 };
-type AutomationMatch = {
-  id: string;
-  name: string;
-  description?: string;
-  signals: ReadonlyArray<{ type: string }>;
-};
 type MatchArgs = {
   profileSlug: string;
   entityId?: string;
@@ -55,30 +61,32 @@ type MatchArgs = {
 
 export interface RouteMatchers {
   playbooks: (args: MatchArgs) => Promise<PlaybookMatch[]>;
-  automations: (args: MatchArgs) => Promise<AutomationMatch[]>;
+  /** The propose-mode rules this entity's capture event fires. */
+  rules: (args: MatchArgs) => Promise<ProposeRuleMatches>;
 }
 
-/** The real matcher doors, called under the caller's own ctx + workspace lens. */
+/** The real matchers, called under the caller's own ctx + workspace lens. */
 async function defaultMatchers(
   ctx: Record<string, unknown>,
   workspaceId: string
 ): Promise<RouteMatchers> {
-  // Lazy: both routers import back into services.
-  const [{ playbooksRouter }, { automationsRouter }] = await Promise.all([
-    import("../../routers/playbooks.js"),
-    import("../../routers/automations.js"),
-  ]);
+  // Lazy: the router imports back into services.
+  const { playbooksRouter } = await import("../../routers/playbooks.js");
   // `playbooks.matchForEntity` is a workspaceProcedure — the lens rides the ctx.
   const lensCtx = { ...ctx, workspaceId };
   const pb = playbooksRouter.createCaller(
     lensCtx as Parameters<typeof playbooksRouter.createCaller>[0]
   );
-  const au = automationsRouter.createCaller(
-    lensCtx as Parameters<typeof automationsRouter.createCaller>[0]
-  );
+  // The rule rows are the same for every entity of one capture: read ONCE.
+  let rows: ReturnType<typeof loadRuleCandidates> | undefined;
   return {
     playbooks: (args) => pb.matchForEntity(args),
-    automations: (args) => au.matchForEntity(args),
+    rules: async (args) =>
+      matchProposeRulesForEntity({
+        rows: await (rows ??= loadRuleCandidates(lensCtx, workspaceId)),
+        ...(args.entityId ? { entityId: args.entityId } : {}),
+        profileSlug: args.profileSlug,
+      }),
   };
 }
 
@@ -109,9 +117,9 @@ export async function loadRouteSuggestions(input: {
           workspaceId,
           ...(intentText ? { intentText } : {}),
         };
-        const [pbs, autos] = await Promise.all([
+        const [pbs, rules] = await Promise.all([
           matchers.playbooks(args),
-          matchers.automations(args),
+          matchers.rules(args),
         ]);
         const candidates: RouteCandidate[] = [
           ...pbs.map((p) => ({
@@ -120,15 +128,20 @@ export async function loadRouteSuggestions(input: {
             name: p.name,
             text: [p.goalTemplate],
             subjectProfileSlug: p.subjectProfileSlug,
+            // Built for a kind, and no standing propose rule asks for it yet.
+            ...(p.subjectProfileSlug && !rules.proposedPlaybookIds.has(p.id)
+              ? { alwaysProposeOffer: true as const }
+              : {}),
           })),
-          ...autos.map((a) => ({
+          ...rules.matches.map((r) => ({
             kind: "automation" as const,
-            id: a.id,
-            name: a.name,
-            text: [a.description],
-            subjectProfileSlug: a.signals.some((s) => s.type === "anyKind")
-              ? null
-              : e.profileSlug,
+            id: r.id,
+            name: r.name,
+            text: [r.description],
+            // The rule's own kind filter is the evidence; a rule with none
+            // fires for anything new (`anyKind`) and needs an intent word.
+            subjectProfileSlug: r.filterProfileSlug,
+            proposes: true as const,
           })),
         ];
         const facetSlugs = [

@@ -59,13 +59,13 @@ import {
   OBJECT_KINDS,
 } from "@synap-core/types/vocabulary";
 import { listCapabilities } from "../services/capabilities/capability-registry.js";
-import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
 import {
   projectRunnableActions,
   type RunnableCapabilityAction,
 } from "../services/capabilities/action-projection.js";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import { readMaxRunsPerDay } from "@synap-core/types/automations";
+import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
 import {
   flowValidationErrorMessage,
   type FlowValidationResolvers,
@@ -548,13 +548,11 @@ function computeNextCronRunAt(cronExpr: string, fromDate: Date): Date | null {
 }
 
 /**
- * One-line human summary of an entity-create trigger for a UI card. When the
- * trigger carries a `filters.profileSlug` it names that profile; an absent
- * filter means the automation fires on ANY entity creation.
+ * One-line human summary of an entity-create trigger for a UI card: the kind
+ * the rule's filter names, or any entity when it names none.
  */
-function summarizeEntityCreateTrigger(config: AutomationTriggerConfig): string {
-  const slug = config.filters?.profileSlug as string | undefined;
-  return slug ? `On ${slug} created` : "On any entity created";
+function summarizeEntityCreateTrigger(profileSlug: string | null): string {
+  return profileSlug ? `On ${profileSlug} created` : "On any entity created";
 }
 
 type AutomationDatabase = Awaited<ReturnType<typeof getDb>>;
@@ -1617,9 +1615,8 @@ export function foldDeclaredEmits(
 /**
  * The authoritative "catalog" tier — the emittable-event universe DERIVED from
  * the grammar SSOT (SUBJECT_TYPES × EVENT_ACTIONS) at the `.completed` phase
- * (the phase automations match: `matchForEntity` hardcodes
- * `entity.create.completed`; unified.ts notes "Most automations should use
- * completed"), plus the connector / message-alias / observation families the
+ * (the phase automations match — capture emits `entity.create.completed`;
+ * unified.ts notes "Most automations should use completed"), plus the connector / message-alias / observation families the
  * matcher accepts. Everything here is a pattern `validateEventPattern` accepts.
  */
 function buildEventCatalog(): EventOption[] {
@@ -2124,43 +2121,32 @@ export const automationsRouter = router({
       return { targets };
     }),
 
-  // ── Match automations that would fire on creating an entity profile ─────────
+  // ── Match the PROPOSE rules a capture of this entity fires ──────────────────
 
   /**
-   * Match active automations whose event-trigger would fire on the creation of
-   * a given entity profile — the Capture→Automation matcher, mirror of
-   * `playbooks.matchForEntity`. Given a captured/created entity's `profileSlug`,
-   * answer "is there an automation that reacts to creating this kind of thing?"
-   * so the capture done-state can surface + offer to run it.
+   * Which PROPOSE-MODE rules fire when an entity of this kind is captured —
+   * the capture router's automation half (intake-ui `useCaptureRoutes`).
    *
-   * PREDICATE — an automation "would fire on entity.create of profileSlug X"
-   * when (source of truth: packages/jobs/src/workers/automation-trigger-matcher.ts):
-   *   • status='active' AND triggerType='event'                (matcher :306-310)
-   *   • triggerConfig.eventPattern matches the fixed operational event
-   *     `entity.create.completed` (events event-types.ts ENTITY_CREATED).
-   *     `matchPattern` (:59) accepts it exactly OR via trailing wildcard, so the
-   *     matching stored patterns are exactly:
-   *       `entity.create.completed` | `entity.create.*` | `entity.*`
-   *   • the profileSlug filter passes. Entity events have NO
-   *     `matchTriggerSpecificFilters` branch (:112) — profileSlug is a GENERIC
-   *     filter (event-types.ts filterKeys:["profileSlug"]) stored at
-   *     `triggerConfig.filters.profileSlug` and matched by exact equality
-   *     (`matchFilters` :78, applied at :419). An absent filter matches EVERY
-   *     profileSlug.
+   * ONE PREDICATE. This used to carry its own: an SQL `eventPattern =
+   * ANY([...])` + `filters.profileSlug` equality, blind to operator filters,
+   * rule scope and the sync-origin opt-in, and it offered AUTO rules that had
+   * already fired on the capture. It now reads the candidates through the
+   * access layer (`loadRuleCandidates`: `scopedDb(...).predicate`, the target
+   * workspace + pod-wide globals, active event rules) and DECIDES with the
+   * trigger matcher's own `automationTriggerMatches`
+   * (`services/routing/match-rules-for-entity.ts`) — the function the live
+   * loop calls. Only propose rules are returned: an auto rule needs no
+   * suggestion, it ran.
    *
-   * SCOPING — `scopedDb(AccessContext.from(ctx)).predicate(automations)` yields
-   * the access-layer user floor (never leaks cross-user), narrowed with
-   * `or(isNull(workspaceId), eq(workspaceId, input.workspaceId))` EXACTLY like
-   * `list`/`get` above: pod-wide (NULL-workspace) globals are KEPT, the target
-   * workspace is included, other workspaces (which can never fire for this
-   * entity) are excluded. Returns the lean card shape; [] when none.
+   * Ranked with a human-readable `reason` by `rankRouteCandidates` — the SAME
+   * rule as `playbooks.matchForEntity`. Returns the lean card shape; [] when
+   * none.
    */
   matchForEntity: protectedProcedure
     .input(
       z.object({
         profileSlug: z.string().min(1).optional(),
-        // Round-tripped by the caller into `trigger`/a run as the subject;
-        // matching is by profile, so it does not narrow this query.
+        /** The captured entity — the event's subject (rule scope reads it). */
         entityId: z.string().uuid().optional(),
         workspaceId: z.string().uuid(),
         /**
@@ -2172,61 +2158,33 @@ export const automationsRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      const database = await getDb();
-      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
-        automations
+      const { loadRuleCandidates, matchProposeRulesForEntity } =
+        await import("../services/routing/match-rules-for-entity.js");
+      const rows = await loadRuleCandidates(
+        ctx as unknown as Record<string, unknown>,
+        input.workspaceId
       );
+      const { matches } = await matchProposeRulesForEntity({
+        rows,
+        ...(input.entityId ? { entityId: input.entityId } : {}),
+        profileSlug: input.profileSlug ?? "",
+      });
 
-      const rows = await database
-        .select()
-        .from(automations)
-        .where(
-          and(
-            visibility,
-            // Same narrow as `list`: keep pod-wide (NULL) globals + the target
-            // workspace; exclude other workspaces.
-            or(
-              isNull(automations.workspaceId),
-              eq(automations.workspaceId, input.workspaceId)
-            ),
-            eq(automations.status, "active"),
-            eq(automations.triggerType, "event"),
-            // eventPattern ∈ the set matchPattern accepts for the fixed
-            // `entity.create.completed` event.
-            drizzleSql`${automations.triggerConfig}->>'eventPattern' = ANY(ARRAY['entity.create.completed','entity.create.*','entity.*'])`,
-            // When a kind is named: filters.profileSlug absent (fires for any)
-            // OR equals the request. When omitted, skip — the pool is every
-            // active visible entity-create automation, ranked by intentText.
-            input.profileSlug
-              ? drizzleSql`(${automations.triggerConfig}->'filters'->>'profileSlug' IS NULL OR ${automations.triggerConfig}->'filters'->>'profileSlug' = ${input.profileSlug})`
-              : undefined
-          )
-        )
-        .orderBy(desc(automations.updatedAt));
-
-      // Ranked with a human-readable `reason` — the SAME rule as
-      // `playbooks.matchForEntity`. Report the automation's own filter slug
-      // honestly; absent filter → null (anyKind).
       const ranked = rankRouteCandidates({
         entity: {
           entityId: input.entityId,
           ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
         },
         intentText: input.intentText,
-        candidates: rows.map((a) => {
-          const filterSlug = (
-            a.triggerConfig as { filters?: { profileSlug?: unknown } } | null
-          )?.filters?.profileSlug;
-          return {
-            kind: "automation" as const,
-            id: a.id,
-            name: a.name,
-            text: [a.description],
-            subjectProfileSlug:
-              typeof filterSlug === "string" ? filterSlug : null,
-            row: a,
-          };
-        }),
+        candidates: matches.map((m) => ({
+          kind: "automation" as const,
+          id: m.id,
+          name: m.name,
+          text: [m.description],
+          subjectProfileSlug: m.filterProfileSlug,
+          proposes: true as const,
+          row: m,
+        })),
       });
 
       const MATCH_LIMIT = 20;
@@ -2238,8 +2196,10 @@ export const automationsRouter = router({
           name: candidate.row.name,
           description: candidate.row.description ?? undefined,
           triggerSummary: summarizeEntityCreateTrigger(
-            candidate.row.triggerConfig
+            candidate.row.filterProfileSlug
           ),
+          /** It files a proposal; confirming it never starts a run. */
+          proposes: true as const,
           score,
           reason,
           signals,

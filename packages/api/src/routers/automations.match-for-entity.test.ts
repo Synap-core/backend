@@ -1,303 +1,139 @@
 /**
- * Focused contract test for `automations.matchForEntity` — the
- * Capture→Automation matcher (mirror of `playbooks.matchForEntity`). Verifies
- * (a) it filters to status='active' AND triggerType='event' AND the
- * entity-create eventPattern set AND the profileSlug JSONB filter, (b) it
- * applies the SAME access-layer scoping as `list` (scopedDb(AccessContext.from
- * (ctx)) + the keep-globals workspace narrow), and (c) it returns the lean card
- * shape, [] when none.
+ * `automations.matchForEntity` — the capture router's automation half — reads
+ * candidates through the access layer and DECIDES with the trigger matcher's
+ * own `automationTriggerMatches` (one predicate; see
+ * `services/routing/match-rules-for-entity.test.ts` for the predicate's
+ * discriminating fixtures). This file pins the DOOR: access scoping, the
+ * propose-only rule, and the card shape the intake-ui hook reads.
  *
- * DB is mocked (no live Postgres in CI); the assertions are on the composed
- * query + scoping, not on Postgres row filtering.
+ * DB is mocked at `getDb` (no live Postgres); the decision runs for real.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetDb, mockScopedDb, mockPredicate, mockAccessFrom } = vi.hoisted(
-  () => {
-    const predicate = vi.fn(() => ({ __visibility: true }));
-    return {
-      mockPredicate: predicate,
-      mockScopedDb: vi.fn(() => ({ predicate })),
-      mockAccessFrom: vi.fn((ctx: unknown) => ({ __access: ctx })),
-      mockGetDb: vi.fn(),
-    };
-  }
-);
-
-vi.mock("@synap/database", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@synap/database")>();
+const h = vi.hoisted(() => {
+  const predicate = vi.fn(() => ({ __visibility: true }));
   return {
-    ...actual,
-    getDb: mockGetDb,
-    and: vi.fn((...conditions) => ({ and: conditions.filter(Boolean) })),
-    or: vi.fn((...conditions) => ({ or: conditions.filter(Boolean) })),
-    eq: vi.fn((column, value) => ({ eq: [column, value] })),
-    isNull: vi.fn((column) => ({ isNull: column })),
-    desc: vi.fn((column) => ({ desc: column })),
-    drizzleSql: vi.fn(
-      (strings: TemplateStringsArray, ...values: unknown[]) => ({
-        sql: strings.join("?"),
-        values,
-      })
-    ),
+    predicate,
+    scopedDb: vi.fn(() => ({ predicate })),
+    accessFrom: vi.fn((ctx: unknown) => ({ __access: ctx })),
+    getDb: vi.fn(),
   };
 });
 
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return { ...actual, getDb: h.getDb };
+});
 vi.mock("../access/index.js", () => ({
-  AccessContext: { from: mockAccessFrom },
-  scopedDb: mockScopedDb,
+  AccessContext: { from: h.accessFrom },
+  scopedDb: h.scopedDb,
 }));
 
 import { automationsRouter } from "./automations.js";
 
 const WORKSPACE = "00000000-0000-4000-8000-000000000010";
+const PB = "33333333-3333-4333-8333-333333333333";
 
-/** Chainable select() builder whose terminal .orderBy resolves to `rows`. */
-function selectChain(rows: unknown[]) {
-  const captured: { where?: unknown } = {};
-  const chain = {
-    from: vi.fn(),
-    where: vi.fn(),
-    orderBy: vi.fn().mockResolvedValue(rows),
-    _captured: captured,
-  };
-  chain.from.mockReturnValue(chain);
-  chain.where.mockImplementation((w: unknown) => {
-    captured.where = w;
-    return chain;
-  });
-  return chain;
+const flow = (mode?: "propose") => ({
+  nodes: [
+    { id: "t", type: "trigger", data: {} },
+    {
+      id: "p",
+      type: "playbook_run",
+      data: { label: "x", playbookId: PB, ...(mode ? { mode } : {}) },
+    },
+  ],
+  edges: [],
+});
+
+function dbReturning(rows: unknown[]) {
+  const chain: Record<string, unknown> = {};
+  chain.from = () => chain;
+  chain.where = () => chain;
+  chain.orderBy = () => Promise.resolve(rows);
+  return { select: vi.fn(() => chain) };
 }
 
-function callerCtx() {
-  return {
+const caller = () =>
+  automationsRouter.createCaller({
     authenticated: true,
     userId: "user-1",
     workspaceId: WORKSPACE,
-  } as never;
-}
+  } as never);
 
-describe("automations.matchForEntity", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockPredicate.mockReturnValue({ __visibility: true });
-  });
+describe("automations.matchForEntity — propose rules, the matcher's predicate", () => {
+  beforeEach(() => vi.clearAllMocks());
 
-  it("matches active event automations by profileSlug and returns the card shape", async () => {
-    const chain = selectChain([
-      {
-        id: "auto-1",
-        name: "Onboard new person",
-        description: "Kick off the onboarding flow",
-        status: "active",
-        triggerType: "event",
-        triggerConfig: {
-          eventPattern: "entity.create.completed",
-          filters: { profileSlug: "person" },
+  it("returns the propose rule a capture of this kind fires, as a card; never an auto rule", async () => {
+    h.getDb.mockResolvedValue(
+      dbReturning([
+        {
+          id: "rule-propose",
+          name: "Qualify new people",
+          description: "Asks before qualifying",
+          triggerConfig: {
+            eventPattern: "entity.create.completed",
+            filters: { profileSlug: "person" },
+          },
+          flowDefinition: flow("propose"),
         },
-      },
-    ]);
-    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+        {
+          id: "rule-auto",
+          name: "Enrich new people",
+          description: null,
+          triggerConfig: {
+            eventPattern: "entity.create.completed",
+            filters: { profileSlug: "person" },
+          },
+          flowDefinition: flow(),
+        },
+      ])
+    );
 
-    const caller = automationsRouter.createCaller(callerCtx());
-    const result = await caller.matchForEntity({
+    const result = await caller().matchForEntity({
       profileSlug: "person",
       workspaceId: WORKSPACE,
     });
 
-    // The card shape + the suggest-and-confirm ranking the door now computes
-    // (`rankRouteCandidates`): the automation's profileSlug filter equals the
-    // request, so it is built for this kind — and the reason SAYS so.
     expect(result).toEqual([
       {
-        id: "auto-1",
-        name: "Onboard new person",
-        description: "Kick off the onboarding flow",
+        id: "rule-propose",
+        name: "Qualify new people",
+        description: "Asks before qualifying",
         triggerSummary: "On person created",
+        proposes: true,
         score: 2,
         reason: "Made for person items",
         signals: [{ type: "kind", profileSlug: "person" }],
       },
     ]);
-
-    // Scoping identical to `list`: scopedDb(AccessContext.from(ctx)).predicate.
-    expect(mockAccessFrom).toHaveBeenCalledWith(
+    // Access scoping, exactly like `list`.
+    expect(h.accessFrom).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1", workspaceId: WORKSPACE })
     );
-    expect(mockScopedDb).toHaveBeenCalledTimes(1);
-    expect(mockPredicate).toHaveBeenCalledTimes(1);
-
-    // WHERE composes: the visibility predicate + keep-globals narrow +
-    // status='active' + triggerType='event' + the entity-create eventPattern
-    // set + the profileSlug filter carrying the requested slug.
-    const where = chain._captured.where as { and: unknown[] };
-    expect(where.and).toContainEqual({ __visibility: true });
-    // keep-globals workspace narrow: or(isNull(workspaceId), eq(..., WORKSPACE))
-    expect(where.and).toContainEqual(
-      expect.objectContaining({ or: expect.any(Array) })
-    );
-    expect(where.and).toContainEqual(
-      expect.objectContaining({ eq: expect.arrayContaining(["active"]) })
-    );
-    expect(where.and).toContainEqual(
-      expect.objectContaining({ eq: expect.arrayContaining(["event"]) })
-    );
-    // eventPattern candidate set is inlined as a static SQL literal.
-    expect(where.and).toContainEqual(
-      expect.objectContaining({
-        sql: expect.stringContaining("entity.create.completed"),
-      })
-    );
-    // profileSlug filter carries the requested slug as a bound value.
-    expect(where.and).toContainEqual(
-      expect.objectContaining({ values: expect.arrayContaining(["person"]) })
-    );
+    expect(h.predicate).toHaveBeenCalledTimes(1);
   });
 
-  it("summarizes an unfiltered entity-create trigger as 'On any entity created'", async () => {
-    const chain = selectChain([
-      {
-        id: "auto-2",
-        name: "Log every creation",
-        description: null,
-        status: "active",
-        triggerType: "event",
-        triggerConfig: { eventPattern: "entity.*" },
-      },
-    ]);
-    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
-
-    const caller = automationsRouter.createCaller(callerCtx());
-    const [card] = await caller.matchForEntity({
-      profileSlug: "deal",
-      workspaceId: WORKSPACE,
-    });
-
-    // No profileSlug filter: it fires for ANY kind — the weakest structural
-    // signal, and the reason names it rather than claiming a kind match.
-    expect(card).toEqual({
-      id: "auto-2",
-      name: "Log every creation",
-      description: undefined,
-      triggerSummary: "On any entity created",
-      score: 0.5,
-      reason: "Runs for anything new",
-      signals: [{ type: "anyKind" }],
-    });
-  });
-
-  it("with intentText, ranks the textual match FIRST through the real door and says why", async () => {
-    // Matcher order is updatedAt desc — the textual match arrives SECOND, so a
-    // door that ignored `intentText` would return it second.
-    const personFilter = {
-      eventPattern: "entity.create.completed",
-      filters: { profileSlug: "person" },
-    };
-    const chain = selectChain([
-      {
-        id: "auto-archive",
-        name: "Archive stale people",
-        description: "Move old contacts away",
-        status: "active",
-        triggerType: "event",
-        triggerConfig: personFilter,
-      },
-      {
-        id: "auto-review",
-        name: "Weekly review of people",
-        description: "Read and triage who you met",
-        status: "active",
-        triggerType: "event",
-        triggerConfig: personFilter,
-      },
-    ]);
-    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
-
-    const caller = automationsRouter.createCaller(callerCtx());
-    const result = await caller.matchForEntity({
-      profileSlug: "person",
-      workspaceId: WORKSPACE,
-      intentText: "review them weekly",
-    });
-
-    expect(result.map((r) => r.id)).toEqual(["auto-review", "auto-archive"]);
-    expect(result[0]).toMatchObject({
-      score: 8,
-      reason: "You mentioned “review”, “weekly” · Made for person items",
-      signals: [
-        { type: "intent", terms: ["review", "weekly"] },
-        { type: "kind", profileSlug: "person" },
-      ],
-    });
-    expect(result[1]).toMatchObject({
-      score: 2,
-      reason: "Made for person items",
-    });
-  });
-
-  it("returns [] when no automation matches the profile", async () => {
-    const chain = selectChain([]);
-    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
-
-    const caller = automationsRouter.createCaller(callerCtx());
-    const result = await caller.matchForEntity({
-      profileSlug: "unmatched-profile",
-      workspaceId: WORKSPACE,
-    });
-
-    expect(result).toEqual([]);
-    expect(mockScopedDb).toHaveBeenCalledTimes(1);
-  });
-
-  it("omitted profileSlug skips the kind filter and ranks by intentText", async () => {
-    const chain = selectChain([
-      {
-        id: "auto-archive",
-        name: "Archive stale people",
-        description: "Move old contacts away",
-        status: "active",
-        triggerType: "event",
-        triggerConfig: {
-          eventPattern: "entity.create.completed",
-          filters: { profileSlug: "person" },
+  it("an operator kind filter matches (the old SQL equality never did)", async () => {
+    h.getDb.mockResolvedValue(
+      dbReturning([
+        {
+          id: "rule-in",
+          name: "Leads and deals",
+          description: null,
+          triggerConfig: {
+            eventPattern: "entity.create.completed",
+            filters: { profileSlug: { $in: ["deal", "lead"] } },
+          },
+          flowDefinition: flow("propose"),
         },
-      },
-      {
-        id: "auto-review",
-        name: "Weekly review of people",
-        description: "Read and triage who you met",
-        status: "active",
-        triggerType: "event",
-        triggerConfig: { eventPattern: "entity.*" },
-      },
-    ]);
-    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
-
-    const caller = automationsRouter.createCaller(callerCtx());
-    const result = await caller.matchForEntity({
-      workspaceId: WORKSPACE,
-      intentText: "review them weekly",
-    });
-
-    expect(result.map((r) => r.id)).toEqual(["auto-review"]);
-    expect(result[0]!.id).toBe("auto-review");
-    // Honest: an unfiltered trigger is anyKind, not a guessed kind.
-    expect(result[0]!.signals).toEqual(
-      expect.arrayContaining([
-        { type: "intent", terms: ["review", "weekly"] },
-        { type: "anyKind" },
       ])
     );
-
-    const where = chain._captured.where as { and: unknown[] };
-    // The eventPattern clause interpolates the column (not a string). A kind
-    // filter would bind the requested slug as a string value — none here.
-    const boundStrings = where.and.flatMap((c) => {
-      const values = (c as { values?: unknown[] } | null)?.values;
-      return Array.isArray(values)
-        ? values.filter((v) => typeof v === "string")
-        : [];
+    const result = await caller().matchForEntity({
+      profileSlug: "lead",
+      workspaceId: WORKSPACE,
+      intentText: "leads and deals",
     });
-    expect(boundStrings).toEqual([]);
+    expect(result.map((r) => r.id)).toEqual(["rule-in"]);
   });
 });

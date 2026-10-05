@@ -766,6 +766,41 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_RUN_MODE_KEY,
 ];
 
+/**
+ * "Always propose this" — the sentence for a STANDING propose rule: WHEN an
+ * entity of `profileSlug` is created, PROPOSE running `playbookId` on it.
+ *
+ * Built HERE, with the grammar's own bookkeeping keys, so a client offering
+ * the shortcut (the capture receipt's playbook chip) sends a sentence the rule
+ * door compiles — never a hand-spelled `__playbookId`. Created through
+ * `skills.createRule` (governed), which compiles it with `compileRuleSentence`.
+ */
+export function proposePlaybookOnKindSentence(input: {
+  playbookId: string;
+  profileSlug: string;
+}): RuleSentenceValue {
+  return {
+    trigger: {
+      triggerType: "event",
+      subjectCategory: "entity",
+      profileSlug: input.profileSlug,
+      actionVerb: "created",
+    },
+    conditions: [],
+    actions: [
+      {
+        type: null,
+        config: {
+          [CAPABILITY_NODE_TYPE_KEY]: "playbook_run",
+          [PLAYBOOK_ID_KEY]: input.playbookId,
+          [PLAYBOOK_RUN_MODE_KEY]: "propose",
+          [CAPABILITY_ACTION_KEY]: `playbook:${input.playbookId}`,
+        },
+      },
+    ],
+  };
+}
+
 /** The action's config with every `__`-prefixed bookkeeping key removed. */
 function persistedConfig(
   config: Record<string, unknown>

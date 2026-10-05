@@ -22,6 +22,7 @@ import {
   type ConditionRow,
   toBackendTrigger,
   toFlowDefinition,
+  proposePlaybookOnKindSentence,
   triggerToSentence,
   type ActionVerb,
   type TriggerSubjectCategory,
@@ -1002,5 +1003,28 @@ describe("playbook_run THEN — propose mode (`__mode`)", () => {
       ])
     );
     expect(actions[0]?.config.__mode).toBe("propose");
+  });
+});
+
+describe("proposePlaybookOnKindSentence — the 'Always propose this' rule", () => {
+  it("compiles to WHEN <kind> created → PROPOSE the playbook", () => {
+    const PB = "77777777-7777-4777-8777-777777777777";
+    const sentence = proposePlaybookOnKindSentence({
+      playbookId: PB,
+      profileSlug: "deal",
+    });
+    const trigger = toBackendTrigger(sentence.trigger!, sentence.conditions);
+    expect(trigger.triggerType).toBe("event");
+    expect(trigger.triggerConfig.eventPattern).toBe("entity.create.completed");
+    // The kind lives in `filters` — the key the matcher reads for entity events.
+    expect(trigger.triggerConfig.filters).toEqual({ profileSlug: "deal" });
+    const node = toFlowDefinition(sentence.actions).nodes.find(
+      (n) => n.type === "playbook_run"
+    )!;
+    expect(node.data).toMatchObject({
+      playbookId: PB,
+      mode: "propose",
+      paramsMapping: {},
+    });
   });
 });
