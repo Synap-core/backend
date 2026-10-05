@@ -350,6 +350,7 @@ async function fetchCells(source: string): Promise<SourceFetch<CatalogFetch>> {
           name: string;
           packageSlug: string;
           author?: string;
+          packageVersion?: string | null;
         }
       >;
       total?: number;
@@ -366,6 +367,9 @@ async function fetchCells(source: string): Promise<SourceFetch<CatalogFetch>> {
           slug: `${cell.packageSlug}/${cell.key}`,
           name: cell.name,
           vendor: cell.author ?? null,
+          // The owning package's version (CP `packageVersion`) — the cache row's
+          // own column, so a pod can tell a newer cell was published.
+          version: cell.packageVersion ?? null,
           // WHOLESALE forward — NEVER a field-by-field rebuild.
           //
           // This is the last hop before `installCellFromDefinition` reads the

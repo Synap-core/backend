@@ -348,6 +348,14 @@ describe("handleCpCatalogSync — cell definitions are forwarded WHOLESALE", () 
     });
   });
 
+  it("writes the CP `packageVersion` to the cache row's version column", async () => {
+    serveOneCell({ ...BASE, packageVersion: "1.4.2" });
+    await handleCpCatalogSync();
+    const rows = upsertedRows() as Array<{ version: string | null }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].version).toBe("1.4.2");
+  });
+
   it("carries a field NO code in this repo names — the structural guarantee", async () => {
     // If someone reintroduces a field-by-field rebuild, they cannot possibly
     // name this key, so this case fails while the three above might not.

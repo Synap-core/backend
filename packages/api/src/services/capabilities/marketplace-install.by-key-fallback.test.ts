@@ -148,6 +148,7 @@ describe("applyMarketInstall — by-key fallback", () => {
       contentKind: "collection",
       packageSlug: "acme-charts",
       packageName: "Acme Charts",
+      packageVersion: "2.1.0",
       installCount: 3,
       isVerified: true,
     };
@@ -188,6 +189,9 @@ describe("applyMarketInstall — by-key fallback", () => {
       kind: "cell",
       typeKey: "cell:acme-charts:chart",
       packageSlug: "acme-charts",
+      // The by-key hop delivers the version (CP `packageVersion`) — it was
+      // discarded, so a by-key install recorded no version at all.
+      packageVersion: "2.1.0",
     });
   });
 

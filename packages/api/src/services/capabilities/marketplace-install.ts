@@ -296,6 +296,7 @@ async function resolveCellDefinitionByKey(slug: string): Promise<{
   cellKey: string;
   name: string;
   def: CellCatalogDef;
+  packageVersion: string | null;
 }> {
   const source = cpBaseUrl();
   if (!source) {
@@ -328,7 +329,12 @@ async function resolveCellDefinitionByKey(slug: string): Promise<{
   }
   const body = (await res.json().catch(() => null)) as {
     cells?: Array<
-      CellCatalogDef & { key: string; name: string; packageSlug: string }
+      CellCatalogDef & {
+        key: string;
+        name: string;
+        packageSlug: string;
+        packageVersion?: string | null;
+      }
     >;
   } | null;
   const list = body?.cells ?? [];
@@ -346,6 +352,7 @@ async function resolveCellDefinitionByKey(slug: string): Promise<{
     cellKey: match.key,
     name: match.name,
     def: match,
+    packageVersion: match.packageVersion ?? null,
   };
 }
 
@@ -516,10 +523,10 @@ export async function applyMarketInstall(
         // B3 — the version was resolved here and DISCARDED. Cells were the only
         // kind with no version at all, so `market installed` could never say a
         // cell was behind its package. Same precedence the other five kinds use
-        // (catalog row → explicit request → unknown). The by-key CP fallback
-        // carries no version either (the marketplace/cells endpoint has none),
-        // same as the cache row's own `entry.version`.
-        packageVersion: entry?.version ?? input.version ?? null,
+        // (catalog row → by-key CP fallback → explicit request → unknown). The
+        // by-key hop reads `packageVersion` off the marketplace/cells row.
+        packageVersion:
+          entry?.version ?? cellByKey?.packageVersion ?? input.version ?? null,
         userId: input.userId,
       });
       return {
@@ -527,7 +534,8 @@ export async function applyMarketInstall(
         typeKey: result.typeKey,
         changeType: result.changeType,
         packageSlug: slugPackage as string,
-        packageVersion: entry?.version ?? input.version ?? null,
+        packageVersion:
+          entry?.version ?? cellByKey?.packageVersion ?? input.version ?? null,
       };
     }
 
