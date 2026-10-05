@@ -143,6 +143,62 @@ export function resolveGoal(
 }
 
 /**
+ * The run's bound SUBJECT answers the playbook's entity param when the caller
+ * left it unanswered.
+ *
+ * A subject-bound run already says WHICH entity it is about, and a playbook that
+ * declares exactly one `entity` param ("Company — the session subject") is
+ * asking for that same thing. Without this, every scheduled run over a subject
+ * rendered `@{arg:company:entity}` as `""` ("Advance  through the Stellar grant
+ * process") AND, on the `owe` path, filed an owed slot asking a person for the
+ * entity the run was already bound to.
+ *
+ * Deliberately narrow: a caller-supplied value always wins, and a playbook with
+ * two or more entity params is left alone — which of them is the subject is not
+ * derivable, and guessing would bind the wrong one silently.
+ */
+export function subjectAnswersEntityParam(
+  declared: readonly PlaybookParam[],
+  supplied: Record<string, unknown> | undefined,
+  subjectId: string | null | undefined
+): Record<string, unknown> {
+  const given = supplied ?? {};
+  if (!subjectId) return given;
+  const entityParams = declared.filter((p) => p.type === "entity");
+  if (entityParams.length !== 1) return given;
+  const name = entityParams[0]!.name;
+  const current = given[name];
+  const answered =
+    current !== undefined &&
+    current !== null &&
+    !(typeof current === "string" && current.trim() === "");
+  return answered ? given : { ...given, [name]: subjectId };
+}
+
+/**
+ * The values the PROMPT renders: an entity param holding the run's subject
+ * renders as the subject's title, not its uuid. The id still reaches the agent —
+ * the executor heads the kickoff with `[Subject: … · id …]` — and the stored
+ * `metadata.params` keep the id. Only the subject is rendered by name: its
+ * visibility was enforced by the caller, while an arbitrary entity id in params
+ * was not, so naming it here would leak a title past the access floor.
+ */
+export function renderSubjectParamValues(
+  declared: readonly PlaybookParam[],
+  values: Record<string, unknown>,
+  subject: { id: string; title: string | null } | null
+): Record<string, unknown> {
+  if (!subject?.title) return values;
+  const rendered = { ...values };
+  for (const p of declared) {
+    if (p.type === "entity" && rendered[p.name] === subject.id) {
+      rendered[p.name] = subject.title;
+    }
+  }
+  return rendered;
+}
+
+/**
  * The `focus_sessions.metadata` key holding a run session's rendered agent
  * prompt. The column is a free-form bag (schema/focus-sessions.ts:192).
  *
@@ -482,9 +538,10 @@ export async function instantiateSessionRow(
   // Until this existed the declaration was decorative: nothing read `required`,
   // `default` or `type` on any run path, so a missing required param rendered
   // as `""` and a default never reached the prompt at all.
+  const declaredParams = readPlaybookParams(playbook.params);
   const paramResolution = validatePlaybookParams(
-    readPlaybookParams(playbook.params),
-    input.params
+    declaredParams,
+    subjectAnswersEntityParam(declaredParams, input.params, input.subjectId)
   );
   const onMissingRequired = input.onMissingRequired ?? "refuse";
   if (
@@ -509,13 +566,11 @@ export async function instantiateSessionRow(
   //
   // Substituted against the RESOLVED values, so a declared `default` finally
   // reaches the agent's instruction.
-  const prompt =
-    input.goalOverride ??
-    resolveGoal(playbook.goalTemplate, paramResolution.values, playbook.id);
-
+  //
   // Title = playbook name + the bound subject's own title. Read the entity here
   // rather than trusting a caller-passed name: `instantiateSession` has three
-  // callers and only one of them resolves the subject.
+  // callers and only one of them resolves the subject. The same title is what
+  // an entity param holding the subject renders as in the prompt.
   let subjectTitle: string | null = null;
   if (input.subjectId) {
     const subject = await db.query.entities.findFirst({
@@ -524,6 +579,17 @@ export async function instantiateSessionRow(
     });
     subjectTitle = subject?.title ?? null;
   }
+  const prompt =
+    input.goalOverride ??
+    resolveGoal(
+      playbook.goalTemplate,
+      renderSubjectParamValues(
+        declaredParams,
+        paramResolution.values,
+        input.subjectId ? { id: input.subjectId, title: subjectTitle } : null
+      ),
+      playbook.id
+    );
   const goal = buildRunSessionTitle(playbook.name, subjectTitle);
   // The display NAME. `goal` above stays exactly as it was — it is the
   // dedup/proposal key other doors compare on — and the short name is written

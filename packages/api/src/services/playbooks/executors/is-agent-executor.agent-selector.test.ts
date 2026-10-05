@@ -143,3 +143,16 @@ describe("is-agent executor — stage lessons reach the kickoff", () => {
     expect(kickoff).not.toContain("NOT this stage's lesson");
   });
 });
+
+describe("is-agent executor — the run's focus session rides the dispatch", () => {
+  beforeEach(() => {
+    triggerAutoRespond.mockClear();
+  });
+
+  it("names the run's own session as focusSessionId (what the IS closes the run by)", async () => {
+    await new IsAgentExecutor().run(baseCtx as any);
+    expect(triggerAutoRespond.mock.calls[0][0]).toMatchObject({
+      focusSessionId: "sess-1",
+    });
+  });
+});

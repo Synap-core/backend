@@ -296,3 +296,94 @@ describe("a playbook that declares nothing is untouched", () => {
     expect(metadataOf()[RUN_PROMPT_METADATA_KEY]).toBe("Do the thing.");
   });
 });
+
+describe("a subject-bound run answers its entity param with the subject", () => {
+  // The live defect (thearch pod, every daily "Stellar Grant Client" run): the
+  // cron binds the subject, never supplies `company`, so the prompt read
+  // "Advance  through the Stellar grant process" — and on the `owe` path a
+  // person was asked for the very entity the run was bound to.
+  const SUBJECT = "5183440e-c841-45f5-982a-b8c95af687fd";
+  const stellar = () =>
+    basePlaybook({
+      name: "Stellar Grant Client",
+      goalTemplate:
+        "Advance @{arg:company:entity} through the Stellar grant process: understand the project, then Abstract, then Build.",
+      params: [
+        {
+          name: "company",
+          type: "entity",
+          label: "Company",
+          required: true,
+          description:
+            "The client company this engagement runs for (the session subject).",
+        },
+      ],
+    });
+  const withSubjectTitle = (title: string) => {
+    db.query.entities.findFirst = (async () => ({ title })) as never;
+  };
+
+  it("renders the subject's NAME in the prompt and owes no param slot", async () => {
+    PLAYBOOK = stellar();
+    withSubjectTitle("Acme Labs");
+
+    await instantiateSession({
+      ...RUN,
+      params: {},
+      subjectId: SUBJECT,
+      onMissingRequired: "owe",
+    });
+
+    expect(metadataOf()[RUN_PROMPT_METADATA_KEY]).toBe(
+      "Advance Acme Labs through the Stellar grant process: understand the project, then Abstract, then Build."
+    );
+    // The stored answer is the id (what the run was given), not the title.
+    expect(metadataOf()[RUN_PARAMS_METADATA_KEY]).toEqual({ company: SUBJECT });
+    const slots = (sessionRow().expectedOutputs ?? []) as Array<{
+      kind?: string;
+    }>;
+    expect(slots.some((s) => s.kind === PARAM_SLOT_KIND)).toBe(false);
+  });
+
+  it("a caller-supplied entity beats the subject", async () => {
+    PLAYBOOK = stellar();
+    withSubjectTitle("Acme Labs");
+    const OTHER = "11111111-2222-4333-8444-555555555555";
+
+    await instantiateSession({
+      ...RUN,
+      params: { company: OTHER },
+      subjectId: SUBJECT,
+    });
+
+    expect(metadataOf()[RUN_PARAMS_METADATA_KEY]).toEqual({ company: OTHER });
+    // Not the subject, so not named — its visibility was never checked here.
+    expect(metadataOf()[RUN_PROMPT_METADATA_KEY]).toContain(
+      `Advance ${OTHER} through`
+    );
+  });
+
+  it("two entity params ⇒ the subject binds neither (which one it is is not derivable)", async () => {
+    PLAYBOOK = basePlaybook({
+      goalTemplate: "Introduce @{arg:a:entity} to @{arg:b:entity}.",
+      params: [
+        { name: "a", type: "entity", required: true },
+        { name: "b", type: "entity", required: true },
+      ],
+    });
+    withSubjectTitle("Acme Labs");
+
+    await instantiateSession({
+      ...RUN,
+      params: {},
+      subjectId: SUBJECT,
+      onMissingRequired: "owe",
+    });
+
+    expect(metadataOf()[RUN_PARAMS_METADATA_KEY]).toEqual({});
+    const slots = (sessionRow().expectedOutputs ?? []) as Array<{
+      kind?: string;
+    }>;
+    expect(slots.filter((s) => s.kind === PARAM_SLOT_KIND)).toHaveLength(2);
+  });
+});

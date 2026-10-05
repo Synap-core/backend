@@ -224,6 +224,11 @@ export class IsAgentExecutor implements Executor {
       // this step SUMMONS the agent: a GROUP run room (channelSpec.type GROUP)
       // only wakes for a named agent, and an unnamed kickoff failed the step.
       agentType: agentType ?? "meta",
+      // The run's OWN focus session, named rather than left to the door's
+      // channel lookup. The IS ends the turn by closing this session's
+      // playbook_run (`POST /focus-sessions/:id/complete-run`); this id is the
+      // only thing on the wire that names it.
+      focusSessionId: ctx.sessionId,
     });
     if (!triggered) {
       return {
