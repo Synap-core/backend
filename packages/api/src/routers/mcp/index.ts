@@ -26,9 +26,11 @@ import { filterToolsForAccess } from "./tool-profiles.js";
 import { loadKeyToolAccess } from "./tool-access.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 import {
-  UI_NOT_SERVABLE,
+  NO_UI_RENDERER,
+  listUiResources,
+  readUiResource,
   withToolUiMeta,
-  type IsUiServable,
+  type UiRendererLookup,
 } from "./ui-tools.js";
 
 const logger: any = createLogger({ module: "mcp-server" });
@@ -174,12 +176,21 @@ export function createMCPServer(
    */
   instructionsProfile: InstructionsProfile = "full",
   /**
-   * MCP Apps: may a renderer for this object kind be served to this caller?
-   * Gates `_meta.ui` on the tagged tools (`ui-tools.ts`). Defaults to "never",
-   * so an unwired server's `tools/list` is unchanged.
+   * MCP Apps: which renderer serves a tagged object kind to this caller
+   * (`ui-tools.ts`). Gates `_meta.ui` on `tools/list`, the `ui://` entries of
+   * `resources/list`, and serves `resources/read`. Defaults to "none", so an
+   * unwired server's tools and resources are unchanged.
    */
-  isUiServable: IsUiServable = UI_NOT_SERVABLE
+  uiRenderer: UiRendererLookup = NO_UI_RENDERER
 ) {
+  // Who is asking, for the renderer ladder (user → workspace → pod). The
+  // workspace is the URL lens — the same one `tools/list` is built for.
+  const uiCtx = {
+    userId: sessionUserId,
+    agentUserId,
+    workspaceId: defaultWorkspaceId,
+  };
+
   const server = new Server(
     {
       name: "synap-mcp-server",
@@ -202,7 +213,10 @@ export function createMCPServer(
   // Register resource handlers
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     return {
-      resources: await resources.list(),
+      resources: [
+        ...(await resources.list()),
+        ...(await listUiResources(uiRenderer, uiCtx)),
+      ],
     };
   });
 
@@ -225,6 +239,15 @@ export function createMCPServer(
     const scopes = apiKeyScopes ??
       process.env.MCP_SCOPES?.split(",") ?? ["mcp.read"];
 
+    // MCP Apps `ui://` documents are answered here, BEFORE the Hub adapter,
+    // whose `synap://`-only URI parser would reject them as invalid.
+    if (request.params.uri.startsWith("ui://")) {
+      if (!scopes.includes("mcp.read")) {
+        throw new Error("Insufficient permissions: mcp.read required");
+      }
+      return await readUiResource(request.params.uri, uiRenderer, uiCtx);
+    }
+
     return await resources.read(request.params.uri, userId, scopes);
   });
 
@@ -239,11 +262,7 @@ export function createMCPServer(
       ? filterToolsForAccess(all, await loadKeyToolAccess(toolAccessKeyId))
       : all;
     return {
-      tools: await withToolUiMeta(visible, isUiServable, {
-        userId: sessionUserId,
-        agentUserId,
-        workspaceId: defaultWorkspaceId,
-      }),
+      tools: await withToolUiMeta(visible, uiRenderer, uiCtx),
     };
   });
 

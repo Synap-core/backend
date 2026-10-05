@@ -61,11 +61,14 @@ vi.mock("../../../services/agent-identity-service.js", async (orig) => ({
 
 const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
 const { createMCPServer } = await import("../index.js");
-const { TOOL_UI_SUBJECT, UI_NOT_SERVABLE, withToolUiMeta } =
+const { TOOL_UI_SUBJECT, NO_UI_RENDERER, withToolUiMeta } =
   await import("../ui-tools.js");
+type UiRendererLookup = import("../ui-tools.js").UiRendererLookup;
+
+const RENDERER = { rendererSource: "<!doctype html>", externalHosts: [] };
 const { tools } = await import("../tools/index.js");
 
-async function listVia(isUiServable?: (kind: string) => Promise<boolean>) {
+async function listVia(uiRenderer?: UiRendererLookup) {
   const server = createMCPServer(
     undefined,
     undefined,
@@ -77,7 +80,7 @@ async function listVia(isUiServable?: (kind: string) => Promise<boolean>) {
     undefined,
     undefined,
     "full",
-    isUiServable
+    uiRenderer
   );
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
@@ -109,15 +112,15 @@ describe("tools/list — _meta.ui only when servable", () => {
     // Over the wire the client re-parses (key order may differ) — deep-equal.
     expect(listed).toEqual(raw);
     // At the seam itself: untouched tools are the SAME objects, not copies.
-    const shaped = await withToolUiMeta(raw, UI_NOT_SERVABLE, {});
+    const shaped = await withToolUiMeta(raw, NO_UI_RENDERER, {});
     shaped.forEach((t, i) => expect(t).toBe(raw[i]));
   });
 
   it("SERVABLE: the tagged tool carries the nested _meta.ui; untagged tools are untouched", async () => {
     const asked: string[] = [];
-    const { listed } = await listVia(async (kind) => {
-      asked.push(kind);
-      return true;
+    const { listed } = await listVia(async (subject) => {
+      asked.push(subject.subjectKind);
+      return RENDERER;
     });
     const get = listed.find((t) => t.name === "synap_get_proposal");
     expect(get?._meta).toEqual({
@@ -136,7 +139,7 @@ describe("tools/list — _meta.ui only when servable", () => {
   });
 
   it("NOT SERVABLE for this kind: no _meta.ui", async () => {
-    const { listed } = await listVia(async () => false);
+    const { listed } = await listVia(async () => null);
     expect(listed.filter((t) => t._meta && "ui" in t._meta)).toEqual([]);
   });
 });

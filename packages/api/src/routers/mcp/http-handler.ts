@@ -42,6 +42,7 @@ import {
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
+import { resolveUiRendererFromDb } from "./ui-tools.js";
 import { loadKeyToolAccess } from "./tool-access.js";
 import { resolveIssuer } from "../oauth/config.js";
 import {
@@ -374,7 +375,9 @@ mcpHttpApp.get("/", async (c) => {
       sessionIdGenerator: undefined, // stateless
     });
     // GET/SSE is stream-establishment only (no auth/userId per spec); still carry
-    // BOTH lenses so the stream's scope matches the POST tool-call path.
+    // BOTH lenses so the stream's scope matches the POST tool-call path. No
+    // MCP Apps renderer lookup here: with no authed user there is no one to
+    // resolve a renderer FOR, so this server serves no UI (default seam).
     const server = createMCPServer(
       c.req.query("workspaceId") ?? undefined,
       undefined,
@@ -580,7 +583,11 @@ mcpHttpApp.post("/", async (c) => {
     keyRecord.workspaceId,
     // The key's MCP tool profile (V1 D4) narrows what tools/list advertises.
     keyRecord.id,
-    instructionsProfile
+    instructionsProfile,
+    // MCP Apps: the renderers bound on the `mcp-app` surface for this user.
+    // Resolved per request — no cross-request cache, so a new/revoked binding
+    // shows up on the very next tools/list.
+    resolveUiRendererFromDb
   );
   await server.connect(transport);
 
