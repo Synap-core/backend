@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   createdSessions: [] as Array<Record<string, unknown>>,
   updates: [] as Array<{ id: string; properties: Record<string, unknown> }>,
   notified: [] as Array<Record<string, unknown>>,
+  closed: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -71,6 +72,18 @@ vi.mock("../../focus-sessions/create-session.js", () => ({
       [id, p.userId, p.goal, p.title]
     );
     return { status: "created", session: { id } };
+  },
+}));
+// The ONE close door — its own suites own what a close does; here we assert
+// WHICH session the reactor hands it, and stamp the status it would.
+vi.mock("../../focus-sessions/complete-session.js", () => ({
+  completeFocusSession: async (p: Record<string, unknown>) => {
+    h.closed.push(p);
+    await h.client!.query(
+      `update focus_sessions set status = 'closed' where id = $1`,
+      [p.sessionId]
+    );
+    return { session: { id: p.sessionId } };
   },
 }));
 vi.mock("../decision-entity-door.js", () => ({
@@ -172,6 +185,7 @@ describe("a proposed decision asks the person (W3)", () => {
     h.createdSessions.length = 0;
     h.updates.length = 0;
     h.notified.length = 0;
+    h.closed.length = 0;
   });
 
   it("homes the ask in the writing session, as a choose with the recommendation marked", async () => {
@@ -295,6 +309,82 @@ describe("a proposed decision asks the person (W3)", () => {
     expect((r as { decision?: unknown }).decision).toEqual({
       status: "updated",
       decisionId: id,
+    });
+  });
+
+  describe("closes the 'Decide:' session it opened, once decided", () => {
+    const decideSession = async (id: string) => {
+      await fire(id, "create");
+      const [slot] = await slotsCarrying(id);
+      return slot!.sessionId as string;
+    };
+    const statusOf = async (sid: string) =>
+      (
+        await q<{ status: string; metadata: Record<string, unknown> }>(
+          `select status, metadata from focus_sessions where id = $1`,
+          [sid]
+        )
+      ).rows[0]!;
+
+    it("marks the session it created, and closes it after the slot is answered", async () => {
+      const id = await decision({
+        decisionStatus: "proposed",
+        decisionOptions: OPTIONS,
+      });
+      const sid = await decideSession(id);
+      expect((await statusOf(sid)).metadata).toMatchObject({
+        decisionAskFor: id,
+      });
+      const [slot] = await slotsCarrying(id);
+      await answerExpectedOutput({
+        sessionId: sid,
+        userId: OWNER,
+        expectedLabel: slot!.label as string,
+        text: "Usage based",
+        messageId: null,
+        value: { type: "chip", chip: { label: "Usage based", value: "usage" } },
+      });
+      // Still open: the answer alone does not close it — the decision update
+      // it makes (captured above; its emit replayed here) does.
+      expect((await statusOf(sid)).status).toBe("active");
+      await setProps(id, h.updates[0]!.properties);
+      await fire(id, "update");
+      expect(h.closed).toEqual([
+        { sessionId: sid, userId: OWNER, summary: "Accepted" },
+      ]);
+      expect((await statusOf(sid)).status).toBe("closed");
+    });
+
+    it("closes it when the decision is resolved elsewhere (slot retired)", async () => {
+      const id = await decision({ decisionStatus: "proposed" });
+      const sid = await decideSession(id);
+      await setProps(id, { decisionStatus: "rejected" });
+      await fire(id, "update");
+      const [slot] = await slotsCarrying(id);
+      expect(slot).toMatchObject({ retiredReason: "decision_resolved" });
+      expect(h.closed.map((c) => c.sessionId)).toEqual([sid]);
+    });
+
+    it("NEVER closes a session the ask was only homed in (unmarked)", async () => {
+      const sid = await session();
+      const id = await decision({ decisionStatus: "proposed" });
+      await fire(id, "create", sid);
+      await setProps(id, { decisionStatus: "accepted" });
+      await fire(id, "update");
+      expect(h.closed).toEqual([]);
+      expect((await statusOf(sid)).status).toBe("active");
+    });
+
+    it("keeps it open while something else is still owed there", async () => {
+      const id = await decision({ decisionStatus: "proposed" });
+      const sid = await decideSession(id);
+      await q(
+        `update focus_sessions set expected_outputs = expected_outputs || $2::jsonb where id = $1`,
+        [sid, JSON.stringify([{ label: "Draft brief", status: "pending" }])]
+      );
+      await setProps(id, { decisionStatus: "accepted" });
+      await fire(id, "update");
+      expect(h.closed).toEqual([]);
     });
   });
 });

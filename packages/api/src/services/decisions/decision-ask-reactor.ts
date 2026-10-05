@@ -23,6 +23,13 @@
  * the entity itself): retired `decision_resolved`. An ANSWERED slot is left
  * alone — the agent still has to pick its answer up.
  *
+ * CLOSE: a "Decide: <title>" session THIS reactor opened (marked
+ * `metadata.decisionAskFor = <decisionId>`, {@link DECISION_ASK_SESSION_KEY})
+ * exists only to ask; once the decision is no longer proposed (answered — the
+ * answer updates it — or resolved elsewhere) and nothing else is owed there,
+ * it is closed through the ONE close door (`completeFocusSession`). A session
+ * the ask was merely HOMED in (the agent's own) is never closed here.
+ *
  * IDEMPOTENT: never two open slots for one decision. Re-checked under the
  * session row lock.
  *
@@ -57,10 +64,18 @@ import { reconcileOwedSince } from "../focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 import { logSlotsAsked } from "../focus-sessions/slot-asked-event.js";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
+import { mergeSessionMetadata } from "../focus-sessions/session-metadata.js";
+import { isDeliverableOutstanding } from "@synap-core/types/units";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "decision-ask-reactor" });
 
 export const DECISION_PROFILE_SLUG = "decision";
+/**
+ * `focus_sessions.metadata` key marking a session THIS reactor created to ask
+ * one decision — the only sessions it may close. Value: the decision id.
+ */
+export const DECISION_ASK_SESSION_KEY = "decisionAskFor";
 const LABEL_MAX = 120;
 
 function clip(s: string, max: number): string {
@@ -179,6 +194,22 @@ export function retireResolvedDecisionAsks(
     };
   });
   return changed ? next : null;
+}
+
+/**
+ * Is a reactor-made "Decide:" session done? Its decision's slot no longer asks
+ * (answered, or retired) AND no OTHER slot is still outstanding — anything
+ * else added there keeps it open. Pure.
+ */
+export function decisionSessionSettled(
+  outputs: ExpectedOutput[],
+  decisionId: string
+): boolean {
+  return !outputs.some((o) =>
+    o?.decisionId === decisionId
+      ? isOpenDecisionAsk(o, decisionId)
+      : isDeliverableOutstanding(o)
+  );
 }
 
 // ─── Effects ────────────────────────────────────────────────────────────────
@@ -300,6 +331,25 @@ export async function ensureDecisionAsk(
       return null;
     }
     homeId = res.session.id;
+    // Mark it as ours ONLY when this call created it: a deduped twin may be a
+    // session someone else opened, and this marker licenses closing it.
+    if (res.status === "created") {
+      try {
+        await db
+          .update(focusSessions)
+          .set({
+            metadata: mergeSessionMetadata({
+              [DECISION_ASK_SESSION_KEY]: decision.id,
+            }),
+          })
+          .where(eq(focusSessions.id, homeId));
+      } catch (err) {
+        logger.error(
+          { err, decisionId: decision.id, sessionId: homeId },
+          "proposed decision: marking the Decide session FAILED — it will not auto-close once decided"
+        );
+      }
+    }
   }
 
   let before: ExpectedOutput[] = [];
@@ -380,6 +430,49 @@ export async function resolveDecisionAsks(
   return retired;
 }
 
+/**
+ * Close every OPEN session this reactor created for the decision, once
+ * settled ({@link decisionSessionSettled}). Through the one close door, as
+ * the person (no agent principal ⇒ never a proposal). Returns how many closed.
+ */
+export async function closeSettledDecisionSessions(
+  decision: DecisionRow
+): Promise<number> {
+  const rows = await db
+    .select({
+      id: focusSessions.id,
+      expectedOutputs: focusSessions.expectedOutputs,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.userId, decision.userId),
+        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+        drizzleSql`${focusSessions.metadata} ->> ${DECISION_ASK_SESSION_KEY} = ${decision.id}`
+      )
+    );
+  if (rows.length === 0) return 0;
+  const { completeFocusSession } =
+    await import("../focus-sessions/complete-session.js");
+  const status = decision.properties.decisionStatus;
+  let closed = 0;
+  for (const row of rows) {
+    const outs = Array.isArray(row.expectedOutputs)
+      ? (row.expectedOutputs as ExpectedOutput[])
+      : [];
+    if (!decisionSessionSettled(outs, decision.id)) continue;
+    const res = await completeFocusSession({
+      sessionId: row.id,
+      userId: decision.userId,
+      ...(typeof status === "string" && status
+        ? { summary: resolveStatusLabel(status) }
+        : {}),
+    });
+    if (res) closed += 1;
+  }
+  return closed;
+}
+
 export const decisionAskReactor: Reactor = {
   id: "decision-ask",
   match: (payload) =>
@@ -397,6 +490,7 @@ export const decisionAskReactor: Reactor = {
         await ensureDecisionAsk(decision, payload.sessionId ?? null);
       } else {
         await resolveDecisionAsks(decision);
+        await closeSettledDecisionSessions(decision);
       }
     } catch (err) {
       logger.error(
