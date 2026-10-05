@@ -328,8 +328,9 @@ async function resolveReviewAuthorityFacts(args: {
   userId: string;
   purpose: "approve" | "reject";
   roster: boolean;
+  actingAgentUserId?: string | null;
 }): Promise<ReviewAuthorityFacts> {
-  const { proposal, userId, purpose, roster } = args;
+  const { proposal, userId, purpose, roster, actingAgentUserId } = args;
   const subjectSessionUnreadable = await subjectSessionUnreadableFor(proposal, {
     userId,
     roster,
@@ -342,9 +343,10 @@ async function resolveReviewAuthorityFacts(args: {
   // could fire at all.
   const ownerRungReachable = sourceIdMatches || Boolean(proposal.agentUserId);
   const viewerIsAgent =
-    purpose === "approve" || ownerRungReachable
+    (purpose === "approve" && Boolean(actingAgentUserId)) ||
+    (purpose === "approve" || ownerRungReachable
       ? await isAgentPrincipal(userId)
-      : false;
+      : false);
 
   // One extra query, only when the direct `sourceId` match already failed —
   // i.e. only when the agent-owner rung can still fire. When `sourceIdMatches`
@@ -424,6 +426,8 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
   userId: string;
   /** The door's roster semantics — `rosterReadFor(ctx)`. */
   roster: boolean;
+  /** `ctx.agentUserId` — see `computeCanReviewApproval`. */
+  actingAgentUserId?: string | null;
   rows: ReadonlyArray<
     Pick<
       ReviewedProposal,
@@ -438,7 +442,7 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
     >
   ) => ReviewAuthorityFacts
 > {
-  const { userId, rows, roster } = args;
+  const { userId, rows, roster, actingAgentUserId } = args;
   // One batched pair of selects for the whole page (see the redaction module).
   const unreadableSessions = await unreadableProposalSessionIds(rows, {
     userId,
@@ -476,7 +480,10 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
     for (const m of memberRows) roleByWs.set(m.workspaceId, m.role);
   }
 
-  const viewerIsAgent = await isAgentPrincipal(userId);
+  // These facts serve the APPROVE verdict (`resolveViewerReviewVerdicts`), so
+  // an acting agent floors the class exactly as in the mutation resolver.
+  const viewerIsAgent =
+    Boolean(actingAgentUserId) || (await isAgentPrincipal(userId));
   const viewerIsPodAdmin = hasPodWideRow ? await isPodAdmin(userId) : false;
 
   // One `inArray` over the page's DISTINCT acting agents — never per row. An
@@ -522,14 +529,17 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
 export async function resolveViewerReviewVerdicts(args: {
   userId: string;
   roster: boolean;
+  /** `ctx.agentUserId` — see `computeCanReviewApproval`. */
+  actingAgentUserId?: string | null;
   rows: ReadonlyArray<ReviewedProposal & { id: string }>;
 }): Promise<
   Map<string, { viewerCanReview: boolean; viewerCanReviewReason: string }>
 > {
-  const { userId, roster, rows } = args;
+  const { userId, roster, rows, actingAgentUserId } = args;
   const factsFor = await resolveBatchedReviewAuthorityFacts({
     userId,
     roster,
+    actingAgentUserId,
     rows,
   });
   const out = new Map<
@@ -609,6 +619,16 @@ export async function computeCanReviewApproval(args: {
    * one makes it a floor.
    */
   purpose: "approve" | "reject";
+  /**
+   * The AGENT acting on this request — `ctx.agentUserId`. On an agent-key door
+   * (`/mcp`, Hub REST) `userId` is the LINKED HUMAN (the key's `linkedUserId`
+   * remap) and the agent travels only here, so `isAgentPrincipal(userId)` reads
+   * a human and the class floor never fires: a latent self-approval. A present
+   * value makes the caller an agent principal for `"approve"` — the same rule
+   * `rejectAgentReviewer` (`hub-protocol/rest/_shared.ts`) applies on Hub REST.
+   * `"reject"` ignores it (an agent key may reject, never approve).
+   */
+  actingAgentUserId?: string | null;
 }): Promise<{ allowed: boolean; reason: ReviewAuthorityReason }> {
   // Resolve the DB facts, then decide with the ONE ladder body. The rungs live
   // in `computeCanReviewApprovalFromFacts` and nowhere else, so this mutation

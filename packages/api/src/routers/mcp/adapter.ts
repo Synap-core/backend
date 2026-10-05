@@ -37,6 +37,7 @@ import { sessionEvaluationHandlers } from "./handlers/session-evaluation.js";
 import { buildHandlers } from "./handlers/build.js";
 import { ruleHandlers } from "./handlers/rule.js";
 import { trackHandlers } from "./handlers/track.js";
+import { parseJsonObject, withUiStructuredContent } from "./ui-tools.js";
 
 export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
 
@@ -222,9 +223,13 @@ export async function executeMCPToolViaHubProtocol(
   // The same fact as data. The Note above stays (clients may read it); this is
   // what a client can branch on — including an explicit `sessionId` that was
   // DROPPED, which the Note never covered. Reads carry no attribution.
-  return resolution
+  const attributed = resolution
     ? withSessionAttribution(disclosed, resolution.attribution)
     : disclosed;
+  // MCP Apps: a UI-tagged tool also returns its payload as `structuredContent`
+  // for the host's iframe. LAST, so it is read back from the final text block
+  // — `link` and `attribution` included — and the two copies never diverge.
+  return withUiStructuredContent(toolName, attributed);
 }
 
 /**
@@ -250,17 +255,6 @@ function withSessionAttribution(
     text: JSON.stringify({ ...payload, attribution }),
   };
   return { ...result, content };
-}
-
-function parseJsonObject(text: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 /** Appends the ambiguity note to a tool result without disturbing its payload. */

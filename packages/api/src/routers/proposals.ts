@@ -630,6 +630,7 @@ export const proposalsRouter = router({
       const reviewVerdicts = await resolveViewerReviewVerdicts({
         userId: reviewerId,
         roster: rosterReadFor(ctx),
+        actingAgentUserId: ctx.agentUserId,
         rows,
       });
       // revertable — per proposal, "is this proposal's effect undoable?" —
@@ -1089,6 +1090,7 @@ export const proposalsRouter = router({
         await resolveViewerReviewVerdicts({
           userId,
           roster: rosterReadFor(ctx),
+          actingAgentUserId: ctx.agentUserId,
           rows: [proposal],
         })
       ).get(proposal.id);
@@ -1455,8 +1457,10 @@ export const proposalsRouter = router({
           proposal,
           userId,
           roster: rosterReadFor(ctx),
-          // This IS the approve door — the class floor applies.
+          // This IS the approve door — the class floor applies, including to
+          // an agent travelling as `ctx.agentUserId` behind a human `userId`.
           purpose: "approve",
+          actingAgentUserId: ctx.agentUserId,
         });
       if (!canApprove) {
         throw new TRPCError({
@@ -2221,6 +2225,7 @@ export const proposalsRouter = router({
           userId,
           roster: rosterReadFor(ctx),
           purpose: "approve",
+          actingAgentUserId: ctx.agentUserId,
         });
       if (!canRevert) {
         throw new TRPCError({
@@ -3075,6 +3080,7 @@ export const proposalsRouter = router({
               roster: rosterReadFor(ctx),
               // batchApprove — same door as single approve, same floor.
               purpose: "approve",
+              actingAgentUserId: ctx.agentUserId,
             });
           if (!canApprove) {
             throw new TRPCError({

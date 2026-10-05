@@ -25,6 +25,11 @@ import { prompts } from "./prompts/index.js";
 import { filterToolsForAccess } from "./tool-profiles.js";
 import { loadKeyToolAccess } from "./tool-access.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
+import {
+  UI_NOT_SERVABLE,
+  withToolUiMeta,
+  type IsUiServable,
+} from "./ui-tools.js";
 
 const logger: any = createLogger({ module: "mcp-server" });
 
@@ -167,7 +172,13 @@ export function createMCPServer(
    * Which reflexes the `instructions` carry (`entry` for an entry-profile
    * key, read by the HTTP door at `initialize`). Default `full`.
    */
-  instructionsProfile: InstructionsProfile = "full"
+  instructionsProfile: InstructionsProfile = "full",
+  /**
+   * MCP Apps: may a renderer for this object kind be served to this caller?
+   * Gates `_meta.ui` on the tagged tools (`ui-tools.ts`). Defaults to "never",
+   * so an unwired server's `tools/list` is unchanged.
+   */
+  isUiServable: IsUiServable = UI_NOT_SERVABLE
 ) {
   const server = new Server(
     {
@@ -224,10 +235,15 @@ export function createMCPServer(
       agentUserId,
       door: "chat",
     });
+    const visible = toolAccessKeyId
+      ? filterToolsForAccess(all, await loadKeyToolAccess(toolAccessKeyId))
+      : all;
     return {
-      tools: toolAccessKeyId
-        ? filterToolsForAccess(all, await loadKeyToolAccess(toolAccessKeyId))
-        : all,
+      tools: await withToolUiMeta(visible, isUiServable, {
+        userId: sessionUserId,
+        agentUserId,
+        workspaceId: defaultWorkspaceId,
+      }),
     };
   });
 
