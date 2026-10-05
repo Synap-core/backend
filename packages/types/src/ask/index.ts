@@ -991,3 +991,11 @@ export {
   type AskOptionChip,
   type ActView,
 } from "./card.js";
+
+/** A decision entity's ask record → the shared outcome rule — see `./decision-record.ts`. */
+export {
+  decisionAskSnapshot,
+  decisionRecordView,
+  type DecisionRecordOption,
+  type DecisionRecordView,
+} from "./decision-record.js";
