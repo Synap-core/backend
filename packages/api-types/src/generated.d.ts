@@ -4453,7 +4453,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace" | "document";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace" | "document" | "track";
 /** The relationship an edge expresses. */
 export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates"
 /**
@@ -10962,7 +10962,7 @@ export interface GraphNeighbor extends GraphNode {
 	edgeType: string;
 	direction: "outgoing" | "incoming" | "structural";
 	/** Which substrate the edge came from — glass-box provenance. */
-	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation" | "governed" | "produced-in" | "body";
+	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation" | "governed" | "produced-in" | "body" | "structure";
 	/**
 	 * Set only on an entity's materialization RECEIPT — the proposal named by
 	 * `entities.sourceProposalId`: where the write came from.
@@ -23837,93 +23837,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getObjectGraph: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
-				type?: "entity" | "automation" | "skill" | "playbook" | "project" | "source" | "workspace" | "session" | "agent" | "tool" | "command" | "channel" | "participant" | "capability" | "document" | "view" | undefined;
+				type?: "entity" | "automation" | "skill" | "playbook" | "project" | "source" | "workspace" | "session" | "agent" | "tool" | "command" | "channel" | "participant" | "capability" | "document" | "track" | "run" | "view" | "proposal" | undefined;
 				workspaceId?: string | null | undefined;
 			};
 			output: GraphEnvelope;
-			meta: object;
-		}>;
-		getNode: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				entityId: string;
-				includeRelations?: boolean | undefined;
-				includeRelatedPreviews?: boolean | undefined;
-				relationTypes?: string[] | undefined;
-			};
-			output: {
-				entity: {
-					title: string | null;
-					preview: string | null;
-					id: string;
-					userId: string;
-					workspaceId: string | null;
-					profileId: string | null;
-					type: string;
-					documentId: string | null;
-					properties: unknown;
-					systemData: unknown;
-					version: number;
-					createdByKind: ProvenanceKind | null;
-					createdByUserId: string | null;
-					agentUserId: string | null;
-					sourceProposalId: string | null;
-					correlationId: string | null;
-					createdAt: Date;
-					updatedAt: Date;
-					deletedAt: Date | null;
-				};
-				relations: never[];
-				relatedEntities: never[];
-				stats: null;
-			} | {
-				entity: {
-					title: string | null;
-					preview: string | null;
-					id: string;
-					userId: string;
-					workspaceId: string | null;
-					profileId: string | null;
-					type: string;
-					documentId: string | null;
-					properties: unknown;
-					systemData: unknown;
-					version: number;
-					createdByKind: ProvenanceKind | null;
-					createdByUserId: string | null;
-					agentUserId: string | null;
-					sourceProposalId: string | null;
-					correlationId: string | null;
-					createdAt: Date;
-					updatedAt: Date;
-					deletedAt: Date | null;
-				};
-				relations: {
-					id: string;
-					userId: string;
-					workspaceId: string | null;
-					type: string;
-					createdByKind: ProvenanceKind | null;
-					createdByUserId: string | null;
-					agentUserId: string | null;
-					sourceProposalId: string | null;
-					correlationId: string | null;
-					createdAt: Date;
-					sourceEntityId: string | null;
-					targetEntityId: string | null;
-					sourceKind: RelationEndpointKind;
-					targetKind: RelationEndpointKind;
-					sourceCellId: string | null;
-					targetCellId: string | null;
-					metadata: unknown;
-				}[];
-				relatedEntities: any[];
-				stats: {
-					total: number;
-					outgoing: number;
-					incoming: number;
-					byType: Record<string, number>;
-				};
-			};
 			meta: object;
 		}>;
 		getSubgraph: import("@trpc/server").TRPCQueryProcedure<{

@@ -44,6 +44,7 @@ import {
   capabilities,
   agents,
   skills,
+  projectTracks,
 } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
@@ -152,6 +153,14 @@ async function endpointVisible(
       return rowVisible(channels, channels.id, id, access.predicate(channels));
     case "project":
       return rowVisible(projects, projects.id, id, access.predicate(projects));
+    // A track's registered rule: exactly as visible as its parent project.
+    case "track":
+      return rowVisible(
+        projectTracks,
+        projectTracks.id,
+        id,
+        access.predicate(projectTracks)
+      );
     // `intelligenceCommands` rule: workspace-shared OR creator-private.
     case "command":
       return rowVisible(

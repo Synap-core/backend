@@ -59,6 +59,7 @@ const LINK_ENDPOINT_TYPES = [
   "agent",
   "workspace",
   "document",
+  "track",
 ] as const;
 
 /**

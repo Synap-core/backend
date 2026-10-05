@@ -123,6 +123,48 @@ describe("deriveNodeNeighbourhood — discriminating rows", () => {
     ).toBe("cameFrom");
   });
 
+  it("a PROPOSAL focus: what it governed is what it became", () => {
+    expect(
+      only(
+        edge({
+          kind: "entity",
+          edgeType: "create_entity",
+          direction: "outgoing",
+          via: "governed",
+        })
+      )
+    ).toBe("became");
+  });
+
+  it("the track FK fold: project it serves, method it came from, sessions working on it", () => {
+    const nb = deriveNodeNeighbourhood({ kind: "track", id: "t" }, [
+      edge({
+        id: "p",
+        kind: "project",
+        edgeType: "member_of",
+        direction: "outgoing",
+        via: "structure",
+      }),
+      edge({
+        id: "pb",
+        kind: "playbook",
+        edgeType: "instantiated_from",
+        direction: "outgoing",
+        via: "structure",
+      }),
+      edge({
+        id: "s",
+        kind: "session",
+        edgeType: "member_of",
+        direction: "incoming",
+        via: "structure",
+      }),
+    ]);
+    expect(zoneIds(nb, "servesAndBlocks")).toEqual(["p"]);
+    expect(zoneIds(nb, "cameFrom")).toEqual(["pb"]);
+    expect(zoneIds(nb, "workingOnIt")).toEqual(["s"]);
+  });
+
   it("links `blocked_by` reads from BOTH ends", () => {
     // focus --blocked_by--> s1: the focus waits on s1.
     expect(

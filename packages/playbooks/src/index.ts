@@ -1194,7 +1194,9 @@ export type LinkEndpointType =
   | "workspace"
   // A `documents` row — the raw capture. `document --produced--> entity`,
   // system-written by `stampMaterialized` only.
-  | "document";
+  | "document"
+  // A `project_tracks` row — a method running inside a project.
+  | "track";
 
 // `governance_rule` was removed here in lock-step with the @synap/database
 // union — it had no producer and no reader. See the note in

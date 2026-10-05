@@ -85,7 +85,13 @@ export type LinkEndpointType =
   // `stageIntakeSource`). `document --produced--> entity` = "this capture made
   // that entity". SYSTEM-WRITTEN ONLY, by `stampMaterialized`; the Hub REST
   // door reads it but refuses to create it.
-  | "document";
+  | "document"
+  // A `project_tracks` row — a METHOD running inside a project (0272). Its own
+  // structure (project, sessions via `focus_sessions.track_id`, playbook) is
+  // read from FK columns by the object graph; as a links endpoint it can carry
+  // dependency / provenance edges like any other unit of work. Visible exactly
+  // when its parent project is (`link-endpoint-visibility.ts`).
+  | "track";
 
 // ── `governance_rule` was HERE and was removed, deliberately ────────────────
 // It was added so an intent-rule could hold an edge to the governance rule it

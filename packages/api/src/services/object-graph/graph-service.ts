@@ -53,6 +53,9 @@ import {
   type FacetVisibilityScope,
   workspaces,
   ProfileRepository,
+  projectTracks,
+  automationRuns,
+  drizzleSql,
 } from "@synap/database";
 import { ownAdjunctFilter, authoredByUser } from "../agent-identity-service.js";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -73,6 +76,7 @@ import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js
 import type { EntityConnection } from "./entity-connections.js";
 import {
   buildRequestFromProposal,
+  isLikelyUUID,
   type Proposal,
 } from "@synap-core/types/proposals";
 import {
@@ -104,6 +108,17 @@ export const GRAPH_KINDS = [
   "source",
   "participant",
   "workspace",
+  // A METHOD running inside a project (`project_tracks`, 0272) — also a links
+  // endpoint. Neighbours: its project, its sessions (`focus_sessions.track_id`),
+  // its playbook (`playbook_id`) — read-time FK folds, `via: "structure"`.
+  "track",
+  // A governed change (`proposals`). Focusable since the node page: what it
+  // governed (`via: "governed"`, outgoing) and the session it was filed in.
+  "proposal",
+  // An AUTOMATION run (`automation_runs`) — the one run ledger that is not
+  // already another graph kind (a playbook run IS a session, a capture run IS a
+  // capture). `subtype` is its flow type, the second half of a run's address.
+  "run",
 ] as const;
 
 export type GraphKind = (typeof GRAPH_KINDS)[number];
@@ -176,7 +191,14 @@ export interface GraphNeighbor extends GraphNode {
     // document returned empty neighbours even when entities pointed at it).
     // Folded in read-time by `getDocumentBodyNeighbors`, direction "incoming"
     // (the document is the target of the FK).
-    | "body";
+    | "body"
+    // Plain FK columns read as edges by `getStructureNeighbors`, never mirrored
+    // into `links`: `focus_sessions.track_id`, `project_tracks.project_id` /
+    // `playbook_id`, `automation_runs.automation_id` / `subject_entity_id`.
+    // Their `edgeType` reuses the `links` vocabulary (`member_of`,
+    // `instantiated_from`, `about`) so the node-neighbourhood role table
+    // classifies them like the stored edge they stand in for.
+    | "structure";
   /**
    * Set only on an entity's materialization RECEIPT — the proposal named by
    * `entities.sourceProposalId`: where the write came from.
@@ -221,7 +243,16 @@ interface KindSpec {
   table: any;
   name: string; // column name for the display name
   subtype?: string; // column name for the in-kind discriminator
+  /** A constant discriminator instead of a column (a run's flow type). */
+  subtypeValue?: string;
   deletedAt?: string;
+  /**
+   * The display name is NOT a column: `proposal` is named by its display
+   * sentence (`proposalNeighborNames`, which redacts session targets), `run` by
+   * its automation. `resolveByName` skips these kinds — there is no name column
+   * to match.
+   */
+  namedBy?: "proposal" | "run";
 }
 
 /**
@@ -255,6 +286,19 @@ const KIND_TABLE: Record<string, KindSpec> = {
     deletedAt: "deletedAt",
   },
   workspace: { table: workspaces, name: "name" },
+  track: { table: projectTracks, name: "name", subtype: "status" },
+  proposal: {
+    table: proposals,
+    name: "proposalType",
+    subtype: "status",
+    namedBy: "proposal",
+  },
+  run: {
+    table: automationRuns,
+    name: "status",
+    subtypeValue: "automation",
+    namedBy: "run",
+  },
 };
 
 /**
@@ -387,6 +431,28 @@ function hydrationScopeWhere(
         channelVisibilityWhere(userId),
         lensNarrowing((t as typeof channels).workspaceId, workspaceId)
       );
+    // A TRACK is exactly as visible as its PARENT PROJECT (the registry rule for
+    // `projectTracks`): it has no workspace of its own. So the floor is the
+    // `project` case above, applied through the FK — a track hydrates iff its
+    // project would. Owner-aware for the same reason (a personal project's
+    // tracks are personal).
+    case "track":
+      return drizzleSql`${projectTracks.projectId} IN (SELECT ${projects.id} FROM ${projects} WHERE ${and(
+        ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId),
+        lensNarrowing(projects.workspaceId, workspaceId)
+      )})`;
+    // The temporal fold's proposal floor (lens OR authored by this user) — a
+    // proposal registered `podGlobalConfig` (no human-owner column yet).
+    case "proposal":
+      return and(
+        or(
+          userVisibleWhere((t as typeof proposals).workspaceId, userId),
+          authoredByUser(userId)
+        ),
+        lensNarrowing((t as typeof proposals).workspaceId, workspaceId)
+      );
+    // `automation_runs` is podGlobalConfig — the default lens IS the runs
+    // feed's own floor (`services/runs` `userVisibleWhere`).
     default:
       return workspaceLensWhere(t.workspaceId, userId, workspaceId);
   }
@@ -475,18 +541,26 @@ export async function hydrateNodes(
           ? await loadFacetSlugs(db, ids, facetVisibilityScope)
           : null;
 
+      const names = await namesFor(
+        spec,
+        rows as Record<string, unknown>[],
+        userId
+      );
       for (const row of rows as Record<string, unknown>[]) {
         const id = row.id as string;
-        const subtype = spec.subtype
-          ? ((row[spec.subtype] as string | null) ?? null)
-          : null;
+        const subtype =
+          spec.subtypeValue ??
+          (spec.subtype
+            ? ((row[spec.subtype] as string | null) ?? null)
+            : null);
         const subtypes = subtype ? [subtype] : [];
         if (facetSlugsByEntity)
           subtypes.push(...(facetSlugsByEntity.get(id) ?? []));
         out.set(`${kind}:${id}`, {
           kind: graphKindOfRow(kind, row),
           id,
-          name: (row[spec.name] as string | null) ?? "(untitled)",
+          name:
+            names?.get(id) ?? (row[spec.name] as string | null) ?? "(untitled)",
           subtype,
           subtypes,
           workspaceId: (row.workspaceId as string | null) ?? null,
@@ -494,6 +568,44 @@ export async function hydrateNodes(
       }
     })
   );
+  return out;
+}
+
+/**
+ * Display names for kinds whose name is not a column (`KindSpec.namedBy`).
+ * `null` = the kind is named by its column.
+ */
+async function namesFor(
+  spec: KindSpec,
+  rows: Record<string, unknown>[],
+  userId: string
+): Promise<Map<string, string> | null> {
+  if (!spec.namedBy || rows.length === 0) return null;
+  if (spec.namedBy === "proposal") {
+    // The proposal's own row sentence, through the redacting name door.
+    return proposalNeighborNames(
+      rows as unknown as NameableProposalRow[],
+      userId
+    );
+  }
+  // run → its automation's name. The run already passed its floor; the
+  // automation is podGlobalConfig and the runs feed names it the same way.
+  const automationIds = [
+    ...new Set(rows.map((r) => r.automationId as string).filter(Boolean)),
+  ];
+  const db = await getDb();
+  const autos = automationIds.length
+    ? await db
+        .select({ id: automations.id, name: automations.name })
+        .from(automations)
+        .where(inArray(automations.id, automationIds))
+    : [];
+  const byId = new Map(autos.map((a) => [a.id, a.name]));
+  const out = new Map<string, string>();
+  for (const r of rows) {
+    const name = byId.get(r.automationId as string);
+    if (name) out.set(r.id as string, name);
+  }
   return out;
 }
 
@@ -1297,6 +1409,238 @@ export async function getDocumentBodyNeighbors(
   }));
 }
 
+/** Max sessions listed as one track's neighbours (newest first). */
+const STRUCTURE_NEIGHBOR_CAP = 50;
+
+interface StructureRef {
+  kind: string;
+  id: string;
+  edgeType: string;
+  direction: "outgoing" | "incoming";
+  via: "structure" | "governed" | "produced-in";
+}
+
+/**
+ * The FK-shaped neighbours of the kinds the node page made focusable — plain
+ * columns that were never mirrored into `links`, read as edges:
+ *
+ *   track    → its project   (`project_id`,  outgoing `member_of`)
+ *            → its playbook  (`playbook_id`, outgoing `instantiated_from`)
+ *            → its sessions  (`focus_sessions.track_id`, incoming `member_of`)
+ *   session  → its track     (outgoing `member_of`)
+ *   project  → its tracks    (incoming `member_of`)
+ *   proposal → what it governed (`target_*` + entities it materialized via
+ *              `entities.source_proposal_id`; outgoing, `via: "governed"`)
+ *            → the session it was filed in (incoming `produced_in`)
+ *   run      → its automation (outgoing `instantiated_from`)
+ *            → its subject entity (outgoing `about`)
+ *
+ * The FOCUS row is read through the same floor as its own hydration (so an
+ * invisible focus contributes no edges), and every far end is hydrated through
+ * `hydrateNodes` — a far end the caller cannot see is DROPPED, never a bare id.
+ * Every other focus kind pays nothing.
+ */
+export async function getStructureNeighbors(
+  userId: string,
+  kind: string,
+  id: string,
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
+): Promise<GraphNeighbor[]> {
+  if (!["track", "session", "project", "proposal", "run"].includes(kind)) {
+    return [];
+  }
+  if (!isLikelyUUID(id)) return [];
+  const db = await getDb();
+  const refs: StructureRef[] = [];
+
+  if (kind === "track") {
+    const [track] = await db
+      .select({
+        projectId: projectTracks.projectId,
+        playbookId: projectTracks.playbookId,
+      })
+      .from(projectTracks)
+      .where(
+        and(
+          eq(projectTracks.id, id),
+          hydrationScopeWhere("track", projectTracks, userId, workspaceId)
+        )
+      )
+      .limit(1);
+    if (!track) return [];
+    refs.push({
+      kind: "project",
+      id: track.projectId,
+      edgeType: "member_of",
+      direction: "outgoing",
+      via: "structure",
+    });
+    if (track.playbookId) {
+      refs.push({
+        kind: "playbook",
+        id: track.playbookId,
+        edgeType: "instantiated_from",
+        direction: "outgoing",
+        via: "structure",
+      });
+    }
+    const sessions = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(eq(focusSessions.trackId, id))
+      .orderBy(desc(focusSessions.createdAt))
+      .limit(STRUCTURE_NEIGHBOR_CAP);
+    for (const row of sessions) {
+      refs.push({
+        kind: "session",
+        id: row.id,
+        edgeType: "member_of",
+        direction: "incoming",
+        via: "structure",
+      });
+    }
+  } else if (kind === "session") {
+    // Read through the ONE session read rule: an unreadable session must not
+    // reveal which track it belongs to.
+    const [session] = await db
+      .select({ trackId: focusSessions.trackId })
+      .from(focusSessions)
+      .where(and(eq(focusSessions.id, id), sessionReadableWhere({ userId })))
+      .limit(1);
+    if (session?.trackId) {
+      refs.push({
+        kind: "track",
+        id: session.trackId,
+        edgeType: "member_of",
+        direction: "outgoing",
+        via: "structure",
+      });
+    }
+  } else if (kind === "project") {
+    // The tracks hydrate through the track floor = this project's visibility.
+    const tracks = await db
+      .select({ id: projectTracks.id })
+      .from(projectTracks)
+      .where(eq(projectTracks.projectId, id))
+      .limit(STRUCTURE_NEIGHBOR_CAP);
+    for (const row of tracks) {
+      refs.push({
+        kind: "track",
+        id: row.id,
+        edgeType: "member_of",
+        direction: "incoming",
+        via: "structure",
+      });
+    }
+  } else if (kind === "proposal") {
+    const [proposal] = await db
+      .select({
+        proposalType: proposals.proposalType,
+        targetType: proposals.targetType,
+        targetId: proposals.targetId,
+        sessionId: proposals.sessionId,
+      })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.id, id),
+          hydrationScopeWhere("proposal", proposals, userId, workspaceId)
+        )
+      )
+      .limit(1);
+    if (!proposal) return [];
+    if (
+      KIND_TABLE[proposal.targetType] &&
+      isLikelyUUID(proposal.targetId) &&
+      proposal.targetId !== id
+    ) {
+      refs.push({
+        kind: proposal.targetType,
+        id: proposal.targetId,
+        edgeType: proposal.proposalType,
+        direction: "outgoing",
+        via: "governed",
+      });
+    }
+    // A create's target id is often a placeholder; the entity it MATERIALIZED
+    // names this proposal as its receipt.
+    const made = await db
+      .select({ id: entities.id })
+      .from(entities)
+      .where(and(eq(entities.sourceProposalId, id), isNull(entities.deletedAt)))
+      .limit(STRUCTURE_NEIGHBOR_CAP);
+    for (const row of made) {
+      refs.push({
+        kind: "entity",
+        id: row.id,
+        edgeType: proposal.proposalType,
+        direction: "outgoing",
+        via: "governed",
+      });
+    }
+    if (proposal.sessionId) {
+      refs.push({
+        kind: "session",
+        id: proposal.sessionId,
+        edgeType: "produced_in",
+        direction: "incoming",
+        via: "produced-in",
+      });
+    }
+  } else {
+    const [run] = await db
+      .select({
+        automationId: automationRuns.automationId,
+        subjectEntityId: automationRuns.subjectEntityId,
+      })
+      .from(automationRuns)
+      .where(
+        and(
+          eq(automationRuns.id, id),
+          hydrationScopeWhere("run", automationRuns, userId, workspaceId)
+        )
+      )
+      .limit(1);
+    if (!run) return [];
+    refs.push({
+      kind: "automation",
+      id: run.automationId,
+      edgeType: "instantiated_from",
+      direction: "outgoing",
+      via: "structure",
+    });
+    if (run.subjectEntityId) {
+      refs.push({
+        kind: "entity",
+        id: run.subjectEntityId,
+        edgeType: "about",
+        direction: "outgoing",
+        via: "structure",
+      });
+    }
+  }
+
+  const nodes = await hydrateNodes(
+    userId,
+    refs.map((r) => ({ kind: r.kind, id: r.id })),
+    facetVisibilityScope,
+    workspaceId
+  );
+  return refs.flatMap((r) => {
+    const node = nodes.get(`${r.kind}:${r.id}`);
+    if (!node) return [];
+    return [
+      {
+        ...node,
+        edgeType: r.edgeType,
+        direction: r.direction,
+        via: r.via,
+      },
+    ];
+  });
+}
+
 /**
  * Merge every neighbour source into ONE list, de-duplicated.
  *
@@ -1358,7 +1702,7 @@ export function mergeNeighbors(
  */
 export async function getObjectGraph(
   userId: string,
-  kind: LinkEndpointType,
+  kind: GraphKind | LinkEndpointType,
   id: string,
   extraNeighbors: GraphNeighbor[] = [],
   workspaceId?: string | null
@@ -1374,9 +1718,17 @@ export async function getObjectGraph(
     governanceNeighbors,
     temporalNeighbors,
     documentBodyNeighbors,
+    structureNeighbors,
   ] = await Promise.all([
     hydrateNodes(userId, [{ kind, id }], facetVisibilityScope, workspaceId),
-    getLinkNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
+    // `proposal` / `run` are not links endpoints: the read finds no edge.
+    getLinkNeighbors(
+      userId,
+      kind as LinkEndpointType,
+      id,
+      facetVisibilityScope,
+      workspaceId
+    ),
     getReceiptNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
     getGovernanceNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
     getTemporalNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
@@ -1387,6 +1739,7 @@ export async function getObjectGraph(
       facetVisibilityScope,
       workspaceId
     ),
+    getStructureNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
   ]);
 
   // Merge config + data graphs through the ONE de-dup door (see `mergeNeighbors`:
@@ -1399,6 +1752,7 @@ export async function getObjectGraph(
     governanceNeighbors,
     temporalNeighbors,
     documentBodyNeighbors,
+    structureNeighbors,
     extraNeighbors,
   ]);
 
@@ -1454,7 +1808,7 @@ export async function resolveByName(
   limit = 10
 ): Promise<GraphNode[]> {
   const spec = KIND_TABLE[kind];
-  if (!spec) return [];
+  if (!spec || spec.namedBy) return [];
   const t = spec.table;
   const db = await getDb();
 

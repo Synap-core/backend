@@ -115,7 +115,7 @@ export const LINK_EDGE_ROLES = {
   // document|session --produced--> entity: the lineage edge.
   produced: { outgoing: "became", incoming: "cameFrom", provenance: true },
   // tool --member_of--> capability, automation --member_of--> playbook,
-  // session --member_of--> track (read-time track fold).
+  // session|track --member_of--> track|project (the `structure` FK fold).
   member_of: { outgoing: "servesAndBlocks", incoming: "work" },
   feeds: RELATED,
   // session --promoted_to--> playbook
@@ -193,8 +193,9 @@ export const VIA_EDGE_ROLES = {
   grant: RELATED,
   // automations.createdBy — what an agent authored.
   automation: { outgoing: "became", incoming: "cameFrom" },
-  // The proposal that authorized a change to it (events spine).
-  governed: { outgoing: "cameFrom", incoming: "cameFrom", provenance: true },
+  // incoming: the proposal that authorized a change to it (events spine /
+  // receipt). outgoing (a PROPOSAL focus): what that proposal governed.
+  governed: { outgoing: "became", incoming: "cameFrom", provenance: true },
   // The session the change happened in (events spine).
   "produced-in": {
     outgoing: "cameFrom",
@@ -203,6 +204,9 @@ export const VIA_EDGE_ROLES = {
   },
   // entities.documentId — the entity this document is the body of.
   body: { ...RELATED, provenance: true },
+  // Plain FK columns read as edges (track ↔ project / sessions / playbook,
+  // run → automation / subject). Their edge types reuse the links vocabulary.
+  structure: "edgeType",
 } as const satisfies Readonly<Record<string, EdgeRole | "edgeType">>;
 
 type ViaKey = keyof typeof VIA_EDGE_ROLES;

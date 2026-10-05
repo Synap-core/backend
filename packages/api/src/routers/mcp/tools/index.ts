@@ -762,7 +762,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Fetch ANY object PLUS everything it's linked to, typed. Returns { object, neighbors[], counts }. Each neighbor is { kind, subtype, name, id, edgeType, direction, via } — so you see a person linked to a deal, a skill linked to its tools, a session to its produced entities, etc. Graph by default: call this to understand an object's place in the pod before acting. Works for entity, project, view, channel, session, playbook, tool, skill, automation, document.",
+          "Fetch ANY object PLUS everything it's linked to, typed. Returns { object, neighbors[], counts }. Each neighbor is { kind, subtype, name, id, edgeType, direction, via } — so you see a person linked to a deal, a skill linked to its tools, a session to its produced entities, etc. Graph by default: call this to understand an object's place in the pod before acting. Works for entity, project, view, channel, session, playbook, tool, skill, automation, document, track (a project's method: its project, sessions and playbook), proposal (what it governed and the session it was filed in) and run (an automation run: its automation and subject).",
         inputSchema: {
           type: "object",
           properties: {
@@ -779,7 +779,7 @@ export const tools = {
             type: {
               type: "string",
               description:
-                "Object kind: entity (default), project, view, channel, session, playbook, tool, skill, automation, document.",
+                "Object kind: entity (default), project, view, channel, session, playbook, tool, skill, automation, document, track, proposal, run.",
             },
             subtype: {
               type: "string",
