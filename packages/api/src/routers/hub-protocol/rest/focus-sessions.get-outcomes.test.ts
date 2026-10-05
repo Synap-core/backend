@@ -83,7 +83,7 @@ describe("Hub GET /focus-sessions/:id — outcomes", () => {
     expect(body.id).toBe(SESSION_ID);
     expect(body).toHaveProperty("continuation");
     expect(readSection).toHaveBeenCalledTimes(1);
-    expect(readSection.mock.calls[0]![0]).toMatchObject({
+    expect((readSection.mock.calls as unknown[][])[0]![0]).toMatchObject({
       userId: USER_ID,
       sessionId: SESSION_ID,
     });
