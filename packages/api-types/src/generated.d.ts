@@ -12295,6 +12295,11 @@ export interface TrackStage {
 	 * portable across pods. `startStageSession` resolves it to a live workspace.
 	 */
 	domain?: string;
+	/**
+	 * ISO-8601 — present only on an EMERGENT stage: one added to the running
+	 * track (`addTrackStage`) rather than pinned from its method at start.
+	 */
+	addedAt?: string;
 }
 /**
  * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
@@ -12317,6 +12322,31 @@ export interface TrackStageHistoryEntry {
  *   - `null`  — the track is not paused (a stale marker never leaks).
  */
 export type TrackPausedBy = "check" | "human" | null;
+/**
+ * The number a track steers by (`project_tracks.kpi`, 0302).
+ *
+ * `current` is STATED, never measured: nothing in the pod derives "qualified
+ * leads per month", so the value always travels with WHEN it was stated
+ * (`updatedAt`) and by whom (`updatedBy`). A surface must never present it as
+ * a live measurement.
+ *
+ * The target is REACHED when `current >= target` — a KPI is a number to grow
+ * toward. (A lower-is-better KPI is not modelled yet; state it as the number
+ * to reach, e.g. "days saved", not "days taken".)
+ *
+ * The DB mirror is `ProjectTrackKpi` (`@synap/database`, which cannot import
+ * this package); the pod pins the two equal at compile time.
+ */
+export interface TrackKpi {
+	label: string;
+	unit?: string;
+	target: number;
+	current?: number;
+	/** ISO-8601 — when `current` was last stated. */
+	updatedAt?: string;
+	/** The user (or agent) id that stated `current`. */
+	updatedBy?: string;
+}
 /** A session's deliverables, counted — the progress rail and the owed badge. */
 export interface DeliverableCounts {
 	/** Stamped done. */
@@ -13896,6 +13926,13 @@ export interface TrackView {
 	declaredParams: unknown[];
 	/** Every stage the track entered, oldest first (0274). */
 	stageHistory: TrackStageHistoryEntry[];
+	/** Where the track is heading, one line (0302) — `null` when unsaid. */
+	direction: string | null;
+	/**
+	 * The number it steers by (0302) — `null` when none. `current` is STATED
+	 * (with `updatedAt` / `updatedBy`), never measured.
+	 */
+	kpi: TrackKpi | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -37749,6 +37786,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string;
 				name?: string | undefined;
 				params?: Record<string, unknown> | undefined;
+				direction?: string | undefined;
+				kpi?: {
+					label?: string | undefined;
+					unit?: string | undefined;
+					target?: number | undefined;
+					current?: number | undefined;
+				} | undefined;
 				reasoning?: string | undefined;
 			};
 			output: (ProposedOutcome & {
@@ -37801,6 +37845,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: ProposedOutcome | {
 				status: "updated" | "unchanged";
+				track: TrackView;
+			};
+			meta: object;
+		}>;
+		setDirection: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				direction?: string | null | undefined;
+				kpi?: {
+					label?: string | undefined;
+					unit?: string | undefined;
+					target?: number | undefined;
+					current?: number | undefined;
+				} | null | undefined;
+				reasoning?: string | undefined;
+			};
+			output: ProposedOutcome | {
+				status: "updated" | "unchanged";
+				track: TrackView;
+			};
+			meta: object;
+		}>;
+		addStage: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				stage: {
+					name: string;
+					goal?: string | undefined;
+					key?: string | undefined;
+				};
+				reasoning?: string | undefined;
+			};
+			output: ProposedOutcome | {
+				status: "added";
+				stageKey: string;
 				track: TrackView;
 			};
 			meta: object;
