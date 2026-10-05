@@ -198,9 +198,12 @@ export interface IFileStorage {
    * Generate a presigned PUT URL so a client can upload bytes DIRECTLY to
    * object storage (the large-file lane — the API never buffers the body).
    *
-   * `contentType` and `contentLength` are SIGNED: the store refuses a PUT whose
+   * `contentType` and `contentLength` are SIGNED (`X-Amz-SignedHeaders`
+   * includes `content-length;content-type`): the store refuses a PUT whose
    * Content-Type or Content-Length differs, so the declared size/type the pod
-   * validated is the only one that can land.
+   * validated is the only one that can land. The URL carries NO
+   * `x-amz-checksum-*` params (the signer is built with
+   * `requestChecksumCalculation: "WHEN_REQUIRED"`).
    *
    * Throws {@link StorageUploadUnavailableError} when this backend cannot hand
    * out a URL a client can actually reach (local filesystem; MinIO with no

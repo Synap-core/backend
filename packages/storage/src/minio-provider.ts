@@ -97,6 +97,11 @@ export class MinIOStorageProvider implements IFileStorage {
             secretAccessKey: config.secretAccessKey,
           },
           forcePathStyle: config.forcePathStyle !== false,
+          // SDK >=3.729 adds flexible checksums by default; on a presigned PUT
+          // that bakes `x-amz-checksum-crc32` of the EMPTY body into the URL,
+          // so every real PUT fails its checksum. This client only signs URLs
+          // for bodies it never sees — compute checksums only when required.
+          requestChecksumCalculation: "WHEN_REQUIRED",
         })
       : null;
 
@@ -301,6 +306,8 @@ export class MinIOStorageProvider implements IFileStorage {
 
     return await getSignedUrl(this.publicSigner, command, {
       expiresIn: options.expiresIn ?? 900,
+      // Content-Length is signed by default; Content-Type is not unless asked.
+      signableHeaders: new Set(["content-type"]),
     });
   }
 

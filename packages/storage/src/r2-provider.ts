@@ -58,6 +58,11 @@ export class R2StorageProvider implements IFileStorage {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
       },
+      // This client also presigns upload URLs (getSignedUploadUrl). With the
+      // SDK's default flexible checksums a presigned PUT carries the CRC32 of
+      // the EMPTY body, so every real PUT is refused. Checksum only when an
+      // operation requires one.
+      requestChecksumCalculation: "WHEN_REQUIRED",
     });
 
     this.bucketName = config.bucketName;
@@ -191,6 +196,8 @@ export class R2StorageProvider implements IFileStorage {
 
     return await getSignedUrl(this.client, command, {
       expiresIn: options.expiresIn ?? 900,
+      // Content-Length is signed by default; Content-Type is not unless asked.
+      signableHeaders: new Set(["content-type"]),
     });
   }
 

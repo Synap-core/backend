@@ -37,8 +37,23 @@ describe("MinIO presigned URLs — client reachability", () => {
     // Content-Type and Content-Length are part of the signature.
     const signed = url.searchParams.get("X-Amz-SignedHeaders") ?? "";
     expect(signed).toContain("content-length");
+    expect(signed).toContain("content-type");
     expect(signed).toContain("host");
     expect(url.searchParams.get("X-Amz-Expires")).toBe("900");
+  });
+
+  it("carries NO flexible-checksum params (an empty-body CRC would refuse every PUT)", async () => {
+    const url = new URL(
+      await provider("https://pod.example.com").getSignedUploadUrl(
+        "files/ws/uploads/u/x/clip.mp4",
+        { contentType: "video/mp4", contentLength: 123 }
+      )
+    );
+    const params = [...url.searchParams.keys()].map((k) => k.toLowerCase());
+    // Non-vacuity: the URL really is a SigV4 presign.
+    expect(params).toContain("x-amz-signature");
+    expect(params.filter((k) => k.startsWith("x-amz-checksum"))).toEqual([]);
+    expect(params).not.toContain("x-amz-sdk-checksum-algorithm");
   });
 
   it("refuses (typed) to presign an upload with no public URL configured", async () => {
