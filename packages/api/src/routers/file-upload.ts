@@ -487,6 +487,12 @@ fileUploadApp.post("/upload", async (c) => {
       return c.json({ error: "workspaceId is required" }, 400);
     }
 
+    // Same membership gate as the presigned lane (`/uploads`): a session must
+    // never write into a workspace it does not belong to.
+    if (!(await isWorkspaceMember(userId, workspaceId))) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+
     if (!file || !(file instanceof File)) {
       return c.json({ error: "file is required (multipart file field)" }, 400);
     }

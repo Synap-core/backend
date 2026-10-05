@@ -26,6 +26,12 @@ x-backend-env: &backend-env
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
   MINIO_BUCKET: synap-storage
   MINIO_USE_SSL: false
+  # Presigned upload/download URLs are signed for THIS origin (SigV4 signs host
+  # + path) and reach MinIO :9000 through the proxy's /synap-storage/* route
+  # (Caddyfile; Traefik on Eve pods) with the Host header preserved. Unset =>
+  # presign routes answer 501. No trailing slash. MinIO's own default CORS
+  # (MINIO_API_CORS_ALLOW_ORIGIN=*) already allows the browser PUT/OPTIONS.
+  MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-${PUBLIC_URL}}
   TYPESENSE_HOST: typesense
   TYPESENSE_PORT: 8108
   TYPESENSE_PROTOCOL: http
