@@ -56,7 +56,7 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     surface: "browser",
     since: SINCE,
     reason:
-      "Governance app deprecated: it merges into Work (needs-you) and Settings (Agents, Trust rules, History). Its System tab is retired outright.",
+      "Governance app deprecated: it merges into Work (needs-you) and Settings (Agents, Approvals, History). Its System tab is retired outright.",
     replacedBy: "Work › Needs you; Settings › AI & agents",
     decisionDoc: V1_PLAN_DOC,
   },
@@ -93,9 +93,14 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     id: "rules",
     surface: "relay",
     since: SINCE,
+    // ⚠️ Corrected 2026-10-05 (founder, linkage rework decision 4). This row
+    // read "moves to Settings › Trust rules": a misattribution — the tab is the
+    // AUTOMATION rules inventory, while Settings › Approvals (was "Trust
+    // rules") is the governance policy list, a different object. The tab
+    // stays retired; what replaced it is where a rule reaches the phone.
     reason:
-      "Rules tab deprecated: moves to Settings › Trust rules (decision D3).",
-    replacedBy: "Settings › Trust rules",
+      "Rules tab deprecated: a rule's proposals are approved in Needs you; rules are authored on the desktop Rules page. Not Settings › Approvals, which governs AI writes, not rules (decision D3, corrected 2026-10-05).",
+    replacedBy: "Home › Needs you (rule proposals); desktop Rules page",
     decisionDoc: V1_PLAN_DOC,
   },
   {

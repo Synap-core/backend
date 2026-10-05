@@ -85,6 +85,16 @@ describe("concept vocabulary — Template, Rule, Tools (W5)", () => {
     expect(resolveObjectNoun("workflow")).toBe("Rule");
   });
 
+  it("a governance rule is an Approval — never 'Trust rules', never 'Rules'", () => {
+    expect(resolveObjectNounPlural("governance_rule")).toBe("Approvals");
+    expect(resolveObjectNounPlural("governance_rules")).toBe("Approvals");
+    expect(resolveObjectNoun("governance_rule")).toBe("Approval");
+    // The two words stay apart: Rules = automations.
+    expect(resolveObjectNounPlural("governance_rule")).not.toBe(
+      resolveObjectNounPlural("automation")
+    );
+  });
+
   it("skill, capability and tool are ONE user word, Tool", () => {
     for (const kind of ["skill", "capability", "tool"]) {
       expect(resolveObjectNoun(kind), kind).toBe("Tool");

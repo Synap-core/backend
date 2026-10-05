@@ -474,6 +474,17 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     label: "Agent",
     labelPlural: "Agents",
   },
+  // A `governance_rules` row: "which AI writes wait for me?" (concepts.md).
+  // The user word is "Approvals" — never "Trust rules" (the old nav label),
+  // and never "Rules", which is the automation (`automation` above).
+  governance_rule: {
+    kind: "governance_rule",
+    category: "proposal",
+    icon: "ShieldCheck",
+    color: ID(4),
+    label: "Approval",
+    labelPlural: "Approvals",
+  },
   proposal: {
     kind: "proposal",
     category: "proposal",
@@ -738,6 +749,8 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   // the glossary renamed the kinds — and `playbooks` pluralized to "Playbookss".
   playbooks: "playbook",
   automations: "automation",
+  // The `governance_rules` table reaches labels as a target type.
+  governance_rules: "governance_rule",
   capabilities: "capability",
   skills: "skill",
   tools: "tool",
