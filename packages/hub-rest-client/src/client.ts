@@ -1056,6 +1056,32 @@ export class HubRestClient {
     return this.request<HubOrientResult>("GET", `/api/hub/orient${qs}`);
   }
 
+  /**
+   * The caller's brand kit — `GET /brand/kit`. The pod resolves the brand
+   * workspace (project's used Brand Library → given workspace → pod default).
+   * "No brand" throws a 404 `HubApiError` whose body carries a typed `reason`
+   * (`no_brand_workspace` | `project_not_found`); any other failure throws too
+   * — never an empty kit.
+   */
+  async getBrandKit(options?: {
+    format?: "json" | "css" | "frame-md";
+    projectId?: string;
+    workspaceId?: string;
+  }): Promise<{
+    format: "json" | "css" | "frame-md";
+    content: string;
+    hash: string;
+    brandWorkspaceId: string;
+    resolvedVia: "project" | "workspace" | "pod-default";
+  }> {
+    const params = new URLSearchParams();
+    if (options?.format) params.set("format", options.format);
+    if (options?.projectId) params.set("projectId", options.projectId);
+    if (options?.workspaceId) params.set("workspaceId", options.workspaceId);
+    const qs = params.toString() ? `?${params}` : "";
+    return this.request("GET", `/api/hub/brand/kit${qs}`);
+  }
+
   // ─── Profiles & Schema ────────────────────────────────────────────────────
 
   /**
