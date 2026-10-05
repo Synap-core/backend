@@ -1010,6 +1010,37 @@ export function resolveBlockedReasonLabel(
 }
 
 /**
+ * RETIRED-REASON labels — why an expected output stopped being owed without
+ * being delivered (`slot.retiredReason`). Its OWN closed domain, for the same
+ * reason blocked reasons are: it is not a lifecycle state (the slot reads
+ * "gone" either way) but a CLASSIFICATION of why.
+ *
+ * The value set is defined ONCE, as `OUTPUT_RETIRED_REASONS` in
+ * `@synap/playbooks`; the parity tripwire in `@synap/api`
+ * (`__tripwires__/retired-reason-vocabulary-parity.test.ts`) fails if a value
+ * has no row here. Not verbs, so no mood.
+ */
+export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
+  /** The session was cancelled with the slot still owed. */
+  session_cancelled: "Session cancelled",
+  /**
+   * The decision this slot asked about was settled on the decision itself
+   * (accepted / rejected / superseded), so the question is moot.
+   */
+  decision_resolved: "Decided elsewhere",
+};
+
+/** The human label for a retired reason; unknown values humanize, never leak. */
+export function resolveRetiredReasonLabel(
+  reason: string | null | undefined
+): string {
+  if (!reason) return "";
+  return (
+    OUTPUT_RETIRED_REASON_LABELS[reason.toLowerCase()] ?? humanizeToken(reason)
+  );
+}
+
+/**
  * The GLYPH for each blocked reason — `ui-composition.md` §1, "state is a MARK,
  * not a sentence": a reader knows what kind of obstacle it is before reading.
  *
