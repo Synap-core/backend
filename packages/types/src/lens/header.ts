@@ -3,11 +3,17 @@
  *
  * ```
  * breadcrumb of scope
- * [state mark]  Title                                  [one primary action]
- * one-line narrative: "3 delivered · 1 waiting on you · last activity 2h ago"
- * counts as doors: Needs you 4 · Happening 1 · Produced 12
- * scope fact (ONE): project = target date · track = "Step 3 of 5" · session = "2 of 4 met"
+ * [identity] Title                                  ⋯ │ pulse (project / track)
+ * goal — one muted line                         More │
+ * [● Waiting on you · <the exact ask>   [Answer →]]  │ active 1h ago · Activity →
+ * 9 need you · 57 delivered · 1 running · due 12 Oct
  * ```
+ *
+ * v2 (founder, 2026-10-05): the state lives on the NEXT MOVE row
+ * (`nextMove`, {@link lensNextMove}) — ONE place for the one move, named by
+ * the needs-you row's own verb — and every count is said ONCE, as a door
+ * (`doors[].text`). `narrative` is the v1 line, kept only until relay mirrors
+ * v2; the web header no longer draws it.
  *
  * A count of `null` is a FAILED or absent read — never zero. It drops out of
  * the narrative and its door shows no number, and it can never earn the
@@ -20,8 +26,9 @@ import {
   type UnitStateInput,
   type UnitStateView,
 } from "../units/state.js";
+import { resolveActionLabel, resolveStatusLabel } from "../vocabulary/index.js";
 import { LENS_SECTION_LABELS } from "./classes.js";
-import type { LensDoor } from "./rows.js";
+import type { LensDoor, LensRow, LensVerb } from "./rows.js";
 import type { LensScopeKind } from "./scope.js";
 
 export interface LensCounts {
@@ -94,14 +101,95 @@ export interface LensCountDoor {
   section: "blocking" | "happening" | "produced";
   label: string;
   count: number | null;
+  /**
+   * The strip's words — "9 need you" · "57 delivered" · "1 running"; the
+   * section's label alone when the count is unknown. The ONE place a count
+   * is said (v2: the narrative no longer repeats it).
+   */
+  text: string;
+}
+
+/**
+ * THE NEXT MOVE — the one row under the title that says what matters most
+ * right now: the FIRST Blocking row's exact ask, else the first Happening
+ * row's now-line. Absent ⇒ the row OMITS and the host's "Start work" takes
+ * the primary slot.
+ */
+export interface LensNextMove {
+  section: "blocking" | "happening";
+  /** The row's own unit state — the mark and the row's tint. */
+  state: UnitStateView;
+  /** The reason word, from the status vocabulary ("Waiting on you" / "Working"). */
+  reason: string;
+  /** The exact ask (a Blocking row's title) or the agent's now-line. */
+  text: string;
+  /**
+   * The ONE filled verb: a Blocking row's OWN verb (Approve / Answer /
+   * Review — `lensRowOfNeedsYou`), never "Open" for an ask; "Open" only for
+   * work in flight (it can only be watched) or a failed run.
+   */
+  verb: LensVerb;
+  /** Where the verb opens. Null ⇒ no button (nothing addressable). */
+  door: LensDoor | null;
+}
+
+/**
+ * A lens row as the header's next move — Blocking or Happening rows only
+ * (anything else is not a move). Reads the row's own words; derives none.
+ */
+export function lensNextMove(
+  row: LensRow | null | undefined
+): LensNextMove | null {
+  if (!row || (row.cls !== "blocking" && row.cls !== "happening")) return null;
+  const text =
+    (row.cls === "happening" ? row.reason?.trim() : null) || row.title.trim();
+  if (!text) return null;
+  const blocking = row.cls === "blocking";
+  // A notification row in Blocking carries no verb of its own (the row is
+  // the door): it is still an ask, so it reads "Review", never "Open".
+  const action = blocking ? (row.verb?.action ?? "review") : "open";
+  return {
+    section: row.cls,
+    state: resolveUnitState(row.state),
+    reason: resolveStatusLabel(blocking ? "waiting_on_you" : "working"),
+    text,
+    verb:
+      blocking && row.verb
+        ? row.verb
+        : { action, label: resolveActionLabel(action, "imperative") },
+    door: row.door,
+  };
+}
+
+/** The strip's words for one count door. */
+function countDoorText(
+  section: LensCountDoor["section"],
+  count: number | null
+): string {
+  if (count === null) return LENS_SECTION_LABELS[section];
+  if (section === "blocking")
+    return `${count} ${count === 1 ? "needs" : "need"} you`;
+  if (section === "produced") return `${count} delivered`;
+  return `${count} running`;
 }
 
 export interface LensHeaderModel {
   /** The scope kind this header is for (decides e.g. whether it has a pulse). */
   scopeKind: Exclude<LensScopeKind, "pod">;
+  /** The scope's aggregate state (v1 drew it before the title; v2 hosts may badge with it). */
   state: UnitStateView;
+  /**
+   * @deprecated v1 line ("3 delivered · 1 waiting on you · …") — it said
+   * every count twice. Kept only until relay mirrors v2; read `nextMove`,
+   * `doors[].text` and `lastActivityAt` instead.
+   */
   narrative: LensNarrativePart[];
+  /** The counts strip, in reading order: Needs you · Produced · Happening. */
   doors: LensCountDoor[];
+  /** The ONE move (see {@link LensNextMove}); null ⇒ the row omits. */
+  nextMove: LensNextMove | null;
+  /** The newest activity (ISO) — "active 1h ago" — or null when unknown. */
+  lastActivityAt: string | null;
   /** The REASSURE mark: blocking was READ and is zero. */
   allClear: boolean;
   fact: LensScopeFact | null;
@@ -122,13 +210,16 @@ export function lensHeaderModel<
   lastActivityAt?: string | Date | null;
   fact?: LensScopeFactFor<K> | null;
   /**
-   * The ONE line that says what matters most right now, in the scope's own
-   * words — "Waiting on you: <the exact ask>" or the agent's now-line. It
-   * REPLACES that section's count clause and leads the narrative, so the
-   * header never says "Waiting on you: X · 1 waiting on you". Absent ⇒ the
-   * count clauses alone.
+   * @deprecated v1 — the narrative's lead text (relay, until it mirrors v2).
+   * v2 hosts pass `nextMove`.
    */
   lead?: { section: "blocking" | "happening"; text: string } | null;
+  /**
+   * The row the NEXT MOVE is made of: the first Blocking row (its exact
+   * ask + its own verb), else the first Happening row — `lensNextMoveRow`
+   * picks it from the page read. Absent / null ⇒ no next-move row.
+   */
+  nextMove?: LensRow | null;
 }): LensHeaderModel {
   const { counts } = input;
   const lead = input.lead?.text.trim() ? input.lead : null;
@@ -156,13 +247,14 @@ export function lensHeaderModel<
   // nothing). An unknown count (null) keeps its door — that section still
   // draws, failed, with its retry.
   const doors: LensCountDoor[] = (
-    ["blocking", "happening", "produced"] as const
+    ["blocking", "produced", "happening"] as const
   )
     .filter((section) => counts[section] !== 0)
     .map((section) => ({
       section,
       label: LENS_SECTION_LABELS[section],
       count: counts[section],
+      text: countDoorText(section, counts[section]),
     }));
 
   return {
@@ -170,6 +262,8 @@ export function lensHeaderModel<
     state: resolveUnitState(input.state),
     narrative,
     doors,
+    nextMove: lensNextMove(input.nextMove),
+    lastActivityAt: last,
     allClear: counts.blocking === 0,
     fact: input.fact ?? null,
   };

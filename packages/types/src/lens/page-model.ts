@@ -196,6 +196,44 @@ export function lensClassCount(
   return cls.unreadable.length === 0 ? cls.total : null;
 }
 
+/**
+ * The row the header's NEXT MOVE is made of (`lensHeaderModel({ nextMove })`):
+ * the FIRST Blocking row in the section's own order — and when that row is a
+ * session card (one session owing several things), its FIRST item, so the
+ * header names the exact ask and its own verb ("Answer"), never the card's
+ * "Review 9" — else the first Happening row. Null when neither class has a
+ * row (including when both failed: the sections carry the retry).
+ */
+export function lensNextMoveRow<T extends LensPageSignal & LensNeedsYouSignal>(
+  page: {
+    blocking: Pick<LensPageClass<T>, "rows">;
+    happening: Pick<LensPageClass<LensPageSignal>, "rows">;
+  } | null
+): LensRow | null {
+  if (!page) return null;
+  const grouped = needsYouRows(page.blocking.rows);
+  const first = grouped.recent[0] ?? grouped.older[0];
+  if (first) {
+    const lead = first.kind === "session" ? first.items[0] : null;
+    const item: NeedsYouRow<T> =
+      first.kind === "item" || !lead
+        ? first
+        : {
+            kind: "item",
+            key: lead.id,
+            signal: lead,
+            session: {
+              id: first.sessionId,
+              title: first.title,
+              projectId: first.projectId,
+            },
+          };
+    return lensRowOfNeedsYou(item, "blocking");
+  }
+  const live = page.happening.rows[0];
+  return live ? lensRowOfLiveSignal(live) : null;
+}
+
 /** The header's counts straight from a page (or null: nothing read yet). */
 export function lensPageCounts(
   page: {

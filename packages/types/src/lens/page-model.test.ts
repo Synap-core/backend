@@ -20,6 +20,7 @@ import {
   lensPageCounts,
   lensPageModel,
   lensHappenedSpan,
+  lensNextMoveRow,
   type LensNeedsYouSignal,
   type LensPage,
   type LensPageClass,
@@ -389,5 +390,40 @@ describe("Happened span (session shows its whole history)", () => {
     expect(rest).toBe(a.happened.rest.length);
     expect(rest).toBeGreaterThan(0);
     expect(a.happened.showAll).not.toBeNull();
+  });
+});
+
+describe("lensNextMoveRow — the header's ONE move", () => {
+  it("a session card yields its FIRST item's exact ask + own verb, never the card's 'Review N'", () => {
+    const card = [1, 2, 3].map((i) =>
+      sig(`c${i}`, {
+        title: `Ask ${i}`,
+        groupKey: "session:S",
+        sessionId: "S",
+        target: { kind: "session", id: "S" },
+      } as Partial<Sig>)
+    );
+    const row = lensNextMoveRow(
+      page({
+        blocking: cls(card),
+        happening: cls([sig("live", { kind: "live-session" })]),
+      })
+    );
+    expect(row).not.toBeNull();
+    expect(row!.cls).toBe("blocking");
+    expect(row!.title).toBe("Ask 1");
+    expect(row!.verb).toEqual({ action: "answer", label: "Answer" });
+    expect(row!.count).toBe(1);
+  });
+  it("nothing blocking ⇒ the first Happening row; nothing at all ⇒ null", () => {
+    const live = sig("live", {
+      kind: "live-session",
+      title: "Writing the brief",
+      target: { kind: "session", id: "L" },
+    });
+    const row = lensNextMoveRow(page({ happening: cls([live]) }));
+    expect(row).toMatchObject({ cls: "happening", title: "Writing the brief" });
+    expect(lensNextMoveRow(page())).toBeNull();
+    expect(lensNextMoveRow(null)).toBeNull();
   });
 });

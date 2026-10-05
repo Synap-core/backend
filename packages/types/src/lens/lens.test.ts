@@ -442,6 +442,10 @@ describe("lensHeaderModel", () => {
     });
     expect(m.allClear).toBe(false);
     expect(m.doors.find((d) => d.section === "blocking")!.count).toBeNull();
+    // An unknown count is named without a number — never "0 need you".
+    expect(m.doors.find((d) => d.section === "blocking")!.text).toBe(
+      "Needs you"
+    );
     expect(m.narrative.map((p) => p.key)).toEqual(["produced"]);
     expect(m.state.state).toBe("unmeasured");
   });
@@ -459,11 +463,19 @@ describe("lensHeaderModel", () => {
       { key: "happening", text: "1 in progress" },
       { key: "last-activity", at: "2026-10-04T10:00:00.000Z" },
     ]);
+    // v2: the strip reads Needs you · Produced · Happening, each count said
+    // once, in words.
     expect(m.doors.map((d) => d.label)).toEqual([
       "Needs you",
-      "Happening",
       "Produced",
+      "Happening",
     ]);
+    expect(m.doors.map((d) => d.text)).toEqual([
+      "1 needs you",
+      "3 delivered",
+      "1 running",
+    ]);
+    expect(m.lastActivityAt).toBe("2026-10-04T10:00:00.000Z");
     expect(
       lensHeaderModel({
         scopeKind: "track",
@@ -506,6 +518,90 @@ describe("lensHeaderModel", () => {
       { key: "blocking", text: "1 waiting on you" },
     ]);
   });
+  it("the NEXT MOVE is the row's exact ask with the row's OWN verb — never Open for an ask", () => {
+    const owed = lensRowOfNeedsYou(
+      {
+        kind: "item",
+        key: "o1",
+        signal: sig({
+          id: "o1",
+          kind: "owed-slot",
+          title: "Mint CROSS_REPO_TOKEN",
+          target: { kind: "session", id: "s-o1" },
+        }),
+        session: null,
+      },
+      "blocking"
+    );
+    const m = lensHeaderModel({
+      scopeKind: "project",
+      state: { owedFromYou: 9 },
+      counts: { blocking: 9, happening: 1, produced: 57 },
+      nextMove: owed,
+    });
+    expect(m.nextMove).toMatchObject({
+      section: "blocking",
+      reason: "Waiting on you",
+      text: "Mint CROSS_REPO_TOKEN",
+      verb: { action: "answer", label: "Answer" },
+      door: { kind: "session", id: "s-o1" },
+    });
+    expect(m.nextMove!.state.state).toBe("needs_you");
+    // A Blocking notification has no verb of its own: still an ask ⇒ Review.
+    const note = lensRowOfNeedsYou(
+      {
+        kind: "item",
+        key: "n1",
+        signal: sig({
+          id: "n1",
+          kind: "notification",
+          title: "Check the brief",
+        }),
+        session: null,
+      },
+      "blocking"
+    );
+    expect(note.verb).toBeNull();
+    expect(
+      lensHeaderModel({
+        scopeKind: "project",
+        state: {},
+        counts: { blocking: 1, happening: 0, produced: 0 },
+        nextMove: note,
+      }).nextMove!.verb.label
+    ).toBe("Review");
+    // Work in flight: the now-line, "Working", and Open (it can only be watched).
+    const live = lensRowOfHappening({
+      id: "s1",
+      title: "Session title",
+      objectKind: "session",
+      door: { kind: "session", id: "s1" },
+      source: null,
+      startedAt: null,
+      nowLine: "Drafting the outline",
+    });
+    expect(
+      lensHeaderModel({
+        scopeKind: "track",
+        state: { running: true },
+        counts: { blocking: 0, happening: 1, produced: 0 },
+        nextMove: live,
+      }).nextMove
+    ).toMatchObject({
+      section: "happening",
+      reason: "Working",
+      text: "Drafting the outline",
+      verb: { action: "open" },
+    });
+    // No row ⇒ no move (the host's "Start work" takes the slot).
+    expect(
+      lensHeaderModel({
+        scopeKind: "track",
+        state: {},
+        counts: { blocking: 0, happening: 0, produced: 0 },
+      }).nextMove
+    ).toBeNull();
+  });
   it("ONE scope fact per kind", () => {
     expect(LENS_SCOPE_FACT_KIND).toEqual({
       pod: null,
@@ -535,8 +631,13 @@ describe("header doors point only at sections that are on the page", () => {
       counts: { blocking: null, happening: 0, produced: 2 },
     });
     expect(m.doors).toEqual([
-      { section: "blocking", label: "Needs you", count: null },
-      { section: "produced", label: "Produced", count: 2 },
+      {
+        section: "blocking",
+        label: "Needs you",
+        count: null,
+        text: "Needs you",
+      },
+      { section: "produced", label: "Produced", count: 2, text: "2 delivered" },
     ]);
   });
   it("the model carries its scope kind; a session lens has NO pulse", () => {
