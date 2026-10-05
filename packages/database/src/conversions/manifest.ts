@@ -350,6 +350,24 @@ export interface RemapPropertyValuesOp extends BaseOp {
    * mapped value always wins.
    */
   preferTargetValues?: string[];
+  /** See {@link CanonicalPrecondition}. */
+  requiresCanonical?: CanonicalPrecondition;
+}
+
+/**
+ * A key move that only makes sense ONCE a later cross-scope `mergeInto` can
+ * land. Without the canonical, that merge REFUSES (refuseStrandingNoop) — but
+ * the key moves ahead of it would already have committed, leaving the source
+ * kind's rows carrying keys their own profile does not declare (the W11
+ * social-post defect). With this set, the op REFUSES the same way BEFORE any
+ * write when the `scope` row of `slug` is missing and live `op.slug` entities
+ * still carry `sourceKey`: nothing is written, nothing ledgered as applied, and
+ * the run halts, so the whole chain retries once the template reconcile has
+ * created the canonical. No live data to move → the op runs (a clean no-op).
+ */
+export interface CanonicalPrecondition {
+  slug: string;
+  scope: MergeIntoScope;
 }
 
 /**
@@ -418,6 +436,8 @@ export interface RenamePropertyKeyOp extends BaseOp {
   targetKey: string;
   /** Which value survives when an entity already carries BOTH keys. */
   onConflict: RenamePropertyKeyConflict;
+  /** See {@link CanonicalPrecondition}. */
+  requiresCanonical?: CanonicalPrecondition;
 }
 
 export const RENAME_PROPERTY_KEY_CONFLICTS = [
@@ -1337,7 +1357,10 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // live pods until these ops fold them. All DEFERRED AT BOOT — pod data moves
     // only on a deliberate operator run, after the reconcile has promoted
     // `post` / `brand-template` to shared (a cross-scope merge REFUSES when the
-    // shared canonical is missing but source rows exist). Dry run first:
+    // shared canonical is missing but source rows exist — and every key move
+    // ahead of a merge carries `requiresCanonical`, so it refuses the same way
+    // BEFORE writing: no social-post row is ever left holding post's keys while
+    // the merge cannot land). Dry run first:
     //   tsx src/scripts/run-conversions.ts --only w11.post.social-platform-to-account,w11.post.social-scheduled-to-publish-date,w11.post.social-status-aside,w11.post.social-status-fold,w11.merge.social-post-into-post
     //   …then --apply --destructive-tail with the same --only list.
     //
@@ -1357,6 +1380,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "renamePropertyKey",
       opKey: "w11.post.social-platform-to-account",
       deferAtBoot: true,
+      requiresCanonical: { slug: "post", scope: "shared" },
       slug: "social-post",
       sourceKey: "post-platform",
       targetKey: "post-account",
@@ -1367,6 +1391,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "renamePropertyKey",
       opKey: "w11.post.social-scheduled-to-publish-date",
       deferAtBoot: true,
+      requiresCanonical: { slug: "post", scope: "shared" },
       slug: "social-post",
       sourceKey: "scheduled-at",
       targetKey: "publish-date",
@@ -1377,6 +1402,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "renamePropertyKey",
       opKey: "w11.post.social-status-aside",
       deferAtBoot: true,
+      requiresCanonical: { slug: "post", scope: "shared" },
       slug: "social-post",
       sourceKey: "post-status",
       targetKey: "publish-outcome",
@@ -1388,6 +1414,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "remapPropertyValues",
       opKey: "w11.post.social-status-fold",
       deferAtBoot: true,
+      requiresCanonical: { slug: "post", scope: "shared" },
       slug: "social-post",
       sourceKey: "publish-outcome",
       targetKey: "post-status",
@@ -1423,6 +1450,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "renamePropertyKey",
       opKey: "w11.content.template-kind-aside",
       deferAtBoot: true,
+      requiresCanonical: { slug: "brand-template", scope: "shared" },
       slug: "content-template",
       sourceKey: "template-kind",
       targetKey: "template-engine",
@@ -1672,6 +1700,7 @@ export function validateManifest(manifest: ConversionManifest): void {
             `Conversion manifest: remapPropertyValues '${op.opKey}' needs a non-empty valueMap`
           );
         }
+        validateCanonicalPrecondition(op.opKey, op.requiresCanonical);
         break;
       case "moveBasePropertyToFacet":
         requireSlug(op.opKey, op.slug);
@@ -1696,8 +1725,22 @@ export function validateManifest(manifest: ConversionManifest): void {
             `Conversion manifest: renamePropertyKey '${op.opKey}' has invalid onConflict '${op.onConflict}' (supported: ${RENAME_PROPERTY_KEY_CONFLICTS.join(", ")})`
           );
         }
+        validateCanonicalPrecondition(op.opKey, op.requiresCanonical);
         break;
     }
+  }
+}
+
+function validateCanonicalPrecondition(
+  opKey: string,
+  pre: CanonicalPrecondition | undefined
+): void {
+  if (pre === undefined) return;
+  requireSlug(opKey, pre.slug, "requiresCanonical.slug");
+  if (!(MERGE_INTO_SCOPES as readonly string[]).includes(pre.scope)) {
+    throw new Error(
+      `Conversion manifest: '${opKey}' has invalid requiresCanonical.scope '${pre.scope}' (supported: ${MERGE_INTO_SCOPES.join(", ")})`
+    );
   }
 }
 

@@ -395,6 +395,9 @@ export async function runConversions(
     }
 
     try {
+      // Refuses (throws) BEFORE any write — dry run included, so a dry run
+      // reports exactly what a real run would refuse.
+      await assertCanonicalPrecondition(sql, op);
       if (options.dryRun) {
         if (opCarriesFieldPlan(op)) {
           const { counts, planDetail } = await planByRollback(sql, op, options);
@@ -464,6 +467,35 @@ export async function runConversions(
     hadError,
     retirementBackfill,
   };
+}
+
+/**
+ * `requiresCanonical` (see CanonicalPrecondition in manifest.ts): refuse a key
+ * move while its canonical is missing AND live rows would move — the same
+ * refusal the later cross-scope merge makes, moved ahead of the writes so the
+ * chain is all-or-nothing instead of half-applied.
+ */
+async function assertCanonicalPrecondition(
+  sql: Sql,
+  op: ConversionOp
+): Promise<void> {
+  if (op.op !== "renamePropertyKey" && op.op !== "remapPropertyValues") return;
+  const pre = op.requiresCanonical;
+  if (!pre) return;
+  if (await resolveScopedCanonicalId(sql, pre.slug, pre.scope)) return;
+  const rows = await sql<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n
+    FROM entities e
+    JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+    WHERE e.deleted_at IS NULL
+      AND e.properties ? ${op.sourceKey}::text
+  `;
+  const n = rows[0]?.n ?? 0;
+  if (n === 0) return;
+  throw new Error(
+    `${op.op} '${op.opKey}': requires the '${pre.slug}' canonical (scope='${pre.scope}'), which is not found, and ${n} live '${op.slug}' entity row(s) still carry '${op.sourceKey}' — refusing to move keys a later merge cannot land. ` +
+      `Fix: run the template reconcile that creates the shared '${pre.slug}' first, then re-run this chain.`
+  );
 }
 
 async function recordLedger(

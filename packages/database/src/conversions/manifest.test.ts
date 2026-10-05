@@ -612,6 +612,31 @@ describe("validateManifest", () => {
     ).toThrow(/invalid onConflict 'merge'/);
   });
 
+  it("validates requiresCanonical on a key move: a slug and a merge scope", () => {
+    expect(() =>
+      validateManifest({
+        version: 1,
+        ops: [
+          renameOp({ requiresCanonical: { slug: "post", scope: "shared" } }),
+        ],
+      })
+    ).not.toThrow();
+    expect(() =>
+      validateManifest({
+        version: 1,
+        ops: [
+          renameOp({ requiresCanonical: { slug: "post", scope: "workspace" } }),
+        ],
+      })
+    ).toThrow(/invalid requiresCanonical.scope 'workspace'/);
+    expect(() =>
+      validateManifest({
+        version: 1,
+        ops: [renameOp({ requiresCanonical: { slug: " ", scope: "shared" } })],
+      })
+    ).toThrow(/requiresCanonical.slug/);
+  });
+
   it("accepts mergeInto intoScope 'system' and 'shared', rejects any other scope", () => {
     const merge = (intoScope: unknown) =>
       ({

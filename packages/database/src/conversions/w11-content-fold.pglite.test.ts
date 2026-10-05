@@ -150,7 +150,7 @@ const W11: ConversionManifest = {
   ops: CONVERSION_MANIFEST.ops.filter((o) => o.opKey.startsWith("w11.")),
 };
 
-async function setupPod() {
+async function setupPod(opts: { sharedPost?: boolean } = {}) {
   const db = new PGlite();
   await db.exec(SCHEMA);
   const q = async (text: string, params: unknown[] = []) =>
@@ -177,7 +177,12 @@ async function setupPod() {
       )
     )[0].id as string;
 
-  const post = await profile("post", "shared", null);
+  // Without a shared `post`, a Content OS install declares it at workspace
+  // scope — the pod the template reconcile has not promoted yet.
+  const post =
+    opts.sharedPost === false
+      ? await profile("post", "workspace", WS_CONTENT)
+      : await profile("post", "shared", null);
   const socialPost = await profile("social-post", "workspace", WS_SOCIAL);
   const brandTemplate = await profile("brand-template", "shared", null);
   const contentTemplate = await profile(
@@ -212,7 +217,7 @@ async function setupPod() {
       "aspect-ratio": "9:16",
     }),
   };
-  return { sql: makePgliteSql(db), q, ids };
+  return { sql: makePgliteSql(db), q, ids, profile };
 }
 
 async function propsOf(
@@ -296,5 +301,77 @@ describe("W11 Content × Brand folds (real manifest ops, real planner)", () => {
       { slug: "content-template", is_active: false },
       { slug: "social-post", is_active: false },
     ]);
+  });
+
+  it("REFUSES before any write while the shared post is missing, then completes once it exists", async () => {
+    const { sql, q, ids, profile } = await setupPod({ sharedPost: false });
+    const snapshot = async () =>
+      q(`SELECT id, profile_id, properties FROM entities ORDER BY id`);
+    const before = await snapshot();
+
+    const refused = await runConversions(sql, W11, {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    expect(refused.hadError).toBe(true);
+    // Halts at the FIRST key move — never reaches the merge.
+    expect(refused.results.map((r) => [r.opKey, r.status])).toEqual([
+      ["w11.post.social-platform-to-account", "error"],
+    ]);
+    expect(refused.results[0]!.error).toContain(
+      "requires the 'post' canonical"
+    );
+    // Nothing moved: no social-post row holds post's keys.
+    expect(await snapshot()).toEqual(before);
+    const appliedRows = await q(
+      `SELECT op_key FROM "_conversions" WHERE error IS NULL AND dry_run = false`
+    );
+    expect(appliedRows).toEqual([]);
+
+    // A dry run reports the same refusal.
+    const dry = await runConversions(sql, W11, {
+      dryRun: true,
+      destructiveTail: false,
+    });
+    expect(dry.results[0]!.status).toBe("error");
+
+    // The reconcile promotes post to shared → the same chain now completes.
+    const sharedPost = await profile("post", "shared", null);
+    const done = await runConversions(sql, W11, {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    for (const r of done.results) {
+      expect(r.error ?? null, `${r.opKey}: ${r.error ?? ""}`).toBeNull();
+    }
+    const draft = await propsOf(q, ids.draft);
+    expect(draft.profile_id).toBe(sharedPost);
+    expect(draft.properties).toEqual({
+      "post-status": "In Draft",
+      "post-account": ACCOUNT,
+      "publish-date": "2026-10-10",
+      "post-content": "hello",
+    });
+
+    // Idempotent: a third run skips every ledgered op and changes nothing.
+    const settled = await snapshot();
+    const again = await runConversions(sql, W11, {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    expect(again.results.every((r) => r.status === "skipped")).toBe(true);
+    expect(await snapshot()).toEqual(settled);
+  });
+
+  it("runs as a clean no-op on a pod with no social-post data and no shared post", async () => {
+    const { sql, q } = await setupPod({ sharedPost: false });
+    await q(`DELETE FROM entities`);
+    const summary = await runConversions(sql, W11, {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    for (const r of summary.results) {
+      expect(r.error ?? null, `${r.opKey}: ${r.error ?? ""}`).toBeNull();
+    }
   });
 });
