@@ -3914,6 +3914,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_active_channel
   WHERE status = 'active' AND channel_id IS NOT NULL;
 -- Any-status room lookup (0298): the 0297 room triggers + lens container reads.
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_channel_id ON focus_sessions (channel_id);
+-- "Does this rule run have a session?" anti-joins (0303): lens rule-run read,
+-- run ledger, run reaper.
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_automation_run_id
+  ON focus_sessions ((metadata->>'automationRunId'))
+  WHERE (metadata->>'automationRunId') IS NOT NULL;
 
 -- proposals → focus_sessions link (placed here: FK target must exist first)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "focus_sessions"("id") ON DELETE SET NULL;

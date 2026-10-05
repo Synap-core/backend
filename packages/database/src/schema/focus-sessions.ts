@@ -314,6 +314,11 @@ export const focusSessions = pgTable(
     // container read match `channel_id = ?` with no status filter, which the
     // partial index above cannot serve.
     channelIdIdx: index("idx_focus_sessions_channel_id").on(table.channelId),
+    // "Does this rule run have a session?" (0303): the lens rule-run read, the
+    // run ledger and the run reaper anti-join on this expression.
+    automationRunIdIdx: index("idx_focus_sessions_automation_run_id")
+      .on(sql`(${table.metadata}->>'automationRunId')`)
+      .where(sql`(metadata->>'automationRunId') IS NOT NULL`),
   })
 );
 
