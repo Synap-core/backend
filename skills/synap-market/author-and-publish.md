@@ -101,9 +101,16 @@ declared) with the full referential-integrity check (dangling profile refs in
 views/entityLinks, missing view scope, entityLink predicates). A template that
 **declares `dependencies`** (compose/require another template) passes through
 this HTTP door **without** that validation — composition-aware server-side
-validation is not yet wired for ad-hoc publishes (only the seeded flagship
-templates get validated at that level). Don't claim a composed publish was
-fully validated; say what actually ran.
+validation is not yet wired for ad-hoc publishes (official templates are
+validated corpus-wide from their YAML by `publish-official.mjs` before it
+posts). Don't claim a composed publish was fully validated; say what actually ran.
+
+**Official templates — ONE writer.** The official template catalog has ONE
+writer: `synap-app/packages/workspace-templates/scripts/publish-official.mjs` →
+`POST /api/packages` (`publishPackageCore`). The CP never reseeds on deploy;
+`seed-templates.ts` is an insert-only, by-hand bootstrap for an empty catalog.
+A YAML change reaches pods only when that script runs (CI on `main`, or by hand
+with `SYNAP_CP_PUBLISH_TOKEN`); a CP-door change ships CP-deploy first, then publish.
 
 ## What you're producing
 
