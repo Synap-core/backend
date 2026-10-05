@@ -400,6 +400,16 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "supersededBy", required: false, displayOrder: 7 },
       { slug: "tags", required: false, displayOrder: 8 },
       { slug: "description", required: false, displayOrder: 9 },
+      // The decision MESH — "the AI recommended X, the person chose Y", kept
+      // structured so agents can learn from it (api `services/decisions/`).
+      // Filed by the answer door for every answered confirm/choose ask; read
+      // by the decision-ask reactor to pose a `proposed` decision as an ask.
+      { slug: "decisionOptions", required: false, displayOrder: 10 },
+      { slug: "chosenOption", required: false, displayOrder: 11 },
+      { slug: "recommendedOption", required: false, displayOrder: 12 },
+      { slug: "followedRecommendation", required: false, displayOrder: 13 },
+      { slug: "sourceSessionId", required: false, displayOrder: 14 },
+      { slug: "askedByAgent", required: false, displayOrder: 15 },
     ],
   },
   // Question — what the user is investigating.
@@ -1220,6 +1230,53 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         valueType: PropertyValueType.ENTITY_ID,
         constraints: {},
         uiHints: { label: "Superseded by", inputType: "entity-select" },
+      },
+      // Decision mesh (see the decision link list above). `decisionOptions`
+      // and not `options`: a global slug that generic would collide with any
+      // template's own `options` def, and the seed links by slug.
+      {
+        slug: "decisionOptions",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Options",
+          inputType: "json",
+          helpText:
+            "The options that were offered — {label, value?, description?, recommended?}. At most one recommended.",
+        },
+      },
+      {
+        slug: "chosenOption",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 500 },
+        uiHints: { label: "Chosen", inputType: "text" },
+      },
+      {
+        slug: "recommendedOption",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 500 },
+        uiHints: { label: "Recommended", inputType: "text" },
+      },
+      {
+        slug: "followedRecommendation",
+        valueType: PropertyValueType.BOOLEAN,
+        constraints: {},
+        uiHints: {
+          label: "Followed the recommendation",
+          inputType: "checkbox",
+        },
+      },
+      {
+        slug: "sourceSessionId",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Decided in session", inputType: "text" },
+      },
+      {
+        slug: "askedByAgent",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Asked by agent", inputType: "text" },
       },
       {
         slug: "viewCount",

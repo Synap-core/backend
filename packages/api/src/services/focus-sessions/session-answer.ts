@@ -510,6 +510,11 @@ export type AnswerSessionSlotResult =
         recorded: boolean;
         resumed: boolean;
       };
+      /** The `decision` entity this answer filed or updated (W2). */
+      decision?: Extract<
+        AnswerExpectedOutputResult,
+        { status: "answered" }
+      >["decision"];
     };
 
 /**
@@ -756,6 +761,8 @@ export async function answerSessionSlot(p: {
     wokeAgentType,
     triggered,
     ...(graded ? { graded } : {}),
+    // The decision this answer filed/updated — `failed` said, never hidden.
+    ...(answered.decision ? { decision: answered.decision } : {}),
   };
 }
 

@@ -50,6 +50,10 @@ import type {
 } from "@synap/playbooks";
 import { askFingerprint, buildAskSnapshot } from "@synap-core/types/ask";
 import { archivedAnswerHistory } from "./answer-history.js";
+import {
+  fileAnswerDecision,
+  type DecisionFilingOutcome,
+} from "../decisions/file-answer-decision.js";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { stampUnblocked } from "./block-output.js";
@@ -123,9 +127,16 @@ export type AnswerExpectedOutputResult =
       session: {
         id: string;
         workspaceId: string | null;
+        projectId: string | null;
         channelId: string | null;
         agentIds: string[];
       };
+      /**
+       * The `decision` entity an answered confirm/choose filed or updated
+       * (`services/decisions/`). `failed` is a LOUD outcome — the answer is
+       * recorded, the decision is not. Absent for asks that file no decision.
+       */
+      decision?: DecisionFilingOutcome;
     };
 
 /**
@@ -197,6 +208,7 @@ export async function answerExpectedOutput(
           id: focusSessions.id,
           expectedOutputs: focusSessions.expectedOutputs,
           workspaceId: focusSessions.workspaceId,
+          projectId: focusSessions.projectId,
           channelId: focusSessions.channelId,
           agentIds: focusSessions.agentIds,
           metadata: focusSessions.metadata,
@@ -300,6 +312,7 @@ export async function answerExpectedOutput(
         session: {
           id: locked.id,
           workspaceId: locked.workspaceId ?? null,
+          projectId: locked.projectId ?? null,
           channelId: locked.channelId ?? null,
           agentIds: Array.isArray(locked.agentIds) ? locked.agentIds : [],
         },
@@ -337,6 +350,17 @@ export async function answerExpectedOutput(
       sessionId: result.session.id,
       userId: params.userId,
     });
+    // Every answered confirm/choose IS a decision — filed (or, for a slot
+    // opened for one, updated) as the person's own act. After commit, never
+    // inside it: a failed filing must not lose the answer, and it is
+    // returned as `failed`, never swallowed (`file-answer-decision.ts`).
+    const decision = await fileAnswerDecision({
+      userId: params.userId,
+      slot: result.before,
+      answer: result.answer,
+      session: result.session,
+    });
+    if (decision) return { ...result, decision };
   }
   return result;
 }

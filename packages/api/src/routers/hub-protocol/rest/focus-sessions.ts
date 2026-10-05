@@ -775,6 +775,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           questionId: z.string().nullable(),
           wokeAgentType: z.string().nullable(),
           triggered: z.boolean(),
+          // The decision an answered confirm/choose filed or updated;
+          // `{status:'failed'}` = the answer stands, the decision did not land.
+          decision: z.unknown().optional(),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -2610,6 +2613,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         questionId: result.questionId,
         wokeAgentType: result.wokeAgentType,
         triggered: result.triggered,
+        ...(result.decision ? { decision: result.decision } : {}),
       });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.answerOutput failed");
