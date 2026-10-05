@@ -98,6 +98,7 @@ import {
   registerAiProvidersRoutes,
   registerFocusSessionsRoutes,
   registerGuidelinesRoutes,
+  registerBrandRoutes,
   registerAgentSkillsRoutes,
   registerRulesRoutes,
   registerUiRoutes,
@@ -343,6 +344,7 @@ registerKeysRoutes(app); // /keys/rotate-cli
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*
 registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidance for a kind of block
+registerBrandRoutes(app); // GET /brand/kit — the caller's brand kit (project → workspace → pod default)
 registerAgentSkillsRoutes(app); // /agent-skills*
 registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list)
 registerUiRoutes(app); // /ui/focus
