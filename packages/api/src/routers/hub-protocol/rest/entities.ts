@@ -2222,6 +2222,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         uploadToken,
         title,
         actorAgentUserId: agentUserId,
+        profileSlug: fields.profileSlug,
       });
       if (!fin.ok) {
         return c.json({ error: fin.error, code: fin.code }, fin.status);
