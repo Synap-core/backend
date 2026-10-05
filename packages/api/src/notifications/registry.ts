@@ -149,6 +149,15 @@ export interface NotificationDef {
    * informational type is left out of needs-you because its own row says so.
    */
   needsYou?: NotificationNeedsYouRole;
+  /**
+   * How unread rows of this type FOLD into one needs-you row. Omit ⇒ per
+   * target (`(type, source)`, `foldNotifications`). `"groupKey"` ⇒ per the
+   * producer's collapse key: the same agent failing on run after run is ONE
+   * row "×9", not nine rows each pointing at a different run (dogfood
+   * 2026-10-05: "meta encountered an error" ×9 on the triage page). The row
+   * carries the NEWEST instance, so its door is the latest failure.
+   */
+  foldBy?: "groupKey";
 }
 
 export type NotificationNeedsYouRole =
@@ -458,6 +467,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     titleTemplate: "{{agentName}} encountered an error",
     bodyTemplate: "{{errorMessage}}",
     defaultChannels: ["in_app", "os"],
+    // Needs-you folds the same agent's failures into ONE row with a count.
+    foldBy: "groupKey",
     // Group repeated failures of the same agent in the bell. Producers pass an
     // explicit agentUserId-keyed groupKey; this declares the fallback grouping
     // for any other caller.
@@ -1156,6 +1167,12 @@ export const RETIRED_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
  * type is an `"item"`: an unread row nobody can classify stays visible rather
  * than silently dropping out of the count.
  */
+/** How unread rows of `type` fold in needs-you (see `NotificationDef.foldBy`). */
+export function needsYouFoldBy(type: string | undefined): "groupKey" | null {
+  if (!type) return null;
+  return NOTIFICATION_REGISTRY_MAP.get(type)?.foldBy ?? null;
+}
+
 export function needsYouRole(
   type: string | undefined
 ): NotificationNeedsYouRole {

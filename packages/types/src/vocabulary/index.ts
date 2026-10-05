@@ -167,6 +167,11 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   join: { imperative: "Join", past: "Joined" },
   import: { imperative: "Import", past: "Imported" },
   capture: { imperative: "Capture", past: "Captured" },
+  // The GRAPH write proposal types (a batch of records + links from one
+  // capture / import). Keyed whole: their tail `graph` names the payload's
+  // shape, not an act, and humanized it leaked as a verb ("Graph …").
+  "capture.graph": { imperative: "Capture", past: "Captured" },
+  "import.graph": { imperative: "Import", past: "Imported" },
   send: { imperative: "Send", past: "Sent" },
   approve: { imperative: "Approve", past: "Approved" },
   // The decision verb for OBJECT-WORK proposals — a proposed entity that

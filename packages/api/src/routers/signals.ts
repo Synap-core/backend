@@ -65,6 +65,7 @@ import {
   desc,
   eq,
   inArray,
+  or,
   focusSessions,
   projects,
 } from "@synap/database";
@@ -125,6 +126,7 @@ import {
 } from "../services/outputs/landed-outputs.js";
 import { loadSessionLiveness } from "../services/runs/session-liveness.js";
 import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
+import { sessionKindWhere } from "../services/focus-sessions/session-kind.js";
 import { OPEN_SESSION_STATUSES } from "../services/focus-sessions/session-statuses.js";
 
 const logger = createLogger({ module: "signals" });
@@ -518,10 +520,14 @@ async function readProjectNames(
  * (`isSessionWorkingNow`, founder decision D1: an IS turn in flight, or any
  * session activity in the last five minutes) over the one batched liveness
  * read (`loadSessionLiveness`, the same facts `focusSessions.list` rows and
- * the session page carry). Candidates are the scope's OPEN sessions under the
- * same population rule as every other session read here (work + tracked runs,
- * drafts excluded, session read floor), most recently moved first, capped —
- * past the cap the class is a floor (`truncated`).
+ * the session page carry). Candidates are the scope's OPEN sessions an agent
+ * can be AT: work AND every run (a playbook run an agent drives — the dev
+ * session a coding agent writes into — is untracked `kind: 'run'`, and the
+ * work + tracked-runs population hid exactly that live work, dogfood
+ * 2026-10-05). Receipts stay out: an agent-write container is not a unit of
+ * work, its writes land in Happened. Drafts excluded, session read floor,
+ * most recently moved first, capped — past the cap the class is a floor
+ * (`truncated`).
  *
  * SESSION-KIND-LENS-EXEMPT: returns `live-session` SIGNAL rows (id, title, goal, project + liveness), never a session row; the population is sessionListConditions (kind + triage lens applied in SQL).
  */
@@ -534,11 +540,11 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
     scope: { workspaceLens: input.workspaceId, projectLens: input.projectId },
     status: "all",
     lens: "default",
-    kind: "work",
-    includeTrackedRuns: true,
+    kind: "all",
     roster: reader.roster,
     ...(input.trackId ? { trackId: input.trackId } : {}),
   });
+  conditions.push(or(sessionKindWhere("work"), sessionKindWhere("run"))!);
   if (input.sessionId) conditions.push(eq(focusSessions.id, input.sessionId));
   const rows = await db
     .select({

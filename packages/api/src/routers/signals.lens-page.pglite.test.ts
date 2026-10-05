@@ -410,3 +410,59 @@ describe("the needs-you duplicate causes", () => {
     expect((await page({ sessionId: S4 })).status?.issues).toHaveLength(1);
   });
 });
+
+// Dogfood 2026-10-05 (real pod): Home had NO Happening while Claude-code wrote
+// into "Content Studio × Brand" seconds earlier. That session is a PLAYBOOK RUN
+// (`origin: 'playbook'`, `playbookId`, no track) — `kind: 'run'` — and the
+// Happening population was `work` + TRACKED runs only, so the live run never
+// reached the D1 rule. The real shape: an agent's MCP writes are `events`
+// carrying `session_id`, no IS turn in flight.
+describe("Happening: an untracked playbook run an agent is writing into", () => {
+  const RUN = randomUUID();
+  const RECEIPT = randomUUID();
+  beforeAll(async () => {
+    const at = new Date(Date.now() - 60 * 60_000).toISOString();
+    for (const [id, origin, playbookId, metadata] of [
+      [RUN, "playbook", randomUUID(), {}],
+      // ACCEPTED, so the triage lens alone cannot hide it — only the kind can.
+      [
+        RECEIPT,
+        "agent",
+        null,
+        {
+          kind: "agent-proposal-package",
+          triage: { acceptedAt: new Date().toISOString() },
+        },
+      ],
+    ] as const) {
+      await q(
+        `insert into focus_sessions (id, user_id, goal, title, status, origin, playbook_id, project_id, expected_outputs, agent_ids, metadata, criteria, created_at, updated_at, started_at)
+         values ($1, $2, 'g', $3, 'active', $4, $5, $6, '[]'::jsonb, '{}', $7::jsonb, '[]'::jsonb, $8, $8, $8)`,
+        [
+          id,
+          USER,
+          `Live ${id.slice(0, 4)}`,
+          origin,
+          playbookId,
+          P,
+          JSON.stringify(metadata),
+          at,
+        ]
+      );
+      await q(
+        `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, session_id)
+         values ($1, now() - interval '1 minute', 'entities.update.completed', $2, 'entity', '{}'::jsonb, $3, $4)`,
+        [randomUUID(), randomUUID(), USER, id]
+      );
+    }
+  });
+
+  it("is Happening at pod and project scope; an agent-write RECEIPT is not work", async () => {
+    for (const scope of [{}, { projectId: P }]) {
+      const ids = (await page(scope)).happening.rows.map((r) => r.target?.id);
+      expect(ids).toContain(RUN);
+      expect(ids).not.toContain(RECEIPT);
+    }
+    expect((await page({ sessionId: RUN })).happening.rows).toHaveLength(1);
+  });
+});

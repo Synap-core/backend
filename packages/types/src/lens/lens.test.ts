@@ -203,23 +203,37 @@ describe("scope address", () => {
 });
 
 describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () => {
-  it("an owed slot names the EXACT ask (why), not the generic reason label", () => {
+  // Dogfood 2026-10-05 (real pod): the reason slot drew the agent's `why` —
+  // "Founder wants cost/trade-off data before choosing HDD…" — as long grey
+  // prose beside the title. The title IS the ask (the slot label); `why` is
+  // the description and goes to `detail`; "Human decision" is never a chip.
+  it("an owed slot: the label is the ask, `why` is the detail, no generic chip", () => {
     const { recent } = needsYouRows([
       sig({
         id: "o",
         kind: "owed-slot",
-        why: "Backup target bucket",
+        title: "B1 — off-host backup target (needs cost data)",
+        why: "Founder wants cost/trade-off data before choosing HDD vs B2",
         blockedReason: "decision",
       }),
     ]);
     const row = lensRowOfNeedsYou(recent[0]!, "blocking");
-    expect(row.reason).toBe("Backup target bucket");
+    expect(row.title).toBe("B1 — off-host backup target (needs cost data)");
+    expect(row.reason).toBeNull();
+    expect(row.detail).toBe(
+      "Founder wants cost/trade-off data before choosing HDD vs B2"
+    );
     expect(row.verb).toEqual({ action: "answer", label: "Answer" });
     expect(resolveUnitState(row.state).state).toBe("needs_you");
   });
-  it("falls back to the reason label only when there is no why", () => {
+  it("a SPECIFIC obstacle is the chip, why or not", () => {
     const { recent } = needsYouRows([
-      sig({ id: "o", kind: "owed-slot", blockedReason: "credential" }),
+      sig({
+        id: "o",
+        kind: "owed-slot",
+        why: "Needs the B2 key",
+        blockedReason: "credential",
+      }),
     ]);
     expect(lensRowOfNeedsYou(recent[0]!, "blocking").reason).toBe(
       "Credential missing"
@@ -237,7 +251,9 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     expect(row.count).toBe(3);
     expect(row.title).toBe("Ship it");
     expect(row.door).toEqual({ kind: "session", id: "s1" });
-    expect(row.verb).toBeNull();
+    // Dogfood 2026-10-05: the grouped "Production readiness" card had no
+    // verb. A card opens its session, so its one verb is "Review N".
+    expect(row.verb).toEqual({ action: "review", label: "Review 3" });
     expect(row.source).toBeNull();
   });
   it("a single session item carries its session as the source door", () => {

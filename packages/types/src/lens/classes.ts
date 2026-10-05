@@ -144,6 +144,21 @@ export const STATUS_BANNER_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * THE list of WORK-BROKE notification types — an agent or automation run that
+ * FAILED. Blocking (a person has to look: the work stopped), but not an ask:
+ * the row's mark is `failed`, its verb opens the run ("Open"), and it never
+ * wears the "Asked by AI" mark (dogfood 2026-10-05: "meta encountered an
+ * error" read as an AI question with no verb). Repeats of one agent's failure
+ * fold server-side into ONE row with a count (the registry's `foldBy`).
+ * `system.*` health is not here — that is the banner
+ * ({@link STATUS_BANNER_NOTIFICATION_TYPES}).
+ */
+export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
+  "agent.task_failed",
+  "automation.broken",
+]);
+
+/**
  * THE classification rule. Read lens first, then the two exceptions inside
  * the needs-you lens that the approved definition names:
  *

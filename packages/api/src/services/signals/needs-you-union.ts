@@ -51,7 +51,7 @@ import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
 import type { ProposalCluster } from "../proposals/fingerprint.js";
 import type { ProposalClass } from "../proposals/proposal-class.js";
-import { needsYouRole } from "../../notifications/registry.js";
+import { needsYouFoldBy, needsYouRole } from "../../notifications/registry.js";
 
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
@@ -251,6 +251,13 @@ export interface Signal {
    */
   event?: { action: string; objectKind: string; origin: string | null };
   /**
+   * `notification` only: the registry type (`notifications.type`) — what the
+   * lens model classifies a row by (a work-broke failure is Blocking with an
+   * Open verb and no "Asked by AI" mark; `FAILURE_NOTIFICATION_TYPES`,
+   * `@synap-core/types/lens`). Absent on every other kind.
+   */
+  notificationType?: string;
+  /**
    * WHICH block this row belongs to on a needs-you page. `session:<id>` for
    * everything a session owes the person (its owed slots, its draft-asks row,
    * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -314,6 +321,7 @@ const KIND_SPECIFIC_SIGNAL_FIELDS = [
   "landed",
   "activity",
   "event",
+  "notificationType",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
@@ -415,6 +423,11 @@ export interface NotificationSignalInput {
    * registry row, never a per-type map here.
    */
   actions?: unknown;
+  /**
+   * The producer's collapse key (`notifications.group_key`). Read ONLY for a
+   * type whose registry `foldBy` is `"groupKey"` ({@link foldNotifications}).
+   */
+  groupKey?: string | null;
 }
 
 /**
@@ -583,6 +596,7 @@ export function signalFromNotification(
     occurredAt: row.createdAt,
     target: targetFromNotification(row.sourceType, row.sourceId, row.actions),
     category: row.category,
+    ...(row.type ? { notificationType: row.type } : {}),
     ...(sessionId && container?.sessionTitle
       ? { sessionTitle: container.sessionTitle }
       : {}),
@@ -616,9 +630,14 @@ export function foldNotifications(
     { row: NotificationSignalInput; repeatCount: number }
   >();
   for (const r of rows) {
-    const key = r.sourceId
-      ? `${r.type ?? ""}\u0000${r.sourceType}\u0000${r.sourceId}`
-      : `untargeted\u0000${r.type ?? ""}\u0000${r.sourceType}\u0000${r.title}`;
+    // A type whose registry `foldBy` is "groupKey" folds on the producer's
+    // collapse key: one agent failing on nine runs is ONE row ×9.
+    const key =
+      r.groupKey && needsYouFoldBy(r.type) === "groupKey"
+        ? `group\u0000${r.type}\u0000${r.groupKey}`
+        : r.sourceId
+          ? `${r.type ?? ""}\u0000${r.sourceType}\u0000${r.sourceId}`
+          : `untargeted\u0000${r.type ?? ""}\u0000${r.sourceType}\u0000${r.title}`;
     const seen = folds.get(key);
     if (!seen) folds.set(key, { row: r, repeatCount: 1 });
     else {

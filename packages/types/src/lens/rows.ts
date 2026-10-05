@@ -28,7 +28,7 @@ import {
 } from "../vocabulary/index.js";
 import type { ActivityActor, ActivityRow } from "../activity/index.js";
 import { calendarDayIn } from "../activity/heat.js";
-import type { AttentionClass } from "./classes.js";
+import { FAILURE_NOTIFICATION_TYPES, type AttentionClass } from "./classes.js";
 import type { LensSource } from "./scope.js";
 
 /** An object-nav address (the `Signal.target` shape). The host routes it. */
@@ -58,6 +58,12 @@ export interface LensRow {
   title: string;
   /** The EXACT ask ("Answer: backup target"), never a generic label. Null = none. */
   reason: string | null;
+  /**
+   * The ask's longer description (an owed slot's `why`) — disclosed on the
+   * row on demand, never drawn as the reason chip (dogfood 2026-10-05: long
+   * grey prose in the reason slot). Absent = none.
+   */
+  detail?: string | null;
   /** "×N" when the row stands for N identical things, else null. */
   repeat: string | null;
   /** Provenance. Pass through `visibleSource(row, scope)` before drawing it. */
@@ -109,6 +115,20 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   /** Ephemeral lifetime the SERVER carries with the class; null = never expires. */
   lifetimeHours?: number | null;
 }
+
+/** A work-broke notification ({@link FAILURE_NOTIFICATION_TYPES}): a failed run, not an ask. */
+export function isFailureSignal(
+  s: Pick<LensNeedsYouSignal, "kind" | "notificationType">
+): boolean {
+  return (
+    s.kind === "notification" &&
+    s.notificationType != null &&
+    FAILURE_NOTIFICATION_TYPES.has(s.notificationType)
+  );
+}
+
+/** The generic reason the lens rejects as a chip — the row's verb already says it. */
+const GENERIC_BLOCKED_REASON = "decision";
 
 /** The notification category agent-originated work wears (`NOTIFICATION_CATEGORY_LABELS.ai`). */
 const AGENT_CATEGORY = "ai";
@@ -197,11 +217,15 @@ function itemShape(
       return {
         state: { owedFromYou: 1 },
         objectKind: "owed",
-        // The agent's own line names the missing thing; the reason label is
-        // the fallback, because "Human decision" alone is the generic chip
-        // the lens rejects.
+        // The title IS the ask (the slot's label); the chip only names a
+        // SPECIFIC obstacle ("Credential missing"). "Human decision" is the
+        // generic chip the lens rejects — the verb already says "Answer" —
+        // and the agent's `why` is a description, so it goes to `detail`.
         reason:
-          s.why?.trim() || resolveBlockedReasonLabel(s.blockedReason) || null,
+          s.blockedReason &&
+          s.blockedReason.toLowerCase() !== GENERIC_BLOCKED_REASON
+            ? resolveBlockedReasonLabel(s.blockedReason) || null
+            : null,
         verb: verb(s.slotKind === CRITERION_SLOT ? "review" : "answer"),
       };
     case "proposal-cluster":
@@ -230,6 +254,15 @@ function itemShape(
         verb: verb("accept"),
       };
     default:
+      if (isFailureSignal(s)) {
+        // Work broke: the failed mark, and the verb that opens the run.
+        return {
+          state: { failed: true },
+          objectKind: s.target?.kind ?? "run",
+          reason: null,
+          verb: verb("open"),
+        };
+      }
       // A notification: the row is the door; no invented verb.
       return {
         state: { owedFromYou: 1 },
@@ -259,7 +292,17 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       key: row.key,
       cls,
       ...shape,
-      title: s.title,
+      // A draft's pod title is a sentence ("X started <goal> · asks you N
+      // things") whose "started" contradicts its `not_started` mark and whose
+      // count repeats the reason chip: the row names the WORK, the mark says
+      // where it stands, the chip says how many asks.
+      title:
+        s.kind === "draft-asks"
+          ? s.sessionTitle?.trim() || s.sessionGoal?.trim() || s.title
+          : s.title,
+      ...(s.kind === "owed-slot" && s.why?.trim()
+        ? { detail: s.why.trim() }
+        : {}),
       repeat: repeatLabel(s),
       source: row.session
         ? {
@@ -271,7 +314,8 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       occurredAt: iso(s.occurredAt),
       door: s.target ?? null,
       count: 1,
-      byAgent: s.category === AGENT_CATEGORY,
+      // An agent ASKED — never a failure an agent merely suffered.
+      byAgent: s.category === AGENT_CATEGORY && !isFailureSignal(s),
       expiresAt: expiresAt(s.occurredAt, s.lifetimeHours),
     };
   }
@@ -295,7 +339,13 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
     // The card IS the session: its own source would repeat its title.
     source: null,
     occurredAt: iso(row.newestAt),
-    verb: null,
+    // The card stands for several asks of one session and opens it: its one
+    // verb is "Review N" — never a lead item's Approve / Answer, which the
+    // card cannot perform in place.
+    verb: {
+      action: "review",
+      label: `${resolveActionLabel("review", "imperative")} ${row.items.length}`,
+    },
     door: { kind: "session", id: row.sessionId },
     count: row.items.length,
   };

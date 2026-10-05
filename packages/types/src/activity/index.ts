@@ -304,6 +304,33 @@ export function resolveActivityVerb(action: string): string {
   return resolveActionLabel(action, "past");
 }
 
+/**
+ * The OBJECT part of a "<verb> <object>" line — the row's title minus a
+ * leading verb of the SAME act, in either mood. A proposal's headline is
+ * already "<Verb> <noun> "name"" (`buildObjectActionTitle`), so a line that
+ * prefixes the past verb read "Created Create Markdown …" (dogfood
+ * 2026-10-05). Only the act's own words are stripped, never another verb
+ * that happens to lead a title ("Plan the UI…" stays whole); a title that
+ * would be emptied stays as it is.
+ */
+export function activityObjectTitle(action: string, title: string): string {
+  const words = [
+    resolveActionLabel(action, "imperative"),
+    resolveActionLabel(action, "past"),
+  ].filter(Boolean);
+  for (const w of words) {
+    const head = title.slice(0, w.length);
+    if (head.toLowerCase() !== w.toLowerCase()) continue;
+    const rest = title.slice(w.length);
+    // A whole word only ("Created", not "Creates…"), with its separator.
+    const m = /^(?::\s*|\s+)/.exec(rest);
+    if (!m) continue;
+    const object = rest.slice(m[0].length).trim();
+    if (object) return object;
+  }
+  return title;
+}
+
 // ── Filters ─────────────────────────────────────────────────────────────────
 
 export const ACTIVITY_MAX_LIMIT = 100;
