@@ -14695,6 +14695,15 @@ export type EntityOpenTarget = {
 } | {
 	kind: "internal";
 };
+export type BrandResolvedVia = "project" | "workspace" | "pod-default";
+export type BrandResolution = {
+	ok: true;
+	brandWorkspaceId: string;
+	resolvedVia: BrandResolvedVia;
+} | {
+	ok: false;
+	reason: "project_not_found" | "no_brand_workspace";
+};
 /**
  * Core API Router
  */
@@ -38779,6 +38788,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entityId: string;
 			};
 			output: EntityOpenTarget;
+			meta: object;
+		}>;
+	}>>;
+	brand: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				opRef?: string | undefined;
+				reasonCode?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		resolve: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				projectId?: string | undefined;
+				workspaceId?: string | undefined;
+			};
+			output: BrandResolution;
 			meta: object;
 		}>;
 	}>>;

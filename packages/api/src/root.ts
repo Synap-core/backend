@@ -95,6 +95,7 @@ import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { usersRouter } from "./routers/users.js";
 import { placesRouter } from "./routers/places.js";
+import { brandRouter } from "./routers/brand.js";
 
 /**
  * Core API Router
@@ -199,6 +200,8 @@ export const coreRouter = router({
   users: usersRouter,
   // Places — "open where it lives" (entity → source app target).
   places: placesRouter,
+  // Brand — the ONE brand-workspace resolution (same as GET /api/hub/brand/kit).
+  brand: brandRouter,
 });
 
 export type AppRouter = typeof coreRouter;

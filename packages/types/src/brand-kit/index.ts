@@ -48,6 +48,8 @@
  * the kit's version rather than one rendering of it.
  */
 
+export * from "./resolve.js";
+
 export type BrandKitFormat = "json" | "css" | "frame-md";
 
 export const BRAND_KIT_FORMATS: readonly BrandKitFormat[] = [
