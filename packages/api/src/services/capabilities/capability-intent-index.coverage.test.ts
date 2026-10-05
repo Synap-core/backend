@@ -95,7 +95,7 @@ function stripComments(code: string): string {
  * vendor→intent MAP, and the positive control below pins that it still fires.
  */
 const VENDOR_PATTERN =
-  /(?<![A-Za-z0-9_$])(remotion|gmail|notion|airtable|slack|hubspot|fal)(?![A-Za-z0-9_$])/i;
+  /(?<![A-Za-z0-9_$])(remotion|hyperframes|gmail|notion|airtable|slack|hubspot|fal)(?![A-Za-z0-9_$])/i;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /**
