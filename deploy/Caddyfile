@@ -158,6 +158,16 @@
         reverse_proxy minio:9001
     }
 
+    # MinIO S3 API for PRESIGNED URLs (large uploads PUT straight to storage,
+    # downloads GET). /storage/* above is the CONSOLE (9001) and can never serve
+    # a signed URL: SigV4 signs host + path, so the bucket must sit at the root
+    # path and the Host header must reach MinIO unchanged (Caddy's default).
+    # Active once the backend has MINIO_PUBLIC_URL = this pod's origin; the
+    # bucket name must match MINIO_BUCKET (compose: synap-storage).
+    handle /synap-storage/* {
+        reverse_proxy minio:9000
+    }
+
     # Pod Agent (CP-initiated commands: update, suspend, restore, configure)
     handle /api/pod-agent/* {
         reverse_proxy pod-agent:4002
