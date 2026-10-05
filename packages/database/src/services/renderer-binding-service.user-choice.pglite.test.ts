@@ -51,6 +51,7 @@ beforeAll(async () => {
       subject_kind text NOT NULL,
       subject_id text,
       content_kind text NOT NULL,
+      surface text NOT NULL DEFAULT 'app',
       ref jsonb NOT NULL,
       source_proposal_id uuid,
       created_by text NOT NULL,

@@ -45,7 +45,8 @@ import {
   workspaces,
   eq,
 } from "@synap/database";
-import type { RendererRef } from "@synap/database";
+import type { RendererRef, RendererSurface } from "@synap/database";
+import { OBJECT_KINDS } from "@synap-core/types/vocabulary";
 import { TRPCError } from "@trpc/server";
 
 import { assertMayBindRenderer } from "./renderer-binding-authz.js";
@@ -92,6 +93,22 @@ const LEGACY_COLUMN_BY_SLOT: Partial<Record<RendererSlot, string>> = {
   dashboard: "defaultDashboardRenderer",
 };
 
+/**
+ * True iff `subjectKind` is a NON-PROFILE object kind — `proposal`, `session`,
+ * `capability`, … — read from the ONE object-identity registry
+ * (`OBJECT_KINDS`, `@synap-core/types/vocabulary`): any kind registered there
+ * under a category other than `entity`. Such a subject has no `profiles` row
+ * and no key in either legacy store (both are keyed by profile slug), so it is
+ * never mirrored and never needs a profile to exist.
+ *
+ * A custom profile slug is absent from the registry and therefore reads as a
+ * profile — the conservative side: it keeps today's preflight and mirror.
+ */
+export function isNonProfileObjectKind(subjectKind: string): boolean {
+  if (!Object.hasOwn(OBJECT_KINDS, subjectKind)) return false;
+  return OBJECT_KINDS[subjectKind]!.category !== "entity";
+}
+
 export interface SetProfileRendererInput {
   userId: string;
   /** Required for `scope: 'workspace'`; also used to resolve the profile lens. */
@@ -113,6 +130,14 @@ export interface SetProfileRendererInput {
   subjectId?: string | null;
   /** Set when a proposal approval materialized this write — kept as lineage. */
   sourceProposalId?: string | null;
+  /**
+   * WHICH HOST renders the binding (0299). Omitted = `app`, the in-app
+   * surface every caller meant before 0299. An `mcp-app` binding lives ONLY in
+   * `renderer_bindings`: the legacy stores are in-app stores that know no
+   * surface, so mirroring one there would leak an outside-host renderer into
+   * the browser/relay chain.
+   */
+  surface?: RendererSurface;
 }
 
 /**
@@ -135,6 +160,7 @@ export async function setProfileRenderer(
     scope,
     subjectId = null,
     sourceProposalId = null,
+    surface = "app",
   } = input;
 
   // WHOLE-KIND ONLY (decision 2026-09-07). Every prior-art system checked —
@@ -163,12 +189,25 @@ export async function setProfileRenderer(
 
   await assertMayBindRenderer({ userId, scope, workspaceId });
 
+  // Mirror the legacy stores ONLY for the shape they can express: an in-app,
+  // whole-kind, workspace/pod binding of a PROFILE. A user-scoped or
+  // per-object binding never mirrors; an `mcp-app` binding never mirrors (the
+  // legacy stores are in-app readers — a mirror would serve an outside-host
+  // cell in the browser); and a non-profile object kind (`proposal`, `run`, …)
+  // has no profile row and no legacy key at all.
+  const willMirrorLegacy =
+    MIRROR_LEGACY_RENDERER_STORES &&
+    scope !== "user" &&
+    subjectId === null &&
+    surface === "app" &&
+    !isNonProfileObjectKind(profileSlug);
+
   // A pod default has no "cleared" state in the legacy store (the column and
   // the map both fall through to the hardcoded system fallback, which is a
-  // different thing from "unset"). Refused for the kind-level pod write, which
-  // is the one the legacy store still answers; a per-object or user binding is
-  // freely revocable because only the binding table holds it.
-  if (ref === null && scope === "pod" && subjectId === null) {
+  // different thing from "unset"). Refused for the kind-level pod write the
+  // legacy store still answers; anything only the binding table holds (user,
+  // per-object, `mcp-app`, a non-profile kind) is freely revocable.
+  if (ref === null && scope === "pod" && willMirrorLegacy) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Pod-scoped profile renderer defaults cannot be cleared",
@@ -189,13 +228,10 @@ export async function setProfileRenderer(
   // a corrected slug left the first one orphaned. Resolve both here so a failed
   // call writes nothing.
   //
-  // Gated on the SAME condition step 2 uses. A user-scoped or per-object
-  // binding never mirrors, and its `subjectKind` is frequently not a profile at
-  // all (`proposal`, `run`, … — the object-nav kind string), so demanding a
-  // profile row for those would refuse the bindings the table exists for.
-  const willMirrorLegacy =
-    MIRROR_LEGACY_RENDERER_STORES && scope !== "user" && subjectId === null;
-
+  // Gated on `willMirrorLegacy` — the SAME condition step 2 uses. A binding
+  // that never mirrors (user, per-object, `mcp-app`, or a non-profile kind
+  // such as `proposal`) must not demand a profile row: that refused the very
+  // pod-scope bindings the table exists for.
   const profileRepo = new ProfileRepository(db);
   const mirrorProfile =
     willMirrorLegacy && scope === "pod"
@@ -235,6 +271,7 @@ export async function setProfileRenderer(
     subjectKind: profileSlug,
     subjectId,
     contentKind,
+    surface,
   } as const;
 
   if (ref === null) {
@@ -249,9 +286,8 @@ export async function setProfileRenderer(
   }
 
   // ── 2. Legacy mirror (one release; see MIRROR_LEGACY_RENDERER_STORES) ─────
-  // Skipped for the two shapes no legacy store can express.
-  if (!MIRROR_LEGACY_RENDERER_STORES) return;
-  if (scope === "user" || subjectId !== null) return;
+  // Skipped for every shape no legacy store can express (see above).
+  if (!willMirrorLegacy) return;
 
   if (scope === "pod") {
     // System default: profiles.default_{list,detail,dashboard}_renderer.

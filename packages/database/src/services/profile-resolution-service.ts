@@ -13,8 +13,13 @@ import { workspaces } from "../schema/workspaces.js";
 import { profiles } from "../schema/profiles.js";
 import { capabilities } from "../schema/capabilities.js";
 import { rendererBindings } from "../schema/renderer-bindings.js";
+import { widgetDefinitions } from "../schema/widget-definitions.js";
 import { activeRendererBindingWhere } from "./renderer-binding-service.js";
-import type { RendererBindingScope } from "../schema/renderer-bindings.js";
+import {
+  DEFAULT_RENDERER_SURFACE,
+  type RendererBindingScope,
+  type RendererSurface,
+} from "../schema/renderer-bindings.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
 import type { AiPosture } from "../schema/profiles.js";
 import { DEFAULT_AI_POSTURES } from "../utils/ai-posture-defaults.js";
@@ -198,6 +203,225 @@ const RENDERER_BINDING_LADDER: ReadonlyArray<{
   { scope: "pod", objectScoped: true },
   { scope: "pod", objectScoped: false },
 ];
+
+/** A `renderer_bindings` hit, as the ladder reports it. */
+interface RendererBindingResolution {
+  ref: RendererRef;
+  source: ProfileRendererSource;
+  binding: RendererBindingHit;
+}
+
+/**
+ * The `renderer_bindings` rung of {@link getEffectiveRendererWithSource}.
+ *
+ * ONE query fetches every ACTIVE candidate row for the (subjectKind,
+ * contentKind) pair — bounded by the partial unique index to at most one row
+ * per (scope, owner, subject) — and {@link RENDERER_BINDING_LADDER} picks the
+ * winner. Ranking in code rather than in SQL keeps the ladder readable and
+ * makes a new rung a list entry, never another round trip.
+ *
+ * The query is ALREADY floored to what this call may see: user rows are
+ * fetched only for the passed `userId`, workspace rows only for the passed
+ * `workspaceId`, pod rows are pod-wide by definition. That mirrors the
+ * `renderer_bindings` VisibilityRule in `access/registry.ts` — keep the two
+ * in sync, the same way `facetVisibilityConditions` and its rule are.
+ *
+ * `surface` is the 0299 floor: the in-app ladder passes `app`,
+ * `resolveSurfaceRenderer` passes `mcp-app`, and neither can see the other's
+ * rows.
+ *
+ * Returns `undefined` when nothing is bound.
+ */
+async function findRendererBinding(
+  db: PostgresJsDatabase<typeof schema>,
+  subjectKind: string,
+  workspaceId: string | null,
+  contentKind: ProfileRendererContentKind,
+  scope: RendererResolutionScope,
+  surface: RendererSurface
+): Promise<RendererBindingResolution | undefined> {
+  const userId = scope.userId ?? null;
+  const subjectId = scope.subjectId ?? null;
+
+  // Scope branches are built from what the CALLER actually has. No userId
+  // means the user rungs cannot match anything, so they are not queried —
+  // never widened to "any user", which would hand one user another's
+  // personal override.
+  const scopeBranches = [
+    eq(rendererBindings.scopeKind, "pod"),
+    ...(workspaceId
+      ? [
+          and(
+            eq(rendererBindings.scopeKind, "workspace"),
+            eq(rendererBindings.workspaceId, workspaceId)
+          )!,
+        ]
+      : []),
+    ...(userId
+      ? [
+          and(
+            eq(rendererBindings.scopeKind, "user"),
+            eq(rendererBindings.userId, userId)
+          )!,
+        ]
+      : []),
+  ];
+
+  // Whole-KIND rows always qualify; the object rows only when a subject id
+  // was passed — a caller resolving "the kind" must never inherit some other
+  // object's personal binding.
+  const subjectBranches = [
+    isNull(rendererBindings.subjectId),
+    ...(subjectId ? [eq(rendererBindings.subjectId, subjectId)] : []),
+  ];
+
+  const rows = await db
+    .select({
+      id: rendererBindings.id,
+      scopeKind: rendererBindings.scopeKind,
+      subjectId: rendererBindings.subjectId,
+      ref: rendererBindings.ref,
+    })
+    .from(rendererBindings)
+    .where(
+      and(
+        // The SHARED live-binding predicate — a revoked binding is a
+        // tombstone every reader must walk past.
+        activeRendererBindingWhere(),
+        eq(rendererBindings.subjectKind, subjectKind),
+        eq(rendererBindings.contentKind, contentKind),
+        // The SURFACE floor: an in-app read never sees an `mcp-app` row and
+        // an `mcp-app` read never sees an in-app one (0299).
+        eq(rendererBindings.surface, surface),
+        or(...scopeBranches),
+        or(...subjectBranches)
+      )
+    );
+
+  if (rows.length === 0) return undefined;
+
+  for (const rung of RENDERER_BINDING_LADDER) {
+    // A rung the caller has no key for cannot match. The WHERE above already
+    // excludes those rows; re-checking here means the LADDER alone is a
+    // correct floor, so a future caller that hands this function a row set
+    // from somewhere else (a batch prefetch, a cache) cannot inherit another
+    // user's personal override through a rung it never earned.
+    if (rung.scope === "user" && !userId) continue;
+    if (rung.scope === "workspace" && !workspaceId) continue;
+    if (rung.objectScoped && !subjectId) continue;
+    const hit = rows.find(
+      (r) =>
+        r.scopeKind === rung.scope &&
+        (rung.objectScoped ? r.subjectId !== null : r.subjectId === null)
+    );
+    if (!hit) continue;
+    return {
+      ref: hit.ref,
+      // The scope IS the source for a binding; `binding` below is what tells
+      // a workspace BINDING apart from the legacy workspace settings overlay.
+      source: hit.scopeKind,
+      binding: {
+        id: hit.id,
+        scope: hit.scopeKind,
+        subjectId: hit.subjectId,
+      },
+    };
+  }
+  return undefined;
+}
+
+/** What `resolveSurfaceRenderer` serves: the bound cell's HTML and egress. */
+export interface SurfaceRendererResolution {
+  cellKey: string;
+  /** The cell's `renderer_source` — a complete, self-contained HTML document. */
+  rendererSource: string;
+  /** Origins the document may reach (`widget_definitions.external_hosts`). */
+  externalHosts: string[];
+  version: string | null;
+  bindingScope: RendererBindingScope;
+}
+
+/**
+ * Resolve WHICH installed cell renders `subjectKind` for an OUTSIDE host
+ * (MCP Apps), and load it.
+ *
+ * Order (founder decision): user binding → workspace binding (only when a
+ * `workspaceId` is given) → pod binding — the SAME ladder the in-app chain
+ * walks (`findRendererBinding`), floored to `surface`. Whole-kind only: no
+ * object rungs, matching the write door's whole-kind-only refusal. The legacy
+ * stores are NOT consulted — they are in-app stores and know no surface.
+ *
+ * Returns `null` when nothing is bound, or when the winning binding cannot
+ * serve: a non-cell ref, a cell missing / inactive (`is_active = false`, the
+ * soft delete), a cell with no source, or a cell whose `rendererType` is not
+ * `mcp-app`. A binding to the wrong renderer type must NEVER serve — an ESM
+ * React `frame` cell handed to an outside host as "HTML" is not a renderer.
+ * It does not fall through to a lower rung: the winning binding is the
+ * owner's choice, and silently substituting another one would hide that the
+ * choice is broken.
+ *
+ * DB failures THROW — an empty result and a failed read are different facts.
+ */
+export async function resolveSurfaceRenderer(
+  db: PostgresJsDatabase<typeof schema>,
+  input: {
+    userId: string;
+    workspaceId: string | null;
+    subjectKind: string;
+    contentKind: ProfileRendererContentKind;
+    surface: Exclude<RendererSurface, "app">;
+  }
+): Promise<SurfaceRendererResolution | null> {
+  const hit = await findRendererBinding(
+    db,
+    input.subjectKind,
+    input.workspaceId,
+    input.contentKind,
+    { userId: input.userId },
+    input.surface
+  );
+  if (!hit || hit.ref.kind !== "cell" || !hit.ref.cellKey) return null;
+  const cellKey = hit.ref.cellKey;
+
+  // Same scope rule the bind door uses to look the cell up (Hub
+  // `profiles.setRenderer`): this workspace's row or a pod-wide one. A
+  // workspace row shadows a pod-wide row of the same key.
+  const rows = await db
+    .select({
+      workspaceId: widgetDefinitions.workspaceId,
+      rendererType: widgetDefinitions.rendererType,
+      rendererSource: widgetDefinitions.rendererSource,
+      externalHosts: widgetDefinitions.externalHosts,
+      version: widgetDefinitions.version,
+      isActive: widgetDefinitions.isActive,
+    })
+    .from(widgetDefinitions)
+    .where(
+      and(
+        eq(widgetDefinitions.typeKey, cellKey),
+        input.workspaceId
+          ? or(
+              eq(widgetDefinitions.workspaceId, input.workspaceId),
+              isNull(widgetDefinitions.workspaceId)
+            )
+          : isNull(widgetDefinitions.workspaceId)
+      )
+    );
+  const cell =
+    rows.find((r) => r.workspaceId !== null) ??
+    rows.find((r) => r.workspaceId === null);
+  if (!cell || !cell.isActive) return null;
+  if (cell.rendererType !== "mcp-app") return null;
+  if (!cell.rendererSource) return null;
+
+  return {
+    cellKey,
+    rendererSource: cell.rendererSource,
+    externalHosts: cell.externalHosts ?? [],
+    version: cell.version ?? null,
+    bindingScope: hit.binding.scope,
+  };
+}
 
 /**
  * Capability renderers — the capability-subject analogue of a profile's
@@ -851,121 +1075,24 @@ export class ProfileResolutionService {
   }
 
   /**
-   * The `renderer_bindings` rung of {@link getEffectiveRendererWithSource}.
-   *
-   * ONE query fetches every ACTIVE candidate row for the (subjectKind,
-   * contentKind) pair — bounded by the partial unique index to at most one row
-   * per (scope, owner, subject) — and {@link RENDERER_BINDING_LADDER} picks the
-   * winner. Ranking in code rather than in SQL keeps the ladder readable and
-   * makes a new rung a list entry, never another round trip.
-   *
-   * The query is ALREADY floored to what this call may see: user rows are
-   * fetched only for the passed `userId`, workspace rows only for the passed
-   * `workspaceId`, pod rows are pod-wide by definition. That mirrors the
-   * `renderer_bindings` VisibilityRule in `access/registry.ts` — keep the two
-   * in sync, the same way `facetVisibilityConditions` and its rule are.
-   *
-   * Returns `undefined` when nothing is bound, which is the ONLY outcome until
-   * a write door exists.
+   * The `renderer_bindings` rung of {@link getEffectiveRendererWithSource} —
+   * the IN-APP surface only. Delegates to {@link findRendererBinding}, the ONE
+   * ladder walk, which `resolveSurfaceRenderer` also uses for `mcp-app`.
    */
   private async resolveRendererBinding(
     subjectKind: string,
     workspaceId: string | null,
     contentKind: ProfileRendererContentKind,
     scope: RendererResolutionScope
-  ): Promise<
-    | {
-        ref: RendererRef;
-        source: ProfileRendererSource;
-        binding: RendererBindingHit;
-      }
-    | undefined
-  > {
-    const userId = scope.userId ?? null;
-    const subjectId = scope.subjectId ?? null;
-
-    // Scope branches are built from what the CALLER actually has. No userId
-    // means the user rungs cannot match anything, so they are not queried —
-    // never widened to "any user", which would hand one user another's
-    // personal override.
-    const scopeBranches = [
-      eq(rendererBindings.scopeKind, "pod"),
-      ...(workspaceId
-        ? [
-            and(
-              eq(rendererBindings.scopeKind, "workspace"),
-              eq(rendererBindings.workspaceId, workspaceId)
-            )!,
-          ]
-        : []),
-      ...(userId
-        ? [
-            and(
-              eq(rendererBindings.scopeKind, "user"),
-              eq(rendererBindings.userId, userId)
-            )!,
-          ]
-        : []),
-    ];
-
-    // Whole-KIND rows always qualify; the object rows only when a subject id
-    // was passed — a caller resolving "the kind" must never inherit some other
-    // object's personal binding.
-    const subjectBranches = [
-      isNull(rendererBindings.subjectId),
-      ...(subjectId ? [eq(rendererBindings.subjectId, subjectId)] : []),
-    ];
-
-    const rows = await this._db
-      .select({
-        id: rendererBindings.id,
-        scopeKind: rendererBindings.scopeKind,
-        subjectId: rendererBindings.subjectId,
-        ref: rendererBindings.ref,
-      })
-      .from(rendererBindings)
-      .where(
-        and(
-          // The SHARED live-binding predicate — a revoked binding is a
-          // tombstone every reader must walk past.
-          activeRendererBindingWhere(),
-          eq(rendererBindings.subjectKind, subjectKind),
-          eq(rendererBindings.contentKind, contentKind),
-          or(...scopeBranches),
-          or(...subjectBranches)
-        )
-      );
-
-    if (rows.length === 0) return undefined;
-
-    for (const rung of RENDERER_BINDING_LADDER) {
-      // A rung the caller has no key for cannot match. The WHERE above already
-      // excludes those rows; re-checking here means the LADDER alone is a
-      // correct floor, so a future caller that hands this function a row set
-      // from somewhere else (a batch prefetch, a cache) cannot inherit another
-      // user's personal override through a rung it never earned.
-      if (rung.scope === "user" && !userId) continue;
-      if (rung.scope === "workspace" && !workspaceId) continue;
-      if (rung.objectScoped && !subjectId) continue;
-      const hit = rows.find(
-        (r) =>
-          r.scopeKind === rung.scope &&
-          (rung.objectScoped ? r.subjectId !== null : r.subjectId === null)
-      );
-      if (!hit) continue;
-      return {
-        ref: hit.ref,
-        // The scope IS the source for a binding; `binding` below is what tells
-        // a workspace BINDING apart from the legacy workspace settings overlay.
-        source: hit.scopeKind,
-        binding: {
-          id: hit.id,
-          scope: hit.scopeKind,
-          subjectId: hit.subjectId,
-        },
-      };
-    }
-    return undefined;
+  ): Promise<RendererBindingResolution | undefined> {
+    return findRendererBinding(
+      this._db,
+      subjectKind,
+      workspaceId,
+      contentKind,
+      scope,
+      DEFAULT_RENDERER_SURFACE
+    );
   }
 
   /**

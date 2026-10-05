@@ -81,7 +81,7 @@ export interface DefineCellInput {
    * Same omit-is-silence rule as `viewTypes`: undefined on an upsert of an
    * EXISTING row leaves the stored mechanism untouched.
    */
-  rendererType?: "builtin" | "iframe" | "frame";
+  rendererType?: "builtin" | "iframe" | "frame" | "mcp-app";
   /**
    * Grouping label ("core" | "data" | "ai" | "app-specific" | …). Defaults to
    * `"installed"` — what this door hardcoded while it served only the

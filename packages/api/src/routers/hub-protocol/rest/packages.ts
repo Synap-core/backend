@@ -33,7 +33,10 @@ import {
   preflightWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
-import { CONTENT_KINDS } from "@synap/database/schema";
+import {
+  CONTENT_KINDS,
+  PACKAGE_CELL_RENDERER_TYPES,
+} from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
 import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
@@ -296,7 +299,7 @@ export const PackageApplySchema = z.object({
          * package payload. `"native"` is absent by construction everywhere
          * (NATIVE_RENDERER_REJECTED).
          */
-        rendererType: z.enum(["iframe", "frame"]).optional(),
+        rendererType: z.enum(PACKAGE_CELL_RENDERER_TYPES).optional(),
         deps: z.record(z.string(), z.string()).optional(),
         previewCode: z.string().optional(),
         defaultSize: z

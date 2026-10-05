@@ -35,9 +35,11 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 
 import {
+  DEFAULT_RENDERER_SURFACE,
   rendererBindings,
   type RendererBinding,
   type RendererBindingScope,
+  type RendererSurface,
 } from "../schema/renderer-bindings.js";
 import type {
   ProfileRendererContentKind,
@@ -62,6 +64,12 @@ export interface RendererBindingKey {
   /** `null`/omitted = the whole KIND. A value pins ONE object. */
   subjectId?: string | null;
   contentKind: ProfileRendererContentKind;
+  /**
+   * WHICH HOST renders the binding. Omitted = `app` (the in-app surface), which
+   * is what every caller before 0299 meant. Part of the binding's identity: an
+   * `app` and an `mcp-app` row for the same subject are two bindings.
+   */
+  surface?: RendererSurface;
 }
 
 export interface SetRendererBindingInput extends RendererBindingKey {
@@ -168,7 +176,9 @@ export async function readUserRendererChoice(
         eq(rendererBindings.userId, input.userId),
         eq(rendererBindings.subjectKind, input.subjectKind),
         isNull(rendererBindings.subjectId),
-        eq(rendererBindings.contentKind, input.contentKind)
+        eq(rendererBindings.contentKind, input.contentKind),
+        // "Open in" is an IN-APP choice; an MCP-App binding is not one.
+        eq(rendererBindings.surface, DEFAULT_RENDERER_SURFACE)
       )
     )
     .orderBy(
@@ -191,7 +201,8 @@ function activeRowWhere(key: RendererBindingKey) {
     }`,
     eq(rendererBindings.subjectKind, key.subjectKind),
     sql`coalesce(${rendererBindings.subjectId}, '') = ${key.subjectId ?? ""}`,
-    eq(rendererBindings.contentKind, key.contentKind)
+    eq(rendererBindings.contentKind, key.contentKind),
+    eq(rendererBindings.surface, key.surface ?? DEFAULT_RENDERER_SURFACE)
   );
 }
 
@@ -253,6 +264,7 @@ async function bindOnce(
         subjectKind: input.subjectKind,
         subjectId: input.subjectId ?? null,
         contentKind: input.contentKind,
+        surface: input.surface ?? DEFAULT_RENDERER_SURFACE,
         ref: input.ref,
         sourceProposalId: input.sourceProposalId ?? null,
         createdBy: input.actorUserId,

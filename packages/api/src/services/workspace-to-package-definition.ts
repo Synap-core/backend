@@ -59,6 +59,7 @@ import {
   type PackageCellDef,
   type WorkspaceSettings,
 } from "@synap/database";
+import { isPackageCellRendererType } from "@synap/database/schema";
 import { detachMarketSource } from "./capabilities/market-source.js";
 
 /** Home/profile bento block as stored in a bento view's `config.blocks`. */
@@ -570,7 +571,9 @@ export async function workspaceToPackageDefinition(opts: {
     // source that was never meant to be evaluated. Declared loss, not a silent
     // one: the export simply does not claim to carry builtins. (`native` cannot
     // occur — NATIVE_RENDERER_REJECTED.)
-    if (c.rendererType !== "iframe" && c.rendererType !== "frame") continue;
+    // The ONE package allowlist (`PACKAGE_CELL_RENDERER_TYPES`) — an `mcp-app`
+    // cell exports like any other package-carried mechanism.
+    if (!isPackageCellRendererType(c.rendererType)) continue;
     const cell: PackageCellDef = {
       key: c.typeKey,
       name: c.name,

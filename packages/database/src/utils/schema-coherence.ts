@@ -1739,6 +1739,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "scope_kind",
     addedBy: "0243_renderer_bindings.sql",
   },
+  // Renderer binding surface (0299) — `app` | `mcp-app`. Every binding read
+  // filters on it, so a pod missing the column fails every renderer resolution.
+  {
+    table: "renderer_bindings",
+    column: "surface",
+    addedBy: "0299_renderer_bindings_surface.sql",
+  },
   // Calendar feed tokens (0255) — the store behind the personal ICS feed. New
   // table; checking the lookup hash confirms the migration ran. Without it the
   // unauthenticated feed route errors on every poll from a subscribed calendar

@@ -79,6 +79,26 @@ export const rendererBindingScopeEnum = pgEnum("renderer_binding_scope", [
 export const RENDERER_BINDING_SCOPES = rendererBindingScopeEnum.enumValues;
 export type RendererBindingScope = (typeof RENDERER_BINDING_SCOPES)[number];
 
+/**
+ * WHICH HOST renders the binding — the surface dimension (migration 0299).
+ *
+ *   - `app`     — the in-app renderer (browser + relay). Every row written
+ *                 before 0299 is this, and it is the column default.
+ *   - `mcp-app` — an OUTSIDE agent host (Claude, ChatGPT) rendering Synap UI
+ *                 inline via MCP Apps. The bound cell must be a
+ *                 `rendererType: "mcp-app"` cell (a self-contained HTML
+ *                 document); `resolveSurfaceRenderer` refuses any other.
+ *
+ * The two surfaces never see each other's rows: the in-app ladder
+ * (`getEffectiveRendererWithSource`) reads `app` ONLY, so an `mcp-app` binding
+ * can never be served to the browser/relay renderer, and vice versa. Kept
+ * `text`, not a DB enum, for the same reason `content_kind` is.
+ */
+export const RENDERER_SURFACES = ["app", "mcp-app"] as const;
+export type RendererSurface = (typeof RENDERER_SURFACES)[number];
+/** The surface every pre-0299 row and every legacy caller means. */
+export const DEFAULT_RENDERER_SURFACE: RendererSurface = "app";
+
 export const rendererBindings = pgTable(
   "renderer_bindings",
   {
@@ -104,6 +124,9 @@ export const rendererBindings = pgTable(
      * 0238/0240 use for their vocabularies.
      */
     contentKind: text("content_kind").notNull(),
+
+    /** A {@link RendererSurface}. Defaults to the in-app surface (0299). */
+    surface: text("surface").$type<RendererSurface>().notNull().default("app"),
 
     /** The bound renderer itself (cell | view | declarative | …). */
     ref: jsonb("ref").$type<RendererRef>().notNull(),
@@ -133,7 +156,9 @@ export const rendererBindings = pgTable(
     ),
 
     /**
-     * ONE active binding per (scope, owner, subject, content kind). `coalesce`
+     * ONE active binding per (scope, owner, subject, content kind, surface) —
+     * `surface` joined the key in 0299 so an in-app and an MCP-App binding for
+     * the same subject coexist. `coalesce`
      * over the nullable owner/subject columns because NULLs never collide in a
      * plain UNIQUE — without it two active whole-KIND pod bindings could
      * coexist and make resolution order-dependent.
@@ -145,7 +170,8 @@ export const rendererBindings = pgTable(
         sql`coalesce(${table.workspaceId}::text, '')`,
         table.subjectKind,
         sql`coalesce(${table.subjectId}, '')`,
-        table.contentKind
+        table.contentKind,
+        table.surface
       )
       .where(sql`${table.revokedAt} IS NULL`),
 

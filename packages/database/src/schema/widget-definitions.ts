@@ -22,7 +22,40 @@ import {
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 
-export type WidgetRendererType = "builtin" | "iframe" | "native" | "frame";
+export type WidgetRendererType =
+  "builtin" | "iframe" | "native" | "frame" | "mcp-app";
+
+/**
+ * The rendering mechanisms a PACKAGE may carry on a cell — the ONE allowlist
+ * every package/marketplace door (publish zod, install appliers, export) reads,
+ * so a new mechanism is added once and cannot be dropped at one hop.
+ *
+ *   - `frame`   — sandboxed ESM React cell (in-app).
+ *   - `iframe`  — raw HTML document (in-app).
+ *   - `mcp-app` — a complete, self-contained HTML document served to OUTSIDE
+ *                 agent hosts (Claude, ChatGPT) as an MCP App, chosen through
+ *                 a `renderer_bindings` row on the `mcp-app` surface.
+ *
+ * `builtin` is absent (HOST code, not package payload); `native` is absent by
+ * construction everywhere (NATIVE_RENDERER_REJECTED).
+ */
+export const PACKAGE_CELL_RENDERER_TYPES = [
+  "iframe",
+  "frame",
+  "mcp-app",
+] as const;
+export type PackageCellRendererType =
+  (typeof PACKAGE_CELL_RENDERER_TYPES)[number];
+
+/** True iff `value` is a mechanism a package may carry. Unknown values are dropped by callers, never forwarded. */
+export function isPackageCellRendererType(
+  value: unknown
+): value is PackageCellRendererType {
+  return (
+    typeof value === "string" &&
+    (PACKAGE_CELL_RENDERER_TYPES as readonly string[]).includes(value)
+  );
+}
 
 /**
  * Trust level of a widget/cell definition — the server-side authority for

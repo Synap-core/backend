@@ -4,7 +4,12 @@
 
 import { z } from "zod";
 import { getDb, and, eq, isNull, or } from "@synap/database";
-import { widgetDefinitions, CONTENT_KINDS } from "@synap/database/schema";
+import {
+  widgetDefinitions,
+  CONTENT_KINDS,
+  isPackageCellRendererType,
+  type PackageCellRendererType,
+} from "@synap/database/schema";
 import {
   CellDefinitionError,
   defineCell,
@@ -230,10 +235,9 @@ export function registerCellsRoutes(app: HubHono): void {
         // Rendering MECHANISM. Unrecognised values are dropped rather than
         // forwarded — `"builtin"`/`"native"` must never reach the column
         // through a marketplace payload.
-        rendererType:
-          cell.rendererType === "iframe" || cell.rendererType === "frame"
-            ? cell.rendererType
-            : undefined,
+        rendererType: isPackageCellRendererType(cell.rendererType)
+          ? cell.rendererType
+          : undefined,
         userId: userId ?? "",
       });
 
@@ -521,5 +525,5 @@ interface CellDef {
    * `"frame"` default — which is exactly how an `iframe` HTML Card used to
    * install as an ESM React cell and fail to mount.
    */
-  rendererType?: "iframe" | "frame";
+  rendererType?: PackageCellRendererType;
 }

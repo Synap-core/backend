@@ -4644,6 +4644,7 @@ CREATE TABLE IF NOT EXISTS "renderer_bindings" (
   "subject_kind"        text NOT NULL,   -- entity: the profile slug; else the object-nav kind
   "subject_id"          text,            -- NULL = the whole kind
   "content_kind"        text NOT NULL,   -- entity-detail | entity-card | entity-profile | collection
+  "surface"             text NOT NULL DEFAULT 'app',  -- 0299: app | mcp-app
   "ref"                 jsonb NOT NULL,
   "source_proposal_id"  uuid,
   "created_by"          text NOT NULL,
@@ -4668,7 +4669,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS "renderer_bindings_active_unique"
     coalesce("workspace_id"::text, ''),
     "subject_kind",
     coalesce("subject_id", ''),
-    "content_kind"
+    "content_kind",
+    "surface"
   )
   WHERE "revoked_at" IS NULL;
 

@@ -67,14 +67,15 @@ describe("setProfileRenderer preflights before it writes", () => {
   });
 
   it("the preflight is gated on the SAME condition as the mirror it guards", () => {
-    // A user-scoped or per-object binding never mirrors, and its subjectKind is
-    // routinely NOT a profile (`proposal`, `run`, … — the object-nav kind
-    // string). Demanding a profile row for those would refuse exactly the
-    // bindings the table exists for.
-    expect(SRC).toMatch(
-      /const willMirrorLegacy =\s*\n?\s*MIRROR_LEGACY_RENDERER_STORES && scope !== "user" && subjectId === null;/
-    );
+    // A user-scoped, per-object, `mcp-app` or non-profile-kind binding never
+    // mirrors, and its subjectKind is routinely NOT a profile (`proposal`,
+    // `run`, … — the object-nav kind string). Demanding a profile row for
+    // those would refuse exactly the bindings the table exists for. ONE
+    // `willMirrorLegacy` gates the preflight AND the mirror; the behaviour is
+    // pinned in `set-profile-renderer.surface-and-object-kinds.test.ts`.
+    expect(SRC.match(/const willMirrorLegacy =/g)).toHaveLength(1);
     expect(SRC).toMatch(/willMirrorLegacy && scope === "pod"/);
     expect(SRC).toMatch(/willMirrorLegacy && scope === "workspace"/);
+    expect(SRC).toMatch(/if \(!willMirrorLegacy\) return;/);
   });
 });

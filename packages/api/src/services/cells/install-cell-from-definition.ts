@@ -20,7 +20,12 @@
  */
 
 import { defineCell } from "./define-cell.js";
-import { CONTENT_KINDS, type ContentKind } from "@synap/database/schema";
+import {
+  CONTENT_KINDS,
+  isPackageCellRendererType,
+  type ContentKind,
+  type PackageCellRendererType,
+} from "@synap/database/schema";
 
 /**
  * The renderer SLOT to store for an installed cell — the same drop as
@@ -96,7 +101,7 @@ export interface PackageCellDefinition {
    * `rendererType`-BLIND: an `iframe` HTML Card installed elsewhere as an ESM
    * React cell and failed to mount, at every hop, with no error.
    */
-  rendererType?: "iframe" | "frame";
+  rendererType?: PackageCellRendererType;
   /**
    * Minimum grid footprint the package declares. Absent ⇒ undefined ⇒
    * omit-is-silence in `defineCell` (insert-only there, like `defaultSize`).
@@ -202,11 +207,9 @@ export async function installCellFromDefinition(
     // unrecognised value is dropped rather than forwarded: the payload is
     // caller-supplied and `"builtin"`/`"native"` must never reach the column
     // through a package.
-    rendererType:
-      definition.rendererType === "iframe" ||
-      definition.rendererType === "frame"
-        ? definition.rendererType
-        : undefined,
+    rendererType: isPackageCellRendererType(definition.rendererType)
+      ? definition.rendererType
+      : undefined,
     // Omitted when the caller has no version to give, so an upsert can never
     // erase a stamp a versioned install wrote — see `packageVersion`.
     version: input.packageVersion ?? undefined,

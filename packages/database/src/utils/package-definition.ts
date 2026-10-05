@@ -18,6 +18,7 @@ import type {
   WorkspaceSpaceBriefExpertise,
   WorkspaceSpaceTemplateRule,
 } from "../schema/workspaces.js";
+import type { PackageCellRendererType } from "../schema/widget-definitions.js";
 
 // ─── Package-level metadata ──────────────────────────────────────────────────
 
@@ -303,8 +304,9 @@ export interface PackageCellDef {
   /** Raw ESM source (`widget_definitions.renderer_source`). */
   code: string;
   /**
-   * Rendering MECHANISM — `"frame"` (sandboxed ESM React cell) or `"iframe"`
-   * (raw HTML document). Needs a slot for the SAME reason `viewTypes` and
+   * Rendering MECHANISM — `"frame"` (sandboxed ESM React cell), `"iframe"`
+   * (raw HTML document) or `"mcp-app"` (a self-contained HTML document for
+   * outside MCP-Apps hosts) — `PACKAGE_CELL_RENDERER_TYPES`. Needs a slot for the SAME reason `viewTypes` and
    * `contentKind` do: without one the field is stripped, `defineCell` applies
    * its default `"frame"` on install, and an HTML Card round-trips into an ESM
    * React cell that fails to mount — silently, at every hop.
@@ -313,7 +315,7 @@ export interface PackageCellDef {
    * anything a package can carry. `"native"` is absent by construction
    * everywhere (NATIVE_RENDERER_REJECTED).
    */
-  rendererType?: "iframe" | "frame";
+  rendererType?: PackageCellRendererType;
   deps?: Record<string, string>;
   defaultSize?: { w: number; h: number };
   /**

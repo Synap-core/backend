@@ -61,6 +61,7 @@ import {
   automations as automationsTable,
 } from "@synap/database";
 import { cpCatalogCache, profiles, views } from "@synap/database/schema";
+import type { PackageCellRendererType } from "@synap/database/schema";
 import type { CatalogKind } from "@synap/jobs";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import type { WorkspaceDefinitionInput } from "@synap/database";
@@ -264,7 +265,7 @@ interface CellCatalogDef {
    * `defineCell`'s `"frame"` default, which is exactly how an `iframe` HTML
    * Card used to install as an ESM React cell and fail to mount.
    */
-  rendererType?: "iframe" | "frame";
+  rendererType?: PackageCellRendererType;
 }
 
 /**
