@@ -237,3 +237,61 @@ describe("matcher claim skip (event fingerprint held)", () => {
     );
   });
 });
+
+describe("matcher daily cap (triggerConfig.maxRunsPerDay)", () => {
+  beforeEach(() => {
+    bossSend.mockClear();
+    updateSets.mockClear();
+    selectSpy.mockClear();
+    selectCall = 0;
+    insertCall = 0;
+    claimReturning = [{ id: "claim-won" }];
+  });
+
+  const fire = () =>
+    handleAutomationTriggerMatch({
+      data: {
+        eventType: "entity.create.completed",
+        subjectId: "e1",
+        userId: "u1",
+        workspaceId: "ws-1",
+        data: { eventId: `evt-${Math.random()}` },
+      },
+    });
+
+  const capped = (n: number) => [
+    [
+      {
+        id: "auto-1",
+        triggerConfig: {
+          eventPattern: "entity.create.completed",
+          maxRunsPerDay: 3,
+        },
+        workspaceId: "ws-1",
+      },
+    ],
+    // The rolling-day count of runs that RAN (the cap read).
+    [{ n }] as never,
+  ];
+
+  it("at the cap → the run is recorded skipped / daily_cap_reached and NOT enqueued", async () => {
+    selectResults = capped(3);
+    await fire();
+    expect(bossSend).not.toHaveBeenCalled();
+    expect(updateSets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "skipped",
+        errorMessage: "daily_cap_reached",
+      })
+    );
+  });
+
+  it("under the cap → fires", async () => {
+    selectResults = capped(2);
+    await fire();
+    expect(bossSend).toHaveBeenCalledTimes(1);
+    expect(updateSets).not.toHaveBeenCalledWith(
+      expect.objectContaining({ errorMessage: "daily_cap_reached" })
+    );
+  });
+});

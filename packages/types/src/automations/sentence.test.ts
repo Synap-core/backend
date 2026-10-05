@@ -659,6 +659,13 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
         topic: "{{trigger.data.title}}",
       },
     ],
+    [
+      "id + propose mode",
+      {
+        __playbookId: "55555555-5555-4555-8555-555555555555",
+        __mode: "propose",
+      },
+    ],
   ])(
     "a grammar-authored playbook flow round-trips unchanged (%s)",
     (_l, cfg) => {
@@ -957,4 +964,43 @@ describe("no editor offers an unevaluable operator", () => {
       ).toBe(true);
     });
   }
+});
+
+describe("playbook_run THEN — propose mode (`__mode`)", () => {
+  const ID = "66666666-6666-4666-8666-666666666666";
+  const nodeOf = (cfg: Record<string, unknown>) =>
+    toFlowDefinition([
+      {
+        type: null,
+        config: { __nodeType: "playbook_run", __playbookId: ID, ...cfg },
+      },
+    ]).nodes.find((n) => n.type === "playbook_run")!;
+
+  it("`__mode: propose` reaches the node as data.mode — never as a param", () => {
+    const node = nodeOf({ __mode: "propose" });
+    expect(node.data.mode).toBe("propose");
+    expect(node.data.paramsMapping).toEqual({});
+  });
+
+  it("the default (`run`, absent, or junk) is OMITTED from the node", () => {
+    for (const cfg of [{}, { __mode: "run" }, { __mode: "nonsense" }]) {
+      expect("mode" in nodeOf(cfg).data, JSON.stringify(cfg)).toBe(false);
+    }
+  });
+
+  it("a stored propose node reads back as `__mode: propose`", () => {
+    const actions = flowToSentenceActions(
+      toFlowDefinition([
+        {
+          type: null,
+          config: {
+            __nodeType: "playbook_run",
+            __playbookId: ID,
+            __mode: "propose",
+          },
+        },
+      ])
+    );
+    expect(actions[0]?.config.__mode).toBe("propose");
+  });
 });

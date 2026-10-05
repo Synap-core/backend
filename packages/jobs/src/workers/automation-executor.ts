@@ -129,6 +129,7 @@ import {
   executeProposalsQueryStep,
 } from "./steps/ledger-query.js";
 import { executePlaybookRun } from "./steps/playbook-run.js";
+import type { PlaybookRunMode } from "@synap-core/types/automations";
 
 import type {
   ExecutionPayload,
@@ -1239,13 +1240,14 @@ async function executeAutomationFlow(params: {
                             paramsMapping?: Record<string, string>;
                             agentType?: string;
                             goalOverride?: string;
-                            mode?: "run" | "appointment";
+                            mode?: PlaybookRunMode;
                           },
                           context,
                           workspaceId,
                           ownerId,
                           automationContext,
-                          producerAgentUserId
+                          producerAgentUserId,
+                          { nodeId: childNode.id, stepRunId: stepRun.id }
                         );
                         break;
                       case "messages_query":
@@ -1747,8 +1749,9 @@ async function executeAutomationFlow(params: {
                 agentType?: string;
                 /** The rule's own goal for the spawned session; absent ⇒ the playbook's. */
                 goalOverride?: string;
-                /** `"appointment"` ⇒ materialize a `scheduled` session, don't run. */
-                mode?: "run" | "appointment";
+                /** `"appointment"` ⇒ a `scheduled` session; `"propose"` ⇒ a
+                 *  governed proposal only (see `executePlaybookRun`). */
+                mode?: PlaybookRunMode;
               };
 
               if (!data.playbookId && !data.playbookName)
@@ -1782,7 +1785,8 @@ async function executeAutomationFlow(params: {
                 workspaceId,
                 ownerId,
                 automationContext,
-                producerAgentUserId
+                producerAgentUserId,
+                { nodeId: node.id, stepRunId: stepRun.id }
               );
               break;
             }

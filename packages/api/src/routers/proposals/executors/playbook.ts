@@ -519,9 +519,26 @@ export function registerPlaybookExecutors(): void {
       const inner = (raw.data ?? {}) as Record<string, unknown>;
       // `playbookId`, not `id` — and NOT `proposal.targetId`, which for this
       // gate is a random uuid (see the payload note above).
-      const playbookId =
+      let playbookId =
         (inner.playbookId as string | undefined) ??
         (raw.playbookId as string | undefined);
+      // A PROPOSE-MODE RULE whose node names its playbook by NAME only
+      // (template-friendly nodes do) files `playbookName` and no id. Resolved
+      // HERE, at approval, through the ONE runnable-playbook door
+      // (`resolveRunnablePlaybook`: this workspace, then pod-wide, with the
+      // cross-workspace guard) — never a second name lookup in the worker.
+      const playbookName =
+        typeof inner.playbookName === "string" ? inner.playbookName : undefined;
+      if (!playbookId && playbookName && proposal.workspaceId) {
+        const { resolveRunnablePlaybook } =
+          await import("../../../services/playbooks/playbook-lifecycle.js");
+        playbookId = (
+          await resolveRunnablePlaybook({
+            playbookName,
+            workspaceId: proposal.workspaceId,
+          })
+        ).id;
+      }
       if (!playbookId) {
         throw new TRPCError({
           code: "BAD_REQUEST",

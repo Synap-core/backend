@@ -105,3 +105,22 @@ describe("compileRuleSentence — playbook_run THEN", () => {
     expect(result.failure.clause).toBe("THEN");
   });
 });
+
+describe("compileRuleSentence — propose mode (`__mode`)", () => {
+  it("a propose THEN compiles to a node whose declared `mode` is propose", () => {
+    const result = compileRuleSentence(
+      sentence({
+        __nodeType: "playbook_run",
+        __playbookId: PB,
+        __mode: "propose",
+      })
+    );
+    expect(result.ok, result.ok ? "" : result.failure.reason).toBe(true);
+    if (!result.ok) return;
+    const node = result.flow.nodes.find((n) => n.type === "playbook_run");
+    const data = node!.data as PlaybookRunNodeDef["data"];
+    expect(data.mode).toBe("propose");
+    // Bookkeeping, never a playbook param.
+    expect(data.paramsMapping).toEqual({});
+  });
+});

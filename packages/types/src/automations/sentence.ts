@@ -28,6 +28,7 @@
 // Same package, no new dependency — and it is why the generic playbook-run node
 // label below is COMPOSED ("Run" + "playbook") rather than hand-written.
 import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
+import { readPlaybookRunMode } from "./rule-run-policy.js";
 
 // ── Value-model ───────────────────────────────────────────────────────────────
 
@@ -700,6 +701,16 @@ const PLAYBOOK_AGENT_TYPE_KEY = "__agentType";
  */
 const PLAYBOOK_GOAL_KEY = "__goal";
 /**
+ * MODE — what the `playbook_run` node materializes (`run` | `appointment` |
+ * `propose`, `readPlaybookRunMode` in `./rule-run-policy`). The rule editor
+ * writes `propose` here for "propose a playbook, I decide"; it lands on the
+ * node as `data.mode`. `run` (the default) is OMITTED from the node, so a
+ * pre-existing sentence round-trips to a byte-identical node.
+ *
+ * EXPORTED so the browser editor writes the same key instead of a copy.
+ */
+export const PLAYBOOK_RUN_MODE_KEY = "__mode";
+/**
  * The generic display label for a playbook-run node — used when the sentence
  * references its playbook by ID (the common case), so no name is available to
  * show. Composed through the vocabulary door in IMPERATIVE mood ("Run"), because
@@ -752,6 +763,7 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_NAME_KEY,
   PLAYBOOK_AGENT_TYPE_KEY,
   PLAYBOOK_GOAL_KEY,
+  PLAYBOOK_RUN_MODE_KEY,
 ];
 
 /** The action's config with every `__`-prefixed bookkeeping key removed. */
@@ -850,6 +862,10 @@ function actionToFlowNode(
       data.agentType = cfg[PLAYBOOK_AGENT_TYPE_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_GOAL_KEY]))
       data.goalOverride = cfg[PLAYBOOK_GOAL_KEY];
+    // Through the ONE normalizer: an unknown value is `run`, and `run` is
+    // omitted, so only a real non-default mode reaches the node.
+    const mode = readPlaybookRunMode(cfg[PLAYBOOK_RUN_MODE_KEY]);
+    if (mode !== "run") data.mode = mode;
     data.paramsMapping = persistedConfig(cfg);
     return {
       id: nodeId,
@@ -1107,11 +1123,14 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       playbookName?: string;
       agentType?: string;
       goalOverride?: string;
+      mode?: unknown;
       paramsMapping?: Record<string, unknown>;
     };
     const config: Record<string, unknown> = {
       [CAPABILITY_NODE_TYPE_KEY]: "playbook_run",
     };
+    const nodeMode = readPlaybookRunMode(pdata.mode);
+    if (nodeMode !== "run") config[PLAYBOOK_RUN_MODE_KEY] = nodeMode;
     if (nonEmptyStr(pdata.playbookId))
       config[PLAYBOOK_ID_KEY] = pdata.playbookId;
     if (nonEmptyStr(pdata.playbookName))

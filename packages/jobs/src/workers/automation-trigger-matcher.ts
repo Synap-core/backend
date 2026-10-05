@@ -34,6 +34,11 @@ import type { AutomationTriggerConfig } from "@synap/database";
 import { matchMessageShape, type MessageEnvelope } from "@synap/database";
 import { MESSAGE_ALIAS_PATTERNS } from "@synap-core/types";
 import { evaluateTriggerFilterValue } from "@synap-core/types/automations/filter-operators";
+import {
+  AUTOMATION_SKIP_REASONS,
+  DAILY_CAP_WINDOW_MS,
+  readMaxRunsPerDay,
+} from "@synap-core/types/automations";
 // Re-export to preserve this module's public surface (tests + downstream imports)
 // after MessageEnvelope + matchMessageShape moved to `@synap/database`.
 export type { MessageEnvelope };
@@ -822,6 +827,76 @@ const isUuid = (v: unknown): v is string =>
  * A thrown read returns `null` — the scoped rule does not fire — and is logged.
  * A missing row is not a failure: it contributes nothing.
  */
+/**
+ * THE trigger decision — "does this automation's trigger match this event?" —
+ * as ONE pure function over facts already derived for the event.
+ *
+ * The live loop below and the capture-suggestion path (`@synap/api`
+ * `services/routing/match-rules-for-entity.ts`) both call it, so "a rule that
+ * would fire on this capture" and "a rule that fires" can never disagree. It
+ * replaced a second, hand-written predicate (`automations.matchForEntity`'s
+ * SQL `eventPattern = ANY(ARRAY[...])` + `filters.profileSlug` equality) that
+ * could see neither operator filters, nor rule scope, nor message shape.
+ *
+ * Order and members are exactly the gates the loop applied inline: sync-origin
+ * opt-in, pattern, generic filters, trigger-specific filters, rule scope. The
+ * cycle guard and the daily cap are NOT here — they are facts about the run
+ * chain and the run ledger, not about the event.
+ */
+export function automationTriggerMatches(input: {
+  eventType: string;
+  data: Record<string, unknown> | undefined;
+  config: AutomationTriggerConfig;
+  messageEnvelope: MessageEnvelope | undefined;
+  scopeFacts: EventScopeFacts;
+  origin?: TriggerMatchPayload["origin"];
+}): boolean {
+  const { eventType, data, config, messageEnvelope, scopeFacts } = input;
+  if (shouldSkipSyncOrigin(input.origin, config)) return false;
+  if (!matchPattern(eventType, config.eventPattern)) return false;
+  if (!matchFilters(data, config.filters)) return false;
+  if (!matchTriggerSpecificFilters(eventType, data, config, messageEnvelope))
+    return false;
+  if (!matchRuleScopeFilters(eventType, config, scopeFacts)) return false;
+  return true;
+}
+
+/**
+ * DAILY CAP — `triggerConfig.maxRunsPerDay`. Counts this automation's runs in
+ * the last rolling day that actually RAN (anything but `skipped`), excluding
+ * the run being decided. A malformed stored cap (the create/update doors
+ * refuse one, so only a hand-edited row can carry it) is logged and ignored —
+ * the rule keeps firing exactly as it did before caps existed.
+ */
+async function isOverDailyCap(input: {
+  automationId: string;
+  triggerConfig: unknown;
+  excludeRunId: string;
+}): Promise<{ over: boolean; cap: number | null }> {
+  const read = readMaxRunsPerDay(input.triggerConfig);
+  if (!read.ok) {
+    logger.warn(
+      { automationId: input.automationId, error: read.error },
+      "Ignoring malformed maxRunsPerDay on a stored automation"
+    );
+    return { over: false, cap: null };
+  }
+  if (read.value === null) return { over: false, cap: null };
+  const since = new Date(Date.now() - DAILY_CAP_WINDOW_MS);
+  const [row] = await db
+    .select({ n: drizzleSql<number>`count(*)::int` })
+    .from(automationRuns)
+    .where(
+      and(
+        eq(automationRuns.automationId, input.automationId),
+        drizzleSql`${automationRuns.startedAt} >= ${since}`,
+        drizzleSql`${automationRuns.status} <> 'skipped'`,
+        drizzleSql`${automationRuns.id} <> ${input.excludeRunId}`
+      )
+    );
+  return { over: (row?.n ?? 0) >= read.value, cap: read.value };
+}
+
 export async function resolveEventProjectIds(input: {
   eventType: string;
   subjectId: string;
@@ -1301,7 +1376,8 @@ export async function handleAutomationTriggerMatch(job: {
     automationId: string,
     automationWorkspaceId: string | null,
     triggerPayload: Record<string, unknown>,
-    runSubjectEntityId: string | undefined
+    runSubjectEntityId: string | undefined,
+    triggerConfig: unknown
   ): Promise<void> {
     // Pod-wide events (null event workspace) run each matched automation IN ITS
     // OWN workspace; for the non-null path this equals `workspaceId`, unchanged.
@@ -1372,7 +1448,7 @@ export async function handleAutomationTriggerMatch(job: {
         .update(automationRuns)
         .set({
           status: "skipped",
-          errorMessage: "event_claim_already_held",
+          errorMessage: AUTOMATION_SKIP_REASONS.eventClaimAlreadyHeld,
           completedAt: new Date(),
         })
         .where(eq(automationRuns.id, run.id));
@@ -1384,6 +1460,31 @@ export async function handleAutomationTriggerMatch(job: {
           runId: run.id,
         },
         "Skipping automation fire — event fingerprint claim already held"
+      );
+      return;
+    }
+
+    // ── Daily cap ────────────────────────────────────────────────────────
+    // After the claim, so a duplicate delivery reads "claim already held"
+    // rather than consuming the cap; the capped run row IS the record (the
+    // Rules trace shows "Daily cap reached").
+    const cap = await isOverDailyCap({
+      automationId,
+      triggerConfig,
+      excludeRunId: run.id,
+    });
+    if (cap.over) {
+      await db
+        .update(automationRuns)
+        .set({
+          status: "skipped",
+          errorMessage: AUTOMATION_SKIP_REASONS.dailyCapReached,
+          completedAt: new Date(),
+        })
+        .where(eq(automationRuns.id, run.id));
+      logger.info(
+        { automationId, eventType, runId: run.id, maxRunsPerDay: cap.cap },
+        "Skipping automation fire — daily cap reached"
       );
       return;
     }
@@ -1434,21 +1535,19 @@ export async function handleAutomationTriggerMatch(job: {
 
     const config = automation.triggerConfig as AutomationTriggerConfig;
 
-    // ── Sync-origin opt-in ─────────────────────────────────────────────
-    if (shouldSkipSyncOrigin(job.data.origin, config)) continue;
-
-    // ── Pattern match ──────────────────────────────────────────────────
-    if (!matchPattern(eventType, config.eventPattern)) continue;
-
-    // ── Filter match ───────────────────────────────────────────────────
-    if (!matchFilters(data, config.filters)) continue;
-
-    // ── Trigger-type-specific filter match ─────────────────────────────
-    if (!matchTriggerSpecificFilters(eventType, data, config, messageEnvelope))
+    // ── THE trigger decision (sync-origin, pattern, filters, trigger-specific
+    //    filters, rule scope) — one pure function, shared with suggestions ──
+    if (
+      !automationTriggerMatches({
+        eventType,
+        data,
+        config,
+        messageEnvelope,
+        scopeFacts,
+        origin: job.data.origin,
+      })
+    )
       continue;
-
-    // ── Rule scope: entity + project (R1/R2) ───────────────────────────
-    if (!matchRuleScopeFilters(eventType, config, scopeFacts)) continue;
 
     // ── Create automation run ──────────────────────────────────────────
     logger.info(
@@ -1470,7 +1569,8 @@ export async function handleAutomationTriggerMatch(job: {
         // stays byte-identical so existing `{{trigger.data.*}}` mappings work.
         ...(messageEnvelope ? { message: messageEnvelope } : {}),
       },
-      subjectEntityId
+      subjectEntityId,
+      automation.triggerConfig
     );
   }
 
@@ -1502,7 +1602,8 @@ export async function handleAutomationTriggerMatch(job: {
         body: (data?.payload as unknown) ?? {},
         timestamp: new Date().toISOString(),
       },
-      undefined
+      undefined,
+      automation.triggerConfig
     );
   }
 }

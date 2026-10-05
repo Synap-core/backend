@@ -65,6 +65,7 @@ import {
   type RunnableCapabilityAction,
 } from "../services/capabilities/action-projection.js";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
+import { readMaxRunsPerDay } from "@synap-core/types/automations";
 import {
   flowValidationErrorMessage,
   type FlowValidationResolvers,
@@ -597,6 +598,18 @@ function assertValidTriggerFilters(filters: unknown): void {
   }
 }
 
+/**
+ * CREATE/UPDATE-DOOR GATE for `triggerConfig.maxRunsPerDay` — the SAME reader
+ * the trigger matcher enforces it with (`readMaxRunsPerDay`), so the door can
+ * never store a cap the runtime would ignore.
+ */
+function assertValidDailyCap(triggerConfig: unknown): void {
+  const result = readMaxRunsPerDay(triggerConfig);
+  if (!result.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
+  }
+}
+
 async function prepareAutomationForMaterialization(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
@@ -642,6 +655,7 @@ async function prepareAutomationForMaterialization(
   if (input.triggerType === "event") {
     assertValidTriggerFilters(input.triggerConfig.filters);
   }
+  assertValidDailyCap(input.triggerConfig);
 
   const resolvers = await loadFlowValidationResolvers(
     database,
@@ -2539,6 +2553,7 @@ export const automationsRouter = router({
             (input.triggerConfig as Record<string, unknown>).filters
           );
         }
+        assertValidDailyCap(input.triggerConfig);
       }
 
       // Node-contract + catalog validation — only the NEW flow being submitted

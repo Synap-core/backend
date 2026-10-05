@@ -828,6 +828,18 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * playbook's own goalTemplate.
      */
     goalOverride?: string;
+    /**
+     * WHAT this node materializes (read through `readPlaybookRunMode`,
+     * `@synap-core/types/automations`, which keeps this union and its runtime
+     * list in sync both ways):
+     *   - absent / `"run"` — an unattended run (every pre-existing node).
+     *   - `"appointment"` — a `scheduled` session waiting for the human
+     *     (`buildPlaybookRunFlowDefinition` from a playbook's `schedule.mode`).
+     *   - `"propose"` — a governed `playbook/run` PROPOSAL; nothing starts until
+     *     a person approves, and approval replays `playbooks.run` →
+     *     `runPlaybook`. Producer: the rule grammar's `__mode` key.
+     */
+    mode?: "run" | "appointment" | "propose";
     errorHandling?: NodeErrorHandling;
   };
 }

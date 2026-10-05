@@ -43,6 +43,7 @@
 // It exists only to bind the runtime arrays below to the schema union at compile
 // time (the drift guard after the constants).
 import type { AutomationNodeBase, OutputNodeDef } from "@synap/database";
+import { PLAYBOOK_RUN_MODES } from "@synap-core/types/automations";
 
 // ── Contract constants (mirror schema/automations.ts — keep in sync) ──────────
 
@@ -397,6 +398,21 @@ export function validateFlowDefinition(
             message: `Playbook-run node "${nodeId}" references a playbook (${
               playbookId ? `id "${playbookId}"` : `name "${playbookName}"`
             }) that does not exist.`,
+          });
+        }
+        // An unknown `mode` would silently RUN (`readPlaybookRunMode` reads it
+        // as the default) — the opposite of what an author who typed
+        // "propose" wanted. Refused by name at the door instead.
+        if (
+          data.mode !== undefined &&
+          !(PLAYBOOK_RUN_MODES as readonly unknown[]).includes(data.mode)
+        ) {
+          errors.push({
+            nodeId,
+            code: "playbook_run_bad_mode",
+            message: `Playbook-run node "${nodeId}" has mode ${JSON.stringify(
+              data.mode
+            )}; expected one of ${PLAYBOOK_RUN_MODES.join(", ")}.`,
           });
         }
         break;

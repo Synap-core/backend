@@ -435,6 +435,26 @@ describe("validateFlowDefinition — malformed flows", () => {
     );
   });
 
+  it("playbook_run mode: run/appointment/propose valid; anything else refused by name", () => {
+    const flow = (mode: unknown) => ({
+      nodes: [
+        {
+          id: "pb",
+          type: "playbook_run",
+          position: { x: 0, y: 0 },
+          data: { label: "x", playbookId: "p1", mode },
+        },
+      ],
+      edges: [],
+    });
+    for (const ok of ["run", "appointment", "propose", undefined]) {
+      expect(validateFlowDefinition(flow(ok)).valid, String(ok)).toBe(true);
+    }
+    const bad = validateFlowDefinition(flow("ask-first"));
+    expect(bad.valid).toBe(false);
+    expect(bad.errors.map((e) => e.code)).toContain("playbook_run_bad_mode");
+  });
+
   it("unknown node.type → invalid (unknown_node_type)", () => {
     const flow = {
       nodes: [

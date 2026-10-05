@@ -10,7 +10,13 @@ import {
 import {
   guardProducerEffect,
   PolicyBlockedError,
+  proposeRulePlaybookRun,
 } from "../../utils/automation-governance.js";
+import {
+  AUTOMATION_SKIP_REASONS,
+  readPlaybookRunMode,
+  type PlaybookRunMode,
+} from "@synap-core/types/automations";
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
 import { logger } from "../automation-executor-logger.js";
 import type {
@@ -111,11 +117,18 @@ export async function executePlaybookRun(
      *   crucially NO agent kickoff — the branch below never reaches the runner,
      *   so there is no suppression flag that could be forgotten.
      *
+     * - `"propose"` — a governed `playbook/run` PROPOSAL and NOTHING else: no
+     *   session, no channel, no run row, no kickoff. Approval replays
+     *   `playbooks.run` → `runPlaybook`. One pending proposal per (rule,
+     *   subject): a repeat returns `{ status: "skipped", reason:
+     *   "already_proposed" }`.
+     *
      * Set by `buildPlaybookRunFlowDefinition` from the playbook's
-     * `schedule.mode`; see `normalizePlaybookScheduleMode` (@synap/playbooks),
-     * the ONE place that decides what an absent/unknown mode means.
+     * `schedule.mode` (run | appointment) and by the rule grammar's `__mode`
+     * (propose). Read through `readPlaybookRunMode` — the ONE place that
+     * decides what an absent/unknown mode means (`run`).
      */
-    mode?: "run" | "appointment";
+    mode?: PlaybookRunMode;
   },
   context: StepContext,
   workspaceId: string,
@@ -128,15 +141,27 @@ export async function executePlaybookRun(
   // firing a HUMAN-owned automation would launder that agent kickoff through
   // owner-bypass. Fail closed when an agent is in the chain and the producer's
   // ladder would not auto-execute. Absent → owner-only behavior, unchanged.
-  producerAgentUserId?: string | null
+  producerAgentUserId?: string | null,
+  // Workflow attribution (D3a) — the executing step run + flow node, stamped on
+  // a propose-mode proposal so `proposals.list({ automationId })` finds it.
+  attribution?: { nodeId: string; stepRunId: string }
 ): Promise<Record<string, unknown>> {
-  const guard = await guardProducerEffect({
-    producerAgentUserId,
-    principalUserId: ownerId,
-    workspaceId,
-    subjectType: "playbook",
-    action: "run",
-  });
+  const mode = readPlaybookRunMode(data.mode);
+
+  // The confused-deputy guard protects an UNGOVERNED launch: an agent-produced
+  // event must not start a human-owned run under owner-bypass. A propose-mode
+  // node launches nothing — it files a proposal a person decides — so the
+  // guard's premise does not hold and it is skipped for that mode only.
+  const guard =
+    mode === "propose"
+      ? ({ proceed: true } as const)
+      : await guardProducerEffect({
+          producerAgentUserId,
+          principalUserId: ownerId,
+          workspaceId,
+          subjectType: "playbook",
+          action: "run",
+        });
   if ("block" in guard) {
     throw new PolicyBlockedError(
       guard.kind,
@@ -181,6 +206,40 @@ export async function executePlaybookRun(
         "playbook_run: subject not visible in workspace — dropping subject binding"
       );
     }
+  }
+
+  // ── PROPOSE: file the governed proposal and STOP. ──────────────────────────
+  // Returns before the scheduler and before the runner — the two places a
+  // session can be born — so a propose-mode node cannot start anything. Pinned
+  // by `playbook-run-propose.test.ts` (behaviour) and
+  // `workers/__tests__/playbook-run-mode-honoured.tripwire.test.ts` (every caller
+  // forwards the mode).
+  if (mode === "propose") {
+    if (!automationContext?.automationId) {
+      throw new Error(
+        "playbook_run in propose mode needs the automation that owns it (no automationContext) — refusing to file an unattributable proposal"
+      );
+    }
+    const proposed = await proposeRulePlaybookRun({
+      ownerId,
+      workspaceId,
+      automationId: automationContext.automationId,
+      automationRunId: automationContext.automationRunId,
+      playbookId: data.playbookId,
+      playbookName: data.playbookName,
+      params: resolvedParams,
+      subjectId: resolvedSubjectId ?? null,
+      sessionId: automationContext.focusSessionId,
+      stepRunId: attribution?.stepRunId,
+      nodeId: attribution?.nodeId,
+    });
+    return proposed.deduped
+      ? {
+          status: "skipped",
+          reason: AUTOMATION_SKIP_REASONS.alreadyProposed,
+          proposalId: proposed.proposalId,
+        }
+      : { status: "proposed", proposalId: proposed.proposalId };
   }
 
   // `goalResolver` resolves the playbook's goalTemplate against the automation
@@ -244,7 +303,7 @@ export async function executePlaybookRun(
   // runner, which is where the executor spine's `triggerAutoRespond` dispatch
   // lives. A scheduled session is waiting for the human, so nothing must answer
   // it for them.
-  if (data.mode === "appointment") {
+  if (mode === "appointment") {
     const sessionScheduler = getSessionScheduler();
     if (!sessionScheduler) {
       throw new Error(

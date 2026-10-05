@@ -44,8 +44,12 @@ export type AutomationStatus = "draft" | "active" | "paused" | "error";
 
 export type AutomationTriggerType = "event" | "cron" | "webhook" | "manual";
 
+/**
+ * DERIVED from the run row's own column enum (it used to be a hand copy that
+ * had lost `skipped`, `blocked_by_policy` and `waiting_on_you`).
+ */
 export type AutomationRunStatus =
-  "running" | "completed" | "failed" | "cancelled";
+  import("@synap/database").AutomationRun["status"];
 
 export type AutomationStepStatus =
   "pending" | "running" | "completed" | "failed" | "skipped";
@@ -109,6 +113,24 @@ export interface AutomationExecutionContext {
  */
 export const MAX_AUTOMATION_CHAIN_DEPTH = 3;
 
+// ── Rule run policy: THEN mode, daily cap, skip reasons ─────────────────────
+export {
+  PLAYBOOK_RUN_MODES,
+  readPlaybookRunMode,
+  ruleActMode,
+  MAX_RUNS_PER_DAY_KEY,
+  MAX_RUNS_PER_DAY_CEILING,
+  readMaxRunsPerDay,
+  DAILY_CAP_WINDOW_MS,
+  AUTOMATION_SKIP_REASONS,
+} from "./rule-run-policy.js";
+export type {
+  PlaybookRunMode,
+  RuleActMode,
+  MaxRunsPerDayRead,
+  AutomationSkipReason,
+} from "./rule-run-policy.js";
+
 // ── Rule "sentence" value-model + bidirectional converters ──────────────────
 //
 // Zero imports, pure functions — safe for browser/Electron/Node/CLI. Lives here
@@ -140,6 +162,9 @@ export {
   // must call the same function rather than re-derive the string — the schema
   // declares `label` REQUIRED and that writer emitted none.
   playbookRunNodeLabel,
+  // The `playbook_run` mode bookkeeping key (`__mode`) — the browser editor
+  // writes it rather than re-declaring the string.
+  PLAYBOOK_RUN_MODE_KEY,
   flowToConditions,
 } from "./sentence.js";
 export type {

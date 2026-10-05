@@ -49,6 +49,7 @@ import {
   proposals,
   eq,
   and,
+  drizzleSql,
 } from "@synap/database";
 import { users } from "@synap/database/schema";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
@@ -842,4 +843,163 @@ async function proposeAutomationWrite(opts: {
     proposalId: proposal.id,
     ...(deduped ? { deduped: true } : {}),
   };
+}
+
+/**
+ * PROPOSE-MODE `playbook_run` — file the governed proposal a propose-mode rule
+ * owes instead of starting a run.
+ *
+ * WHY NOT `checkPermissionOrPropose`. The gate decides propose-vs-execute from
+ * the ACTOR's ladder, and a human-owned rule takes the human path and EXECUTES
+ * (its `forcePropose` is honoured only on AI paths). Propose mode is the
+ * rule's own instruction — "never start this, ask me" — so it must propose for
+ * every owner. What it reuses is the existing proposal machinery, unchanged:
+ *   - the row: `insertPendingProposal` (the SSOT insert every door uses);
+ *   - the TYPE: `playbook/run` (targetType `playbook`, proposalType `run`) — the
+ *     very type the gate files for a proposed `playbooks.run`, so approval runs
+ *     the existing `playbook/run` executor, which replays `playbooks.run` →
+ *     `runPlaybook` (visibility, write floor, subject IDOR guard, runs feed);
+ *   - the payload: the gate's request-shaped envelope (`data.data` carries
+ *     `playbookId`/`params`/`subjectId`) — the executor reads exactly that.
+ *
+ * DEDUP — ONE pending proposal per (rule, subject). A rule that fires again on
+ * the same subject while its proposal still waits returns the pending one with
+ * `deduped: true` (the step records `skipped / already_proposed`). Subjectless
+ * rules (a schedule) dedupe on the rule alone: one waiting proposal at a time.
+ * Read-then-insert: two concurrent fires can still both insert — the event
+ * claim already serialises one event per rule, so this only races across two
+ * DIFFERENT events about one subject inside the same instant (accepted; a
+ * second card is visible and rejectable, never a silent double run).
+ */
+export async function proposeRulePlaybookRun(opts: {
+  ownerId: string;
+  workspaceId: string;
+  automationId: string;
+  automationRunId?: string;
+  playbookId?: string;
+  playbookName?: string;
+  params: Record<string, unknown>;
+  subjectId: string | null;
+  sessionId?: string;
+  stepRunId?: string;
+  nodeId?: string;
+}): Promise<{ proposalId: string; deduped: boolean }> {
+  const {
+    ownerId,
+    workspaceId,
+    automationId,
+    automationRunId,
+    playbookId,
+    playbookName,
+    params,
+    subjectId,
+  } = opts;
+
+  const [pending] = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.workspaceId, workspaceId),
+        eq(proposals.targetType, "playbook"),
+        eq(proposals.proposalType, "run"),
+        eq(proposals.status, ProposalStatus.PENDING),
+        drizzleSql`${proposals.data}->>'automationId' = ${automationId}`,
+        drizzleSql`coalesce(${proposals.data}->'data'->>'subjectId', '') = ${subjectId ?? ""}`
+      )
+    )
+    .limit(1);
+  if (pending) return { proposalId: pending.id, deduped: true };
+
+  // Attribution: an agent-owned rule proposes AS that agent (the Reactions
+  // queue, the scorecard and the approval replay all read `agentUserId`); a
+  // human-owned rule's proposal is the human's own standing instruction, so it
+  // carries no agent — the same split `openRunSession` makes for run sessions.
+  const [ownerRow] = await db
+    .select({ userType: users.userType })
+    .from(users)
+    .where(eq(users.id, ownerId))
+    .limit(1);
+  const agentUserId = ownerRow?.userType === "agent" ? ownerId : null;
+
+  const targetId = playbookId ?? randomUUID();
+  const correlationId = randomUUID();
+  const payload: Record<string, unknown> = {
+    ...(playbookId ? { playbookId } : {}),
+    ...(playbookName ? { playbookName, name: playbookName } : {}),
+    params,
+    ...(subjectId ? { subjectId } : {}),
+  };
+
+  const { proposal, deduped } = await insertPendingProposal({
+    workspaceId,
+    targetType: "playbook",
+    targetId,
+    proposalType: "run",
+    data: {
+      targetType: "playbook",
+      targetId,
+      changeType: "run",
+      data: payload,
+      source: "automation",
+      // The rule that asked — the dedup key above and the Rules page's
+      // "proposals waiting" read.
+      automationId,
+      ...(automationRunId ? { automationRunId } : {}),
+      ...(agentUserId ? { agentUserId, authorshipMode: "autonomous" } : {}),
+      reasoning:
+        "A rule set to propose matched — it asks before starting this playbook.",
+      correlationId,
+    },
+    createdBy: ownerId,
+    agentUserId,
+    subjectUserId: ownerId,
+    correlationId,
+    sessionId: opts.sessionId ?? null,
+    stepRunId: opts.stepRunId ?? null,
+    nodeId: opts.nodeId ?? null,
+  });
+
+  if (!deduped) {
+    try {
+      await broadcastNotification({
+        userId: ownerId,
+        requestId: proposal.id,
+        message: {
+          type: "proposal:created",
+          data: {
+            proposalId: proposal.id,
+            targetType: "playbook",
+            targetId,
+            changeType: "run",
+            status: ProposalStatus.PENDING,
+          },
+          requestId: proposal.id,
+          status: "success",
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch {
+      // non-critical — the queue is DB-driven
+    }
+    emitSideEffects({
+      subjectType: "proposal",
+      action: "created",
+      subjectId: proposal.id,
+      userId: ownerId,
+      workspaceId,
+      data: {
+        proposalStatus: "created",
+        targetType: "playbook",
+        changeType: "run",
+        correlationId,
+      },
+    });
+  }
+
+  logger.info(
+    { proposalId: proposal.id, automationId, subjectId, deduped },
+    "Propose-mode rule filed a playbook/run proposal"
+  );
+  return { proposalId: proposal.id, deduped };
 }
