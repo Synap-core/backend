@@ -24,6 +24,7 @@ import {
   lensHeaderModel,
   lensRowOfHappening,
   lensRowExpiry,
+  lensRowsChangeMessage,
   lensRowOfNeedsYou,
   LENS_EXPIRY_URGENT_MS,
   lensScopeFactLabel,
@@ -269,7 +270,12 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     // Discriminating pair: same kind, the category alone decides.
     const { recent } = needsYouRows([
       sig({ id: "o", kind: "owed-slot", category: "ai" }),
-      sig({ id: "p", kind: "owed-slot", category: "governance", occurredAt: "2026-10-04T09:00:00.000Z" }),
+      sig({
+        id: "p",
+        kind: "owed-slot",
+        category: "governance",
+        occurredAt: "2026-10-04T09:00:00.000Z",
+      }),
     ]);
     const rows = recent.map((r) => lensRowOfNeedsYou(r, "blocking"));
     expect(rows.find((r) => r.key === "o")?.byAgent).toBe(true);
@@ -278,22 +284,57 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
   it("expiresAt = occurredAt + the server's lifetime; none without one", () => {
     const { recent } = needsYouRows([
       sig({ id: "e", kind: "proposal-cluster", lifetimeHours: 4 }),
-      sig({ id: "n", kind: "proposal-cluster", lifetimeHours: null, occurredAt: "2026-10-04T09:00:00.000Z" }),
+      sig({
+        id: "n",
+        kind: "proposal-cluster",
+        lifetimeHours: null,
+        occurredAt: "2026-10-04T09:00:00.000Z",
+      }),
     ]);
     const rows = recent.map((r) => lensRowOfNeedsYou(r, "blocking"));
-    expect(rows.find((r) => r.key === "e")?.expiresAt).toBe("2026-10-04T14:00:00.000Z");
+    expect(rows.find((r) => r.key === "e")?.expiresAt).toBe(
+      "2026-10-04T14:00:00.000Z"
+    );
     expect(rows.find((r) => r.key === "n")?.expiresAt).toBeNull();
   });
   it("lensRowExpiry: words + urgency at the boundary, Expired after", () => {
     const end = Date.parse("2026-10-04T14:00:00.000Z");
     const row = { expiresAt: "2026-10-04T14:00:00.000Z" };
-    expect(lensRowExpiry(row, end - 2 * 3_600_000)).toEqual({ label: "Expires in 2h", urgent: false, expired: false });
-    expect(lensRowExpiry(row, end - LENS_EXPIRY_URGENT_MS)).toEqual({ label: "Expires in 1h", urgent: true, expired: false });
-    expect(lensRowExpiry(row, end - LENS_EXPIRY_URGENT_MS - 60_000)?.urgent).toBe(false);
+    expect(lensRowExpiry(row, end - 2 * 3_600_000)).toEqual({
+      label: "Expires in 2h",
+      urgent: false,
+      expired: false,
+    });
+    expect(lensRowExpiry(row, end - LENS_EXPIRY_URGENT_MS)).toEqual({
+      label: "Expires in 1h",
+      urgent: true,
+      expired: false,
+    });
+    expect(
+      lensRowExpiry(row, end - LENS_EXPIRY_URGENT_MS - 60_000)?.urgent
+    ).toBe(false);
     expect(lensRowExpiry(row, end - 22 * 60_000)?.label).toBe("Expires in 22m");
-    expect(lensRowExpiry(row, end)).toEqual({ label: "Expired", urgent: true, expired: true });
+    expect(lensRowExpiry(row, end)).toEqual({
+      label: "Expired",
+      urgent: true,
+      expired: true,
+    });
     expect(lensRowExpiry({ expiresAt: null }, end)).toBeNull();
     expect(lensRowExpiry({}, end)).toBeNull();
+  });
+  it("lensRowsChangeMessage: counts only, null on a no-op", () => {
+    expect(lensRowsChangeMessage("Needs you", { added: 2, removed: 1 })).toBe(
+      "Needs you: 2 new, 1 cleared"
+    );
+    expect(lensRowsChangeMessage("Needs you", { added: 0, removed: 3 })).toBe(
+      "Needs you: 3 cleared"
+    );
+    expect(lensRowsChangeMessage("Produced", { added: 1, removed: 0 })).toBe(
+      "Produced: 1 new"
+    );
+    expect(
+      lensRowsChangeMessage("Produced", { added: 0, removed: 0 })
+    ).toBeNull();
   });
   it("happening rows are live and verb-less", () => {
     const row = lensRowOfHappening({
@@ -509,7 +550,12 @@ describe("lensStatusBanner — ONE, deduplicated", () => {
         target: { kind: "app", id: "settings" },
         notificationIds: ["n1", "n2"],
       },
-      { key: "disk", tone: "info", title: "Disk", notificationIds: ["n3", "n1"] },
+      {
+        key: "disk",
+        tone: "info",
+        title: "Disk",
+        notificationIds: ["n3", "n1"],
+      },
     ]);
     expect(b!.target).toEqual({ kind: "app", id: "settings" });
     expect(b!.notificationIds).toEqual(["n1", "n2", "n3"]);

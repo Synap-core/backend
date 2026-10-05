@@ -149,7 +149,11 @@ export function lensRowExpiry(
   if (!Number.isFinite(end)) return null;
   const left = end - now;
   if (left <= 0)
-    return { label: resolveStatusLabel("expired"), urgent: true, expired: true };
+    return {
+      label: resolveStatusLabel("expired"),
+      urgent: true,
+      expired: true,
+    };
   const mins = Math.floor(left / 60_000);
   const span =
     mins < 1
@@ -164,6 +168,22 @@ export function lensRowExpiry(
     urgent: left <= LENS_EXPIRY_URGENT_MS,
     expired: false,
   };
+}
+
+/**
+ * What a section's ONE polite live region says when rows come and go — COUNTS
+ * only, never every row ("Needs you: 1 new, 2 cleared"). Web (`LensRowList`)
+ * and relay (`LensSection`, `announceForAccessibility`) speak this one string.
+ * Null when nothing changed (never announce a no-op).
+ */
+export function lensRowsChangeMessage(
+  label: string,
+  { added, removed }: { added: number; removed: number }
+): string | null {
+  const parts: string[] = [];
+  if (added > 0) parts.push(`${added} new`);
+  if (removed > 0) parts.push(`${removed} cleared`);
+  return parts.length > 0 ? `${label}: ${parts.join(", ")}` : null;
 }
 
 /** The criterion slot kind (`CRITERION_SLOT_KIND`) — a grade owed, not an answer. */
