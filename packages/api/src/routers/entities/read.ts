@@ -263,6 +263,15 @@ export const readProcs = {
          * a forged id can never widen.
          */
         projectId: z.string().uuid().optional(),
+        /**
+         * The lens model's "this space × this project" (BRIEF-lens-model):
+         * with `projectId` AND a workspace lens, keep the WORKSPACE scope and
+         * narrow it by the project, instead of replacing it with the user floor
+         * (the project across every space). Opt-in so every existing caller
+         * (Hub/MCP/IS project reads) keeps the project-across-spaces answer.
+         * Ignored without `projectId` or without a workspace lens.
+         */
+        projectWithinWorkspace: z.boolean().optional(),
         /** Filter to entities materialized from a specific proposal (provenance). */
         sourceProposalId: z.string().uuid().optional(),
         /**
@@ -353,9 +362,13 @@ export const readProcs = {
         input.workspaceId !== undefined
           ? input.workspaceId
           : (ctx.workspaceId ?? undefined);
+      // Space × project: the project narrows THIS workspace (never replaces it).
+      const projectReplacesScope =
+        !!input.projectId &&
+        !(input.projectWithinWorkspace === true && lensWorkspaceId);
       const facetVisibilityScope = await resolveFacetVisibilityScope(
         ctx.userId,
-        input.projectId ? undefined : lensWorkspaceId
+        projectReplacesScope ? undefined : lensWorkspaceId
       );
       // The scope rule (unified, floor-first):
       //   • PROJECT lens → the full user floor (incl. the project-membership
@@ -368,8 +381,10 @@ export const readProcs = {
       //     (all the user's workspaces + globals), NOT globals-only. This is the
       //     "no lens = everything you can access" rule and makes `.list` with no
       //     lens a strict superset of (and the replacement for) `.listAll`.
+      //   • `projectWithinWorkspace` + a workspace lens → that workspace, and the
+      //     project narrow below intersects it (space × project).
       let workspaceScopeCondition;
-      if (input.projectId) {
+      if (projectReplacesScope) {
         workspaceScopeCondition = entityReadVisibleWhere(ctx.userId);
       } else if (input.globalOnly || input.workspaceId === null) {
         workspaceScopeCondition = entityLensWhere(ctx.userId, null);

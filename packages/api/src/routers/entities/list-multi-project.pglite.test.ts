@@ -49,7 +49,10 @@ import * as schema from "@synap/database/schema";
 import { router } from "../../trpc.js";
 import { readProcs } from "./read.js";
 
-const testRouter = router({ listMulti: readProcs.listMulti });
+const testRouter = router({
+  listMulti: readProcs.listMulti,
+  list: readProcs.list,
+});
 
 const A = randomUUID();
 const WS = randomUUID(); // the Content space
@@ -97,6 +100,22 @@ async function listMulti(input: {
     } as never)
     .listMulti({ ...input, profileSlug: "thing" });
   return new Set(res.entities.map((e) => e.id));
+}
+
+/** `entities.list` — the paginated door Data › Things reads (useWorkspaceData). */
+async function list(input: {
+  workspaceId: string;
+  projectId?: string;
+  projectWithinWorkspace?: boolean;
+}): Promise<Set<string>> {
+  const res = await testRouter
+    .createCaller({
+      authenticated: true,
+      userId: A,
+      workspaceId: null,
+    } as never)
+    .list({ ...input, profileSlug: "thing" });
+  return new Set(res.entities.map((e: { id: string }) => e.id));
 }
 
 beforeAll(async () => {
@@ -191,5 +210,35 @@ describe("entities.listMulti — this space × this project", () => {
     expect(
       await listMulti({ workspaceIds: [WS], withoutProject: true })
     ).toEqual(new Set([E_NONE]));
+  });
+});
+
+describe("entities.list — projectWithinWorkspace (Data › Things, space × project)", () => {
+  it("opted in: the project NARROWS the space — never pulls P's item from another space", async () => {
+    expect(
+      await list({
+        workspaceId: WS,
+        projectId: P,
+        projectWithinWorkspace: true,
+      })
+    ).toEqual(new Set([E_P]));
+  });
+
+  it("opted in, same answer as listMulti (ContentHome's read) — Show all lands on the same set", async () => {
+    for (const project of [P, Q]) {
+      expect(
+        await list({
+          workspaceId: WS,
+          projectId: project,
+          projectWithinWorkspace: true,
+        })
+      ).toEqual(await listMulti({ workspaceIds: [WS], projectId: project }));
+    }
+  });
+
+  it("not opted in: unchanged — the project replaces the space (across spaces)", async () => {
+    expect(await list({ workspaceId: WS, projectId: P })).toEqual(
+      new Set([E_P, E_WO_P])
+    );
   });
 });
