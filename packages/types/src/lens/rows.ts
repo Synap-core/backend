@@ -24,6 +24,7 @@ import {
   resolveActionLabel,
   resolveBlockedReasonLabel,
   resolveNeedsYouItemCount,
+  resolveStatusLabel,
 } from "../vocabulary/index.js";
 import type { ActivityActor, ActivityRow } from "../activity/index.js";
 import { calendarDayIn } from "../activity/heat.js";
@@ -69,6 +70,19 @@ export interface LensRow {
   door: LensDoor | null;
   /** Units this row stands for (a session card's items) — what caps count. */
   count: number;
+  /**
+   * An agent raised it (the signal's `ai` category — agent-originated work).
+   * Drawn as an AI provenance mark on the row — never on a Proposed row,
+   * whose lane heading already carries it. Absent = not known to be an agent.
+   * Same name and meaning as `LensOutput.byAgent`.
+   */
+  byAgent?: boolean;
+  /**
+   * When an ephemeral ask stops being answerable (ISO) — occurredAt + the
+   * server's `lifetimeHours`, never a lifetime this module invented. Read
+   * with `lensRowExpiry`. Absent / null = it never expires.
+   */
+  expiresAt?: string | null;
 }
 
 function verb(action: string): LensVerb {
@@ -92,6 +106,64 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   why?: string | null;
   /** `owed-slot`: the slot's own kind; a criterion slot takes the review verb. */
   slotKind?: string | null;
+  /** Ephemeral lifetime the SERVER carries with the class; null = never expires. */
+  lifetimeHours?: number | null;
+}
+
+/** The notification category agent-originated work wears (`NOTIFICATION_CATEGORY_LABELS.ai`). */
+const AGENT_CATEGORY = "ai";
+
+function expiresAt(
+  at: string | Date | null | undefined,
+  lifetimeHours: number | null | undefined
+): string | null {
+  if (lifetimeHours == null || !Number.isFinite(lifetimeHours)) return null;
+  const start = iso(at);
+  return start
+    ? new Date(Date.parse(start) + lifetimeHours * 3_600_000).toISOString()
+    : null;
+}
+
+/** Inside this much time left, an expiring ask reads urgent (danger tone). */
+export const LENS_EXPIRY_URGENT_MS = 60 * 60_000;
+
+/** A row's expiry as its age slot reads it. */
+export interface LensRowExpiry {
+  /** "Expires in 2h" · "Expires in 22m" · "Expired". */
+  label: string;
+  /** ≤ `LENS_EXPIRY_URGENT_MS` left, or already expired — the danger tone. */
+  urgent: boolean;
+  expired: boolean;
+}
+
+/**
+ * The age slot's EXPIRY variant — web and relay read this, never their own
+ * countdown. Null when the row never expires (or its instant is unreadable).
+ */
+export function lensRowExpiry(
+  row: Pick<LensRow, "expiresAt">,
+  now: number = Date.now()
+): LensRowExpiry | null {
+  if (!row.expiresAt) return null;
+  const end = Date.parse(row.expiresAt);
+  if (!Number.isFinite(end)) return null;
+  const left = end - now;
+  if (left <= 0)
+    return { label: resolveStatusLabel("expired"), urgent: true, expired: true };
+  const mins = Math.floor(left / 60_000);
+  const span =
+    mins < 1
+      ? "<1m"
+      : mins < 60
+        ? `${mins}m`
+        : mins < 24 * 60
+          ? `${Math.floor(mins / 60)}h`
+          : `${Math.floor(mins / (24 * 60))}d`;
+  return {
+    label: `Expires in ${span}`,
+    urgent: left <= LENS_EXPIRY_URGENT_MS,
+    expired: false,
+  };
 }
 
 /** The criterion slot kind (`CRITERION_SLOT_KIND`) — a grade owed, not an answer. */
@@ -179,6 +251,8 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       occurredAt: iso(s.occurredAt),
       door: s.target ?? null,
       count: 1,
+      byAgent: s.category === AGENT_CATEGORY,
+      expiresAt: expiresAt(s.occurredAt, s.lifetimeHours),
     };
   }
   const owed = row.items.filter((s) => s.kind === "owed-slot").length;
