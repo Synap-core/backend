@@ -6542,6 +6542,13 @@ declare const EVALUATION_VERDICTS: readonly [
 	"unmeasured"
 ];
 export type EvaluationVerdict = (typeof EVALUATION_VERDICTS)[number];
+declare const EVALUATOR_KINDS: readonly [
+	"evidence",
+	"capability",
+	"judge",
+	"human"
+];
+export type EvaluatorKind = (typeof EVALUATOR_KINDS)[number];
 export interface SessionVerdict {
 	total: number;
 	passed: number;
@@ -7194,6 +7201,18 @@ export interface ExpectedOutput {
 	label: string;
 	icon?: string;
 	/**
+	 * The slot's STABLE identity — what every slot door joins on first (the
+	 * label stays the alias). SERVER-STAMPED: derived by the ONE function
+	 * `deriveSlotKeys` (`@synap-core/types/units`, a slug of the label, `-2`/`-3`
+	 * on collision) and carried across every rewrite of the array (api
+	 * `services/focus-sessions/slot-keys.ts`). A declarer may PROPOSE one at the
+	 * slot's birth (the `outcomes[].key` alias); once stored it never changes —
+	 * a patch carrying a different key is refused like any other receipt.
+	 * ABSENT on a slot stored before keys existed: readers derive it with the
+	 * same function, so the key read today is the key the next write stamps.
+	 */
+	key?: string;
+	/**
 	 * WHO owns this slot. ABSENT MEANS `agent` — every slot stored before this
 	 * field existed is semantically unchanged, so there is no backfill and no DB
 	 * default. Do not add one: a stored `agent` and an absent value must stay
@@ -7248,6 +7267,28 @@ export interface ExpectedOutput {
 	claimedDone?: boolean;
 	/** Lineage: the approved proposal whose apply satisfied this output. */
 	satisfiedByProposalId?: string;
+	/**
+	 * Lineage of an EVIDENCE verdict — the third way `done` is earned, beside an
+	 * approval (`satisfiedByProposalId`) and an attestation (`attestedBy`).
+	 *
+	 * The agent CLAIMS a deliverable (`completeOutput` → `claimedDone`); the
+	 * claim alone is never a verdict. When the slot also has EVIDENCE — a
+	 * produced object the session's output join attributes to it (an artifact
+	 * claiming its key/label, an approved proposal's target, a produced edge) or
+	 * a declared `ref` the declarer could see — the pod stamps `done` with this
+	 * receipt naming that evidence. Deterministic, no human needed, and only for
+	 * an outcome checked by evidence: an agent-owned slot no criterion shares a
+	 * key with. Written ONLY by `satisfyClaimsByEvidence` (api
+	 * `services/focus-sessions/satisfy-expected-output.ts`).
+	 */
+	satisfiedByEvidence?: {
+		/** `output` = a joined produced object; `ref` = the slot's own pointer. */
+		kind: "output" | "ref";
+		/** The produced object's join coordinate (`<kind>:<refId>`) or the ref's id/url. */
+		id: string;
+		/** ISO timestamp of the verdict. */
+		at: string;
+	};
 	/**
 	 * The agent TYPE this slot was handed to (`focusSessions.delegateOutput` /
 	 * `POST /focus-sessions/:id/outputs/delegate`). A DELEGATION, never a claim of
@@ -12225,6 +12266,154 @@ export interface SessionOutputDependencies {
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
 }
+export type TrackStagePosition = "done" | "active" | "not_started";
+export interface TrackStage {
+	key: string;
+	name: string;
+	/** The stage's closed rollup category, when the pinned stage declares one. */
+	category: string | null;
+	position: TrackStagePosition;
+	/** Sessions filed in this track at this stage — only when counts were given. */
+	sessionCount?: number;
+	/** The stage's own goal — the brief of a session started at this stage. */
+	goal?: string;
+	description?: string;
+	suggestedTasks?: string[];
+	/** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
+	expectedOutputs?: Array<Record<string, unknown>>;
+	/** Acceptance criteria of this stage, as pinned (objects with a `key`). */
+	criteria?: Array<Record<string, unknown> & {
+		key: string;
+	}>;
+	/** The entry gate's kind — a person approves (`human`) or a check measures. */
+	gate?: "human" | "check";
+	/** May the track sit in this stage indefinitely? */
+	indefinite?: boolean;
+	/**
+	 * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
+	 * (`workspaces.package_slug`), never a workspace id, so a method stays
+	 * portable across pods. `startStageSession` resolves it to a live workspace.
+	 */
+	domain?: string;
+}
+/**
+ * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
+ * first. A re-entered stage appears again — this is a timeline, not a map.
+ */
+export interface TrackStageHistoryEntry {
+	stageKey: string;
+	/** Where it came from — `null` for the entry recorded at birth/backfill. */
+	fromStage: string | null;
+	/** ISO-8601. */
+	enteredAt: string;
+	/** The user (or agent) id that moved it. */
+	actor: string;
+}
+/**
+ * WHY a paused track is paused — projected by the pod on every track read.
+ *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
+ *     marker, cleared on every status change);
+ *   - `human` — a person paused it, or a human stage gate awaits review;
+ *   - `null`  — the track is not paused (a stale marker never leaks).
+ */
+export type TrackPausedBy = "check" | "human" | null;
+/** A session's deliverables, counted — the progress rail and the owed badge. */
+export interface DeliverableCounts {
+	/** Stamped done. */
+	done: number;
+	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
+	total: number;
+	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
+	owedByYou: number;
+}
+/**
+ * One produced item (`SessionOutput` from the pod's three-ledger join).
+ * `expected` is the slot the join matched it to, if any — key and/or label.
+ */
+export interface ProducedItemLike {
+	id: string;
+	expected?: {
+		key?: string | null;
+		label?: string | null;
+	} | null;
+}
+/** How an outcome gets checked — the trust ladder, cheapest first. */
+export type OutcomeVerify = EvaluatorKind;
+/**
+ * WHICH door met an outcome: an approved proposal, the person's attestation,
+ * the pod's evidence verdict, a criterion's `pass` verdict — or `unverified`,
+ * a `done` with no receipt at all (the pre-A3 agent self-mark).
+ */
+export type OutcomeMetBy = "approval" | "attestation" | "evidence" | "verdict" | "unverified";
+/** The CURRENT verdict behind a criterion outcome. */
+export interface OutcomeVerdict {
+	verdict: EvaluationVerdict;
+	evaluatorKind: EvaluatorKind;
+	at: string;
+}
+export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
+	/** Stable identity: the slot's key, or the criterion's key. */
+	key: string;
+	/** What it is, in words. */
+	label: string;
+	/** Slot kind (`report`, `document`, …), or `"fact"` for a criterion. */
+	kind: string;
+	/** Which store(s) declared it. */
+	source: "slot" | "criterion" | "slot+criterion";
+	/** Who yields it. */
+	owner: "agent" | "human";
+	verify: OutcomeVerify;
+	/** Absent on the criterion = true; a declared slot is always required. */
+	required: boolean;
+	/** Delivered (slot stamped done) or proven (current verdict `pass`). */
+	met: boolean;
+	/** Which door met it; `null` while not met. */
+	metBy: OutcomeMetBy | null;
+	/** Let go when its session was cancelled — neither met nor owed. */
+	retired: boolean;
+	/** THE mark (tone + glyph), from the one derivation. */
+	state: UnitStateView;
+	/** Criterion outcomes only: the current verdict, or null if never checked. */
+	verdict: OutcomeVerdict | null;
+	/** Produced items joined to it (key first, then label). */
+	evidence: P[];
+	stageKey?: string;
+	/** The stored slot's label — what the label-matching slot doors address. */
+	slotLabel?: string;
+	/** Criterion check detail, when it names one. */
+	capability?: string;
+	evidenceKey?: string;
+}
+/** What an input asks the person for. */
+export type SessionInputNeed = 
+/** A playbook param value (`PARAM_SLOT_KIND`). */
+"param"
+/** A pass/fail grade on an escalated criterion (`CRITERION_SLOT_KIND`). */
+ | "grade"
+/** A blocker class (`BLOCKED_REASONS`: decision, credential, …). */
+ | (string & {});
+export interface SessionInput {
+	/** The slot's key. */
+	key: string;
+	label: string;
+	need: SessionInputNeed;
+	/** Still waiting on the person. */
+	open: boolean;
+	/** The person answered it (the agent has it now). */
+	answered: boolean;
+	state: UnitStateView;
+	/** The outcome this blocks — null when it names none it can be traced to. */
+	blocksOutcomeKey: string | null;
+	blockedReason?: string;
+	why?: string;
+	owedSince?: string;
+	/** Opaque: the typed ask, for the surface's ask renderer. */
+	ask?: unknown;
+	paramName?: string;
+	criterionKey?: string;
+	/** The stored slot's label — what the label-matching answer doors address. */
+	slotLabel: string;
+}
 /** The identity a card needs: the kind slug, its display name, its icon. */
 export interface EntityProfileRef {
 	/** Profile slug (`entities.type` mirrors it when the profile row is absent). */
@@ -12276,7 +12465,14 @@ export interface SessionOutput {
 	 * way to guarantee that as the type grows is to carry the type, so this is
 	 * `ExpectedOutput` itself and the assignment spreads.
 	 */
-	expected?: ExpectedOutput;
+	expected?: ExpectedOutput & {
+		/**
+		 * The slot's stored KEY (`slot-keys.ts`), when it carries one — a slot
+		 * stored before keys existed has none until its next write stamps it.
+		 * Never derived here: a matched slot reads exactly like an unmatched one.
+		 */
+		key?: string;
+	};
 	/** Which ledger(s) reported it — provenance for the join itself. */
 	source: Array<"artifact" | "produced_edge" | "expected">;
 }
@@ -12284,6 +12480,26 @@ export interface SessionOutputsResult {
 	outputs: SessionOutput[];
 	/** Declared deliverables with no produced object behind them. */
 	pendingExpected: ExpectedOutput[];
+}
+/**
+ * The per-session read (`listSessionOutputs`) — the three-ledger join PLUS the
+ * session's OUTCOMES / INPUTS / UNATTACHED, projected at read time by the ONE
+ * pure rule (`projectSessionOutcomes`, `@synap-core/types/units`) over the
+ * same slots, the session's criteria and its evaluation rows. ADDITIVE: every
+ * field of {@link SessionOutputsResult} is unchanged.
+ */
+export interface SessionOutputsWithOutcomes extends SessionOutputsResult {
+	/** What the session must yield; each carries its `evidence` (from `outputs`). */
+	outcomes: SessionOutcome<SessionOutput>[];
+	/** What it needs from the person; each points at the outcome it blocks. */
+	inputs: SessionInput[];
+	/** Produced outputs that serve no outcome. */
+	unattached: SessionOutput[];
+	/** Met / total over outcomes that were not retired. */
+	outcomeCounts: {
+		met: number;
+		total: number;
+	};
 }
 export type PacketSection<T> = {
 	status: "ok";
@@ -13503,66 +13719,6 @@ export interface ProjectOutputsResult {
 	 * active sessions' outputs are missing from every page.
 	 */
 	truncated: boolean;
-}
-export type TrackStagePosition = "done" | "active" | "not_started";
-export interface TrackStage {
-	key: string;
-	name: string;
-	/** The stage's closed rollup category, when the pinned stage declares one. */
-	category: string | null;
-	position: TrackStagePosition;
-	/** Sessions filed in this track at this stage — only when counts were given. */
-	sessionCount?: number;
-	/** The stage's own goal — the brief of a session started at this stage. */
-	goal?: string;
-	description?: string;
-	suggestedTasks?: string[];
-	/** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
-	expectedOutputs?: Array<Record<string, unknown>>;
-	/** Acceptance criteria of this stage, as pinned (objects with a `key`). */
-	criteria?: Array<Record<string, unknown> & {
-		key: string;
-	}>;
-	/** The entry gate's kind — a person approves (`human`) or a check measures. */
-	gate?: "human" | "check";
-	/** May the track sit in this stage indefinitely? */
-	indefinite?: boolean;
-	/**
-	 * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
-	 * (`workspaces.package_slug`), never a workspace id, so a method stays
-	 * portable across pods. `startStageSession` resolves it to a live workspace.
-	 */
-	domain?: string;
-}
-/**
- * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
- * first. A re-entered stage appears again — this is a timeline, not a map.
- */
-export interface TrackStageHistoryEntry {
-	stageKey: string;
-	/** Where it came from — `null` for the entry recorded at birth/backfill. */
-	fromStage: string | null;
-	/** ISO-8601. */
-	enteredAt: string;
-	/** The user (or agent) id that moved it. */
-	actor: string;
-}
-/**
- * WHY a paused track is paused — projected by the pod on every track read.
- *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
- *     marker, cleared on every status change);
- *   - `human` — a person paused it, or a human stage gate awaits review;
- *   - `null`  — the track is not paused (a stale marker never leaks).
- */
-export type TrackPausedBy = "check" | "human" | null;
-/** A session's deliverables, counted — the progress rail and the owed badge. */
-export interface DeliverableCounts {
-	/** Stamped done. */
-	done: number;
-	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
-	total: number;
-	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
-	owedByYou: number;
 }
 type Unavailable$1 = {
 	status: "unavailable";
@@ -34785,9 +34941,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string;
 					label: string;
 					icon?: string | undefined;
+					key?: string | undefined;
 					status?: "pending" | "done" | undefined;
 					claimedDone?: boolean | undefined;
 					satisfiedByProposalId?: string | undefined;
+					satisfiedByEvidence?: {
+						kind: "output" | "ref";
+						id: string;
+						at: string;
+					} | undefined;
 					delegatedTo?: string | undefined;
 					delegatedAt?: string | undefined;
 					returnedReason?: string | undefined;
@@ -35015,9 +35177,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string;
 					label: string;
 					icon?: string | undefined;
+					key?: string | undefined;
 					status?: "pending" | "done" | undefined;
 					claimedDone?: boolean | undefined;
 					satisfiedByProposalId?: string | undefined;
+					satisfiedByEvidence?: {
+						kind: "output" | "ref";
+						id: string;
+						at: string;
+					} | undefined;
 					delegatedTo?: string | undefined;
 					delegatedAt?: string | undefined;
 					returnedReason?: string | undefined;
@@ -35618,7 +35786,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				sessionId: string;
 			};
-			output: SessionOutputsResult;
+			output: SessionOutputsWithOutcomes;
 			meta: object;
 		}>;
 		activity: import("@trpc/server").TRPCQueryProcedure<{

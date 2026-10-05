@@ -223,6 +223,67 @@ function buildAskJsonSchema(): Record<string, unknown> {
 const ASK_JSON_SCHEMA = buildAskJsonSchema();
 
 /**
+ * `outcomes` (A4) — THE declaration of what a session must yield, on
+ * `synap_start_session` / `synap_update_session`. Parsed server-side by
+ * `outcomeDeclarationSchema` (`services/focus-sessions/outcome-declarations.ts`)
+ * and written into the same storage the deprecated `expectedOutputs` /
+ * `criteria` aliases write.
+ */
+const SESSION_OUTCOMES_PROPERTY = {
+  type: "array",
+  maxItems: 40,
+  description:
+    "What this session must YIELD — one list, each outcome verifiable. A deliverable (`kind`: document, report, code, decision…) is checked by EVIDENCE by default: when you finish it, call `completeOutput` with its key (your CLAIM) and make sure the evidence is there — the object produced inside this session, or its `ref` — and the pod marks it met; with no evidence the claim waits for review. Use `kind: 'fact'` for an outcome whose thing is a fact (e.g. 'Typecheck passes'), checked by `verify` (default judge) through synap_evaluate_session. `owner: 'human'` (+ `blockedReason`, `why`, an `ask`) declares one only the person can yield — it shows as an INPUT the work needs. On update_session outcomes UPSERT by key (nothing unnamed is removed). Replaces `expectedOutputs` + `criteria` (still accepted, deprecated).",
+  items: {
+    type: "object",
+    properties: {
+      key: {
+        type: "string",
+        description:
+          "Optional stable id (lowercase slug a-z 0-9 -). Default: a slug of the label. Name the outcome by this key in completeOutput and later updates; a renamed label keeps its key.",
+      },
+      label: { type: "string", description: "What it is, in words." },
+      kind: {
+        type: "string",
+        description:
+          "What it is: 'fact' for a checked statement, else the deliverable's kind (document, report, code, decision, entity…). Default 'output'.",
+      },
+      verify: {
+        type: "object",
+        description:
+          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` to post a named proof instead) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+        properties: {
+          kind: {
+            type: "string",
+            enum: ["evidence", "capability", "judge", "human"],
+          },
+          capability: { type: "string" },
+          evidenceKey: { type: "string" },
+          hint: { type: "string" },
+        },
+        required: ["kind"],
+      },
+      required: { type: "boolean", description: "Default true." },
+      owner: {
+        type: "string",
+        enum: ["human", "agent"],
+        description:
+          "Omit for anything you can do. 'human' = only the person can yield it; add blockedReason + why + an ask.",
+      },
+      blockedReason: { type: "string", enum: [...BLOCKED_REASONS] },
+      why: { type: "string", maxLength: 500 },
+      ref: {
+        description:
+          'WHERE it lives — {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} or {"url":"https://..."}. A ref is evidence for a claimed deliverable.',
+        type: "object",
+      },
+      ask: ASK_JSON_SCHEMA,
+    },
+    required: ["label"],
+  },
+};
+
+/**
  * The same derived `ask` on `synap_post_message` — the question's typed ask,
  * filed on the `slotLabel` output. Only the prose differs.
  */
@@ -1645,7 +1706,12 @@ export const tools = {
               description:
                 "Answers to the template's declared params (only with templateId). Each playbook declares its own: synap_list_playbooks / synap_match_playbooks return the declaration, including which are `required`, their `type` and any `options`. A required one you leave out is NOT an error here — it lands as a deliverable OWED BY THE PERSON on the session, so the question is visible and ages rather than being silently answered with an empty string. A value of the wrong type IS refused.",
             },
-            criteria: SESSION_CRITERIA_PROPERTY,
+            outcomes: SESSION_OUTCOMES_PROPERTY,
+            criteria: {
+              ...SESSION_CRITERIA_PROPERTY,
+              description:
+                "DEPRECATED alias — prefer `outcomes` with kind 'fact'. Binary acceptance criteria, each observable; written to the same storage.",
+            },
             parentSessionId: {
               type: "string",
               format: "uuid",
@@ -1729,7 +1795,7 @@ export const tools = {
                 required: ["kind", "label"],
               },
               description:
-                "Where the detail goes — list each concrete deliverable here so the goal can stay one line. Optional expected deliverables — what the session should produce.",
+                "DEPRECATED alias — prefer `outcomes`. The concrete deliverables the session should produce, so the goal can stay one line.",
             },
           },
           required: ["goal"],
@@ -1772,10 +1838,11 @@ export const tools = {
               type: "number",
               description: "0-100 integer progress (optional).",
             },
+            outcomes: SESSION_OUTCOMES_PROPERTY,
             criteria: {
               ...SESSION_CRITERIA_PROPERTY,
               description:
-                "Replace the session's acceptance criteria wholesale (optional) — the full list, not a delta.",
+                "DEPRECATED alias — prefer `outcomes` (kind 'fact'), which upserts by key. Replaces the session's acceptance criteria wholesale — the full list, not a delta.",
             },
             currentStage: {
               type: "string",
@@ -1866,7 +1933,7 @@ export const tools = {
                 required: ["kind", "label"],
               },
               description:
-                "Replace the full deliverable list (optional). For incremental edits prefer addOutput / completeOutput.",
+                "DEPRECATED alias — prefer `outcomes` (upserts by key). Replaces the full deliverable list (optional).",
             },
             addOutput: {
               type: "object",
@@ -1922,12 +1989,12 @@ export const tools = {
               },
               required: ["kind", "label"],
               description:
-                "Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason, a one-line why AND an `ask` (confirm yes/no, choose options, ...) so the person answers in one tap instead of a bare 'I did this' button.",
+                "DEPRECATED alias — prefer `outcomes` (one entry upserts one deliverable). Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason, a one-line why AND an `ask` (confirm yes/no, choose options, ...) so the person answers in one tap instead of a bare 'I did this' button.",
             },
             completeOutput: {
               type: "string",
               description:
-                "Mark the deliverable with this exact label as 'done'. REFUSED for a slot you declared owner='human' — you cannot close work you handed back. The reply always carries `completeOutput.result`: 'completed' (marked done), 'refused' (human-owned; nothing changed, do NOT report the work as delivered), or 'no_match' (no deliverable has that exact label; nothing changed). A 'refused' or 'no_match' still comes back as a successful update because the rest of the patch landed — read the field, not just the session.",
+                "CLAIM the deliverable with this key (or exact label) as done — your claim, not the verdict. If evidence is attached (the object produced inside this session, or the slot's `ref`) the pod verifies it at once; otherwise it waits for review. REFUSED for a slot you declared owner='human'. The reply always carries `completeOutput.result`: 'completed' (claimed AND verified by evidence), 'claimed' (recorded, no evidence yet — attach it; do not report it as delivered), 'refused' (human-owned; nothing changed), or 'no_match' (no deliverable has that key/label; nothing changed). Read the field, not just the session.",
             },
             addAgentId: {
               type: "string",
@@ -2114,7 +2181,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Re-find a focus session — read-only. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
+          "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
         inputSchema: {
           type: "object",
           properties: {

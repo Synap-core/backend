@@ -106,6 +106,63 @@ function parseSlotInputs(
 }
 
 /**
+ * The session's outcomes + inputs for an agent read — `{status:'ok', …}`, or
+ * `{status:'unavailable', reason}` when the read failed (the continuation
+ * packet's section contract: a failed section is NOT an empty one).
+ */
+async function readSessionOutcomesSection(
+  sessionId: string,
+  userId: string
+): Promise<Record<string, unknown>> {
+  try {
+    const { listSessionOutputsWithOutcomes } =
+      await import("../../../services/focus-sessions/session-outputs.js");
+    const view = await listSessionOutputsWithOutcomes({
+      db,
+      userId,
+      sessionId,
+    });
+    if (!view) return { status: "unavailable", reason: "session not readable" };
+    return {
+      status: "ok",
+      counts: view.outcomeCounts,
+      outcomes: view.outcomes,
+      inputs: view.inputs,
+      unattached: view.unattached,
+    };
+  } catch (err) {
+    return {
+      status: "unavailable",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * `outcomes` (A4) off the MCP wire, parsed by THE outcome schema
+ * (`outcome-declarations.ts`). Absent ⇒ `{ list: undefined }`; malformed ⇒ a
+ * refusal the model reads, naming the path — never a silent drop.
+ */
+async function parseOutcomesArg(raw: unknown): Promise<
+  | { error: string }
+  | {
+      list?: import("../../../services/focus-sessions/outcome-declarations.js").OutcomeDeclaration[];
+    }
+> {
+  if (raw === undefined || raw === null) return {};
+  const { outcomeDeclarationsSchema } =
+    await import("../../../services/focus-sessions/outcome-declarations.js");
+  const parsed = outcomeDeclarationsSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      error: `Invalid outcomes: ${issue ? `${issue.path.join(".") || "outcomes"}: ${issue.message}` : "malformed"}. Nothing was changed.`,
+    };
+  }
+  return { list: parsed.data };
+}
+
+/**
  * The caller's answers to a template's declared params, off the MCP wire.
  *
  * MCP clients do not agree on how to serialise an object-valued argument: some
@@ -272,6 +329,23 @@ export const sessionHandlers: McpHandlerMap = {
       addOutputWireSchema,
     });
     if ("error" in slots) return ok(slots);
+    // `outcomes` (A4) — the one declaration; `expectedOutputs`/`criteria`
+    // stay as deprecated aliases over the same storage, and both may ride one
+    // call (the aliases first: they were said first).
+    const outcomes = await parseOutcomesArg(args.outcomes);
+    if ("error" in outcomes) return ok(outcomes);
+    const declared = outcomes.list
+      ? (
+          await import("../../../services/focus-sessions/outcome-declarations.js")
+        ).mergeOutcomesForStart({
+          outcomes: outcomes.list,
+          expectedOutputs: slots.expectedOutputs,
+          criteria: args.criteria as SessionCriterion[] | undefined,
+        })
+      : {
+          expectedOutputs: slots.expectedOutputs,
+          criteria: args.criteria as SessionCriterion[] | undefined,
+        };
     const result = await createFocusSession({
       userId,
       workspaceId: args.workspaceId as string | undefined,
@@ -307,12 +381,12 @@ export const sessionHandlers: McpHandlerMap = {
       // auto-opened for it, if any (never a duplicate).
       clientKey: requestClientKey(agentUserId) ?? null,
       // Validated by the service with the shared criteria schema.
-      criteria: args.criteria as SessionCriterion[] | undefined,
+      criteria: declared.criteria,
       // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
       // re-typed inline shape: an inline copy silently narrows what this door
       // believes a slot is, which is how the per-door shapes drifted in the
       // first place — and a cast narrows nothing while checking nothing.
-      expectedOutputs: slots.expectedOutputs,
+      expectedOutputs: declared.expectedOutputs,
       parentSessionId: args.parentSessionId as string | undefined,
       suspendedIntent: args.suspendedIntent as string | undefined,
       // Validated above (array of UUIDs), so this narrows nothing unchecked.
@@ -575,6 +649,10 @@ export const sessionHandlers: McpHandlerMap = {
     return ok({
       session: await withParentSessionId(session),
       continuation: await projectContinuationPacket(session, { userId }),
+      // OUTCOMES / INPUTS (A4) — the one projection every surface reads
+      // (`projectSessionOutcomes` via `listSessionOutputsWithOutcomes`). A
+      // failed read says `unavailable`, never an empty list.
+      outcomes: await readSessionOutcomesSection(session.id, userId),
       ...(ambient?.sessionId
         ? {
             inferred: true,
@@ -721,6 +799,31 @@ export const sessionHandlers: McpHandlerMap = {
       addOutputWireSchema,
     });
     if ("error" in slots) return ok(slots);
+    // `outcomes` (A4): UPSERTED by key onto the stored lists (or onto the
+    // wholesale lists this same call sent), then written through the same
+    // `expectedOutputs` / `criteria` fields — one merge, one governance path.
+    const outcomes = await parseOutcomesArg(args.outcomes);
+    if ("error" in outcomes) return ok(outcomes);
+    let outcomeLists:
+      | { expectedOutputs: ExpectedOutput[]; criteria: SessionCriterion[] }
+      | undefined;
+    if (outcomes.list && outcomes.list.length > 0) {
+      const { resolveOutcomesUpdate } =
+        await import("../../../services/focus-sessions/outcome-declarations.js");
+      const resolved = await resolveOutcomesUpdate({
+        sessionId: args.sessionId as string,
+        userId,
+        outcomes: outcomes.list,
+        expectedOutputs: slots.expectedOutputs,
+        criteria: args.criteria as SessionCriterion[] | undefined,
+      });
+      if (!resolved) {
+        return ok({
+          error: `Focus session ${String(args.sessionId)} not found`,
+        });
+      }
+      outcomeLists = resolved;
+    }
     const result = await updateFocusSession({
       sessionId: args.sessionId as string,
       userId,
@@ -735,9 +838,11 @@ export const sessionHandlers: McpHandlerMap = {
       goal: args.goal as string | undefined,
       // Validated by the service with the shared criteria schema (a bad list
       // comes back as `denied` with the reason, never stored half-right).
-      ...(args.criteria !== undefined
-        ? { criteria: args.criteria as SessionCriterion[] }
-        : {}),
+      ...(outcomeLists
+        ? { criteria: outcomeLists.criteria }
+        : args.criteria !== undefined
+          ? { criteria: args.criteria as SessionCriterion[] }
+          : {}),
       status: args.status as "active" | "paused" | undefined,
       progress: args.progress as number | undefined,
       currentStage: args.currentStage as string | undefined,
@@ -783,7 +888,7 @@ export const sessionHandlers: McpHandlerMap = {
       // re-typed inline shape: an inline copy silently narrows what this door
       // believes a slot is, which is how the per-door shapes drifted in the
       // first place — and a cast narrows nothing while checking nothing.
-      expectedOutputs: slots.expectedOutputs,
+      expectedOutputs: outcomeLists?.expectedOutputs ?? slots.expectedOutputs,
       // NARROWED like `subjectEntityId`, and for the same reason: this field
       // has THREE meanings on the wire — `undefined` leaves the playbook alone,
       // `null` RELEASES it, a string FOLLOWS it — and a blanket cast collapses

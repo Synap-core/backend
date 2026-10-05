@@ -22,6 +22,11 @@
  * so getCaller() (which creates a hubProtocolRouter caller) cannot reach it.
  */
 
+import {
+  mergeOutcomesForStart,
+  outcomeDeclarationsSchema,
+  upsertOutcomes,
+} from "../../../services/focus-sessions/outcome-declarations.js";
 import { z } from "@hono/zod-openapi";
 import {
   sessionCriteriaSchema,
@@ -95,7 +100,11 @@ import {
   newlyBlockedSlots,
 } from "../../../services/focus-sessions/block-guidelines.js";
 import { notifySessionNeedsYou } from "../../../services/focus-sessions/notify-needs-you.js";
-import { BLOCKED_REASONS, type ExpectedOutput } from "@synap/playbooks";
+import {
+  BLOCKED_REASONS,
+  readCriteria,
+  type ExpectedOutput,
+} from "@synap/playbooks";
 import {
   blockExpectedOutput,
   unblockExpectedOutput,
@@ -198,8 +207,15 @@ const CreateBodySchema = z
      * validated against its declaration by the service.
      */
     params: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * What the session must yield (A4) — THE declaration. Written into the
+     * same storage as the deprecated `expectedOutputs` / `criteria` aliases
+     * (`outcome-declarations.ts`); both may ride one call.
+     */
+    outcomes: outcomeDeclarationsSchema.optional(),
+    /** DEPRECATED alias — prefer `outcomes`. */
     expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
-    /** Binary acceptance criteria (validated by the service's shared schema). */
+    /** DEPRECATED alias — prefer `outcomes` (kind "fact"). Binary acceptance criteria. */
     criteria: z.array(z.unknown()).optional(),
     channelId: z.string().uuid().optional(),
     agentIds: z.array(z.string()).optional(),
@@ -317,6 +333,10 @@ const UpdateBodySchema = z.object({
   // cannot lose a concurrent attach; the two may be sent together, in which
   // case the wholesale assignment lands first and the append is applied on top.
   addAgentId: z.string().min(1).optional(),
+  // What the session must yield (A4): UPSERTED by key onto the stored lists,
+  // then written through `expectedOutputs` / `criteria` below (one merge).
+  outcomes: outcomeDeclarationsSchema.optional(),
+  // DEPRECATED alias — prefer `outcomes`. Wholesale replace.
   expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
   verificationReport: z.unknown().optional(),
   // First-class stages: advance the active playbook stage (PlaybookStage.key).
@@ -326,7 +346,8 @@ const UpdateBodySchema = z.object({
   subjectEntityId: z.string().uuid().nullable().optional(),
   // Free-form metadata bag — SHALLOW-MERGED into the existing row metadata.
   metadata: z.record(z.string(), z.unknown()).optional(),
-  // WHOLESALE replace of the session's binary acceptance criteria (max 12).
+  // DEPRECATED alias — prefer `outcomes` (kind "fact"). WHOLESALE replace of
+  // the session's binary acceptance criteria (max 12).
   criteria: sessionCriteriaSchema.optional(),
   // FOLLOW a playbook with this live session; `null` RELEASES it. The session
   // BECOMES A RUN of that playbook — it joins the playbook's runs and leaves
@@ -1163,8 +1184,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // capture they made) is never re-shaped by a guessed template.
         matchTemplate: !!ctxAgentUserId,
         clientKey: ctxAgentUserId ? requestClientKey(ctxAgentUserId) : null,
-        criteria: body.criteria as SessionCriterion[] | undefined,
-        expectedOutputs: body.expectedOutputs,
+        ...(body.outcomes && body.outcomes.length > 0
+          ? mergeOutcomesForStart({
+              outcomes: body.outcomes,
+              expectedOutputs: body.expectedOutputs,
+              criteria: body.criteria as SessionCriterion[] | undefined,
+            })
+          : {
+              criteria: body.criteria as SessionCriterion[] | undefined,
+              expectedOutputs: body.expectedOutputs,
+            }),
         subjectEntityId: body.subjectEntityId ?? null,
         parentSessionId: body.parentSessionId ?? null,
         suspendedIntent: body.suspendedIntent ?? null,
@@ -1278,6 +1307,29 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
+
+      // `outcomes` (A4) → the same two fields, UPSERTED by key onto the
+      // loaded row (or onto the wholesale lists this same PATCH sent). From
+      // here on the patch is an ordinary `expectedOutputs` / `criteria` write:
+      // the authority floor, the membrane and the merge all see it.
+      if (patch.outcomes && patch.outcomes.length > 0) {
+        const upserted = upsertOutcomes(
+          {
+            expectedOutputs:
+              patch.expectedOutputs ??
+              (Array.isArray(existing.expectedOutputs)
+                ? (existing.expectedOutputs as ExpectedOutput[])
+                : []),
+            criteria:
+              (patch.criteria as SessionCriterion[] | undefined) ??
+              readCriteria(existing.criteria),
+          },
+          patch.outcomes
+        );
+        patch.expectedOutputs = upserted.expectedOutputs;
+        patch.criteria = upserted.criteria as typeof patch.criteria;
+      }
+      delete patch.outcomes;
 
       // Step 2b: VISIBILITY FLOOR on the subject anchor, before the membrane
       // for the same reason the output-ref floor sits there: an entity the
