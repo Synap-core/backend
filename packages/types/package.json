@@ -76,6 +76,10 @@
       "types": "./dist/service-marks/index.d.ts",
       "import": "./dist/service-marks/index.js"
     },
+    "./brand-kit": {
+      "types": "./dist/brand-kit/index.d.ts",
+      "import": "./dist/brand-kit/index.js"
+    },
     "./pod-hygiene": {
       "types": "./dist/pod-hygiene/index.d.ts",
       "import": "./dist/pod-hygiene/index.js"
