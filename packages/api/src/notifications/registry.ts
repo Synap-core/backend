@@ -192,6 +192,40 @@ export const NOTIFICATION_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
 // ---------------------------------------------------------------------------
 
 export const NOTIFICATION_REGISTRY: NotificationDef[] = [
+  // ── Tracks ────────────────────────────────────────────────────────────────
+  {
+    /**
+     * A track's KPI just reached its target (0302). Producer:
+     * `applyTrackDirection` (services/tracks), on the CROSSING only
+     * (`trackKpiJustReached`) — a re-statement of a reached value never
+     * re-nudges. `sourceId` is the track id.
+     *
+     * A NUDGE, never an act: completing a track stays a person's decision
+     * (founder, 2026-10-05). It is an ITEM in needs-you because the decision
+     * is theirs to make; the door opens the track, where "Complete" lives.
+     * The KPI value is STATED, so the body says "stated", never "measured".
+     */
+    type: "track.kpi_reached",
+    category: "data",
+    label: "Track target reached",
+    icon: "target",
+    priority: "normal",
+    titleTemplate: "{{trackName}} reached its target",
+    bodyTemplate:
+      "{{kpiLabel}}: {{current}} of {{target}} {{unit}} (stated). Complete the track, or raise the target.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    groupBy: "trackId",
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open track",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
   // ── Governance ────────────────────────────────────────────────────────────
   {
     type: "proposal.created",

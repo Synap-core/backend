@@ -126,6 +126,8 @@ export const TOOL_GROUPS = {
     "synap_advance_track",
     "synap_set_track_status",
     "synap_set_track_params",
+    "synap_update_track",
+    "synap_add_track_stage",
   ],
   /** Views, cells, playbooks and skills. */
   build: [

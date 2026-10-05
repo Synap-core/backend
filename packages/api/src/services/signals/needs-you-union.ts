@@ -477,6 +477,8 @@ export const NOTIFICATION_TARGET_KIND: Readonly<Record<string, string>> = {
   ai_proactive: "channel",
   // `handoff.continue` (notif-center `requestHandoff`) — sourceId is the session id.
   session: "session",
+  // `track.kpi_reached` (services/tracks) — sourceId is the track id.
+  track: "track",
 };
 
 /**

@@ -17,6 +17,7 @@ import { projectTracks } from "../schema/project-tracks.js";
 import type {
   ProjectTrack,
   ProjectTrackDefinitionSnapshot,
+  ProjectTrackKpi,
   ProjectTrackStageHistoryEntry,
   ProjectTrackStatus,
 } from "../schema/project-tracks.js";
@@ -34,7 +35,35 @@ export interface CreateTrackInput {
   currentStage: string | null;
   /** The method's param answers given at start (0274). */
   params?: Record<string, unknown>;
+  /** Where the track is heading (0302). */
+  direction?: string | null;
+  /** The number it steers by (0302), already validated by the caller. */
+  kpi?: ProjectTrackKpi | null;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * A DIRECTION / KPI patch (0302). `undefined` leaves a field alone; `null`
+ * clears it. `kpi` (an object) is MERGED onto the stored KPI in SQL — only
+ * the keys it names change, so a person moving the target and an agent
+ * stating the current value cannot revert each other.
+ */
+export interface TrackDirectionPatch {
+  direction?: string | null;
+  kpi?: Partial<ProjectTrackKpi> | null;
+}
+
+/** One stage appended to a running track (`appendStage`). */
+export interface AppendedTrackStage {
+  key: string;
+  name: string;
+  /** The closed rollup category every stored stage carries. */
+  category: string;
+  goal?: string;
+  /** ISO-8601 — marks the stage as EMERGENT (added after the track started). */
+  addedAt: string;
+  /** The user (or agent) id that added it. */
+  addedBy: string;
 }
 
 export interface UpdateTrackInput {
@@ -82,6 +111,8 @@ export class TrackRepository extends BaseRepository<
         methodVersion: data.methodVersion,
         currentStage: data.currentStage,
         params: data.params ?? {},
+        direction: data.direction ?? null,
+        kpi: data.kpi ?? null,
         // The birth seed of the stage history (0274): the first stage is
         // ENTERED at birth, the same moment `current_stage` is seeded.
         stageHistory: data.currentStage
@@ -258,6 +289,75 @@ export class TrackRepository extends BaseRepository<
         updatedAt: new Date(),
       })
       .where(eq(projectTracks.id, id))
+      .returning();
+    if (!track) return null;
+    await this.emitCompleted("update", track, userId);
+    return track as ProjectTrack;
+  }
+
+  /**
+   * Write a track's DIRECTION and/or KPI (0302). The KPI is merged IN SQL
+   * (`kpi || patch`, a NULL stored KPI read as `{}`), so only the keys this
+   * write names change; `kpi: null` clears it. Validation and governance are
+   * the caller's (`setTrackDirection`). Emits `track.update.completed`.
+   * Returns `null` when the row is gone.
+   */
+  async patchDirection(
+    id: string,
+    patch: TrackDirectionPatch,
+    userId: string
+  ): Promise<ProjectTrack | null> {
+    const kpi =
+      patch.kpi === undefined
+        ? undefined
+        : patch.kpi === null
+          ? null
+          : sql`(COALESCE(${projectTracks.kpi}, '{}'::jsonb) || ${JSON.stringify(patch.kpi)}::jsonb)`;
+    const [track] = await this.db
+      .update(projectTracks)
+      .set({
+        // `undefined` keys are dropped by Drizzle's SET (field untouched).
+        direction: patch.direction,
+        kpi,
+        updatedAt: new Date(),
+      })
+      .where(eq(projectTracks.id, id))
+      .returning();
+    if (!track) return null;
+    await this.emitCompleted("update", track, userId);
+    return track as ProjectTrack;
+  }
+
+  /**
+   * Append ONE stage to the track's PINNED stage list
+   * (`definition_snapshot.stages`) — the one writer of that list after birth.
+   * Compare-and-set on the list as the caller read it: lands only while the
+   * list still holds `expectedCount` stages AND no stage with this key, so two
+   * concurrent adds cannot both append (the loser gets `null` and is told) and
+   * a key can never be declared twice. `current_stage` and `stage_history` are
+   * untouched: adding a stage never ENTERS it — `advanceStage` does, and it
+   * now finds the key declared.
+   */
+  async appendStage(
+    id: string,
+    stage: AppendedTrackStage,
+    expectedCount: number,
+    userId: string
+  ): Promise<ProjectTrack | null> {
+    const stages = sql`COALESCE(${projectTracks.definitionSnapshot} -> 'stages', '[]'::jsonb)`;
+    const [track] = await this.db
+      .update(projectTracks)
+      .set({
+        definitionSnapshot: sql`jsonb_set(COALESCE(${projectTracks.definitionSnapshot}, '{}'::jsonb), '{stages}', (CASE WHEN jsonb_typeof(${stages}) = 'array' THEN ${stages} ELSE '[]'::jsonb END) || ${JSON.stringify([stage])}::jsonb, true)`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(projectTracks.id, id),
+          sql`(CASE WHEN jsonb_typeof(${stages}) = 'array' THEN jsonb_array_length(${stages}) ELSE 0 END) = ${expectedCount}`,
+          sql`NOT EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${stages}) = 'array' THEN ${stages} ELSE '[]'::jsonb END) AS s(e) WHERE s.e ->> 'key' = ${stage.key})`
+        )
+      )
       .returning();
     if (!track) return null;
     await this.emitCompleted("update", track, userId);

@@ -51,6 +51,8 @@ const PRESERVES: Record<string, string> = {
     "`expectedOutputs:` is the playbook_runs definition snapshot, not a session slot write",
   "routers/sync.ts":
     "mirrors a peer pod's session row verbatim — the peer's keys are the row's keys",
+  "services/playbooks/stage-gate.ts":
+    "`expectedOutputs:` is the READ input of the track check gate's outcome projection (`projectSessionOutcomes`); its `.update(focusSessions)` never sets expected_outputs",
 };
 
 function walk(dir: string, out: string[] = []): string[] {

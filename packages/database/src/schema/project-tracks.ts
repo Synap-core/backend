@@ -74,6 +74,25 @@ export interface ProjectTrackStageHistoryEntry {
   actor: string;
 }
 
+/**
+ * The optional number a track steers by (0302). `current` is STATED — by a
+ * person or an agent — never measured: nothing in the pod derives "qualified
+ * leads per month", so the value always travels with when it was stated
+ * (`updatedAt`) and by whom (`updatedBy`). Mirrored as `TrackKpi` in
+ * `@synap-core/types/units` (this package cannot import types); the tracks
+ * service pins the two equal at compile time.
+ */
+export interface ProjectTrackKpi {
+  label: string;
+  unit?: string;
+  target: number;
+  current?: number;
+  /** ISO-8601 — when `current` was last stated. */
+  updatedAt?: string;
+  /** The user (or agent) id that stated `current`. */
+  updatedBy?: string;
+}
+
 export const projectTracks = pgTable(
   "project_tracks",
   {
@@ -114,6 +133,13 @@ export const projectTracks = pgTable(
       .$type<ProjectTrackStageHistoryEntry[]>()
       .notNull()
       .default([]),
+    /**
+     * Where the track is heading, in one line (0302). May be non-verifiable
+     * — the verifiable part lives in its sessions' outcomes. NULL = not said.
+     */
+    direction: text("direction"),
+    /** The optional number the track steers by (0302). NULL = none. */
+    kpi: jsonb("kpi").$type<ProjectTrackKpi>(),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()

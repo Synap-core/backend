@@ -258,6 +258,8 @@ beforeAll(async () => {
       status text not null default 'active',
       params jsonb not null default '{}'::jsonb,
       stage_history jsonb not null default '[]'::jsonb,
+      direction text,
+      kpi jsonb,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()

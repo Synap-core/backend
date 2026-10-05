@@ -19,6 +19,12 @@
  *                       Entering a stage OFFERS its session (`offer`); it
  *                       never starts one.
  *   setTrackParams    — the method's param answers (0274), governed `track/update`.
+ *   setTrackDirection — the track's direction + KPI (0302), governed
+ *                       `track/update`. Reaching the KPI target NUDGES
+ *                       (`track.kpi_reached`); completion stays a person's act.
+ *   addTrackStage     — append an EMERGENT stage to the pinned stage list,
+ *                       governed `track/update`. The one writer of
+ *                       `definition_snapshot.stages` after birth.
  *   startStageSession — the ONE door that starts a stage's session: a thin
  *                       wrapper over `createFocusSession` (same governance),
  *                       idempotent on an open session already filed there.
@@ -52,6 +58,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import {
+  DEFAULT_PLAYBOOK_STAGE_CATEGORY,
   describeParamTypeError,
   readPlaybookParams,
   validatePlaybookParams,
@@ -59,6 +66,7 @@ import {
 import type {
   Playbook,
   ProjectTrack,
+  ProjectTrackKpi,
   ProjectTrackStatus,
 } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
@@ -67,14 +75,23 @@ import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   canTransitionTrack,
   deriveTrackStages,
+  readTrackDirection,
+  readTrackKpi,
   readTrackStage,
   readTrackStageHistory,
+  slotKeyBase,
+  trackKpiJustReached,
   trackPausedBy,
+  TRACK_DIRECTION_MAX,
+  TRACK_KPI_LABEL_MAX,
+  TRACK_KPI_UNIT_MAX,
+  type TrackKpi,
   type TrackPausedBy,
   type TrackStage,
   type TrackStageHistoryEntry,
   type TrackStatus,
 } from "@synap-core/types/units";
+import { z } from "zod";
 import {
   CHECK_GATE_METADATA_KEY,
   OPEN_SESSION_STATUSES,
@@ -149,6 +166,20 @@ type _SameStatuses = [ProjectTrackStatus] extends [TrackStatus]
 const _sameStatuses: _SameStatuses = true;
 void _sameStatuses;
 
+// The same pin for the KPI (0302): `ProjectTrackKpi` (@synap/database) and
+// `TrackKpi` (@synap-core/types/units) must describe ONE shape.
+type _SameKpi = [Required<ProjectTrackKpi>] extends [Required<TrackKpi>]
+  ? [Required<TrackKpi>] extends [Required<ProjectTrackKpi>]
+    ? [keyof ProjectTrackKpi] extends [keyof TrackKpi]
+      ? [keyof TrackKpi] extends [keyof ProjectTrackKpi]
+        ? true
+        : never
+      : never
+    : never
+  : never;
+const _sameKpi: _SameKpi = true;
+void _sameKpi;
+
 // ── projection ──────────────────────────────────────────────────────────────
 
 export interface TrackView {
@@ -176,6 +207,13 @@ export interface TrackView {
   declaredParams: unknown[];
   /** Every stage the track entered, oldest first (0274). */
   stageHistory: TrackStageHistoryEntry[];
+  /** Where the track is heading, one line (0302) — `null` when unsaid. */
+  direction: string | null;
+  /**
+   * The number it steers by (0302) — `null` when none. `current` is STATED
+   * (with `updatedAt` / `updatedBy`), never measured.
+   */
+  kpi: TrackKpi | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -209,6 +247,8 @@ export function toTrackView(
       ? track.definitionSnapshot.params
       : [],
     stageHistory: readTrackStageHistory(track.stageHistory),
+    direction: readTrackDirection(track.direction),
+    kpi: readTrackKpi(track.kpi),
     createdAt: new Date(track.createdAt).toISOString(),
     updatedAt: new Date(track.updatedAt).toISOString(),
   };
@@ -529,6 +569,10 @@ export interface StartTrackInput {
    * stage session that needs it.
    */
   params?: Record<string, unknown>;
+  /** Where the track is heading, one line (0302). */
+  direction?: string | null;
+  /** The number it steers by (0302): `{ label, unit?, target, current? }`. */
+  kpi?: unknown;
   actor: TrackActor;
   /**
    * Pre-minted id — ONLY the approval replay passes it (the id the proposal
@@ -672,6 +716,11 @@ export async function startTrack(
   const trackParams = input.params
     ? resolveTrackParams(playbook.params, input.params)
     : {};
+  const direction = resolveTrackDirection(input.direction);
+  // A KPI given at start is a WHOLE one (label + target); the `current`
+  // stamp is applied at the write, so a replay stamps the approval moment.
+  const kpiInput = input.kpi ? parseTrackKpiInput(input.kpi) : null;
+  if (kpiInput) resolveTrackKpi(null, kpiInput, actor.userId);
 
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
@@ -693,6 +742,8 @@ export async function startTrack(
       // The answers ride the proposal; the replay re-validates them against
       // the method as it stands at approval.
       ...(Object.keys(trackParams).length > 0 ? { params: trackParams } : {}),
+      ...(direction ? { direction } : {}),
+      ...(kpiInput ? { kpi: kpiInput } : {}),
       // The consent the summary states ("…and let <agent> work in …").
       ...(spaceGrantConsent
         ? { [TRACK_SPACE_GRANT_KEY]: spaceGrantConsent }
@@ -731,6 +782,10 @@ export async function startTrack(
       // the first stage, so the gate is not consulted here.
       currentStage: firstStageKey(snapshot.stages),
       params: trackParams,
+      direction,
+      kpi: kpiInput
+        ? resolveTrackKpi(null, kpiInput, actor.agentUserId ?? actor.userId)
+        : null,
       ...trackSpaceGrantMetadata(input, stepSpaces),
     },
     actor.userId
@@ -1420,6 +1475,488 @@ export async function applyTrackParams(
     throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
   }
   return { status: "updated", track: updated };
+}
+
+// ── direction + KPI (0302) ──────────────────────────────────────────────────
+
+/**
+ * A KPI as a caller may write it. `updatedAt` / `updatedBy` are SERVER-STAMPED
+ * whenever `current` is written — a caller cannot backdate a statement or
+ * attribute it to someone else — so they are not accepted here.
+ */
+export const trackKpiInputSchema = z
+  .object({
+    label: z.string().trim().min(1).max(TRACK_KPI_LABEL_MAX).optional(),
+    unit: z.string().trim().max(TRACK_KPI_UNIT_MAX).optional(),
+    target: z.number().finite().optional(),
+    current: z.number().finite().optional(),
+  })
+  .strict();
+export type TrackKpiInput = z.infer<typeof trackKpiInputSchema>;
+
+/** Parse a KPI patch, refusing it in words an agent can act on. */
+export function parseTrackKpiInput(raw: unknown): TrackKpiInput {
+  const parsed = trackKpiInputSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Invalid kpi: ${parsed.error.issues
+        .map((i) => `${i.path.join(".") || "kpi"} ${i.message}`)
+        .join(
+          "; "
+        )}. A KPI is { label, unit?, target, current? } — numbers for target and current.`,
+    });
+  }
+  return parsed.data;
+}
+
+/** A direction line: trimmed and bounded; `null`/blank clears it. */
+export function resolveTrackDirection(
+  raw: string | null | undefined
+): string | null {
+  const direction = readTrackDirection(raw);
+  if (direction && direction.length > TRACK_DIRECTION_MAX) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `A track's direction is one line — at most ${TRACK_DIRECTION_MAX} characters.`,
+    });
+  }
+  return direction;
+}
+
+/**
+ * The KPI a patch leaves on the track: the stored one with the patch's keys
+ * on top. Refused unless the result is a WHOLE KPI (a label and a target) —
+ * stating a value for a KPI nobody defined is not a KPI. Writing `current`
+ * stamps when and by whom it was stated.
+ */
+export function resolveTrackKpi(
+  stored: unknown,
+  patch: TrackKpiInput,
+  statedBy: string,
+  now: Date = new Date()
+): ProjectTrackKpi {
+  const merged = readTrackKpi({
+    ...(readTrackKpi(stored) ?? {}),
+    ...patch,
+    ...(patch.current !== undefined
+      ? { updatedAt: now.toISOString(), updatedBy: statedBy }
+      : {}),
+  });
+  if (!merged) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A KPI needs a label and a target number — give both (then state its current value).",
+    });
+  }
+  return merged;
+}
+
+export type SetTrackDirectionResult =
+  { status: "updated" | "unchanged"; track: ProjectTrack } | ProposedOutcome;
+
+/**
+ * Say where the track is heading (`direction`) and/or the number it steers by
+ * (`kpi` — a PATCH merged onto the stored KPI; `null` clears it). Stating a
+ * new `current` is the common write. Governed `track/update`; the replay is
+ * {@link applyTrackDirection}. Completion is NEVER automatic: reaching the
+ * target nudges the person (`track.kpi_reached`).
+ */
+export async function setTrackDirection(input: {
+  trackId: string;
+  direction?: string | null;
+  /** A KPI patch (`{ label?, unit?, target?, current? }`) or `null` to clear. */
+  kpi?: unknown;
+  actor: TrackActor;
+}): Promise<SetTrackDirectionResult> {
+  const { track, project } = await loadTrackForWrite(
+    input.trackId,
+    input.actor
+  );
+  if (input.direction === undefined && input.kpi === undefined) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Nothing to change — pass a direction and/or a kpi.",
+    });
+  }
+  const patch = normalizeDirectionPatch(input);
+  // Refused BEFORE governance: a malformed KPI is told to its author, never
+  // filed for a person to approve.
+  const next = previewDirection(track, patch, input.actor.userId);
+  if (
+    next.direction === readTrackDirection(track.direction) &&
+    sameKpiValue(next.kpi, readTrackKpi(track.kpi))
+  ) {
+    return { status: "unchanged", track };
+  }
+
+  const perm = await checkPermissionOrPropose({
+    userId: input.actor.userId,
+    agentUserId: input.actor.agentUserId ?? undefined,
+    workspaceId: project.workspaceId ?? undefined,
+    projectId: project.id,
+    subjectType: "track",
+    action: "update",
+    source: input.actor.source,
+    reasoning: input.actor.reasoning,
+    // The PATCH, never the merged result: the replay merges onto the KPI as it
+    // stands at approval, so a value stated in between is not reverted.
+    data: {
+      id: track.id,
+      name: track.name,
+      ...(patch.direction !== undefined ? { direction: patch.direction } : {}),
+      ...(patch.kpi !== undefined ? { kpi: patch.kpi } : {}),
+    },
+  });
+  if ("denied" in perm && perm.denied) {
+    throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+  }
+  if ("proposalId" in perm) {
+    return proposed(
+      perm,
+      buildObjectActionTitle({
+        action: "update",
+        objectKind: "track",
+        objectName: track.name,
+      }) + " — proposed for review"
+    );
+  }
+  return applyTrackDirection(track, project, patch, {
+    userId: input.actor.userId,
+    statedBy: input.actor.agentUserId ?? input.actor.userId,
+  });
+}
+
+interface DirectionPatch {
+  direction?: string | null;
+  kpi?: TrackKpiInput | null;
+}
+
+/** A patch as it arrives (a door, or a proposal's stored payload). */
+interface RawDirectionPatch {
+  direction?: string | null;
+  kpi?: unknown;
+}
+
+function normalizeDirectionPatch(input: RawDirectionPatch): DirectionPatch {
+  return {
+    ...(input.direction !== undefined
+      ? { direction: resolveTrackDirection(input.direction) }
+      : {}),
+    ...(input.kpi !== undefined
+      ? { kpi: input.kpi === null ? null : parseTrackKpiInput(input.kpi) }
+      : {}),
+  };
+}
+
+function previewDirection(
+  track: Pick<ProjectTrack, "direction" | "kpi">,
+  patch: DirectionPatch,
+  statedBy: string
+): { direction: string | null; kpi: ProjectTrackKpi | null } {
+  return {
+    direction:
+      patch.direction !== undefined
+        ? patch.direction
+        : readTrackDirection(track.direction),
+    kpi:
+      patch.kpi === undefined
+        ? readTrackKpi(track.kpi)
+        : patch.kpi === null
+          ? null
+          : resolveTrackKpi(track.kpi, patch.kpi, statedBy),
+  };
+}
+
+/** Equal KPIs, ignoring the statement stamps (a re-statement is a change). */
+function sameKpiValue(
+  a: ProjectTrackKpi | null,
+  b: ProjectTrackKpi | null
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.label === b.label &&
+    (a.unit ?? null) === (b.unit ?? null) &&
+    a.target === b.target &&
+    (a.current ?? null) === (b.current ?? null)
+  );
+}
+
+/**
+ * The direction/KPI write. Callers: `setTrackDirection` and the
+ * `track/update` replay (which passes the PROPOSING agent as `statedBy`).
+ * Re-validates against the KPI as it stands NOW, writes only the patch's keys
+ * (`patchDirection`, merged in SQL), and nudges on the target crossing.
+ */
+export async function applyTrackDirection(
+  track: ProjectTrack,
+  project: GateProject,
+  rawPatch: RawDirectionPatch,
+  who: { userId: string; statedBy: string }
+): Promise<{ status: "updated"; track: ProjectTrack }> {
+  const patch = normalizeDirectionPatch(rawPatch);
+  const before = readTrackKpi(track.kpi);
+  const kpi =
+    patch.kpi === undefined
+      ? undefined
+      : patch.kpi === null
+        ? null
+        : // Validated whole, written as a patch: the stamps ride with it.
+          kpiWritePatch(
+            track.kpi,
+            resolveTrackKpi(track.kpi, patch.kpi, who.statedBy),
+            patch.kpi
+          );
+  const updated = await (
+    await repo()
+  ).patchDirection(
+    track.id,
+    {
+      ...(patch.direction !== undefined ? { direction: patch.direction } : {}),
+      ...(kpi !== undefined ? { kpi } : {}),
+    },
+    who.userId
+  );
+  if (!updated) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+  }
+  const after = readTrackKpi(updated.kpi);
+  if (trackKpiJustReached(before, after)) {
+    await notifyTrackKpiReached(updated, project, after!);
+  }
+  return { status: "updated", track: updated };
+}
+
+/**
+ * What `patchDirection` merges in SQL: only the keys the patch named (+ the
+ * statement stamps when it named `current`), so a concurrent write to another
+ * key is not reverted. A track with no usable KPI yet gets the WHOLE merged
+ * one — `resolveTrackKpi` has proven it complete, and there is nothing to
+ * merge onto.
+ */
+function kpiWritePatch(
+  stored: unknown,
+  merged: ProjectTrackKpi,
+  patch: TrackKpiInput
+): Partial<ProjectTrackKpi> {
+  if (!readTrackKpi(stored)) return merged;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(patch) as Array<keyof TrackKpiInput>) {
+    if (patch[k] !== undefined) out[k] = merged[k];
+  }
+  if (patch.current !== undefined) {
+    out.updatedAt = merged.updatedAt;
+    out.updatedBy = merged.updatedBy;
+  }
+  return out as Partial<ProjectTrackKpi>;
+}
+
+/**
+ * The nudge: the KPI just reached its target, so the person may want to
+ * COMPLETE the track. Never completes it. Through the ONE notification door
+ * (`NotificationService.create`), to the person the track belongs to (its
+ * starter — for an agent key, its operator). Non-fatal: a failed nudge never
+ * fails the write it follows.
+ */
+async function notifyTrackKpiReached(
+  track: ProjectTrack,
+  project: GateProject,
+  kpi: TrackKpi
+): Promise<void> {
+  try {
+    const { NotificationService } =
+      await import("../../notifications/NotificationService.js");
+    await NotificationService.create({
+      type: "track.kpi_reached",
+      userId: track.userId,
+      workspaceId: project.workspaceId,
+      sourceType: "track",
+      sourceId: track.id,
+      groupKey: `track:${track.id}:kpi`,
+      data: {
+        trackId: track.id,
+        trackName: track.name,
+        kpiLabel: kpi.label,
+        current: kpi.current,
+        target: kpi.target,
+        unit: kpi.unit ?? "",
+      },
+    });
+  } catch (err) {
+    logger.warn({ err, trackId: track.id }, "track.kpi_reached nudge failed");
+  }
+}
+
+// ── emergent stages (0302) ──────────────────────────────────────────────────
+
+/** What a caller may say about a stage it adds to a running track. */
+export const addTrackStageInputSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    goal: z.string().trim().min(1).max(5000).optional(),
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(120)
+      .regex(/^[a-z0-9][a-z0-9_-]*$/, {
+        message: "a stage key is lowercase letters, digits, - or _",
+      })
+      .optional(),
+  })
+  .strict();
+export type AddTrackStageInput = z.infer<typeof addTrackStageInputSchema>;
+
+export type AddTrackStageResult =
+  { status: "added"; track: ProjectTrack; stageKey: string } | ProposedOutcome;
+
+/**
+ * Append an EMERGENT stage to a running track — work the method did not
+ * foresee. Governed `track/update`; the replay is {@link applyTrackStageAdd}.
+ *
+ * WHAT AN EMERGENT STAGE CARRIES — decided (founder decision 2, 2026-10-05:
+ * outcomes live INSIDE the session): a `name`, an optional `goal` (the brief
+ * of the session started there) and its `addedAt` / `addedBy` provenance.
+ * NOT outcomes and NOT a gate: what a stage must yield is declared on the
+ * session worked there (`outcomes[]` on `start_session` / `update_session`),
+ * and the check gate measures exactly those. A stage that pins its own
+ * outputs is a METHOD change — edit the method and start it again.
+ *
+ * The stage is APPENDED (last). Adding never enters it: `advanceTrackStage`
+ * does, and finds it declared — the "declared stages only" rule holds, and
+ * `stage_history` records the entry like any other.
+ */
+export async function addTrackStage(input: {
+  trackId: string;
+  stage: AddTrackStageInput;
+  actor: TrackActor;
+}): Promise<AddTrackStageResult> {
+  const { track, project } = await loadTrackForWrite(
+    input.trackId,
+    input.actor
+  );
+  const stage = parseAddTrackStage(input.stage);
+  // Refused BEFORE governance (closed track, taken key).
+  const key = resolveEmergentStageKey(track, stage);
+
+  const perm = await checkPermissionOrPropose({
+    userId: input.actor.userId,
+    agentUserId: input.actor.agentUserId ?? undefined,
+    workspaceId: project.workspaceId ?? undefined,
+    projectId: project.id,
+    subjectType: "track",
+    action: "update",
+    source: input.actor.source,
+    reasoning: input.actor.reasoning,
+    data: {
+      id: track.id,
+      name: track.name,
+      addStage: { ...stage, key },
+    },
+  });
+  if ("denied" in perm && perm.denied) {
+    throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+  }
+  if ("proposalId" in perm) {
+    return proposed(
+      perm,
+      buildObjectActionTitle({
+        action: "update",
+        objectKind: "track",
+        objectName: track.name,
+      }) + " — proposed for review"
+    );
+  }
+  return applyTrackStageAdd(
+    track,
+    { ...stage, key },
+    {
+      userId: input.actor.userId,
+      addedBy: input.actor.agentUserId ?? input.actor.userId,
+    }
+  );
+}
+
+export function parseAddTrackStage(raw: unknown): AddTrackStageInput {
+  const parsed = addTrackStageInputSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Invalid stage: ${parsed.error.issues
+        .map((i) => `${i.path.join(".") || "stage"} ${i.message}`)
+        .join("; ")}. A stage is { name, goal?, key? }.`,
+    });
+  }
+  return parsed.data;
+}
+
+/**
+ * The key the stage will be declared under: the caller's, refused when
+ * taken; else derived from its name (the shared label→key slug), suffixed
+ * `-2`, `-3`… past the keys the track already declares.
+ */
+function resolveEmergentStageKey(
+  track: ProjectTrack,
+  stage: AddTrackStageInput
+): string {
+  if (track.status === "archived" || track.status === "completed") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Track "${track.name}" is ${track.status} — reopen it before adding a stage.`,
+    });
+  }
+  const taken = new Set(stageKeys(track.definitionSnapshot?.stages));
+  if (stage.key) {
+    if (taken.has(stage.key)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `"${stage.key}" is already a stage of "${track.name}". Stages: ${[...taken].join(", ")}.`,
+      });
+    }
+    return stage.key;
+  }
+  const base = slotKeyBase(stage.name);
+  let key = base;
+  for (let n = 2; taken.has(key); n++) key = `${base}-${n}`;
+  return key;
+}
+
+/**
+ * The append. Callers: `addTrackStage` and the `track/update` replay (which
+ * passes the PROPOSING agent as `addedBy`). Compare-and-set on the stage list
+ * as read here: a concurrent add — or the same key landing first — is a
+ * CONFLICT, never a silent duplicate.
+ */
+export async function applyTrackStageAdd(
+  track: ProjectTrack,
+  stage: AddTrackStageInput & { key: string },
+  who: { userId: string; addedBy: string }
+): Promise<{ status: "added"; track: ProjectTrack; stageKey: string }> {
+  const key = resolveEmergentStageKey(track, stage);
+  const current = track.definitionSnapshot?.stages;
+  const updated = await (
+    await repo()
+  ).appendStage(
+    track.id,
+    {
+      key,
+      name: stage.name,
+      category: DEFAULT_PLAYBOOK_STAGE_CATEGORY,
+      ...(stage.goal ? { goal: stage.goal } : {}),
+      addedAt: new Date().toISOString(),
+      addedBy: who.addedBy,
+    },
+    Array.isArray(current) ? current.length : 0,
+    who.userId
+  );
+  if (!updated) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Track "${track.name}"'s stages changed while this was being decided — reload it and try again.`,
+    });
+  }
+  return { status: "added", track: updated, stageKey: key };
 }
 
 // ── the stage session (M2) ──────────────────────────────────────────────────

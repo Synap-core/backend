@@ -7,6 +7,10 @@
  *   POST  /tracks/:id/advance           { toStage } — any declared stage
  *   PATCH /tracks/:id                   { status } — pause/resume/complete/archive
  *   PATCH /tracks/:id/params            { params } — answer the method's params
+ *   PATCH /tracks/:id/direction         { direction?, kpi? } — where it is heading
+ *                                       and the number it steers by (0302)
+ *   POST  /tracks/:id/stages            { name, goal?, key? } — add an EMERGENT
+ *                                       stage (appended; never entered)
  *   POST  /tracks/:id/stages/:stageKey/sessions  { title?, goal? } — start the
  *                                       session a stage offers (idempotent)
  *
@@ -37,6 +41,10 @@ import {
   loadWrittenTrackView,
   setTrackParams,
   setTrackStatus,
+  setTrackDirection,
+  addTrackStage,
+  trackKpiInputSchema,
+  addTrackStageInputSchema,
   startStageSession,
   startTrack,
   type TrackActor,
@@ -53,6 +61,16 @@ const StartSchema = z.object({
   playbookId: Uuid,
   name: z.string().trim().min(1).max(200).optional(),
   params: ParamsBag.optional(),
+  direction: z.string().max(280).optional(),
+  kpi: trackKpiInputSchema.optional(),
+  reasoning: z.string().max(2000).optional(),
+});
+const DirectionSchema = z.object({
+  direction: z.string().max(280).nullable().optional(),
+  kpi: trackKpiInputSchema.nullable().optional(),
+  reasoning: z.string().max(2000).optional(),
+});
+const AddStageSchema = addTrackStageInputSchema.extend({
   reasoning: z.string().max(2000).optional(),
 });
 const ParamsSchema = z.object({
@@ -224,6 +242,70 @@ export function registerTracksRoutes(app: HubHono): void {
       });
     } catch (err) {
       return fail(c, err, "PATCH /tracks/:id/params");
+    }
+  });
+
+  app.patch("/tracks/:id/direction", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    const body = DirectionSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const { reasoning, direction, kpi } = body.data;
+      const result = await setTrackDirection({
+        trackId: id.data,
+        ...(direction !== undefined ? { direction } : {}),
+        ...(kpi !== undefined ? { kpi } : {}),
+        actor: actorOf(c, reasoning),
+      });
+      if (result.status === "proposed") return jsonGoverned(c, result);
+      return jsonGoverned(c, {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, actorOf(c)),
+      });
+    } catch (err) {
+      return fail(c, err, "PATCH /tracks/:id/direction");
+    }
+  });
+
+  app.post("/tracks/:id/stages", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    const body = AddStageSchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const { reasoning, ...stage } = body.data;
+      const result = await addTrackStage({
+        trackId: id.data,
+        stage,
+        actor: actorOf(c, reasoning),
+      });
+      if (result.status === "proposed") return jsonGoverned(c, result);
+      return jsonGoverned(c, {
+        status: result.status,
+        stageKey: result.stageKey,
+        track: await loadWrittenTrackView(result.track, actorOf(c)),
+      });
+    } catch (err) {
+      return fail(c, err, "POST /tracks/:id/stages");
     }
   });
 

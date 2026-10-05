@@ -8,9 +8,11 @@
  *                                runs), with the id the proposal was filed under.
  *   track/update               → a status change (`applyTrackStatus`), a stage
  *                                advance (`applyTrackStageAdvance`, gate OFF —
- *                                the reviewer just answered for this advance) or
+ *                                the reviewer just answered for this advance),
  *                                a params patch (`applyTrackParams`, re-validated
- *                                against the pinned params at approval).
+ *                                against the pinned params at approval), an
+ *                                emergent stage (`applyTrackStageAdd`) or a
+ *                                direction / KPI patch (`applyTrackDirection`).
  *   track/playbook.stage_gate  → flip the paused track back to active. APPROVAL
  *                                RESUMES, IT NEVER RUNS (same contract as
  *                                `focus_session/playbook.stage_gate`).
@@ -41,6 +43,9 @@ import {
   applyTrackStatus,
   applyTrackStageAdvance,
   applyTrackParams,
+  applyTrackDirection,
+  applyTrackStageAdd,
+  parseAddTrackStage,
   assertStageAdvanceable,
   assertTrackTransition,
 } from "../../../services/tracks/tracks-service.js";
@@ -186,6 +191,45 @@ export function registerTrackExecutors(): void {
           userId
         );
       } else if (
+        data.addStage &&
+        typeof data.addStage === "object" &&
+        !Array.isArray(data.addStage)
+      ) {
+        // An EMERGENT stage (0302). Re-parsed and re-checked against the stage
+        // list as it stands NOW (a key taken since refuses); `addedBy` is the
+        // PROPOSING agent, as the proposal records it.
+        const stage = parseAddTrackStage(data.addStage);
+        await applyTrackStageAdd(
+          track,
+          { ...stage, key: stage.key ?? "" },
+          { userId, addedBy: proposal.agentUserId ?? userId }
+        );
+      } else if ("direction" in data || "kpi" in data) {
+        // Direction / KPI (0302): the PATCH, merged onto the KPI as it stands
+        // at approval and re-validated; `current` is stamped as stated by the
+        // proposing agent at the approval moment.
+        await applyTrackDirection(
+          track,
+          project,
+          {
+            ...("direction" in data
+              ? {
+                  direction:
+                    typeof data.direction === "string" ? data.direction : null,
+                }
+              : {}),
+            ...("kpi" in data
+              ? {
+                  kpi:
+                    data.kpi && typeof data.kpi === "object"
+                      ? (data.kpi as Record<string, unknown>)
+                      : null,
+                }
+              : {}),
+          },
+          { userId, statedBy: proposal.agentUserId ?? userId }
+        );
+      } else if (
         typeof data.status === "string" &&
         (PROJECT_TRACK_STATUSES as readonly string[]).includes(data.status)
       ) {
@@ -206,7 +250,7 @@ export function registerTrackExecutors(): void {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Track update proposal carries neither a stage, a status nor params",
+            "Track update proposal carries no stage, status, params, direction, kpi or added stage",
         });
       }
 

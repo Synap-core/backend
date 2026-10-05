@@ -19,6 +19,8 @@ import {
   loadWrittenTrackView,
   setTrackParams,
   setTrackStatus,
+  setTrackDirection,
+  addTrackStage,
   startStageSession,
   startTrack,
   type TrackActor,
@@ -106,6 +108,10 @@ export const trackHandlers: McpHandlerMap = {
         playbookId,
         ...(str(ctx.args.name) ? { name: str(ctx.args.name) } : {}),
         ...(isParams(ctx.args.params) ? { params: ctx.args.params } : {}),
+        ...(str(ctx.args.direction)
+          ? { direction: str(ctx.args.direction) }
+          : {}),
+        ...(ctx.args.kpi != null ? { kpi: ctx.args.kpi } : {}),
         actor: actorOf(ctx),
       });
       const domainsNote = missingStageDomainsNote(result.missingDomains);
@@ -187,6 +193,65 @@ export const trackHandlers: McpHandlerMap = {
       if (result.status === "proposed") return result;
       return {
         status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    });
+  },
+
+  synap_update_track: async (ctx) => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    const trackId = uuid(ctx.args.trackId);
+    const hasDirection = "direction" in ctx.args;
+    const hasKpi = "kpi" in ctx.args;
+    if (!trackId || (!hasDirection && !hasKpi)) {
+      return ok({
+        error:
+          "trackId (uuid) and a direction and/or kpi are required — synap_list_tracks lists the project's tracks.",
+      });
+    }
+    const direction = ctx.args.direction;
+    if (hasDirection && direction !== null && typeof direction !== "string") {
+      return ok({ error: "direction is one line of text, or null to clear." });
+    }
+    return run(async () => {
+      const result = await setTrackDirection({
+        trackId,
+        ...(hasDirection ? { direction: direction as string | null } : {}),
+        ...(hasKpi ? { kpi: ctx.args.kpi } : {}),
+        actor: actorOf(ctx),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    });
+  },
+
+  synap_add_track_stage: async (ctx) => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    const trackId = uuid(ctx.args.trackId);
+    const name = str(ctx.args.name);
+    if (!trackId || !name) {
+      return ok({
+        error:
+          "trackId (uuid) and name are required — synap_list_tracks lists each track and its stages.",
+      });
+    }
+    return run(async () => {
+      const result = await addTrackStage({
+        trackId,
+        stage: {
+          name,
+          ...(str(ctx.args.goal) ? { goal: str(ctx.args.goal) } : {}),
+          ...(str(ctx.args.key) ? { key: str(ctx.args.key) } : {}),
+        },
+        actor: actorOf(ctx),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        stageKey: result.stageKey,
         track: await loadWrittenTrackView(result.track, ctx),
       };
     });

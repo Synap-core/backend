@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
   },
   permCalls: [] as Array<Record<string, unknown>>,
   emits: [] as Array<Record<string, unknown>>,
+  notifications: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -92,6 +93,14 @@ vi.mock("../../../utils/event-backed-proposal.js", () => ({
     proposal: { id: randomUUID(), status: "pending" },
   }),
 }));
+vi.mock("../../../notifications/NotificationService.js", () => ({
+  NotificationService: {
+    create: async (input: Record<string, unknown>) => {
+      h.notifications.push(input);
+      return randomUUID();
+    },
+  },
+}));
 vi.mock("../../links/links-service.js", () => ({
   createLinks: async () => [],
 }));
@@ -128,8 +137,10 @@ import {
   projectMembers,
 } from "@synap/database";
 import {
+  addTrackStage,
   advanceTrackStage,
   applyTrackParams,
+  setTrackDirection,
   getTrack,
   loadTrackView,
   loadWrittenTrackView,
@@ -296,6 +307,8 @@ beforeAll(async () => {
       status text not null default 'active',
       params jsonb not null default '{}'::jsonb,
       stage_history jsonb not null default '[]'::jsonb,
+      direction text,
+      kpi jsonb,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
@@ -327,6 +340,7 @@ beforeAll(async () => {
 beforeEach(() => {
   h.permCalls.length = 0;
   h.emits.length = 0;
+  h.notifications.length = 0;
 });
 
 describe("M4 params + M5 history at birth", () => {
@@ -782,15 +796,91 @@ describe("M6 the track check gate measures the sessions filed at the stage being
     gated = res.track.id;
   }
 
-  async function fileClosed(criteria: unknown[] = []) {
+  async function fileClosed(
+    criteria: unknown[] = [],
+    expectedOutputs: unknown[] = []
+  ) {
     const id = randomUUID();
     await q(
       `insert into focus_sessions (id, user_id, goal, status, project_id, track_id, track_stage, criteria, expected_outputs, agent_ids, metadata)
-       values ($1, $2, 'Drafted', 'closed', $3, $4, 'draft', $5::jsonb, '[]'::jsonb, '{}', '{}'::jsonb)`,
-      [id, USER, GATE_PROJECT, gated, JSON.stringify(criteria)]
+       values ($1, $2, 'Drafted', 'closed', $3, $4, 'draft', $5::jsonb, $6::jsonb, '{}', '{}'::jsonb)`,
+      [
+        id,
+        USER,
+        GATE_PROJECT,
+        gated,
+        JSON.stringify(criteria),
+        JSON.stringify(expectedOutputs),
+      ]
     );
     return id;
   }
+
+  async function advanceGated() {
+    const r = await advanceTrackStage({
+      trackId: gated,
+      toStage: "audit",
+      actor: human,
+    });
+    if (r.status === "proposed") throw new Error("unexpected");
+    return r;
+  }
+
+  // ── OUTCOMES (2026-10-05): the gate reads the ONE projection. Each row
+  // rules out the old criteria-only rule or a looser outcome rule. ──
+  it("HOLDS on a closed session whose required DELIVERABLE was never delivered, naming its key (rival: criteria-only passes it)", async () => {
+    await newGatedTrack();
+    await fileClosed([], [{ kind: "document", label: "Final draft" }]);
+    const r = await advanceGated();
+    expect(r.check).toMatchObject({ passed: false, failing: ["final-draft"] });
+    expect(r.track.status).toBe("paused");
+  });
+
+  it("PASSES once that deliverable is delivered (status done)", async () => {
+    await newGatedTrack();
+    await fileClosed(
+      [],
+      [
+        {
+          kind: "document",
+          label: "Final draft",
+          key: "final-draft",
+          status: "done",
+        },
+      ]
+    );
+    const r = await advanceGated();
+    expect(r).toMatchObject({ paused: false, check: { passed: true } });
+  });
+
+  it("a param slot is an INPUT, not an outcome: it never holds the gate (rival: every slot is owed)", async () => {
+    await newGatedTrack();
+    await fileClosed(
+      [],
+      [
+        {
+          kind: PARAM_SLOT_KIND,
+          label: "Audience",
+          owner: "human",
+          paramName: "audience",
+        },
+      ]
+    );
+    const r = await advanceGated();
+    expect(r).toMatchObject({ paused: false, check: { passed: true } });
+  });
+
+  it("an OPTIONAL criterion that failed does not hold (required outcomes only)", async () => {
+    await newGatedTrack();
+    const id = await fileClosed([{ ...CRITERION, required: false }]);
+    await q(
+      `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evidence, created_at)
+       values (gen_random_uuid(), $1, $2, 'reviewed', 1, 'fail', 'human', '{}'::jsonb, now())`,
+      [id, USER]
+    );
+    const r = await advanceGated();
+    expect(r).toMatchObject({ paused: false, check: { passed: true } });
+  });
 
   const CRITERION = {
     key: "reviewed",
@@ -848,7 +938,7 @@ describe("M6 the track check gate measures the sessions filed at the stage being
     // B's session is still COUNTED: it holds the gate for A.
     expect(r.check).toMatchObject({ passed: false, failing: ["reviewed"] });
     expect(r.check!.reason).toBe(
-      '1 session at stage "draft" closed without meeting its criteria.'
+      '1 session at stage "draft" closed without meeting its required outcomes.'
     );
     const [row] = (
       await q<{ metadata: unknown }>(
@@ -879,5 +969,282 @@ describe("M6 the track check gate measures the sessions filed at the stage being
     if (r.status === "proposed") throw new Error("unexpected");
     expect(r).toMatchObject({ paused: false, check: { passed: true } });
     expect(r.track.status).toBe("active");
+  });
+});
+
+describe("0302 direction + KPI", () => {
+  let dirTrack: string;
+  beforeAll(async () => {
+    const res = await startTrack({
+      projectId: STAGE_PROJECT,
+      playbookId: CHECK_METHOD,
+      direction: "  Become the reference for indie founders  ",
+      kpi: { label: "Qualified leads per month", target: 10 },
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("unexpected");
+    dirTrack = res.track.id;
+  });
+
+  it("start stores the direction (trimmed) and a WHOLE KPI; the view returns both", async () => {
+    const view = await loadTrackView((await getTrack(dirTrack, human))!, human);
+    expect(view.direction).toBe("Become the reference for indie founders");
+    expect(view.kpi).toEqual({
+      label: "Qualified leads per month",
+      target: 10,
+    });
+  });
+
+  it("refuses a half KPI at start, before anything is filed", async () => {
+    const fresh = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Fresh', 'active')`,
+      [fresh, USER]
+    );
+    await expect(
+      startTrack({
+        projectId: fresh,
+        playbookId: METHOD,
+        kpi: { current: 3 },
+        actor: agent,
+      })
+    ).rejects.toThrow(/label and a target/);
+    expect(h.permCalls).toHaveLength(0);
+  });
+
+  it("stating `current` merges onto the KPI and stamps when + by whom (never a caller-sent stamp)", async () => {
+    await expect(
+      setTrackDirection({
+        trackId: dirTrack,
+        kpi: { current: 4, updatedAt: "2020-01-01T00:00:00Z" },
+        actor: human,
+      })
+    ).rejects.toThrow(/Invalid kpi/);
+    const res = await setTrackDirection({
+      trackId: dirTrack,
+      kpi: { current: 4 },
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("unexpected");
+    const [row] = (
+      await q<{ kpi: Record<string, unknown> }>(
+        `select kpi from project_tracks where id = $1`,
+        [dirTrack]
+      )
+    ).rows;
+    expect(row!.kpi).toMatchObject({
+      label: "Qualified leads per month",
+      target: 10,
+      current: 4,
+      updatedBy: USER,
+    });
+    expect(typeof row!.kpi.updatedAt).toBe("string");
+    expect(h.notifications).toHaveLength(0);
+  });
+
+  it("a write from a STALE read keeps the value another writer stated in between (SQL merge)", async () => {
+    const stale = (await getTrack(dirTrack, human))!;
+    const { applyTrackDirection } = await import("../tracks-service.js");
+    const project = { id: STAGE_PROJECT, workspaceId: null, userId: USER };
+    await applyTrackDirection(
+      stale,
+      project,
+      { kpi: { current: 5 } },
+      {
+        userId: USER,
+        statedBy: USER,
+      }
+    );
+    await applyTrackDirection(
+      stale,
+      project,
+      { kpi: { target: 12 } },
+      {
+        userId: USER,
+        statedBy: USER,
+      }
+    );
+    const view = await loadTrackView((await getTrack(dirTrack, human))!, human);
+    expect(view.kpi).toMatchObject({ current: 5, target: 12 });
+  });
+
+  it("an AGENT proposes track/update; the replay stamps the proposing agent and NUDGES on the crossing only", async () => {
+    const res = await setTrackDirection({
+      trackId: dirTrack,
+      kpi: { current: 12 },
+      actor: agent,
+    });
+    expect(res.status).toBe("proposed");
+    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    expect(data).toMatchObject({ id: dirTrack, kpi: { current: 12 } });
+    expect(h.notifications).toHaveLength(0); // proposing nudges nobody
+    await execute("track/update", data, {
+      targetId: dirTrack,
+      projectId: STAGE_PROJECT,
+      targetType: "track",
+    });
+    const view = await loadTrackView((await getTrack(dirTrack, human))!, human);
+    expect(view.kpi).toMatchObject({ current: 12, updatedBy: AGENT });
+    // Completion stays manual: the track is still active…
+    expect(view.status).toBe("active");
+    // …and the person got ONE nudge, addressed at the track.
+    expect(h.notifications).toHaveLength(1);
+    expect(h.notifications[0]).toMatchObject({
+      type: "track.kpi_reached",
+      userId: USER,
+      sourceType: "track",
+      sourceId: dirTrack,
+    });
+    // Re-stating a reached value is not a crossing.
+    await setTrackDirection({
+      trackId: dirTrack,
+      kpi: { current: 13 },
+      actor: human,
+    });
+    expect(h.notifications).toHaveLength(1);
+  });
+
+  it("direction null clears it; kpi null clears it; nothing to change is refused", async () => {
+    await setTrackDirection({
+      trackId: dirTrack,
+      direction: null,
+      kpi: null,
+      actor: human,
+    });
+    const view = await loadTrackView((await getTrack(dirTrack, human))!, human);
+    expect(view).toMatchObject({ direction: null, kpi: null });
+    await expect(
+      setTrackDirection({ trackId: dirTrack, actor: human })
+    ).rejects.toThrow(/Nothing to change/);
+  });
+});
+
+describe("0302 emergent stages", () => {
+  let emTrack: string;
+  beforeAll(async () => {
+    await q(
+      `update project_tracks set status = 'archived' where project_id = $1 and playbook_id = $2`,
+      [GATE_PROJECT, CHECK_METHOD]
+    );
+    const res = await startTrack({
+      projectId: GATE_PROJECT,
+      playbookId: CHECK_METHOD,
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("unexpected");
+    emTrack = res.track.id;
+  });
+
+  it("appends a stage (derived key, goal, addedAt/addedBy) WITHOUT entering it; advance then enters it and the history records it", async () => {
+    const res = await addTrackStage({
+      trackId: emTrack,
+      stage: { name: "Partner outreach", goal: "Talk to three partners" },
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("unexpected");
+    expect(res.stageKey).toBe("partner-outreach");
+    const view = await loadTrackView(res.track, human);
+    expect(view.stages.map((s) => s.key)).toEqual([
+      "draft",
+      "audit",
+      "partner-outreach",
+    ]);
+    expect(view.stages[2]).toMatchObject({
+      name: "Partner outreach",
+      goal: "Talk to three partners",
+      position: "not_started",
+    });
+    expect(typeof view.stages[2]!.addedAt).toBe("string");
+    expect(view.currentStage).toBe("draft");
+
+    const moved = await advanceTrackStage({
+      trackId: emTrack,
+      toStage: "partner-outreach",
+      actor: human,
+    });
+    if (moved.status === "proposed") throw new Error("unexpected");
+    expect(moved.track.currentStage).toBe("partner-outreach");
+    expect(
+      (moved.track.stageHistory as Array<{ stageKey: string }>).map(
+        (e) => e.stageKey
+      )
+    ).toEqual(["draft", "partner-outreach"]);
+  });
+
+  it("a second stage of the same name gets -2; an explicit taken key is refused", async () => {
+    const res = await addTrackStage({
+      trackId: emTrack,
+      stage: { name: "Partner outreach" },
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("unexpected");
+    expect(res.stageKey).toBe("partner-outreach-2");
+    await expect(
+      addTrackStage({
+        trackId: emTrack,
+        stage: { name: "Again", key: "audit" },
+        actor: human,
+      })
+    ).rejects.toThrow(/already a stage/);
+  });
+
+  it("a STALE append (the list moved since it was read) is a CONFLICT, never a duplicate", async () => {
+    const stale = (await getTrack(emTrack, human))!;
+    const { applyTrackStageAdd } = await import("../tracks-service.js");
+    await applyTrackStageAdd(
+      stale,
+      { name: "One", key: "one" },
+      {
+        userId: USER,
+        addedBy: USER,
+      }
+    );
+    await expect(
+      applyTrackStageAdd(
+        stale,
+        { name: "Two", key: "two" },
+        {
+          userId: USER,
+          addedBy: USER,
+        }
+      )
+    ).rejects.toThrow(/changed while this was being decided/);
+  });
+
+  it("an AGENT proposes; the replay appends with the proposing agent as addedBy", async () => {
+    const res = await addTrackStage({
+      trackId: emTrack,
+      stage: { name: "Retro" },
+      actor: agent,
+    });
+    expect(res.status).toBe("proposed");
+    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    expect(data.addStage).toMatchObject({ name: "Retro", key: "retro" });
+    await execute("track/update", data, {
+      targetId: emTrack,
+      projectId: GATE_PROJECT,
+      targetType: "track",
+    });
+    const [row] = (
+      await q<{
+        definition_snapshot: { stages: Array<Record<string, unknown>> };
+      }>(`select definition_snapshot from project_tracks where id = $1`, [
+        emTrack,
+      ])
+    ).rows;
+    expect(row!.definition_snapshot.stages.at(-1)).toMatchObject({
+      key: "retro",
+      addedBy: AGENT,
+      category: "started",
+    });
+  });
+
+  it("a completed track takes no new stage", async () => {
+    await q(`update project_tracks set status = 'completed' where id = $1`, [
+      emTrack,
+    ]);
+    await expect(
+      addTrackStage({ trackId: emTrack, stage: { name: "Late" }, actor: human })
+    ).rejects.toThrow(/completed — reopen it/);
   });
 });

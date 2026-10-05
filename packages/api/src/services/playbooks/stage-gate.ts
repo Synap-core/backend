@@ -42,11 +42,17 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
+  readCriteria,
   resolveStageGate,
   stageGateProposalType,
   type PlaybookStage,
   type PlaybookStageGate,
 } from "@synap/playbooks";
+import {
+  projectSessionOutcomes,
+  unmetRequiredOutcomes,
+  type OutcomeCriterionLike,
+} from "@synap-core/types/units";
 import {
   CHECK_GATE_METADATA_KEY,
   CHECK_GATE_UNEVALUATED,
@@ -597,32 +603,35 @@ export function trackGateSubject(
 }
 
 /**
- * The track check gate's measurement (M6). PASSES iff at least one session
- * filed at `stageKey` is `closed` AND every closed session there that declares
- * criteria has a PASSING verdict (the shared `summarizeEvaluations` →
- * `computeSessionVerdict`: every required criterion's current verdict is
- * `pass`). A session with no criteria passes on being closed. Cancelled /
- * failed sessions are not work done and do not count either way.
+ * The track check gate's measurement (M6, switched to OUTCOMES 2026-10-05).
+ * PASSES iff at least one session filed at `stageKey` is `closed` AND every
+ * closed session there has met each of its REQUIRED OUTCOMES — read through
+ * the ONE projection every surface shows (`projectSessionOutcomes`,
+ * `@synap-core/types/units`): a required criterion is met by a current `pass`
+ * verdict (exactly the old rule: `computeSessionVerdict`'s "every required
+ * criterion passes"), a declared deliverable by its slot being delivered
+ * (`done`), a slot+criterion pair by either. A session with no required
+ * outcome passes on being closed. Cancelled / failed sessions are not work
+ * done and do not count either way.
  *
  * HOLDS otherwise, with a readable `reason`:
  *   - no closed session at the stage ⇒ `[CHECK_GATE_UNEVALUATED]` — nothing
  *     was measured, and unmeasured is not passed;
- *   - a closed session whose verdict is not passing ⇒ its unmet required
- *     criterion keys;
+ *   - a closed session with an unmet required outcome ⇒ those outcome keys;
  *   - ANY error ⇒ `[CHECK_GATE_UNEVALUATED]` (fail-closed: a broken read must
  *     never open the gate).
  *
  * Every session filed at the stage counts, whoever owns it — the track is the
  * project's, and so is its gate. Evaluations are owner-floored per session
- * (the same floor `attachSessionVerdicts` applies).
+ * (the same floor `attachSessionVerdicts` applies). Produced items are NOT
+ * joined: evidence decides which outcome an item serves, never whether it is
+ * met (`met` reads the slot's own `done` stamp), so the join is not needed.
  */
 export async function measureTrackStage(
   trackId: string,
   stageKey: string
 ): Promise<CheckMeasure> {
   try {
-    const { summarizeEvaluations } =
-      await import("../focus-sessions/evaluations/record.js");
     // SESSION-KIND-LENS-EXEMPT: the gate measures every session filed at ONE (track, stage), not a list a consumer pages.
     const filed = await db
       .select({
@@ -630,6 +639,7 @@ export async function measureTrackStage(
         userId: focusSessions.userId,
         status: focusSessions.status,
         criteria: focusSessions.criteria,
+        expectedOutputs: focusSessions.expectedOutputs,
       })
       .from(focusSessions)
       .where(
@@ -660,20 +670,17 @@ export async function measureTrackStage(
     const failing = new Set<string>();
     let notPassing = 0;
     for (const s of closed) {
-      const summary = summarizeEvaluations(
-        s.criteria,
-        evals.filter((e) => e.sessionId === s.id && e.userId === s.userId)
-      );
-      if (summary.criteria.length === 0) continue;
-      if (summary.verdict.state === "passing") continue;
-      const current = new Map(
-        summary.evaluations.map((e) => [e.criterionKey, e.verdict])
-      );
-      for (const c of summary.criteria) {
-        if (c.required !== false && current.get(c.key) !== "pass") {
-          failing.add(c.key);
-        }
-      }
+      const { outcomes } = projectSessionOutcomes({
+        expectedOutputs: s.expectedOutputs,
+        criteria: readCriteria(s.criteria) as OutcomeCriterionLike[],
+        evaluations: evals.filter(
+          (e) => e.sessionId === s.id && e.userId === s.userId
+        ),
+        sessionTerminal: true,
+      });
+      const unmet = unmetRequiredOutcomes(outcomes);
+      if (unmet.length === 0) continue;
+      for (const key of unmet) failing.add(key);
       notPassing += 1;
     }
     if (notPassing === 0) return { failing: [] };
@@ -684,8 +691,8 @@ export async function measureTrackStage(
       failing: failing.size > 0 ? [...failing] : [CHECK_GATE_UNEVALUATED],
       reason:
         notPassing === 1
-          ? `1 session at stage "${stageKey}" closed without meeting its criteria.`
-          : `${notPassing} sessions at stage "${stageKey}" closed without meeting their criteria.`,
+          ? `1 session at stage "${stageKey}" closed without meeting its required outcomes.`
+          : `${notPassing} sessions at stage "${stageKey}" closed without meeting their required outcomes.`,
     };
   } catch (err) {
     // Fail-CLOSED, and said: the hold names the failure rather than a criterion.

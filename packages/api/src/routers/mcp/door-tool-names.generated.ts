@@ -5,6 +5,11 @@
 import type { DoorToolNameRow } from "./door-tool-names.build.js";
 
 export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
+  synap_add_track_stage: {
+    "pod-mcp": "synap_add_track_stage",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_advance_track: {
     "pod-mcp": "synap_advance_track",
     "cp-connector": "pod__advance_track",
@@ -413,6 +418,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_update_space_brief: {
     "pod-mcp": "synap_update_space_brief",
     "cp-connector": "pod__update_space_brief",
+    raycast: null,
+  },
+  synap_update_track: {
+    "pod-mcp": "synap_update_track",
+    "cp-connector": null,
     raycast: null,
   },
   synap_update_workspace: {

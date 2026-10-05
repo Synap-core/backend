@@ -4696,7 +4696,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List a project's TRACKS — the methods it is running (e.g. 'Business model', 'Content', 'Build' inside one project). Each track follows one project-scoped playbook (its method), pinned at the version it started with. Each row: id, name, playbookId, methodVersion, status (active|paused|completed|archived), pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started }]. Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
+      "description": "List a project's TRACKS — the methods it is running (e.g. 'Business model', 'Content', 'Build' inside one project). Each track follows one project-scoped playbook (its method), pinned at the version it started with. Each row: id, name, playbookId, methodVersion, status (active|paused|completed|archived), pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4739,6 +4739,29 @@
           "params": {
             "type": "object",
             "description": "Optional answers to the method's declared params (its onboarding), by param name. A mistyped value or an unknown name is refused. A REQUIRED param you leave out is not refused: it becomes a question owed to the person on the stage session that needs it."
+          },
+          "direction": {
+            "type": "string",
+            "description": "Optional: where the track is heading, ONE line in the person's words. May be non-verifiable — the verifiable part is each session's outcomes."
+          },
+          "kpi": {
+            "type": "object",
+            "description": "Optional number the track steers by: { label, unit?, target, current? } (numbers). Only if the person names one; never invent a metric.",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "unit": {
+                "type": "string"
+              },
+              "target": {
+                "type": "number"
+              },
+              "current": {
+                "type": "number"
+              }
+            },
+            "required": ["label", "target"]
           },
           "reasoning": {
             "type": "string",
@@ -4864,6 +4887,88 @@
           }
         },
         "required": ["trackId", "params"]
+      }
+    },
+    {
+      "name": "synap_update_track",
+      "annotations": {
+        "title": "Update track",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Set a track's DIRECTION (where it is heading, one line) and/or its KPI (the number it steers by). kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to complete the track — never complete it yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "trackId": {
+            "type": "string",
+            "description": "Track UUID"
+          },
+          "direction": {
+            "type": ["string", "null"],
+            "description": "One line, in the person's words. null clears it."
+          },
+          "kpi": {
+            "type": ["object", "null"],
+            "description": "A KPI patch { label?, unit?, target?, current? } (numbers), or null to clear.",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "unit": {
+                "type": "string"
+              },
+              "target": {
+                "type": "number"
+              },
+              "current": {
+                "type": "number"
+              }
+            }
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why — shown to the reviewer. One line."
+          }
+        },
+        "required": ["trackId"]
+      }
+    },
+    {
+      "name": "synap_add_track_stage",
+      "annotations": {
+        "title": "Add track stage",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Add a stage to a RUNNING track — work the method did not foresee. Appended after the existing stages; adding never enters it (move there with synap_advance_track, then synap_start_stage_session). A stage carries a name and an optional goal; what it must yield is declared as `outcomes` on the session worked there, and that is what a check gate measures. A key already declared is refused. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "trackId": {
+            "type": "string",
+            "description": "Track UUID"
+          },
+          "name": {
+            "type": "string",
+            "description": "The stage's name."
+          },
+          "goal": {
+            "type": "string",
+            "description": "Optional: the brief of the session started at this stage."
+          },
+          "key": {
+            "type": "string",
+            "description": "Optional stable key (lowercase, digits, - or _). Omit to derive one from the name."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why this step is needed — shown to the reviewer."
+          }
+        },
+        "required": ["trackId", "name"]
       }
     },
     {
@@ -6303,6 +6408,7 @@
                           "document",
                           "proposal",
                           "relation",
+                          "link",
                           "role",
                           "project",
                           "workspace",

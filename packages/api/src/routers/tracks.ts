@@ -21,6 +21,10 @@ import {
   loadTrackViews,
   loadWrittenTrackView,
   setTrackParams,
+  setTrackDirection,
+  addTrackStage,
+  trackKpiInputSchema,
+  addTrackStageInputSchema,
   setTrackStatus,
   startStageSession,
   startTrack,
@@ -86,6 +90,10 @@ export const tracksRouter = router({
         playbookId: z.string().uuid(),
         name: z.string().trim().min(1).max(200).optional(),
         params: params.optional(),
+        /** Where the track is heading, one line (0302). */
+        direction: z.string().max(280).optional(),
+        /** The number it steers by (0302) — a whole KPI: label + target. */
+        kpi: trackKpiInputSchema.optional(),
         reasoning,
       })
     )
@@ -157,6 +165,63 @@ export const tracksRouter = router({
       if (result.status === "proposed") return result;
       return {
         status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * Say where the track is heading and/or the number it steers by (0302).
+   * `kpi` is a PATCH merged onto the stored KPI (`null` clears it); stating
+   * `current` stamps when and by whom. Governed `track/update`. Reaching the
+   * target nudges — it never completes the track.
+   */
+  setDirection: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        direction: z.string().max(280).nullable().optional(),
+        kpi: trackKpiInputSchema.nullable().optional(),
+        reasoning,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await setTrackDirection({
+        trackId: input.id,
+        ...(input.direction !== undefined
+          ? { direction: input.direction }
+          : {}),
+        ...(input.kpi !== undefined ? { kpi: input.kpi } : {}),
+        actor: actorOf(ctx, input.reasoning),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * Append an EMERGENT stage (0302) — work the method did not foresee.
+   * Adding never enters it (advance does). Governed `track/update`.
+   */
+  addStage: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        stage: addTrackStageInputSchema,
+        reasoning,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await addTrackStage({
+        trackId: input.id,
+        stage: input.stage,
+        actor: actorOf(ctx, input.reasoning),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        stageKey: result.stageKey,
         track: await loadWrittenTrackView(result.track, ctx),
       };
     }),
