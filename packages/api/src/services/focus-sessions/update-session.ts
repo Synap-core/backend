@@ -43,6 +43,7 @@ import type {
   SlotAskSnapshot,
 } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
+import { carrySlotKeys, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
 // `await import()` with no stated reason, which reads as circular-dependency
@@ -111,6 +112,10 @@ export interface UpdateFocusSessionParams {
      */
     ask?: ExpectedOutput["ask"];
   };
+  /**
+   * The slot to report produced, named by its LABEL (exact) or its KEY
+   * (`slot-keys.ts`, stamped by the server) — additive: a label keeps working.
+   */
   completeOutput?: string;
   /**
    * APPEND one agent to the session roster. Mirrors `addOutput`: incremental
@@ -616,52 +621,57 @@ export function mergeExpectedOutputs(
 
   const stored = indexByLabel(current);
 
-  return incoming.map((item) => {
-    const key = normalizeExpectedLabel(item?.label);
-    const prior = key ? stored.get(key) : undefined;
-    // A slot the stored array does not carry is NEW, and a new slot has no
-    // receipts by definition. Server-stamped fields on it are DROPPED rather
-    // than refused: there is no stored value being contradicted, so nothing is
-    // being overwritten — and refusing would break the legitimate rename (read
-    // the array, change one label, send it back), which arrives as exactly this
-    // shape. Dropping still defeats the bypass: a patch inventing a `done` slot
-    // under an unmatched label lands it pending, like any other declaration.
-    if (!prior)
-      return dropClearedRef(reconcileOwedSince(stripServerStamped(item)));
-    // Only the fields the incoming item is SILENT about are carried; a
-    // client-declarable field it states explicitly wins. Server-stamped fields
-    // are always carried from storage — an incoming one either equalled the
-    // stored value (a round-trip) or the detector above already refused.
-    const carried: Partial<ExpectedOutput> = {};
-    for (const field of SERVER_OWNED_OUTPUT_FIELDS) {
-      if (
-        item[field] !== undefined &&
-        !SERVER_STAMPED_FIELD_SET.has(field as string)
-      ) {
-        continue;
+  // Each slot keeps its KEY across the rebuild (`slot-keys.ts`): carried from
+  // the stored slot it replaces, minted for a new one. Never from the client.
+  return carrySlotKeys(
+    current,
+    incoming.map((item) => {
+      const key = normalizeExpectedLabel(item?.label);
+      const prior = key ? stored.get(key) : undefined;
+      // A slot the stored array does not carry is NEW, and a new slot has no
+      // receipts by definition. Server-stamped fields on it are DROPPED rather
+      // than refused: there is no stored value being contradicted, so nothing is
+      // being overwritten — and refusing would break the legitimate rename (read
+      // the array, change one label, send it back), which arrives as exactly this
+      // shape. Dropping still defeats the bypass: a patch inventing a `done` slot
+      // under an unmatched label lands it pending, like any other declaration.
+      if (!prior)
+        return dropClearedRef(reconcileOwedSince(stripServerStamped(item)));
+      // Only the fields the incoming item is SILENT about are carried; a
+      // client-declarable field it states explicitly wins. Server-stamped fields
+      // are always carried from storage — an incoming one either equalled the
+      // stored value (a round-trip) or the detector above already refused.
+      const carried: Partial<ExpectedOutput> = {};
+      for (const field of SERVER_OWNED_OUTPUT_FIELDS) {
+        if (
+          item[field] !== undefined &&
+          !SERVER_STAMPED_FIELD_SET.has(field as string)
+        ) {
+          continue;
+        }
+        const value = prior[field];
+        if (value !== undefined) {
+          Object.assign(carried, { [field]: value });
+        }
       }
-      const value = prior[field];
-      if (value !== undefined) {
-        Object.assign(carried, { [field]: value });
+      // A slot handed (back) to the person is being ASKED anew: the answer to
+      // the previous ask must not ride along, or the agent reads it as the
+      // answer to this one once the slot comes back (`stampBlocked`, same rule).
+      if (prior.owner !== "human" && item.owner === "human") {
+        // Archived, never dropped (`answer-history.ts`).
+        const answerHistory = archivedAnswerHistory(prior);
+        if (answerHistory) carried.answerHistory = answerHistory;
+        delete carried.answer;
+        delete carried.answerPickedUpAt;
       }
-    }
-    // A slot handed (back) to the person is being ASKED anew: the answer to
-    // the previous ask must not ride along, or the agent reads it as the
-    // answer to this one once the slot comes back (`stampBlocked`, same rule).
-    if (prior.owner !== "human" && item.owner === "human") {
-      // Archived, never dropped (`answer-history.ts`).
-      const answerHistory = archivedAnswerHistory(prior);
-      if (answerHistory) carried.answerHistory = answerHistory;
-      delete carried.answer;
-      delete carried.answerPickedUpAt;
-    }
-    // Stripped first so a server-stamped field the STORED slot does not carry
-    // cannot survive as the incoming value — `carried` can only overwrite keys
-    // it has, and an absent stored receipt has none.
-    return dropClearedRef(
-      reconcileOwedSince({ ...stripServerStamped(item), ...carried })
-    );
-  });
+      // Stripped first so a server-stamped field the STORED slot does not carry
+      // cannot survive as the incoming value — `carried` can only overwrite keys
+      // it has, and an absent stored receipt has none.
+      return dropClearedRef(
+        reconcileOwedSince({ ...stripServerStamped(item), ...carried })
+      );
+    })
+  );
 }
 
 /**
@@ -1065,10 +1075,11 @@ export function applyOutputMutations(
   let completeOutput: CompleteOutputOutcome | undefined;
   if (typeof patch.completeOutput === "string") {
     const label = patch.completeOutput;
+    const keys = deriveSlotKeys(next);
     let completed = 0;
     let refused = 0;
-    next = next.map((o) => {
-      if (o.label !== label) return o;
+    next = next.map((o, i) => {
+      if (o.label !== label && keys[i] !== label) return o;
       if (o.owner === "human") {
         refused += 1;
         return o;
@@ -1079,7 +1090,10 @@ export function applyOutputMutations(
     completeOutput = describeCompleteOutput(label, completed, refused);
   }
 
-  return { outputs: next, ...(completeOutput ? { completeOutput } : {}) };
+  return {
+    outputs: carrySlotKeys(current, next),
+    ...(completeOutput ? { completeOutput } : {}),
+  };
 }
 
 export async function updateFocusSession(

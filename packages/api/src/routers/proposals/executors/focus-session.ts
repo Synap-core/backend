@@ -41,6 +41,7 @@ import {
   sanitizeDeclaredOutputs,
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
+import { stampSlotKeys } from "../../../services/focus-sessions/slot-keys.js";
 import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
 import {
   findOpenSessionTwin,
@@ -302,9 +303,13 @@ export function registerFocusSessionExecutors(): void {
             // the slot actually becomes owed.
             // Track param slots are server-minted and appended AFTER the floor
             // (see create-session.ts) — never run through it.
-            expectedOutputs: sanitizeDeclaredOutputs(
-              (innerData.expectedOutputs as ExpectedOutput[] | undefined) ?? []
-            ).concat(trackParamSlots),
+            // Keyed at birth (`slot-keys.ts`).
+            expectedOutputs: stampSlotKeys(
+              sanitizeDeclaredOutputs(
+                (innerData.expectedOutputs as ExpectedOutput[] | undefined) ??
+                  []
+              ).concat(trackParamSlots)
+            ),
             channelId: (innerData.channelId as string | undefined) ?? null,
             agentIds: (innerData.agentIds as string[] | undefined) ?? [],
             status: "active",

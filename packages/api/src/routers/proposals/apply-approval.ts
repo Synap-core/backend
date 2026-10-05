@@ -131,6 +131,7 @@ import {
   readProposalExpectedLabel,
 } from "../../services/focus-sessions/satisfy-expected-output.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+import { readProposalExpectedKey } from "../../services/focus-sessions/slot-keys.js";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "proposals" });
@@ -577,6 +578,9 @@ export async function applyProposalApproval(args: {
         // `checkPermissionOrPropose`). Without it a session owing two documents
         // stamps the FIRST one whatever this draft was actually for.
         expectedLabel: readProposalExpectedLabel(args.proposal.data),
+        // The same claim by slot KEY — tried first; absent on proposals filed
+        // before keys existed, which still resolve by the label above.
+        expectedKey: readProposalExpectedKey(args.proposal.data),
         // The PROFILE of the entity this approval produced. `targetType` can
         // only say `entity`, while a slot is declared `knowledge` / `task` —
         // without it a `kind: "knowledge"` slot satisfied by a PROPOSED capture
@@ -606,6 +610,10 @@ export async function applyProposalApproval(args: {
         title:
           readProposalExpectedLabel(args.proposal.data) ?? "Untitled output",
         agentUserId: args.ctx.agentUserId ?? null,
+        // Forward the claim, so the room joins this output to the slot the
+        // approval just satisfied (key first, label as the alias).
+        expectedLabel: readProposalExpectedLabel(args.proposal.data),
+        expectedKey: readProposalExpectedKey(args.proposal.data),
       });
     } catch (err) {
       logger.warn(

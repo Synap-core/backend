@@ -245,7 +245,9 @@ describe("tripwire: expected-output write authority", () => {
     // must never error, or the fix breaks every honest client.
     const slot = storedSlot();
     const [merged] = mergeExpectedOutputs([slot], [{ ...slot }]);
-    expect(merged).toEqual(slot);
+    // Plus the slot's KEY (A2): a stored slot without one is keyed — at the
+    // key a reader already derived — on its first write. Nothing else moves.
+    expect(merged).toEqual({ ...slot, key: "launch-brief" });
   });
 
   it("ALLOWS a round-trip that went through JSON (an agent's echo)", () => {
@@ -256,7 +258,7 @@ describe("tripwire: expected-output write authority", () => {
     const echoed = JSON.parse(JSON.stringify(slot)) as ExpectedOutput;
     expect(detectServerStampedWrites([slot], [echoed])).toEqual([]);
     const [merged] = mergeExpectedOutputs([slot], [echoed]);
-    expect(merged).toEqual(slot);
+    expect(merged).toEqual({ ...slot, key: "launch-brief" });
   });
 
   it("carries every stamp forward when the patch is SILENT about it", () => {

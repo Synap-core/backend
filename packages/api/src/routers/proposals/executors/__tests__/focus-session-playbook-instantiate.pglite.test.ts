@@ -215,8 +215,9 @@ describe("approved playbook instantiate = the direct instantiate row", () => {
     expect(row.current_stage).toBe("triage");
     expect(row.origin).toBe("playbook");
     expect(row.subject_entity_id).toBe(SUBJECT);
+    // Keyed at birth (A2, `slot-keys.ts`).
     expect(row.expected_outputs).toEqual([
-      { kind: "note", label: "Hygiene report" },
+      { kind: "note", label: "Hygiene report", key: "hygiene-report" },
     ]);
     // `goal` unchanged (the dedup key); the name is written beside it.
     expect(row.goal).toBe("CRM hygiene for Acme Corp");

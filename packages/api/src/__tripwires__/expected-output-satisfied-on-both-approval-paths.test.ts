@@ -165,8 +165,10 @@ describe("tripwire: every approval path satisfies expected outputs", () => {
     // indifferent to conditional-spread vs plain property. Do NOT re-tighten
     // this to a literal source form.
     const satisfyCall = check.indexOf("await satisfyExpectedOutputs({");
-    const receiptStart = check.indexOf(
-      "const { expectedLabel: _callerSlotClaim"
+    // Whitespace-tolerant for the same reason as below: prettier breaks the
+    // destructuring across lines once it strips a second key (`expectedKey`).
+    const receiptStart = check.search(
+      /const \{\s*expectedLabel: _callerSlotClaim/
     );
     // Non-vacuity: `indexOf` returns -1 on a miss, and a -1 start would slice
     // from the END of the file — matching nothing and reading GREEN. Both
@@ -179,6 +181,9 @@ describe("tripwire: every approval path satisfies expected outputs", () => {
     // stored one.
     const receiptInsert = check.slice(receiptStart, satisfyCall);
     expect(receiptInsert).toMatch(/expectedLabel:\s*sessionSlotClaim\b/);
+    // …and the slot's KEY beside it (A2, `slot-keys.ts`), which the approval
+    // resolves first; the label stays the alias.
+    expect(receiptInsert).toMatch(/expectedKey:\s*sessionSlotClaimKey\b/);
     // The PENDING door stores it too — otherwise the deferred path above has
     // nothing to read. Asserted INSIDE the propose branch, so the satisfy call's
     // own forwarding above cannot stand in for it.
@@ -192,6 +197,9 @@ describe("tripwire: every approval path satisfies expected outputs", () => {
     expect(executeBranch).toBeGreaterThan(proposeBranch);
     expect(check.slice(proposeBranch, executeBranch)).toMatch(
       /expectedLabel:\s*sessionSlotClaim\b/
+    );
+    expect(check.slice(proposeBranch, executeBranch)).toMatch(
+      /expectedKey:\s*sessionSlotClaimKey\b/
     );
   });
 

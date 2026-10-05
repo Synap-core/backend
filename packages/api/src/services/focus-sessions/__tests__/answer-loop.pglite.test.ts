@@ -384,10 +384,12 @@ describe("the answer loop", () => {
       answeredBy: OWNER,
       question: WHY,
     });
-    // The sibling slot is untouched.
+    // The sibling slot is untouched — but for its KEY, stamped by the
+    // locked writer on a slot stored before keys existed (A2).
     expect(await slot(sessionId, "DNS record")).toEqual({
       kind: "document",
       label: "DNS record",
+      key: "dns-record",
     });
     expect(
       ((await metaOf(qid))!.roomPost as { answer: unknown }).answer

@@ -48,7 +48,9 @@
  *     — a human row beats any later non-human row). A slot and a criterion that
  *     share a key are ONE outcome (the slot names it, the criterion checks it).
  *  8. Evidence joins by KEY first, then by the normalised label; a produced
- *     item that names no outcome is UNATTACHED.
+ *     item that names no outcome is UNATTACHED. (Known edge: two LEGACY slots
+ *     sharing one label, neither keyed yet — label evidence lands on the
+ *     first. The first write through any slot door keys them, A2.)
  *
  * KEYS. A slot's identity is its stored `key` (server-stamped since A2). A
  * slot stored before keys existed gets one DERIVED here by the SAME function

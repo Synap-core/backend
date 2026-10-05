@@ -45,6 +45,7 @@ import {
   type SessionPlaybookCandidates,
 } from "./match-session-template.js";
 import { sanitizeDeclaredOutputs } from "./update-session.js";
+import { stampSlotKeys } from "./slot-keys.js";
 import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
@@ -748,10 +749,11 @@ export async function createFocusSession(
       // exists to strip exactly the `owner`/`owedSince` a caller must not
       // forge. Running them through it would erase the ownership this door is
       // the authority on.
-      expectedOutputs: [
+      // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
+      expectedOutputs: stampSlotKeys([
         ...sanitizeDeclaredOutputs(expectedOutputs),
         ...paramSlots,
-      ],
+      ]),
       criteria: sessionCriteria,
     };
 

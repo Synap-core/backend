@@ -179,7 +179,9 @@ describe("a declared slot carries no receipt it did not earn", () => {
       [
         "the approval executor (the write an AI caller reaches)",
         "../routers/proposals/executors/focus-session.ts",
-        [/expectedOutputs:\s*sanitizeDeclaredOutputs\(/],
+        // Keyed at birth (`stampSlotKeys`, A2) around the floor — the floor
+        // itself is what this asserts, so the wrapper is allowed, not required.
+        [/expectedOutputs:\s*(?:stampSlotKeys\(\s*)?sanitizeDeclaredOutputs\(/],
       ],
     ];
 

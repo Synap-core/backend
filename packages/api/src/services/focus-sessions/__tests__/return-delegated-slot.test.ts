@@ -149,8 +149,13 @@ describe("returnDelegatedSlot — one message, one un-delegation", () => {
     expect(slot).not.toHaveProperty("delegatedAt");
     // NO new status value, and certainly not `done`.
     expect(slot).not.toHaveProperty("status");
-    // Every other slot untouched.
-    expect(written()[0]).toEqual({ kind: "document", label: "Spec" });
+    // Every other slot untouched — but for the KEY the locked writer stamps on
+    // a slot stored before keys existed (A2, `slot-keys.ts`).
+    expect(written()[0]).toEqual({
+      kind: "document",
+      label: "Spec",
+      key: "spec",
+    });
   });
 
   it("still returns the slot when the reviewer gave no reason", async () => {

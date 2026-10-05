@@ -57,6 +57,7 @@ import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
+import { carrySlotKeys } from "./slot-keys.js";
 
 const logger = createLogger({ module: "focus-sessions/delegate-output" });
 
@@ -250,8 +251,12 @@ export async function updateExpectedOutputsLocked(
     const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)
       ? (locked.expectedOutputs as ExpectedOutput[])
       : [];
-    const next = mutate(current);
-    if (!next) return false;
+    const mutated = mutate(current);
+    if (!mutated) return false;
+    // Every slot keyed — carried from `current`, minted for a new one
+    // (`slot-keys.ts`), so each door that writes through this lock (a criterion
+    // escalation, a block, a delegation, a return) keeps slot identity.
+    const next = carrySlotKeys(current, mutated);
     await tx
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: new Date() })

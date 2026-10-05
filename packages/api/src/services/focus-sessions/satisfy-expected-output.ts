@@ -62,6 +62,7 @@ import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
+import { findSlotIndex } from "./slot-keys.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
@@ -94,6 +95,12 @@ export interface SatisfyExpectedOutputsParams {
    * absent ⇒ today's kind-only behaviour, unchanged.
    */
   expectedLabel?: string | null;
+  /**
+   * The same claim by slot KEY (`proposals.data.expectedKey`, read with
+   * `readProposalExpectedKey`). Tried BEFORE the label; a proposal filed
+   * before keys existed carries only the label, which still resolves.
+   */
+  expectedKey?: string | null;
 }
 
 export interface SatisfyExpectedOutputsResult {
@@ -118,6 +125,7 @@ export async function satisfyExpectedOutputs(
     targetType,
     proposalId,
     expectedLabel,
+    expectedKey,
     entityProfileSlug,
   } = params;
 
@@ -152,7 +160,8 @@ export async function satisfyExpectedOutputs(
       current,
       targetType,
       expectedLabel,
-      entityProfileSlug
+      entityProfileSlug,
+      expectedKey
     );
     if (index === -1) return { satisfied: [] };
 
@@ -173,8 +182,9 @@ export async function satisfyExpectedOutputs(
  *
  * TWO rungs, in this order:
  *
- *   1. SLOT CLAIM — the not-yet-done output whose `label` equals `expectedLabel`
- *      exactly (trimmed, case-insensitive) AND whose declared kind normalizes to
+ *   1. SLOT CLAIM — the not-yet-done output whose KEY equals `expectedKey`
+ *      (`slot-keys.ts`), else whose `label` equals `expectedLabel` exactly
+ *      (trimmed, case-insensitive), AND whose declared kind normalizes to
  *      the same object kind as the change. The claim names WHICH deliverable the
  *      change is for, so it beats the first-of-kind guess — but it does not
  *      outrank the kind itself. A label match on a slot of a DIFFERENT kind is
@@ -206,7 +216,8 @@ export function selectOutputToSatisfy(
   outputs: ExpectedOutput[],
   targetType: string | null | undefined,
   expectedLabel?: string | null,
-  entityProfileSlug?: string | null
+  entityProfileSlug?: string | null,
+  expectedKey?: string | null
 ): number {
   const kind = resolveChangeKind(targetType, entityProfileSlug);
   // A slot declared as the bare `entity` is satisfied by ANY entity, profile or
@@ -219,13 +230,12 @@ export function selectOutputToSatisfy(
     return slot === kind || (isEntityChange && slot === "entity");
   };
 
-  const claim = normalizeExpectedLabel(expectedLabel);
-  if (claim) {
-    const claimed = outputs.findIndex(
-      (o) =>
-        o.status !== "done" &&
-        normalizeExpectedLabel(o.label) === claim &&
-        matchesKind(o)
+  // The claim names the slot by KEY first, then by label (`findSlotIndex`).
+  if (expectedKey?.trim() || normalizeExpectedLabel(expectedLabel)) {
+    const claimed = findSlotIndex(
+      outputs,
+      { key: expectedKey, label: expectedLabel },
+      (o) => o.status !== "done" && matchesKind(o)
     );
     if (claimed !== -1) return claimed;
   }

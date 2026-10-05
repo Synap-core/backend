@@ -33,6 +33,7 @@ import {
   focusSessions,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { findSlotIndex, slotKeyAt } from "./slot-keys.js";
 
 const logger = createLogger({ module: "session-artifact" });
 
@@ -79,6 +80,14 @@ export interface RecordSessionArtifactParams {
    */
   expectedLabel?: string | null;
   /**
+   * The same claim by the slot's KEY (`slot-keys.ts`) — preferred over the
+   * label when both are given. Either one is resolved against the session's
+   * slots, and the claim is stored as BOTH (`props.expectedKey` +
+   * `props.expectedLabel`): the key is what joins (`session-outputs.ts`), the
+   * label stays the alias older readers and the unique index use.
+   */
+  expectedKey?: string | null;
+  /**
    * Where the output lands. Omitted ⇒ `desk` only when the session DECLARED
    * an expected output of this kind (the person asked for it), else `library`
    * — an agent that writes twenty files must not bury the desk under them.
@@ -115,16 +124,34 @@ async function findExistingArtifact(params: {
   });
 }
 
-async function sessionDeclaresKind(
-  sessionId: string,
-  kind: RecordSessionArtifactParams["kind"]
-): Promise<boolean> {
+async function sessionSlots(
+  sessionId: string
+): Promise<Array<{ kind?: string; label?: string }>> {
   const row = await db.query.focusSessions.findFirst({
     where: eq(focusSessions.id, sessionId),
     columns: { expectedOutputs: true },
   });
-  const declared = (row?.expectedOutputs ?? []) as Array<{ kind?: string }>;
-  return declared.some((o) => o.kind === kind);
+  return Array.isArray(row?.expectedOutputs)
+    ? (row.expectedOutputs as Array<{ kind?: string; label?: string }>)
+    : [];
+}
+
+/**
+ * The claim as the session's slots name it: the slot found by key first,
+ * then label (`findSlotIndex`), as `{key, label}` in the slot's own words.
+ * A claim naming no slot is kept as the label the caller sent (today's
+ * behaviour — the join then simply finds nothing to match) and carries no key.
+ */
+export function resolveArtifactSlotClaim(
+  slots: ReadonlyArray<{ label?: string }>,
+  claim: { key?: string | null; label?: string | null }
+): { key?: string; label?: string } {
+  if (!claim.key && !claim.label) return {};
+  const index = findSlotIndex(slots, claim);
+  if (index === -1) return claim.label ? { label: claim.label } : {};
+  const key = slotKeyAt(slots, index) ?? undefined;
+  const label = slots[index]?.label ?? claim.label ?? undefined;
+  return { ...(key ? { key } : {}), ...(label ? { label } : {}) };
 }
 
 /**
@@ -148,21 +175,19 @@ async function sessionDeclaresKind(
 export async function recordSessionArtifact(
   params: RecordSessionArtifactParams
 ): Promise<string | null> {
-  const {
-    sessionId,
-    workspaceId,
-    userId,
-    kind,
-    refId,
-    title,
-    agentUserId,
-    expectedLabel,
-  } = params;
+  const { sessionId, workspaceId, userId, kind, refId, title, agentUserId } =
+    params;
   if (!sessionId || !refId) return null;
   try {
+    const slots = await sessionSlots(sessionId);
+    const claim = resolveArtifactSlotClaim(slots, {
+      key: params.expectedKey,
+      label: params.expectedLabel,
+    });
+    const expectedLabel = claim.label;
     const placement =
       params.placement ??
-      ((await sessionDeclaresKind(sessionId, kind)) ? "desk" : "library");
+      (slots.some((o) => o.kind === kind) ? "desk" : "library");
     const [row] = await db
       .insert(artifacts)
       .values({
@@ -176,7 +201,14 @@ export async function recordSessionArtifact(
         sessionId,
         state: "working",
         placement,
-        ...(expectedLabel ? { props: { expectedLabel } } : {}),
+        ...(expectedLabel
+          ? {
+              props: {
+                expectedLabel,
+                ...(claim.key ? { expectedKey: claim.key } : {}),
+              },
+            }
+          : {}),
       })
       // IDEMPOTENT (0246). A retry after a failed request, or a double-click on
       // "record this as an output", used to write a SECOND row asserting the

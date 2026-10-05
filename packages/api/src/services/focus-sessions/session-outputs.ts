@@ -50,6 +50,7 @@ import {
 } from "@synap-core/types/units";
 import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { UUID_RE } from "./session-metadata.js";
+import { deriveSlotKeys } from "./slot-keys.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
   resolveEntityProfileRefs,
@@ -96,7 +97,14 @@ export interface SessionOutput {
    * way to guarantee that as the type grows is to carry the type, so this is
    * `ExpectedOutput` itself and the assignment spreads.
    */
-  expected?: ExpectedOutput;
+  expected?: ExpectedOutput & {
+    /**
+     * The slot's stored KEY (`slot-keys.ts`), when it carries one — a slot
+     * stored before keys existed has none until its next write stamps it.
+     * Never derived here: a matched slot reads exactly like an unmatched one.
+     */
+    key?: string;
+  };
   /** Which ledger(s) reported it — provenance for the join itself. */
   source: Array<"artifact" | "produced_edge" | "expected">;
 }
@@ -189,6 +197,11 @@ export interface JoinArtifactRow {
    * slot — never a `done` stamp; only `satisfy-expected-output.ts` writes that.
    */
   expectedLabel?: string | null;
+  /**
+   * The same claim by slot KEY (`artifacts.props.expectedKey`, written beside
+   * the label since A2). Preferred over the label when both are present.
+   */
+  expectedKey?: string | null;
 }
 
 /** Minimal produced-edge shape. */
@@ -238,8 +251,9 @@ function coordinate(kind: string, refId: string): string {
  *   2. PROPOSAL LINEAGE — an expected output's `satisfiedByProposalId` resolves
  *      through the proposal's `targetType:targetId` onto a produced coordinate.
  *      This is evidence, so it wins over any kind guess.
- *   3. DECLARED LABEL — an artifact recorded with `props.expectedLabel` names
- *      the slot its producer MEANT. A person attaching an existing object to a
+ *   3. DECLARED SLOT — an artifact recorded with `props.expectedKey` (A2, the
+ *      slot's stable key — tried first) or `props.expectedLabel` names the
+ *      slot its producer MEANT. A person attaching an existing object to a
  *      session has no proposal to leave lineage on, so without this a
  *      human-produced output could only ever land on the FIRST declared slot of
  *      its kind — wrong the moment two documents are declared. An explicit
@@ -247,7 +261,7 @@ function coordinate(kind: string, refId: string): string {
  *      completion, so it never stamps `done`.
  *   4. KIND FALLBACK — only for an expected output with NO proposal lineage,
  *      and only onto an output nothing else has claimed, and never onto one
- *      that claimed a different label (a guess may not overrule a claim).
+ *      that claimed a different label or key (a guess may not overrule a claim).
  *
  * Whatever is left over is `pendingExpected`: declared, not delivered.
  */
@@ -257,8 +271,12 @@ export function joinSessionOutputs(
   const byId = new Map<string, SessionOutput>();
   /** Declared label → the coordinate whose artifact claimed it (first wins). */
   const byExpectedLabel = new Map<string, string>();
+  /** Declared slot KEY → the coordinate whose artifact claimed it (first wins). */
+  const byExpectedKey = new Map<string, string>();
   /** The reverse: coordinate → the label its artifact claimed. */
   const labelClaimOf = new Map<string, string>();
+  /** The reverse: coordinate → the slot key its artifact claimed. */
+  const keyClaimOf = new Map<string, string>();
   const profileOf = (id: string) => {
     const entityProfile = input.entityProfiles?.get(id);
     return entityProfile ? { entityProfile } : {};
@@ -270,6 +288,10 @@ export function joinSessionOutputs(
     if (a.expectedLabel && !byExpectedLabel.has(a.expectedLabel)) {
       byExpectedLabel.set(a.expectedLabel, id);
       labelClaimOf.set(id, a.expectedLabel);
+    }
+    if (a.expectedKey && !byExpectedKey.has(a.expectedKey)) {
+      byExpectedKey.set(a.expectedKey, id);
+      keyClaimOf.set(id, a.expectedKey);
     }
     const existing = byId.get(id);
     if (existing) {
@@ -319,7 +341,9 @@ export function joinSessionOutputs(
   const claimed = new Set<string>();
   const pendingExpected: ExpectedOutput[] = [];
 
-  for (const e of input.expectedOutputs) {
+  const slotKeys = deriveSlotKeys(input.expectedOutputs);
+  for (const [index, e] of input.expectedOutputs.entries()) {
+    const slotKey = slotKeys[index] ?? undefined;
     // (2) Lineage first — an approved proposal names the object it produced.
     let target: SessionOutput | undefined;
     const proposal = e.satisfiedByProposalId
@@ -331,12 +355,25 @@ export function joinSessionOutputs(
       );
       if (candidate && !claimed.has(candidate.id)) target = candidate;
     }
-    // (3) Declared label — an explicit claim from the producer. Allowed even
-    // when a proposal exists but did not resolve: a named slot beats a guess.
+    // (3) Declared slot — an explicit claim from the producer, by KEY first
+    // and then by label. Allowed even when a proposal exists but did not
+    // resolve: a named slot beats a guess.
+    if (!target && slotKey) {
+      const claimedId = byExpectedKey.get(slotKey);
+      const candidate = claimedId ? byId.get(claimedId) : undefined;
+      if (candidate && !claimed.has(candidate.id)) target = candidate;
+    }
     if (!target) {
       const claimedId = byExpectedLabel.get(e.label);
       const candidate = claimedId ? byId.get(claimedId) : undefined;
-      if (candidate && !claimed.has(candidate.id)) target = candidate;
+      // A label claim yields to the same artifact's KEY claim on another slot.
+      if (
+        candidate &&
+        !claimed.has(candidate.id) &&
+        (keyClaimOf.get(candidate.id) ?? slotKey) === slotKey
+      ) {
+        target = candidate;
+      }
     }
     // (4) Kind fallback — ONLY when there is no lineage to read.
     if (!target && !proposal) {
@@ -348,7 +385,8 @@ export function joinSessionOutputs(
           // An output that claimed a DIFFERENT slot is not up for guessing.
           // Otherwise the first declared slot would swallow it before its own
           // label was ever reached, and the claim would be inert.
-          (labelClaimOf.get(o.id) ?? e.label) === e.label
+          (labelClaimOf.get(o.id) ?? e.label) === e.label &&
+          (keyClaimOf.get(o.id) ?? slotKey) === slotKey
       );
     }
     if (!target) {
@@ -600,6 +638,7 @@ export async function listOutputsForSessions(
         artifacts: (artifactsBySession.get(id) ?? []).map((a) => ({
           ...(a as unknown as JoinArtifactRow),
           expectedLabel: readExpectedLabel(a.props),
+          expectedKey: readExpectedKey(a.props),
         })),
         produced: (producedBySession.get(id) ?? []) as JoinProducedRow[],
         expectedOutputs: expectedBySession.get(id) ?? [],
@@ -634,6 +673,12 @@ function groupBy<T>(
  * `artifacts.props` is free-form JSONB, so this narrows rather than trusts.
  * Module-local: the join below is its only consumer (it was exported with none).
  */
+function readExpectedKey(props: unknown): string | null {
+  if (!props || typeof props !== "object") return null;
+  const value = (props as { expectedKey?: unknown }).expectedKey;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 function readExpectedLabel(props: unknown): string | null {
   if (!props || typeof props !== "object") return null;
   const value = (props as { expectedLabel?: unknown }).expectedLabel;

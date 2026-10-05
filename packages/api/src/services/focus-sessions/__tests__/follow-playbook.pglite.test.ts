@@ -435,8 +435,10 @@ describe("attach: the session BECOMES A RUN of the playbook", () => {
         blockedReason: "decision",
         why: "only you can price the enterprise tier",
         owedSince: "2026-09-01T10:00:00.000Z",
+        // The slot's KEY (A2) — its identity, frozen on this first write.
+        key: "pricing-sign-off",
       },
-      { kind: "document", label: "Launch note" },
+      { kind: "document", label: "Launch note", key: "launch-note" },
     ]);
   });
 

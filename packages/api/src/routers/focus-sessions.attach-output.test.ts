@@ -301,7 +301,11 @@ describe("focusSessions.attachOutput — the write", () => {
       expectedLabel: "Spec",
     });
     // Exactly the coordinate `joinSessionOutputs` rule 3 reads back.
-    expect(insertedRow().props).toEqual({ expectedLabel: "Spec" });
+    // …and the slot's KEY beside it (A2), which the join tries first.
+    expect(insertedRow().props).toEqual({
+      expectedLabel: "Spec",
+      expectedKey: "spec",
+    });
   });
 
   it("claiming a slot writes no `done` stamp anywhere", async () => {

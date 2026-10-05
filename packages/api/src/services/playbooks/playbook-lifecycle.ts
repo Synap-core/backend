@@ -82,6 +82,7 @@ import {
 } from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
 import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
+import { stampSlotKeys } from "../focus-sessions/slot-keys.js";
 import { parseCommandTemplate } from "../../utils/command-template.js";
 import { authoringMisses } from "../../utils/template-diagnostics.js";
 import {
@@ -550,7 +551,8 @@ export async function instantiateSessionRow(
           PARAM_SLOT_CIRCUMSTANCE.run
         )
       : [];
-  const expectedOutputs = [...declaredOutputs, ...paramSlots];
+  // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
+  const expectedOutputs = stampSlotKeys([...declaredOutputs, ...paramSlots]);
   // Seed the active stage from the playbook's first stage (null when stageless,
   // so a no-stage playbook stays progress-only — currentStage never NOT NULL).
   const stages = (playbook.stages as PlaybookStage[]) ?? [];

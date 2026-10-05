@@ -94,6 +94,7 @@ import {
   getAgentFocusProjectId,
 } from "../services/agent-identity-service.js";
 import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expected-output.js";
+import { slotKeyAt } from "../services/focus-sessions/slot-keys.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
@@ -294,15 +295,42 @@ interface SessionGovernanceContext {
  * already has in `services/focus-sessions/session-outputs.ts`. `done` still hangs
  * off approval, and `selectOutputToSatisfy` falls back to the kind guess when the
  * claim matches no open slot. Returns the DECLARED label (the slot's own casing),
- * not the change's, so the stored claim joins the ledger verbatim.
+ * not the change's, so the stored claim joins the ledger verbatim — together
+ * with the slot's KEY (`slot-keys.ts`, stored or derived), which is what the
+ * approval resolves first; the label stays the alias older readers use.
  */
 function resolveSessionSlotClaim(
   expectedOutputs: ExpectedOutput[],
   data: Record<string, unknown> | undefined,
   targetType: string | null | undefined,
   actingAgentType?: string
-): string | undefined {
-  if (expectedOutputs.length === 0) return undefined;
+): SessionSlotClaim | undefined {
+  const index = resolveSessionSlotClaimIndex(
+    expectedOutputs,
+    data,
+    targetType,
+    actingAgentType
+  );
+  if (index === -1) return undefined;
+  const label = expectedOutputs[index]?.label;
+  if (!label) return undefined;
+  const key = slotKeyAt(expectedOutputs, index);
+  return { label, ...(key ? { key } : {}) };
+}
+
+/** A resolved slot claim: the slot's own label, and its key. */
+interface SessionSlotClaim {
+  label: string;
+  key?: string;
+}
+
+function resolveSessionSlotClaimIndex(
+  expectedOutputs: ExpectedOutput[],
+  data: Record<string, unknown> | undefined,
+  targetType: string | null | undefined,
+  actingAgentType?: string
+): number {
+  if (expectedOutputs.length === 0) return -1;
 
   // The kind floor, applied to BOTH rungs below.
   const targetKind = normalizeObjectKind(targetType);
@@ -325,14 +353,14 @@ function resolveSessionSlotClaim(
         .toLowerCase()
     : "";
   if (candidate) {
-    const named = expectedOutputs.find(
+    const named = expectedOutputs.findIndex(
       (o) =>
         typeof o.label === "string" &&
         o.label.trim().toLowerCase() === candidate &&
         ofKind(o) &&
         notTheHumans(o)
-    )?.label;
-    if (named) return named;
+    );
+    if (named !== -1) return named;
   }
 
   // RUNG 2 — the DELEGATION already named it. A slot handed to an agent type
@@ -356,17 +384,17 @@ function resolveSessionSlotClaim(
   // by creating an entity.
   const delegateType = actingAgentType?.trim().toLowerCase();
   if (delegateType) {
-    return expectedOutputs.find(
+    return expectedOutputs.findIndex(
       (o) =>
         o.status !== "done" &&
         typeof o.delegatedTo === "string" &&
         o.delegatedTo.trim().toLowerCase() === delegateType &&
         ofKind(o) &&
         notTheHumans(o)
-    )?.label;
+    );
   }
 
-  return undefined;
+  return -1;
 }
 
 /**
@@ -1639,7 +1667,7 @@ async function evaluatePermission(
     // exactly. Written onto the proposal (pending row AND auto-approve receipt)
     // as `data.expectedLabel`, so the approval that later stamps `done` knows
     // WHICH slot it satisfied instead of guessing the first of the kind.
-    let sessionSlotClaim = sessionGovernance
+    let slotClaim = sessionGovernance
       ? resolveSessionSlotClaim(
           sessionGovernance.expectedOutputs,
           data,
@@ -1650,20 +1678,24 @@ async function evaluatePermission(
     // needs it: an attributed agent write, no name match, and a slot on this
     // session that was actually handed to someone.
     if (
-      !sessionSlotClaim &&
+      !slotClaim &&
       sessionGovernance &&
       agentUserId &&
       sessionGovernance.expectedOutputs.some(
         (o) => o.status !== "done" && o.delegatedTo
       )
     ) {
-      sessionSlotClaim = resolveSessionSlotClaim(
+      slotClaim = resolveSessionSlotClaim(
         sessionGovernance.expectedOutputs,
         data,
         subjectType,
         await loadActingAgentType(agentUserId)
       );
     }
+    // The label (the alias every pending proposal already carries) and the
+    // slot's KEY (`slot-keys.ts`), written side by side on the proposal.
+    const sessionSlotClaim = slotClaim?.label;
+    const sessionSlotClaimKey = slotClaim?.key;
 
     // 5. AI policy check
     //
@@ -1835,6 +1867,7 @@ async function evaluatePermission(
           // The slot this draft claims — carried so the human's approval stamps
           // the deliverable the agent was actually working on.
           expectedLabel: sessionSlotClaim,
+          expectedKey: sessionSlotClaimKey,
           // A1 + Q1: a session the hoist above MINTED/REUSED was never named by
           // the caller — the pending row it lands on must not take its project.
           sessionSource:
@@ -1906,7 +1939,11 @@ async function evaluatePermission(
         // deliverable slot, which is the one thing this claim is designed not
         // to be. Strip it: ONLY the claim governance resolved from the session
         // row may occupy that key.
-        const { expectedLabel: _callerSlotClaim, ...receiptData } = data ?? {};
+        const {
+          expectedLabel: _callerSlotClaim,
+          expectedKey: _callerSlotKey,
+          ...receiptData
+        } = data ?? {};
         try {
           const [receipt] = await db
             .insert(proposals)
@@ -1922,6 +1959,9 @@ async function evaluatePermission(
                 // Slot claim, same top-level key the pending door writes.
                 ...(sessionSlotClaim
                   ? { expectedLabel: sessionSlotClaim }
+                  : {}),
+                ...(sessionSlotClaimKey
+                  ? { expectedKey: sessionSlotClaimKey }
                   : {}),
                 ...(correlationId ? { correlationId } : {}),
                 ...(requestedEventId ? { requestedEventId } : {}),
@@ -2011,6 +2051,7 @@ async function evaluatePermission(
               // The claim resolved above, so a session owing TWO documents
               // stamps the one this write was for — not the first of the kind.
               expectedLabel: sessionSlotClaim,
+              expectedKey: sessionSlotClaimKey,
               // The PROFILE of the entity this write produced. `subjectType` can
               // only say `entity`, while a slot is declared as `knowledge` /
               // `task` — without this a `kind: "knowledge"` slot could never be
@@ -2283,6 +2324,7 @@ async function evaluatePermission(
         // Parity with the agent path: the anonymous principal's proposal claims
         // the same slot when its own name names one.
         expectedLabel: sessionSlotClaim,
+        expectedKey: sessionSlotClaimKey,
         governanceReason:
           proposeReasonCode ?? opts.governanceReason ?? undefined,
       });
@@ -3400,6 +3442,8 @@ async function createProposal(args: {
    * approval stamps `done`. A claim, never a stamp.
    */
   expectedLabel?: string;
+  /** The same claim by slot KEY (`slot-keys.ts`) — `readProposalExpectedKey` reads it. */
+  expectedKey?: string;
   /**
    * Structured governance reason — the PROPOSE_REASON KEY the pure engine
    * stamped (from `gov.reasonCode`). Persisted to `governance_reason` so the
@@ -3424,6 +3468,7 @@ async function createProposal(args: {
     data,
     reasoning,
     expectedLabel,
+    expectedKey,
     governanceReason,
     stepRunId,
     nodeId,
@@ -3709,6 +3754,7 @@ async function createProposal(args: {
     // The slot claim rides at the TOP LEVEL, beside the request-shaped envelope
     // — `readProposalExpectedLabel` is the ONE reader.
     ...(expectedLabel ? { expectedLabel } : {}),
+    ...(expectedKey ? { expectedKey } : {}),
   };
 
   // G1 PEEK-BEFORE-EVENT: for an agent-authored write that exactly matches an

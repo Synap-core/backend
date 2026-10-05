@@ -132,12 +132,17 @@ describe("mergeExpectedOutputs", () => {
     const next = mergeExpectedOutputs(stored(), [
       { kind: "view", label: "Pipeline board" },
     ]);
-    expect(next).toEqual([{ kind: "view", label: "Pipeline board" }]);
+    // Verbatim, plus the key the server mints for a new slot (A2).
+    expect(next).toEqual([
+      { kind: "view", label: "Pipeline board", key: "pipeline-board" },
+    ]);
   });
 
   it("is a no-op on an empty stored array", () => {
     const incoming = [{ kind: "document", label: "Spec" }];
-    expect(mergeExpectedOutputs([], incoming)).toEqual(incoming);
+    expect(mergeExpectedOutputs([], incoming)).toEqual(
+      incoming.map((o) => ({ ...o, key: "spec" }))
+    );
   });
 });
 
