@@ -61,6 +61,11 @@ export interface TrackStage {
    * portable across pods. `startStageSession` resolves it to a live workspace.
    */
   domain?: string;
+  /**
+   * ISO-8601 — present only on an EMERGENT stage: one added to the running
+   * track (`addTrackStage`) rather than pinned from its method at start.
+   */
+  addedAt?: string;
 }
 
 type ReadStage = Omit<TrackStage, "position" | "sessionCount">;
@@ -108,6 +113,7 @@ function readStage(raw: unknown): ReadStage | null {
   if (typeof r.domain === "string" && r.domain.trim()) {
     out.domain = r.domain.trim();
   }
+  if (typeof r.addedAt === "string" && r.addedAt) out.addedAt = r.addedAt;
   return out;
 }
 
@@ -405,3 +411,102 @@ export function filedStageKey(
 export const NOT_FILED_AT_A_STAGE = `Not filed at a ${resolveObjectNoun(
   "stage"
 ).toLowerCase()}`;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMERGENT STAGES + DIRECTION + KPI (0302, founder decision 2026-10-05: a track
+// carries a direction and an optional KPI; stages may be added after it starts;
+// no hill chart). The verifiable part of a track lives in its SESSIONS'
+// outcomes — the track only steers.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** True when any stage was added after the track started (`addedAt`). */
+export function trackStagesEmerged(
+  stages: ReadonlyArray<{ addedAt?: string }>
+): boolean {
+  return stages.some((s) => typeof s.addedAt === "string" && !!s.addedAt);
+}
+
+/**
+ * The number a track steers by (`project_tracks.kpi`, 0302).
+ *
+ * `current` is STATED, never measured: nothing in the pod derives "qualified
+ * leads per month", so the value always travels with WHEN it was stated
+ * (`updatedAt`) and by whom (`updatedBy`). A surface must never present it as
+ * a live measurement.
+ *
+ * The target is REACHED when `current >= target` — a KPI is a number to grow
+ * toward. (A lower-is-better KPI is not modelled yet; state it as the number
+ * to reach, e.g. "days saved", not "days taken".)
+ *
+ * The DB mirror is `ProjectTrackKpi` (`@synap/database`, which cannot import
+ * this package); the pod pins the two equal at compile time.
+ */
+export interface TrackKpi {
+  label: string;
+  unit?: string;
+  target: number;
+  current?: number;
+  /** ISO-8601 — when `current` was last stated. */
+  updatedAt?: string;
+  /** The user (or agent) id that stated `current`. */
+  updatedBy?: string;
+}
+
+/** Max length of a KPI label / unit and of a track's direction line. */
+export const TRACK_KPI_LABEL_MAX = 80;
+export const TRACK_KPI_UNIT_MAX = 24;
+export const TRACK_DIRECTION_MAX = 280;
+
+function finite(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/**
+ * Read the untyped jsonb leniently: a KPI needs a non-empty `label` and a
+ * finite `target`, else it is not a KPI (`null`) — never a half-drawn bar.
+ */
+export function readTrackKpi(raw: unknown): TrackKpi | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const label = typeof r.label === "string" ? r.label.trim() : "";
+  const target = finite(r.target);
+  if (!label || target === undefined) return null;
+  const out: TrackKpi = { label, target };
+  if (typeof r.unit === "string" && r.unit.trim()) out.unit = r.unit.trim();
+  const current = finite(r.current);
+  if (current !== undefined) out.current = current;
+  if (typeof r.updatedAt === "string" && r.updatedAt) {
+    out.updatedAt = r.updatedAt;
+  }
+  if (typeof r.updatedBy === "string" && r.updatedBy) {
+    out.updatedBy = r.updatedBy;
+  }
+  return out;
+}
+
+/** True when a stated `current` has reached the `target` (see {@link TrackKpi}). */
+export function trackKpiReached(kpi: TrackKpi | null | undefined): boolean {
+  return (
+    !!kpi &&
+    typeof kpi.current === "number" &&
+    Number.isFinite(kpi.current) &&
+    kpi.current >= kpi.target
+  );
+}
+
+/**
+ * Did THIS write make the KPI reach its target? True only on the crossing —
+ * not reached before, reached after — so a re-statement of an already-reached
+ * value (or a label edit) never nudges again.
+ */
+export function trackKpiJustReached(
+  before: TrackKpi | null | undefined,
+  after: TrackKpi | null | undefined
+): boolean {
+  return trackKpiReached(after) && !trackKpiReached(before);
+}
+
+/** Read the direction line: trimmed, or `null` when unsaid. */
+export function readTrackDirection(raw: unknown): string | null {
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}

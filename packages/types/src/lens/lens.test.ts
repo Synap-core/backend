@@ -617,7 +617,7 @@ describe("lensHeaderModel", () => {
       pod: null,
       workspace: null,
       project: "target-date",
-      track: "step",
+      track: ["kpi", "step"],
       session: "criteria",
     });
     expect(lensScopeFactLabel({ kind: "step", index: 3, total: 5 })).toBe(

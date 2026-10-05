@@ -26,6 +26,11 @@ import {
   type UnitStateInput,
   type UnitStateView,
 } from "../units/state.js";
+import {
+  readTrackKpi,
+  trackStagesEmerged,
+  type TrackKpi,
+} from "../units/track.js";
 import { resolveActionLabel, resolveStatusLabel } from "../vocabulary/index.js";
 import { LENS_SECTION_LABELS } from "./classes.js";
 import type { LensDoor, LensRow, LensVerb } from "./rows.js";
@@ -44,24 +49,51 @@ export interface LensCounts {
 export type LensScopeFact =
   | { kind: "target-date"; at: string | null }
   | { kind: "step"; index: number; total: number }
+  | LensKpiFact
   | { kind: "criteria"; met: number; total: number };
+
+/**
+ * A track's KPI as its header fact (0302): "Qualified leads per month 6 / 10"
+ * with a small bar. `current` is STATED, never measured — `statedAt` says
+ * when, and a host shows it beside the number (never a bare "live" value).
+ */
+export interface LensKpiFact {
+  kind: "kpi";
+  label: string;
+  unit: string | null;
+  target: number;
+  /** The stated value; null when nobody has stated one yet (no bar). */
+  current: number | null;
+  /** current / target, clamped to [0, 1]; null without a current value. */
+  progress: number | null;
+  /** ISO — when `current` was stated; null when never. */
+  statedAt: string | null;
+  reached: boolean;
+}
 
 export type LensScopeFactFor<K extends LensScopeKind> = K extends "project"
   ? Extract<LensScopeFact, { kind: "target-date" }>
   : K extends "track"
-    ? Extract<LensScopeFact, { kind: "step" }>
+    ? Extract<LensScopeFact, { kind: "step" | "kpi" }>
     : K extends "session"
       ? Extract<LensScopeFact, { kind: "criteria" }>
       : never;
 
-/** Which fact a header of this scope kind carries — null for the pod / a space. */
+/**
+ * Which fact a header of this scope kind carries — null for the pod / a space.
+ * A track carries ONE of two, in this order: its KPI when it has one, else its
+ * step ({@link lensTrackFact}).
+ */
 export const LENS_SCOPE_FACT_KIND = {
   pod: null,
   workspace: null,
   project: "target-date",
-  track: "step",
+  track: ["kpi", "step"],
   session: "criteria",
-} as const satisfies Record<LensScopeKind, LensScopeFact["kind"] | null>;
+} as const satisfies Record<
+  LensScopeKind,
+  LensScopeFact["kind"] | readonly LensScopeFact["kind"][] | null
+>;
 
 /**
  * Whether a lens of this scope kind carries the PULSE (the activity heatmap).
@@ -88,7 +120,67 @@ export function lensScopeFactLabel(fact: LensScopeFact): string | null {
   if (fact.kind === "criteria") {
     return fact.total > 0 ? `${fact.met} of ${fact.total} met` : null;
   }
+  if (fact.kind === "kpi") {
+    const unit = fact.unit ? ` ${fact.unit}` : "";
+    return fact.current === null
+      ? `${fact.label}: target ${fmtNumber(fact.target)}${unit}`
+      : `${fact.label} ${fmtNumber(fact.current)} / ${fmtNumber(fact.target)}${unit}`;
+  }
   return null;
+}
+
+/** A KPI number in words: integers plain, fractions to two places at most. */
+function fmtNumber(n: number): string {
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+}
+
+/** A track's KPI as its header fact; null when the track steers by no number. */
+export function lensKpiFact(raw: TrackKpi | unknown): LensKpiFact | null {
+  const kpi = readTrackKpi(raw);
+  if (!kpi) return null;
+  const current = typeof kpi.current === "number" ? kpi.current : null;
+  return {
+    kind: "kpi",
+    label: kpi.label,
+    unit: kpi.unit ?? null,
+    target: kpi.target,
+    current,
+    progress:
+      current === null
+        ? null
+        : kpi.target > 0
+          ? Math.max(0, Math.min(1, current / kpi.target))
+          : current >= kpi.target
+            ? 1
+            : 0,
+    statedAt: current === null ? null : (kpi.updatedAt ?? null),
+    reached: current !== null && current >= kpi.target,
+  };
+}
+
+/**
+ * THE track header's fact — one rule for browser and relay:
+ *   1. the KPI, when the track steers by one;
+ *   2. else "Step N of M" — but ONLY while the stages are the method's own.
+ *      Once a stage has EMERGED (added to the running track) M is no longer a
+ *      plan, just the count so far, so "Step 3 of 4" would promise an end the
+ *      track never declared: the fact omits;
+ *   3. else nothing (stageless, or standing on no pinned stage).
+ */
+export function lensTrackFact(track: {
+  kpi?: unknown;
+  stages: ReadonlyArray<{ key: string; addedAt?: string }>;
+  currentStage: string | null | undefined;
+}): Extract<LensScopeFact, { kind: "step" | "kpi" }> | null {
+  const kpi = lensKpiFact(track.kpi);
+  if (kpi) return kpi;
+  if (trackStagesEmerged(track.stages)) return null;
+  const at = track.currentStage
+    ? track.stages.findIndex((s) => s.key === track.currentStage)
+    : -1;
+  return at >= 0
+    ? { kind: "step", index: at + 1, total: track.stages.length }
+    : null;
 }
 
 /** One part of the narrative line. `at` parts are formatted by the host's date door. */

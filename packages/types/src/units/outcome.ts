@@ -596,3 +596,23 @@ export function readInputs(
 ): SessionInput[] {
   return projectSessionOutcomes(input).inputs;
 }
+
+/**
+ * The REQUIRED outcomes not met — the keys a stage's check gate holds on.
+ * Retired outcomes are neither met nor owed (rule 5), so they never hold. An
+ * outcome list with nothing required is met by construction (a session with
+ * no outcomes passes on being closed).
+ *
+ * Over criterion-only outcomes this is exactly `computeSessionVerdict`'s
+ * "every required criterion's current verdict is pass"; a slot+criterion
+ * outcome is also met when its slot was delivered (rule 7).
+ */
+export function unmetRequiredOutcomes(
+  outcomes: ReadonlyArray<
+    Pick<SessionOutcome, "key" | "required" | "met" | "retired">
+  >
+): string[] {
+  return outcomes
+    .filter((o) => o.required && !o.retired && !o.met)
+    .map((o) => o.key);
+}
