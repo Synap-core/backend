@@ -25,6 +25,8 @@ export type {
   DynamicFormField,
   DynamicFormSpec,
   WorkspaceTiebreakResult,
+  TranscriptionStatus,
+  TranscribeOutcome,
 } from "./intelligence-hub-client.js";
 
 export {

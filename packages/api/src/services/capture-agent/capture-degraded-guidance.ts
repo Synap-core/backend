@@ -82,6 +82,8 @@ const TRANSIENT_REASONS = new Set([
   // A CONFIGURED vision provider failed (bad key, unfunded, outage) — not the
   // configuration state `vision_provider_not_configured`.
   "vision_provider_failed",
+  // Same for a CONFIGURED transcription provider (Groq/OpenAI Whisper).
+  "transcription_provider_failed",
 ]);
 
 /**

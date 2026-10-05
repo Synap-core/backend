@@ -48,7 +48,11 @@ describe("degraded reason → permanence class", () => {
     expect(isDegradedReasonRetryable(reason)).toBe(false);
   });
 
-  it.each(["is_invalid_response", "vision_provider_failed"])(
+  it.each([
+    "is_invalid_response",
+    "vision_provider_failed",
+    "transcription_provider_failed",
+  ])(
     "%s is transient — a configured upstream failed, retrying may succeed",
     (reason) => {
       expect(classifyDegradedReason(reason)).toBe("transient");

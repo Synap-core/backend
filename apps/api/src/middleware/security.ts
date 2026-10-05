@@ -421,8 +421,9 @@ export const applicationConnectionStatusRateLimitMiddleware = rateLimiter({
  *
  * Default: 10MB max request body.
  * Exception: Hub entity source-file attach (binary provenance / Superwhisper
- * WAV dogfood) allows 32MB — matches SOURCE_BLOB_MAX_BYTES. Path-scoped so
- * the rest of the surface stays at 10MB.
+ * WAV dogfood) allows 32MB — matches SOURCE_BLOB_MAX_BYTES. Dictation
+ * (`/api/media/transcribe`, 25MB audio) rides the same exemption and enforces
+ * its own tighter ceiling. Path-scoped so the rest of the surface stays at 10MB.
  */
 export const requestSizeLimit: MiddlewareHandler = async (c, next) => {
   const contentLength = c.req.header("content-length");
@@ -434,7 +435,8 @@ export const requestSizeLimit: MiddlewareHandler = async (c, next) => {
     const isBulkMedia =
       /\/entities\/[^/]+\/source-file\/?$/.test(path) ||
       path.endsWith("/source-file") ||
-      path.includes("/import/store-unit");
+      path.includes("/import/store-unit") ||
+      path === "/api/media/transcribe";
     const maxSize = isBulkMedia
       ? 32 * 1024 * 1024 // 32MB — audio provenance
       : 10 * 1024 * 1024; // 10MB default

@@ -50,6 +50,7 @@ export { fileUploadApp } from "./routers/file-upload.js";
 export { externalSkillsApp } from "./routers/external/skills.js";
 export { externalChatApp } from "./routers/external/chat.js";
 export { chatStreamApp } from "./routers/chat-stream.js";
+export { mediaTranscribeApp } from "./routers/media-transcribe.js";
 export { captureProgressStreamApp } from "./routers/capture-progress-stream.js";
 export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";

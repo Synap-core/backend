@@ -37,7 +37,7 @@ import {
 } from "../routers/hub-protocol/rest/_codecs/misc.js";
 
 /**
- * The eleven honesty reasons the Intelligence Service emits, plus the three
+ * The twelve honesty reasons the Intelligence Service emits, plus the three
  * pod plumbing ones. Sourced from `synap-intelligence-service`'s
  * `extraction/extractors/*` + `extraction/index.ts`.
  */
@@ -48,6 +48,7 @@ const IS_EXTRACTION_REASONS = [
   "vision_provider_failed",
   "image_missing_binary",
   "transcription_provider_not_configured",
+  "transcription_provider_failed",
   "audio_missing_binary",
   "docx_missing_binary",
   "docx_empty",

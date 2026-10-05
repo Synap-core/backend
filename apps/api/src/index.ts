@@ -42,6 +42,7 @@ import {
   mcpHttpApp,
   oauthApp,
   fileUploadApp,
+  mediaTranscribeApp,
   externalSkillsApp,
   externalChatApp,
   chatStreamApp,
@@ -1165,6 +1166,10 @@ app.route("/v1", openaiCompatApp);
 // File Upload REST endpoint (multipart/form-data — not tRPC)
 // Auth: Kratos session cookie (applied inside fileUploadApp)
 app.route("/api/files", fileUploadApp);
+
+// Dictation speech-to-text (multipart — not tRPC). Pod → IS over Hub Protocol.
+// GET|POST /api/media/transcribe — auth applied inside mediaTranscribeApp.
+app.route("/api/media", mediaTranscribeApp);
 
 // AI rate limiting for chat/send message path
 app.use("/trpc/chat.sendMessage", aiRateLimitMiddleware);

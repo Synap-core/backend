@@ -385,6 +385,38 @@ function isAuthStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
+// ── Transcription ────────────────────────────────────────────────────────────
+
+/** `GET /api/transcribe` — whether the IS can transcribe, and with what. */
+export interface TranscriptionStatus {
+  available: boolean;
+  model: string | null;
+  provider: string | null;
+  /** Set when `available` is false for a reason other than "no provider". */
+  reason?: "is_route_missing";
+}
+
+/** `POST /api/transcribe` — a transcript, or the IS's named refusal. */
+export type TranscribeOutcome =
+  | {
+      ok: true;
+      text: string;
+      language?: string;
+      durationMs?: number;
+      model: string | null;
+      provider: string | null;
+    }
+  | {
+      ok: false;
+      /** The IS's HTTP status. */
+      status: number;
+      /** e.g. transcription_not_configured, transcription_provider_failed,
+       *  llm_budget_exceeded, audio_too_large, unsupported_audio_type,
+       *  is_route_missing (older IS), is_invalid_response. */
+      code: string;
+      error: string;
+    };
+
 // ── Fetch helper ─────────────────────────────────────────────────────────────
 
 const FETCH_TIMEOUT_MS = 30_000;
@@ -1587,6 +1619,102 @@ export class IntelligenceHubClient {
       );
       return null;
     }
+  }
+
+  /**
+   * Can this IS transcribe right now? `GET /api/transcribe` — resolution only,
+   * no provider call. An IS build without the route (404) answers
+   * `{ available: false, reason: "is_route_missing" }`; any other failure
+   * THROWS — an unreachable IS is not "transcription off".
+   */
+  async transcriptionStatus(): Promise<TranscriptionStatus> {
+    const response = await fetchWithTimeout(
+      `${this.baseUrl}/api/transcribe`,
+      { headers: { "X-API-Key": this.apiKey } },
+      5_000
+    );
+    if (response.status === 404) {
+      return {
+        available: false,
+        model: null,
+        provider: null,
+        reason: "is_route_missing",
+      };
+    }
+    if (isAuthStatus(response.status)) {
+      throw new IntelligenceAuthError(response.status);
+    }
+    if (!response.ok) {
+      throw new Error(
+        `Intelligence Service transcription status failed: HTTP ${response.status}`
+      );
+    }
+    const body = (await response.json()) as Partial<TranscriptionStatus>;
+    return {
+      available: body.available === true,
+      model: body.model ?? null,
+      provider: body.provider ?? null,
+    };
+  }
+
+  /**
+   * Synchronous speech-to-text — `POST /api/transcribe`. Every answer the IS
+   * gives is returned as a value (`ok: false` carries its status + `code`);
+   * only a network failure or rejected credentials THROW.
+   */
+  async transcribe(
+    input: { content: string; mimeType: string; language?: string },
+    options: { signal?: AbortSignal } = {}
+  ): Promise<TranscribeOutcome> {
+    const response = await fetchWithTimeout(
+      `${this.baseUrl}/api/transcribe`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": this.apiKey,
+        },
+        body: JSON.stringify(input),
+      },
+      // The IS gives the provider 60s; leave room for the upload itself.
+      75_000,
+      options.signal
+    );
+    if (isAuthStatus(response.status)) {
+      throw new IntelligenceAuthError(response.status);
+    }
+    const body = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (response.ok && body && typeof body.text === "string") {
+      return {
+        ok: true,
+        text: body.text,
+        ...(typeof body.language === "string"
+          ? { language: body.language }
+          : {}),
+        ...(typeof body.durationMs === "number"
+          ? { durationMs: body.durationMs }
+          : {}),
+        model: typeof body.model === "string" ? body.model : null,
+        provider: typeof body.provider === "string" ? body.provider : null,
+      };
+    }
+    return {
+      ok: false,
+      status: response.status,
+      code:
+        typeof body?.code === "string"
+          ? body.code
+          : response.status === 404
+            ? "is_route_missing"
+            : "is_invalid_response",
+      error:
+        typeof body?.error === "string"
+          ? body.error
+          : `Intelligence Service answered HTTP ${response.status}`,
+    };
   }
 
   /**
