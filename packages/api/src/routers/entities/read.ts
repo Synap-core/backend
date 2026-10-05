@@ -625,6 +625,12 @@ export const readProcs = {
    * Security: `workspaceIds` is silently filtered to workspaces the caller
    * is actually a member of — unknown or inaccessible IDs are ignored.
    * Omitting `workspaceIds` returns entities from ALL user's workspaces.
+   *
+   * `projectId` is the lens model's "this space × this project": the
+   * workspace scope INTERSECTED with the project (`projectLensWhere`, the one
+   * `belongs_to_project` predicate). It only narrows — never widens to the
+   * project's items in other spaces (that is `entities.list`'s project lens,
+   * which replaces the workspace scope). Omitted ⇒ everything in the spaces.
    */
   listMulti: protectedProcedure
     .input(
@@ -633,6 +639,7 @@ export const readProcs = {
         profileSlug: z.string().optional(),
         includeGlobal: z.boolean().default(false),
         limit: z.number().min(1).max(200).default(50),
+        projectId: z.string().uuid().optional(),
       })
     )
     .output(
@@ -663,6 +670,9 @@ export const readProcs = {
           profileSlug: input.profileSlug,
           limit: input.limit,
           includeGlobal: input.includeGlobal,
+          ...(input.projectId
+            ? { narrow: projectLensWhere(entities.id, input.projectId) }
+            : {}),
         }
       );
 

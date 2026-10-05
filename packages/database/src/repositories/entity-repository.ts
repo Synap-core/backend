@@ -5,7 +5,7 @@
  * Properties are validated against profile schemas and stored in entities.properties JSONB.
  */
 
-import { eq, and, or, isNull, inArray, desc } from "drizzle-orm";
+import { eq, and, or, isNull, inArray, desc, type SQL } from "drizzle-orm";
 import { entities } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
@@ -202,6 +202,9 @@ export class EntityRepository extends BaseRepository<
    * List entities across multiple workspaces (used by cross-workspace queries).
    * Returns entities where workspaceId is in the provided list.
    * Optionally includes global entities (workspaceId IS NULL).
+   *
+   * `narrow` is an extra predicate ANDed on top of the workspace scope (the
+   * caller's project lens) — it can only narrow the result, never widen it.
    */
   async listForWorkspaces(
     workspaceIds: string[],
@@ -210,9 +213,10 @@ export class EntityRepository extends BaseRepository<
       profileSlug?: string;
       limit?: number;
       includeGlobal?: boolean;
+      narrow?: SQL;
     } = {}
   ): Promise<Entity[]> {
-    const { profileSlug, limit = 50, includeGlobal = false } = opts;
+    const { profileSlug, limit = 50, includeGlobal = false, narrow } = opts;
 
     // Build workspace condition
     let workspaceCondition;
@@ -234,6 +238,9 @@ export class EntityRepository extends BaseRepository<
 
     if (profileSlug) {
       conditions.push(eq(entities.type, profileSlug));
+    }
+    if (narrow) {
+      conditions.push(narrow);
     }
 
     return this.db.query.entities.findMany({
