@@ -31,6 +31,10 @@ export interface WireGraphNeighbor {
   edgeType?: string | null;
   direction?: string | null;
   via?: string | null;
+  /** The far end's RAW lifecycle status (`GraphNode.status`); absent on an older pod. */
+  status?: string | null;
+  /** The far end's last change, ISO-8601; absent on an older pod. */
+  updatedAt?: string | null;
 }
 
 export function toConnectionNeighbors(
@@ -47,6 +51,10 @@ export function toConnectionNeighbors(
         ? n.direction
         : "outgoing",
     via: n.via ?? null,
+    // Carried only when the wire sent them: `undefined` = not read (older
+    // pod), `null` = read, and the far end has none — never folded together.
+    ...(n.status !== undefined ? { status: n.status } : {}),
+    ...(n.updatedAt !== undefined ? { updatedAt: n.updatedAt } : {}),
   }));
 }
 

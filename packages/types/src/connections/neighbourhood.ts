@@ -48,6 +48,12 @@ import {
   type WireGraphNeighbor,
   type WireRelationType,
 } from "./wire.js";
+import { isDependencyEndpointKind } from "./dependency.js";
+import {
+  neighbourUnitState,
+  neighboursBlockedByFocus,
+} from "./neighbour-state.js";
+import type { UnitStateView } from "../units/state.js";
 
 /** The six zones, in the Navigator's reading order. */
 export const NODE_ZONES = [
@@ -62,6 +68,72 @@ export type NodeZone = (typeof NODE_ZONES)[number];
 
 /** Items per zone before "Show all N" (ui-composition §4). */
 export const NODE_ZONE_CAP = 5;
+
+/**
+ * What a zone answers when it is EMPTY (ui-composition §2). Only two answers
+ * occur: a zone the person cannot fill from the node page OMITS (absence
+ * already says zero); "Blocked by" REASSURES — nothing waiting is the good
+ * outcome — but only on a focus that can be blocked ({@link nodeZoneEmpty}).
+ * The whole neighbourhood empty is each host's own INVITE, not a zone answer.
+ */
+export type NodeZoneEmpty =
+  | { readonly answer: "omit" }
+  | { readonly answer: "reassure"; readonly title: string };
+
+export interface NodeZoneSpec {
+  /** Section heading — product copy, the same on every surface. */
+  readonly heading: string;
+  readonly empty: NodeZoneEmpty;
+}
+
+const OMIT: NodeZoneEmpty = { answer: "omit" };
+
+/**
+ * THE zone headings + empty answers, for the browser Navigator / `ObjectGraph`
+ * stack AND relay's node page — one table, so the two surfaces cannot name a
+ * zone differently. Paired readings: Came from / Became (lineage, both ends),
+ * Blocked by / Serves & blocks (the dependency edge, both ends). Keyed by
+ * `NodeZone` (`satisfies Record<NodeZone, …>`), so a seventh zone that is not
+ * named here stops the build.
+ */
+export const NODE_ZONE_SPECS = {
+  cameFrom: { heading: "Came from", empty: OMIT },
+  became: { heading: "Became", empty: OMIT },
+  blockedBy: {
+    heading: "Blocked by",
+    empty: { answer: "reassure", title: "Nothing blocks it" },
+  },
+  servesAndBlocks: { heading: "Serves & blocks", empty: OMIT },
+  workingOnIt: { heading: "Working on it", empty: OMIT },
+  related: { heading: "Related", empty: OMIT },
+} as const satisfies Record<NodeZone, NodeZoneSpec>;
+
+/** Heading per zone — {@link NODE_ZONE_SPECS}' `heading`, keyed by zone. */
+export const NODE_ZONE_HEADINGS: Readonly<Record<NodeZone, string>> = {
+  cameFrom: NODE_ZONE_SPECS.cameFrom.heading,
+  became: NODE_ZONE_SPECS.became.heading,
+  blockedBy: NODE_ZONE_SPECS.blockedBy.heading,
+  servesAndBlocks: NODE_ZONE_SPECS.servesAndBlocks.heading,
+  workingOnIt: NODE_ZONE_SPECS.workingOnIt.heading,
+  related: NODE_ZONE_SPECS.related.heading,
+};
+
+/**
+ * The empty answer of `zone` for THIS focus. "Nothing blocks it" is only true
+ * news about a unit of work: a session or track, or an entity carrying a
+ * `status` (a task, a deal). On a person or a note it is noise — OMIT.
+ * `focus.status`: the envelope object's raw status (`undefined` = not read).
+ */
+export function nodeZoneEmpty(
+  zone: NodeZone,
+  focus: { kind: string; status?: string | null } | null | undefined
+): NodeZoneEmpty {
+  const spec: NodeZoneSpec = NODE_ZONE_SPECS[zone];
+  if (spec.empty.answer !== "reassure") return spec.empty;
+  if (!focus || !isDependencyEndpointKind(focus.kind)) return OMIT;
+  if (focus.kind === "entity" && !focus.status) return OMIT;
+  return spec.empty;
+}
 
 /**
  * Where the far end lands for one direction. `work` = `workingOnIt` when the
@@ -308,6 +380,17 @@ export interface NodeNeighbourItem {
   reversed: boolean;
   /** See {@link isPoweredByEdge}. */
   poweredBy: boolean;
+  /** The far end's raw lifecycle status; `null` = none or not read. */
+  status: string | null;
+  /** The far end's last change, ISO-8601; `null` = none or not read. */
+  updatedAt: string | null;
+  /**
+   * The far end's STATE MARK through the one derivation
+   * ({@link neighbourUnitState} → `resolveUnitState`), including `blocked`
+   * when it waits on the focus while the focus is open. `null` = its
+   * lifecycle alone settles nothing — draw no mark, never a guess.
+   */
+  state: UnitStateView | null;
 }
 
 export interface NodeZoneSlice {
@@ -325,6 +408,13 @@ export type NodeNeighbourhood = Record<NodeZone, NodeZoneSlice> & {
 export interface NodeFocus {
   kind: string;
   id: string;
+  /**
+   * The focus's raw status (the envelope `object.status`). Only when it was
+   * READ (`!== undefined`) can a neighbour be marked blocked BY the focus.
+   */
+  status?: string | null;
+  /** The focus's name — what a blocked neighbour waits on. */
+  title?: string | null;
 }
 
 export interface DeriveNodeNeighbourhoodOptions {
@@ -408,6 +498,22 @@ export function deriveNodeNeighbourhood(
       .map((n) => `${n.id}:${n.direction}`)
   );
 
+  // Rows that wait on the focus while it is still open — the dependency rule.
+  const blockedByFocus = focus
+    ? neighboursBlockedByFocus(
+        focus,
+        neighbors.map((n) => ({
+          graphKind: n.kind,
+          id: n.id,
+          edgeType: n.edgeType?.trim() ?? "",
+          direction: n.direction,
+          via: n.via ?? null,
+          ...(n.status !== undefined ? { status: n.status } : {}),
+        }))
+      )
+    : new Set<string>();
+  const focusName = focus?.title?.trim() || "this";
+
   const best = new Map<string, NodeNeighbourItem>();
   const order: string[] = [];
   for (const n of neighbors) {
@@ -440,6 +546,13 @@ export function deriveNodeNeighbourhood(
       label,
       reversed,
       poweredBy: isPoweredByEdge({ kind: n.kind, via }),
+      status: n.status ?? null,
+      updatedAt: n.updatedAt ?? null,
+      state: neighbourUnitState(
+        n.kind,
+        n.status,
+        blockedByFocus.has(`${n.kind}:${n.id}`) ? focusName : null
+      ),
     };
     const key = `${n.kind}:${n.id}`;
     const prev = best.get(key);

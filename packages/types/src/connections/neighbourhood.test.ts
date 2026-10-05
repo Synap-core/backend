@@ -384,6 +384,14 @@ describe("deriveNodeNeighbourhood — render once, cap, identity", () => {
           direction: "incoming",
           via: "links",
         }),
+        // A link type no table knows (a future / foreign edge).
+        edge({
+          id: "unk",
+          kind: "tool",
+          edgeType: "mirrors",
+          direction: "incoming",
+          via: "links",
+        }),
       ],
       {
         relationTypes: [
@@ -404,12 +412,42 @@ describe("deriveNodeNeighbourhood — render once, cap, identity", () => {
       label: "Blocks",
       reversed: false,
     });
-    // No curated inverse for promoted_to: forward words + the reversed mark,
-    // never "Promoted to" presented as if it were true from the playbook's side.
+    // promoted_to read from the playbook's side: curated, no reversed mark.
     expect(nb.cameFrom.items.find((i) => i.id === "pb")).toMatchObject({
-      label: "Promoted to",
+      label: "Promoted from",
+      reversed: false,
+    });
+    // No curated inverse: forward words + the reversed mark, never "Mirrors"
+    // presented as if it were true from this side.
+    expect(nb.related.items.find((i) => i.id === "unk")).toMatchObject({
+      label: "Mirrors",
       reversed: true,
     });
+  });
+
+  it("COVERAGE: every stored link type reads from its TO end without the reversed mark", () => {
+    // Derived from the role table (itself pinned to `LinkType` in the pod), so
+    // a new link type joins this scan by existing. Both substrates that use
+    // the links vocabulary are checked: `links` and the `structure` FK fold.
+    const types = Object.keys(LINK_EDGE_ROLES);
+    expect(types.length).toBeGreaterThanOrEqual(19); // non-vacuity
+    expect(types).toContain("targets"); // the row that started this
+    for (const via of ["links", "structure"] as const) {
+      const wire = types.map((t, i) =>
+        edge({
+          id: `n${i}`,
+          kind: "session",
+          edgeType: t,
+          direction: "incoming",
+          via,
+        })
+      );
+      const nb = deriveNodeNeighbourhood(FOCUS, wire, { cap: 100 });
+      const items = NODE_ZONES.flatMap((z) => nb[z].items);
+      expect(items).toHaveLength(types.length);
+      const reversed = items.filter((i) => i.reversed).map((i) => i.edgeType);
+      expect(reversed, `${via}: incoming with no curated label`).toEqual([]);
+    }
   });
 
   it("flags the substrate it runs on (capability grant, linked tool/skill)", () => {

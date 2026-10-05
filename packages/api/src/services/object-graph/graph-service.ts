@@ -150,6 +150,16 @@ export interface GraphNode {
    */
   subtypes: string[];
   workspaceId: string | null;
+  /**
+   * The object's RAW lifecycle status, as its own table stores it — session /
+   * track / project / proposal / run `status`, an entity's `status` PROPERTY.
+   * `null` = this kind (or this row) has no status; absent = not hydrated by
+   * this read. Never mapped here: every surface maps it through the ONE state
+   * derivation (`neighbourUnitState` → `resolveUnitState`).
+   */
+  status?: string | null;
+  /** Last change to the row, ISO-8601 (a run: completed, else started). */
+  updatedAt?: string | null;
 }
 
 /** A neighbour = a node + the edge that connects it to the focused object. */
@@ -253,6 +263,14 @@ interface KindSpec {
    * to match.
    */
   namedBy?: "proposal" | "run";
+  /**
+   * Where the row's lifecycle status lives: a column name, or `"property"` =
+   * the entity's `status` property (`properties.status`, a string only).
+   * Absent = the kind has no status (a capture, a document, a playbook…).
+   */
+  status?: string;
+  /** Column(s) for `updatedAt`, first non-null wins. */
+  updatedAt?: readonly string[];
 }
 
 /**
@@ -264,11 +282,24 @@ const KIND_TABLE: Record<string, KindSpec> = {
     name: "title",
     subtype: "type",
     deletedAt: "deletedAt",
+    status: "property",
+    updatedAt: ["updatedAt"],
   },
-  project: { table: projects, name: "name", subtype: "status" },
+  project: {
+    table: projects,
+    name: "name",
+    subtype: "status",
+    status: "status",
+    updatedAt: ["updatedAt"],
+  },
   view: { table: views, name: "name", subtype: "type" },
   channel: { table: channels, name: "title", subtype: "channelType" },
-  session: { table: focusSessions, name: "goal" },
+  session: {
+    table: focusSessions,
+    name: "goal",
+    status: "status",
+    updatedAt: ["updatedAt"],
+  },
   playbook: { table: playbooks, name: "name" },
   tool: { table: tools, name: "name", subtype: "kind" },
   skill: { table: skills, name: "name", subtype: "kind" },
@@ -284,20 +315,31 @@ const KIND_TABLE: Record<string, KindSpec> = {
     name: "title",
     subtype: "type",
     deletedAt: "deletedAt",
+    updatedAt: ["updatedAt"],
   },
   workspace: { table: workspaces, name: "name" },
-  track: { table: projectTracks, name: "name", subtype: "status" },
+  track: {
+    table: projectTracks,
+    name: "name",
+    subtype: "status",
+    status: "status",
+    updatedAt: ["updatedAt"],
+  },
   proposal: {
     table: proposals,
     name: "proposalType",
     subtype: "status",
     namedBy: "proposal",
+    status: "status",
+    updatedAt: ["updatedAt"],
   },
   run: {
     table: automationRuns,
     name: "status",
     subtypeValue: "automation",
     namedBy: "run",
+    status: "status",
+    updatedAt: ["completedAt", "startedAt"],
   },
 };
 
@@ -514,6 +556,8 @@ export async function hydrateNodes(
             subtype: null,
             subtypes: [],
             workspaceId: null,
+            status: null,
+            updatedAt: null,
           });
         }
         return;
@@ -564,11 +608,44 @@ export async function hydrateNodes(
           subtype,
           subtypes,
           workspaceId: (row.workspaceId as string | null) ?? null,
+          ...nodeStateOfRow(spec, row),
         });
       }
     })
   );
   return out;
+}
+
+/**
+ * The row's raw lifecycle status + last change, per {@link KindSpec}. Read off
+ * the row the floor already admitted — never a second, unfloored read.
+ */
+export function nodeStateOfRow(
+  spec: Pick<KindSpec, "status" | "updatedAt">,
+  row: Record<string, unknown>
+): { status: string | null; updatedAt: string | null } {
+  let status: string | null = null;
+  if (spec.status === "property") {
+    const raw = (row.properties as Record<string, unknown> | null | undefined)
+      ?.status;
+    status = typeof raw === "string" && raw.trim() ? raw.trim() : null;
+  } else if (spec.status) {
+    const raw = row[spec.status];
+    status = typeof raw === "string" && raw ? raw : null;
+  }
+  let updatedAt: string | null = null;
+  for (const col of spec.updatedAt ?? []) {
+    const v = row[col];
+    if (v instanceof Date && !Number.isNaN(v.getTime())) {
+      updatedAt = v.toISOString();
+      break;
+    }
+    if (typeof v === "string" && v) {
+      updatedAt = v;
+      break;
+    }
+  }
+  return { status, updatedAt };
 }
 
 /**
@@ -680,6 +757,7 @@ export async function getLinkNeighbors(
       subtype: node?.subtype ?? null,
       subtypes: node?.subtypes ?? [],
       workspaceId: node?.workspaceId ?? null,
+      ...(node ? { status: node.status, updatedAt: node.updatedAt } : {}),
       edgeType: r.edgeType,
       direction: r.direction,
       via: "links" as const,
@@ -1694,6 +1772,54 @@ export function mergeNeighbors(
   return neighbors;
 }
 
+/** The `KIND_TABLE` key a graph kind hydrates from (a capture IS a document row). */
+function tableKindOf(graphKind: string): string {
+  return graphKind === "capture" ? "document" : graphKind;
+}
+
+/**
+ * Fill `status` / `updatedAt` on every neighbour a fold built WITHOUT going
+ * through `hydrateNodes` (the entity-data half, governance / receipt proposals,
+ * body entities). One batched `hydrateNodes` per kind — the SAME per-kind read
+ * floor, so a state is only ever read for a row the caller may see; a row the
+ * floor refuses keeps `null` (no mark), never a guess. Lens as
+ * `getLinkNeighbors`: documents keep only their owner floor.
+ */
+export async function withNodeState(
+  userId: string,
+  neighbors: GraphNeighbor[],
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
+): Promise<GraphNeighbor[]> {
+  const stateful = (n: GraphNeighbor) => {
+    const spec = KIND_TABLE[tableKindOf(n.kind)];
+    return (
+      n.status === undefined &&
+      spec !== undefined &&
+      (spec.status !== undefined || spec.updatedAt !== undefined)
+    );
+  };
+  const missing = neighbors.filter(stateful);
+  if (missing.length === 0) return neighbors;
+  const refs = missing.map((n) => ({ kind: tableKindOf(n.kind), id: n.id }));
+  const docRefs = refs.filter((r) => r.kind === "document");
+  const otherRefs = refs.filter((r) => r.kind !== "document");
+  const [nodes, docNodes] = await Promise.all([
+    hydrateNodes(userId, otherRefs, facetVisibilityScope, workspaceId),
+    hydrateNodes(userId, docRefs, facetVisibilityScope, undefined),
+  ]);
+  for (const [key, node] of docNodes) nodes.set(key, node);
+  return neighbors.map((n) => {
+    if (!stateful(n)) return n;
+    const node = nodes.get(`${tableKindOf(n.kind)}:${n.id}`);
+    return {
+      ...n,
+      status: node?.status ?? null,
+      updatedAt: node?.updatedAt ?? null,
+    };
+  });
+}
+
 /**
  * Assemble the uniform envelope: the focused object (hydrated) + its neighbours.
  * `extraNeighbors` lets the route layer fold in the ENTITY-DATA graph
@@ -1746,15 +1872,20 @@ export async function getObjectGraph(
   // same-edge-twice, plus the produced / produced-in one-fact-two-rows fold).
   // `receiptNeighbors` before `temporalNeighbors`: same key, and the receipt
   // row is the one carrying session / source message / agent.
-  const neighbors = mergeNeighbors([
-    linkNeighbors,
-    receiptNeighbors,
-    governanceNeighbors,
-    temporalNeighbors,
-    documentBodyNeighbors,
-    structureNeighbors,
-    extraNeighbors,
-  ]);
+  const neighbors = await withNodeState(
+    userId,
+    mergeNeighbors([
+      linkNeighbors,
+      receiptNeighbors,
+      governanceNeighbors,
+      temporalNeighbors,
+      documentBodyNeighbors,
+      structureNeighbors,
+      extraNeighbors,
+    ]),
+    facetVisibilityScope,
+    workspaceId
+  );
 
   // Resolve the focal node. `hydrateNodes` already gives stub kinds
   // (`participant`/`source` — no KIND_TABLE) a raw-id node, so a MISS here means

@@ -41,6 +41,7 @@ import {
 export * from "./wire.js";
 export * from "./neighbourhood.js";
 export * from "./dependency.js";
+export * from "./neighbour-state.js";
 import { isProvenanceRole } from "./neighbourhood.js";
 
 export type ConnectionDirection = "outgoing" | "incoming" | "structural";
@@ -64,6 +65,10 @@ export interface ConnectionNeighbor {
   via?: string | null;
   /** Caller override: force this edge into provenance. */
   isProvenance?: boolean;
+  /** The far end's raw lifecycle status; `undefined` = not read. */
+  status?: string | null;
+  /** The far end's last change, ISO-8601; `undefined` = not read. */
+  updatedAt?: string | null;
 }
 
 /** One relation-type catalog row (`relations.listTypes` / `relationDefs.list`). */

@@ -394,6 +394,32 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   blocked_by: { outgoing: "Blocked by", incoming: "Blocks" },
   // `A --replaces--> B`: "this step replaces that one".
   replaces: { outgoing: "Replaces", incoming: "Replaced by" },
+  // ── Every other stored `links` type, read from its TO end ────────────────
+  // Without these an incoming edge showed its FORWARD word ("Targets") plus a
+  // reversed-arrow mark. Read as "<focus> <label> <row>": the row is the
+  // edge's FROM end. The outgoing reading humanizes (it is already right).
+  // `connections` asserts every `LINK_EDGE_ROLES` key has one, so a new link
+  // type cannot fall back to the reversed mark unnoticed.
+  grants: { incoming: "Granted by" },
+  requires: { incoming: "Required by" },
+  // session|track --instantiated_from--> playbook: the method ran as it.
+  instantiated_from: { incoming: "Ran as" },
+  used: { incoming: "Used by" },
+  targets: { incoming: "Targeted by" },
+  // tool → capability, session|track → track|project: the whole includes it.
+  member_of: { incoming: "Includes" },
+  feeds: { incoming: "Fed by" },
+  promoted_to: { incoming: "Promoted from" },
+  provided_by: { incoming: "Provides" },
+  about: { incoming: "Subject of" },
+  documents: { incoming: "Documented by" },
+  concerns: { incoming: "Concerned by" },
+  activates: { incoming: "Activated by" },
+  // Incoming ONLY: a plain fork is also `spawned_from`, so the outgoing side
+  // must stay "Spawned from" — only `rerun` may say "Rerun of".
+  spawned_from: { incoming: "Spawned" },
+  provides_credential: { incoming: "Credential from" },
+  uses: { incoming: "Used by" },
 };
 
 export function resolveLineageEdgeLabel(

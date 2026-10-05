@@ -85,14 +85,16 @@ describe("resolveLineageEdgeLabel", () => {
     expect(resolveLineageEdgeLabel("spawned_from", "outgoing")).toBe(
       "Spawned from"
     );
-    expect(LINEAGE_EDGE_LABELS.spawned_from).toBeUndefined();
+    // spawned_from carries an INCOMING label only — never an outgoing one.
+    expect(LINEAGE_EDGE_LABELS.spawned_from?.outgoing).toBeUndefined();
   });
 
   it("humanizes an uncurated edge or direction instead of leaking it", () => {
     expect(resolveLineageEdgeLabel("rerun", "incoming")).toBe("Rerun");
-    expect(resolveLineageEdgeLabel("spawned_from", "incoming")).toBe(
-      "Spawned from"
-    );
+    expect(resolveLineageEdgeLabel("feeds", "outgoing")).toBe("Feeds");
+    // The parent's side of a fork names what it spawned.
+    expect(resolveLineageEdgeLabel("spawned_from", "incoming")).toBe("Spawned");
+    expect(resolveLineageEdgeLabel("targets", "incoming")).toBe("Targeted by");
     // blocked_by is curated from BOTH ends: the blocker's side reads "Blocks".
     expect(resolveLineageEdgeLabel("blocked_by", "incoming")).toBe("Blocks");
     expect(resolveLineageEdgeLabel(null, "incoming")).toBe("");
