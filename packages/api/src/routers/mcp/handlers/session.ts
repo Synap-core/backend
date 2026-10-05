@@ -106,36 +106,16 @@ function parseSlotInputs(
 }
 
 /**
- * The session's outcomes + inputs for an agent read — `{status:'ok', …}`, or
- * `{status:'unavailable', reason}` when the read failed (the continuation
- * packet's section contract: a failed section is NOT an empty one).
+ * The session's outcomes + inputs for an agent read — the ONE section reader,
+ * shared with the Hub `GET /focus-sessions/:id` (see `session-outputs.ts`).
  */
 async function readSessionOutcomesSection(
   sessionId: string,
   userId: string
 ): Promise<Record<string, unknown>> {
-  try {
-    const { listSessionOutputsWithOutcomes } =
-      await import("../../../services/focus-sessions/session-outputs.js");
-    const view = await listSessionOutputsWithOutcomes({
-      db,
-      userId,
-      sessionId,
-    });
-    if (!view) return { status: "unavailable", reason: "session not readable" };
-    return {
-      status: "ok",
-      counts: view.outcomeCounts,
-      outcomes: view.outcomes,
-      inputs: view.inputs,
-      unattached: view.unattached,
-    };
-  } catch (err) {
-    return {
-      status: "unavailable",
-      reason: err instanceof Error ? err.message : String(err),
-    };
-  }
+  const { readSessionOutcomesSection: read } =
+    await import("../../../services/focus-sessions/session-outputs.js");
+  return read({ db, userId, sessionId });
 }
 
 /**

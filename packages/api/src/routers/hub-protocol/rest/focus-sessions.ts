@@ -1058,14 +1058,27 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // the continuation packet, which carries the rerun door's own rule.
       const { projectContinuationPacket } =
         await import("../../../services/focus-sessions/continuation-packet.js");
-      const continuation = await projectContinuationPacket(row, {
-        database: db,
-        userId: acting.userId,
-      });
+      const { readSessionOutcomesSection } =
+        await import("../../../services/focus-sessions/session-outputs.js");
+      const [continuation, outcomes] = await Promise.all([
+        projectContinuationPacket(row, {
+          database: db,
+          userId: acting.userId,
+        }),
+        // Same section as MCP `synap_get_session` (A4): the session's
+        // outcomes projected at read time, or `{status:'unavailable'}` —
+        // a failed read is never an empty list. Additive field.
+        readSessionOutcomesSection({
+          db,
+          userId: acting.userId,
+          sessionId: row.id,
+        }),
+      ]);
       return c.json({
         ...row,
         rerun: continuation.rerun,
         continuation,
+        outcomes,
         // Same lift as tRPC `focusSessions.get`: normalized criteria, verdict,
         // current evaluation per criterion. Absent when the read failed.
         ...(continuation.evaluation.status === "ok"

@@ -780,3 +780,32 @@ async function resolveTitles(
   }
   return { titles, entityProfiles };
 }
+
+/**
+ * The session's outcomes + inputs as a READ SECTION — `{status:'ok', counts,
+ * outcomes, inputs, unattached}`, or `{status:'unavailable', reason}` when the
+ * read failed or the session is not readable (the continuation packet's section
+ * contract: a failed section is NOT an empty one). The one reader behind MCP
+ * `synap_get_session` and Hub `GET /focus-sessions/:id`, so both doors carry
+ * the same `outcomes` from `listSessionOutputsWithOutcomes`.
+ */
+export async function readSessionOutcomesSection(
+  params: ListSessionOutputsParams
+): Promise<Record<string, unknown>> {
+  try {
+    const view = await listSessionOutputsWithOutcomes(params);
+    if (!view) return { status: "unavailable", reason: "session not readable" };
+    return {
+      status: "ok",
+      counts: view.outcomeCounts,
+      outcomes: view.outcomes,
+      inputs: view.inputs,
+      unattached: view.unattached,
+    };
+  } catch (err) {
+    return {
+      status: "unavailable",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
