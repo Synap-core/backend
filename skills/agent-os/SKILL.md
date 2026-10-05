@@ -55,6 +55,8 @@ Load this skill via `load_skill` as `system/agent-os/skill`.
 
 ### Loop 1 — workspace (domain)
 
+**One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client. An agent asking for a second space of a live domain gets `status: "exists"` with the space to use — do that, never retry under another name.
+
 1. **Orient.** `synap_orient` / `synap lens` — which domains already exist?
 2. **Have it here?** If the right workspace is already installed → focus it
    (`set_workspace_focus` / `synap use`) and work. Done.

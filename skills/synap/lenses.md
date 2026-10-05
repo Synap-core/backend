@@ -14,6 +14,8 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 **The project rule (one rule, every door):** a project is set ONLY when the user names it — declare it with `set_project_focus`, or pass `projectId` on the write. Filing into a project shares entities and documents with its members (a session is shared only through its room, never by filing), so never infer one from content, and never let a session decide it: a write without a `sessionId` is grouped into YOUR session — the one you started, else one opened for you, never another client's — and that door-picked session never sets the project. When nobody named a project, leave it unset. Guessing a workspace is merely untidy; guessing a project is not.
 
+**One space per domain — the lens rule (every door):** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client. A second space from a template whose domain already has a live space is refused for an agent (`status: "exists"` + the space to use); a person may still create one, with the same note.
+
 **Reads:** pod-wide by default; find by name, id or role, and pass `workspaceId` / `projectId` only to narrow a list.
 
 **Writes:** name the kind (profile slug) and, when known, the roles as facets. Omit `workspaceId` unless you are deliberately pinning a domain — the server places the write from installed profile metadata. Never invent a workspace name. Focus sticks for the session; an explicit `workspaceId` / `projectId` on one call overrides it for that call.

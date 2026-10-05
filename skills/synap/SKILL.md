@@ -41,17 +41,18 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 > Canonical source — the MCP `instructions` field is derived from this file and composed with live grounding under ONE 2 KB budget (pinned by `instructions-budget.test.ts`). Most important first. Depth belongs in a skill, never here.
 
-The user's Synap pod: source of truth for their life, work and people. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).
+The user's Synap pod: their source of truth. Tool names below are stems; your door may prefix them (`pod__ask`).
 
-1. **Recall first.** Before answering about the user's world or creating, `ask`.
+1. **Recall first.** Before answering about their world or creating, `ask`.
 2. **Capture after.** A durable fact, decision, person, task: `capture`; about the user: `remember_fact`. No private scratchpad.
 3. **Orient once.** `orient`: pending review (raise first), open sessions, kinds.
-4. **Work in a session.** `start_session` or resume (playbook `templateId`); project method = TRACK: `list_tracks`, else `start_track`; steps `start_stage_session`; `advance_track` only with the user; 2-5 `criteria`; advance `currentStage`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
-5. **Never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe.
-6. **`proposed` is success**, queued for review. Keep going; never retry.
+4. **Work in a session.** `start_session` or resume (playbook `templateId`); method = TRACK: `list_tracks`, else `start_track`; steps `start_stage_session`; `advance_track` only with the user; 2-5 `criteria`; advance `currentStage`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
+5. **Never guess a project.** Pin only what the user names (`set_workspace_focus`, `set_project_focus`).
+6. **`proposed` is success**: keep going, never retry.
 7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role, space. **Extend first** (facet, overlay, parent); never a twin.
+8. **One space per domain**; projects filter it (`file_into_project`, `project_use_workspace`).
 
-Depth via `load_skill`: `system/synap/concepts`, `focus-sessions`, `from-intent` (new area), `escalation-ladder`, `writes`, `catalog`.
+Depth: `load_skill` `system/synap/concepts`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`.
 
 ---
 
@@ -135,6 +136,8 @@ Extend the substrate so the need becomes expressible. Always governed — expect
 
 **Template-before-workspace (hard rule in teaching):** new operational domains start as marketplace templates when one fits. Freehand workspace creation is last resort after the four workspace-design conditions hold (`workspace-design.md`). Capture never invents a workspace — placement only routes into existing lenses.
 
+**One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
+
 ### L4 — CRYSTALLIZE after proof
 
 After a one-off has succeeded and is clearly repeatable:
@@ -199,6 +202,8 @@ Do not install templates, define kinds, or create a project until you can answer
 | Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
+
+**One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
 
 Hats are **not** limited to people and companies. A role is a hat on **whatever kind** `applicableKinds` lists (`item`, `task`, `deal`, …). “This item is an X” is a facet, not a new kind, until X has its own independent life.
 
@@ -443,6 +448,8 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 | **Session**   | the work room for the current goal; pass its id on writes  | `start_session` / `synap session start --goal "…"` / `attach <id>` |
 
 **The project rule (one rule, every door):** a project is set ONLY when the user names it — declare it with `set_project_focus`, or pass `projectId` on the write. Filing into a project shares entities and documents with its members (a session is shared only through its room, never by filing), so never infer one from content, and never let a session decide it: a write without a `sessionId` is grouped into YOUR session — the one you started, else one opened for you, never another client's — and that door-picked session never sets the project. When nobody named a project, leave it unset. Guessing a workspace is merely untidy; guessing a project is not.
+
+**One space per domain — the lens rule (every door):** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client. A second space from a template whose domain already has a live space is refused for an agent (`status: "exists"` + the space to use); a person may still create one, with the same note.
 
 **Reads:** pod-wide by default; find by name, id or role, and pass `workspaceId` / `projectId` only to narrow a list.
 
@@ -2301,6 +2308,8 @@ The point of the flywheel is that mistakes are **visible and fixable**, not sile
 ## Workspace design — is this concern a WORKSPACE, or something smaller?
 
 Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **method** (track), or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
+
+**One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
 
 ## The decision rule — a concern earns a workspace ONLY if ALL FOUR hold
 

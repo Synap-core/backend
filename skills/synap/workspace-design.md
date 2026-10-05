@@ -2,6 +2,8 @@
 
 Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **method** (track), or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
 
+**One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
+
 ## The decision rule — a concern earns a workspace ONLY if ALL FOUR hold
 
 1. **Owns kinds** — it is source-of-truth for a noun nothing else owns (CRM owns `person`/`company`; Operations owns `engagement`/`deliverable`). If it only _reads_ or _annotates_ another domain's kinds, it is not a domain.

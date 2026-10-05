@@ -51,6 +51,8 @@ Extend the substrate so the need becomes expressible. Always governed — expect
 
 **Template-before-workspace (hard rule in teaching):** new operational domains start as marketplace templates when one fits. Freehand workspace creation is last resort after the four workspace-design conditions hold (`workspace-design.md`). Capture never invents a workspace — placement only routes into existing lenses.
 
+**One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
+
 ### L4 — CRYSTALLIZE after proof
 
 After a one-off has succeeded and is clearly repeatable:

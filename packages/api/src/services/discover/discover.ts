@@ -41,10 +41,7 @@ import {
   drizzleSql,
   profileSlugScopeCondition,
 } from "@synap/database";
-import {
-  readSpaceBrief,
-  type SpaceBrief,
-} from "@synap-core/types/space-brief";
+import { readSpaceBrief, type SpaceBrief } from "@synap-core/types/space-brief";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
 import {
@@ -81,6 +78,10 @@ import {
   spacePurposeLine,
   type BuiltSpaceBrief,
 } from "./space-brief.js";
+import {
+  ONE_SPACE_PER_DOMAIN_REFLEX,
+  ONE_SPACE_PER_DOMAIN_RULE,
+} from "../one-space-per-domain.js";
 
 export type DiscoverDetail = "light" | "full";
 
@@ -166,7 +167,11 @@ export interface StartHere {
     | {
         count: number;
         countIsLowerBound: boolean;
-        items: Array<{ id: string; goal: string | null; startedAt: string | null }>;
+        items: Array<{
+          id: string;
+          goal: string | null;
+          startedAt: string | null;
+        }>;
       }
     | StartHereUnavailable;
   /**
@@ -487,7 +492,8 @@ function lensConceptNote(projectCount: number): string {
         `infer a project from content — filing work into one grants access to ` +
         `its members, so unset is the correct answer when nobody said. `
       : ``) +
-    `If a domain is missing for the job, propose installing/attaching a template — do not invent workspaces.`
+    `If a domain is missing for the job, propose installing/attaching a template — do not invent workspaces. ` +
+    ONE_SPACE_PER_DOMAIN_RULE
   );
 }
 
@@ -548,7 +554,9 @@ function buildNote(
     `Domain map: ${projectCount} project(s), ${workspaceCount} domain app(s). ` +
     (opts.explain
       ? lensConceptNote(projectCount)
-      : `How workspaces and projects place a write: load the skill named in startHere.learnMore, or re-run with explain:true.`)
+      : // The one lens rule agents get wrong at CREATE time (a space per
+        // project/brand) rides on every orient, in its budgeted reflex form.
+        `${ONE_SPACE_PER_DOMAIN_REFLEX} How workspaces and projects place a write: load the skill named in startHere.learnMore, or re-run with explain:true.`)
   );
 }
 

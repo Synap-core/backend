@@ -22,7 +22,7 @@ export const ONE_SPACE_PER_DOMAIN_RULE =
   "A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.";
 
 export const ONE_SPACE_PER_DOMAIN_REFLEX =
-  "**One space per domain** (Content, Brand, CRM…), installed once; a project filters it: `file_into_project` + `project_use_workspace`. Never a space named after a project, brand or client.";
+  "**One space per domain**; projects filter it (`file_into_project`, `project_use_workspace`).";
 
 /** The guidance a create that would mint a second domain space carries. */
 export function oneSpacePerDomainGuidance(existing: {

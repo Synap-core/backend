@@ -193,6 +193,8 @@ Installs are **workspace-first**: a `workspace`/`template` package spins up
 automation, cell) route you to the right surface (`synap capability add`,
 etc.) rather than being force-fit into a workspace install.
 
+**One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client. Reinstalling reuses the live space. A second copy (`--as <name>`) of a domain that already has a live space is refused for an agent (`409`, `status: "exists"` + the space to use); a person may create it, and the reply carries the same note.
+
 ## Pod verb — `market.install` (MCP / agent / automation)
 
 ```json
@@ -306,6 +308,8 @@ end (human, or an AI driving the CLI on the user's behalf — always say what yo
   the whole definition (the user sees a live preview and approves). This is NOT a
   market publish — it installs the AI-authored template into the user's pod, governed.
   Use it when the user wants a whole workspace set up as a reviewable proposal.
+
+**One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
 
 ## The loop
 
