@@ -1326,6 +1326,130 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
         deferAtBoot: true,
       })
     ),
+
+    // ─── W11 (2026-10-05): Content × Brand — ONE post kind, ONE template kind ──
+    //
+    // Plan "Content × Brand" W3 (founder D2, D6, D12). The workspace templates
+    // now declare `post` (content-os.yaml) and `brand-template`
+    // (brand-library.yaml) as `scope: shared`, and Social / Content Studio
+    // RE-DECLARE them instead of owning the `social-post` / `content-template`
+    // twins. Template reconcile is ADD-ONLY, so the twins and their data stay on
+    // live pods until these ops fold them. All DEFERRED AT BOOT — pod data moves
+    // only on a deliberate operator run, after the reconcile has promoted
+    // `post` / `brand-template` to shared (a cross-scope merge REFUSES when the
+    // shared canonical is missing but source rows exist). Dry run first:
+    //   tsx src/scripts/run-conversions.ts --only w11.post.social-platform-to-account,w11.post.social-scheduled-to-publish-date,w11.post.social-status-aside,w11.post.social-status-fold,w11.merge.social-post-into-post
+    //   …then --apply --destructive-tail with the same --only list.
+    //
+    // ORDER IS LOAD-BEARING (pinned by w11-content-fold.pglite.test.ts). A
+    // `remapPropertyValues` needs sourceKey ≠ targetKey and strips the source of
+    // MAPPED rows only, so the status fold is two steps: move `post-status` aside
+    // into `publish-outcome`, then map the three LIFECYCLE values back into the
+    // post vocabulary. `failed` is deliberately unmapped (D12: a publish OUTCOME,
+    // not a lifecycle stage), so it stays exactly where step 3 put it —
+    // `publish-outcome = "failed"` — with no lifecycle status claimed for it.
+    //
+    // (1) social-post's `post-platform` is an entity link to a `platform`
+    // account; post's `post-platform` is a network LABEL (string select). Same
+    // slug, different meaning — move the link to post's `post-account` BEFORE the
+    // merge so it can never land in the label field.
+    {
+      op: "renamePropertyKey",
+      opKey: "w11.post.social-platform-to-account",
+      deferAtBoot: true,
+      slug: "social-post",
+      sourceKey: "post-platform",
+      targetKey: "post-account",
+      onConflict: "keepTarget",
+    },
+    // (2) social-post's planned slot is post's `publish-date`.
+    {
+      op: "renamePropertyKey",
+      opKey: "w11.post.social-scheduled-to-publish-date",
+      deferAtBoot: true,
+      slug: "social-post",
+      sourceKey: "scheduled-at",
+      targetKey: "publish-date",
+      onConflict: "keepTarget",
+    },
+    // (3) status aside → publish-outcome (every value, verbatim).
+    {
+      op: "renamePropertyKey",
+      opKey: "w11.post.social-status-aside",
+      deferAtBoot: true,
+      slug: "social-post",
+      sourceKey: "post-status",
+      targetKey: "publish-outcome",
+      onConflict: "keepTarget",
+    },
+    // (4) lifecycle values back onto post's `post-status` vocabulary. Unmapped
+    // `failed` keeps `publish-outcome = "failed"`.
+    {
+      op: "remapPropertyValues",
+      opKey: "w11.post.social-status-fold",
+      deferAtBoot: true,
+      slug: "social-post",
+      sourceKey: "publish-outcome",
+      targetKey: "post-status",
+      valueMap: {
+        draft: "In Draft",
+        scheduled: "Scheduled",
+        published: "Published",
+      },
+    },
+    // (5) Fold the twin onto the ONE pod-wide `post`. Entities + views repoint;
+    // social-post's extra defs (post-content, post-notes, published-at) land as
+    // the Social workspace's OVERLAYS on the shared row; colliding defs
+    // (post-status, post-platform, post-url) are skipped. Drained row retired
+    // under --destructive-tail.
+    {
+      op: "mergeInto",
+      opKey: "w11.merge.social-post-into-post",
+      deferAtBoot: true,
+      fromSlugs: ["social-post"],
+      intoSlug: "post",
+      intoScope: "shared",
+    },
+
+    // D6 — `content-template` folds into the shared `brand-template`. Its
+    // `template-kind` (hyperframes/remotion/hybrid = a video ENGINE) collides
+    // with brand-template's `template-kind` (artboard/deck/…/video = an OUTPUT
+    // kind), so: set it aside BEFORE the merge, merge, then map every engine
+    // value to the output kind `video`. Same two-step reason as the status fold.
+    // `aspect-ratio` has no brand-template twin and lands as a Content Studio
+    // overlay. Verified 2026-10-05: no content-template entities on the
+    // antoinesrvt (profile absent) or thearch (0 rows) pods.
+    {
+      op: "renamePropertyKey",
+      opKey: "w11.content.template-kind-aside",
+      deferAtBoot: true,
+      slug: "content-template",
+      sourceKey: "template-kind",
+      targetKey: "template-engine",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "mergeInto",
+      opKey: "w11.merge.content-template-into-brand-template",
+      deferAtBoot: true,
+      fromSlugs: ["content-template"],
+      intoSlug: "brand-template",
+      intoScope: "shared",
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "w11.content.template-engine-to-kind",
+      deferAtBoot: true,
+      slug: "brand-template",
+      sourceKey: "template-engine",
+      targetKey: "template-kind",
+      valueMap: { hyperframes: "video", remotion: "video", hybrid: "video" },
+    },
+    // NOT here: retiring content-composition's `remotion-composition` def and
+    // the `remotion` / `hybrid` render-engine options. No ConversionOp retires a
+    // property_def or an enum option (reconcile only ADDS them), so live pods
+    // keep both until the governed retire-field door
+    // (`synap_retire_field` → proposePropertyDefRetire) is used per pod.
   ],
 };
 
