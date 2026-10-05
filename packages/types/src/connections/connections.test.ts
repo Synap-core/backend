@@ -480,3 +480,43 @@ describe("suggestConnections", () => {
     expect(suggestConnections("idea", {}, [])).toEqual([]);
   });
 });
+
+describe("resolveConnectionLabel — built-in relation types (no def row)", () => {
+  it("reads an incoming embedded_in / visualized_in from the target's side, unreversed", async () => {
+    const { resolveConnectionLabel } = await import("./index.js");
+    expect(
+      resolveConnectionLabel("embedded_in", "incoming", undefined)
+    ).toEqual({
+      label: "Embeds",
+      reversed: false,
+    });
+    expect(
+      resolveConnectionLabel("visualized_in", "incoming", undefined)
+    ).toEqual({
+      label: "Shows",
+      reversed: false,
+    });
+    // symmetric: same words from both ends
+    expect(
+      resolveConnectionLabel("same_subject", "incoming", undefined)
+    ).toEqual({
+      label: "Same subject as",
+      reversed: false,
+    });
+  });
+
+  it("a catalog def still wins, and an unknown def-less type keeps the reversed mark", async () => {
+    const { resolveConnectionLabel } = await import("./index.js");
+    expect(
+      resolveConnectionLabel("embedded_in", "incoming", {
+        slug: "embedded_in",
+        displayName: "In",
+        inverseLabel: "Holds",
+      }).label
+    ).toBe("Holds");
+    expect(resolveConnectionLabel("zz_custom", "incoming", undefined)).toEqual({
+      label: "Zz custom",
+      reversed: true,
+    });
+  });
+});

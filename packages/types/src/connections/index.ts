@@ -201,12 +201,48 @@ function toItem(n: ConnectionNeighbor): ConnectionItem {
   };
 }
 
+/**
+ * Relation types the pod accepts WITHOUT a `relation_defs` row — the database's
+ * `SYSTEM_RELATION_TYPES` and the api's `IMPACT_RELATION_TYPES` — so no
+ * catalog read can ever supply their words. They still reach a node page (the
+ * role table zones them), and without this an incoming `embedded_in` drew the
+ * forward word plus a reversed-arrow mark. A def row, when one exists, wins.
+ * Kept equal to those two lists by the api tripwire
+ * `builtin-relation-labels.tripwire.test.ts`.
+ */
+export const BUILTIN_RELATION_TYPES: Readonly<
+  Record<string, ConnectionRelationType>
+> = {
+  embedded_in: {
+    slug: "embedded_in",
+    displayName: "Embedded in",
+    inverseLabel: "Embeds",
+    isDirectional: true,
+  },
+  visualized_in: {
+    slug: "visualized_in",
+    displayName: "Shown in",
+    inverseLabel: "Shows",
+    isDirectional: true,
+  },
+  same_subject: {
+    slug: "same_subject",
+    displayName: "Same subject as",
+    isDirectional: false,
+  },
+};
+
 /** Label + reversed flag for a (type, direction) from THIS side. */
 export function resolveConnectionLabel(
   edgeType: string,
   direction: ConnectionDirection | "both",
-  def: ConnectionRelationType | undefined
+  catalogDef: ConnectionRelationType | undefined
 ): { label: string; reversed: boolean } {
+  const def =
+    catalogDef ??
+    (Object.prototype.hasOwnProperty.call(BUILTIN_RELATION_TYPES, edgeType)
+      ? BUILTIN_RELATION_TYPES[edgeType]
+      : undefined);
   const forward =
     sentenceCaseLabel(def?.displayName ?? "") || humanizeToken(edgeType);
   if (direction !== "incoming") return { label: forward, reversed: false };

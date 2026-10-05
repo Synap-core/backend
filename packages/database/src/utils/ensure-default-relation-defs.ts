@@ -10,6 +10,20 @@ import { getDb } from "../client-pg.js";
 import { RelationDefRepository } from "../repositories/relation-def-repository.js";
 import { DEFAULT_RELATION_DEFS } from "./default-relation-defs.js";
 
+/** Default slug → its curated inverse label (only the defaults that have one). */
+const DEFAULT_INVERSE_LABELS: ReadonlyMap<string, string> = new Map(
+  DEFAULT_RELATION_DEFS.flatMap((def) => {
+    const label = (def.uiHints as { inverseLabel?: string }).inverseLabel;
+    return label ? [[def.slug, label] as const] : [];
+  })
+);
+
+function hasInverseLabel(uiHints: unknown): boolean {
+  const value = (uiHints as { inverseLabel?: unknown } | null | undefined)
+    ?.inverseLabel;
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 export interface EnsureDefaultRelationDefsResult {
   status: "created" | "skipped" | "error";
   message: string;
@@ -21,6 +35,11 @@ export interface EnsureDefaultRelationDefsResult {
    * seed-property-relation-mappings, which resolves through the same fallback.
    */
   podWideCovered: number;
+  /**
+   * Existing default-slug rows whose ABSENT `uiHints.inverseLabel` was filled
+   * from the curated default. See "Inverse-label convergence" below.
+   */
+  inverseLabelsFilled: number;
   error?: string;
 }
 
@@ -48,6 +67,41 @@ export async function ensureDefaultRelationDefs(
     // much of the coverage is pod-wide so a "skipped" is never mistaken for a
     // workspace that was actually seeded.
     const existing = await relDefRepo.list(workspaceId);
+
+    // ── Inverse-label convergence (fill-if-absent, no marker) ───────────────
+    // This seeder used to be create-only, so a label added to a default after a
+    // pod was seeded never reached it (honest under-convergence: nothing
+    // claimed otherwise). It now converges exactly ONE field, and the
+    // comparator reads exactly that field: `uiHints.inverseLabel` is ABSENT on
+    // the row and the default has one ⇒ write it, merging the rest of uiHints
+    // untouched. A label a workspace set (any non-empty string, even one that
+    // differs from the default) is never overwritten, and nothing is stamped —
+    // the next pass re-reads the row itself, so there is no marker to lie.
+    //
+    // Scope: the boot call (`workspaceId = null`) reaches EVERY row of a
+    // default slug, pod-wide AND workspace-scoped — a workspace copy seeded
+    // before the 0118 base layer shadows the base row by slug, so filling only
+    // the base row would leave the label invisible exactly where it is read.
+    // A workspace call converges that workspace's own rows.
+    const candidates =
+      workspaceId === null
+        ? await dbConn.query.relationDefs.findMany({
+            where: (relationDefs, { inArray }) =>
+              inArray(relationDefs.slug, [...DEFAULT_INVERSE_LABELS.keys()]),
+          })
+        : existing.filter((d) => d.workspaceId === workspaceId);
+    let inverseLabelsFilled = 0;
+    for (const row of candidates) {
+      const label = DEFAULT_INVERSE_LABELS.get(row.slug);
+      if (!label || hasInverseLabel(row.uiHints)) continue;
+      await relDefRepo.update(row.id, row.workspaceId ?? null, {
+        uiHints: {
+          ...((row.uiHints as Record<string, unknown> | null) ?? {}),
+          inverseLabel: label,
+        },
+      });
+      inverseLabelsFilled += 1;
+    }
     const existingSlugs = new Set(existing.map((d) => d.slug));
     const ownSlugs = new Set(
       existing.filter((d) => d.workspaceId === workspaceId).map((d) => d.slug)
@@ -69,6 +123,7 @@ export async function ensureDefaultRelationDefs(
             : `All ${DEFAULT_RELATION_DEFS.length} default relation definitions already exist`,
         defsCreated: 0,
         podWideCovered,
+        inverseLabelsFilled,
       };
     }
 
@@ -89,6 +144,7 @@ export async function ensureDefaultRelationDefs(
       message: `Seeded ${missing.length} default relation definitions (${existingSlugs.size} already existed)`,
       defsCreated: missing.length,
       podWideCovered,
+      inverseLabelsFilled,
     };
   } catch (error) {
     return {
@@ -96,6 +152,7 @@ export async function ensureDefaultRelationDefs(
       message: "Failed to seed default relation definitions",
       defsCreated: 0,
       podWideCovered: 0,
+      inverseLabelsFilled: 0,
       error: error instanceof Error ? error.message : String(error),
     };
   }

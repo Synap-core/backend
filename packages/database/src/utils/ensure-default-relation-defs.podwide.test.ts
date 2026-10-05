@@ -6,7 +6,12 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-let existingRows: Array<{ slug: string; workspaceId: string | null }> = [];
+let existingRows: Array<{
+  id?: string;
+  slug: string;
+  workspaceId: string | null;
+  uiHints?: unknown;
+}> = [];
 const captured: { inserts: Array<Record<string, unknown>> } = { inserts: [] };
 
 vi.mock("../client-pg.js", () => {
@@ -58,9 +63,13 @@ describe("ensureDefaultRelationDefs — pod-wide base layer", () => {
   });
 
   it("is idempotent — a second boot writes nothing", async () => {
+    // A second boot reads back what the first wrote — uiHints included — so
+    // the inverse-label convergence has nothing to fill either.
     existingRows = DEFAULT_RELATION_DEFS.map((d) => ({
+      id: `id-${d.slug}`,
       slug: d.slug,
       workspaceId: null,
+      uiHints: d.uiHints,
     }));
 
     const result = await ensureDefaultRelationDefs(null, "system");
@@ -69,6 +78,7 @@ describe("ensureDefaultRelationDefs — pod-wide base layer", () => {
     // violation used as control flow.
     expect(result.status).toBe("skipped");
     expect(captured.inserts.length).toBe(0);
+    expect(result.inverseLabelsFilled).toBe(0);
   });
 
   it("reports a workspace covered ONLY by the base layer as pod-wide coverage", async () => {
