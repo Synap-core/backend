@@ -229,7 +229,8 @@ describe("POST /packages/apply — one space per domain", () => {
       instanceName: "Architech",
     });
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual(reply);
+    // `error` carries the guidance: Hub clients surface a 4xx through it.
+    expect(await res.json()).toEqual({ ...reply, error: reply.guidance });
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockMaterialize).not.toHaveBeenCalled();
   });

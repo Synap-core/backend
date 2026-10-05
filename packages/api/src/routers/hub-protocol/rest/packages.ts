@@ -525,7 +525,10 @@ export function registerPackagesRoutes(app: HubHono): void {
         idempotencyKey,
         workspaceName,
       });
-      if (verdict.action === "refuse") return c.json(verdict.reply, 409);
+      // `error` too: every Hub client (IS, CLI) surfaces a 4xx through it.
+      if (verdict.action === "refuse") {
+        return c.json({ ...verdict.reply, error: verdict.reply.guidance }, 409);
+      }
       if (verdict.note) result.oneSpacePerDomain = verdict.note;
     }
 

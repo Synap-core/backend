@@ -1018,7 +1018,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         (definition as { workspaceName?: string }).workspaceName,
     });
     if (domainVerdict.action === "refuse") {
-      return c.json(domainVerdict.reply, 409);
+      return c.json(
+        { ...domainVerdict.reply, error: domainVerdict.reply.guidance },
+        409
+      );
     }
     const declaredSlugs = (
       (definition as { profiles?: Array<{ slug?: unknown }> }).profiles ?? []

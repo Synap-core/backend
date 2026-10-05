@@ -177,7 +177,7 @@ describe("POST /workspaces/from-definition — one space per domain", () => {
     h.verdict = { action: "refuse", reply };
     const { status, body } = await post(appAs(AGENT), definitionMintingKind);
     expect(status).toBe(409);
-    expect(body).toEqual(reply);
+    expect(body).toEqual({ ...reply, error: reply.guidance });
     expect(h.gateCalls).toEqual([]);
     expect(h.installCalls).toEqual([]);
   });
