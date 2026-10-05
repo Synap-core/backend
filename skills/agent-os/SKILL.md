@@ -31,7 +31,7 @@ the same loop, twice:
 > **Intent → have it here? use it. Else marketplace? explain why it fits, ask
 > to install. Else create** (or start a session whose job is to create/find it).
 
-- **Loop 1 — workspaces (domains).** CRM, Content Studio, Builder, Operations…
+- **Loop 1 — workspaces (domains).** CRM, Content OS, Builder, Operations…
 - **Loop 2 — tools (capabilities).** Gmail sync, a publisher, a scraper…
 - **Later — playbooks.** Same shape; do not invent a new package kind this
   wave. Project templates = packages (suites + embedded playbooks).
@@ -98,7 +98,8 @@ governance.
 | `ecosystem`          | Ecosystem          | Market actors, segments, trends, relationships         |
 | `brand-library`      | Brand Library      | Brand voice, assets, tokens, components, rules         |
 | `crm`                | CRM                | Contacts, companies, deals, pipeline                   |
-| `content-studio`     | Content Studio     | Posts, pillars, calendar + video/production            |
+| `content-os`         | Content OS         | THE content surface — posts, pillars, calendar, text   |
+| `content-studio`     | Content Studio     | Video only — HyperFrames compositions for a post       |
 | `marketing-campaign` | Marketing          | Campaigns, leads, channels                             |
 | `project-management` | Project Management | OKRs, projects, sprints, tasks                         |
 | `builder-workspace`  | Dev                | DevPlane + agents — building the product               |
@@ -132,10 +133,11 @@ Ask: "Describe what you do in a sentence." From the answer, **infer** which
 workspaces fit. Examples:
 
 - "dev agency with clients" → Dev (`builder-workspace`) + CRM + Project Management
-- "I want to create content" → Content Studio (+ offer Brand Library)
+- "I want to create content" → Content OS (+ offer Brand Library; add Content
+  Studio only when they make video)
 - "I want to build a product" → Dev (`builder-workspace`) (+ offer CRM)
 - "I need a shopping/procurement domain" → market-search first; else propose
-- "SaaS startup" → Dev + CRM + Project Management + Content Studio
+- "SaaS startup" → Dev + CRM + Project Management + Content OS
 - "this work needs another workspace" → Loop 1 for that one domain only
 
 ### 3. Propose + confirm (NEVER auto-install everything)
