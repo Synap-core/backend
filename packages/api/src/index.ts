@@ -56,6 +56,10 @@ export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { ensureSynapCoreCapability } from "./services/capabilities/ensure-synap-core.js";
 export { ensureSystemSkills } from "./services/capabilities/ensure-system-skills.js";
+export {
+  ensureCoreRenderers,
+  CORE_MCP_RENDERERS,
+} from "./services/cells/ensure-core-renderers.js";
 export { backfillCapabilityEmits } from "./services/capabilities/backfill-capability-emits.js";
 export {
   ensureCaptureAgent,
