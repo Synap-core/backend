@@ -8,13 +8,11 @@ import {
 const e = (
   profileSlug: string,
   title: string,
-  properties: Record<string, unknown> = {},
-  body?: string
+  properties: Record<string, unknown> = {}
 ): BrandKitSourceEntity => ({
   profileSlug,
   title,
   properties,
-  ...(body ? { body } : {}),
 });
 
 const FIXTURE: BrandKitSourceEntity[] = [
@@ -43,7 +41,9 @@ const FIXTURE: BrandKitSourceEntity[] = [
   e("brand-asset", "Logo", {
     "asset-kind": "logo",
     "asset-variant": "primary",
+    "asset-url": "https://cdn.test/logo.svg",
     "asset-document-id": "doc-1",
+    "asset-file-id": "file-1",
     "asset-status": "approved",
   }),
   e("brand-voice-guide", "General", {
@@ -106,7 +106,9 @@ describe("brandKitFromEntities — mapping real Brand Library slugs", () => {
         name: "Logo",
         kind: "logo",
         variant: "primary",
+        url: "https://cdn.test/logo.svg",
         documentId: "doc-1",
+        fileId: "file-1",
         status: "approved",
       },
     ]);
@@ -129,11 +131,17 @@ describe("brandKitFromEntities — mapping real Brand Library slugs", () => {
     expect(JSON.stringify(kit)).not.toContain("Unrelated");
   });
 
-  it("prefers an entity body over composed voice examples", () => {
+  it("composes the voice body from vocabulary / do / don't properties", () => {
     const k = brandKitFromEntities([
-      e("brand-voice-guide", "V", { "voice-example-do": "x" }, "Own body"),
+      e("brand-voice-guide", "V", {
+        "voice-vocabulary": "ship, build",
+        "voice-example-do": "Say it plainly.",
+        "voice-example-dont": "Synergize.",
+      }),
     ]);
-    expect(k.voice[0]!.body).toBe("Own body");
+    expect(k.voice[0]!.body).toBe(
+      "Vocabulary: ship, build\nDo: Say it plainly.\nDon't: Synergize."
+    );
   });
 });
 
@@ -315,10 +323,39 @@ describe("exportBrandKit — formats", () => {
   it("css declares role-keyed brand variables", () => {
     const css = exportBrandKit(kit, "css").content;
     expect(css).toContain(":root {");
-    expect(css).toContain("--brand-primary: #b67a38;");
+    // `color-token-name: brand-ochre` names the variable; role is the fallback.
+    expect(css).toContain("--brand-ochre: #b67a38;");
+    expect(css).not.toContain("--brand-primary:");
     expect(css).toContain("--brand-text: #111111;");
     expect(css).toContain('--brand-font-heading: "Fraunces", Georgia, serif;');
     expect(css).toContain('--brand-font-body: "Inter";');
+  });
+
+  it("css keys a color by its sanitized token name, never in the font- namespace", () => {
+    const css = exportBrandKit(
+      brandKitFromEntities([
+        e("brand-color", "A", {
+          "color-role": "accent",
+          "color-hex": "#aaa",
+          "color-token-name": "--Brand Sun Gold!",
+        }),
+        e("brand-color", "B", {
+          "color-role": "secondary",
+          "color-hex": "#bbb",
+          "color-token-name": "font-body",
+        }),
+        e("brand-color", "C", {
+          "color-role": "tertiary",
+          "color-hex": "#ccc",
+          "color-token-name": "sun-gold",
+        }),
+      ]),
+      "css"
+    ).content;
+    expect(css).toContain("--brand-sun-gold: #aaa;");
+    expect(css).toContain("--brand-sun-gold-2: #ccc;");
+    expect(css).toContain("--brand-secondary: #bbb;");
+    expect(css).not.toContain("--brand-font-body: #bbb");
   });
 
   it("css suffixes a repeated role instead of overwriting it", () => {
@@ -350,7 +387,7 @@ describe("exportBrandKit — formats", () => {
     const md = exportBrandKit(kit, "frame-md").content;
     expect(md.startsWith("---\n")).toBe(true);
     expect(md).toContain('name: "Acme"');
-    expect(md).toContain('colors:\n  primary: "#b67a38"\n  text: "#111111"');
+    expect(md).toContain('colors:\n  ochre: "#b67a38"\n  text: "#111111"');
     expect(md).toContain('typography:\n  body: "Inter"\n  heading: "Fraunces"');
     expect(md).toContain("## Voice");
     expect(md).toContain("### General");

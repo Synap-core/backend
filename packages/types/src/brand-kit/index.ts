@@ -12,7 +12,8 @@
  *   - brand-identity     brand-tagline · brand-website · brand-voice-summary · brand-status
  *   - brand-color        color-role · color-hex · color-token-name · color-usage · color-status
  *   - brand-font         font-role · font-family · font-fallback · font-url · font-status
- *   - brand-asset        asset-kind · asset-variant · asset-document-id · asset-usage · asset-status
+ *   - brand-asset        asset-kind · asset-variant · asset-url · asset-document-id ·
+ *                        asset-file-id · asset-usage · asset-status
  *   - brand-voice-guide  voice-tone-descriptors · voice-personality-traits ·
  *                        voice-vocabulary · voice-example-do · voice-example-dont · voice-status
  *   - brand-rule         rule-kind · rule-content · rule-severity
@@ -32,6 +33,13 @@
  *     title).
  *   - identity: the first identity in canonical order whose `brand-status` is
  *     not `archived`, preferring `active` over `draft`.
+ *
+ * Voice text lives in the voice guide's PROPERTIES (vocabulary / do / don't),
+ * not in a linked document — no Brand Library surface writes a body.
+ *
+ * Color keys (CSS `--brand-<key>` and frame-md `colors.<key>`) come from
+ * `color-token-name` when set (sanitized, a leading `--` / `brand-` dropped),
+ * else from `color-role`; a repeated key gets `-2`, `-3`, …
  *
  * Determinism: every list is sorted canonically, so the same set of entities
  * in ANY order yields byte-identical content and the same `hash`. The hash is
@@ -84,7 +92,9 @@ export interface BrandKitInput {
     name: string;
     kind: string;
     variant?: string;
+    url?: string;
     documentId?: string;
+    fileId?: string;
     usage?: string;
     status?: string;
   }>;
@@ -107,7 +117,6 @@ export interface BrandKitSourceEntity {
   profileSlug: string;
   title: string;
   properties: Record<string, unknown>;
-  body?: string;
 }
 
 // ── Reading entities ─────────────────────────────────────────────────────────
@@ -224,7 +233,9 @@ export function brandKitFromEntities(
             name,
             kind: str(p, "asset-kind") ?? "other",
             variant: str(p, "asset-variant"),
+            url: str(p, "asset-url"),
             documentId: str(p, "asset-document-id"),
+            fileId: str(p, "asset-file-id"),
             usage: str(p, "asset-usage"),
             status,
           })
@@ -234,19 +245,17 @@ export function brandKitFromEntities(
       case "brand-voice-guide": {
         const status = str(p, "voice-status") ?? "approved";
         if (status === "deprecated" || status === "draft") break;
-        const body =
-          (typeof e.body === "string" && e.body.trim()) ||
-          joinSections([
-            ["Vocabulary", str(p, "voice-vocabulary")],
-            ["Do", str(p, "voice-example-do")],
-            ["Don't", str(p, "voice-example-dont")],
-          ]);
+        const body = joinSections([
+          ["Vocabulary", str(p, "voice-vocabulary")],
+          ["Do", str(p, "voice-example-do")],
+          ["Don't", str(p, "voice-example-dont")],
+        ]);
         kit.voice.push(
           compact({
             name,
             tone: str(p, "voice-tone-descriptors"),
             traits: str(p, "voice-personality-traits"),
-            body: body || undefined,
+            body,
           })
         );
         break;
@@ -363,14 +372,15 @@ function keySegment(raw: string, fallback: string): string {
   return k || fallback;
 }
 
-/** Unique role keys in canonical order: a repeated role gets `-2`, `-3`, … */
-function roleKeys<T extends { role: string }>(
+/** Unique keys in canonical order: a repeated key gets `-2`, `-3`, … */
+function uniqueKeys<T>(
   items: T[],
+  rawKey: (item: T) => string,
   fallback: string
 ): Array<[string, T]> {
   const seen = new Map<string, number>();
   return items.map((item) => {
-    const base = keySegment(item.role, fallback);
+    const base = keySegment(rawKey(item), fallback);
     const n = (seen.get(base) ?? 0) + 1;
     seen.set(base, n);
     return [n === 1 ? base : `${base}-${n}`, item];
@@ -385,6 +395,31 @@ function cssSafe(value: string): string {
     .trim();
 }
 
+function roleKeys<T extends { role: string }>(
+  items: T[],
+  fallback: string
+): Array<[string, T]> {
+  return uniqueKeys(items, (item) => item.role, fallback);
+}
+
+/**
+ * A color's key: its `color-token-name` (minus a `brand-` prefix) when set,
+ * else its role. A token name in the `font-` namespace is ignored so a color
+ * can never shadow a `--brand-font-*` variable.
+ */
+function colorKeys(colors: BrandKitInput["colors"]) {
+  return uniqueKeys(
+    colors,
+    (c) => {
+      const token = c.tokenName
+        ? keySegment(c.tokenName, "").replace(/^brand-/, "")
+        : "";
+      return token && !token.startsWith("font-") ? token : c.role;
+    },
+    "color"
+  );
+}
+
 function fontStack(f: BrandKitInput["fonts"][number]): string {
   const family = `"${cssSafe(f.family).replace(/"/g, "'")}"`;
   return f.fallback ? `${family}, ${cssSafe(f.fallback)}` : family;
@@ -392,7 +427,7 @@ function fontStack(f: BrandKitInput["fonts"][number]): string {
 
 function renderCss(kit: BrandKitInput): string {
   const lines = [":root {"];
-  for (const [key, c] of roleKeys(kit.colors, "color")) {
+  for (const [key, c] of colorKeys(kit.colors)) {
     lines.push(`  --brand-${key}: ${c.hex};`);
   }
   for (const [key, f] of roleKeys(kit.fonts, "body")) {
@@ -411,7 +446,7 @@ function renderFrameMd(kit: BrandKitInput): string {
   const y = (v: string) => JSON.stringify(v); // a JSON string is a valid YAML scalar
   const lines: string[] = ["---"];
   if (kit.identity?.name) lines.push(`name: ${y(kit.identity.name)}`);
-  const colors = roleKeys(kit.colors, "color");
+  const colors = colorKeys(kit.colors);
   if (colors.length) {
     lines.push("colors:");
     for (const [key, c] of colors) lines.push(`  ${key}: ${y(c.hex)}`);
