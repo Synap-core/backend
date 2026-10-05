@@ -17,7 +17,10 @@ import {
   ComposeOverlayError,
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
-import { workspaceInstanceKey } from "../../../services/workspace-creation-service.js";
+import {
+  checkOneSpacePerDomain,
+  workspaceInstanceKey,
+} from "../../../services/workspace-creation-service.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
 import { resolveProjectForPackInstall } from "../../../services/resolve-project-for-pack-install.js";
@@ -508,6 +511,23 @@ export function registerPackagesRoutes(app: HubHono): void {
       return c.json({ error: (e as Error).message }, 400);
     }
     const workspaceName = body.instanceName ?? body.workspaceName;
+
+    // ── One space per domain — BEFORE governance, so an agent's second
+    // domain space is refused (typed `exists`), never filed as a proposal. A
+    // human (incl. a named `--as` instance) may proceed; the reply carries the
+    // same guidance. `targetWorkspaceId` installs onto an existing space —
+    // nothing new is minted, so there is nothing to check.
+    if (!body.targetWorkspaceId) {
+      const verdict = await checkOneSpacePerDomain({
+        userId,
+        agentUserId,
+        packageSlug: body._meta?.slug ?? undefined,
+        idempotencyKey,
+        workspaceName,
+      });
+      if (verdict.action === "refuse") return c.json(verdict.reply, 409);
+      if (verdict.note) result.oneSpacePerDomain = verdict.note;
+    }
 
     // ── LIVE preflight gate ───────────────────────────────────────────────
     // Run the write-free create-path resolver against the LIVE pod catalog

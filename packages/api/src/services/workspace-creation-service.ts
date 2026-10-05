@@ -24,6 +24,9 @@ import {
   workspaces,
   and,
   eq,
+  isNull,
+  isNotNull,
+  or,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
   type WorkspaceSettings,
@@ -34,6 +37,7 @@ import {
   resolveWorkspaceTemplate,
   type ResolvedWorkspaceTemplate,
 } from "./capabilities/resolve-workspace-template.js";
+import { oneSpacePerDomainGuidance } from "./one-space-per-domain.js";
 
 const logger = createLogger({ module: "workspace-creation-service" });
 
@@ -395,6 +399,166 @@ async function findLegacyWorkspaceMatch(
     id: chosen.id,
     settings: (chosen.settings ?? null) as WorkspaceSettings | null,
   };
+}
+
+/**
+ * ONE SPACE PER DOMAIN — the create-time verdict (rule text:
+ * `one-space-per-domain.ts`). Every create door that can mint a space an
+ * agent asked for calls this BEFORE governance, so an agent's second Content
+ * space is refused instead of becoming a proposal the user must decline.
+ *
+ * A request "mints a second domain space" when it would CREATE (the same
+ * reuse decision `createWorkspaceFromDefinitionIdempotent` makes: an exact
+ * idempotency-key hit, or — for the singleton key only — the legacy fallback)
+ * AND a live space of that domain already exists:
+ *   - template mode (`packageSlug`): a live member space installed from that
+ *     template — the singleton, any named instance (`<slug>:<name>`), or a
+ *     legacy row carrying the slug as `package_slug` / `workspaceSubtype`;
+ *   - freehand mode (no slug): a live template-installed space whose name
+ *     equals the requested one (case/space-insensitive).
+ * Verdict: none found → `create`; found + agent caller → `refuse` with the
+ * typed `{status:"exists"}` reply; found + human caller (incl. a human's
+ * named instance) → `create` with a guidance `note` for the reply.
+ */
+export type OneSpacePerDomainVerdict =
+  | {
+      action: "create";
+      note?: { existingWorkspaceId: string; guidance: string };
+    }
+  | {
+      action: "refuse";
+      reply: {
+        status: "exists";
+        workspaceId: string;
+        workspaceName: string;
+        matchedBy: "template" | "name";
+        guidance: string;
+      };
+    };
+
+export async function checkOneSpacePerDomain(input: {
+  userId: string;
+  /** Present ⇔ an agent is acting — the refuse branch. */
+  agentUserId?: string | null;
+  packageSlug?: string;
+  /** The idempotency key the create would use (`workspaceInstanceKey`). */
+  idempotencyKey?: string;
+  workspaceName?: string;
+}): Promise<OneSpacePerDomainVerdict> {
+  const { userId, packageSlug, idempotencyKey } = input;
+  const live = and(
+    eq(workspaceMembers.userId, userId),
+    isNull(workspaces.archivedAt)
+  );
+  const cols = {
+    id: workspaces.id,
+    name: workspaces.name,
+    ownerId: workspaces.ownerId,
+    createdAt: workspaces.createdAt,
+  };
+
+  // Would this request REUSE? Then it mints nothing — never refuse a reinstall.
+  if (idempotencyKey) {
+    const [hit] = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, workspaces.id)
+      )
+      .where(
+        and(
+          eq(workspaceMembers.userId, userId),
+          eq(workspaces.provisioningProposalId, idempotencyKey)
+        )
+      )
+      .limit(1);
+    if (hit) return { action: "create" };
+  }
+
+  let existing: { id: string; name: string } | undefined;
+  let matchedBy: "template" | "name" = "template";
+  if (packageSlug) {
+    if (
+      !isNamedInstanceKey(idempotencyKey, packageSlug) &&
+      (await findLegacyWorkspaceMatch(packageSlug, userId))
+    ) {
+      return { action: "create" };
+    }
+    const instancePrefix = `${packageSlug}:`;
+    const rows = await db
+      .select(cols)
+      .from(workspaces)
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, workspaces.id)
+      )
+      .where(
+        and(
+          live,
+          or(
+            eq(workspaces.packageSlug, packageSlug),
+            eq(workspaces.provisioningProposalId, packageSlug),
+            drizzleSql`left(${workspaces.provisioningProposalId}, ${instancePrefix.length}) = ${instancePrefix}`,
+            drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${packageSlug}`
+          )
+        )
+      );
+    existing = pickExisting(rows, userId);
+  } else if (input.workspaceName?.trim()) {
+    matchedBy = "name";
+    const rows = await db
+      .select(cols)
+      .from(workspaces)
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, workspaces.id)
+      )
+      .where(
+        and(
+          live,
+          isNotNull(workspaces.packageSlug),
+          drizzleSql`lower(trim(${workspaces.name})) = ${input.workspaceName.trim().toLowerCase()}`
+        )
+      );
+    existing = pickExisting(rows, userId);
+  }
+  if (!existing) return { action: "create" };
+
+  const guidance = oneSpacePerDomainGuidance({
+    workspaceId: existing.id,
+    name: existing.name,
+  });
+  if (input.agentUserId) {
+    return {
+      action: "refuse",
+      reply: {
+        status: "exists",
+        workspaceId: existing.id,
+        workspaceName: existing.name,
+        matchedBy,
+        guidance,
+      },
+    };
+  }
+  return {
+    action: "create",
+    note: { existingWorkspaceId: existing.id, guidance },
+  };
+}
+
+/** Deterministic: owned first, then the OLDEST (the original domain space). */
+function pickExisting(
+  rows: Array<{ id: string; name: string; ownerId: string; createdAt: Date }>,
+  userId: string
+): { id: string; name: string } | undefined {
+  const sorted = [...rows].sort((a, b) => {
+    const ao = a.ownerId === userId ? 1 : 0;
+    const bo = b.ownerId === userId ? 1 : 0;
+    if (ao !== bo) return bo - ao;
+    return a.createdAt.getTime() - b.createdAt.getTime();
+  });
+  return sorted[0];
 }
 
 export interface CreateWorkspaceFromDefinitionInput {

@@ -284,6 +284,21 @@ export const workspaceHandlers: McpHandlerMap = {
     }
     const definition = (args.definition ?? {}) as object;
     const idempotencyKey = args.proposalId as string | undefined;
+    // One space per domain — BEFORE governance: an agent naming a space after
+    // an existing domain space is refused (typed `exists`), a human proceeds
+    // with the same guidance in the reply.
+    const { checkOneSpacePerDomain } =
+      await import("../../../services/workspace-creation-service.js");
+    const domainVerdict = await checkOneSpacePerDomain({
+      userId,
+      agentUserId,
+      idempotencyKey,
+      workspaceName: name,
+    });
+    if (domainVerdict.action === "refuse") return ok(domainVerdict.reply);
+    const domainNote = domainVerdict.note
+      ? { oneSpacePerDomain: domainVerdict.note }
+      : {};
     const { checkPermissionOrPropose, proposedMessageFor } =
       await import("../../../utils/permission-check.js");
     const perm = await checkPermissionOrPropose({
@@ -321,6 +336,7 @@ export const workspaceHandlers: McpHandlerMap = {
         reviewPath: perm.reviewPath,
         reviewUrl: perm.reviewUrl,
         ...(perm.deduped ? { deduped: true } : {}),
+        ...domainNote,
       });
     }
     // Granted (operator authority) → same materialize door as approve
@@ -351,6 +367,7 @@ export const workspaceHandlers: McpHandlerMap = {
       workspaceId: core.workspaceId,
       materializeStatus,
       created: materializeStatus === "created",
+      ...domainNote,
     });
   },
   synap_declare_workspace_source: async (

@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   gateResult: {} as Record<string, unknown>,
   installCalls: [] as Array<Record<string, unknown>>,
   liveSlugs: new Set<string>(),
+  verdict: { action: "create" } as Record<string, unknown>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -68,6 +69,9 @@ vi.mock(
         h.installCalls.push(input);
         return { workspaceId: "ws-new", created: true };
       },
+      // One-space-per-domain verdict is proven on PGlite
+      // (one-space-per-domain.pglite.test.ts); this suite is about D6.
+      checkOneSpacePerDomain: async () => h.verdict,
     };
   }
 );
@@ -116,6 +120,7 @@ beforeEach(() => {
   h.installCalls.length = 0;
   h.liveSlugs = new Set();
   h.gateResult = {};
+  h.verdict = { action: "create" };
 });
 
 describe("POST /workspaces/from-definition — D6 governance", () => {
@@ -157,5 +162,32 @@ describe("POST /workspaces/from-definition — D6 governance", () => {
     });
     expect(status).toBe(200);
     expect(h.installCalls).toHaveLength(1);
+  });
+});
+
+describe("POST /workspaces/from-definition — one space per domain", () => {
+  it("a refused verdict → 409 typed `exists`, before the gate; nothing installed", async () => {
+    const reply = {
+      status: "exists",
+      workspaceId: "ws-podcasts",
+      workspaceName: "Podcasts",
+      matchedBy: "name",
+      guidance: "g",
+    };
+    h.verdict = { action: "refuse", reply };
+    const { status, body } = await post(appAs(AGENT), definitionMintingKind);
+    expect(status).toBe(409);
+    expect(body).toEqual(reply);
+    expect(h.gateCalls).toEqual([]);
+    expect(h.installCalls).toEqual([]);
+  });
+
+  it("a human note rides on the 200 reply", async () => {
+    const note = { existingWorkspaceId: "ws-podcasts", guidance: "g" };
+    h.verdict = { action: "create", note };
+    h.gateResult = { granted: true };
+    const { status, body } = await post(appAs(), definitionMintingKind);
+    expect(status).toBe(200);
+    expect(body.oneSpacePerDomain).toEqual(note);
   });
 });

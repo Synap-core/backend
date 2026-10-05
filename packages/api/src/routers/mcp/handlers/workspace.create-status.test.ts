@@ -8,6 +8,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   created: true,
+  verdict: { action: "create" } as Record<string, unknown>,
+  verdictArgs: null as null | Record<string, unknown>,
+  materialized: 0,
+}));
+
+vi.mock("../../../services/workspace-creation-service.js", async (orig) => ({
+  ...(await orig<
+    typeof import("../../../services/workspace-creation-service.js")
+  >()),
+  checkOneSpacePerDomain: async (a: Record<string, unknown>) => {
+    h.verdictArgs = a;
+    return h.verdict;
+  },
 }));
 
 vi.mock("../../../utils/permission-check.js", async (orig) => ({
@@ -21,16 +34,19 @@ vi.mock(
     ...(await orig<
       typeof import("../../../services/workspace-materialization-service.js")
     >()),
-    materializeWorkspaceCore: async () => ({
-      status: "created",
-      workspaceId: "ws-1",
-      dependencies: [],
-      created: {
+    materializeWorkspaceCore: async () => (
+      h.materialized++,
+      {
+        status: "created",
         workspaceId: "ws-1",
-        created: h.created,
-        outcome: h.created ? "created" : "unchanged",
-      },
-    }),
+        dependencies: [],
+        created: {
+          workspaceId: "ws-1",
+          created: h.created,
+          outcome: h.created ? "created" : "unchanged",
+        },
+      }
+    ),
   })
 );
 
@@ -54,6 +70,9 @@ const create = async () => {
 
 beforeEach(() => {
   h.created = true;
+  h.verdict = { action: "create" };
+  h.verdictArgs = null;
+  h.materialized = 0;
 });
 
 describe("synap_create_workspace — reply status is the outcome", () => {
@@ -73,5 +92,39 @@ describe("synap_create_workspace — reply status is the outcome", () => {
       created: false,
       workspaceId: "ws-1",
     });
+  });
+});
+
+describe("synap_create_workspace — one space per domain", () => {
+  it("asks the verdict with the agent identity and the requested name", async () => {
+    await create();
+    expect(h.verdictArgs).toMatchObject({
+      userId: "u1",
+      agentUserId: "agent-1",
+      workspaceName: "Brand Library",
+    });
+  });
+
+  it("a refused verdict replies the typed `exists` result and materializes nothing", async () => {
+    const reply = {
+      status: "exists",
+      workspaceId: "ws-brand",
+      workspaceName: "Brand Library",
+      matchedBy: "name",
+      guidance: "use it — project_use_workspace + file_into_project",
+    };
+    h.verdict = { action: "refuse", reply };
+    expect(await create()).toEqual(reply);
+    expect(h.materialized).toBe(0);
+  });
+
+  it("a human note rides on the created reply", async () => {
+    const note = { existingWorkspaceId: "ws-brand", guidance: "g" };
+    h.verdict = { action: "create", note };
+    expect(await create()).toMatchObject({
+      status: "created",
+      oneSpacePerDomain: note,
+    });
+    expect(h.materialized).toBe(1);
   });
 });

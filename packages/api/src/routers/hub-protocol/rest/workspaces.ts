@@ -43,6 +43,7 @@ import {
 } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  checkOneSpacePerDomain,
   createWorkspaceFromDefinitionIdempotent,
   isAgentTypeAllowedToCreateWorkspaces,
   WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
@@ -1006,6 +1007,19 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     // ProfileRepository floor would otherwise refuse it mid-install. Approval
     // re-materialises through the `workspace/create` executor as a human.
     const agentUserId = c.get("agentUserId") as string | undefined;
+
+    // One space per domain — same verdict as /packages/apply, before governance.
+    const domainVerdict = await checkOneSpacePerDomain({
+      userId: ownerId,
+      agentUserId,
+      idempotencyKey: proposalId,
+      workspaceName:
+        workspaceName ??
+        (definition as { workspaceName?: string }).workspaceName,
+    });
+    if (domainVerdict.action === "refuse") {
+      return c.json(domainVerdict.reply, 409);
+    }
     const declaredSlugs = (
       (definition as { profiles?: Array<{ slug?: unknown }> }).profiles ?? []
     )
@@ -1075,6 +1089,9 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         {
           workspaceId: result.workspaceId,
           created: result.created,
+          ...(domainVerdict.note
+            ? { oneSpacePerDomain: domainVerdict.note }
+            : {}),
         },
         200
       );
