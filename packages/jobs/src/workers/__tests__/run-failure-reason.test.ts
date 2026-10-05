@@ -146,7 +146,7 @@ describe("never-worked breaker", () => {
     const msg = breakerErrorMessage(10, theIncidentReason);
     expect(msg).toContain("10 failed runs");
     expect(msg).toContain("HTTP 404 Not Found");
-    expect(msg).toMatch(/set this automation back to Active/i);
+    expect(msg).toMatch(/resume the rule/i);
   });
 
   it("still explains itself when no step reason was captured", () => {

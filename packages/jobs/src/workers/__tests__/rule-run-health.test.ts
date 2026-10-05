@@ -81,7 +81,7 @@ describe("worked-then-broke breaker", () => {
     const msg = brokeAfterWorkingMessage("HTTP 500 from Gmail");
     expect(msg).toContain(`${CONSECUTIVE_FAILURE_LIMIT} failed runs in a row`);
     expect(msg).toContain("HTTP 500 from Gmail");
-    expect(msg).toMatch(/back to Active/);
+    expect(msg).toMatch(/resume the rule/i);
   });
 });
 

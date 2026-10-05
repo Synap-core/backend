@@ -618,6 +618,61 @@ export async function guardProducerEffect(opts: {
 }
 
 /**
+ * Tell the person a NEW proposal is waiting: the realtime `proposal:created`
+ * nudge plus the side-effect event. The Reactions queue itself is DB-driven,
+ * so a failed broadcast never blocks governance — it is logged, not thrown.
+ * (The api's `notifyProposalCreatedOrdered` is the twin; jobs cannot import it.)
+ * Callers skip it on a dedup hit: the existing row already announced itself.
+ */
+async function announceProposal(p: {
+  proposalId: string;
+  userId: string;
+  workspaceId: string | null | undefined;
+  targetType: string;
+  targetId: string | null | undefined;
+  changeType: string;
+  correlationId: string | null | undefined;
+}): Promise<void> {
+  try {
+    await broadcastNotification({
+      userId: p.userId,
+      requestId: p.proposalId,
+      message: {
+        type: "proposal:created",
+        data: {
+          proposalId: p.proposalId,
+          targetType: p.targetType,
+          targetId: p.targetId,
+          changeType: p.changeType,
+          status: ProposalStatus.PENDING,
+        },
+        requestId: p.proposalId,
+        status: "success",
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    logger.warn(
+      { err, proposalId: p.proposalId },
+      "proposal:created broadcast failed (the queue is DB-driven; continuing)"
+    );
+  }
+  emitSideEffects({
+    subjectType: "proposal",
+    action: "created",
+    subjectId: p.proposalId,
+    userId: p.userId,
+    workspaceId: p.workspaceId,
+    data: {
+      proposalStatus: "created",
+      targetType: p.targetType,
+      changeType: p.changeType,
+      correlationId: p.correlationId,
+    },
+  });
+}
+
+/**
  * Create a PENDING proposal attributed to the owning agent and surface it in
  * the Reactions queue. Mirrors createPendingProposal's persisted shape
  * (status=pending, agentUserId, TTL, broadcast, emitSideEffects) so automation
@@ -788,40 +843,14 @@ async function proposeAutomationWrite(opts: {
   // a broadcast failure must never block governance. Skipped on a dedup hit: the
   // pre-existing row already broadcast + emitted these when it was first created.
   if (!deduped) {
-    try {
-      await broadcastNotification({
-        userId: agentUserId,
-        requestId: proposal.id,
-        message: {
-          type: "proposal:created",
-          data: {
-            proposalId: proposal.id,
-            targetType: singularType,
-            targetId,
-            changeType: action,
-            status: ProposalStatus.PENDING,
-          },
-          requestId: proposal.id,
-          status: "success",
-          timestamp: new Date().toISOString(),
-        },
-      });
-    } catch {
-      // non-critical
-    }
-
-    emitSideEffects({
-      subjectType: "proposal",
-      action: "created",
-      subjectId: proposal.id,
+    await announceProposal({
+      proposalId: proposal.id,
       userId: agentUserId,
       workspaceId,
-      data: {
-        proposalStatus: "created",
-        targetType: singularType,
-        changeType: action,
-        correlationId: resolvedCorrelationId,
-      },
+      targetType: singularType,
+      targetId,
+      changeType: action,
+      correlationId: resolvedCorrelationId,
     });
   }
 
@@ -968,39 +997,14 @@ export async function proposeRulePlaybookRun(opts: {
   });
 
   if (!deduped) {
-    try {
-      await broadcastNotification({
-        userId: ownerId,
-        requestId: proposal.id,
-        message: {
-          type: "proposal:created",
-          data: {
-            proposalId: proposal.id,
-            targetType: "playbook",
-            targetId,
-            changeType: "run",
-            status: ProposalStatus.PENDING,
-          },
-          requestId: proposal.id,
-          status: "success",
-          timestamp: new Date().toISOString(),
-        },
-      });
-    } catch {
-      // non-critical — the queue is DB-driven
-    }
-    emitSideEffects({
-      subjectType: "proposal",
-      action: "created",
-      subjectId: proposal.id,
+    await announceProposal({
+      proposalId: proposal.id,
       userId: ownerId,
       workspaceId,
-      data: {
-        proposalStatus: "created",
-        targetType: "playbook",
-        changeType: "run",
-        correlationId,
-      },
+      targetType: "playbook",
+      targetId,
+      changeType: "run",
+      correlationId,
     });
   }
 

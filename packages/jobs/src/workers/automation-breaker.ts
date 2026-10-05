@@ -87,17 +87,26 @@ export function shouldTripNeverWorkedBreaker(c: BreakerCounters): boolean {
   );
 }
 
-/** The sentence the user reads — in the runs ledger AND as the notification body. */
+/**
+ * THE breaker sentence — in the runs ledger AND as the notification body. One
+ * shape for both causes: what happened, the last failure, what to do. The
+ * object is a RULE and the verb is Resume, the words the Rules page uses.
+ */
+function turnedOffMessage(lead: string, reason: string | null): string {
+  const cause = reason?.trim()
+    ? ` Last failure: ${reason.trim().slice(0, REASON_MAX)}`
+    : "";
+  return `Turned off automatically after ${lead}.${cause} Fix it, then resume the rule.`;
+}
+
+/** The sentence the user reads when a rule that never worked is turned off. */
 export function breakerErrorMessage(
   failureCount: number,
   reason: string | null
 ): string {
-  const cause = reason?.trim()
-    ? ` Last failure: ${reason.trim().slice(0, REASON_MAX)}`
-    : "";
-  return (
-    `Turned off automatically after ${failureCount} failed runs and no successes.${cause}` +
-    ` Fix the flow, then set this automation back to Active to resume it.`
+  return turnedOffMessage(
+    `${failureCount} failed runs and no successes`,
+    reason
   );
 }
 
@@ -195,12 +204,9 @@ export function shouldTripBrokeAfterWorking(input: {
 
 /** The sentence the user reads when a rule that used to work is turned off. */
 export function brokeAfterWorkingMessage(reason: string | null): string {
-  const cause = reason?.trim()
-    ? ` Last failure: ${reason.trim().slice(0, REASON_MAX)}`
-    : "";
-  return (
-    `Turned off automatically after ${CONSECUTIVE_FAILURE_LIMIT} failed runs in a row (it had worked before).${cause}` +
-    ` Fix the flow, then set this automation back to Active to resume it.`
+  return turnedOffMessage(
+    `${CONSECUTIVE_FAILURE_LIMIT} failed runs in a row (it had worked before)`,
+    reason
   );
 }
 
