@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   selectThrows: null as Error | null,
   lenses: [] as Array<unknown>,
   entityWhere: null as unknown,
+  entityOrderBy: null as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -53,9 +54,13 @@ vi.mock("../../access/index.js", async (importOriginal) => {
     AccessContext: { agent: () => ctx(undefined) },
     scopedDb: (access: { lens: unknown }) => ({
       findFirst: async () => h.projectRow,
-      findMany: async (_t: unknown, opts: { where: unknown }) => {
+      findMany: async (
+        _t: unknown,
+        opts: { where: unknown; orderBy?: unknown }
+      ) => {
         h.lenses.push(access.lens);
         h.entityWhere = opts.where;
+        h.entityOrderBy = opts.orderBy;
         return h.entityRows;
       },
     }),
@@ -91,6 +96,7 @@ beforeEach(() => {
   h.selectThrows = null;
   h.lenses = [];
   h.entityWhere = null;
+  h.entityOrderBy = null;
 });
 
 describe("pickBrandWorkspace — resolution order", () => {
@@ -278,5 +284,50 @@ describe("readBrandKit — access-layer seam", () => {
     expect(kit.format).toBe("css");
     expect(kit.content).toContain("--brand-primary: #b67a38;");
     expect(kit.hash).toMatch(/^[0-9a-f]{14}$/);
+  });
+
+  it("voice-guide text (vocabulary / do / don't) reaches the exported kit", async () => {
+    h.profileRows = [{ id: "pv", slug: "brand-voice-guide" }];
+    // The row exactly as the entities table returns it: text lives in properties.
+    h.entityRows = [
+      {
+        profileId: "pv",
+        title: "General",
+        properties: {
+          "voice-tone-descriptors": "warm",
+          "voice-vocabulary": "ship, build",
+          "voice-example-do": "Say it plainly.",
+          "voice-example-dont": "Synergize.",
+        },
+      },
+    ];
+    const kit = await readBrandKit({
+      userId: "u1",
+      brandWorkspaceId: "lib",
+      format: "json",
+    });
+    const parsed = JSON.parse(kit.content) as {
+      voice: Array<{ body?: string; tone?: string }>;
+    };
+    expect(parsed.voice).toEqual([
+      {
+        name: "General",
+        tone: "warm",
+        body: "Vocabulary: ship, build\nDo: Say it plainly.\nDon't: Synergize.",
+      },
+    ]);
+  });
+
+  it("the capped row read is ordered by id (deterministic past the cap)", async () => {
+    h.profileRows = [{ id: "pc", slug: "brand-color" }];
+    await readBrandKit({
+      userId: "u1",
+      brandWorkspaceId: "lib",
+      format: "json",
+    });
+    const order = h.entityOrderBy as SQL[] | null;
+    expect(Array.isArray(order)).toBe(true);
+    const q = new PgDialect().sqlToQuery(order![0]!);
+    expect(q.sql).toBe('"entities"."id" asc');
   });
 });

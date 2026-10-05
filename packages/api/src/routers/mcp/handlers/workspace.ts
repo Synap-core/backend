@@ -346,7 +346,8 @@ export const workspaceHandlers: McpHandlerMap = {
     }
     const materializeStatus = materializeReportStatus(core);
     return ok({
-      status: "created",
+      // The outcome, never the branch: an idempotent re-hit is "reused".
+      status: materializeStatus,
       workspaceId: core.workspaceId,
       materializeStatus,
       created: materializeStatus === "created",

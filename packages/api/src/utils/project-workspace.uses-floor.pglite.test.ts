@@ -49,6 +49,12 @@ const OTHER = "other-1";
 const WS_SEEN = randomUUID(); // viewer is a member
 const WS_HIDDEN = randomUUID(); // owned by OTHER, viewer not a member
 const PROJECT_ID = randomUUID(); // viewer's own project, uses both workspaces
+// Two libraries a second project uses: the LATER link (and its workspace) is
+// inserted FIRST, so heap order and link order disagree — only an ORDER BY
+// returns early-first.
+const WS_EARLY = randomUUID();
+const WS_LATE = randomUUID();
+const PROJECT_TWO = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -91,6 +97,16 @@ beforeAll(async () => {
       ($4,'project',$2,'workspace',$5,'uses')`,
     [randomUUID(), PROJECT_ID, WS_SEEN, randomUUID(), WS_HIDDEN]
   );
+  await q(
+    `insert into workspaces (id, name, domain, owner_id) values ($1,'Late lib','brand',$3),($2,'Early lib','brand',$3)`,
+    [WS_LATE, WS_EARLY, VIEWER]
+  );
+  await q(
+    `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_at) values
+      ($1,'project',$2,'workspace',$3,'uses', now()),
+      ($4,'project',$2,'workspace',$5,'uses', now() - interval '1 hour')`,
+    [randomUUID(), PROJECT_TWO, WS_LATE, randomUUID(), WS_EARLY]
+  );
 });
 
 describe("listWorkspacesUsedByProjects — floored to what the viewer can see", () => {
@@ -112,6 +128,20 @@ describe("listWorkspacesUsedByProjects — floored to what the viewer can see", 
       OTHER
     );
     expect(map.get(PROJECT_ID)).toEqual([WS_HIDDEN]);
+  });
+});
+
+describe("listWorkspacesUsedByProjects — deterministic order", () => {
+  it("returns used workspaces oldest-link first, whatever the heap order", async () => {
+    const db = (await import("@synap/database")).db;
+    const map = await listWorkspacesUsedByProjects(
+      db as never,
+      [PROJECT_TWO],
+      VIEWER
+    );
+    // The brand rung takes the FIRST used library — it must be the same one
+    // on every call.
+    expect(map.get(PROJECT_TWO)).toEqual([WS_EARLY, WS_LATE]);
   });
 });
 

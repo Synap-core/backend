@@ -69,6 +69,7 @@ function makeDb(selectRows: unknown[], workspaceRows?: unknown[]) {
   const whereResult = (rows: unknown[]) =>
     Object.assign(Promise.resolve(rows), {
       limit: async () => rows,
+      orderBy: async () => rows,
     });
   const db = {
     select: () => ({

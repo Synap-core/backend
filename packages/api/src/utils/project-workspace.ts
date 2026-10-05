@@ -16,6 +16,7 @@
 
 import {
   and,
+  asc,
   eq,
   inArray,
   getDb,
@@ -278,7 +279,10 @@ export async function listWorkspacesUsedByProjects(
         eq(links.linkType, "uses"),
         userVisibleWhere(workspaces.id, userId)
       )
-    );
+    )
+    // Deterministic order (oldest link first): callers that pick ONE used
+    // workspace — the brand rung in `resolveBrandWorkspace` — take the first.
+    .orderBy(asc(links.createdAt), asc(links.id));
 
   for (const row of rows) {
     const current = result.get(row.fromId);

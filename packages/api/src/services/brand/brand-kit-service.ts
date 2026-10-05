@@ -192,7 +192,11 @@ export async function resolveBrandWorkspace(
   );
 }
 
-/** Upper bound on brand rows read for one kit — a library is tens of rows. */
+/**
+ * Upper bound on brand rows read for one kit — a library is tens of rows. The
+ * read is ordered by id so that, past the cap, the SAME rows (and so the same
+ * kit hash) come back on every call.
+ */
 const BRAND_KIT_MAX_ROWS = 1000;
 
 /**
@@ -225,6 +229,7 @@ export async function readBrandKit(
           isNull(entities.deletedAt)
         ),
         columns: { profileId: true, title: true, properties: true },
+        orderBy: [asc(entities.id)],
         limit: BRAND_KIT_MAX_ROWS,
       })
     : [];
