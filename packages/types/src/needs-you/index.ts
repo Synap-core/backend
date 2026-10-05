@@ -147,13 +147,14 @@ export interface RepeatableSignal {
  * How many IDENTICAL things this ONE row stands for — kind-aware:
  *   - `notification` → `repeatCount` (the same news raised N times);
  *   - `proposal-cluster` → `count` (N identical-shape proposals);
+ *   - `rule-run` → `repeatCount` (one rule, N runs in the window);
  *   - anything else → 1. A `draft-asks` row's `count` is its number of
  *     DISTINCT asks — "asks you 3 things", never "×3" of one thing — and an
  *     owed slot is never a repeat.
  */
 export function repeatOf(signal: RepeatableSignal): number {
   const n =
-    signal.kind === "notification"
+    signal.kind === "notification" || signal.kind === "rule-run"
       ? (signal.repeatCount ?? 1)
       : signal.kind === "proposal-cluster"
         ? (signal.count ?? 1)

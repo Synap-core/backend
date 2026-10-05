@@ -74,6 +74,7 @@ import {
   chatTurns,
   automationRuns,
   automationStepRuns,
+  automations,
 } from "@synap/database";
 import { needsYouRows } from "@synap-core/types/needs-you";
 import { signalsRouter } from "./signals.js";
@@ -229,6 +230,7 @@ beforeAll(async () => {
     chatTurns,
     automationRuns,
     automationStepRuns,
+    automations,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -464,5 +466,73 @@ describe("Happening: an untracked playbook run an agent is writing into", () => 
       expect(ids).not.toContain(RECEIPT);
     }
     expect((await page({ sessionId: RUN })).happening.rows).toHaveLength(1);
+  });
+});
+
+describe("Happening: a rule running without a session (C5)", () => {
+  const BUSY = randomUUID();
+  const BROKE = randomUUID();
+  const WITH_SESSION = randomUUID();
+  const SKIPPER = randomUUID();
+  const run = async (
+    automationId: string,
+    status: string,
+    opts: { minutesAgo?: number } = {}
+  ) => {
+    const id = randomUUID();
+    await q(
+      `insert into automation_runs (id, automation_id, workspace_id, status, trigger_payload, steps_completed, steps_failed, started_at)
+       values ($1, $2, null, $3, '{}'::jsonb, 0, 0, now() - ($4 || ' minutes')::interval)`,
+      [id, automationId, status, String(opts.minutesAgo ?? 1)]
+    );
+    return id;
+  };
+  beforeAll(async () => {
+    for (const [id, name] of [
+      [BUSY, "Gmail triage"],
+      [BROKE, "Enrich contact"],
+      [WITH_SESSION, "Qualify lead"],
+      [SKIPPER, "Deduped rule"],
+    ] as const) {
+      await q(
+        `insert into automations (id, name, workspace_id, status, trigger_type, created_by)
+         values ($1, $2, null, 'active', 'event', $3)`,
+        [id, name, USER]
+      );
+    }
+    for (let i = 0; i < 5; i += 1) await run(BUSY, "completed");
+    await run(BUSY, "completed", { minutesAgo: 90 }); // outside the window
+    await run(BROKE, "completed");
+    await run(BROKE, "failed");
+    // A run that opened a session IS its live-session row — not a rule row.
+    const opened = await run(WITH_SESSION, "completed");
+    await q(
+      `insert into focus_sessions (id, user_id, goal, title, status, origin, expected_outputs, agent_ids, metadata, criteria)
+       values ($1, $2, 'g', 'Run', 'completed', 'automation', '[]'::jsonb, '{}', $3::jsonb, '[]'::jsonb)`,
+      [randomUUID(), USER, JSON.stringify({ automationRunId: opened })]
+    );
+    await run(SKIPPER, "skipped");
+  });
+
+  it("is ONE row per rule, its runs folded, a failure marked — at pod scope", async () => {
+    const rows = (await page({})).happening.rows.filter(
+      (r) => r.kind === "rule-run"
+    );
+    const byId = new Map(rows.map((r) => [r.target?.id, r]));
+    expect([...byId.keys()].sort()).toEqual([BUSY, BROKE].sort());
+    expect(byId.get(BUSY)).toMatchObject({
+      title: "Gmail triage",
+      repeatCount: 5,
+      ruleRun: { runs: 5, failed: 0 },
+      target: { kind: "automation", id: BUSY },
+    });
+    expect(byId.get(BROKE)?.ruleRun).toMatchObject({ runs: 2, failed: 1 });
+  });
+
+  it("is not guessed into a project or session (a run carries neither)", async () => {
+    for (const scope of [{ projectId: P }, { sessionId: S2 }]) {
+      const rows = (await page(scope)).happening.rows;
+      expect(rows.some((r) => r.kind === "rule-run")).toBe(false);
+    }
   });
 });

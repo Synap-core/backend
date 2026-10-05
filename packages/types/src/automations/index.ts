@@ -131,6 +131,15 @@ export type {
   AutomationSkipReason,
 } from "./rule-run-policy.js";
 
+// ── Rule health: "silent too long", derived from run history ───────────────
+export {
+  ruleSilence,
+  SILENCE_MIN_RUNS,
+  SILENCE_FACTOR,
+  SILENCE_FLOOR_MS,
+} from "./rule-silence.js";
+export type { RuleSilence } from "./rule-silence.js";
+
 // ── Rule "sentence" value-model + bidirectional converters ──────────────────
 //
 // Zero imports, pure functions — safe for browser/Electron/Node/CLI. Lives here

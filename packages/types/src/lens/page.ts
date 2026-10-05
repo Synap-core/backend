@@ -29,6 +29,7 @@ import {
   type LensRow,
 } from "./rows.js";
 import type { LensSource } from "./scope.js";
+import { repeatLabel } from "../needs-you/index.js";
 
 /** One `Signal` of the page read — the fields the kit reads. */
 export interface LensPageSignal {
@@ -45,6 +46,17 @@ export interface LensPageSignal {
     since?: string | Date | null;
     lastAt?: string | Date | null;
   } | null;
+  /**
+   * `rule-run` only: a rule's runs inside the working window, folded into one
+   * row (runs, failures, one in flight). The row's door is the rule.
+   */
+  ruleRun?: {
+    runs: number;
+    failed: number;
+    running: boolean;
+  } | null;
+  /** How many identical things the row folds (`rule-run`: its runs). */
+  repeatCount?: number;
   /** `output` only: the landed object (`outputs.landed`, `LandedObjectRow`). */
   landed?: {
     kind: string;
@@ -120,7 +132,7 @@ export function lensRowOfLiveSignal(
   signal: LensPageSignal,
   nowLine?: string | null
 ): LensRow {
-  return lensRowOfHappening({
+  const base = lensRowOfHappening({
     id: signal.id,
     title: signal.title,
     objectKind: signal.target?.kind ?? "session",
@@ -130,6 +142,16 @@ export function lensRowOfLiveSignal(
       signal.live?.since ?? signal.live?.lastAt ?? signal.occurredAt ?? null,
     nowLine: nowLine ?? null,
   });
+  // A RULE running without a session (`rule-run`): its runs are folded into
+  // this one row. A failure inside the window is the mark — it outranks the
+  // healthy runs beside it — and the repeat says how many runs it stands for.
+  const rule = signal.ruleRun;
+  if (!rule) return base;
+  return {
+    ...base,
+    state: rule.failed > 0 ? { failed: true } : { running: true },
+    repeat: repeatLabel(signal),
+  };
 }
 
 /**

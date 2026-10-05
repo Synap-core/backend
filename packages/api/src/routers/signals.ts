@@ -20,7 +20,8 @@
  *             agent is paused on included), sessions awaiting your review,
  *             asking notifications.
  *   Proposed  (`proposed`)  — AI suggestions + agent drafts. Never needs-you.
- *   Happening (`happening`) — sessions an agent is working on right now.
+ *   Happening (`happening`) — sessions an agent is working on right now, and
+ *             rules running without a session (one row per rule).
  *   Produced  (`produced`)  — objects work produced (`outputs.landed`).
  *   Happened  (`history`)   — the `activity.list` ledger + data events.
  *
@@ -66,9 +67,15 @@ import {
   eq,
   inArray,
   or,
+  ne,
+  gte,
+  drizzleSql,
   focusSessions,
   projects,
+  automations,
+  automationRuns,
 } from "@synap/database";
+import { foldRuleRuns } from "../services/signals/rule-runs.js";
 import { createLogger } from "@synap-core/core";
 import {
   humanizeToken,
@@ -610,8 +617,67 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
       names
     );
   });
+  // Rules whose runs opened no session — the second Happening population.
+  const rules = await readRuleRuns(ctx, input, now);
+  signals.push(...rules.signals);
   signals.sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
-  return { signals, truncated };
+  return { signals, truncated: truncated || rules.truncated };
+}
+
+/** Rule runs the Happening read scans inside the window, newest first. */
+const RULE_RUN_SCAN_LIMIT = 500;
+
+/**
+ * RULE RUNS working now — runs started inside the SAME working window as
+ * sessions (`SESSION_WORKING_WINDOW_MS`), or still in flight, of rules whose
+ * run opened NO session (a run that did is already its live-session row).
+ * Skipped runs (dedup, daily cap, precondition) did no work and are out.
+ * Folded one row per rule (`foldRuleRuns`) so a 300-run sync burst is ONE
+ * row. Read floor: the `automationRuns` VisibilityRule under the page's
+ * workspace lens. Pod/workspace scopes only — a run carries no project,
+ * track or session column, so under those it is not guessed into the
+ * container (the same rule the Happened data events follow).
+ */
+async function readRuleRuns(
+  ctx: SignalsCtx,
+  input: SignalScopeInput,
+  now: Date
+): Promise<{ signals: Signal[]; truncated: boolean }> {
+  if (input.projectId || input.trackId || input.sessionId) {
+    return { signals: [], truncated: false };
+  }
+  const since = new Date(now.getTime() - SESSION_WORKING_WINDOW_MS);
+  const rows = await db
+    .select({
+      automationId: automationRuns.automationId,
+      automationName: automations.name,
+      status: automationRuns.status,
+      startedAt: automationRuns.startedAt,
+    })
+    .from(automationRuns)
+    .innerJoin(automations, eq(automations.id, automationRuns.automationId))
+    .where(
+      and(
+        scopedDb(AccessContext.from(ctx).withLens(input.workspaceId)).predicate(
+          automationRuns
+        ),
+        or(
+          gte(automationRuns.startedAt, since),
+          eq(automationRuns.status, "running")
+        ),
+        ne(automationRuns.status, "skipped"),
+        drizzleSql`NOT EXISTS (
+          SELECT 1 FROM focus_sessions fs
+          WHERE fs.metadata->>'automationRunId' = ${automationRuns.id}::text
+        )`
+      )
+    )
+    .orderBy(desc(automationRuns.startedAt))
+    .limit(RULE_RUN_SCAN_LIMIT + 1);
+  return {
+    signals: foldRuleRuns(rows.slice(0, RULE_RUN_SCAN_LIMIT), now),
+    truncated: rows.length > RULE_RUN_SCAN_LIMIT,
+  };
 }
 
 // ── Produced ────────────────────────────────────────────────────────────────

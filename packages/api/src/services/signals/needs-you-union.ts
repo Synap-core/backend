@@ -31,6 +31,7 @@
  * proposal card can never render the same change with two different verbs.
  */
 
+import type { RuleRunFacts } from "./rule-runs.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { ASK_COPY } from "@synap-core/types/ask";
@@ -86,6 +87,12 @@ export type SignalKind =
    * `isSessionWorkingNow` over `loadSessionLiveness`. Its facts ride in `live`.
    */
   | "live-session"
+  /**
+   * A RULE whose runs opened no session, running inside the working window
+   * (Happening) — one row per rule, its runs folded (`foldRuleRuns`,
+   * `services/signals/rule-runs.ts`). Its facts ride in `ruleRun`.
+   */
+  | "rule-run"
   /**
    * One object a session PRODUCED (Produced) — an `outputs.landed` row,
    * verbatim, in `landed`.
@@ -238,6 +245,11 @@ export interface Signal {
   source?: SignalSource;
   /** `live-session` only: the liveness facts the "working now" rule read. */
   live?: SessionActivityLive;
+  /**
+   * `rule-run` only: the rule's runs inside the window — how many, how many
+   * failed, whether one is in flight. The row's door is the rule.
+   */
+  ruleRun?: RuleRunFacts;
   /** `output` only: the produced object, as `outputs.landed` returns it. */
   landed?: LandedObjectRow;
   /** `activity` only: the ledger row, as `activity.list` returns it. */
@@ -276,6 +288,7 @@ export interface Signal {
   /**
    * How many unread notifications this row folds — the same `(type, target)`
    * raised N times is ONE row with `repeatCount: N` ({@link foldNotifications}).
+   * A `rule-run` row folds a rule's runs the same way (`repeatCount` = runs).
    * 1 on every other kind: a cluster says its size through `count`, and an
    * owed slot or a draft is never a repeat of anything.
    */
@@ -318,6 +331,7 @@ const KIND_SPECIFIC_SIGNAL_FIELDS = [
   "lifetimeHours",
   "source",
   "live",
+  "ruleRun",
   "landed",
   "activity",
   "event",
