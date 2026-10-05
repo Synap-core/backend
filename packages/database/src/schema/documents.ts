@@ -11,8 +11,10 @@ import {
   jsonb,
   boolean,
   index,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import type { ProvenanceKind } from "./provenance.js";
 
 /**
@@ -88,6 +90,11 @@ export const documents = pgTable(
   (table) => ({
     userIdIdx: index("documents_user_id_idx").on(table.userId),
     typeIdx: index("documents_type_idx").on(table.type),
+    // One row per presigned-upload object (0300): a concurrent second finalize
+    // of the same key 23505s instead of double-backing one object.
+    uploadStorageKeyUnique: uniqueIndex("documents_upload_storage_key_unique")
+      .on(table.storageKey)
+      .where(sql`storage_key LIKE 'files/%/uploads/%'`),
   })
 );
 

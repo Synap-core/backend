@@ -630,6 +630,10 @@ ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with tim
 
 CREATE INDEX IF NOT EXISTS "documents_user_id_idx" ON "documents" ("user_id");
 CREATE INDEX IF NOT EXISTS "documents_type_idx"    ON "documents" ("type");
+-- One row per presigned-upload object (0300) — closes the concurrent-finalize race.
+CREATE UNIQUE INDEX IF NOT EXISTS "documents_upload_storage_key_unique"
+  ON "documents" ("storage_key")
+  WHERE "storage_key" LIKE 'files/%/uploads/%';
 
 CREATE TABLE IF NOT EXISTS "document_versions" (
   "id"          uuid    PRIMARY KEY DEFAULT gen_random_uuid(),

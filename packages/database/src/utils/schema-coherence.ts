@@ -31,6 +31,7 @@ import { governanceTargetEnum } from "../schema/governance-rules.js";
 import { governanceCeilingAxisEnum } from "../schema/governance-ceilings.js";
 import { entityExternalLinks } from "../schema/entity-external-links.js";
 import { notificationPreferences } from "../schema/notifications.js";
+import { documents } from "../schema/documents.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -1819,6 +1820,10 @@ const REQUIRED_INDEX_TABLES = [
   // The pod-wide push-prefs upsert conflicts on `notif_prefs_user_pod_unique`
   // (0290); without it every `setPushPrefs` errors.
   notificationPreferences,
+  // The presigned-upload finalize relies on `documents_upload_storage_key_unique`
+  // (0300) to turn a concurrent second finalize into a 409; without it one
+  // object can back two documents (deleting either deletes the other's bytes).
+  documents,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */
