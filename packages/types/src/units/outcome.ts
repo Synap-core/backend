@@ -390,14 +390,16 @@ function inputState(slot: SlotFacts): UnitStateInput {
 function criterionState(
   c: OutcomeCriterionLike,
   verdict: OutcomeVerdict | null,
-  gradeOwed: boolean,
-  sessionTerminal: boolean
+  gradeOwed: boolean
 ): UnitStateInput {
   if (verdict?.verdict === "pass") return { terminal: true };
   if (verdict?.verdict === "fail") return { failed: true };
   if (gradeOwed || c.check.kind === "human") return { owedFromYou: 1 };
-  if (verdict?.verdict === "unmeasured") return { unreadable: true };
-  return sessionTerminal ? { unreadable: true } : { running: true };
+  // Ungraded (or graded "unmeasured"): "Not checked". Never `running` — no
+  // signal here says an evaluation is in flight, and "working" on a check
+  // tells the person the AI is checking when nobody is. Open or closed
+  // session alike: an ungraded check is not checked.
+  return { unreadable: true };
 }
 
 /** The one projection. See the header for the rules and their order. */
@@ -484,7 +486,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       // A verdict on the folded criterion is the stronger fact; without one
       // the slot answers by the deliverable rule.
       verdict && !delivered && !retired
-        ? criterionState(criterion!, verdict, false, input.sessionTerminal)
+        ? criterionState(criterion!, verdict, false)
         : deliverableUnitInput(slot, {
             sessionTerminal: input.sessionTerminal,
           })
@@ -543,9 +545,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       met: verdict?.verdict === "pass",
       metBy: verdict?.verdict === "pass" ? "verdict" : null,
       retired: false,
-      state: resolveUnitState(
-        criterionState(c, verdict, gradeOwed.has(c.key), input.sessionTerminal)
-      ),
+      state: resolveUnitState(criterionState(c, verdict, gradeOwed.has(c.key))),
       verdict,
       evidence: [],
       ...(c.stageKey ? { stageKey: c.stageKey } : {}),

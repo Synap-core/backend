@@ -31,6 +31,8 @@ const T1 = "2026-10-01T11:00:00.000Z";
  *   F. "latest row wins"                      (a judge after a human un-grades)
  *   G. "evidence joins by label only"         (a renamed slot loses its proof)
  *   H. "a slot and a criterion sharing a key are two outcomes"
+ *   I. "an ungraded check on an open session is being worked on" (the AI
+ *      spark claims a check nobody is running)
  */
 interface Row {
   name: string;
@@ -54,6 +56,29 @@ interface Row {
 }
 
 const ROWS: Row[] = [
+  {
+    name: "an ungraded judge check on an OPEN session reads Not checked, never working",
+    rulesOut: "I",
+    slots: [],
+    criteria: [
+      {
+        key: "evidence-cited",
+        statement: "Every gap cites file:line",
+        check: { kind: "judge" },
+      },
+    ],
+    evaluations: [],
+    terminal: false,
+    outcomes: [
+      {
+        key: "evidence-cited",
+        state: "unmeasured",
+        met: false,
+        verify: "judge",
+      },
+    ],
+    inputs: [],
+  },
   {
     name: "a person's own deliverable is an outcome checked by them, not an input",
     rulesOut: "A",
