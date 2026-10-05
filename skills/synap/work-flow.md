@@ -77,7 +77,7 @@ User: _"I'm trying to figure out whether we should build our own orchestrator or
      } }
    ```
 
-4. When the user picks, create a decision linked to the question:
+4. When the user picked through an answered `confirm`/`choose` ask, the pod ALREADY filed the decision (`slot.decisionId`) — link that one, never create a twin. Picked in plain chat? Create it yourself, linked to the question:
 
    ```json
    POST /api/hub/entities

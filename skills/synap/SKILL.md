@@ -740,7 +740,7 @@ User: _"I'm trying to figure out whether we should build our own orchestrator or
      } }
    ```
 
-4. When the user picks, create a decision linked to the question:
+4. When the user picked through an answered `confirm`/`choose` ask, the pod ALREADY filed the decision (`slot.decisionId`) — link that one, never create a twin. Picked in plain chat? Create it yourself, linked to the question:
 
    ```json
    POST /api/hub/entities
@@ -1245,6 +1245,8 @@ POST /api/hub/entities
 ```
 
 This creates a first-class decision entity linked to Project Eve. It shows up in traversals, can be superseded later (`supersededBy: newDecisionId`), and survives governance. Memory can't do any of that.
+
+**A decision the PERSON must make** — create it with `decisionStatus: "proposed"` and the pod asks them for you: pass `decisionOptions` (≤8 of `{label, value?, description?}`) and `recommendedOption` (an option's `value`, else its `label`); set `sourceSessionId` to keep the question in your session. Their answer UPDATES that decision — never create a second one. Every answered `confirm`/`choose` ask already files its decision (`slot.decisionId`): don't create one for it. **Before you recommend**, recall the user's past decisions (`synap_ask`, or find `decision` entities) so your pick follows their past choices.
 
 ### Post to the user's personal channel
 
@@ -1974,7 +1976,7 @@ Note: all hub-protocol writes are governance-gated server-side — a start may c
 **Asking the person.** On an `owner: 'human'` slot, add an `ask` so they answer in one tap instead of typing:
 
 - `confirm` — yes/no (`prompt` optional). `choose` — 1–8 `options` (`label`, optional `value` and a one-line `description` of the consequence, at most ONE `recommended`; `allowOther: true` also takes free text). `form` — a small flat form (never a secret field). `act` — something to DO: an http(s) `url` and up to 7 `steps`. `provide` — a `connection`, `file` or `secret` handed over through the vault (you receive a reference, never the secret).
-- **Which mode.** A DECISION is `confirm` (one yes/no) or `choose` — never `act`. When you have a view, mark exactly ONE option `recommended`: the person's pick vs your recommendation is recorded, and every answered `confirm`/`choose` files a `decision` entity automatically. Use `act` ONLY for a physical/world task with `steps` (they answer "I did this"). Always add an `ask`: a human-owned slot with only `blockedReason` + `why` shows a bare "I did this" button. Example: `ask: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}`.
+- **Which mode.** A DECISION is `confirm` (one yes/no) or `choose` — never `act`. When you have a view, mark exactly ONE option `recommended`: the person's pick vs your recommendation is recorded, and every answered `confirm`/`choose` files a `decision` entity automatically. Recall past decisions first (`synap_ask`) so your recommendation follows the user's past choices. Use `act` ONLY for a physical/world task with `steps` (they answer "I did this"). Always add an `ask`: a human-owned slot with only `blockedReason` + `why` shows a bare "I did this" button. Example: `ask: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}`.
 - **How it comes back.** `act` is resolved by "I did this" (attest): the slot is done and you are woken. Every other mode goes through the answer door: the slot comes back to you with `answer.text` (a readable summary) and `answer.value`, the typed pick (`confirm` → `confirmed`, `chip` → the option, `form` → `values`, `provide` → `ref`, `text`). Act on `answer.value`, not the prose. A plain reply in the room answers a typed slot only when the ask takes text (`choose` with `allowOther`); otherwise it answers your question and the slot stays owed.
 - **Then wait — don't end your turn.** After an ask, call `wait_for_answer` with the `sessionId` (when your tools list it; an in-app agent has no such tool, the answer wakes it): it returns the moment the person answers (`status: 'answered'`, `answers[]` with `text` and the typed `value`) or after `timeoutSeconds` (default 50, max 90; Codex: 55 or less) with `status: 'timeout'` and `nextSince` — call again with `since = nextSince` to keep waiting. Without `since` you get only answers you have not picked up yet. Your read marks the answer "Picked up" for the person. If you must stop, the answer stays on the slot for your next turn.
 - **Changing it.** Send a new `ask` to re-ask; `ask: null` clears it (an ask on a slot you own is dropped). An answer given against the old one is refused `ask_changed:` (409) and the person is shown the current ask; `ask_invalid:` means the answer did not fit it. Re-blocking a slot clears its previous answer.

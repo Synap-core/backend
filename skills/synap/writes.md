@@ -248,6 +248,8 @@ POST /api/hub/entities
 
 This creates a first-class decision entity linked to Project Eve. It shows up in traversals, can be superseded later (`supersededBy: newDecisionId`), and survives governance. Memory can't do any of that.
 
+**A decision the PERSON must make** — create it with `decisionStatus: "proposed"` and the pod asks them for you: pass `decisionOptions` (≤8 of `{label, value?, description?}`) and `recommendedOption` (an option's `value`, else its `label`); set `sourceSessionId` to keep the question in your session. Their answer UPDATES that decision — never create a second one. Every answered `confirm`/`choose` ask already files its decision (`slot.decisionId`): don't create one for it. **Before you recommend**, recall the user's past decisions (`synap_ask`, or find `decision` entities) so your pick follows their past choices.
+
 ### Post to the user's personal channel
 
 ```
