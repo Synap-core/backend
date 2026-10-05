@@ -59,7 +59,17 @@ describe("buildTrackSnapshot — DEEP COPY independence", () => {
     const snap = buildTrackSnapshot(method());
     expect(snap.version).toBe(3);
     expect(snap.goalTemplate).toBe("Run the method");
-    expect(snap.expectedOutputs).toEqual([{ kind: "document", label: "Plan" }]);
+  });
+
+  it("does not pin the method's top-level outputs or criteria (a track yields nothing itself)", () => {
+    const snap = buildTrackSnapshot(method()) as Record<string, unknown>;
+    expect(snap).not.toHaveProperty("expectedOutputs");
+    expect(snap).not.toHaveProperty("criteria");
+    // Each STAGE still pins its own — what a stage session copies on.
+    const stages = snap.stages as PlaybookStage[];
+    expect(stages[0]!.expectedOutputs).toEqual([
+      { kind: "document", label: "Brief" },
+    ]);
   });
 
   it("tolerates a stageless method", () => {

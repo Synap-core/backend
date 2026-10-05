@@ -361,8 +361,9 @@ export function buildTrackSnapshot(playbook: Playbook) {
       Array.isArray(playbook.stages) ? playbook.stages : []
     ),
     goalTemplate: playbook.goalTemplate,
-    expectedOutputs: structuredClone(playbook.expectedOutputs ?? []),
-    criteria: structuredClone(playbook.criteria ?? []),
+    // NOT the method's top-level expectedOutputs / criteria: a track yields
+    // nothing of its own (its stages' sessions do, from each stage's pinned
+    // outputs + criteria above). Pinned until 2026-10-05, never read.
     // The method's DECLARED params (0274): what `project_tracks.params`
     // answers, pinned like the stages so a method edit never changes what a
     // live track is asked.

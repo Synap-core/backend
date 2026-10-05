@@ -44,12 +44,16 @@ export type ProjectTrackStatus = (typeof PROJECT_TRACK_STATUSES)[number];
  * What a track pinned from its method at start. Every key optional: a track
  * backfilled from a project's legacy `settings.stages` (0272) carries only
  * `stages`.
+ *
+ * NOT pinned: the method's TOP-LEVEL `expectedOutputs` / `criteria`. They were
+ * written here until 2026-10-05 and never read — a track yields nothing of its
+ * own; its stages' sessions do, and each stage pins its own outputs and
+ * criteria inside `stages`. Rows started before then still carry the two keys
+ * in the jsonb; nothing reads them.
  */
 export interface ProjectTrackDefinitionSnapshot {
   stages?: unknown;
   goalTemplate?: string;
-  expectedOutputs?: unknown;
-  criteria?: unknown;
   /** The method's declared params (0274) — what `project_tracks.params` answers. */
   params?: unknown;
   version?: number;
