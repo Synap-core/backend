@@ -376,6 +376,10 @@ export { registerPodWideProposalReactor } from "./notifications/pod-wide-proposa
 // `focus_session.closed`, this reactor derives whether the LAST open blocker
 // just went away and notifies once. See session-unblock-reactor.ts.
 export { registerSessionUnblockReactor } from "./notifications/session-unblock-reactor.js";
+// A `proposed` decision is a question for the person: the decision-ask
+// reactor opens ONE owed ask slot for it, and retires it once the decision is
+// resolved elsewhere. See services/decisions/decision-ask-reactor.ts.
+export { registerDecisionAskReactor } from "./services/decisions/decision-ask-reactor.js";
 // Same close event, different news: the session ENDED with required criteria
 // still unmet. See session-criteria-unmet-reactor.ts.
 export { registerSessionCriteriaUnmetReactor } from "./notifications/session-criteria-unmet-reactor.js";

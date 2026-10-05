@@ -273,7 +273,13 @@ export type RemediableBlockedReason =
  * a new retirement path is a visible edit here rather than a free-text string
  * every reader has to guess at — the same shape as {@link BLOCKED_REASONS}.
  */
-export const OUTPUT_RETIRED_REASONS = ["session_cancelled"] as const;
+export const OUTPUT_RETIRED_REASONS = [
+  "session_cancelled",
+  // The `decision` entity this slot asked about was resolved by another route
+  // (accepted / rejected / superseded on the entity itself) — the question is
+  // moot (api `services/decisions/decision-ask-reactor.ts`).
+  "decision_resolved",
+] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 

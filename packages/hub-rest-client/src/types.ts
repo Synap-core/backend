@@ -950,7 +950,7 @@ export interface FocusSessionExpectedOutput {
    */
   retiredAt?: string;
   /** Mirrored from `OUTPUT_RETIRED_REASONS` (@synap/playbooks). */
-  retiredReason?: "session_cancelled";
+  retiredReason?: "session_cancelled" | "decision_resolved";
   /**
    * WHERE to go for this deliverable — an in-pod object or an external link.
    * ONE union, two arms; nothing else (free text is `why`).

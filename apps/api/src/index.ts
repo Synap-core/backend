@@ -55,6 +55,7 @@ import {
   refuseGuestSession,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
+  registerDecisionAskReactor,
   registerSessionCriteriaUnmetReactor,
   registerClosingReportReactor,
   registerDocumentDiagnosticsReactor,
@@ -1803,6 +1804,9 @@ try {
       // `focus_session.closed`, this reactor derives whether the last open
       // blocker just went away and files ONE `session.unblocked` notification.
       registerSessionUnblockReactor();
+      // Same seam, entity writes: a `proposed` decision opens ONE owed ask
+      // slot for the person; a decision resolved elsewhere retires it.
+      registerDecisionAskReactor();
       // Same close event again: a session that ENDED with required criteria
       // still unmet is news the founder is told once, on the phone — it is the
       // one moment a course correction is cheap. Re-derives the verdict from
