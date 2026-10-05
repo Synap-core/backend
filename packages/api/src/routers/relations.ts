@@ -113,6 +113,48 @@ import { assertAnchorAdmin } from "../services/sharing/anchor-admin.js";
 import { shareResource } from "../services/sharing/share-service.js";
 import { shareActorFromCtx } from "./shares.js";
 import { stampAutoApprovedCreate } from "../services/proposals/stamp-materialized.js";
+import {
+  governedDependencyLink,
+  writeRelationAsDependency,
+  trpcCodeForDependencyRefusal,
+  type GovernedLinkResult,
+} from "../services/links/dependency-links.js";
+import { normaliseDependencyRelation } from "@synap-core/types/connections";
+
+/**
+ * `blocks` / `depends_on` are not relations any more: they are THE dependency
+ * edge (`links` `blocked_by`, direction-normalised — A blocks B ⇔ B blocked_by
+ * A; A depends_on B ⇔ A blocked_by B). The relation doors keep accepting the
+ * two slugs so every caller (MCP `link_entities`, Hub REST, capture, composite
+ * approval) keeps working, and hand them to the dependency door. The result
+ * says `storedAs: "link"` so a materializer records the LINK id for undo,
+ * never a relation id that names no row.
+ */
+function dependencyResultForRelationDoor(result: GovernedLinkResult) {
+  switch (result.status) {
+    case "created":
+    case "exists":
+      return {
+        id: result.linkId ?? "",
+        status: result.status,
+        storedAs: "link" as const,
+      };
+    case "proposed":
+      return { status: "proposed" as const, proposalId: result.proposalId };
+    case "denied":
+      throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+    case "refused":
+      throw new TRPCError({
+        code: trpcCodeForDependencyRefusal(result.httpStatus),
+        message: result.error,
+      });
+    default:
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Unexpected dependency result",
+      });
+  }
+}
 
 /**
  * Direction schema for relation queries
@@ -812,6 +854,37 @@ export const relationsRouter = router({
       // rejected set is the WHOLE `EXPOSURE_RELATION_TYPES` whitelist, imported,
       // not `visible_to` alone (see `rejectExposureEdge` above).
       rejectExposureEdge(input.type, "relations.create");
+
+      // `blocks` / `depends_on` ⇒ THE dependency edge (see
+      // `dependencyResultForRelationDoor`). Same governance contract as below:
+      // an agent write proposes; the APPROVAL path (`governanceProposalId`)
+      // is already decided and is not re-gated.
+      const dependency = normaliseDependencyRelation(
+        input.type,
+        input.sourceEntityId,
+        input.targetEntityId
+      );
+      if (dependency) {
+        return dependencyResultForRelationDoor(
+          await governedDependencyLink({
+            edge: {
+              fromType: "entity",
+              fromId: dependency.fromId,
+              toType: "entity",
+              toId: dependency.toId,
+              linkType: dependency.linkType,
+            },
+            userId: ctx.userId,
+            agentUserId: ctx.agentUserId ?? undefined,
+            approvedProposalId: ctx.governanceProposalId ?? undefined,
+            requestWorkspaceId: input.workspaceId || ctx.workspaceId || null,
+            sessionId: ctx.sessionId ?? undefined,
+            // Provenance: which relation slug the caller asked for.
+            metadata: { ...(input.metadata ?? {}), relationType: input.type },
+            door: "relations.create (dependency)",
+          })
+        );
+      }
       const id = randomUUID();
       // Resolve the GOVERNANCE workspace: prefer explicit input, then the context
       // header. When neither is supplied, DERIVE it from the two endpoints via the
@@ -1900,6 +1973,25 @@ export const relationsRouter = router({
         }
 
         try {
+          // `blocks` / `depends_on` ⇒ THE dependency edge, under this door's
+          // own (workspace-write) contract — see `dependencyResultForRelationDoor`.
+          const asDependency = await writeRelationAsDependency({
+            type: rel.type,
+            sourceEntityId: rel.sourceEntityId,
+            targetEntityId: rel.targetEntityId,
+            userId: ctx.userId,
+            metadata: rel.metadata,
+            attribution: {
+              agentUserId: ctx.agentUserId,
+              proposalId: ctx.governanceProposalId,
+              sessionId: ctx.sessionId,
+            },
+          });
+          if (asDependency) {
+            if (asDependency.inserted > 0) created++;
+            else skipped++;
+            continue;
+          }
           const relationWorkspaceId = inheritRelationWorkspaceId(
             [
               endpointWorkspaceById.get(rel.sourceEntityId) ?? null,

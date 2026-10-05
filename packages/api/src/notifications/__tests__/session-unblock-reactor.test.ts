@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const {
   getSessionEdgesForMock,
   openBlockerIdsMock,
+  replacedBlockerDependentsMock,
   outputDependentsOfMock,
   openOutputBlockerIdsMock,
   createMock,
@@ -23,6 +24,7 @@ const {
     unblocks: [] as string[],
   })),
   openBlockerIdsMock: vi.fn(async (_id: string) => [] as string[]),
+  replacedBlockerDependentsMock: vi.fn(async (_id: string) => [] as string[]),
   outputDependentsOfMock: vi.fn(
     async (_id: string, _userId: string) =>
       [] as Array<{ entityId: string; dependentSessionId: string }>
@@ -48,6 +50,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("../../services/focus-sessions/session-blocked-by.js", () => ({
   getSessionEdgesFor: getSessionEdgesForMock,
   openBlockerIds: openBlockerIdsMock,
+  replacedBlockerDependents: replacedBlockerDependentsMock,
 }));
 
 vi.mock("../../services/focus-sessions/session-output-edges.js", () => ({
@@ -250,5 +253,25 @@ describe("session-unblock-notify reactor", () => {
     queue.push([{ id: "already-told" }]); // durable row from the first delivery
     await sessionUnblockNotifyReactor.handler(payload(), {} as never);
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("a REPLACEMENT closing frees the session that waited on the replaced step", async () => {
+    // outcome --blocked_by--> stepA, closed(stepB) --replaces--> stepA: no
+    // edge names stepB, yet stepB was what the outcome waited on.
+    getSessionEdgesForMock.mockResolvedValueOnce({
+      blockedBy: [],
+      unblocks: [],
+    });
+    queue.push([{ id: CLOSED, title: "step B", userId: "u" }]);
+    replacedBlockerDependentsMock.mockResolvedValueOnce([DEPENDENT]);
+    queue.push([
+      { id: DEPENDENT, title: "outcome", userId: "u", workspaceId: "ws" },
+    ]);
+    openBlockerIdsMock.mockResolvedValueOnce([]);
+    openOutputBlockerIdsMock.mockResolvedValueOnce([]);
+    queue.push([]);
+    await sessionUnblockNotifyReactor.handler(payload(), {} as never);
+    expect(replacedBlockerDependentsMock).toHaveBeenCalledWith(CLOSED);
+    expect(createMock).toHaveBeenCalledTimes(1);
   });
 });

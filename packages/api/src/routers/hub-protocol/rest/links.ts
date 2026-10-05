@@ -38,6 +38,11 @@ import { stampAutoApprovedCreate } from "../../../services/proposals/stamp-mater
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
 import { db } from "@synap/database";
 import { checkLinkEndpointsVisible } from "./link-endpoint-visibility.js";
+import { governedDependencyLink } from "../../../services/links/dependency-links.js";
+import {
+  isDependencyLinkType,
+  type DependencyLinkType,
+} from "@synap-core/types/connections";
 
 // Kept in sync with LinkEndpointType (packages/database/src/schema/links.ts).
 // __tripwires__/links-endpoint-type-ssot.test.ts fails the build if this
@@ -120,6 +125,10 @@ const LINK_TYPES = [
   "activates",
   "spawned_from",
   "blocked_by",
+  // A --replaces--> B: "this step replaces that one". Producer + reader:
+  // `services/links/dependency-links.ts` (+ the node neighbourhood, and
+  // `deriveOpenBlockers`, which re-points B's dependents at A).
+  "replaces",
   "uses",
 ] as const;
 
@@ -224,22 +233,25 @@ export function registerLinksRoutes(app: HubHono): void {
     // let an agent point its session at a stranger's and have the unblock
     // reactor notify it with the stranger's session title. Validate BEFORE
     // governance, or an invalid edge becomes a proposal that approval writes.
-    const isBlockedBy = parsed.data.linkType === "blocked_by";
+    // `blocked_by` between two SESSIONS keeps its dedicated, owner-floored
+    // session door below (its response shape is a contract). Every OTHER
+    // dependency edge — `blocked_by` across kinds (entity · session · track)
+    // and `replaces` — goes through THE generic dependency door
+    // (`governedDependencyLink`): endpoint floor, governance in the BLOCKED
+    // end's workspace, the one store write, `link.create.completed`.
+    const isSessionPair =
+      parsed.data.fromType === "session" && parsed.data.toType === "session";
+    const isGenericDependency =
+      isDependencyLinkType(parsed.data.linkType) &&
+      !(parsed.data.linkType === "blocked_by" && isSessionPair);
+    const isBlockedBy =
+      parsed.data.linkType === "blocked_by" && isSessionPair;
     // The BLOCKED session's own workspace — what the edge will be stamped
     // with (via `addSessionBlocker`) and the workspace governance must judge
     // in, so a filed proposal's `workspaceId` always matches the edge it
     // would create. Populated below only for `blocked_by`.
     let blockedByWorkspaceId: string | null = null;
     if (isBlockedBy) {
-      if (
-        parsed.data.fromType !== "session" ||
-        parsed.data.toType !== "session"
-      ) {
-        return c.json(
-          { error: "blocked_by links must connect two sessions" },
-          400
-        );
-      }
       // `addSessionBlocker` always writes `metadata: {}` — no real caller
       // (IS, CLI, browser) sends metadata with blocked_by today, so refusing
       // it is not a behaviour cut; forwarding it would need a producer change
@@ -304,6 +316,51 @@ export function registerLinksRoutes(app: HubHono): void {
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
+
+      if (isGenericDependency) {
+        const result = await governedDependencyLink({
+          edge: {
+            fromType: parsed.data.fromType,
+            fromId: parsed.data.fromId,
+            toType: parsed.data.toType,
+            toId: parsed.data.toId,
+            linkType: parsed.data.linkType as DependencyLinkType,
+          },
+          userId,
+          agentUserId: actorId !== userId ? actorId : undefined,
+          requestWorkspaceId: workspaceId ?? null,
+          ...(typeof body.reasoning === "string"
+            ? { reasoning: body.reasoning }
+            : {}),
+          ...(parsed.data.metadata ? { metadata: parsed.data.metadata } : {}),
+          door: "POST /links",
+        });
+        switch (result.status) {
+          case "refused":
+            return c.json({ error: result.error }, result.httpStatus);
+          case "denied":
+            return c.json({ error: result.reason }, 403);
+          case "proposed":
+            return jsonGoverned(c, {
+              status: "proposed",
+              proposalId: result.proposalId,
+              reviewPath: result.reviewPath,
+              reviewUrl: result.reviewUrl,
+            });
+          case "created":
+          case "exists":
+            return c.json({
+              status: "created" as const,
+              link: null,
+              dependency: {
+                linkId: result.linkId,
+                inserted: result.inserted,
+              },
+            });
+          default:
+            return c.json({ error: "Unexpected dependency result" }, 500);
+        }
+      }
 
       // `userId` must stay the acting human (`proposals.subjectUserId`'s
       // source — see `applyApprovedBlockedBy`); `actorId` goes in `agentUserId`

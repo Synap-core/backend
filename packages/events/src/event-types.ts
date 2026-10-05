@@ -160,6 +160,26 @@ export const OperationalEventTypes = {
     filterKeys: ["relationType"],
   },
 
+  // ── Links (the dependency door) ──────────────────────────────────────────
+  // Emitted by THE dependency door (`services/links/dependency-links.ts`) for
+  // `blocked_by` (X waits on Y, any unit-of-work kinds) and `replaces` edges.
+  // data: { linkType, fromType, fromId, toType, toId }.
+  LINK_CREATED: {
+    type: "link.create.completed",
+    label: "Dependency declared",
+    domain: "Links",
+    description:
+      "A unit of work was marked as blocked by (or replacing) another.",
+    filterKeys: ["linkType", "fromType", "toType"],
+  },
+  LINK_DELETED: {
+    type: "link.delete.completed",
+    label: "Dependency removed",
+    domain: "Links",
+    description: "A blocked-by (or replaces) edge was removed.",
+    filterKeys: ["linkType", "fromType", "toType"],
+  },
+
   // ── Documents ────────────────────────────────────────────────────────────
   DOCUMENT_CREATED: {
     type: "document.create.completed",

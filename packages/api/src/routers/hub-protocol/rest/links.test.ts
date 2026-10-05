@@ -181,6 +181,21 @@ vi.mock("./link-endpoint-visibility.js", () => ({
   ),
 }));
 
+// THE dependency door: every dependency edge that is NOT session↔session
+// `blocked_by` (cross-kind `blocked_by`, `replaces`). Its own floor + store
+// write are exercised in `dependency-links.test.ts`; this pins the ROUTING.
+const governedDependencyLinkMock = vi.fn(
+  async (_i: Record<string, unknown>): Promise<Record<string, unknown>> => ({
+    status: "created",
+    linkId: "dep-link-1",
+    inserted: 1,
+  })
+);
+vi.mock("../../../services/links/dependency-links.js", () => ({
+  governedDependencyLink: (i: Record<string, unknown>) =>
+    governedDependencyLinkMock(i),
+}));
+
 const resolveActingContextMock = vi.fn();
 
 vi.mock("./_shared.js", () => ({
@@ -445,7 +460,7 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
     expect(calls.createLink).not.toHaveBeenCalled();
   });
 
-  it("refuses a non-session endpoint with 400", async () => {
+  it("a cross-kind endpoint leaves the session floor for THE dependency door (B4)", async () => {
     const res = await postLinks(buildTestApp(), {
       fromType: "entity",
       fromId: "entity-1",
@@ -454,8 +469,10 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
       linkType: "blocked_by",
     });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
     const calls = await writeCalls();
+    expect(governedDependencyLinkMock).toHaveBeenCalledTimes(1);
+    expect(calls.addSessionBlocker).not.toHaveBeenCalled();
     expect(calls.checkPermissionOrPropose).not.toHaveBeenCalled();
     expect(calls.createLink).not.toHaveBeenCalled();
   });
@@ -663,5 +680,92 @@ describe("POST /links — project --uses--> workspace", () => {
     ).toMatchObject({
       reasoning: "Architech runs through Operations",
     });
+  });
+});
+
+describe("POST /links — the dependency door (cross-kind blocked_by, replaces)", () => {
+  const AGENT = "99999999-9999-4999-8999-999999999999";
+  const T1 = "aaaaaaaa-0000-4000-8000-000000000001";
+  const T2 = "aaaaaaaa-0000-4000-8000-000000000002";
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveActingContextMock.mockResolvedValue({
+      ok: true,
+      userId: USER_ID,
+      workspaceId: CONSUMER_WS,
+      role: "editor",
+    });
+  });
+
+  it("routes entity --blocked_by--> track to the dependency door as the AGENT, never the session producer or createLink", async () => {
+    const { addSessionBlocker } =
+      await import("../../../services/focus-sessions/session-blocked-by.js");
+    const { createLink } =
+      await import("../../../services/links/links-service.js");
+    const res = await postLinks(buildTestApp(), {
+      fromType: "entity",
+      fromId: T1,
+      toType: "track",
+      toId: T2,
+      linkType: "blocked_by",
+      agentUserId: AGENT,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      status: "created",
+      dependency: { linkId: "dep-link-1", inserted: 1 },
+    });
+    expect(governedDependencyLinkMock).toHaveBeenCalledTimes(1);
+    expect(governedDependencyLinkMock.mock.calls[0]![0]).toMatchObject({
+      edge: {
+        fromType: "entity",
+        fromId: T1,
+        toType: "track",
+        toId: T2,
+        linkType: "blocked_by",
+      },
+      userId: USER_ID,
+      agentUserId: AGENT,
+    });
+    expect(vi.mocked(addSessionBlocker)).not.toHaveBeenCalled();
+    expect(vi.mocked(createLink)).not.toHaveBeenCalled();
+    // Governance is the door's — the handler must not gate twice.
+    expect(vi.mocked(checkPermissionOrPropose)).not.toHaveBeenCalled();
+  });
+
+  it("replaces between two sessions also goes through the door; a proposal is returned as proposed", async () => {
+    governedDependencyLinkMock.mockResolvedValueOnce({
+      status: "proposed",
+      proposalId: "prop-1",
+    });
+    const res = await postLinks(buildTestApp(), {
+      fromType: "session",
+      fromId: T1,
+      toType: "session",
+      toId: T2,
+      linkType: "replaces",
+    });
+    expect(await res.json()).toMatchObject({
+      status: "proposed",
+      proposalId: "prop-1",
+    });
+    expect(governedDependencyLinkMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the door's refusal status verbatim", async () => {
+    governedDependencyLinkMock.mockResolvedValueOnce({
+      status: "refused",
+      reason: "invalid_pair",
+      httpStatus: 400,
+      error: "blocked_by links connect two units of work",
+    });
+    const res = await postLinks(buildTestApp(), {
+      fromType: "playbook",
+      fromId: T1,
+      toType: "entity",
+      toId: T2,
+      linkType: "blocked_by",
+    });
+    expect(res.status).toBe(400);
   });
 });

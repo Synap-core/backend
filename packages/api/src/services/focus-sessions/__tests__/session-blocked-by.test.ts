@@ -242,13 +242,36 @@ describe("attachSessionEdges (the list projection)", () => {
 });
 
 describe("openBlockerIds (the derivation — nothing stores blocked-ness)", () => {
-  it("returns only blockers the join found still open", async () => {
-    queue.push([{ blockerId: B }]);
+  // Query order of the ONE derivation (`readDependencyState`): the session's
+  // owner; its outgoing blocked_by edges; `replaces` into them (one hop, none);
+  // then the blockers' visibility and status.
+  function feed(blockerStatus: string) {
+    queue.push([{ userId: "u" }]);
+    queue.push([
+      {
+        fromType: "session",
+        fromId: A,
+        toType: "session",
+        toId: B,
+        linkType: "blocked_by",
+      },
+    ]);
+    queue.push([]); // no replacements
+    queue.push([{ id: B }]); // visible to the owner
+    queue.push([{ id: B, status: blockerStatus }]);
+  }
+
+  it("returns the blocker while it is still open", async () => {
+    feed("active");
     expect(await openBlockerIds(A)).toEqual([B]);
-    expect(calls.some((c) => c.method === "innerJoin")).toBe(true);
   });
 
   it("is empty when every blocker has closed — that is 'unblocked'", async () => {
+    feed("closed");
+    expect(await openBlockerIds(A)).toEqual([]);
+  });
+
+  it("is empty for a session that no longer exists", async () => {
     queue.push([]);
     expect(await openBlockerIds(A)).toEqual([]);
   });

@@ -208,6 +208,14 @@ export function buildMaterializedRecord(
     ...planRecordFields(result),
     byOp: buildByOp(result),
   };
+  // A relation op that landed as THE dependency edge (`blocks` /
+  // `depends_on` → links `blocked_by`) is a link this run created.
+  const relationLinkIds = result.relations
+    .filter((r) => !r.preExisting && r.linkId)
+    .map((r) => r.linkId as string);
+  if (relationLinkIds.length > 0) {
+    record.linkIds = unique([...(record.linkIds ?? []), ...relationLinkIds]);
+  }
   return record;
 }
 

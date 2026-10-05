@@ -3,6 +3,8 @@ import { db, proposals, eq } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { auditLog } from "../../../utils/audit-log.js";
 import { addSessionBlocker } from "../../../services/focus-sessions/session-blocked-by.js";
+import { applyApprovedDependencyLink } from "../../../services/links/dependency-links.js";
+import { isDependencyLinkType } from "@synap-core/types/connections";
 import {
   registerProposalExecutor,
   type ProposalEffect,
@@ -312,11 +314,41 @@ export function registerCatchAllExecutor(): void {
         if (
           targetType === "link" &&
           changeType === "create" &&
-          eventPayload.linkType === "blocked_by"
+          eventPayload.linkType === "blocked_by" &&
+          eventPayload.fromType === "session" &&
+          eventPayload.toType === "session"
         ) {
           return settle(
             await applyApprovedBlockedBy(proposal, eventPayload, doorKey)
           );
+        }
+        // Every OTHER dependency edge (cross-kind `blocked_by`, `replaces`;
+        // create or delete) is applied through THE dependency door, floored on
+        // the proposal's owner against today's rows — never handed to the raw
+        // materializer, which would skip the endpoint floor and the
+        // `link.*.completed` event.
+        if (
+          targetType === "link" &&
+          (changeType === "create" || changeType === "delete") &&
+          isDependencyLinkType(eventPayload.linkType as string)
+        ) {
+          const applied = await applyApprovedDependencyLink({
+            action: changeType,
+            data: eventPayload,
+            ownerUserId: proposal.subjectUserId,
+            proposalId: input.proposalId,
+          });
+          if (!applied.ok) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Approval for '${doorKey}' (${String(eventPayload.linkType)}) refused: ${applied.why} Nothing was applied.`,
+            });
+          }
+          return settle({
+            applied: "verified",
+            rows: applied.rows,
+            subject: "link",
+          });
         }
 
         // ── THE HONESTY GATE ────────────────────────────────────────────────

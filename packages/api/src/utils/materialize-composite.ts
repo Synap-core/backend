@@ -150,9 +150,14 @@ export async function createRelationsFromRefs(
       // The created row's id is what makes the edge undoable. `exists` means
       // the door found an edge that was already there — somebody else's, so
       // it is reported but never recorded as this run's creation.
-      const relationId = (created as { id?: unknown } | undefined)?.id;
+      const createdId = (created as { id?: unknown } | undefined)?.id;
       const preExisting =
         (created as { status?: string } | undefined)?.status === "exists";
+      // `blocks` / `depends_on` land as THE dependency edge (a `links` row):
+      // its id is a LINK id, recorded as such so undo deletes the right row.
+      const storedAsLink =
+        (created as { storedAs?: string } | undefined)?.storedAs === "link";
+      const hasId = typeof createdId === "string" && createdId.length > 0;
       relations.push({
         sourceEntityId,
         targetEntityId,
@@ -162,7 +167,8 @@ export async function createRelationsFromRefs(
           targetRef: op.targetRef,
           type: op.type,
         },
-        ...(typeof relationId === "string" ? { relationId } : {}),
+        ...(hasId && !storedAsLink ? { relationId: createdId } : {}),
+        ...(hasId && storedAsLink ? { linkId: createdId } : {}),
         ...(preExisting ? { preExisting: true as const } : {}),
       });
     } catch (err) {
@@ -263,6 +269,12 @@ export interface MaterializeRelationResult {
   requested?: { sourceRef: string; targetRef: string; type: string };
   /** Id of the relation row, when the door returned one. */
   relationId?: string;
+  /**
+   * Id of the `links` row instead, when the requested relation slug is the
+   * dependency edge under another name (`blocks` / `depends_on` → links
+   * `blocked_by`). Exactly one of `relationId` / `linkId` is set.
+   */
+  linkId?: string;
   /** The door found this edge already in the graph — not created by this run. */
   preExisting?: true;
 }
@@ -684,6 +696,9 @@ function appliedRowsOf(
     ...result.relations
       .filter((r) => r.relationId && !r.preExisting)
       .map((r) => ({ kind: "relation", id: r.relationId as string })),
+    ...result.relations
+      .filter((r) => r.linkId && !r.preExisting)
+      .map((r) => ({ kind: "link", id: r.linkId as string })),
     ...result.facets.map((f) => ({ kind: "facet", id: f.facetId })),
     ...result.skills.map((s) => ({ kind: "skill", id: s.skillId })),
     ...result.automations.map((a) => ({

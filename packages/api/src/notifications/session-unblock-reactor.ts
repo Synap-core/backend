@@ -54,6 +54,7 @@ import {
 import {
   getSessionEdgesFor,
   openBlockerIds,
+  replacedBlockerDependents,
 } from "../services/focus-sessions/session-blocked-by.js";
 import {
   outputDependentsOf,
@@ -122,9 +123,16 @@ export const sessionUnblockNotifyReactor: Reactor = {
     // dependent's own remaining waits are re-derived below.
     const outputsWaitedOnBy = await outputDependentsOf(closedId, closed.userId);
 
+    // Sessions waiting on a step this one REPLACED (`closed --replaces--> X`):
+    // by the dependency rule they were waiting on THIS session, though no
+    // edge names it. Their remaining waits are re-derived below like any
+    // other dependent's.
+    const waitingOnReplaced = await replacedBlockerDependents(closedId);
+
     const dependentIds = [
       ...new Set([
         ...unblocks,
+        ...waitingOnReplaced,
         ...outputsWaitedOnBy.map((o) => o.dependentSessionId),
       ]),
     ];
@@ -146,7 +154,9 @@ export const sessionUnblockNotifyReactor: Reactor = {
     for (const dependent of dependents) {
       try {
         // THE DERIVATION, across BOTH kinds of wait. Anything still open ⇒
-        // still blocked ⇒ stay silent.
+        // still blocked ⇒ stay silent. `openBlockerIds` is the ONE dependency
+        // rule (`deriveOpenBlockers`): it spans cross-kind blockers (an entity
+        // or track this session waits on) and follows `replaces`.
         const stillOpen = await openBlockerIds(dependent.id);
         if (stillOpen.length > 0) continue;
         const stillWaitingOnOutputs = await openOutputBlockerIds(

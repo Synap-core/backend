@@ -157,19 +157,34 @@ export type LinkType =
   // execution by the dispatcher per the tool's `authBinding`.
   | "provides_credential"
   /**
-   * session --blocked_by--> session. A dependency between units of work: the
-   * FROM session cannot proceed until the TO session closes.
+   * X --blocked_by--> Y. THE dependency between units of work, across kinds
+   * (`session` · `entity` · `track`, any pair — `DEPENDENCY_ENDPOINT_KINDS` in
+   * `@synap-core/types/connections`): the FROM end cannot proceed until the TO
+   * end clears by its own kind's status vocabulary. Entity relations
+   * `blocks` / `depends_on` are this edge under other names; the relation
+   * create door maps them here and migration 0301 moved the stored rows.
    *
    * Blocked-ness is DERIVED from the subset of these edges whose TARGET is
    * still open, never a stored `blocked` status on `focus_sessions` (prior
    * art: Atlassian's "flag, don't status" — a status can only hold one value,
    * so storing blocked-ness destroys the real state and then drifts from the
-   * blockers). The reader is `session-blocked-by.ts`.
+   * blockers). The ONE producer is `services/links/dependency-links.ts`
+   * (session↔session through `session-blocked-by.ts`'s owner floor); the rule
+   * is `deriveOpenBlockers`.
    *
    * Unrelated to the run status `blocked_by_policy` — that is a governance
    * outcome on a single run, not an edge between sessions.
    */
   | "blocked_by"
+  /**
+   * A --replaces--> B. "This step replaces that one" — B failed or was dropped
+   * and A is the attempt instead. Same endpoint kinds and producer as
+   * `blocked_by`. Read by the node neighbourhood (Related: "Replaces" /
+   * "Replaced by") and by `deriveOpenBlockers`: whoever waited on B now waits
+   * on A, so a replaced step can neither hold its dependents forever nor clear
+   * them early.
+   */
+  | "replaces"
   /**
    * project --uses--> workspace. INDEX of which domains (workspaces) an
    * engagement runs through. Stamped at provision time so a clean template

@@ -131,6 +131,9 @@ export const LINK_EDGE_ROLES = {
   provides_credential: RELATED,
   // X --blocked_by--> Y: X waits on Y.
   blocked_by: { outgoing: "blockedBy", incoming: "servesAndBlocks" },
+  // A --replaces--> B: A is the attempt that took B's place. Neither end waits
+  // on the other, so it is a plain tie ("Replaces" / "Replaced by").
+  replaces: RELATED,
   uses: RELATED,
 } as const satisfies Readonly<Record<string, EdgeRole>>;
 

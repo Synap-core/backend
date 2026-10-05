@@ -377,6 +377,13 @@ describe("deriveNodeNeighbourhood — render once, cap, identity", () => {
           direction: "incoming",
           via: "links",
         }),
+        edge({
+          id: "pb",
+          kind: "playbook",
+          edgeType: "promoted_to",
+          direction: "incoming",
+          via: "links",
+        }),
       ],
       {
         relationTypes: [
@@ -392,10 +399,15 @@ describe("deriveNodeNeighbourhood — render once, cap, identity", () => {
       label: "Made from",
       reversed: false,
     });
-    // No curated inverse for blocked_by yet: forward words + the reversed mark,
-    // never "Blocked by" presented as if it were true from the blocker's side.
+    // blocked_by has a curated inverse: from the blocker's side it BLOCKS.
     expect(nb.servesAndBlocks.items[0]).toMatchObject({
-      label: "Blocked by",
+      label: "Blocks",
+      reversed: false,
+    });
+    // No curated inverse for promoted_to: forward words + the reversed mark,
+    // never "Promoted to" presented as if it were true from the playbook's side.
+    expect(nb.cameFrom.items.find((i) => i.id === "pb")).toMatchObject({
+      label: "Promoted to",
       reversed: true,
     });
   });

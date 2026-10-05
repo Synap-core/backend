@@ -32,6 +32,13 @@
  * user, so a `blocked_by` edge can only ever connect two sessions with the same
  * owner. A future producer that floors differently silently turns these reads
  * into a cross-user disclosure — add the floor here before adding one.
+ *
+ * CROSS-KIND EDGES (B4). `blocked_by` now joins any two units of work
+ * (`services/links/dependency-links.ts` is the generic door, and the store
+ * write both doors share). Every reader in THIS file filters
+ * `from_type = to_type = 'session'`, so a cross-kind edge never reaches them;
+ * and the generic door floors a session end through the session read rule,
+ * which is OWNER-ONLY for these doors — the invariant above still holds.
  */
 
 import {
@@ -42,10 +49,15 @@ import {
   or,
   focusSessions,
   links,
-  drizzleSql,
 } from "@synap/database";
-import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
 import { UUID_RE } from "./session-metadata.js";
+import {
+  deleteDependencyEdge,
+  insertDependencyEdge,
+  readDependencyState,
+  type LinkAttribution,
+} from "../links/dependency-links.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 
@@ -56,6 +68,8 @@ export interface BlockerEdgeInput {
   blockerSessionId: string;
   /** Owner floor — BOTH sessions must belong to this user. */
   userId: string;
+  /** Event-spine attribution for the `link.*.completed` emit. */
+  attribution?: LinkAttribution;
 }
 
 export type BlockerEdgeResult =
@@ -149,36 +163,29 @@ export async function addSessionBlocker(
   const valid = await validateSessionBlocker(input);
   if (!valid.ok) return { linked: false, reason: valid.reason };
 
-  const inserted = await db
-    .insert(links)
-    .values({
-      // The BLOCKED session's own workspace — the single source of truth
-      // every door (POST /links, tRPC addBlocker, proposal approval) stamps
-      // the edge with, so it never depends on which door created it.
-      workspaceId: valid.workspaceId,
+  // THE dependency store write (`dependency-links.ts`) — the one producer for
+  // every `blocked_by` edge, so this door also emits `link.create.completed`.
+  // The owner floor above is what this session door adds on top.
+  const written = await insertDependencyEdge({
+    edge: {
       fromType: "session",
       fromId: input.sessionId,
       toType: "session",
       toId: input.blockerSessionId,
-      linkType: "blocked_by",
-      createdBy: input.userId,
-      metadata: {},
-    })
-    .onConflictDoNothing({
-      target: [
-        links.fromType,
-        links.fromId,
-        links.toType,
-        links.toId,
-        links.linkType,
-      ],
-    })
-    .returning({ id: links.id });
+      linkType: DEPENDENCY_LINK_TYPE,
+    },
+    // The BLOCKED session's own workspace — the single source of truth
+    // every door (POST /links, tRPC addBlocker, proposal approval) stamps
+    // the edge with, so it never depends on which door created it.
+    workspaceId: valid.workspaceId,
+    createdBy: input.userId,
+    attribution: input.attribution,
+  });
 
   return {
     linked: true,
-    inserted: inserted.length,
-    ...(inserted[0]?.id ? { linkId: inserted[0].id } : {}),
+    inserted: written.inserted,
+    ...(written.linkId ? { linkId: written.linkId } : {}),
   };
 }
 
@@ -247,7 +254,7 @@ export async function addCreateTimeBlockers(input: {
             fromId: input.sessionId,
             toType: "session",
             toId: blockerSessionId,
-            linkType: "blocked_by",
+            linkType: DEPENDENCY_LINK_TYPE,
           },
         });
         if ("denied" in perm && perm.denied) {
@@ -273,6 +280,10 @@ export async function addCreateTimeBlockers(input: {
         sessionId: input.sessionId,
         blockerSessionId,
         userId: input.userId,
+        attribution: {
+          agentUserId: input.agentUserId,
+          proposalId: receiptId,
+        },
       });
       // Undo record for the agent's auto-approved edge: the row this call
       // inserted, or nothing when the edge already existed.
@@ -312,20 +323,19 @@ export async function removeSessionBlocker(
   )
     return { removed: false, reason: "not_found" };
 
-  const deleted = await db
-    .delete(links)
-    .where(
-      and(
-        eq(links.fromType, "session"),
-        eq(links.fromId, input.sessionId),
-        eq(links.toType, "session"),
-        eq(links.toId, input.blockerSessionId),
-        eq(links.linkType, "blocked_by")
-      )
-    )
-    .returning({ id: links.id });
+  const { removed } = await deleteDependencyEdge({
+    edge: {
+      fromType: "session",
+      fromId: input.sessionId,
+      toType: "session",
+      toId: input.blockerSessionId,
+      linkType: DEPENDENCY_LINK_TYPE,
+    },
+    userId: input.userId,
+    attribution: input.attribution,
+  });
 
-  return deleted.length > 0
+  return removed > 0
     ? { removed: true }
     : { removed: false, reason: "no_edge" };
 }
@@ -406,24 +416,53 @@ export async function attachSessionEdges<T extends { id: string }>(
  * blocked right now. Empty ⇒ not blocked (it may still carry closed blocker
  * edges; those are history, and are deliberately not deleted on close).
  *
- * This is the derivation. Nothing stores it.
+ * This is the derivation, and there is ONE: `readDependencyState` over the
+ * pure `deriveOpenBlockers` rule — so a session waiting on an ENTITY or a
+ * TRACK (cross-kind `blocked_by`), or on a step that was REPLACED, is judged
+ * by the same rule as one waiting on a session. Floored on the session's own
+ * owner (every session end of a dependency edge is the caller's own). Ids are
+ * returned bare whatever their kind; a hidden blocker is still listed.
+ * Nothing stores it.
  */
 export async function openBlockerIds(sessionId: string): Promise<string[]> {
-  const rows = await db
-    .select({ blockerId: focusSessions.id })
+  if (!UUID_RE.test(sessionId)) return [];
+  const [owner] = await db
+    .select({ userId: focusSessions.userId })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, sessionId))
+    .limit(1);
+  if (!owner) return [];
+  const state = await readDependencyState(
+    { kind: "session", id: sessionId },
+    owner.userId
+  );
+  return state.openBlockers.map((b) => b.id);
+}
+
+/**
+ * Sessions waiting on a session that `sessionId` REPLACES
+ * (`sessionId --replaces--> X`, `dependent --blocked_by--> X`): when a
+ * replacement closes, these dependents may now be free even though no edge
+ * names the replacement directly. Session dependents only — the unblock
+ * notification is a session-room event.
+ */
+export async function replacedBlockerDependents(
+  sessionId: string
+): Promise<string[]> {
+  const replaced = await db
+    .select({ id: links.toId })
     .from(links)
-    .innerJoin(
-      focusSessions,
-      eq(drizzleSql`${focusSessions.id}::text`, links.toId)
-    )
     .where(
       and(
         eq(links.fromType, "session"),
         eq(links.fromId, sessionId),
         eq(links.toType, "session"),
-        eq(links.linkType, "blocked_by"),
-        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
+        // Literal on purpose: `links-type-ssot` derives LIVE link types from
+        // typed readers (`linkType, "<type>"`) — this is `replaces`'s reader.
+        eq(links.linkType, "replaces")
       )
     );
-  return rows.map((r) => r.blockerId);
+  if (replaced.length === 0) return [];
+  const edges = await getSessionEdges(replaced.map((r) => r.id));
+  return [...new Set([...edges.values()].flatMap((e) => e.unblocks))];
 }

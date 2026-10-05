@@ -90,9 +90,11 @@ describe("resolveLineageEdgeLabel", () => {
 
   it("humanizes an uncurated edge or direction instead of leaking it", () => {
     expect(resolveLineageEdgeLabel("rerun", "incoming")).toBe("Rerun");
-    expect(resolveLineageEdgeLabel("blocked_by", "incoming")).toBe(
-      "Blocked by"
+    expect(resolveLineageEdgeLabel("spawned_from", "incoming")).toBe(
+      "Spawned from"
     );
+    // blocked_by is curated from BOTH ends: the blocker's side reads "Blocks".
+    expect(resolveLineageEdgeLabel("blocked_by", "incoming")).toBe("Blocks");
     expect(resolveLineageEdgeLabel(null, "incoming")).toBe("");
   });
 });

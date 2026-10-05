@@ -150,6 +150,7 @@ import { isDomainHomeWorkspace } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
+import { writeRelationAsDependency } from "../services/links/dependency-links.js";
 import { computeCaptureGraphIdempotencyKey } from "../utils/pending-capture-dedup.js";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { emitSideEffects } from "@synap/events";
@@ -3808,6 +3809,14 @@ const captureBaseRouter = router({
           targetEntityId: string;
           type: string;
         }) =>
+          // `blocks` / `depends_on` ⇒ THE dependency edge (links `blocked_by`).
+          (await writeRelationAsDependency({
+            ...rel,
+            userId,
+            attribution: captureReceipt?.id
+              ? { proposalId: captureReceiptId }
+              : {},
+          })) ??
           relationRepo.create(
             {
               id: randomUUID(),
@@ -4893,6 +4902,8 @@ const captureBaseRouter = router({
               targetEntityId: string;
               type: string;
             }) =>
+              // `blocks` / `depends_on` ⇒ THE dependency edge.
+              (await writeRelationAsDependency({ ...rel, userId })) ??
               relationRepo.create(
                 {
                   id: randomUUID(),

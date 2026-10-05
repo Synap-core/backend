@@ -1228,11 +1228,15 @@ export type LinkType =
   // session --spawned_from--> session. Work lineage: forked from, never
   // "branched from", and with no "merged_into" twin — nothing merges work.
   | "spawned_from"
-  // session --blocked_by--> session. A dependency between units of work: the
-  // FROM session cannot proceed until the TO session closes. Blocked-ness is
-  // DERIVED from the set of edges whose target is still open — there is no
-  // stored `blocked` status, deliberately (see `session-blocked-by.ts`).
+  // X --blocked_by--> Y. THE dependency edge between units of work, across
+  // kinds (session · entity · track): X cannot proceed until Y clears.
+  // Blocked-ness is DERIVED from the edges whose target is still open — there
+  // is no stored `blocked` status, deliberately (`@synap-core/types/connections`
+  // `deriveOpenBlockers`; producer `services/links/dependency-links.ts`).
   | "blocked_by"
+  // A --replaces--> B. "This step replaces that one": B failed or was dropped
+  // and A is the attempt instead. A dependent of B now waits on A.
+  | "replaces"
   // project --uses--> workspace. INDEX of which domains an engagement runs
   // through. NOT an ACL — project members do not gain workspace membership
   // from this edge. Distinct from live `used` (session --used--> tool).

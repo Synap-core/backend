@@ -59,6 +59,40 @@ import { relationsRouter } from "./relations.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
+import {
+  governedDependencyLink,
+  governedRemoveDependencyLink,
+  readDependencyState,
+  trpcCodeForDependencyRefusal,
+  type GovernedLinkResult,
+} from "../services/links/dependency-links.js";
+import { checkLinkEndpointsVisible } from "./hub-protocol/rest/link-endpoint-visibility.js";
+import {
+  DEPENDENCY_ENDPOINT_KINDS,
+  DEPENDENCY_LINK_TYPES,
+} from "@synap-core/types/connections";
+
+const dependencyEdgeInput = z.object({
+  fromType: z.enum(DEPENDENCY_ENDPOINT_KINDS),
+  fromId: z.string().uuid(),
+  toType: z.enum(DEPENDENCY_ENDPOINT_KINDS),
+  toId: z.string().uuid(),
+  linkType: z.enum(DEPENDENCY_LINK_TYPES),
+});
+
+/** A governed dependency result as the tRPC contract: refusals THROW. */
+function governedResultOrThrow(result: GovernedLinkResult) {
+  if (result.status === "denied") {
+    throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+  }
+  if (result.status === "refused") {
+    throw new TRPCError({
+      code: trpcCodeForDependencyRefusal(result.httpStatus),
+      message: result.error,
+    });
+  }
+  return result;
+}
 
 // Entity read floor for the graph's legacy bulk fetch (getSubgraph) — the ONE
 // door with role-as-lens (facetLens), so it agrees with getFull and
@@ -888,5 +922,73 @@ export const graphRouter = router({
         averageRelationsPerEntity:
           allEntities.length > 0 ? allRelations.length / allEntities.length : 0,
       };
+    }),
+
+  // ── THE dependency edge (links `blocked_by` / `replaces`), human door ──────
+  //
+  // `X --blocked_by--> Y` across units of work (session · entity · track);
+  // `A --replaces--> B` = "this step replaces that one". Written through the
+  // ONE governed door (`services/links/dependency-links.ts`): endpoint floor,
+  // `checkPermissionOrPropose` (`link/create` | `link/delete`, in the blocked
+  // end's workspace), the one store write, `link.*.completed` events. The
+  // node neighbourhood already DRAWS these edges (Blocked by / Blocks /
+  // Replaces / Replaced by); this is how a person adds or drops one.
+
+  /** Declare a dependency (or a replacement) between two units of work. */
+  addDependency: protectedProcedure
+    .input(dependencyEdgeInput)
+    .mutation(async ({ ctx, input }) =>
+      governedResultOrThrow(
+        await governedDependencyLink({
+          edge: input,
+          userId: ctx.userId,
+          agentUserId: ctx.agentUserId ?? undefined,
+          requestWorkspaceId: ctx.workspaceId ?? null,
+          sessionId: ctx.sessionId ?? undefined,
+          door: "graph.addDependency",
+        })
+      )
+    ),
+
+  /** Drop a dependency (or replacement) edge. Reports whether one was there. */
+  removeDependency: protectedProcedure
+    .input(dependencyEdgeInput)
+    .mutation(async ({ ctx, input }) =>
+      governedResultOrThrow(
+        await governedRemoveDependencyLink({
+          edge: input,
+          userId: ctx.userId,
+          agentUserId: ctx.agentUserId ?? undefined,
+          requestWorkspaceId: ctx.workspaceId ?? null,
+          sessionId: ctx.sessionId ?? undefined,
+          door: "graph.removeDependency",
+        })
+      )
+    ),
+
+  /**
+   * Is this unit of work blocked right now, and by what — DERIVED, for any
+   * dependency kind (`deriveOpenBlockers`: a blocker clears by its own kind's
+   * status; a replaced blocker is followed to its replacement). A blocker the
+   * caller cannot see is still listed (`hidden: true`, no name). The focus
+   * itself must be visible, or this is NOT_FOUND.
+   */
+  dependencyState: protectedProcedure
+    .input(
+      z.object({
+        kind: z.enum(DEPENDENCY_ENDPOINT_KINDS),
+        id: z.string().uuid(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const refusal = await checkLinkEndpointsVisible(
+        { fromType: input.kind, fromId: input.id, toType: input.kind, toId: input.id },
+        ctx.userId,
+        ctx.workspaceId ?? null
+      );
+      if (refusal) {
+        throw new TRPCError({ code: "NOT_FOUND", message: refusal.error });
+      }
+      return readDependencyState(input, ctx.userId);
     }),
 });

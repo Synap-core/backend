@@ -40,6 +40,7 @@ import {
 
 export * from "./wire.js";
 export * from "./neighbourhood.js";
+export * from "./dependency.js";
 import { isProvenanceRole } from "./neighbourhood.js";
 
 export type ConnectionDirection = "outgoing" | "incoming" | "structural";

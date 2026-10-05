@@ -124,6 +124,29 @@ vi.mock(
   }
 );
 
+/** Every `applyApprovedDependencyLink` call (cross-kind / replaces approvals). */
+const dependencyCalls: Array<Record<string, unknown>> = [];
+/** What the stubbed dependency door answers next. */
+let dependencyAnswer: { ok: true; rows: number } | { ok: false; why: string } =
+  { ok: true, rows: 1 };
+
+vi.mock(
+  "../../../../services/links/dependency-links.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../../services/links/dependency-links.js")
+      >();
+    return {
+      ...actual,
+      applyApprovedDependencyLink: async (i: Record<string, unknown>) => {
+        dependencyCalls.push({ ...i });
+        return dependencyAnswer;
+      },
+    };
+  }
+);
+
 // `vi.mock` is hoisted above these, so the executor module loads against the
 // stubbed `db`.
 import { proposalExecRegistry } from "../../execution-registry.js";
@@ -373,12 +396,33 @@ describe("(3b) link/create blocked_by", () => {
     expect(dbUpdates).toHaveLength(0);
   });
 
-  it("a non-session endpoint is refused without calling the producer", async () => {
+  it("a CROSS-KIND blocked_by goes through the dependency door, floored on the OWNER — never the session producer, never the raw materializer", async () => {
+    dependencyCalls.length = 0;
+    dependencyAnswer = { ok: true, rows: 1 };
     const a = blockedByArgs();
     (a.payload as { data: Record<string, unknown> }).data.toType = "entity";
-    await expect(catchAll().execute(a)).rejects.toThrow(/two sessions/);
+    const result = await catchAll().execute(a);
+    expect(result.effect).toMatchObject({ applied: "verified", rows: 1 });
+    expect(dependencyCalls).toHaveLength(1);
+    expect(dependencyCalls[0]).toMatchObject({
+      action: "create",
+      ownerUserId: OWNER,
+      data: { fromType: "session", toType: "entity", linkType: "blocked_by" },
+    });
     expect(blockerCalls).toHaveLength(0);
     expect(auditCalls).toHaveLength(0);
+  });
+
+  it("a refused dependency approval THROWS and writes nothing", async () => {
+    dependencyCalls.length = 0;
+    dependencyAnswer = { ok: false, why: "Entity not found." };
+    const a = blockedByArgs();
+    (a.payload as { data: Record<string, unknown> }).data.linkType =
+      "replaces";
+    await expect(catchAll().execute(a)).rejects.toThrow(/Entity not found/);
+    expect(dbUpdates).toHaveLength(0);
+    expect(auditCalls).toHaveLength(0);
+    dependencyAnswer = { ok: true, rows: 1 };
   });
 
   it("other link types still hand off to the materializer", async () => {

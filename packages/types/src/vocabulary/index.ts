@@ -389,6 +389,11 @@ export const LINEAGE_EDGE_LABELS: Readonly<
 > = {
   produced: { incoming: "Made from", outgoing: "Made" },
   rerun: { outgoing: "Rerun of" },
+  // `X --blocked_by--> Y`, the ONE dependency edge (any unit-of-work kinds).
+  // From Y's side the forward words would be wrong: Y BLOCKS X.
+  blocked_by: { outgoing: "Blocked by", incoming: "Blocks" },
+  // `A --replaces--> B`: "this step replaces that one".
+  replaces: { outgoing: "Replaces", incoming: "Replaced by" },
 };
 
 export function resolveLineageEdgeLabel(

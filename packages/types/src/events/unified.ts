@@ -23,6 +23,10 @@ export const SUBJECT_TYPES = [
   "workspace",
   "view",
   "relation",
+  // A `links` edge written through the governed link door
+  // (`services/links/dependency-links.ts`): `link.create.completed` /
+  // `link.delete.completed`, data `{ linkType, fromType, fromId, toType, toId }`.
+  "link",
   "tag",
   "project",
   "proposal",
