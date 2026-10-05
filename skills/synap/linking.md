@@ -8,15 +8,12 @@ When a profile property has `valueType: "entity_id"`, setting it on entity creat
 
 Known system-profile auto-syncs:
 
-| Profile  | Property    | Target profile | Auto-relation type   |
-| -------- | ----------- | -------------- | -------------------- |
-| task     | `projectId` | project        | `belongs_to_project` |
-| task     | `assignee`  | person         | `assigned_to`        |
-| contact  | `companyId` | company        | `works_at`           |
-| deal     | `contactId` | contact        | `deal_for`           |
-| deal     | `companyId` | company        | `deal_with`          |
-| document | `entityId`  | (any)          | `attached_to`        |
-| anchor   | `channelId` | (channel)      | `anchored_in`        |
+| Profile | Property    | Target profile | Auto-relation type   |
+| ------- | ----------- | -------------- | -------------------- |
+| task    | `projectId` | project        | `belongs_to_project` |
+| task    | `assignee`  | person         | `assigned_to`        |
+| contact | `companyId` | company        | `works_at`           |
+| deal    | `contactId` | contact        | `deal_for`           |
 
 Custom profiles: an `entity_id` property does NOT create an edge on its own. Auto-sync writes a relation only when the property def is mapped to a relation def (its `relationDefId`), and the edge then takes THAT def's slug. An unmapped `entity_id` property stores the id and creates no relation at all — there is no default or fallback type. When you need the edge, create it explicitly (Way 2) with an existing relation-def slug; `synap_list_profiles` returns them under `relationTypes`.
 
@@ -68,37 +65,40 @@ POST /api/hub/relations
 }
 ```
 
-## Conventional relation types
+## Relation types — use the pod's, never invent one
 
-String-typed, case-insensitive by convention. Use these first before inventing new ones — workspace UI often renders known types specially.
+A relation's `type` must be the slug of a relation definition the pod has. `synap_list_profiles` returns them under `relationTypes` (custom ones a workspace added included) — read it before linking. The defaults every pod ships:
 
-| Type           | Direction       | When                                                                                                                                                                                    |
-| -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `relates_to`   | bidirectional   | Generic association, no stronger label fits                                                                                                                                             |
-| `parent_of`    | source → target | Entity hierarchy (a kind instance of another). Not nested projects — those do not exist. A method in a project is a track; a unit of work is a session (`spawned_from` / `blocked_by`). |
-| `child_of`     | source → target | Inverse of `parent_of` (entity hierarchy only)                                                                                                                                          |
-| `belongs_to`   | source → target | Membership                                                                                                                                                                              |
-| `authored_by`  | source → target | Note/document authored by a person                                                                                                                                                      |
-| `depends_on`   | source → target | Task blocked by another task, project needs input                                                                                                                                       |
-| `references`   | source → target | Task references a document, note cites an article                                                                                                                                       |
-| `mentions`     | source → target | Entity mentioned within another entity                                                                                                                                                  |
-| `works_with`   | bidirectional   | People who collaborate                                                                                                                                                                  |
-| `part_of`      | source → target | Component relationship                                                                                                                                                                  |
-| `from_meeting` | source → target | Any entity extracted from a meeting/event                                                                                                                                               |
-| `anchored_in`  | source → target | Anchor (pinned chat message) in a channel                                                                                                                                               |
+| Type                                        | Direction       | When                                                                                                                                                                                      |
+| ------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relates_to`                                | bidirectional   | Generic association, when no stronger type fits                                                                                                                                           |
+| `references`                                | source → target | A task references a document, a note cites an article                                                                                                                                     |
+| `mentions`                                  | source → target | One entity is mentioned within another's content                                                                                                                                          |
+| `links_to`                                  | source → target | A hyperlink or explicit pointer                                                                                                                                                           |
+| `parent_of`                                 | source → target | Entity hierarchy (a kind instance of another). Not nested projects — those do not exist. A method in a project is a track; a unit of work is a session.                                   |
+| `belongs_to_project`                        | source → target | An entity filed into a project (prefer the `projectId` property — Way 1)                                                                                                                  |
+| `assigned_to`                               | source → target | A task/project assigned to a person                                                                                                                                                       |
+| `created_by`                                | source → target | A note/document authored or created by a person                                                                                                                                           |
+| `blocks` / `depends_on`                     | source → target | A DEPENDENCY: the source blocks / waits on the target. Dependencies are becoming ONE `blocked_by` edge across kinds (session · entity · track); these two slugs are its entity-side names |
+| `tagged_with`                               | source → target | Categorization by a tag entity                                                                                                                                                            |
+| `attended_by`                               | source → target | An event's participant                                                                                                                                                                    |
+| `works_at` · `works_on` · `affiliated_with` | source → target | A person and an organization / a project they contribute to / an affiliation                                                                                                              |
+| `knows` · `met_at` · `discussed_with`       | person → target | People who know each other / where they met / who they talked with                                                                                                                        |
+| `deal_for`                                  | source → target | A sales deal for a contact                                                                                                                                                                |
+| `has_skill`                                 | source → target | A person's skill                                                                                                                                                                          |
 
-If none fits, invent a snake_case verb. Keep it short and symmetric with existing verbs. Don't create `related-to-this-specific-thing` — prefer a generic `relates_to` plus a more specific property or document.
+**No fitting type? Do not invent one.** A slug that is not a relation definition is refused or lands as a link nobody can read. Use `relates_to` plus a more specific property or document, or — if the relationship recurs and deserves a name — propose a new relation definition (it is a schema change, reviewed like one).
 
 ## Decision table
 
-| Situation                                              | Use                                    |
-| ------------------------------------------------------ | -------------------------------------- |
-| Profile has matching `valueType: "entity_id"` property | Way 1 — set the property               |
-| Linking two already-existing entities                  | Way 2 — create a relation              |
-| Custom connection, no matching property                | Way 2                                  |
-| Unsure whether a property exists                       | `GET /profiles` first                  |
-| Linking a document to its parent entity                | Use `entityId` on the document (Way 1) |
-| Multi-party link (entity A ↔ entity B ↔ entity C)      | Two relations, both Way 2              |
+| Situation                                              | Use                       |
+| ------------------------------------------------------ | ------------------------- |
+| Profile has matching `valueType: "entity_id"` property | Way 1 — set the property  |
+| Linking two already-existing entities                  | Way 2 — create a relation |
+| Custom connection, no matching property                | Way 2                     |
+| Unsure whether a property exists                       | `GET /profiles` first     |
+| Linking a document to the entity it is about           | Way 2 — `references`      |
+| Multi-party link (entity A ↔ entity B ↔ entity C)      | Two relations, both Way 2 |
 
 ## Reading the graph
 
@@ -125,5 +125,6 @@ GET /api/hub/graph/traverse?entityId={id}&maxDepth=2
 - **Spinning up a new project instead of linking into an existing one.** A project is a **commitment with gravity**, not a folder for a task, plan, repo, or theme (those are entities). Before `create_project`, search existing projects and file the entity into one via `belongs_to_project` (Way 1 `projectId`, or Way 2 relation). Near-duplicate project names are rejected server-side with the existing candidates, and an agent-created project also requires **≥5 existing entities** as evidence.
 - **Creating an orphan, then forgetting to link it.** Every `POST /entities` should include properties that link, OR be immediately followed by a `POST /relations`. Never close the operation with a disconnected node.
 - **Double-linking.** If you set `properties.projectId` AND also `POST /relations` with type `belongs_to_project`, the auto-sync already did it. Don't duplicate.
-- **Using `relates_to` when a specific verb fits.** `relates_to` is the fallback. `authored_by`, `depends_on`, `references` carry more meaning to both the user and downstream views.
+- **Using `relates_to` when a specific type fits.** `relates_to` is the fallback. `created_by`, `depends_on`, `references` carry more meaning to both the user and downstream views.
+- **Inventing a relation type.** `child_of`, `belongs_to`, `authored_by`, `part_of`, `works_with` are NOT relation types here — use `parent_of` (from the parent), `belongs_to_project`, `created_by`, `parent_of` / `relates_to`, `knows`. Check `relationTypes` first.
 - **Inverting direction.** Source is "the thing doing the action or owning the relationship." `task depends_on task` means the source is blocked by the target. Check twice.

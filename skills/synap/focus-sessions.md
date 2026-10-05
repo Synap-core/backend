@@ -8,9 +8,14 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
-**Declare your definition of done** with `criteria` — binary, observable statements ("Typecheck passes with 0 errors"). Two to five, not a checklist. **Propose them yourself and let the person validate or rewrite them**; they may equally be written by the person, but a session with none can only be reported on by opinion. Closing never blocks on them; unmet ones are flagged. Already open with no criteria? Set them with `synap_update_session` (it replaces the list wholesale).
+**Declare your OUTCOMES** — `outcomes: [{ key?, label, kind, verify?, owner? }]` on `synap_start_session` / `synap_update_session` (Hub: the same field on `POST`/`PATCH /focus-sessions`). One list of what the work must yield, each one verifiable. Two kinds:
 
-**Declare what the work will produce** with `expectedOutputs` — the documents, entities and decisions this session owes. That list is what makes "done" derivable instead of announced, and it is what the person's board shows as still outstanding.
+- **A fact** (`kind: 'fact'`) — your definition of done, a binary, observable statement ("Typecheck passes with 0 errors"), checked by `verify` (`capability` → `judge` → `human`; default `judge`) through `synap_evaluate_session`. Two to five, not a checklist. **Propose them yourself and let the person validate or rewrite them**; they may equally be written by the person, but a session with none can only be reported on by opinion. Closing never blocks on them; unmet ones are flagged.
+- **A deliverable** (`kind: 'document'`, `'report'`, `'code'`, `'decision'`…). **Declare what the work will produce** — the documents, entities and decisions this session owes. That list is what makes "done" derivable instead of announced, and it is what the person's board shows as still outstanding. Give each a `key` (or one is derived from the label) and name it by that key from then on.
+
+On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps its key and its receipts, and nothing you do not name is removed. `criteria`, `expectedOutputs` and `addOutput` still work as deprecated aliases over the same storage. `synap_get_session` returns `outcomes.outcomes[]` (each with `verify`, `met`, `metBy`, its `state` and its `evidence`) and `outcomes.inputs[]` — what the work needs FROM the person, each pointing at the outcome it blocks. `status: 'unavailable'` there means the read failed, not that the list is empty.
+
+**Done is a verdict, not your claim.** When you finish a deliverable, `completeOutput: '<key>'` records your CLAIM. The pod then decides: if EVIDENCE is attached — the object produced inside this session (record it against the slot's key), or the slot's `ref` pointing at it — the outcome is met at once (`completeOutput.result: 'completed'`, `metBy: 'evidence'`). With no evidence the reply says `'claimed'`: the claim waits for review, so attach the evidence instead of reporting the work as delivered. A deliverable that also has a `verify` beyond evidence (`judge`, `capability`) is met only by that check; a person's own outcome only by the person.
 
 **Keep the session true as you work — the person watches it, not your chat.**
 
@@ -22,9 +27,9 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Hub Protocol REST** (for IS → backend; always include `workspaceId`):
 
-- `POST /api/hub/focus-sessions` — create (include `correlationId` for idempotency; `templateId`, `criteria` as above)
+- `POST /api/hub/focus-sessions` — create (include `correlationId` for idempotency; `templateId`, `outcomes` as above)
 - `GET /api/hub/focus-sessions/:id?workspaceId=<id>` — read
-- `PATCH /api/hub/focus-sessions/:id` — update `{ workspaceId, progress, status, goal, agentIds }`
+- `PATCH /api/hub/focus-sessions/:id` — update `{ workspaceId, progress, status, goal, agentIds, outcomes }` (outcomes upsert by key)
 - Send `X-Session-Id` to name the session a call belongs to; without it, your writes group under your own session.
 
 **Before you hand work to the human — check the guidelines first.** When you cannot take a deliverable, you file it on the human with `owner: 'human'`, a `blockedReason` (`credential` · `permission` · `capability` · `policy` · `decision` · `physical`) and a one-line `why`. Before you do, look up standing guidance for that kind of block. When the same block keeps recurring, the human may have approved a guideline for it, e.g. "Stripe keys live in the team vault under billing/".
