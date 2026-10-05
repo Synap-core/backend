@@ -23,6 +23,7 @@ import {
   gte,
   lt,
   inArray,
+  notInArray,
   getDb,
   ProfileResolutionService,
   eventRepository,
@@ -33,7 +34,7 @@ import {
   drizzleSql,
   notProbeEntityWhere,
 } from "@synap/database";
-import { entities, entityFacets } from "@synap/database/schema";
+import { entities, entityFacets, relations } from "@synap/database/schema";
 import { EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
@@ -42,6 +43,7 @@ import {
   buildPaginatedResponse,
 } from "../../utils/pagination.js";
 import {
+  BELONGS_TO_PROJECT,
   projectLensWhere,
   facetInWorkspaceLensWhere,
 } from "../../utils/project-scope.js";
@@ -631,6 +633,9 @@ export const readProcs = {
    * `belongs_to_project` predicate). It only narrows — never widens to the
    * project's items in other spaces (that is `entities.list`'s project lens,
    * which replaces the workspace scope). Omitted ⇒ everything in the spaces.
+   * `withoutProject` is the other half of the same filter: only the rows that
+   * belong to NO project (e.g. the brand rows of a brand in no project).
+   * Given both, `projectId` wins.
    */
   listMulti: protectedProcedure
     .input(
@@ -640,6 +645,7 @@ export const readProcs = {
         includeGlobal: z.boolean().default(false),
         limit: z.number().min(1).max(200).default(50),
         projectId: z.string().uuid().optional(),
+        withoutProject: z.boolean().optional(),
       })
     )
     .output(
@@ -672,7 +678,17 @@ export const readProcs = {
           includeGlobal: input.includeGlobal,
           ...(input.projectId
             ? { narrow: projectLensWhere(entities.id, input.projectId) }
-            : {}),
+            : input.withoutProject
+              ? {
+                  narrow: notInArray(
+                    entities.id,
+                    db
+                      .select({ id: relations.sourceEntityId })
+                      .from(relations)
+                      .where(eq(relations.type, BELONGS_TO_PROJECT))
+                  ),
+                }
+              : {}),
         }
       );
 

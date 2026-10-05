@@ -87,6 +87,7 @@ const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 async function listMulti(input: {
   workspaceIds?: string[];
   projectId?: string;
+  withoutProject?: boolean;
 }): Promise<Set<string>> {
   const res = await testRouter
     .createCaller({
@@ -184,5 +185,11 @@ describe("entities.listMulti — this space × this project", () => {
     expect(
       await listMulti({ workspaceIds: [WS], projectId: randomUUID() })
     ).toEqual(new Set());
+  });
+
+  it("withoutProject ⇒ only the rows in NO project (the unfiled one)", async () => {
+    expect(
+      await listMulti({ workspaceIds: [WS], withoutProject: true })
+    ).toEqual(new Set([E_NONE]));
   });
 });
