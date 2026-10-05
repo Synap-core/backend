@@ -17,6 +17,7 @@ import type {
   TokenUsage,
   AIStep,
   CreatedProposal,
+  IsFailureEnvelope,
 } from "@synap-core/types";
 import {
   decodeStructureProgressFrame,
@@ -501,6 +502,78 @@ function extractValidationDetail(body: string): string | undefined {
 }
 
 /**
+ * The IS's `failure` envelope from a non-2xx JSON body, when it sent one.
+ *
+ * The IS's own refusals (`enforceQuota` 429, entitlement 403, inactive-account
+ * 403, spend-guard 429) answer `{ error, message, failure: { code, retryable } }`.
+ * This body used to be logged and dropped, so the pod classified on the bare
+ * status: a monthly-quota 429 read as "rate-limited, try again" and a
+ * not-entitled / inactive 403 as "credentials rejected".
+ */
+function extractFailureEnvelope(body: string): IsFailureEnvelope | undefined {
+  if (!body) return undefined;
+  try {
+    const failure = (JSON.parse(body) as { failure?: unknown })?.failure;
+    if (
+      typeof failure === "object" &&
+      failure !== null &&
+      typeof (failure as { code?: unknown }).code === "string"
+    ) {
+      return failure as IsFailureEnvelope;
+    }
+  } catch {
+    // Not JSON — nothing to carry; the body stays in the logs.
+  }
+  return undefined;
+}
+
+/**
+ * Refusals about THIS ACCOUNT, not about the IS's health. They must not feed
+ * the circuit breaker (three account refusals used to open it, and every
+ * later turn then read "assistant temporarily unavailable") and must not be
+ * retried — the same request is refused the same way until the account
+ * changes.
+ */
+const ACCOUNT_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "account_quota_exceeded",
+  "not_entitled",
+  "account_inactive",
+  "llm_budget_exceeded",
+]);
+
+function isAccountRefusal(failure: IsFailureEnvelope | undefined): boolean {
+  return failure?.code != null && ACCOUNT_REFUSAL_CODES.has(failure.code);
+}
+
+/**
+ * The error a non-2xx IS answer becomes. Carries `.status`, the IS's own
+ * validation `.detail`, and its `.failure` envelope — `classifyAiFailure`
+ * (api `utils/ai-failure.ts`) prefers that envelope over the status.
+ */
+function hubHttpError(
+  response: Response,
+  responseBody: string,
+  baseUrl: string,
+  failure: IsFailureEnvelope | undefined
+): Error {
+  const hubError = new Error(
+    `Intelligence Hub error: ${response.status} ${response.statusText} at ${baseUrl}`
+  ) as Error & {
+    status?: number;
+    detail?: string;
+    failure?: IsFailureEnvelope;
+  };
+  // ONLY our own validation envelope becomes `.detail`. A raw upstream body
+  // is left in the logs, because it is not ours to put in front of a user
+  // and may carry provider detail we have not reviewed.
+  const parsedDetail = extractValidationDetail(responseBody);
+  if (parsedDetail) hubError.detail = parsedDetail;
+  if (failure) hubError.failure = failure;
+  hubError.status = response.status;
+  return hubError;
+}
+
+/**
  * Is a thrown Intelligence Hub error worth retrying with the SAME payload?
  *
  * Lives here because this module is what throws it (and what stamps `.status`),
@@ -581,6 +654,7 @@ export class IntelligenceHubClient {
           const responseBody = await response
             .text()
             .catch(() => "<unreadable>");
+          const failure = extractFailureEnvelope(responseBody);
           // 401 = credential error — don't retry, surface immediately for auto-repair
           if (response.status === 401) {
             recordFailure(this.baseUrl);
@@ -594,10 +668,7 @@ export class IntelligenceHubClient {
           console.error(
             `[IntelligenceHubClient] Request failed: url=${this.baseUrl}/api/chat/stream, status=${response.status}, statusText=${response.statusText}, body=${responseBody.slice(0, 500)}, attempt=${attempt + 1}/${MAX_RETRIES + 1}`
           );
-          const hubError = new Error(
-            `Intelligence Hub error: ${response.status} ${response.statusText} at ${this.baseUrl}`
-          );
-          // Carry the IS's OWN validation reason forward.
+          // Carry the IS's OWN validation reason and failure envelope forward.
           //
           // This body used to be logged here and then dropped: the thrown
           // Error held only `status statusText baseUrl`, so a request the IS
@@ -605,15 +676,12 @@ export class IntelligenceHubClient {
           // generic "the request was rejected as invalid". The 2026-08-20
           // Companion outage was exactly this — the IS said "turnContext may
           // not contain more than 20 items" and nobody downstream could see it.
-          //
-          // ONLY our own validation envelope is attached. A raw upstream body
-          // is left in the logs, because it is not ours to put in front of a
-          // user and may carry provider detail we have not reviewed.
-          const parsedDetail = extractValidationDetail(responseBody);
-          if (parsedDetail) {
-            (hubError as Error & { detail?: string }).detail = parsedDetail;
-          }
-          (hubError as Error & { status?: number }).status = response.status;
+          const hubError = hubHttpError(
+            response,
+            responseBody,
+            this.baseUrl,
+            failure
+          );
           throw hubError;
         }
 
@@ -624,6 +692,15 @@ export class IntelligenceHubClient {
         lastError = error instanceof Error ? error : new Error(String(error));
         // Don't retry 401s — break immediately so auto-repair can kick in
         if (lastError.message.includes("401 Unauthorized")) {
+          break;
+        }
+        // An account refusal answers the same on every retry and is not an
+        // IS-health fault: stop here, and never reach recordFailure below.
+        if (
+          isAccountRefusal(
+            (lastError as Error & { failure?: IsFailureEnvelope }).failure
+          )
+        ) {
           break;
         }
         // Log network-level errors (connection refused, DNS failure, timeout)
@@ -710,8 +787,9 @@ export class IntelligenceHubClient {
     }
 
     if (!response.ok) {
-      recordFailure(this.baseUrl);
       const responseBody = await response.text().catch(() => "<unreadable>");
+      const failure = extractFailureEnvelope(responseBody);
+      if (!isAccountRefusal(failure)) recordFailure(this.baseUrl);
       if (response.status === 401) {
         console.error(
           `[IntelligenceHubClient] IS authentication failed at ${this.baseUrl}/api/chat/stream — check API key in intelligence_services table (status=401, body=${responseBody.slice(0, 500)})`
@@ -723,9 +801,7 @@ export class IntelligenceHubClient {
       console.error(
         `[IntelligenceHubClient] Stream request failed: url=${this.baseUrl}/api/chat/stream, status=${response.status}, body=${responseBody.slice(0, 500)}`
       );
-      throw new Error(
-        `Intelligence Hub error: ${response.status} ${response.statusText} at ${this.baseUrl}`
-      );
+      throw hubHttpError(response, responseBody, this.baseUrl, failure);
     }
 
     // Parse SSE stream — one shared reader (see is-chat-stream.ts). Map each

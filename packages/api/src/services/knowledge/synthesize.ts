@@ -678,7 +678,7 @@ export async function synthesizeAnswer(
     });
     if (!res.ok) {
       // Carry the IS's own classified `failure` envelope (a spend-guard
-      // refusal is 429 `quota_exhausted`, a provider outage 502 `…`) so
+      // refusal is 429 `llm_budget_exceeded`, a provider outage 502 `…`) so
       // `classifyAiFailure` reads the IS's code instead of guessing from the
       // bare status — a budget refusal read as a 429 would say "try again
       // shortly" about an allowance that resets at month rollover.

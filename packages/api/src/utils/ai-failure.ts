@@ -31,6 +31,8 @@
  *   plan_quota       — an allowance (provider quota, spend guard) is used up
  *   account_quota    — THIS account's monthly plan quota (IS quota middleware)
  *   not_entitled     — the account's plan does not include AI (IS entitlement middleware)
+ *   account_inactive — this account's AI access is switched off (IS auth middleware)
+ *   budget           — the shared monthly AI budget is used up (IS spend guard; NOT the provider)
  *   auth             — 401/403, credentials rejected by the AI service
  *   rate_limit       — 429
  *   timeout          — the call was aborted on our deadline
@@ -47,6 +49,8 @@ export type AiFailureClass =
   | "plan_quota"
   | "account_quota"
   | "not_entitled"
+  | "account_inactive"
+  | "budget"
   | "context_length"
   | "content_filter"
   | "cancelled"
@@ -76,6 +80,8 @@ export type AiFailureCode =
   | "quota_exhausted"
   | "account_quota_exceeded"
   | "not_entitled"
+  | "account_inactive"
+  | "llm_budget_exceeded"
   | "context_length_exceeded"
   | "content_filter"
   | "cancelled"
@@ -190,6 +196,10 @@ const IS_CODE_TO_CLASS: Record<string, AiFailureClass> = {
   // not-entitled 403 became "credentials rejected" — both false.
   account_quota_exceeded: "account_quota",
   not_entitled: "not_entitled",
+  account_inactive: "account_inactive",
+  // OUR spend guard, not the provider: `quota_exhausted` above says "the AI
+  // provider's quota", which is false for a fleet budget stop.
+  llm_budget_exceeded: "budget",
   context_length_exceeded: "context_length",
   content_filter: "content_filter",
   auth: "auth",
@@ -326,6 +336,25 @@ const COPY: Record<
     needsOperator: false,
     message:
       "This account's plan does not include AI features right now (the subscription may have lapsed). Retrying will not help \u2014 renew or change the plan to use them.",
+  },
+  // The account itself is switched off — not a credentials fault (the 403
+  // used to read "an operator has to fix the AI service credentials"). The
+  // account holder re-enables it; no pod operator fix exists.
+  account_inactive: {
+    code: "account_inactive",
+    retryable: false,
+    needsOperator: false,
+    message:
+      "AI access is turned off for this account. Retrying will not help \u2014 the account owner has to re-enable AI access first.",
+  },
+  // Shared capacity, not this account's plan and not the provider's quota:
+  // an operator raises the budget, or it frees at the start of next month.
+  budget: {
+    code: "llm_budget_exceeded",
+    retryable: false,
+    needsOperator: true,
+    message:
+      "The shared AI capacity for this month is used up. Retrying will not help \u2014 an operator has to raise the AI budget, or it frees up at the start of next month.",
   },
   // Neither of the next two is an operator problem: the OPERATOR cannot make a
   // prompt shorter or make a safety filter accept it. `needsOperator: false`

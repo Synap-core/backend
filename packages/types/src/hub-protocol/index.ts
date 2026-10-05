@@ -203,6 +203,10 @@ export interface IsFailureEnvelope {
     | "account_quota_exceeded"
     /** IS entitlement middleware: the account's plan does not include AI. */
     | "not_entitled"
+    /** IS auth middleware: this account's AI access is switched off. */
+    | "account_inactive"
+    /** IS spend guard: the shared monthly LLM budget is used up (not the provider's quota). */
+    | "llm_budget_exceeded"
     | "timeout"
     | "circuit_open"
     | "provider_error"

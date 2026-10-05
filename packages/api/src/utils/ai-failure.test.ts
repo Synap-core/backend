@@ -200,6 +200,8 @@ describe("IS failure envelope", () => {
       quota_exhausted: "plan_quota",
       account_quota_exceeded: "account_quota",
       not_entitled: "not_entitled",
+      account_inactive: "account_inactive",
+      llm_budget_exceeded: "budget",
       auth: "auth",
       rate_limit: "rate_limit",
       timeout: "timeout",

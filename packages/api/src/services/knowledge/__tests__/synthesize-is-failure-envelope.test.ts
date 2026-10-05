@@ -122,6 +122,42 @@ describe("synthesizeAnswer — IS failure envelope", () => {
     expect(d.message).not.toMatch(/credential/i);
   });
 
+  // The live 2026-10-06 defect: `synap_ask` on a pod whose IS customer row
+  // was deactivated read "an operator has to fix the AI service credentials".
+  it("an inactive-account 403 says AI access is off — not 'credentials'", async () => {
+    isResponds(403, {
+      error: "Account inactive",
+      message: "Your account has been deactivated. Please contact support.",
+      failure: { code: "account_inactive", retryable: false },
+    });
+
+    const res = await synthesizeAnswer([], "q", ["structured"], null);
+
+    expect(res.answer).toBeNull();
+    expect(res.failureClass).toBe("account_inactive");
+    const d = describeAiFailure(res.failureClass);
+    expect(d.code).toBe("account_inactive");
+    expect(d.message).not.toMatch(/credential/i);
+  });
+
+  it("a spend-guard 429 (llm_budget_exceeded) is the shared budget, not the provider's quota", async () => {
+    isResponds(429, {
+      error: "Knowledge synthesis refused: LLM budget exceeded",
+      failure: {
+        code: "llm_budget_exceeded",
+        message: "budget",
+        retryable: false,
+      },
+    });
+
+    const res = await synthesizeAnswer([], "q", ["structured"], null);
+
+    expect(res.failureClass).toBe("budget");
+    const d = describeAiFailure(res.failureClass);
+    expect(d.code).toBe("llm_budget_exceeded");
+    expect(d.message).not.toMatch(/provider/i);
+  });
+
   it("old IS (no envelope): the same refusals fall back to the bare status", async () => {
     isResponds(403, { error: "Account not entitled" });
     expect(

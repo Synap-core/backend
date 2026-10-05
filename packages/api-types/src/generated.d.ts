@@ -7396,7 +7396,7 @@ export type UndoPromotePropertyToBodyResult = {
  * orders in sync in spirit: no-credit and credential-rejection outrank
  * transient, because calling a 402 "temporary" is the exact defect above.
  */
-export type AiFailureClass = "quota" | "plan_quota" | "account_quota" | "not_entitled" | "context_length" | "content_filter" | "cancelled" | "auth" | "rate_limit" | "timeout" | "circuit" | "upstream" | "bad_request" | "invalid_response" | "unknown";
+export type AiFailureClass = "quota" | "plan_quota" | "account_quota" | "not_entitled" | "account_inactive" | "budget" | "context_length" | "content_filter" | "cancelled" | "auth" | "rate_limit" | "timeout" | "circuit" | "upstream" | "bad_request" | "invalid_response" | "unknown";
 /**
  * WIRE CONTRACT — the stable `code` emitted on `CHAT_STREAM_ERROR` alongside
  * `error` and `retryable`. The browser reads it to decide affordances (notably
@@ -7409,7 +7409,7 @@ export type AiFailureClass = "quota" | "plan_quota" | "account_quota" | "not_ent
  * remaining classes this module can prove, and collapsing them into `unknown`
  * would throw away evidence we hold.
  */
-export type AiFailureCode = "provider_no_credit" | "quota_exhausted" | "account_quota_exceeded" | "not_entitled" | "context_length_exceeded" | "content_filter" | "cancelled" | "provider_auth" | "rate_limited" | "timeout" | "circuit_open" | "upstream_error" | "bad_request" | "invalid_response" | "unknown";
+export type AiFailureCode = "provider_no_credit" | "quota_exhausted" | "account_quota_exceeded" | "not_entitled" | "account_inactive" | "llm_budget_exceeded" | "context_length_exceeded" | "content_filter" | "cancelled" | "provider_auth" | "rate_limited" | "timeout" | "circuit_open" | "upstream_error" | "bad_request" | "invalid_response" | "unknown";
 /**
  * A COMMITTED PARTIAL turn — the client-shaped verdict.
  *
