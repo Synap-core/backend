@@ -34327,6 +34327,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unfiled?: boolean | undefined;
 				includeTrackedRuns?: boolean | undefined;
 				trackId?: string | undefined;
+				liveness?: boolean | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -34366,6 +34367,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: SessionKind;
 				} & SessionParticipants & {
 					verdict?: SessionVerdict;
+				} & {
+					live?: SessionActivityLive | null;
 				} & {
 					viewerRole: SessionViewerRole;
 				})[];
