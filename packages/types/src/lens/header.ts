@@ -264,7 +264,9 @@ export function lensHeaderModel<
     doors,
     nextMove: lensNextMove(input.nextMove),
     lastActivityAt: last,
-    allClear: counts.blocking === 0,
+    // Never "All clear" beside a "Waiting on you" move: a session's own ask
+    // (a grade owed) can exist where the pod's needs-you union counts zero.
+    allClear: counts.blocking === 0 && input.nextMove?.cls !== "blocking",
     fact: input.fact ?? null,
   };
 }

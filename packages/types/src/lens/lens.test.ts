@@ -593,6 +593,16 @@ describe("lensHeaderModel", () => {
       text: "Drafting the outline",
       verb: { action: "open" },
     });
+    // A Blocking move with a counted ZERO (a session's own grade the pod's
+    // union does not carry) is never "All clear" — the two would contradict.
+    expect(
+      lensHeaderModel({
+        scopeKind: "session",
+        state: {},
+        counts: { blocking: 0, happening: 0, produced: 1 },
+        nextMove: owed,
+      }).allClear
+    ).toBe(false);
     // No row ⇒ no move (the host's "Start work" takes the slot).
     expect(
       lensHeaderModel({
