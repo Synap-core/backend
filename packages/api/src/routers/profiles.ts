@@ -33,6 +33,7 @@ import {
   eq,
   getActingAgentUserId,
   resolveProfileForApply,
+  RENDERER_SURFACES,
 } from "@synap/database";
 import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -1880,6 +1881,9 @@ export const profilesRouter = router({
            * through the same `profile/renderer.set` gate as any other write.
            */
           subjectId: z.string().min(1).optional(),
+          // WHICH HOST renders the binding. Omitted = the in-app surface;
+          // 'mcp-app' picks the cell shown inside outside AI hosts.
+          surface: z.enum(RENDERER_SURFACES).optional(),
         })
         .superRefine((value, refineCtx) => {
           // The shared placement rule, BEFORE governance — a misplaced
@@ -1917,6 +1921,9 @@ export const profilesRouter = router({
           // Only present for the per-object exception, so a kind-level
           // proposal payload is byte-identical to what it was before.
           ...(input.subjectId ? { subjectId: input.subjectId } : {}),
+          // Only present when non-default, so an in-app proposal payload is
+          // byte-identical to what it was before 0299.
+          ...(input.surface ? { surface: input.surface } : {}),
           ref: input.ref,
         },
       });
@@ -1940,6 +1947,7 @@ export const profilesRouter = router({
         ref: input.ref,
         scope: input.scope,
         ...(input.subjectId ? { subjectId: input.subjectId } : {}),
+        ...(input.surface ? { surface: input.surface } : {}),
       });
 
       logger.info(

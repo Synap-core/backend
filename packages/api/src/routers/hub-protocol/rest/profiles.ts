@@ -349,6 +349,7 @@ export function registerProfilesRoutes(app: HubHono): void {
       cellKey?: string;
       props?: Record<string, unknown>;
       scope?: "workspace" | "pod";
+      surface?: "app" | "mcp-app";
       reasoning?: string;
       agentUserId?: string;
       sourceMessageId?: string;
@@ -390,6 +391,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         cellKey: body.cellKey,
         props: body.props,
         scope: body.scope,
+        ...(body.surface ? { surface: body.surface } : {}),
         reasoning: body.reasoning,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
       });

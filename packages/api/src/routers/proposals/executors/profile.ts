@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { db, proposals, eq, getWorkspaceMembership } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import type { RendererRef } from "@synap/database";
+import type { RendererRef, RendererSurface } from "@synap/database";
 import { profilesRouter } from "../../profiles.js";
 import { setProfileRenderer } from "../../../services/profiles/set-profile-renderer.js";
 import type {
@@ -164,6 +164,11 @@ export function registerProfileExecutors(): void {
       // a kind-level one does: as an approved proposal. `null` = whole kind.
       const subjectId =
         (innerData.subjectId as string | null | undefined) ?? null;
+      // WHICH HOST renders it. Proposals stored before 0299 carry no surface:
+      // absent ⇒ the in-app default. Dropping this would silently write an
+      // approved `mcp-app` proposal to the IN-APP surface.
+      const surface =
+        (innerData.surface as RendererSurface | undefined) ?? "app";
       if (!profileSlug || !slot || ref === undefined) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -188,6 +193,7 @@ export function registerProfileExecutors(): void {
         ref,
         scope,
         subjectId,
+        surface,
         // Lineage: the binding row records the proposal that minted it, the
         // same `source_proposal_id` trail `governance_rules` keeps for a rule
         // born of an approved widening.

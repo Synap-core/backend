@@ -35,6 +35,7 @@ import {
   widgetDefinitions,
   PropertyValueType,
   slugifyPropertyKey,
+  RENDERER_SURFACES,
 } from "@synap/database";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
@@ -345,6 +346,8 @@ export const hubProfilesRouter = router({
          * so an agent's per-object binding arrives as a proposal like any other.
          */
         subjectId: z.string().min(1).optional(),
+        /** WHICH HOST renders it; omitted = in-app. 'mcp-app' = outside AI hosts. */
+        surface: z.enum(RENDERER_SURFACES).optional(),
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
       })
@@ -389,6 +392,7 @@ export const hubProfilesRouter = router({
           // Only present for the per-object exception, so a kind-level
           // proposal payload is byte-identical to what it was before.
           ...(input.subjectId ? { subjectId: input.subjectId } : {}),
+          ...(input.surface ? { surface: input.surface } : {}),
           ref,
         },
       });
@@ -412,6 +416,7 @@ export const hubProfilesRouter = router({
         ref,
         scope,
         ...(input.subjectId ? { subjectId: input.subjectId } : {}),
+        ...(input.surface ? { surface: input.surface } : {}),
       });
       return { status: "applied" as const, proposalId: null };
     }),

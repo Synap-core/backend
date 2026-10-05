@@ -42,8 +42,12 @@ import {
   eventRepository,
   revokeRendererBinding,
   setRendererBinding,
+  widgetDefinitions,
   workspaces,
+  and,
   eq,
+  isNull,
+  or,
 } from "@synap/database";
 import type { RendererRef, RendererSurface } from "@synap/database";
 import { OBJECT_KINDS } from "@synap-core/types/vocabulary";
@@ -107,6 +111,49 @@ const LEGACY_COLUMN_BY_SLOT: Partial<Record<RendererSlot, string>> = {
 export function isNonProfileObjectKind(subjectKind: string): boolean {
   if (!Object.hasOwn(OBJECT_KINDS, subjectKind)) return false;
   return OBJECT_KINDS[subjectKind]!.category !== "entity";
+}
+
+/**
+ * The `rendererType` of the cell a ref names — the SAME scope rule
+ * `resolveSurfaceRenderer` and Hub `profiles.setRenderer` use to find it: this
+ * workspace's row or a pod-wide one, a workspace row shadowing a pod-wide row
+ * of the same key. `null` = no such cell (a built-in has no row), or inactive.
+ * An iframe cell is referenced as `iframe-widget` with its real key in
+ * `props.typeKey`.
+ */
+async function lookupCellRendererType(
+  db: Awaited<ReturnType<typeof getDb>>,
+  ref: RendererRef,
+  workspaceId: string | null
+): Promise<string | null> {
+  if (ref.kind !== "cell") return null;
+  const props = (ref.props ?? {}) as Record<string, unknown>;
+  const key =
+    ref.cellKey === "iframe-widget" && typeof props.typeKey === "string"
+      ? props.typeKey
+      : ref.cellKey;
+  const rows = await db
+    .select({
+      workspaceId: widgetDefinitions.workspaceId,
+      rendererType: widgetDefinitions.rendererType,
+      isActive: widgetDefinitions.isActive,
+    })
+    .from(widgetDefinitions)
+    .where(
+      and(
+        eq(widgetDefinitions.typeKey, key),
+        workspaceId
+          ? or(
+              eq(widgetDefinitions.workspaceId, workspaceId),
+              isNull(widgetDefinitions.workspaceId)
+            )
+          : isNull(widgetDefinitions.workspaceId)
+      )
+    );
+  const row =
+    rows.find((r) => r.workspaceId !== null) ??
+    rows.find((r) => r.workspaceId === null);
+  return row && row.isActive ? (row.rendererType ?? null) : null;
 }
 
 export interface SetProfileRendererInput {
@@ -188,6 +235,34 @@ export async function setProfileRenderer(
     "collection" | "entity-detail" | "entity-card" | "entity-profile";
 
   await assertMayBindRenderer({ userId, scope, workspaceId });
+
+  // SURFACE ↔ RENDERER TYPE. An `mcp-app` cell serves outside AI hosts only; a
+  // frame/iframe cell is an in-app React/ESM renderer. Handing either to the
+  // other surface binds something that can never serve (the resolver returns
+  // null for it), so refuse at the write, not at render. Only a cell ref is
+  // typed; a view/declarative/source-app ref has no renderer type. A cleared
+  // binding (`ref === null`) has nothing to check.
+  if (ref !== null && ref.kind === "cell") {
+    const rendererType = await lookupCellRendererType(db, ref, workspaceId);
+    if (surface === "mcp-app" && rendererType !== "mcp-app") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          `The 'mcp-app' surface needs an installed mcp-app cell; ` +
+          (rendererType
+            ? `'${ref.cellKey}' is a '${rendererType}' cell.`
+            : `'${ref.cellKey}' is not an installed, active cell.`),
+      });
+    }
+    if (surface === "app" && rendererType === "mcp-app") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          `'${ref.cellKey}' is an mcp-app cell: it renders inside outside AI ` +
+          `hosts only. Bind it with surface 'mcp-app'.`,
+      });
+    }
+  }
 
   // Mirror the legacy stores ONLY for the shape they can express: an in-app,
   // whole-kind, workspace/pod binding of a PROFILE. A user-scoped or

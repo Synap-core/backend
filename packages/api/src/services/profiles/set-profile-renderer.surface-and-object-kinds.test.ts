@@ -23,11 +23,14 @@ const calls = vi.hoisted(() => ({
   profileUpdate: vi.fn(),
   setRendererBinding: vi.fn(),
   revokeRendererBinding: vi.fn(),
+  cellRows: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", () => ({
   getDb: async () => ({
     query: { workspaces: { findFirst: async () => null } },
+    // widget_definitions lookup for the surface ↔ renderer-type check
+    select: () => ({ from: () => ({ where: async () => calls.cellRows }) }),
   }),
   ProfileRepository: class {
     update = calls.profileUpdate;
@@ -40,6 +43,10 @@ vi.mock("@synap/database", () => ({
   setRendererBinding: calls.setRendererBinding,
   revokeRendererBinding: calls.revokeRendererBinding,
   workspaces: {},
+  widgetDefinitions: {},
+  and: () => undefined,
+  or: () => undefined,
+  isNull: () => undefined,
   eq: () => undefined,
 }));
 vi.mock("./renderer-binding-authz.js", () => ({
@@ -61,7 +68,10 @@ const podInput = {
 };
 
 beforeEach(() => {
-  for (const fn of Object.values(calls)) fn.mockReset();
+  for (const fn of Object.values(calls)) {
+    if (typeof fn === "function") fn.mockReset();
+  }
+  calls.cellRows = [];
   calls.resolveProfile.mockResolvedValue(null);
 });
 
@@ -104,6 +114,9 @@ describe("setProfileRenderer — pod-scope binding for a non-profile kind", () =
 
 describe("setProfileRenderer — the mcp-app surface never mirrors", () => {
   it("a pod-scope mcp-app binding of a PROFILE writes only the binding", async () => {
+    calls.cellRows = [
+      { workspaceId: null, rendererType: "mcp-app", isActive: true },
+    ];
     await setProfileRenderer({
       ...podInput,
       profileSlug: "person",
