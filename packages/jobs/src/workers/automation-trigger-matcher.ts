@@ -39,6 +39,11 @@ import {
   DAILY_CAP_WINDOW_MS,
   readMaxRunsPerDay,
 } from "@synap-core/types/automations";
+import {
+  DEPENDENCY_LINK_TYPE,
+  RELATION_DEPENDENCY_TYPES,
+  dependencyLinkAsRelation,
+} from "@synap-core/types/connections";
 // Re-export to preserve this module's public surface (tests + downstream imports)
 // after MessageEnvelope + matchMessageShape moved to `@synap/database`.
 export type { MessageEnvelope };
@@ -843,14 +848,110 @@ const isUuid = (v: unknown): v is string =>
  * cycle guard and the daily cap are NOT here — they are facts about the run
  * chain and the run ledger, not about the event.
  */
-export function automationTriggerMatches(input: {
+export function automationTriggerMatches(input: TriggerMatchInput): boolean {
+  return matchingTriggerView(input) !== null;
+}
+
+export interface TriggerMatchInput {
   eventType: string;
   data: Record<string, unknown> | undefined;
   config: AutomationTriggerConfig;
   messageEnvelope: MessageEnvelope | undefined;
   scopeFacts: EventScopeFacts;
   origin?: TriggerMatchPayload["origin"];
-}): boolean {
+}
+
+/** The event as one automation sees it — the real event, or a legacy view of it. */
+export interface TriggerEventView {
+  eventType: string;
+  data: Record<string, unknown> | undefined;
+}
+
+/**
+ * LEGACY DEPENDENCY RULES — a `link` event read in the relation vocabulary.
+ *
+ * Entity relations `blocks` / `depends_on` moved onto ONE edge, links
+ * `blocked_by` (backend 4eacdeaf + migration 0301), and the relation create
+ * door now reroutes those slugs to the link door. So `relation.create.completed`
+ * with `relationType: "blocks"` is never emitted again, and every stored rule
+ * filtered on it would silently stop firing while reporting itself `active`.
+ *
+ * Why a READ-TIME view and not a rewrite of the stored rules: the rule's
+ * meaning ("when X blocks Y") is exactly expressible as a projection of the
+ * link event, and its THEN-steps template against the relation payload
+ * (`{{trigger.data.fromEntityId}}`, `relationType`). Rewriting the stored
+ * pattern to `link.create.completed` would keep the trigger and break those
+ * templates; rewriting user-owned rows also needs a governed write per row.
+ * Projecting here keeps both halves working with no data change, and runs
+ * through the SAME gates (pattern, generic filters, trigger-specific filters,
+ * scope) as any event — this function only proposes the views.
+ *
+ * Narrow on purpose:
+ *   • only `link.(create|delete).completed` with `linkType: blocked_by`;
+ *   • only entity↔entity edges (a relation could only ever join entities, so a
+ *     session/track dependency has no relation reading);
+ *   • only a rule that FILTERS on the relation type (`relationType` at the top
+ *     level or in `filters`). An unfiltered "any relation" rule is not widened
+ *     onto the dependency edge — that would be a new behaviour, not a kept one.
+ * One view per legacy slug (`X blocked_by Y` reads as `Y blocks X` AND as
+ * `X depends_on Y`); the real filters decide which, if any, matches.
+ */
+export function legacyDependencyRelationViews(
+  eventType: string,
+  data: Record<string, unknown> | undefined,
+  config: AutomationTriggerConfig
+): TriggerEventView[] {
+  const m = /^link\.(create|delete)\.completed$/.exec(eventType);
+  if (!m || !data) return [];
+  if (!config.eventPattern?.startsWith("relation.")) return [];
+  const filters = config.filters as Record<string, unknown> | undefined;
+  const filtersOnType =
+    config.relationType != null || filters?.relationType !== undefined;
+  if (!filtersOnType) return [];
+  if (data.linkType !== DEPENDENCY_LINK_TYPE) return [];
+  if (data.fromType !== "entity" || data.toType !== "entity") return [];
+  const { fromId, toId } = data;
+  if (typeof fromId !== "string" || typeof toId !== "string") return [];
+  return RELATION_DEPENDENCY_TYPES.map((relationType) => {
+    const { sourceId, targetId } = dependencyLinkAsRelation(
+      relationType,
+      fromId,
+      toId
+    );
+    return {
+      eventType: `relation.${m[1]}.completed`,
+      // The relation door's automation payload (`routers/relations.ts`
+      // `recordDomainMutation` data), alongside the link's own keys.
+      data: {
+        ...data,
+        relationType,
+        fromEntityId: sourceId,
+        toEntityId: targetId,
+      },
+    };
+  });
+}
+
+/**
+ * {@link automationTriggerMatches}, returning WHICH reading of the event
+ * matched — the real one, or a {@link legacyDependencyRelationViews} view — so
+ * the live loop hands the run the payload its rule was written against.
+ * `null` = no match.
+ */
+export function matchingTriggerView(
+  input: TriggerMatchInput
+): TriggerEventView | null {
+  const candidates: TriggerEventView[] = [
+    { eventType: input.eventType, data: input.data },
+    ...legacyDependencyRelationViews(input.eventType, input.data, input.config),
+  ];
+  for (const view of candidates) {
+    if (rawTriggerMatches({ ...input, ...view })) return view;
+  }
+  return null;
+}
+
+function rawTriggerMatches(input: TriggerMatchInput): boolean {
   const { eventType, data, config, messageEnvelope, scopeFacts } = input;
   if (shouldSkipSyncOrigin(input.origin, config)) return false;
   if (!matchPattern(eventType, config.eventPattern)) return false;
@@ -1537,17 +1638,15 @@ export async function handleAutomationTriggerMatch(job: {
 
     // ── THE trigger decision (sync-origin, pattern, filters, trigger-specific
     //    filters, rule scope) — one pure function, shared with suggestions ──
-    if (
-      !automationTriggerMatches({
-        eventType,
-        data,
-        config,
-        messageEnvelope,
-        scopeFacts,
-        origin: job.data.origin,
-      })
-    )
-      continue;
+    const view = matchingTriggerView({
+      eventType,
+      data,
+      config,
+      messageEnvelope,
+      scopeFacts,
+      origin: job.data.origin,
+    });
+    if (!view) continue;
 
     // ── Create automation run ──────────────────────────────────────────
     logger.info(
@@ -1559,9 +1658,13 @@ export async function handleAutomationTriggerMatch(job: {
       automation.id,
       automation.workspaceId,
       {
-        eventType,
+        // The reading the rule matched: the real event, or the legacy
+        // relation view of a dependency link (see
+        // `legacyDependencyRelationViews`), so `{{trigger.data.*}}` resolves
+        // against the payload the rule was written for.
+        eventType: view.eventType,
         subjectId,
-        data: data ?? {},
+        data: view.data ?? {},
         userId,
         timestamp: new Date().toISOString(),
         // Provider-agnostic normalized message for `{{trigger.message.*}}`.

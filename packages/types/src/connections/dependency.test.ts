@@ -212,7 +212,9 @@ describe("deriveOpenBlockers — replaces", () => {
       rep("session", "b", "session", "a"),
       rep("session", "a", "session", "b"),
     ];
-    expect(() => deriveOpenBlockers(outcome, cyc, () => undefined)).not.toThrow();
+    expect(() =>
+      deriveOpenBlockers(outcome, cyc, () => undefined)
+    ).not.toThrow();
   });
 });
 
@@ -268,8 +270,32 @@ describe("neighbourhood labels for the dependency + replaces edges", () => {
       ["old", "Replaces", false],
       ["new", "Replaced by", false],
     ]);
-    expect(resolveLineageEdgeLabel("replaces", "incoming")).toBe(
-      "Replaced by"
-    );
+    expect(resolveLineageEdgeLabel("replaces", "incoming")).toBe("Replaced by");
+  });
+});
+
+describe("dependencyLinkAsRelation (inverse of normaliseDependencyRelation)", () => {
+  it("round-trips both legacy slugs through the one edge", async () => {
+    const { dependencyLinkAsRelation, normaliseDependencyRelation } =
+      await import("./index.js");
+    for (const type of ["blocks", "depends_on"] as const) {
+      const edge = normaliseDependencyRelation(type, "src", "tgt")!;
+      expect(dependencyLinkAsRelation(type, edge.fromId, edge.toId)).toEqual({
+        sourceId: "src",
+        targetId: "tgt",
+      });
+    }
+  });
+
+  it("reads X blocked_by Y as Y blocks X and X depends_on Y", async () => {
+    const { dependencyLinkAsRelation } = await import("./index.js");
+    expect(dependencyLinkAsRelation("blocks", "x", "y")).toEqual({
+      sourceId: "y",
+      targetId: "x",
+    });
+    expect(dependencyLinkAsRelation("depends_on", "x", "y")).toEqual({
+      sourceId: "x",
+      targetId: "y",
+    });
   });
 });

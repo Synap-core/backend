@@ -55,7 +55,11 @@ export type DependencyLinkType = (typeof DEPENDENCY_LINK_TYPES)[number];
  * The endpoint kinds a dependency / replacement edge may join — the units of
  * work that have a status to clear. Any pair of these is allowed.
  */
-export const DEPENDENCY_ENDPOINT_KINDS = ["session", "entity", "track"] as const;
+export const DEPENDENCY_ENDPOINT_KINDS = [
+  "session",
+  "entity",
+  "track",
+] as const;
 export type DependencyEndpointKind = (typeof DEPENDENCY_ENDPOINT_KINDS)[number];
 
 export function isDependencyEndpointKind(
@@ -268,7 +272,11 @@ export function normaliseDependencyRelation(
   type: string | null | undefined,
   sourceId: string,
   targetId: string
-): { fromId: string; toId: string; linkType: typeof DEPENDENCY_LINK_TYPE } | null {
+): {
+  fromId: string;
+  toId: string;
+  linkType: typeof DEPENDENCY_LINK_TYPE;
+} | null {
   if (type === "blocks") {
     return { fromId: targetId, toId: sourceId, linkType: DEPENDENCY_LINK_TYPE };
   }
@@ -276,4 +284,26 @@ export function normaliseDependencyRelation(
     return { fromId: sourceId, toId: targetId, linkType: DEPENDENCY_LINK_TYPE };
   }
   return null;
+}
+
+/**
+ * The INVERSE of {@link normaliseDependencyRelation}: read a `blocked_by` edge
+ * back as the entity relation it replaces, in the given legacy slug.
+ *
+ *   X --blocked_by--> Y  ⇔  Y --blocks-->     X
+ *                        ⇔  X --depends_on--> Y
+ *
+ * Exists for readers that still SPEAK the relation vocabulary — notably stored
+ * automations filtered on `relation.create` + `relationType: blocks` — so an
+ * edge that moved onto the link door is not silently invisible to them. Pure;
+ * round-trips with `normaliseDependencyRelation` for both slugs.
+ */
+export function dependencyLinkAsRelation(
+  type: RelationDependencyType,
+  fromId: string,
+  toId: string
+): { sourceId: string; targetId: string } {
+  return type === "blocks"
+    ? { sourceId: toId, targetId: fromId }
+    : { sourceId: fromId, targetId: toId };
 }

@@ -113,6 +113,14 @@ export const TRIGGER_SUBJECT_CATEGORIES = [
   "document",
   "proposal",
   "relation",
+  // `link` — the dependency door (`services/links/dependency-links.ts`,
+  // `recordLinkMutation`) emits `link.create|delete.completed` with a workspace
+  // and `{ linkType, fromType, fromId, toType, toId }`, so "When a dependency
+  // is added" (`link.create.completed` WHERE linkType is `blocked_by`) is a
+  // rule. Entity `blocks`/`depends_on` relations moved onto this edge
+  // (backend 4eacdeaf): a stored `relation.*` rule filtered on those types is
+  // still honoured by the matcher (`legacyDependencyRelationViews`).
+  "link",
   "role",
   "project",
   "workspace",

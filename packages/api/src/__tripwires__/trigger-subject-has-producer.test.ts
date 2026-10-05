@@ -173,12 +173,34 @@ function scanProducers(): Producer[] {
           ? (aliases.get(rawAction.replace(/[^\w$]/g, "")) ?? null)
           : null;
 
-      producers.push({
-        subject,
-        action,
-        passesWorkspace,
-        loc: `${path.relative(REPO, file)}:${src.slice(0, m.index).split("\n").length}`,
-      });
+      // SHORTHAND `action,` forwarded from a parameter typed as a literal
+      // union — `recordLinkMutation(action: "create" | "delete", …)` emits
+      // `link.create` and `link.delete`, and reading it as "no action" pinned
+      // `link` as wildcard-only, i.e. told the picker no verb of it can fire.
+      // Resolved from the NEAREST preceding `action: "a" | "b"` declaration in
+      // the same file; a non-literal type (`action: string`) still resolves to
+      // nothing, exactly as before. One producer per member.
+      const shorthandActions: string[] = [];
+      if (!at && /(?:^|[\s,{])action\s*(?:,|\})/.test(block)) {
+        const decls = [
+          ...src
+            .slice(0, m.index)
+            .matchAll(
+              /\baction\??\s*:\s*((?:["'`][A-Za-z_]\w*["'`]\s*\|?\s*)+)[,)]/g
+            ),
+        ];
+        const last = decls[decls.length - 1];
+        if (last) {
+          for (const lit of last[1]!.matchAll(/["'`]([A-Za-z_]\w*)["'`]/g)) {
+            shorthandActions.push(lit[1]!);
+          }
+        }
+      }
+
+      const loc = `${path.relative(REPO, file)}:${src.slice(0, m.index).split("\n").length}`;
+      for (const a of shorthandActions.length ? shorthandActions : [action]) {
+        producers.push({ subject, action: a, passesWorkspace, loc });
+      }
     }
   }
   return producers;
@@ -290,6 +312,14 @@ describe("every offered rule subject can actually fire", () => {
       .filter((p) => p.passesWorkspace && p.action)
       .map((p) => `${p.subject}.${p.action}`)
   );
+
+  it("resolves a SHORTHAND action forwarded from a literal-union parameter (self-check)", () => {
+    // `recordLinkMutation(action: "create" | "delete", …)` is the live sample:
+    // if the shorthand resolution regresses, `link` silently rejoins the
+    // wildcard-only set below and the picker is told its verbs cannot fire.
+    expect(emitted.has("link.create")).toBe(true);
+    expect(emitted.has("link.delete")).toBe(true);
+  });
 
   it("records which subjects are WILDCARD-ONLY (no verb of theirs can ever fire)", () => {
     const wildcardOnly = TRIGGER_SUBJECT_CATEGORIES.filter((subject) =>

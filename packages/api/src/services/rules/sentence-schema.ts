@@ -77,6 +77,7 @@ const subjectCategorySchema = z.enum([
   "document",
   "proposal",
   "relation",
+  "link",
   "role",
   "project",
   "workspace",

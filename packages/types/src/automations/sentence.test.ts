@@ -1028,3 +1028,25 @@ describe("proposePlaybookOnKindSentence — the 'Always propose this' rule", () 
     });
   });
 });
+
+describe("link trigger subject (the dependency door)", () => {
+  it("compiles 'a dependency is added' to the pattern the link door emits, and round-trips", async () => {
+    const { buildEventPattern, triggerToSentence, TRIGGER_SUBJECT_CATEGORIES } =
+      await import("./sentence.js");
+    const { validateEventPattern } = await import("../events/unified.js");
+    expect(TRIGGER_SUBJECT_CATEGORIES).toContain("link");
+    const pattern = buildEventPattern({
+      triggerType: "event",
+      subjectCategory: "link",
+      actionVerb: "created",
+    });
+    expect(pattern).toBe("link.create.completed");
+    expect(validateEventPattern(pattern)).toBe(pattern);
+    expect(
+      triggerToSentence("event", {
+        eventPattern: pattern,
+        filters: { linkType: "blocked_by" },
+      })
+    ).toMatchObject({ subjectCategory: "link", actionVerb: "created" });
+  });
+});
