@@ -26,6 +26,7 @@ vi.mock("@synap/storage", () => {
       downloadBuffer: vi.fn(async () => Buffer.from("stored-bytes")),
       delete: vi.fn(async () => {}),
       getSignedUrl: vi.fn(async () => "signed://url"),
+      objectUrl: vi.fn(async (path: string) => `mem://${path}`),
     },
   };
 });
@@ -81,6 +82,42 @@ describe("EntityBodyService", () => {
       .spyOn(DocumentRepository.prototype, "delete")
       .mockResolvedValue(undefined as any);
     svc = new EntityBodyService(db, { append: vi.fn() } as any);
+  });
+
+  // --- stored-object mode: adopt bytes a presigned PUT already landed --------
+  describe("setBody stored-object mode", () => {
+    it("records the EXISTING object — no upload, no copy, no v1 snapshot", async () => {
+      const res = await svc.setBody({
+        entityId: "e-1",
+        userId: "user-1",
+        workspaceId: "ws-1",
+        provenance: HUMAN,
+        storedObject: {
+          storageKey: "files/ws-1/uploads/user-1/u/clip.mp4",
+          size: 400_000_000,
+          mimeType: "video/mp4",
+          filename: "clip.mp4",
+        },
+      });
+      expect(res).toEqual({
+        documentId: "doc-1",
+        storageKey: "files/ws-1/uploads/user-1/u/clip.mp4",
+        storageUrl: "mem://files/ws-1/uploads/user-1/u/clip.mp4",
+        size: 400_000_000,
+      });
+      expect(storage.upload).not.toHaveBeenCalled();
+      const input = createSpy.mock.calls[0][0];
+      expect(input).toMatchObject({
+        storageKey: "files/ws-1/uploads/user-1/u/clip.mp4",
+        size: 400_000_000,
+        mimeType: "video/mp4",
+        title: "clip.mp4",
+        workspaceId: "ws-1",
+        createdByKind: "human",
+      });
+      expect(input.preUploadedVersion).toBeUndefined();
+      expect(input.content).toBeUndefined();
+    });
   });
 
   // --- text mode: the heuristic branch --------------------------------------

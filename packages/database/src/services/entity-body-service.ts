@@ -142,7 +142,21 @@ interface SetBodyCommon {
 export type SetBodyParams =
   | (SetBodyCommon & { text: string })
   | (SetBodyCommon & { bytes: Buffer; mimeType: string; filename: string })
-  | (SetBodyCommon & { url: string });
+  | (SetBodyCommon & { url: string })
+  | (SetBodyCommon & { storedObject: StoredObjectBody });
+
+/**
+ * Bytes that are ALREADY in object storage (a presigned PUT landed them there
+ * directly — the large-file lane, where the API never holds the body). The
+ * caller has verified the object exists and its size/type against the caps.
+ */
+export interface StoredObjectBody {
+  storageKey: string;
+  /** Verified object size (HEAD), bytes. */
+  size: number;
+  mimeType: string;
+  filename: string;
+}
 
 /**
  * Result of {@link EntityBodyService.setBody}.
@@ -209,6 +223,7 @@ export class EntityBodyService {
    */
   async setBody(params: SetBodyParams): Promise<SetBodyResult> {
     if ("bytes" in params) return this.setBodyBytes(params);
+    if ("storedObject" in params) return this.setBodyStoredObject(params);
     if ("url" in params) return this.setBodyUrl(params);
     return this.setBodyText(params);
   }
@@ -325,6 +340,40 @@ export class EntityBodyService {
       storageUrl: metadata.url,
       size: metadata.size,
     };
+  }
+
+  // --- stored-object mode (← presigned upload finalize) ---------------------
+  // Adopts an object a client PUT straight to storage. Same `documents` row
+  // shape as bytes-mode (type/metadata/provenance) but WITHOUT a v1 version
+  // snapshot: the snapshot is a second full copy (bytes-mode uploads it from
+  // memory), and for a 500 MB video that would mean downloading and re-uploading
+  // the whole object just to duplicate it. A documents row with no version rows
+  // is already a valid state (url-mode); `deleteBody` still removes the object.
+  private async setBodyStoredObject(
+    params: SetBodyCommon & { storedObject: StoredObjectBody }
+  ): Promise<SetBodyResult> {
+    const { storedObject, userId, workspaceId, title, provenance } = params;
+    const { storageKey, size, mimeType, filename } = storedObject;
+    const storageUrl = await storage.objectUrl(storageKey);
+    const doc = await this.docRepo.create(
+      {
+        title: title?.trim() || filename,
+        type: documentTypeForMimeType(mimeType) as CreateDocumentInput["type"],
+        storageUrl,
+        storageKey,
+        size,
+        mimeType,
+        metadata: {
+          originalFileName: filename,
+          uploadKind: "presigned-upload",
+        },
+        userId,
+        workspaceId: workspaceId ?? undefined,
+        ...this.provenanceFields(provenance),
+      },
+      userId
+    );
+    return { documentId: doc.id, storageKey, storageUrl, size };
   }
 
   // --- url mode (← hub-protocol/documents.ts external branch) ----------------
