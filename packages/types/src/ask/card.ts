@@ -22,6 +22,7 @@ import {
   resolveAskResolution,
   type Ask,
   type AskOption,
+  type AskSnapshot,
 } from "./index.js";
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
@@ -52,6 +53,14 @@ export const ASK_COPY = {
    * asking (trust-ladder rung 1). The agent speaks, so it is first person.
    */
   lookedAt: "What I looked at",
+  /**
+   * The mark on an answered choose whose ask carried an AI recommendation
+   * ({@link askRecommendationOutcome}). Nothing is drawn for `none`.
+   */
+  followedAiPick: "Followed AI pick",
+  choseDifferently: "Chose differently from AI",
+  /** The overrode mark's detail line, when the recommended option is known. */
+  aiPicked: (label: string): string => `AI picked: ${label}`,
   provideTitle: "Not answerable here yet",
   provideBody: "Talk it through with the agent.",
   /**
@@ -234,4 +243,49 @@ export function actView(ask: Ask | null | undefined): ActView | null {
     host: url ? new URL(url).host || null : null,
     steps: (ask.steps ?? []).map((s) => s.trim()).filter(Boolean),
   };
+}
+
+// ─── Followed or overrode the AI's pick ─────────────────────────────────────
+
+/**
+ *   `followed` — the person picked the option the agent recommended.
+ *   `overrode` — the agent recommended one, the person answered otherwise
+ *                (another option, or "Other…" in their own words).
+ *   `none`     — nothing to judge: no recommendation (a confirm can never
+ *                carry one — only a choose's options can be `recommended`),
+ *                or a pick nobody can read (a room reply in words).
+ */
+export type AskRecommendationOutcomeKind = "followed" | "overrode" | "none";
+
+export interface AskRecommendationOutcome {
+  outcome: AskRecommendationOutcomeKind;
+  /** The recommended option's label, ONLY when `overrode` and it is known. */
+  recommendedLabel: string | null;
+}
+
+/**
+ * The ONE reading of `askSnapshot.followedRecommendation` for both surfaces.
+ * Takes the snapshot itself, or an answer carrying it (`SlotAnswer`). The
+ * pod's `null` stays `none` — never "overrode" advice nobody gave.
+ */
+export function askRecommendationOutcome(
+  input: AskSnapshot | { askSnapshot?: AskSnapshot | null } | null | undefined
+): AskRecommendationOutcome {
+  const none: AskRecommendationOutcome = {
+    outcome: "none",
+    recommendedLabel: null,
+  };
+  if (!input) return none;
+  const snap: AskSnapshot | null | undefined =
+    "followedRecommendation" in input
+      ? (input as AskSnapshot)
+      : (input as { askSnapshot?: AskSnapshot | null }).askSnapshot;
+  if (!snap || snap.mode !== "choose" || !snap.recommendedKey) return none;
+  if (snap.followedRecommendation === true)
+    return { outcome: "followed", recommendedLabel: null };
+  if (snap.followedRecommendation !== false) return none;
+  const rec = snap.options?.find(
+    (o) => askOptionKey(o) === snap.recommendedKey
+  );
+  return { outcome: "overrode", recommendedLabel: rec?.label ?? null };
 }
