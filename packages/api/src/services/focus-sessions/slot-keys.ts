@@ -121,3 +121,20 @@ export function readProposalExpectedKey(data: unknown): string | undefined {
   const value = asRecord(data)?.expectedKey;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
+
+/** The shape a DECLARED key must have: the same alphabet `slotKeyBase` mints. */
+export const DECLARED_SLOT_KEY_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * A key a declarer PROPOSED for a slot at its birth (`outcomes[].key`), or
+ * `undefined` when it is absent, malformed, or already `taken` by another
+ * slot. Never honoured on an existing slot — a stored key is a receipt.
+ */
+export function declaredSlotKey(
+  value: unknown,
+  taken: ReadonlySet<string> = new Set()
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const key = value.trim();
+  return DECLARED_SLOT_KEY_RE.test(key) && !taken.has(key) ? key : undefined;
+}

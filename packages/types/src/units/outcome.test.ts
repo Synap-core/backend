@@ -447,3 +447,66 @@ describe("slot keys", () => {
     );
   });
 });
+
+/**
+ * WHICH door met an outcome (A3). Rival I: "status done is enough" — it
+ * cannot tell an approval from the pre-A3 agent self-mark, which is exactly
+ * the receipt-less `done` this field exists to expose.
+ */
+describe("metBy — the door that earned the `done` (rules out I)", () => {
+  const view = projectSessionOutcomes({
+    expectedOutputs: [
+      {
+        kind: "doc",
+        label: "Approved",
+        status: "done",
+        satisfiedByProposalId: "p1",
+      },
+      {
+        kind: "doc",
+        label: "Attested",
+        status: "done",
+        owner: "human",
+        attestedBy: "u1",
+      },
+      {
+        kind: "doc",
+        label: "Evidenced",
+        status: "done",
+        claimedDone: true,
+        satisfiedByEvidence: { kind: "output", id: "document:d1", at: T0 },
+      },
+      { kind: "doc", label: "Self-marked", status: "done" },
+      { kind: "doc", label: "Claimed only", claimedDone: true },
+    ],
+    criteria: [
+      { key: "proven", statement: "It is proven", check: { kind: "judge" } },
+    ],
+    evaluations: [
+      {
+        criterionKey: "proven",
+        verdict: "pass",
+        evaluatorKind: "judge",
+        createdAt: T1,
+        attempt: 1,
+      },
+    ],
+    sessionTerminal: false,
+  });
+  const by = Object.fromEntries(view.outcomes.map((o) => [o.label, o.metBy]));
+
+  it("names approval, attestation, evidence and verdict apart", () => {
+    expect(by["Approved"]).toBe("approval");
+    expect(by["Attested"]).toBe("attestation");
+    expect(by["Evidenced"]).toBe("evidence");
+    expect(by["It is proven"]).toBe("verdict");
+  });
+
+  it("a done with no receipt is `unverified`, and a bare claim is not met", () => {
+    expect(by["Self-marked"]).toBe("unverified");
+    expect(by["Claimed only"]).toBeNull();
+    expect(
+      view.outcomes.find((o) => o.label === "Claimed only")?.state.state
+    ).toBe("needs_review");
+  });
+});

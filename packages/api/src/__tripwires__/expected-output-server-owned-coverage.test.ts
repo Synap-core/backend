@@ -45,8 +45,14 @@ const WIRE_FIELDS = Object.keys(expectedOutputWireSchema.shape) as Array<
 const SAMPLE: Required<
   Pick<ExpectedOutput, (typeof SERVER_OWNED_OUTPUT_FIELDS)[number]>
 > = {
+  key: "the-stored-slot",
   status: "done",
   claimedDone: true,
+  satisfiedByEvidence: {
+    kind: "ref",
+    id: "entity:33333333-3333-3333-3333-333333333333",
+    at: "2026-09-08T12:30:00.000Z",
+  },
   satisfiedByProposalId: "11111111-1111-1111-1111-111111111111",
   delegatedTo: "researcher",
   delegatedAt: "2026-09-08T10:00:00.000Z",

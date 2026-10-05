@@ -124,15 +124,25 @@ async function findExistingArtifact(params: {
   });
 }
 
-async function sessionSlots(
-  sessionId: string
-): Promise<Array<{ kind?: string; label?: string }>> {
+async function sessionSlots(sessionId: string): Promise<
+  Array<{
+    kind?: string;
+    label?: string;
+    claimedDone?: boolean;
+    status?: string;
+  }>
+> {
   const row = await db.query.focusSessions.findFirst({
     where: eq(focusSessions.id, sessionId),
     columns: { expectedOutputs: true },
   });
   return Array.isArray(row?.expectedOutputs)
-    ? (row.expectedOutputs as Array<{ kind?: string; label?: string }>)
+    ? (row.expectedOutputs as Array<{
+        kind?: string;
+        label?: string;
+        claimedDone?: boolean;
+        status?: string;
+      }>)
     : [];
 }
 
@@ -219,6 +229,26 @@ export async function recordSessionArtifact(
       // ON CONFLICT). A bare DO NOTHING covers it.
       .onConflictDoNothing()
       .returning({ id: artifacts.id });
+    // EVIDENCE that may close a claim the agent already made on this slot —
+    // the ONE verdict door decides (`satisfyClaimsByEvidence`). Only when a
+    // slot was named and something is claimed; its failure never fails the
+    // ledger write (the claim simply stands).
+    if (
+      row?.id &&
+      expectedLabel &&
+      slots.some((o) => o.claimedDone === true && o.status !== "done")
+    ) {
+      try {
+        const { satisfyClaimsByEvidence } =
+          await import("./satisfy-expected-output.js");
+        await satisfyClaimsByEvidence({ sessionId, userId });
+      } catch (err) {
+        logger.warn(
+          { err, sessionId },
+          "session-artifact: evidence verdict failed — the claim stands"
+        );
+      }
+    }
     if (row?.id) return row.id;
 
     // DO NOTHING returns no row. The caller asked "is this recorded?", and the

@@ -24,7 +24,7 @@
 import { db, focusSessions, and, eq } from "@synap/database";
 import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
 import { resolveRoomSession } from "../messaging/room-session.js";
-import { normalizeExpectedLabel } from "./expected-label.js";
+import { findSlotIndex } from "./slot-keys.js";
 import {
   blockExpectedOutput,
   type BlockExpectedOutputResult,
@@ -68,12 +68,12 @@ export async function fileRoomQuestionOnSlot(p: {
       )
     )
     .limit(1);
-  const wanted = normalizeExpectedLabel(p.slotLabel);
-  const existing = (
-    Array.isArray(row?.expectedOutputs)
-      ? (row.expectedOutputs as ExpectedOutput[])
-      : []
-  ).find((o) => normalizeExpectedLabel(o?.label) === wanted);
+  // KEY first, then the label (`findSlotIndex`) — the same slot
+  // `blockExpectedOutput` below resolves `slotLabel` to.
+  const slots = Array.isArray(row?.expectedOutputs)
+    ? (row.expectedOutputs as ExpectedOutput[])
+    : [];
+  const existing = slots[findSlotIndex(slots, p.slotLabel)];
 
   const question = p.question.trim();
   return blockExpectedOutput({

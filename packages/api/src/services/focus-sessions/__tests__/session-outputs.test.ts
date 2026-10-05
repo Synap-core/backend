@@ -431,6 +431,12 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     kind: "entity",
     label: "The dossier",
     icon: "file",
+    key: "the-dossier",
+    satisfiedByEvidence: {
+      kind: "ref",
+      id: "document:44444444-4444-4444-4444-444444444444",
+      at: "2026-09-08T12:30:00.000Z",
+    },
     owner: "human",
     blockedReason: "credential",
     why: "The Stripe restricted key for the live account",

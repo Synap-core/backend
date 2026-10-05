@@ -31,17 +31,12 @@ import { join, relative } from "path";
 const DOOR_SUFFIX = "satisfy-expected-output.ts";
 
 /**
- * KNOWN RESIDUAL — not an endorsement.
- *
- * `update-session.ts` is the agent's own `completeOutput` mark. It still writes
- * `status: "done"`; converting it to `claimedDone` is the open half of P5, left
- * undone because the file was being edited by a concurrent session and could not
- * be touched without committing someone else's work-in-progress.
- *
- * This list is pinned EXACTLY (not as a subset) so the residual can never grow
- * silently and so removing the last entry is a required, visible edit.
+ * KNOWN RESIDUAL — none. `update-session.ts` (`completeOutput`) stamped
+ * `done` until A3; it now records the agent's CLAIM (`claimedDone`) and the
+ * evidence verdict in the door file decides (`satisfyClaimsByEvidence`). The
+ * list stays, pinned EXACTLY, so re-adding a residual is a visible edit.
  */
-const KNOWN_RESIDUAL = ["src/services/focus-sessions/update-session.ts"];
+const KNOWN_RESIDUAL: string[] = [];
 
 const DONE_LITERAL = /status:\s*"done"/g;
 
@@ -98,7 +93,7 @@ function offenders(): string[] {
 }
 
 describe("tripwire: expected-output `done` has one write door", () => {
-  it("only the one door — plus the pinned, documented residual — stamps done", () => {
+  it("only the one door stamps done (no residual left)", () => {
     expect(offenders()).toEqual([...KNOWN_RESIDUAL].sort());
   });
 
@@ -119,6 +114,26 @@ describe("tripwire: expected-output `done` has one write door", () => {
     expect(door).toMatch(
       /status:\s*"done"\s*as const,\s*satisfiedByProposalId/
     );
+    // The evidence verdict's `done` carries the evidence it cites.
+    expect(door).toMatch(/status:\s*"done"\s*as const,\s*satisfiedByEvidence:/);
+  });
+
+  it("completeOutput records a CLAIM, never the verdict", () => {
+    const update = readFileSync(
+      join(
+        process.cwd(),
+        "src",
+        "services",
+        "focus-sessions",
+        "update-session.ts"
+      ),
+      "utf8"
+    );
+    // The claim branch exists (non-vacuity: the scan above would pass on a
+    // file that lost the branch entirely)…
+    expect(update).toMatch(/claimedDone: true/);
+    // …and hands the decision to the one evidence door.
+    expect(update).toMatch(/satisfyClaimsByEvidence\(/);
   });
 
   it("the approval path calls the door with the proposal's own session + target", () => {

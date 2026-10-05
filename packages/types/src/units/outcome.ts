@@ -43,7 +43,11 @@
  *  5. RETIRED is never met, never owed: the outcome shows done-stopped, and no
  *     input is raised for a retired human slot.
  *  6. `claimedDone` is not met — it reads `needs_review` until a door stamps
- *     `done` (the agent grading its own homework is not a verdict).
+ *     `done` (the agent grading its own homework is not a verdict). Since A3
+ *     the agent brings EVIDENCE and a door decides: approval, attestation, or
+ *     the pod's evidence verdict (a claim + a produced object attributed to
+ *     the slot, or its `ref`). `metBy` names which one — a `done` with no
+ *     lineage is `unverified` (stamped by the pre-A3 agent mark).
  *  7. A criterion's state is its CURRENT verdict (`latestEvaluationPerCriterion`
  *     — a human row beats any later non-human row). A slot and a criterion that
  *     share a key are ONE outcome (the slot names it, the criterion checks it).
@@ -111,6 +115,10 @@ export interface SlotFacts extends DeliverableFacts {
   paramName?: string | null;
   icon?: string | null;
   ref?: unknown;
+  /** Receipts behind a `done` — which door earned it (see `OutcomeMetBy`). */
+  satisfiedByProposalId?: string | null;
+  attestedBy?: string | null;
+  satisfiedByEvidence?: unknown;
 }
 
 function text(v: unknown): string | undefined {
@@ -249,6 +257,21 @@ export interface ProducedItemLike {
 /** How an outcome gets checked — the trust ladder, cheapest first. */
 export type OutcomeVerify = EvaluatorKind;
 
+/**
+ * WHICH door met an outcome: an approved proposal, the person's attestation,
+ * the pod's evidence verdict, a criterion's `pass` verdict — or `unverified`,
+ * a `done` with no receipt at all (the pre-A3 agent self-mark).
+ */
+export type OutcomeMetBy =
+  "approval" | "attestation" | "evidence" | "verdict" | "unverified";
+
+function slotMetBy(slot: SlotFacts): OutcomeMetBy {
+  if (text(slot.satisfiedByProposalId)) return "approval";
+  if (text(slot.attestedBy)) return "attestation";
+  if (slot.satisfiedByEvidence != null) return "evidence";
+  return "unverified";
+}
+
 /** The CURRENT verdict behind a criterion outcome. */
 export interface OutcomeVerdict {
   verdict: EvaluationVerdict;
@@ -272,6 +295,8 @@ export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
   required: boolean;
   /** Delivered (slot stamped done) or proven (current verdict `pass`). */
   met: boolean;
+  /** Which door met it; `null` while not met. */
+  metBy: OutcomeMetBy | null;
   /** Let go when its session was cancelled — neither met nor owed. */
   retired: boolean;
   /** THE mark (tone + glyph), from the one derivation. */
@@ -477,6 +502,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
           : "evidence",
       required: criterion ? criterion.required !== false : true,
       met,
+      metBy: !met ? null : delivered ? slotMetBy(slot) : "verdict",
       retired,
       state,
       verdict,
@@ -515,6 +541,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       verify: c.check.kind,
       required: c.required !== false,
       met: verdict?.verdict === "pass",
+      metBy: verdict?.verdict === "pass" ? "verdict" : null,
       retired: false,
       state: resolveUnitState(
         criterionState(c, verdict, gradeOwed.has(c.key), input.sessionTerminal)

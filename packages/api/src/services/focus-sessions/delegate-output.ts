@@ -53,6 +53,7 @@ import { createLogger } from "@synap-core/core";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
+import { findSlotIndex } from "./slot-keys.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { postChannelMessage } from "../messaging/post-message.js";
@@ -123,10 +124,9 @@ export async function delegateExpectedOutput(
   const outputs: ExpectedOutput[] = Array.isArray(session.expectedOutputs)
     ? (session.expectedOutputs as ExpectedOutput[])
     : [];
-  const wanted = normalizeExpectedLabel(params.expectedLabel);
-  const slot = wanted
-    ? outputs.find((o) => normalizeExpectedLabel(o.label) === wanted)
-    : undefined;
+  // KEY first, then the label (`findSlotIndex`); the stamp below addresses
+  // the slot by its STORED label.
+  const slot = outputs[findSlotIndex(outputs, params.expectedLabel)];
   if (!slot) return { status: "unknown_label" };
   if (slot.status === "done") return { status: "already_done" };
 

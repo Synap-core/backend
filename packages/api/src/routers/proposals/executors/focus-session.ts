@@ -39,6 +39,8 @@ import {
   addOutputWireSchema,
   expectedOutputWireSchema,
   sanitizeDeclaredOutputs,
+  withEvidenceVerdict,
+  type CompleteOutputOutcome,
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { stampSlotKeys } from "../../../services/focus-sessions/slot-keys.js";
@@ -880,7 +882,8 @@ export function registerFocusSessionExecutors(): void {
         // the approved path — inside the SAME row lock the direct write takes.
         outputRefusals = await applyProposedOutputMutations(
           sessionId,
-          innerData
+          innerData,
+          session.userId
         );
 
         // CRITERIA. Carried by the proposing doors and, until now, applied by
@@ -1149,7 +1152,8 @@ async function instantiateApprovedPlaybook(args: {
  */
 async function applyProposedOutputMutations(
   sessionId: string,
-  innerData: Record<string, unknown>
+  innerData: Record<string, unknown>,
+  ownerUserId: string
 ): Promise<string[]> {
   const expectedOutputs = z
     .array(expectedOutputWireSchema)
@@ -1170,19 +1174,32 @@ async function applyProposedOutputMutations(
   if (Object.keys(patch).length === 0) return [];
 
   const refusals: string[] = [];
+  let report: CompleteOutputOutcome | undefined;
   await updateExpectedOutputsLocked(sessionId, (current) => {
     const applied = applyOutputMutations(current, patch);
-    if (
-      applied.completeOutput &&
-      applied.completeOutput.result !== "completed"
-    ) {
-      refusals.push(
-        applied.completeOutput.message ??
-          `"${applied.completeOutput.label}" was not marked done.`
-      );
-    }
+    report = applied.completeOutput;
     return applied.outputs;
   });
+  // The approved patch's `completeOutput` is still the agent's CLAIM — the
+  // same evidence verdict the direct door runs decides (A3). Approving the
+  // proposal approved the patch, not the deliverable's evidence.
+  if (report?.result === "claimed") {
+    try {
+      const { satisfyClaimsByEvidence } =
+        await import("../../../services/focus-sessions/satisfy-expected-output.js");
+      const verdict = await satisfyClaimsByEvidence({
+        sessionId,
+        userId: ownerUserId,
+      });
+      report = withEvidenceVerdict(report, verdict.satisfied);
+    } catch {
+      // The claim stands, unverified — reported below like any open claim.
+    }
+  }
+  // A recorded claim is not a refusal; a REFUSED or unmatched one is.
+  if (report && (report.result === "refused" || report.result === "no_match")) {
+    refusals.push(report.message ?? `"${report.label}" was not marked done.`);
+  }
   return refusals;
 }
 

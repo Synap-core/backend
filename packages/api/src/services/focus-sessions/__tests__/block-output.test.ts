@@ -22,7 +22,11 @@
 import { describe, it, expect } from "vitest";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { stampBlocked, stampUnblocked } from "../block-output.js";
-import { applyOutputMutations, reconcileOwedSince } from "../update-session.js";
+import {
+  applyOutputMutations,
+  reconcileOwedSince,
+  withEvidenceVerdict,
+} from "../update-session.js";
 
 const AT = new Date("2026-09-08T09:00:00.000Z");
 
@@ -148,11 +152,14 @@ describe("completeOutput — the agent may not close the human's slot", () => {
     expect(after).not.toHaveProperty("status");
   });
 
-  it("still completes a slot the agent owns", () => {
+  it("still CLAIMS a slot the agent owns — a claim, never the `done` verdict (A3)", () => {
     const [after] = applyOutputMutations(slots(), {
       completeOutput: "Launch brief",
     }).outputs;
-    expect(after.status).toBe("done");
+    expect(after.claimedDone).toBe(true);
+    // The verdict is the evidence door's (`satisfyClaimsByEvidence`), never
+    // the agent's own mark.
+    expect(after.status).not.toBe("done");
   });
 
   // ── THE REFUSAL MUST BE REPORTED, NOT JUST PERFORMED ──────────────────────
@@ -194,15 +201,27 @@ describe("completeOutput — the agent may not close the human's slot", () => {
     expect(refused?.message).not.toBe(missed?.message);
   });
 
-  it("reports a plain success, and says nothing at all when unasked", () => {
-    const done = applyOutputMutations(slots(), {
+  it("reports a recorded claim, a verified one, and nothing at all when unasked", () => {
+    const claimed = applyOutputMutations(slots(), {
       completeOutput: "Launch brief",
     }).completeOutput;
-    expect(done?.result).toBe("completed");
-    expect(done?.completed).toBe(1);
-    // A success needs no explanation — an always-present message is the one
-    // callers learn to ignore.
-    expect(done?.message).toBeUndefined();
+    expect(claimed?.result).toBe("claimed");
+    expect(claimed?.completed).toBe(1);
+    // A claim with no evidence says what would verify it.
+    expect(claimed?.message).toContain("evidence");
+
+    // Once the evidence verdict closed it: a plain success, no message — an
+    // always-present message is the one callers learn to ignore.
+    const verified = withEvidenceVerdict(claimed, [
+      { key: "launch-brief", label: "Launch brief" },
+    ]);
+    expect(verified?.result).toBe("completed");
+    expect(verified?.verified).toBe(1);
+    expect(verified?.message).toBeUndefined();
+    // A verdict on ANOTHER slot does not verify this claim.
+    expect(
+      withEvidenceVerdict(claimed, [{ key: "other", label: "Other" }])?.result
+    ).toBe("claimed");
 
     // A patch that never mentioned completeOutput must not manufacture a report.
     expect(
@@ -212,13 +231,13 @@ describe("completeOutput — the agent may not close the human's slot", () => {
     ).toBeUndefined();
   });
 
-  it("completes an unblocked slot once the agent has reclaimed it", () => {
+  it("claims an unblocked slot once the agent has reclaimed it", () => {
     const blocked = stampBlocked(slots(), "Signed NDA", "physical", "s", AT);
     const reclaimed = stampUnblocked(blocked, "Signed NDA");
     const [, after] = applyOutputMutations(reclaimed, {
       completeOutput: "Signed NDA",
     }).outputs;
-    expect(after.status).toBe("done");
+    expect(after.claimedDone).toBe(true);
   });
 });
 

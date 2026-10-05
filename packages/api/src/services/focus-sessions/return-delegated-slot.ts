@@ -41,6 +41,7 @@ import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { updateExpectedOutputsLocked } from "./delegate-output.js";
+import { findSlotIndex } from "./slot-keys.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 
 const logger = createLogger({ module: "focus-sessions/return-delegated-slot" });
@@ -49,6 +50,8 @@ export interface ReturnDelegatedSlotParams {
   sessionId: string;
   /** The slot the rejected proposal claimed. */
   expectedLabel: string;
+  /** The slot KEY it claimed (`data.expectedKey`), tried before the label. */
+  expectedKey?: string | null;
   /** The reviewer's free-text reason, when they gave one. */
   reason?: string | null;
 }
@@ -82,9 +85,14 @@ export async function returnDelegatedSlot(
     const outputs: ExpectedOutput[] = Array.isArray(session.expectedOutputs)
       ? (session.expectedOutputs as ExpectedOutput[])
       : [];
-    const slot = outputs.find(
-      (o) => normalizeExpectedLabel(o.label) === wanted
-    );
+    // KEY first, then the label (`findSlotIndex`).
+    const slot =
+      outputs[
+        findSlotIndex(outputs, {
+          key: params.expectedKey ?? null,
+          label: params.expectedLabel,
+        })
+      ];
     // A claim naming no open slot returns nothing and says nothing. An already
     // satisfied slot is not handed back either — its `done` came from a
     // DIFFERENT, approved proposal, and a later rejection is not evidence

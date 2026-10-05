@@ -154,7 +154,7 @@ describe("slot keys reach storage through the write doors", () => {
     ]);
   });
 
-  it("completeOutput names the slot by its key", async () => {
+  it("completeOutput names the slot by its key — and records a CLAIM, not a verdict", async () => {
     const id = await seedLegacy([
       { kind: "document", label: "Spec", key: "spec" },
       { kind: "document", label: "Deck", key: "deck" },
@@ -166,11 +166,85 @@ describe("slot keys reach storage through the write doors", () => {
     });
     expect(r.status).toBe("updated");
     expect(
-      (await stored(id)).map((s) => [s.key, s.status ?? "pending"])
+      (await stored(id)).map((s) => [
+        s.key,
+        s.status ?? "pending",
+        s.claimedDone ?? false,
+      ])
     ).toEqual([
-      ["spec", "pending"],
-      ["deck", "done"],
+      ["spec", "pending", false],
+      // No evidence anywhere: the claim waits for a verdict (A3).
+      ["deck", "pending", true],
     ]);
+    if (r.status === "updated") {
+      expect(r.completeOutput?.result).toBe("claimed");
+    }
+  });
+
+  it("a claim WITH evidence (its ref) is closed by the evidence verdict, with lineage", async () => {
+    const id = await seedLegacy([
+      {
+        kind: "document",
+        label: "Deck",
+        key: "deck",
+        ref: { url: "https://example.com/deck" },
+      },
+      { kind: "document", label: "Spec", key: "spec" },
+    ]);
+    const r = await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      completeOutput: "Deck",
+    });
+    expect(r.status).toBe("updated");
+    const [deck, spec] = await stored(id);
+    expect(deck).toMatchObject({
+      status: "done",
+      claimedDone: true,
+      satisfiedByEvidence: { kind: "ref", id: "https://example.com/deck" },
+    });
+    // A sibling nobody claimed is untouched, ref or not.
+    expect(spec!.status ?? "pending").toBe("pending");
+    if (r.status === "updated") {
+      expect(r.completeOutput).toMatchObject({
+        result: "completed",
+        verified: 1,
+      });
+      // The reply carries the row AS VERIFIED, not the pre-verdict write.
+      const replied = (
+        r.session.expectedOutputs as Array<{ key?: string; status?: string }>
+      ).find((o) => o.key === "deck");
+      expect(replied?.status).toBe("done");
+    }
+  });
+
+  it("a claim on a slot a CRITERION checks is never closed by evidence", async () => {
+    const id = await seedLegacy([
+      {
+        kind: "document",
+        label: "Deck",
+        key: "deck",
+        ref: { url: "https://example.com/d" },
+      },
+    ]);
+    await q(`update focus_sessions set criteria = $2::jsonb where id = $1`, [
+      id,
+      JSON.stringify([
+        {
+          key: "deck",
+          statement: "The deck convinces",
+          check: { kind: "judge" },
+        },
+      ]),
+    ]);
+    await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      completeOutput: "deck",
+    });
+    const [deck] = await stored(id);
+    expect(deck).toMatchObject({ claimedDone: true });
+    expect(deck!.status ?? "pending").toBe("pending");
   });
 
   it("the locked mutator (criterion escalation, block, delegate, return) keys what it writes", async () => {

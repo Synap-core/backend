@@ -338,6 +338,18 @@ export interface ExpectedOutput {
   label: string;
   icon?: string;
   /**
+   * The slot's STABLE identity — what every slot door joins on first (the
+   * label stays the alias). SERVER-STAMPED: derived by the ONE function
+   * `deriveSlotKeys` (`@synap-core/types/units`, a slug of the label, `-2`/`-3`
+   * on collision) and carried across every rewrite of the array (api
+   * `services/focus-sessions/slot-keys.ts`). A declarer may PROPOSE one at the
+   * slot's birth (the `outcomes[].key` alias); once stored it never changes —
+   * a patch carrying a different key is refused like any other receipt.
+   * ABSENT on a slot stored before keys existed: readers derive it with the
+   * same function, so the key read today is the key the next write stamps.
+   */
+  key?: string;
+  /**
    * WHO owns this slot. ABSENT MEANS `agent` — every slot stored before this
    * field existed is semantically unchanged, so there is no backfill and no DB
    * default. Do not add one: a stored `agent` and an absent value must stay
@@ -392,6 +404,28 @@ export interface ExpectedOutput {
   claimedDone?: boolean;
   /** Lineage: the approved proposal whose apply satisfied this output. */
   satisfiedByProposalId?: string;
+  /**
+   * Lineage of an EVIDENCE verdict — the third way `done` is earned, beside an
+   * approval (`satisfiedByProposalId`) and an attestation (`attestedBy`).
+   *
+   * The agent CLAIMS a deliverable (`completeOutput` → `claimedDone`); the
+   * claim alone is never a verdict. When the slot also has EVIDENCE — a
+   * produced object the session's output join attributes to it (an artifact
+   * claiming its key/label, an approved proposal's target, a produced edge) or
+   * a declared `ref` the declarer could see — the pod stamps `done` with this
+   * receipt naming that evidence. Deterministic, no human needed, and only for
+   * an outcome checked by evidence: an agent-owned slot no criterion shares a
+   * key with. Written ONLY by `satisfyClaimsByEvidence` (api
+   * `services/focus-sessions/satisfy-expected-output.ts`).
+   */
+  satisfiedByEvidence?: {
+    /** `output` = a joined produced object; `ref` = the slot's own pointer. */
+    kind: "output" | "ref";
+    /** The produced object's join coordinate (`<kind>:<refId>`) or the ref's id/url. */
+    id: string;
+    /** ISO timestamp of the verdict. */
+    at: string;
+  };
   /**
    * The agent TYPE this slot was handed to (`focusSessions.delegateOutput` /
    * `POST /focus-sessions/:id/outputs/delegate`). A DELEGATION, never a claim of

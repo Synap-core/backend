@@ -46,6 +46,13 @@
  * door and that rule is pinned by a tripwire. A second stamper would be the
  * agent-grades-its-own-homework defect wearing a human's hat.
  *
+ * ── THE THIRD PATH: EVIDENCE ────────────────────────────────────────────────
+ * An agent's `completeOutput` is a CLAIM (`claimedDone`). When the claimed
+ * slot also has evidence — a produced object the output join attributes to
+ * it, or its declared `ref` — `satisfyClaimsByEvidence` (bottom of this file)
+ * stamps `done` with `satisfiedByEvidence` lineage. Deterministic, no human
+ * needed, and never for a person's slot or one a criterion checks.
+ *
  * Three floors make it a different act from the approval path rather than a
  * bypass of it: only the slot's OWNER may attest, only on a slot whose `owner`
  * is `human`, and the stamp is `attestedBy`/`attestedAt` — never a fabricated
@@ -59,10 +66,10 @@ import { createLogger } from "@synap-core/core";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import { askFingerprint, resolveAskResolution } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
-import type { ExpectedOutput } from "@synap/playbooks";
+import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
-import { findSlotIndex } from "./slot-keys.js";
+import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
@@ -586,11 +593,10 @@ export function selectSlotToAttest(
         | "retired"
         | "answer_required";
     } {
-  const wanted = normalizeExpectedLabel(expectedLabel);
-  if (!wanted) return { refused: "unknown_label" };
-  const index = outputs.findIndex(
-    (o) => normalizeExpectedLabel(o?.label) === wanted
-  );
+  // KEY first, then the label (`findSlotIndex`) — `expectedLabel` may carry
+  // either.
+  if (!expectedLabel?.trim()) return { refused: "unknown_label" };
+  const index = findSlotIndex(outputs, expectedLabel, (o) => !!o);
   if (index === -1) return { refused: "unknown_label" };
   const slot = outputs[index]!;
   if (slot.status === "done") return { refused: "already_done" };
@@ -641,4 +647,191 @@ export function stampAttested(
         }
       : o
   );
+}
+
+// ── THE THIRD PATH: EVIDENCE (A3, "done has one door") ─────────────────────
+
+/** What an evidence verdict cites. See `ExpectedOutput.satisfiedByEvidence`. */
+export interface SlotEvidence {
+  kind: "output" | "ref";
+  id: string;
+}
+
+/** The slot's own declared pointer, as evidence (`{kind,id}` or `{url}`). */
+export function refEvidence(slot: ExpectedOutput): SlotEvidence | null {
+  const ref = slot.ref;
+  if (!ref) return null;
+  if ("url" in ref) return { kind: "ref", id: ref.url };
+  return { kind: "ref", id: `${ref.kind}:${ref.id}` };
+}
+
+/**
+ * WHICH claims the evidence closes. Pure — every floor is testable without a
+ * database, the `selectSlotToAttest` precedent.
+ *
+ * A slot is closed by evidence only when ALL hold:
+ *   - the agent CLAIMED it (`claimedDone`) — evidence without a claim is a
+ *     produced object, not a delivery; the agent still says when it is done;
+ *   - it is not already done (any door) and not retired;
+ *   - it is NOT the person's (`owner: 'human'`): a person's deliverable is
+ *     checked by the person (attest / answer), never by what an agent made;
+ *   - no CRITERION shares its key: such an outcome is checked by that
+ *     criterion's evaluator (`judge` / `capability` / `human` — evaluate_session),
+ *     and evidence alone would short-circuit the check it declared;
+ *   - there IS evidence: a produced object the output join attributed to the
+ *     slot (`evidenceByKey`, keyed by slot key), else the slot's own `ref`.
+ */
+export function selectClaimsWithEvidence(
+  outputs: readonly ExpectedOutput[],
+  evidenceByKey: ReadonlyMap<string, SlotEvidence>,
+  criterionKeys: ReadonlySet<string>
+): Array<{ index: number; evidence: SlotEvidence }> {
+  const keys = deriveSlotKeys(outputs);
+  const out: Array<{ index: number; evidence: SlotEvidence }> = [];
+  outputs.forEach((slot, index) => {
+    const key = keys[index];
+    if (!slot || !key) return;
+    if (slot.claimedDone !== true) return;
+    if (slot.status === "done" || slot.retiredAt != null) return;
+    if (slot.owner === "human") return;
+    if (criterionKeys.has(key)) return;
+    const evidence = evidenceByKey.get(key) ?? refEvidence(slot);
+    if (evidence) out.push({ index, evidence });
+  });
+  return out;
+}
+
+/**
+ * The evidence stamp — status + the evidence it cites. Pure. Like
+ * {@link stampSatisfied}, the `done` here always carries its lineage.
+ */
+export function stampEvidenced(
+  outputs: ExpectedOutput[],
+  picks: ReadonlyArray<{ index: number; evidence: SlotEvidence }>,
+  now: Date = new Date()
+): ExpectedOutput[] {
+  const byIndex = new Map(picks.map((p) => [p.index, p.evidence]));
+  return outputs.map((o, i) => {
+    const evidence = byIndex.get(i);
+    return evidence
+      ? {
+          ...o,
+          status: "done" as const,
+          satisfiedByEvidence: { ...evidence, at: now.toISOString() },
+        }
+      : o;
+  });
+}
+
+export interface SatisfyClaimsByEvidenceResult {
+  /** The slots this call closed (key + stored label). */
+  satisfied: Array<{ key: string; label: string; evidence: SlotEvidence }>;
+  /** The array as written, when anything was closed. */
+  outputs?: ExpectedOutput[];
+}
+
+/**
+ * THE EVIDENCE VERDICT — the agent brings evidence, the pod decides.
+ *
+ * Called after every write that can complete the picture: a claim
+ * (`completeOutput`, update-session.ts), a slot patch that may add a `ref`,
+ * and an artifact recorded against a slot (`record-session-artifact.ts`).
+ * Idempotent: a slot already done is never re-stamped.
+ *
+ * The evidence is read through THE output join (`listOutputsForSessions`) —
+ * the same attribution every surface shows under "what this produced" — so a
+ * slot is never closed by an object the room would not show against it.
+ * Owner-floored like every slot door. Best-effort for its callers: a failure
+ * leaves the claim standing, which is the honest state.
+ */
+export async function satisfyClaimsByEvidence(params: {
+  sessionId: string;
+  userId: string;
+  now?: Date;
+}): Promise<SatisfyClaimsByEvidenceResult> {
+  const { sessionId, userId } = params;
+  const session = await db.query.focusSessions.findFirst({
+    where: and(
+      eq(focusSessions.id, sessionId),
+      eq(focusSessions.userId, userId)
+    ),
+    columns: { id: true, expectedOutputs: true, criteria: true },
+  });
+  if (!session) return { satisfied: [] };
+  const slots: ExpectedOutput[] = Array.isArray(session.expectedOutputs)
+    ? (session.expectedOutputs as ExpectedOutput[])
+    : [];
+  // Nothing claimed and still open ⇒ nothing to decide (and no join to run).
+  if (!slots.some((s) => s?.claimedDone === true && s.status !== "done")) {
+    return { satisfied: [] };
+  }
+
+  // The join runs only when a claimed slot has no `ref` to stand on — a
+  // claim with its own pointer needs no ledger read. A FAILED join throws to
+  // the caller (the claim then stands): it is never read as "no evidence".
+  const keys = deriveSlotKeys(slots);
+  const evidenceByKey = new Map<string, SlotEvidence>();
+  const needsJoin = slots.some(
+    (s) => s?.claimedDone === true && s.status !== "done" && !s.ref
+  );
+  const joined = needsJoin
+    ? (
+        await (
+          await import("./session-outputs.js")
+        ).listOutputsForSessions(db, [
+          { id: session.id, expectedOutputs: slots },
+        ])
+      ).get(session.id)
+    : undefined;
+  for (const output of joined?.outputs ?? []) {
+    if (!output.expected) continue;
+    const index = findSlotIndex(slots, {
+      key: output.expected.key ?? null,
+      label: output.expected.label,
+    });
+    const key = index === -1 ? null : keys[index];
+    if (key && !evidenceByKey.has(key)) {
+      evidenceByKey.set(key, { kind: "output", id: output.id });
+    }
+  }
+  const criterionKeys = new Set(
+    readCriteria(session.criteria).map((c) => c.key)
+  );
+
+  const now = params.now ?? new Date();
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ expectedOutputs: focusSessions.expectedOutputs })
+      .from(focusSessions)
+      .where(
+        and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+      )
+      .for("update");
+    const current: ExpectedOutput[] = Array.isArray(locked?.expectedOutputs)
+      ? (locked.expectedOutputs as ExpectedOutput[])
+      : [];
+    // Re-selected on the LOCKED array: a slot reworded, retired or closed
+    // since the read above is judged as it now stands. Evidence is by KEY,
+    // so a reorder cannot move it onto another slot.
+    const picks = selectClaimsWithEvidence(
+      current,
+      evidenceByKey,
+      criterionKeys
+    );
+    if (picks.length === 0) return { satisfied: [] };
+    const next = stampEvidenced(current, picks, now);
+    await tx
+      .update(focusSessions)
+      .set({ expectedOutputs: next, updatedAt: now })
+      .where(eq(focusSessions.id, sessionId));
+    const currentKeys = deriveSlotKeys(current);
+    return {
+      satisfied: picks.map((p) => ({
+        key: currentKeys[p.index]!,
+        label: current[p.index]!.label,
+        evidence: p.evidence,
+      })),
+      outputs: next,
+    };
+  });
 }

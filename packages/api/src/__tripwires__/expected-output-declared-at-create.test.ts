@@ -45,6 +45,14 @@ import {
 
 /** A forged value for each stamped field, typed loosely on purpose. */
 const FORGED: Record<string, unknown> = {
+  // Malformed on purpose: a WELL-FORMED key is the one stamped field a birth
+  // may propose (`declaredSlotKey`) — covered by its own test below.
+  key: "Not A Slug!",
+  satisfiedByEvidence: {
+    kind: "ref",
+    id: "https://example.com",
+    at: "2020-01-01T00:00:00.000Z",
+  },
   status: "done",
   claimedDone: true,
   satisfiedByProposalId: "prop-forged",
@@ -105,6 +113,16 @@ describe("a declared slot carries no receipt it did not earn", () => {
       expect(out).not.toHaveProperty(field);
     }
   );
+
+  it("a slot being BORN may propose a well-formed key; the first holder keeps it", () => {
+    const out = sanitizeDeclaredOutputs([
+      { kind: "doc", label: "Spec", key: "spec-v1" } as never,
+      { kind: "doc", label: "Other", key: "spec-v1" } as never,
+    ]);
+    expect(out[0]!.key).toBe("spec-v1");
+    // A duplicate proposal is dropped (the birth door then mints one).
+    expect(out[1]).not.toHaveProperty("key");
+  });
 
   it("`owedSince` is the server's observation, never the caller's claim", () => {
     // Not in the loop above because this is the ONE field the server re-adds:

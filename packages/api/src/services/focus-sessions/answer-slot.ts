@@ -55,7 +55,7 @@ import {
   type DecisionFilingOutcome,
 } from "../decisions/file-answer-decision.js";
 import { logEvent } from "../../lib/event-helpers.js";
-import { normalizeExpectedLabel } from "./expected-label.js";
+import { findSlotIndex } from "./slot-keys.js";
 import { stampUnblocked } from "./block-output.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import { paramValueFromAnswer } from "./param-slots.js";
@@ -154,11 +154,10 @@ export function selectSlotToAnswer(
 ):
   | { index: number }
   | { refused: "unknown_label" | "already_done" | "retired" } {
-  const wanted = normalizeExpectedLabel(expectedLabel);
-  if (!wanted) return { refused: "unknown_label" };
-  const index = outputs.findIndex(
-    (o) => !!o && normalizeExpectedLabel(o.label) === wanted
-  );
+  // KEY first, then the label (`findSlotIndex`) — `expectedLabel` may carry
+  // either.
+  if (!expectedLabel?.trim()) return { refused: "unknown_label" };
+  const index = findSlotIndex(outputs, expectedLabel, (o) => !!o);
   if (index === -1) return { refused: "unknown_label" };
   const slot = outputs[index]!;
   if (slot.status === "done") return { refused: "already_done" };

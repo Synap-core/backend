@@ -48,6 +48,7 @@ import {
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
+import { findSlotIndex } from "./slot-keys.js";
 import { updateExpectedOutputsLocked } from "./delegate-output.js";
 import { reconcileOwedSince } from "./update-session.js";
 import {
@@ -157,10 +158,9 @@ async function loadSlot(
   const outputs: ExpectedOutput[] = Array.isArray(session.expectedOutputs)
     ? (session.expectedOutputs as ExpectedOutput[])
     : [];
-  const wanted = normalizeExpectedLabel(expectedLabel);
-  const slot = wanted
-    ? outputs.find((o) => normalizeExpectedLabel(o.label) === wanted)
-    : undefined;
+  // KEY first, then the label (`findSlotIndex`) — `expectedLabel` may carry
+  // either. Every stamp below then addresses the slot by its STORED label.
+  const slot = outputs[findSlotIndex(outputs, expectedLabel)];
   if (!slot) return { ok: false, result: { status: "unknown_label" } };
   if (slot.status === "done") {
     return { ok: false, result: { status: "already_done" } };

@@ -282,9 +282,12 @@ describe("focus_session/update — the deliverables half of an approval", () => 
     expect(added).not.toHaveProperty("answer");
   });
 
-  it("applies completeOutput on a slot the agent owns", async () => {
+  it("applies completeOutput on a slot the agent owns — as the agent's CLAIM (A3)", async () => {
     await approve({ completeOutput: "Launch brief" });
-    expect(writtenOutputs()![0]).toMatchObject({ status: "done" });
+    // Approving the patch records the claim; `done` stays the evidence
+    // verdict's (`satisfyClaimsByEvidence`), never this write's.
+    expect(writtenOutputs()![0]).toMatchObject({ claimedDone: true });
+    expect(writtenOutputs()![0]).not.toHaveProperty("status", "done");
   });
 
   it("honours the human-owned floor on the APPROVED path too", async () => {

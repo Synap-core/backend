@@ -71,6 +71,7 @@ import { discardProposalSourceBlob } from "../utils/store-entity-source-blob.js"
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { returnDelegatedSlot } from "../services/focus-sessions/return-delegated-slot.js";
 import { readProposalExpectedLabel } from "../services/focus-sessions/satisfy-expected-output.js";
+import { readProposalExpectedKey } from "../services/focus-sessions/slot-keys.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import {
@@ -270,6 +271,7 @@ async function returnRejectedSlot(
     await returnDelegatedSlot({
       sessionId: proposal.sessionId,
       expectedLabel,
+      expectedKey: readProposalExpectedKey(proposal.data),
       reason,
     });
   } catch (err) {

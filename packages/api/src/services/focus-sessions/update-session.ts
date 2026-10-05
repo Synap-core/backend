@@ -43,7 +43,7 @@ import type {
   SlotAskSnapshot,
 } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
-import { carrySlotKeys, deriveSlotKeys } from "./slot-keys.js";
+import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
 // `await import()` with no stated reason, which reads as circular-dependency
@@ -322,10 +322,23 @@ export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
   icon: z.string().optional(),
+  // The slot's stable identity (`slot-keys.ts`). SERVER-STAMPED: on the wire
+  // so a round-trip keeps it and so a patch can address a slot by key (the
+  // merge matches key first — a renamed label keeps its receipts). A key on a
+  // NEW slot is the declarer's proposal, kept when well-formed and free.
+  key: z.string().max(64).optional(),
   // Per-item lifecycle (defaults to "pending" when omitted). Shape-within-jsonb.
   status: z.enum(["pending", "done"]).optional(),
   claimedDone: z.boolean().optional(),
   satisfiedByProposalId: z.string().optional(),
+  // Evidence-verdict receipt (`satisfyClaimsByEvidence`). Round-trip only.
+  satisfiedByEvidence: z
+    .object({
+      kind: z.enum(["output", "ref"]),
+      id: z.string(),
+      at: z.string(),
+    })
+    .optional(),
   delegatedTo: z.string().optional(),
   delegatedAt: z.string().optional(),
   returnedReason: z.string().optional(),
@@ -490,9 +503,18 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
+  // The slot's identity. SERVER-STAMPED, not declarable: a client that could
+  // change it would re-point every claim, artifact and proposal that names the
+  // slot by key. (A NEW slot may PROPOSE one — `declaredSlotKey` — which is a
+  // birth, not a write over a stored value.)
+  "key",
   "status",
   "claimedDone",
   "satisfiedByProposalId",
+  // The evidence verdict's lineage (`satisfyClaimsByEvidence`). An agent that
+  // could author it would close its own claim with a receipt naming evidence
+  // nobody checked.
+  "satisfiedByEvidence",
   "delegatedTo",
   "delegatedAt",
   "returnedReason",
@@ -619,15 +641,20 @@ export function mergeExpectedOutputs(
     throw serverStampedWriteError(violations);
   }
 
-  const stored = indexByLabel(current);
+  const { twinOf, keyOf } = storedTwins(current);
+  // Keys already held by a stored slot: a NEW slot may not propose one.
+  const taken = new Set<string>(
+    deriveSlotKeys(current).filter((k): k is string => !!k)
+  );
 
   // Each slot keeps its KEY across the rebuild (`slot-keys.ts`): carried from
-  // the stored slot it replaces, minted for a new one. Never from the client.
+  // the stored slot it replaces (matched KEY first, so a renamed label keeps
+  // its identity and receipts), proposed by the declarer for a new one, else
+  // minted. Never changed by the client.
   return carrySlotKeys(
     current,
     incoming.map((item) => {
-      const key = normalizeExpectedLabel(item?.label);
-      const prior = key ? stored.get(key) : undefined;
+      const prior = twinOf(item);
       // A slot the stored array does not carry is NEW, and a new slot has no
       // receipts by definition. Server-stamped fields on it are DROPPED rather
       // than refused: there is no stored value being contradicted, so nothing is
@@ -635,8 +662,14 @@ export function mergeExpectedOutputs(
       // the array, change one label, send it back), which arrives as exactly this
       // shape. Dropping still defeats the bypass: a patch inventing a `done` slot
       // under an unmatched label lands it pending, like any other declaration.
-      if (!prior)
-        return dropClearedRef(reconcileOwedSince(stripServerStamped(item)));
+      if (!prior) {
+        const born = dropClearedRef(
+          reconcileOwedSince(stripServerStamped(item))
+        );
+        const proposed = declaredSlotKey(item?.key, taken);
+        if (proposed) taken.add(proposed);
+        return proposed ? { ...born, key: proposed } : born;
+      }
       // Only the fields the incoming item is SILENT about are carried; a
       // client-declarable field it states explicitly wins. Server-stamped fields
       // are always carried from storage — an incoming one either equalled the
@@ -654,6 +687,11 @@ export function mergeExpectedOutputs(
           Object.assign(carried, { [field]: value });
         }
       }
+      // The key it is matched by is its identity — stored, or (a legacy slot)
+      // the derived key, frozen on this write instead of re-derived from a
+      // label the patch may have just reworded.
+      const priorKey = keyOf.get(prior);
+      if (priorKey) carried.key = priorKey;
       // A slot handed (back) to the person is being ASKED anew: the answer to
       // the previous ask must not ride along, or the agent reads it as the
       // answer to this one once the slot comes back (`stampBlocked`, same rule).
@@ -705,17 +743,43 @@ const SERVER_STAMPED_FIELD_SET: ReadonlySet<string> = new Set(
   SERVER_STAMPED_OUTPUT_FIELDS
 );
 
-/** Every incoming slot indexed by the casefolded label the doors match on. */
-function indexByLabel(outputs: OutputItem[]): Map<string, OutputItem> {
-  const stored = new Map<string, OutputItem>();
-  for (const o of outputs) {
-    const key = normalizeExpectedLabel(o?.label);
+/**
+ * The stored twin of an incoming slot — by KEY first (stored or derived, the
+ * same identity `findSlotIndex` resolves), then by the casefolded label — and
+ * each stored slot's effective key. ONE matcher for the merge and the
+ * authority detector, so the two cannot disagree about which stored slot a
+ * patch item is talking about.
+ */
+function storedTwins(outputs: OutputItem[]): {
+  twinOf: (item: OutputItem | undefined) => OutputItem | undefined;
+  keyOf: Map<OutputItem, string>;
+} {
+  const keys = deriveSlotKeys(outputs);
+  const byKey = new Map<string, OutputItem>();
+  const byLabel = new Map<string, OutputItem>();
+  const keyOf = new Map<OutputItem, string>();
+  outputs.forEach((o, i) => {
+    const key = keys[i];
+    if (key && o) {
+      keyOf.set(o, key);
+      if (!byKey.has(key)) byKey.set(key, o);
+    }
+    const label = normalizeExpectedLabel(o?.label);
     // First wins: two slots sharing a label are already ambiguous everywhere
     // else (the delegation and satisfy doors both take the first match), so
     // this resolves it the same way rather than inventing a second answer.
-    if (key && !stored.has(key)) stored.set(key, o);
-  }
-  return stored;
+    if (label && !byLabel.has(label)) byLabel.set(label, o);
+  });
+  return {
+    twinOf: (item) => {
+      const key = typeof item?.key === "string" ? item.key.trim() : "";
+      const byItsKey = key ? byKey.get(key) : undefined;
+      if (byItsKey) return byItsKey;
+      const label = normalizeExpectedLabel(item?.label);
+      return label ? byLabel.get(label) : undefined;
+    },
+    keyOf,
+  };
 }
 
 /**
@@ -745,11 +809,19 @@ export function sanitizeDeclaredOutputs(
 ): OutputItem[] {
   // `dropClearedRef` too: a `null` ref/ask at birth is the wire's CLEAR with
   // nothing to clear, and storing it would make the field tri-state.
-  return outputs.map((o) =>
-    dropClearedRef(
+  // A well-formed key is the declarer's PROPOSAL for a slot being born
+  // (`outcomes[].key`) and is kept, first holder wins; anything else is
+  // minted by the birth door's `stampSlotKeys`.
+  const taken = new Set<string>();
+  return outputs.map((o) => {
+    const born = dropClearedRef(
       reconcileOwedSince(parseDeclaredAsk(stripServerStamped(o)), now)
-    )
-  );
+    );
+    const proposed = declaredSlotKey(o?.key, taken);
+    if (!proposed) return born;
+    taken.add(proposed);
+    return { ...born, key: proposed };
+  });
 }
 
 /**
@@ -819,18 +891,20 @@ export function detectServerStampedWrites(
   current: OutputItem[],
   incoming: OutputItem[]
 ): ServerStampedWrite[] {
-  const stored = indexByLabel(current);
+  const { twinOf, keyOf } = storedTwins(current);
   const violations: ServerStampedWrite[] = [];
   for (const item of incoming) {
-    const key = normalizeExpectedLabel(item?.label);
-    const prior = key ? stored.get(key) : undefined;
+    const prior = twinOf(item);
     if (!prior) continue;
     for (const field of SERVER_STAMPED_OUTPUT_FIELDS) {
       const value = item[field];
       if (value === undefined) continue;
+      // A legacy slot's key is the DERIVED one: echoing what a reader was
+      // shown (`outcomes[].key`) is a round-trip, not a write.
+      const stored = field === "key" ? keyOf.get(prior) : prior[field];
       // DEEP, not by reference: `answer` is an object, and an echo that went
       // through JSON is a new object with equal content — a round-trip.
-      if (isDeepStrictEqual(value, prior[field])) continue;
+      if (isDeepStrictEqual(value, stored)) continue;
       violations.push({ label: item.label, field });
     }
   }
@@ -944,23 +1018,36 @@ export function droppedAskWarnings(
  * What a `completeOutput` in the patch ACTUALLY did — the report that makes the
  * governance floor below observable to whoever asked.
  *
- * Three outcomes, and they must stay tellable apart. `completed` is the write.
- * `refused` is the floor: the slot is the human's and the agent may not close
- * it — actionable, the caller should stop claiming the work is done. `no_match`
- * is the DOCUMENTED contract of this field (the MCP tool advertises "no-op if no
- * deliverable matches the label exactly"), not an error — but a caller still has
+ * `completeOutput` is the agent's CLAIM, never a verdict (A3, "done has one
+ * door"): it records `claimedDone` on the slot, and the pod then decides. A
+ * claimed slot with EVIDENCE (a produced object the output join attributes to
+ * it, or its declared `ref`) is stamped done by `satisfyClaimsByEvidence` right
+ * after the write — `verified`. One without evidence waits as a claim for a
+ * reviewer — `claimed`.
+ *
+ * The outcomes must stay tellable apart. `completed` = claim recorded AND
+ * verified by evidence; `claimed` = claim recorded, no evidence yet; `refused`
+ * is the floor: the slot is the human's and the agent may not close it —
+ * actionable, the caller should stop claiming the work is done. `no_match` is
+ * the DOCUMENTED contract of this field, not an error — but a caller still has
  * to be able to distinguish "you spelled the label wrong" from "you are not
  * allowed", which is exactly what a bare 200 with an unchanged row cannot do.
  */
 export type CompleteOutputOutcome = {
-  /** The label the caller asked to complete, verbatim. */
+  /** The label (or slot key) the caller asked to complete, verbatim. */
   label: string;
-  /** Matching slots that were stamped done. */
+  /**
+   * Matching slots whose claim was recorded. (Named for the pre-A3 contract,
+   * when this count was a `done` stamp; `verified` now says how many of them
+   * the evidence verdict closed.)
+   */
   completed: number;
+  /** Of `completed`, the slots the evidence verdict stamped done. */
+  verified?: number;
   /** Matching slots REFUSED because `owner: 'human'`. */
   refusedHumanOwned: number;
-  /** The one-word verdict, derived from the two counts above. */
-  result: "completed" | "refused" | "no_match";
+  /** The one-word verdict, derived from the counts above. */
+  result: "completed" | "claimed" | "refused" | "no_match";
   /**
    * Caller-facing sentence for the two non-success verdicts. Absent when the
    * mark landed — a success needs no explanation, and an always-present message
@@ -968,6 +1055,25 @@ export type CompleteOutputOutcome = {
    */
   message?: string;
 };
+
+/**
+ * The `completeOutput` report AFTER the evidence verdict: the claimed slots
+ * the verdict closed are `verified`, and a claim fully verified reads
+ * `completed`. Pure. `satisfied` names slots by key + stored label, matched to
+ * the caller's ref the way `completeOutput` matched it (exact label or key).
+ */
+export function withEvidenceVerdict(
+  report: CompleteOutputOutcome | undefined,
+  satisfied: ReadonlyArray<{ key: string; label: string }>
+): CompleteOutputOutcome | undefined {
+  if (!report || report.result !== "claimed") return report;
+  const verified = satisfied.filter(
+    (s) => s.label === report.label || s.key === report.label
+  ).length;
+  if (verified === 0) return report;
+  const { message: _pending, ...rest } = report;
+  return { ...rest, verified, result: "completed" };
+}
 
 /** The outputs array a patch produced, plus the report of what it refused. */
 export interface OutputMutationResult {
@@ -977,19 +1083,24 @@ export interface OutputMutationResult {
 }
 
 /**
- * Turn the two match counts into the verdict + its sentence. Lives OUTSIDE
- * {@link applyOutputMutations} deliberately: prose wedged between that
- * function's `patch.completeOutput` read and its `status: "done"` literal blinds
- * the `__tripwires__/expected-output-done-one-door.test.ts` proximity window to
- * the residual it exists to pin.
+ * Turn the two match counts into the verdict + its sentence. A recorded claim
+ * reads `claimed` here; {@link withEvidenceVerdict} upgrades it to `completed`
+ * once the evidence verdict has run.
  */
-function describeCompleteOutput(
+export function describeCompleteOutput(
   label: string,
   completed: number,
   refusedHumanOwned: number
 ): CompleteOutputOutcome {
   if (completed > 0) {
-    return { label, completed, refusedHumanOwned, result: "completed" };
+    return {
+      label,
+      completed,
+      refusedHumanOwned,
+      verified: 0,
+      result: "claimed",
+      message: `Recorded your claim on "${label}" — a claim is not a verdict. No evidence is attributed to it yet, so it waits for review. Attach evidence and it is verified automatically: produce the object inside this session (record it against this slot's key), or set the slot's \`ref\` to it.`,
+    };
   }
   if (refusedHumanOwned > 0) {
     return {
@@ -1062,15 +1173,13 @@ export function applyOutputMutations(
       }),
     ];
   }
-  // GOVERNANCE FLOOR on the branch below — an agent may not complete a slot it
+  // GOVERNANCE FLOOR on the branch below — an agent may not claim a slot it
   // handed to the human. `owner: 'human'` is the agent's own declaration that it
-  // CANNOT do this work; letting the same caller then mark it done would make
-  // the declaration a way to close work nobody did. (The wider residual — that
-  // this stamps `status` at all instead of `claimedDone` — is pinned in
-  // `__tripwires__/expected-output-done-one-door.test.ts` and deliberately
-  // untouched here. Keep this prose OUTSIDE the branch: that tripwire matches
-  // `completeOutput` within 400 chars of the `done` literal, and a comment
-  // wedged between the two blinds it to the very residual it pins.)
+  // CANNOT do this work; letting the same caller then claim it would make the
+  // declaration a way to close work nobody did. The branch writes the CLAIM
+  // (`claimedDone`) and never the verdict: `done` is earned only through the
+  // doors in `satisfy-expected-output.ts` (approval, attestation, evidence) —
+  // pinned by `__tripwires__/expected-output-done-one-door.test.ts`.
 
   let completeOutput: CompleteOutputOutcome | undefined;
   if (typeof patch.completeOutput === "string") {
@@ -1085,7 +1194,9 @@ export function applyOutputMutations(
         return o;
       }
       completed += 1;
-      return { ...o, status: "done" as const };
+      // Already verified (any door) or already claimed: nothing to record.
+      if (o.status === "done" || o.claimedDone === true) return o;
+      return { ...o, claimedDone: true };
     });
     completeOutput = describeCompleteOutput(label, completed, refused);
   }
@@ -1441,6 +1552,35 @@ export async function updateFocusSession(
       .where(eq(focusSessions.id, sessionId))
       .returning();
   });
+
+  // ── EVIDENCE VERDICT ────────────────────────────────────────────────────────
+  // A claim (`completeOutput`) is never a verdict: the ONE evidence door
+  // decides, after the claim committed. Also run when the patch could have
+  // ADDED evidence to an earlier claim (a `ref` on a wholesale patch).
+  // Best-effort: a failure leaves the claim standing — the honest state.
+  if (
+    mutatesOutputs &&
+    outputsAfter.some((o) => o?.claimedDone === true && o.status !== "done")
+  ) {
+    try {
+      const { satisfyClaimsByEvidence } =
+        await import("./satisfy-expected-output.js");
+      const verdict = await satisfyClaimsByEvidence({ sessionId, userId });
+      if (verdict.outputs) {
+        updated.expectedOutputs =
+          verdict.outputs as typeof updated.expectedOutputs;
+      }
+      completeOutputOutcome = withEvidenceVerdict(
+        completeOutputOutcome,
+        verdict.satisfied
+      );
+    } catch (err) {
+      logger.warn(
+        { err, sessionId },
+        "evidence verdict failed — the claim stands, unverified"
+      );
+    }
+  }
 
   // ── STAGE ADVANCE ───────────────────────────────────────────────────────────
   // The `stage_changed` fan-out AND the human gate both live in ONE door now

@@ -56,6 +56,12 @@ const WIRE_FIELDS = Object.keys(expectedOutputWireSchema.shape) as Array<
 const STORED: Required<
   Pick<ExpectedOutput, (typeof SERVER_STAMPED_OUTPUT_FIELDS)[number]>
 > = {
+  key: "stored-slot",
+  satisfiedByEvidence: {
+    kind: "output",
+    id: "document:stored",
+    at: "2026-09-01T12:30:00.000Z",
+  },
   status: "pending",
   criterionKey: "no-stale",
   paramName: "channel",
@@ -91,6 +97,14 @@ const STORED: Required<
 
 /** The forgery an agent would attempt for each — every one a real attack. */
 const FORGED: typeof STORED = {
+  // An agent re-pointing every claim that names this slot by key.
+  key: "forged-slot",
+  // An agent closing its own claim with evidence nobody checked.
+  satisfiedByEvidence: {
+    kind: "ref",
+    id: "https://example.com/forged",
+    at: "2026-09-08T12:30:00.000Z",
+  },
   status: "done",
   criterionKey: "forged-key",
   // An agent pointing the person's answer at a param it chose.
@@ -245,9 +259,13 @@ describe("tripwire: expected-output write authority", () => {
     // must never error, or the fix breaks every honest client.
     const slot = storedSlot();
     const [merged] = mergeExpectedOutputs([slot], [{ ...slot }]);
-    // Plus the slot's KEY (A2): a stored slot without one is keyed — at the
-    // key a reader already derived — on its first write. Nothing else moves.
-    expect(merged).toEqual({ ...slot, key: "launch-brief" });
+    // The stored slot carries its key, so NOTHING moves — not even the key.
+    expect(merged).toEqual(slot);
+    // A LEGACY slot (no stored key) is keyed — at the key a reader already
+    // derived — on its first write (A2). Nothing else moves.
+    const { key: _none, ...legacy } = slot;
+    const [keyed] = mergeExpectedOutputs([legacy], [{ ...legacy }]);
+    expect(keyed).toEqual({ ...legacy, key: "launch-brief" });
   });
 
   it("ALLOWS a round-trip that went through JSON (an agent's echo)", () => {
@@ -258,7 +276,28 @@ describe("tripwire: expected-output write authority", () => {
     const echoed = JSON.parse(JSON.stringify(slot)) as ExpectedOutput;
     expect(detectServerStampedWrites([slot], [echoed])).toEqual([]);
     const [merged] = mergeExpectedOutputs([slot], [echoed]);
-    expect(merged).toEqual({ ...slot, key: "launch-brief" });
+    expect(merged).toEqual(slot);
+  });
+
+  it("a patch naming a slot by KEY renames it and keeps its receipts (key-first merge)", () => {
+    const slot = storedSlot();
+    const [merged] = mergeExpectedOutputs(
+      [slot],
+      [{ kind: "doc", label: "A brand-new label", key: slot.key }]
+    );
+    // Matched by key, not by the (changed) label: the receipts ride along.
+    expect(merged).toMatchObject({
+      label: "A brand-new label",
+      key: slot.key,
+      attestedBy: slot.attestedBy,
+      satisfiedByProposalId: slot.satisfiedByProposalId,
+    });
+    // Without the key the same rename is a NEW slot — no receipts (label rule).
+    const [fresh] = mergeExpectedOutputs(
+      [slot],
+      [{ kind: "doc", label: "A brand-new label" }]
+    );
+    expect(fresh).not.toHaveProperty("attestedBy");
   });
 
   it("carries every stamp forward when the patch is SILENT about it", () => {
