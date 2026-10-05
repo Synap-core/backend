@@ -121,12 +121,29 @@ export function lensScopeFactLabel(fact: LensScopeFact): string | null {
     return fact.total > 0 ? `${fact.met} of ${fact.total} met` : null;
   }
   if (fact.kind === "kpi") {
-    const unit = fact.unit ? ` ${fact.unit}` : "";
     return fact.current === null
-      ? `${fact.label}: target ${fmtNumber(fact.target)}${unit}`
-      : `${fact.label} ${fmtNumber(fact.current)} / ${fmtNumber(fact.target)}${unit}`;
+      ? `${fact.label}: target ${withUnit(fmtNumber(fact.target), fact.unit)}`
+      : `${fact.label} ${formatKpiFraction(fact.current, fact.target, fact.unit)}`;
   }
   return null;
+}
+
+function withUnit(value: string, unit: string | null | undefined): string {
+  const u = unit?.trim();
+  return u ? `${value} ${u}` : value;
+}
+
+/**
+ * THE KPI fraction — "6 / 10 leads", or "6 / 10" when the KPI has no unit
+ * (never a dangling space). One spelling for the track header and the
+ * "target reached" notification.
+ */
+export function formatKpiFraction(
+  current: number,
+  target: number,
+  unit?: string | null
+): string {
+  return withUnit(`${fmtNumber(current)} / ${fmtNumber(target)}`, unit);
 }
 
 /** A KPI number in words: integers plain, fractions to two places at most. */

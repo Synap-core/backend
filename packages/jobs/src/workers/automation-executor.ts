@@ -387,6 +387,9 @@ async function executeAutomationFlow(params: {
             flow
           ),
           status: "skipped",
+          // The reason token, like every other skip — the Rules trace reads
+          // "Condition not met" from the row, never a guess at render.
+          errorMessage: AUTOMATION_SKIP_REASONS.conditionNotMet,
           completedAt: new Date(),
         })
         .where(

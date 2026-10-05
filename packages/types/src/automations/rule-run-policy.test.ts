@@ -79,5 +79,8 @@ describe("skip reasons are tokens that humanize", () => {
     expect(humanizeToken(AUTOMATION_SKIP_REASONS.alreadyProposed)).toBe(
       "Already proposed"
     );
+    expect(humanizeToken(AUTOMATION_SKIP_REASONS.conditionNotMet)).toBe(
+      "Condition not met"
+    );
   });
 });

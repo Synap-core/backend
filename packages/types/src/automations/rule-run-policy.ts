@@ -126,6 +126,9 @@ export const AUTOMATION_SKIP_REASONS = {
   /** A propose-mode THEN found its pending proposal for the same subject.
    *  Step output (`{ status: "skipped", reason, proposalId }`). */
   alreadyProposed: "already_proposed",
+  /** The flow's precondition read false for this event, so it did nothing.
+   *  Run row (the executor's precondition gate). */
+  conditionNotMet: "condition_not_met",
 } as const;
 export type AutomationSkipReason =
   (typeof AUTOMATION_SKIP_REASONS)[keyof typeof AUTOMATION_SKIP_REASONS];

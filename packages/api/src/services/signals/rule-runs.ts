@@ -17,6 +17,7 @@
  * Skipped runs (dedup, daily cap, precondition) are not work and never reach
  * here; the caller filters them in SQL.
  */
+import { unitStateInputOfRunStatus } from "@synap-core/types/units";
 import type { Signal } from "./needs-you-union.js";
 import { ageBucketOf } from "./needs-you-union.js";
 
@@ -35,8 +36,10 @@ export interface RuleRunFacts {
   runs: number;
   /** Of those, how many failed. */
   failed: number;
-  /** At least one run is still in flight. */
+  /** At least one run is still in flight (the run-status door says running). */
   running: boolean;
+  /** The newest run's status — a quiet row's mark is read from it. */
+  latestStatus: string;
 }
 
 /** The fold key every surface groups a rule's repeats under. */
@@ -61,12 +64,16 @@ export function foldRuleRuns(rows: readonly RuleRunRow[], now: Date): Signal[] {
         runs: 0,
         failed: 0,
         running: false,
+        latestStatus: r.status,
       },
     };
     cur.facts.runs += 1;
     if (r.status === "failed") cur.facts.failed += 1;
-    if (r.status === "running") cur.facts.running = true;
-    if (at > cur.newest) cur.newest = at;
+    if (unitStateInputOfRunStatus(r.status).running) cur.facts.running = true;
+    if (at >= cur.newest) {
+      cur.newest = at;
+      cur.facts.latestStatus = r.status;
+    }
     byRule.set(r.automationId, cur);
   }
   const out: Signal[] = [];

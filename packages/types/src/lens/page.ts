@@ -31,6 +31,7 @@ import {
 import type { LensSource } from "./scope.js";
 import type { LensPagePicks } from "./next-moves.js";
 import { repeatLabel } from "../needs-you/index.js";
+import { unitStateInputOfRunStatus } from "../units/state.js";
 
 /** One `Signal` of the page read — the fields the kit reads. */
 export interface LensPageSignal {
@@ -55,6 +56,8 @@ export interface LensPageSignal {
     runs: number;
     failed: number;
     running: boolean;
+    /** The newest run's status — what a quiet row's mark is read from. */
+    latestStatus?: string | null;
   } | null;
   /** How many identical things the row folds (`rule-run`: its runs). */
   repeatCount?: number;
@@ -151,12 +154,19 @@ export function lensRowOfLiveSignal(
   });
   // A RULE running without a session (`rule-run`): its runs are folded into
   // this one row. A failure inside the window is the mark — it outranks the
-  // healthy runs beside it — and the repeat says how many runs it stands for.
+  // healthy runs beside it; else a run still in flight; else the newest run's
+  // REAL status through the one run-status door (a finished rule is never
+  // drawn as running). The repeat says how many runs it stands for.
   const rule = signal.ruleRun;
   if (!rule) return base;
   return {
     ...base,
-    state: rule.failed > 0 ? { failed: true } : { running: true },
+    state:
+      rule.failed > 0
+        ? { failed: true }
+        : rule.running
+          ? { running: true }
+          : unitStateInputOfRunStatus(rule.latestStatus),
     repeat: repeatLabel(signal),
   };
 }

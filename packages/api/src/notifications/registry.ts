@@ -212,7 +212,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     priority: "normal",
     titleTemplate: "{{trackName}} reached its target",
     bodyTemplate:
-      "{{kpiLabel}}: {{current}} of {{target}} {{unit}} (stated). Complete the track, or raise the target.",
+      "{{kpiLabel}}: {{kpiValue}} (stated). Complete the track, or raise the target.",
     defaultChannels: ["in_app"],
     ttl: 0,
     groupBy: "trackId",

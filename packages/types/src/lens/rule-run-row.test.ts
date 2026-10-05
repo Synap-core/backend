@@ -42,6 +42,39 @@ describe("rule-run Happening row", () => {
     );
   });
 
+  it("a rule whose runs all FINISHED is not drawn as running (C5)", () => {
+    const row = lensRowOfLiveSignal(
+      ruleSignal({
+        ruleRun: {
+          runs: 4,
+          failed: 0,
+          running: false,
+          latestStatus: "completed",
+        },
+        repeatCount: 4,
+      })
+    );
+    expect(row.state).toEqual({ terminal: true });
+    expect(resolveUnitState(row.state).state).not.toBe(
+      resolveUnitState({ running: true }).state
+    );
+  });
+
+  it("a run refused by a rule reads blocked on policy, through the run-status door", () => {
+    const row = lensRowOfLiveSignal(
+      ruleSignal({
+        ruleRun: {
+          runs: 1,
+          failed: 0,
+          running: false,
+          latestStatus: "blocked_by_policy",
+        },
+        repeatCount: 1,
+      })
+    );
+    expect(row.state).toEqual({ blockedBy: "policy" });
+  });
+
   it("one run is not a repeat", () => {
     const row = lensRowOfLiveSignal(
       ruleSignal({

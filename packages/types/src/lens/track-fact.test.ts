@@ -4,7 +4,12 @@
  * rival rule out (see the comment on it).
  */
 import { describe, expect, it } from "vitest";
-import { lensKpiFact, lensScopeFactLabel, lensTrackFact } from "./index.js";
+import {
+  formatKpiFraction,
+  lensKpiFact,
+  lensScopeFactLabel,
+  lensTrackFact,
+} from "./index.js";
 
 const pinned = [{ key: "a" }, { key: "b" }, { key: "c" }];
 
@@ -89,5 +94,20 @@ describe("lensKpiFact — current is STATED, never invented", () => {
     expect(f.current).toBe(0);
     expect(f.progress).toBe(0);
     expect(lensScopeFactLabel(f)).toBe("Leads 0 / 10");
+  });
+});
+
+describe("formatKpiFraction — one spelling for the header and the nudge", () => {
+  it("prints the unit after the fraction", () => {
+    expect(formatKpiFraction(6, 10, "leads")).toBe("6 / 10 leads");
+  });
+  it.each([undefined, null, "", "  "])(
+    "a unitless KPI (%j) leaves no dangling space",
+    (unit) => {
+      expect(formatKpiFraction(6, 10, unit)).toBe("6 / 10");
+    }
+  );
+  it("rounds a fraction to two places", () => {
+    expect(formatKpiFraction(2.345, 10)).toBe("2.35 / 10");
   });
 });

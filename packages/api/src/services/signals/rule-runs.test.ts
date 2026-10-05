@@ -60,8 +60,38 @@ describe("foldRuleRuns", () => {
       runs: 2,
       failed: 1,
       running: false,
+      latestStatus: "completed",
     });
     expect(out[0]!.ruleRun?.running).toBe(true);
+  });
+
+  it("in flight is the run-status door's answer (pending/queued too), not a literal", () => {
+    const out = foldRuleRuns(
+      [
+        {
+          automationId: "a1",
+          automationName: "A",
+          status: "pending",
+          startedAt: at(5),
+        },
+        {
+          automationId: "a2",
+          automationName: "B",
+          status: "completed",
+          startedAt: at(5),
+        },
+      ],
+      now
+    );
+    const byId = new Map(out.map((s) => [s.target?.id, s.ruleRun]));
+    expect(byId.get("a1")).toMatchObject({
+      running: true,
+      latestStatus: "pending",
+    });
+    expect(byId.get("a2")).toMatchObject({
+      running: false,
+      latestStatus: "completed",
+    });
   });
 
   it("an empty window is no rows", () => {

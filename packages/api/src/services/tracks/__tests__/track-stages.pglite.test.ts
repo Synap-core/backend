@@ -1094,6 +1094,8 @@ describe("0302 direction + KPI", () => {
       userId: USER,
       sourceType: "track",
       sourceId: dirTrack,
+      // THE fraction, unitless ⇒ no dangling space in the body.
+      data: expect.objectContaining({ kpiValue: "12 / 12" }),
     });
     // Re-stating a reached value is not a crossing.
     await setTrackDirection({
@@ -1185,7 +1187,7 @@ describe("0302 emergent stages", () => {
         stage: { name: "Again", key: "audit" },
         actor: human,
       })
-    ).rejects.toThrow(/already a stage/);
+    ).rejects.toThrow(/A step with that key already exists/);
   });
 
   it("a STALE append (the list moved since it was read) is a CONFLICT, never a duplicate", async () => {

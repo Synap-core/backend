@@ -71,7 +71,11 @@ import type {
 } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
+import { formatKpiFraction } from "@synap-core/types/lens";
 import {
   canTransitionTrack,
   deriveTrackStages,
@@ -1781,6 +1785,9 @@ async function notifyTrackKpiReached(
         current: kpi.current,
         target: kpi.target,
         unit: kpi.unit ?? "",
+        // THE KPI fraction (the track header's spelling, no dangling space
+        // for a unitless KPI) — what the body template prints.
+        kpiValue: formatKpiFraction(kpi.current ?? 0, kpi.target, kpi.unit),
       },
     });
   } catch (err) {
@@ -1903,7 +1910,7 @@ function resolveEmergentStageKey(
   if (track.status === "archived" || track.status === "completed") {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${track.status} — reopen it before adding a stage.`,
+      message: `"${track.name}" is ${resolveStatusLabel(track.status).toLowerCase()} — reopen it to add a step.`,
     });
   }
   const taken = new Set(stageKeys(track.definitionSnapshot?.stages));
@@ -1911,7 +1918,7 @@ function resolveEmergentStageKey(
     if (taken.has(stage.key)) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `"${stage.key}" is already a stage of "${track.name}". Stages: ${[...taken].join(", ")}.`,
+        message: `A step with that key already exists in "${track.name}".`,
       });
     }
     return stage.key;
