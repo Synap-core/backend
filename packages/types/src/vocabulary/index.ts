@@ -35,6 +35,9 @@ import type { FilterOperator } from "../views/filters.js";
  */
 export * from "./object-kinds.js";
 
+/** AI tool name → label, in three moods (`resolveToolLabel`). */
+export * from "./tool-labels.js";
+
 /**
  * Turn a machine token into a human word: strip a dotted namespace, split
  * `snake_case`/`kebab-case`/`camelCase`, and sentence-case the result.
