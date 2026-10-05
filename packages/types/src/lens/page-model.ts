@@ -28,6 +28,15 @@
 
 import { needsYouRows, type NeedsYouRow } from "../needs-you/index.js";
 import { LENS_CAPS } from "./classes.js";
+import {
+  NEXT_HOUR_PICKS,
+  nextMoveCandidateOfWire,
+  nextMoveKeyOfRow,
+  rankNextMoves,
+  type LensPagePicks,
+  type NextMoveCandidate,
+  type RankedNextMove,
+} from "./next-moves.js";
 import type { LensBanner, LensCounts } from "./header.js";
 import {
   happenedItems,
@@ -197,41 +206,112 @@ export function lensClassCount(
 }
 
 /**
+ * Every move a page holds, as candidates for THE ranking (`rankNextMoves`):
+ *   - answer — each Blocking row in the section's own order; a session card
+ *     (one session owing several things) stands as its FIRST item, so the
+ *     move names the exact ask and its own verb ("Answer"), never the card's
+ *     "Review 9";
+ *   - start  — the page's next-hour picks (`page.picks`), when it was asked;
+ *   - watch  — each Happening row.
+ */
+export function lensNextMoveCandidates<
+  T extends LensPageSignal & LensNeedsYouSignal,
+>(page: {
+  blocking: Pick<LensPageClass<T>, "rows">;
+  happening: Pick<LensPageClass<LensPageSignal>, "rows">;
+  picks?: Pick<LensPagePicks, "rows"> | null;
+}): NextMoveCandidate[] {
+  const grouped = needsYouRows(page.blocking.rows);
+  const answer: NextMoveCandidate[] = [...grouped.recent, ...grouped.older].map(
+    (first) => {
+      const lead = first.kind === "session" ? first.items[0] : null;
+      const item: NeedsYouRow<T> =
+        first.kind === "item" || !lead
+          ? first
+          : {
+              kind: "item",
+              key: lead.id,
+              signal: lead,
+              session: {
+                id: first.sessionId,
+                title: first.title,
+                projectId: first.projectId,
+              },
+            };
+      return { tier: "answer", row: lensRowOfNeedsYou(item, "blocking") };
+    }
+  );
+  const start = (page.picks?.rows ?? []).map(nextMoveCandidateOfWire);
+  const watch: NextMoveCandidate[] = page.happening.rows.map((s) => ({
+    tier: "watch",
+    row: lensRowOfLiveSignal(s),
+  }));
+  return [...answer, ...start, ...watch];
+}
+
+/**
  * The row the header's NEXT MOVE is made of (`lensHeaderModel({ nextMove })`):
- * the FIRST Blocking row in the section's own order — and when that row is a
- * session card (one session owing several things), its FIRST item, so the
- * header names the exact ask and its own verb ("Answer"), never the card's
- * "Review 9" — else the first Happening row. Null when neither class has a
- * row (including when both failed: the sections carry the retry).
+ * rank[0] of THE ranking (`rankNextMoves`) over the page's moves — the first
+ * Blocking row (as its first item when it is a session card), else, where the
+ * page carries picks, the top pick, else the first Happening row. Null when
+ * the page holds no move (including when both reads failed: the sections
+ * carry the retry).
+ *
+ * A header page never carries picks (the pod sends them only at pod /
+ * workspace scope, for Home, which has no header — skill `lens-page`, the
+ * Home exception), so a header's move is always Blocking or Happening; a
+ * start row handed to `lensNextMove` reads as no move rather than a wrong one.
  */
 export function lensNextMoveRow<T extends LensPageSignal & LensNeedsYouSignal>(
   page: {
     blocking: Pick<LensPageClass<T>, "rows">;
     happening: Pick<LensPageClass<LensPageSignal>, "rows">;
-  } | null
+    picks?: Pick<LensPagePicks, "rows"> | null;
+  } | null,
+  now: Date | number = Date.now()
 ): LensRow | null {
   if (!page) return null;
-  const grouped = needsYouRows(page.blocking.rows);
-  const first = grouped.recent[0] ?? grouped.older[0];
-  if (first) {
-    const lead = first.kind === "session" ? first.items[0] : null;
-    const item: NeedsYouRow<T> =
-      first.kind === "item" || !lead
-        ? first
-        : {
-            kind: "item",
-            key: lead.id,
-            signal: lead,
-            session: {
-              id: first.sessionId,
-              title: first.title,
-              projectId: first.projectId,
-            },
-          };
-    return lensRowOfNeedsYou(item, "blocking");
-  }
-  const live = page.happening.rows[0];
-  return live ? lensRowOfLiveSignal(live) : null;
+  return rankNextMoves(lensNextMoveCandidates(page), now)[0]?.row ?? null;
+}
+
+/** The next-hour picker's model (relay Home) — see {@link lensNextHour}. */
+export interface LensNextHour {
+  /**
+   * `ready` — read whole; `partial` — a half failed but picks came back;
+   * `failed` — a half failed and nothing can be drawn (never "nothing to do").
+   */
+  status: LensClassStatus;
+  /** The picks at rest, ranked, each with its reason chips. */
+  picks: RankedNextMove[];
+}
+
+/**
+ * THE next-hour picker: the START tier of THE ranking (`rankNextMoves`, the
+ * same call the header's move reads), top {@link NEXT_HOUR_PICKS}, minus the
+ * rows the viewer skipped while the pod has not yet re-read (`hidden`: wire
+ * keys, `nextMoveKeyOfRow`). "Only you can answer" is the Needs-you section
+ * right above it — the answer tier, in the same order. Null when the page was
+ * read without picks (not asked).
+ */
+export function lensNextHour<T extends LensPageSignal & LensNeedsYouSignal>(
+  page: {
+    blocking: Pick<LensPageClass<T>, "rows">;
+    happening: Pick<LensPageClass<LensPageSignal>, "rows">;
+    picks?: LensPagePicks | null;
+  } | null,
+  now: Date | number,
+  opts: { hidden?: ReadonlySet<string> } = {}
+): LensNextHour | null {
+  if (!page?.picks) return null;
+  const hidden = opts.hidden ?? new Set<string>();
+  const picks = rankNextMoves(lensNextMoveCandidates(page), now)
+    .filter((m) => m.tier === "start")
+    .filter((m) => !hidden.has(nextMoveKeyOfRow(m.row) ?? ""))
+    .slice(0, NEXT_HOUR_PICKS);
+  return {
+    status: statusOf(page.picks, picks.length),
+    picks,
+  };
 }
 
 /** The header's counts straight from a page (or null: nothing read yet). */

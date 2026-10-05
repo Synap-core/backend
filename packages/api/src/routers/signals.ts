@@ -88,7 +88,7 @@ import {
   isSessionWorkingNow,
   SESSION_WORKING_WINDOW_MS,
 } from "@synap-core/types/run-activity";
-import { LENS_CAPS } from "@synap-core/types/lens";
+import { LENS_CAPS, type LensPagePicks } from "@synap-core/types/lens";
 import { needsYouRows } from "@synap-core/types/needs-you";
 import { parseRecordChange } from "@synap-core/types/events";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -135,6 +135,10 @@ import { loadSessionLiveness } from "../services/runs/session-liveness.js";
 import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
 import { sessionKindWhere } from "../services/focus-sessions/session-kind.js";
 import { OPEN_SESSION_STATUSES } from "../services/focus-sessions/session-statuses.js";
+import {
+  readNextMovePicks,
+  writeNextMoveSkip,
+} from "../services/signals/next-moves.js";
 
 const logger = createLogger({ module: "signals" });
 
@@ -939,6 +943,12 @@ export interface LensPageWire {
   status: StatusBanner | null;
   /** The health read failed: `status: null` then means NOT MEASURED. */
   statusUnreadable: boolean;
+  /**
+   * The next-hour START tier (`readNextMovePicks`), ranked by THE ranking
+   * (`rankNextMoves`) — only when asked (`picks: true`) at pod / workspace
+   * scope. Absent = not asked.
+   */
+  picks?: LensPagePicks;
 }
 
 /**
@@ -997,11 +1007,38 @@ function lensClass(
   };
 }
 
+/**
+ * Sessions a page row already stands for — a Blocking row filed under a
+ * session (its target or its session group) and a Happening session. A pick
+ * never repeats them: a session owing you something is "only you can answer",
+ * one an agent is in is watched, not started.
+ */
+function sessionIdsOnPage(signals: readonly Signal[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of signals) {
+    if (s.target?.kind === "session") out.add(s.target.id);
+    const group = s.groupKey;
+    if (group && group.startsWith("session:")) out.add(group.slice(8));
+  }
+  return out;
+}
+
+/** The next-hour picks exist where Home reads: pod / workspace scope only. */
+function picksAllowed(input: SignalScopeInput): boolean {
+  return (
+    !input.projectId &&
+    !input.trackId &&
+    !input.sessionId &&
+    !input.automationId
+  );
+}
+
 async function readLensPage(
   ctx: SignalsCtx,
   input: SignalScopeInput,
   caps: Record<keyof typeof LENS_CAPS, number>,
-  since: string | undefined
+  since: string | undefined,
+  opts: { picks?: boolean } = {}
 ): Promise<LensPageWire> {
   const [attention, happening, produced, happened] = await Promise.all([
     readAttention(ctx, input, CLUSTER_PAGE_LIMIT),
@@ -1017,7 +1054,26 @@ async function readLensPage(
   const blocking = blockingSignals(attention);
   const proposed = proposedSignals(attention);
   const statusFailed = attention.failures.status.length > 0;
+  const picks =
+    opts.picks && picksAllowed(input)
+      ? await readNextMovePicks(
+          {
+            userId: requireUserId(ctx.userId),
+            roster: rosterReadFor(ctx),
+            access: AccessContext.from(ctx),
+          },
+          { workspaceId: input.workspaceId },
+          {
+            excludeSessionIds: sessionIdsOnPage([
+              ...blocking,
+              ...happening.value.signals,
+            ]),
+            projectNames: (ids) => readProjectNames(ctx, ids),
+          }
+        )
+      : undefined;
   return {
+    ...(picks ? { picks } : {}),
     blocking: lensClass(blocking, caps.blocking, {
       // THE needs-you number (`countNeedsYou`), the same the badge shows.
       total: counts.needsYou,
@@ -1121,6 +1177,11 @@ export const signalsRouter = router({
         since: z.string().datetime({ offset: true }).optional(),
         /** Page lens only: per-class caps (defaults: `LENS_CAPS`, `@synap-core/types/lens`). */
         caps: LensCaps.optional(),
+        /**
+         * Page lens only: also send the next-hour START tier (`page.picks`),
+         * ranked by THE ranking. Pod / workspace scope only (Home).
+         */
+        picks: z.boolean().optional(),
       })
     )
     .query(
@@ -1135,7 +1196,8 @@ export const signalsRouter = router({
               ctx,
               input,
               { ...LENS_CAPS, ...input.caps },
-              input.since
+              input.since,
+              { picks: input.picks === true }
             ),
           };
         }
@@ -1187,6 +1249,30 @@ export const signalsRouter = router({
           ).slice(0, input.limit),
         };
       }
+    ),
+
+  /**
+   * Skip a next-hour pick until `until` (the viewer's next local midnight) —
+   * the picker's Skip. Stored in the caller's OWN preference row
+   * (`user_preferences.ui_preferences.nextMoveSkips`, owner floor by key);
+   * `until` is clamped to at most 36h ahead. The page read leaves a skipped
+   * pick out until then.
+   */
+  skipNextMove: protectedProcedure
+    .input(
+      z.object({
+        key: z
+          .string()
+          .regex(/^(entity|session):[0-9a-f-]{36}$/i, "Not a pick key"),
+        until: z.string().datetime({ offset: true }),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      writeNextMoveSkip({
+        userId: requireUserId(ctx.userId),
+        key: input.key,
+        until: new Date(input.until),
+      })
     ),
 
   /**

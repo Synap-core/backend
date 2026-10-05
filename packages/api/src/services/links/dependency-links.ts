@@ -59,6 +59,7 @@ import {
   DEPENDENCY_LINK_TYPE,
   REPLACES_LINK_TYPE,
   deriveOpenBlockers,
+  isDependencyBlockerCleared,
   isDependencyEndpointKind,
   isDependencyLinkType,
   normaliseDependencyRelation,
@@ -216,7 +217,9 @@ export async function deleteDependencyEdge(input: {
 }
 
 /** The existing row's id, for an idempotent re-link. */
-async function existingLinkId(edge: DependencyEdgeInput): Promise<string | null> {
+async function existingLinkId(
+  edge: DependencyEdgeInput
+): Promise<string | null> {
   const [row] = await db
     .select({ id: links.id })
     .from(links)
@@ -279,7 +282,9 @@ export async function validateDependencyEdge(
   edge: DependencyEdgeInput,
   userId: string,
   requestWorkspaceId: string | null = null
-): Promise<{ ok: true; workspaceId: string | null } | ({ ok: false } & DependencyRefusal)> {
+): Promise<
+  { ok: true; workspaceId: string | null } | ({ ok: false } & DependencyRefusal)
+> {
   if (
     !isDependencyLinkType(edge.linkType) ||
     !isDependencyEndpointKind(edge.fromType) ||
@@ -329,7 +334,12 @@ export async function writeDependencyLink(input: {
   metadata?: Record<string, unknown>;
   attribution?: LinkAttribution;
 }): Promise<
-  | { ok: true; inserted: number; linkId: string | null; workspaceId: string | null }
+  | {
+      ok: true;
+      inserted: number;
+      linkId: string | null;
+      workspaceId: string | null;
+    }
   | ({ ok: false } & DependencyRefusal)
 > {
   const valid = await validateDependencyEdge(input.edge, input.userId);
@@ -393,8 +403,7 @@ async function gate(
   action: "create" | "delete",
   workspaceId: string | null
 ): Promise<
-  | { go: true; receiptId?: string }
-  | { go: false; result: GovernedLinkResult }
+  { go: true; receiptId?: string } | { go: false; result: GovernedLinkResult }
 > {
   if (input.approvedProposalId) return { go: true };
   const perm = await checkPermissionOrPropose({
@@ -655,8 +664,7 @@ async function readStates(
         out.set(`entity:${id}`, { missing: true });
         continue;
       }
-      const status = (row.properties as Record<string, unknown> | null)
-        ?.status;
+      const status = (row.properties as Record<string, unknown> | null)?.status;
       out.set(`entity:${id}`, {
         status: typeof status === "string" ? status : null,
         hidden: !visible.has(id),
@@ -773,6 +781,124 @@ export async function readDependencyState(
     states.get(`${r.kind}:${r.id}`)
   );
   return { blocked: openBlockers.length > 0, openBlockers, declared };
+}
+
+/** Per node: is it blocked, and how many open units of work wait on it. */
+export interface DependencyFacts {
+  /** Open blockers after `replaces` following (`deriveOpenBlockers`). */
+  openBlockers: number;
+  /**
+   * Dependents still OPEN by their own kind's rule that declare
+   * `blocked_by` this node — "Unblocks N". A deleted dependent does not
+   * count; one the reader cannot see still does (a number, never a name).
+   */
+  unblocks: number;
+}
+
+/**
+ * {@link readDependencyState} for MANY nodes at once — the same edges, the
+ * same `replaces` following, the same batch state read and the ONE rule
+ * (`deriveOpenBlockers`) — plus each node's open dependents. A bounded number
+ * of queries whatever the node count (a list read, e.g. the lens page's
+ * next-hour picks). A failed read THROWS; it is never folded into "free".
+ */
+export async function readDependencyFacts(
+  nodes: readonly DependencyNodeRef[],
+  userId: string
+): Promise<Map<string, DependencyFacts>> {
+  const out = new Map<string, DependencyFacts>();
+  if (nodes.length === 0) return out;
+  const nodeKey = (r: DependencyNodeRef) => `${r.kind}:${r.id}`;
+  const byEnd = (end: "from" | "to") =>
+    or(
+      ...[...new Set(nodes.map((n) => n.kind))].map((kind) =>
+        and(
+          eq(end === "from" ? links.fromType : links.toType, kind as never),
+          inArray(
+            end === "from" ? links.fromId : links.toId,
+            nodes.filter((n) => n.kind === kind).map((n) => n.id)
+          )
+        )
+      )
+    );
+  const cols = {
+    fromType: links.fromType,
+    fromId: links.fromId,
+    toType: links.toType,
+    toId: links.toId,
+    linkType: links.linkType,
+  };
+  const [declaredRows, dependentRows] = await Promise.all([
+    db
+      .select(cols)
+      .from(links)
+      .where(and(byEnd("from"), eq(links.linkType, DEPENDENCY_LINK_TYPE))),
+    db
+      .select(cols)
+      .from(links)
+      .where(and(byEnd("to"), eq(links.linkType, DEPENDENCY_LINK_TYPE))),
+  ]);
+  const edges: DependencyEdge[] = [...declaredRows];
+
+  // Follow `replaces` INTO the blockers, bounded — exactly as the one-node read.
+  let frontier: DependencyNodeRef[] = declaredRows.map((r) => ({
+    kind: r.toType as string,
+    id: r.toId,
+  }));
+  const seen = new Set(frontier.map(nodeKey));
+  for (let hop = 0; hop < MAX_REPLACEMENT_HOPS && frontier.length; hop++) {
+    const rows = await db
+      .select(cols)
+      .from(links)
+      .where(
+        and(
+          eq(links.linkType, REPLACES_LINK_TYPE),
+          or(
+            ...frontier.map((r) =>
+              and(eq(links.toType, r.kind as never), eq(links.toId, r.id))
+            )
+          )
+        )
+      );
+    edges.push(...rows);
+    frontier = rows
+      .map((r) => ({ kind: r.fromType as string, id: r.fromId }))
+      .filter((r) => {
+        const k = nodeKey(r);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+  }
+  const dependents = dependentRows.map((r) => ({
+    kind: r.fromType as string,
+    id: r.fromId,
+  }));
+  for (const d of dependents) seen.add(nodeKey(d));
+
+  const refs = [...seen].map((k) => {
+    const i = k.indexOf(":");
+    return { kind: k.slice(0, i), id: k.slice(i + 1) };
+  });
+  const states = await readStates(refs, userId);
+  const stateOf = (r: DependencyNodeRef) => states.get(nodeKey(r));
+
+  for (const node of nodes) {
+    const waiting = new Set<string>();
+    for (const e of dependentRows) {
+      if (e.toType !== node.kind || e.toId !== node.id) continue;
+      const dep = { kind: e.fromType as string, id: e.fromId };
+      const st = stateOf(dep);
+      if (!st || st.missing) continue;
+      if (isDependencyBlockerCleared(dep.kind, st.status)) continue;
+      waiting.add(nodeKey(dep));
+    }
+    out.set(nodeKey(node), {
+      openBlockers: deriveOpenBlockers(node, edges, stateOf).length,
+      unblocks: waiting.size,
+    });
+  }
+  return out;
 }
 
 /**

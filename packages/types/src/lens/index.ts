@@ -12,3 +12,4 @@ export * from "./rows.js";
 export * from "./header.js";
 export * from "./page.js";
 export * from "./page-model.js";
+export * from "./next-moves.js";

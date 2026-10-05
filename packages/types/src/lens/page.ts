@@ -29,6 +29,7 @@ import {
   type LensRow,
 } from "./rows.js";
 import type { LensSource } from "./scope.js";
+import type { LensPagePicks } from "./next-moves.js";
 import { repeatLabel } from "../needs-you/index.js";
 
 /** One `Signal` of the page read — the fields the kit reads. */
@@ -114,6 +115,12 @@ export interface LensPage<T = LensPageSignal> {
   status: { issues: LensPageStatusIssue[] } | null;
   /** The health read failed: `status: null` then means NOT MEASURED. */
   statusUnreadable: boolean;
+  /**
+   * The next-hour start tier (`next-moves.ts`) — present only when the read
+   * asked for it (`picks: true`, pod / workspace scope). Absent = not asked,
+   * never "nothing to do".
+   */
+  picks?: LensPagePicks;
 }
 
 /** A class is fully READ when none of its halves failed; a partial read is a floor. */
