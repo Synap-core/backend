@@ -752,6 +752,25 @@ describe("POST /links — the dependency door (cross-kind blocked_by, replaces)"
     expect(governedDependencyLinkMock).toHaveBeenCalledTimes(1);
   });
 
+  it("S6: an edge that already existed answers `exists`, never `created`", async () => {
+    governedDependencyLinkMock.mockResolvedValueOnce({
+      status: "exists",
+      linkId: "dep-link-1",
+      inserted: 0,
+    });
+    const res = await postLinks(buildTestApp(), {
+      fromType: "entity",
+      fromId: T1,
+      toType: "track",
+      toId: T2,
+      linkType: "blocked_by",
+    });
+    expect(await res.json()).toMatchObject({
+      status: "exists",
+      dependency: { linkId: "dep-link-1", inserted: 0 },
+    });
+  });
+
   it("returns the door's refusal status verbatim", async () => {
     governedDependencyLinkMock.mockResolvedValueOnce({
       status: "refused",

@@ -15,13 +15,17 @@
 
 import {
   db,
+  and,
   eq,
   inArray,
   entities,
+  links,
   relations,
   PropertyIndexService,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { DEPENDENCY_LINK_TYPES } from "@synap-core/types/connections";
+import { recordLinkMutation } from "../links/dependency-links.js";
 import type { ProposalRevertPlan } from "../../routers/proposals/revert.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { syncRelationToPropertyOnDelete } from "../../utils/property-relation-sync.js";
@@ -327,6 +331,30 @@ export async function revertProposalCreations(args: {
           .where(inArray(entities.id, entityRowIds))
       : [];
 
+  // Dependency / replacement edges announce their removal on the spine like
+  // every forward write does (`recordLinkMutation`), so a rule on
+  // `link.delete` also sees an undo.
+  const linkRows =
+    (plan.linkIds ?? []).length > 0
+      ? await database
+          .select({
+            id: links.id,
+            workspaceId: links.workspaceId,
+            fromType: links.fromType,
+            fromId: links.fromId,
+            toType: links.toType,
+            toId: links.toId,
+            linkType: links.linkType,
+          })
+          .from(links)
+          .where(
+            and(
+              inArray(links.id, plan.linkIds ?? []),
+              inArray(links.linkType, [...DEPENDENCY_LINK_TYPES])
+            )
+          )
+      : [];
+
   const writeInTransaction = args.writeInTransaction;
   const result = await safeRevert({
     targets: revertTargetsFromPlan(plan),
@@ -373,6 +401,13 @@ export async function revertProposalCreations(args: {
     entityRows,
     database,
   });
+  for (const row of linkRows) {
+    if (!(outcome.undone.linkIds ?? []).includes(row.id)) continue;
+    recordLinkMutation("delete", row, userId, {
+      proposalId: proposal.id,
+      sessionId: proposal.sessionId,
+    });
+  }
 
   return outcome;
 }

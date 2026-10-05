@@ -244,8 +244,7 @@ export function registerLinksRoutes(app: HubHono): void {
     const isGenericDependency =
       isDependencyLinkType(parsed.data.linkType) &&
       !(parsed.data.linkType === "blocked_by" && isSessionPair);
-    const isBlockedBy =
-      parsed.data.linkType === "blocked_by" && isSessionPair;
+    const isBlockedBy = parsed.data.linkType === "blocked_by" && isSessionPair;
     // The BLOCKED session's own workspace — what the edge will be stamped
     // with (via `addSessionBlocker`) and the workspace governance must judge
     // in, so a filed proposal's `workspaceId` always matches the edge it
@@ -349,8 +348,10 @@ export function registerLinksRoutes(app: HubHono): void {
             });
           case "created":
           case "exists":
+            // Honest: an edge that was already there is `exists`, not
+            // `created` (additive — this branch is new for these pairs).
             return c.json({
-              status: "created" as const,
+              status: result.status,
               link: null,
               dependency: {
                 linkId: result.linkId,

@@ -70,6 +70,20 @@ vi.mock("../utils/permission-check.js", () => ({
 vi.mock("../utils/workspace-write-access.js", () => ({
   assertWorkspaceWrite: mockAssertWrite,
 }));
+// The dependency door (a relation id that names a `blocked_by` link) — the
+// lookup and the governed delete are the door's own, tested in
+// services/links/__tests__/dependency-links.test.ts.
+const { mockFindDependency, mockRemoveDependency } = vi.hoisted(() => ({
+  mockFindDependency: vi.fn(),
+  mockRemoveDependency: vi.fn(),
+}));
+vi.mock("../services/links/dependency-links.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../services/links/dependency-links.js")
+  >()),
+  findDependencyEdgeByRelationReadId: mockFindDependency,
+  governedRemoveDependencyLink: mockRemoveDependency,
+}));
 vi.mock("../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn().mockResolvedValue(false),
@@ -144,8 +158,35 @@ describe("relations.delete — the unlink proposal names its endpoints", () => {
     expect(mockCheckPermission).not.toHaveBeenCalled();
   });
 
+  it("a dependency read as a relation (link id) is removed on the LINK door, not 404", async () => {
+    mockRelationFindFirst.mockResolvedValueOnce(undefined);
+    const edge = {
+      fromType: "entity",
+      fromId: TGT,
+      toType: "entity",
+      toId: SRC,
+      linkType: "blocked_by",
+    };
+    mockFindDependency.mockResolvedValueOnce(edge);
+    mockRemoveDependency.mockResolvedValueOnce({
+      status: "removed",
+      removed: 1,
+    });
+
+    const res = await caller.delete({ id: REL });
+
+    expect(res).toEqual({ status: "deleted", storedAs: "link" });
+    expect(mockFindDependency).toHaveBeenCalledWith(REL);
+    expect(mockRemoveDependency.mock.calls[0][0]).toMatchObject({
+      edge,
+      userId: USER,
+    });
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+  });
+
   it("an unknown relation id is NOT_FOUND and files nothing", async () => {
     mockRelationFindFirst.mockResolvedValueOnce(undefined);
+    mockFindDependency.mockResolvedValueOnce(null);
 
     await expect(caller.delete({ id: REL })).rejects.toMatchObject({
       code: "NOT_FOUND",

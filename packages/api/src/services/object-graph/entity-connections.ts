@@ -6,11 +6,7 @@
  */
 
 export type EntityConnectionSource =
-  | "graph"
-  | "property"
-  | "thread"
-  | "context_channel"
-  | "focus_session";
+  "graph" | "property" | "thread" | "context_channel" | "focus_session";
 
 export interface EntityConnection {
   entityId: string;
@@ -25,6 +21,12 @@ export interface EntityConnection {
   source: EntityConnectionSource;
   relationId?: string;
   relationType?: string;
+  /**
+   * `"link"`: this graph connection is THE dependency edge (a `links`
+   * `blocked_by` row read as `blocks` / `depends_on`); `relationId` is the
+   * link id. The object graph already carries it on its links half.
+   */
+  storedAs?: "link";
   propertySlug?: string;
   propertyLabel?: string;
   channelId?: string;

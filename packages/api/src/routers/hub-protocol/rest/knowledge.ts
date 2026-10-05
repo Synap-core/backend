@@ -27,6 +27,8 @@ import {
   and,
 } from "@synap/database";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
+import { AccessContext } from "../../../access/index.js";
+import { readDependencyRelations } from "../../../services/links/dependency-relation-read.js";
 
 import {
   ErrorSchema,
@@ -570,6 +572,23 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         maxDepth: Math.min(maxDepth, 3),
         relationshipTypes,
         workspaceIds: accessibleWsIds,
+        // Dependencies are links now; they are still relations to the walk.
+        readExtraEdges: async (entityId) =>
+          (
+            await readDependencyRelations({
+              // Read scoping is the same for both actors (access/context.ts).
+              access: AccessContext.operator({ userId }),
+              touching: { entityIds: [entityId], mode: "either" },
+            })
+          )
+            .filter(
+              (r) => !relationshipTypes || relationshipTypes.includes(r.type)
+            )
+            .map((r) => ({
+              source_entity_id: r.sourceEntityId as string,
+              target_entity_id: r.targetEntityId as string,
+              type: r.type,
+            })),
       });
 
       // Hydrate each node with title + entityType so callers (AI agents) get

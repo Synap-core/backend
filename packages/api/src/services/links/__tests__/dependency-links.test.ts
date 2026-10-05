@@ -53,17 +53,36 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: dbStub };
 });
 
-const visibility = vi.fn(async (_e: unknown, _u: string, _w: unknown) => null as
-  | null
-  | { status: 403 | 404; error: string });
-vi.mock("../../../routers/hub-protocol/rest/link-endpoint-visibility.js", () => ({
-  checkLinkEndpointsVisible: (e: unknown, u: string, w: unknown) =>
-    visibility(e, u, w),
+const visibility = vi.fn(
+  async (_e: unknown, _u: string, _w: unknown) =>
+    null as null | { status: 403 | 404; error: string }
+);
+const oneEnd = vi.fn(
+  async (_t: string, _i: string, _u: string, _w: unknown) =>
+    null as null | { status: 403 | 404; error: string }
+);
+vi.mock(
+  "../../../routers/hub-protocol/rest/link-endpoint-visibility.js",
+  () => ({
+    checkLinkEndpointsVisible: (e: unknown, u: string, w: unknown) =>
+      visibility(e, u, w),
+    checkLinkEndpointVisible: (t: string, i: string, u: string, w: unknown) =>
+      oneEnd(t, i, u, w),
+  })
+);
+
+const writeFloor = vi.fn(async (_db: unknown, _u: string, _row: unknown) => {});
+vi.mock("../../../utils/workspace-write-access.js", () => ({
+  assertWorkspaceWrite: (db: unknown, u: string, row: unknown) =>
+    writeFloor(db, u, row),
 }));
 
-const gate = vi.fn(async (_o: Record<string, unknown>) => ({
-  granted: true,
-}) as Record<string, unknown>);
+const gate = vi.fn(
+  async (_o: Record<string, unknown>) =>
+    ({
+      granted: true,
+    }) as Record<string, unknown>
+);
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: (o: Record<string, unknown>) => gate(o),
 }));
@@ -109,6 +128,10 @@ beforeEach(() => {
   mutations.length = 0;
   stamps.length = 0;
   visibility.mockClear();
+  oneEnd.mockClear();
+  oneEnd.mockResolvedValue(null);
+  writeFloor.mockClear();
+  writeFloor.mockResolvedValue(undefined);
   gate.mockClear();
   gate.mockResolvedValue({ granted: true });
   visibility.mockResolvedValue(null);
@@ -120,17 +143,28 @@ describe("validateDependencyEdge — the endpoint floor", () => {
       { ...edge, fromType: "playbook" },
       U
     );
-    expect(r).toMatchObject({ ok: false, reason: "invalid_pair", httpStatus: 400 });
+    expect(r).toMatchObject({
+      ok: false,
+      reason: "invalid_pair",
+      httpStatus: 400,
+    });
     expect(visibility).not.toHaveBeenCalled();
   });
   it("refuses a self edge", async () => {
-    const r = await validateDependencyEdge({ ...edge, toType: "entity", toId: T1 }, U);
+    const r = await validateDependencyEdge(
+      { ...edge, toType: "entity", toId: T1 },
+      U
+    );
     expect(r).toMatchObject({ ok: false, reason: "self_edge" });
   });
   it("an invisible endpoint gets the floor's refusal verbatim", async () => {
     visibility.mockResolvedValueOnce({ status: 404, error: "Track not found" });
     const r = await validateDependencyEdge(edge, U);
-    expect(r).toMatchObject({ ok: false, httpStatus: 404, error: "Track not found" });
+    expect(r).toMatchObject({
+      ok: false,
+      httpStatus: 404,
+      error: "Track not found",
+    });
   });
   it("stamps the BLOCKED (from) end's own workspace", async () => {
     queue.push([{ w: "ws-of-the-task" }]);
@@ -138,6 +172,43 @@ describe("validateDependencyEdge — the endpoint floor", () => {
       ok: true,
       workspaceId: "ws-of-the-task",
     });
+  });
+  it("S4: seeing the blocked end is not enough — it must be WRITABLE (403, nothing written)", async () => {
+    queue.push([{ w: "ws-read-only", o: "someone-else" }]);
+    writeFloor.mockRejectedValueOnce(
+      new Error("You are not a member of this resource's workspace.")
+    );
+    const r = await governedDependencyLink({ edge, userId: U, door: "test" });
+    expect(r).toMatchObject({
+      status: "refused",
+      reason: "forbidden",
+      httpStatus: 403,
+    });
+    expect(writeFloor.mock.calls[0]![2]).toEqual({
+      workspaceId: "ws-read-only",
+      ownerId: "someone-else",
+    });
+    expect(gate).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+  });
+  it("M1: removing floors ONLY the blocked end — a blocker the owner cannot see can still be dropped", async () => {
+    visibility.mockResolvedValue({ status: 404, error: "Track not found" });
+    queue.push([{ w: "ws-1", o: U }]); // from-end home
+    queue.push([{ id: "link-1", workspaceId: "ws-1" }]); // delete … returning
+    const r = await governedRemoveDependencyLink({
+      edge,
+      userId: U,
+      door: "test",
+    });
+    expect(r).toEqual({ status: "removed", removed: 1 });
+    expect(visibility).not.toHaveBeenCalled();
+    expect(oneEnd).toHaveBeenCalledWith("entity", T1, U, null);
+  });
+  it("M1: creating still floors BOTH ends (no dependency on what you cannot see)", async () => {
+    visibility.mockResolvedValueOnce({ status: 404, error: "Track not found" });
+    const r = await governedDependencyLink({ edge, userId: U, door: "test" });
+    expect(r).toMatchObject({ status: "refused", httpStatus: 404 });
+    expect(inserts).toHaveLength(0);
   });
 });
 
@@ -171,7 +242,10 @@ describe("governedDependencyLink — governance + event", () => {
   it("a granted write inserts ONE edge, emits link.create (reachability), and stamps the undo receipt", async () => {
     queue.push([{ w: "ws-1" }]); // from-end workspace
     queue.push([{ id: "link-9" }]); // insert … returning
-    gate.mockResolvedValueOnce({ granted: true, autoApprovedProposalId: "rcpt-1" });
+    gate.mockResolvedValueOnce({
+      granted: true,
+      autoApprovedProposalId: "rcpt-1",
+    });
     const r = await governedDependencyLink({
       edge,
       userId: U,
@@ -234,13 +308,20 @@ describe("governedDependencyLink — governance + event", () => {
       door: "test",
     });
     expect(gate).not.toHaveBeenCalled();
-    expect(mutations[0]).toMatchObject({ proposalId: "prop-7", agentUserId: AGENT });
+    expect(mutations[0]).toMatchObject({
+      proposalId: "prop-7",
+      agentUserId: AGENT,
+    });
   });
 
   it("delete emits link.delete per removed row", async () => {
     queue.push([{ w: "ws-1" }]);
     queue.push([{ id: "link-3", workspaceId: "ws-1" }]);
-    const r = await governedRemoveDependencyLink({ edge, userId: U, door: "test" });
+    const r = await governedRemoveDependencyLink({
+      edge,
+      userId: U,
+      door: "test",
+    });
     expect(r).toEqual({ status: "removed", removed: 1 });
     expect(gate.mock.calls[0]![0]).toMatchObject({ action: "delete" });
     expect(mutations[0]).toMatchObject({
@@ -288,7 +369,10 @@ describe("writeRelationAsDependency — the relation doors' mapping", () => {
     expect(visibility).not.toHaveBeenCalled();
   });
   it("a refused endpoint THROWS (never a silent skip)", async () => {
-    visibility.mockResolvedValueOnce({ status: 404, error: "Entity not found" });
+    visibility.mockResolvedValueOnce({
+      status: 404,
+      error: "Entity not found",
+    });
     await expect(
       writeRelationAsDependency({
         type: "depends_on",

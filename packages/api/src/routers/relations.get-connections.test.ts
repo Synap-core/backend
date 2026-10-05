@@ -61,6 +61,21 @@ vi.mock("../utils/workspace-membership.js", () => ({
   resolveFacetVisibilityScope: vi.fn().mockResolvedValue({ userId: "user-1" }),
 }));
 
+// The dependency projection has its own suite; here it is a seam whose rows
+// must arrive as graph connections marked `storedAs: "link"`.
+const { mockReadDependencyRelations } = vi.hoisted(() => ({
+  mockReadDependencyRelations: vi.fn(async (_q: unknown) => [] as unknown[]),
+}));
+vi.mock(
+  "../services/links/dependency-relation-read.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../services/links/dependency-relation-read.js")
+    >()),
+    readDependencyRelations: mockReadDependencyRelations,
+  })
+);
+
 import { relationsRouter } from "./relations.js";
 
 const FOCUS = "00000000-0000-4000-8000-000000000001";
@@ -191,5 +206,43 @@ describe("relations.getConnections", () => {
     expect(mockAccessScopeWhere).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1", workspaceLens: WORKSPACE })
     );
+  });
+
+  it("a dependency (links blocked_by) arrives as a graph connection marked storedAs:'link'", async () => {
+    mockDb.query.relations.findMany.mockResolvedValue([]);
+    mockReadDependencyRelations.mockResolvedValueOnce([
+      {
+        id: "00000000-0000-4000-8000-0000000000aa",
+        sourceEntityId: FOCUS,
+        targetEntityId: OUTGOING,
+        type: "depends_on",
+        storedAs: "link",
+        createdAt: new Date("2026-01-03"),
+      },
+    ]);
+    const caller = relationsRouter.createCaller({
+      authenticated: true,
+      userId: "user-1",
+      workspaceId: WORKSPACE,
+    } as never);
+
+    const result = await caller.getConnections({
+      entityId: FOCUS,
+      workspaceId: WORKSPACE,
+      limit: 50,
+    });
+
+    expect(result.connections).toContainEqual(
+      expect.objectContaining({
+        entityId: OUTGOING,
+        source: "graph",
+        relationId: "00000000-0000-4000-8000-0000000000aa",
+        relationType: "depends_on",
+        storedAs: "link",
+      })
+    );
+    expect(mockReadDependencyRelations.mock.calls[0]![0]).toMatchObject({
+      touching: { entityIds: [FOCUS], mode: "either" },
+    });
   });
 });

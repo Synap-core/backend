@@ -253,6 +253,21 @@ async function endpointVisible(
 }
 
 /**
+ * Resolve ONE endpoint — for a write floored on one end only (removing a
+ * dependency is floored on the BLOCKED end; the blocker may be invisible).
+ */
+export async function checkLinkEndpointVisible(
+  type: string,
+  id: string,
+  userId: string,
+  workspaceId: string | null
+): Promise<LinkEndpointRefusal | null> {
+  return (await endpointVisible(type, id, userId, workspaceId))
+    ? null
+    : refusalFor(type, id);
+}
+
+/**
  * Resolve both endpoints of a link. Returns the refusal for the first endpoint
  * the caller may not see (or that does not exist), or null when both resolve.
  */

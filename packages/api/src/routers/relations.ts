@@ -114,12 +114,20 @@ import { shareResource } from "../services/sharing/share-service.js";
 import { shareActorFromCtx } from "./shares.js";
 import { stampAutoApprovedCreate } from "../services/proposals/stamp-materialized.js";
 import {
+  findDependencyEdgeByRelationReadId,
   governedDependencyLink,
+  governedRemoveDependencyLink,
   writeRelationAsDependency,
   trpcCodeForDependencyRefusal,
   type GovernedLinkResult,
 } from "../services/links/dependency-links.js";
 import { normaliseDependencyRelation } from "@synap-core/types/connections";
+import {
+  filterRelationRowsByDirection,
+  mergeRelationPages,
+  readDependencyRelations,
+  type RelationReadRow,
+} from "../services/links/dependency-relation-read.js";
 
 /**
  * `blocks` / `depends_on` are not relations any more: they are THE dependency
@@ -396,6 +404,31 @@ function rejectExposureEdgeRemoval(type: string, refusedDoor: string): void {
   });
 }
 
+/**
+ * One entity's dependency edges as relation rows, filtered like the relation
+ * half of the same read (direction on the RELATION reading, slug, limit).
+ */
+async function readEntityDependencyRelations(
+  access: AccessContext,
+  input: {
+    entityId: string;
+    type?: string;
+    direction: "source" | "target" | "both";
+    limit: number;
+  }
+): Promise<RelationReadRow[]> {
+  const rows = await readDependencyRelations({
+    access,
+    touching: { entityIds: [input.entityId], mode: "either" },
+    type: input.type,
+  });
+  return filterRelationRowsByDirection(
+    rows,
+    input.entityId,
+    input.direction
+  ).slice(0, input.limit);
+}
+
 export const relationsRouter = router({
   /**
    * List all semantic relations in the current workspace.
@@ -417,24 +450,36 @@ export const relationsRouter = router({
       // A caller can only narrow the generic shared-relation floor. `null`
       // explicitly selects their own pod-wide relations; omitted means the
       // active workspace (or the complete user floor when no header exists).
-      const results = await scopedDb(
-        relationReadAccess(ctx, input.workspaceId)
-      ).findMany<typeof relations.$inferSelect>(relations, {
-        where: input.type ? eq(relations.type, input.type) : undefined,
-        // `id` is the unique tiebreak, and it is NOT optional. Postgres gives no
-        // stable order across separate LIMIT/OFFSET queries when the sort key
-        // ties, and bulk writes (seeding, import, agent link runs) share
-        // `created_at` to the millisecond — so a tied order can SKIP a row
-        // between pages, not merely repeat it. A skipped relation makes a
-        // paginating caller believe it holds a complete snapshot when it does
-        // not; the whiteboard then treats the absence as "deleted elsewhere"
-        // and removes that relation's projected arrow. Do not drop this.
-        orderBy: [desc(relations.createdAt), desc(relations.id)],
-        limit: input.limit,
-        offset: input.offset,
-      });
+      const access = relationReadAccess(ctx, input.workspaceId);
+      // The page is over the UNION of relation rows and dependency edges (one
+      // total order), so each source is read up to `offset + limit` and the
+      // merge slices the page — a dependency never shifts or drops a relation.
+      const window = input.offset + input.limit;
+      const [relationRows, dependencyRows] = await Promise.all([
+        scopedDb(access).findMany<typeof relations.$inferSelect>(relations, {
+          where: input.type ? eq(relations.type, input.type) : undefined,
+          // `id` is the unique tiebreak, and it is NOT optional. Postgres gives no
+          // stable order across separate LIMIT/OFFSET queries when the sort key
+          // ties, and bulk writes (seeding, import, agent link runs) share
+          // `created_at` to the millisecond — so a tied order can SKIP a row
+          // between pages, not merely repeat it. A skipped relation makes a
+          // paginating caller believe it holds a complete snapshot when it does
+          // not; the whiteboard then treats the absence as "deleted elsewhere"
+          // and removes that relation's projected arrow. Do not drop this.
+          orderBy: [desc(relations.createdAt), desc(relations.id)],
+          limit: window,
+        }),
+        readDependencyRelations({ access, type: input.type, limit: window }),
+      ]);
 
-      return { relations: results };
+      return {
+        relations: mergeRelationPages<RelationReadRow>(
+          relationRows,
+          dependencyRows,
+          input.offset,
+          input.limit
+        ),
+      };
     }),
 
   /**
@@ -513,15 +558,23 @@ export const relationsRouter = router({
         );
       }
 
-      const results = await scopedDb(access).findMany<
-        typeof relations.$inferSelect
-      >(relations, {
-        where: whereClause,
-        orderBy: [desc(relations.createdAt)],
-        limit: input.limit,
-      });
+      const [results, dependencyRows] = await Promise.all([
+        scopedDb(access).findMany<typeof relations.$inferSelect>(relations, {
+          where: whereClause,
+          orderBy: [desc(relations.createdAt)],
+          limit: input.limit,
+        }),
+        readEntityDependencyRelations(access, input),
+      ]);
 
-      return { relations: results };
+      return {
+        relations: mergeRelationPages<RelationReadRow>(
+          results,
+          dependencyRows,
+          0,
+          input.limit
+        ),
+      };
     }),
 
   /**
@@ -581,6 +634,14 @@ export const relationsRouter = router({
           limit: input.limit,
         });
       }
+
+      // Dependencies are links now; they are still this entity's relations.
+      relationRecords = mergeRelationPages<RelationReadRow>(
+        relationRecords,
+        await readEntityDependencyRelations(access, input),
+        0,
+        input.limit
+      );
 
       // Extract entity IDs (the "other" entity in each relation).
       // Polymorphic endpoints: a cell endpoint has a NULL entity id — skip it
@@ -649,10 +710,19 @@ export const relationsRouter = router({
         return counts;
       };
 
-      const [outCounts, inCounts] = await Promise.all([
+      const [outCounts, inCounts, dependencyRows] = await Promise.all([
         countByType("source"),
         countByType("target"),
+        readDependencyRelations({
+          access: relationReadAccess(ctx),
+          touching: { entityIds: [input.entityId], mode: "either" },
+        }),
       ]);
+      // Dependencies are links now; count them on their relation reading.
+      for (const r of dependencyRows) {
+        const side = r.sourceEntityId === input.entityId ? outCounts : inCounts;
+        side[r.type] = (side[r.type] ?? 0) + 1;
+      }
 
       const byType: Record<string, number> = {};
       let outgoingCount = 0;
@@ -1194,19 +1264,33 @@ export const relationsRouter = router({
         contextChannels,
         subjectSessions,
       ] = await Promise.all([
-        // ── 1. Semantic graph relations ─────────────────────────────────────
-        scopedDb(relationAccess).findMany<typeof relations.$inferSelect>(
-          relations,
-          {
-            where: and(
-              or(
-                eq(relations.sourceEntityId, input.entityId),
-                eq(relations.targetEntityId, input.entityId)
-              )
-            ),
-            orderBy: [desc(relations.createdAt)],
+        // ── 1. Semantic graph relations (+ dependency edges, read as relations)
+        Promise.all([
+          scopedDb(relationAccess).findMany<typeof relations.$inferSelect>(
+            relations,
+            {
+              where: and(
+                or(
+                  eq(relations.sourceEntityId, input.entityId),
+                  eq(relations.targetEntityId, input.entityId)
+                )
+              ),
+              orderBy: [desc(relations.createdAt)],
+              limit: input.limit,
+            }
+          ),
+          readEntityDependencyRelations(relationAccess, {
+            entityId: input.entityId,
+            direction: "both",
             limit: input.limit,
-          }
+          }),
+        ]).then(([rows, dependencyRows]) =>
+          mergeRelationPages<RelationReadRow>(
+            rows,
+            dependencyRows,
+            0,
+            input.limit
+          )
         ),
 
         // ── 2. Structural property links (both directions via index) ────────
@@ -1367,6 +1451,7 @@ export const relationsRouter = router({
           source: "graph",
           relationId: rel.id,
           relationType: rel.type,
+          ...(rel.storedAs ? { storedAs: rel.storedAs } : {}),
           createdAt: rel.createdAt,
         });
       }
@@ -1649,6 +1734,45 @@ export const relationsRouter = router({
         },
       });
       if (!relationToDelete) {
+        // A dependency read as a relation carries the LINK id (or, for an
+        // edge 0301 moved, the old relation id): remove it on the link door.
+        const edge = await findDependencyEdgeByRelationReadId(input.id);
+        if (edge) {
+          const removed = await governedRemoveDependencyLink({
+            edge,
+            userId: ctx.userId,
+            agentUserId: ctx.agentUserId ?? undefined,
+            approvedProposalId: ctx.governanceProposalId ?? undefined,
+            requestWorkspaceId: effectiveWorkspaceId ?? null,
+            sessionId: ctx.sessionId ?? undefined,
+            door: "relations.delete (dependency)",
+          });
+          switch (removed.status) {
+            case "removed":
+            case "absent":
+              return { status: "deleted" as const, storedAs: "link" as const };
+            case "proposed":
+              return {
+                status: "proposed" as const,
+                proposalId: removed.proposalId,
+              };
+            case "denied":
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: removed.reason,
+              });
+            case "refused":
+              throw new TRPCError({
+                code: trpcCodeForDependencyRefusal(removed.httpStatus),
+                message: removed.error,
+              });
+            default:
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "Unexpected dependency result",
+              });
+          }
+        }
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Relation not found",

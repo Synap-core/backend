@@ -54,6 +54,7 @@ import {
   focusSessions,
   projectTracks,
   projects,
+  drizzleSql,
 } from "@synap/database";
 import {
   DEPENDENCY_LINK_TYPE,
@@ -71,7 +72,11 @@ import {
 } from "@synap-core/types/connections";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
-import { checkLinkEndpointsVisible } from "../../routers/hub-protocol/rest/link-endpoint-visibility.js";
+import {
+  checkLinkEndpointVisible,
+  checkLinkEndpointsVisible,
+} from "../../routers/hub-protocol/rest/link-endpoint-visibility.js";
+import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
@@ -239,37 +244,38 @@ async function existingLinkId(
 export type DependencyRefusal =
   | { reason: "invalid_pair"; httpStatus: 400; error: string }
   | { reason: "self_edge"; httpStatus: 400; error: string }
-  | { reason: "not_found"; httpStatus: 403 | 404; error: string };
+  | { reason: "not_found"; httpStatus: 403 | 404; error: string }
+  | { reason: "forbidden"; httpStatus: 403; error: string };
 
-/** The FROM (blocked / replacing) end's own workspace. */
-async function endpointWorkspaceId(
+/** The FROM (blocked / replacing) end's own workspace and owner. */
+async function endpointHome(
   kind: string,
   id: string
-): Promise<string | null> {
+): Promise<{ workspaceId: string | null; ownerId: string | null } | null> {
   if (kind === "entity") {
     const [r] = await db
-      .select({ w: entities.workspaceId })
+      .select({ w: entities.workspaceId, o: entities.userId })
       .from(entities)
       .where(eq(entities.id, id))
       .limit(1);
-    return r?.w ?? null;
+    return r ? { workspaceId: r.w ?? null, ownerId: r.o ?? null } : null;
   }
   if (kind === "session") {
     const [r] = await db
-      .select({ w: focusSessions.workspaceId })
+      .select({ w: focusSessions.workspaceId, o: focusSessions.userId })
       .from(focusSessions)
       .where(eq(focusSessions.id, id))
       .limit(1);
-    return r?.w ?? null;
+    return r ? { workspaceId: r.w ?? null, ownerId: r.o ?? null } : null;
   }
   if (kind === "track") {
     const [r] = await db
-      .select({ w: projects.workspaceId })
+      .select({ w: projects.workspaceId, o: projectTracks.userId })
       .from(projectTracks)
       .innerJoin(projects, eq(projects.id, projectTracks.projectId))
       .where(eq(projectTracks.id, id))
       .limit(1);
-    return r?.w ?? null;
+    return r ? { workspaceId: r.w ?? null, ownerId: r.o ?? null } : null;
   }
   return null;
 }
@@ -277,11 +283,24 @@ async function endpointWorkspaceId(
 /**
  * The endpoint floor. Returns the edge's workspace (the FROM end's) on
  * success. An invisible and a nonexistent endpoint get the identical refusal.
+ *
+ * WHO MAY WRITE THE EDGE: the edge changes the BLOCKED (FROM) end's derived
+ * state — whether it is blocked, and so the next-hour picks of whoever works
+ * on it — so the caller must be able to WRITE that end
+ * (`assertWorkspaceWrite`: a write role in its workspace, or its owner when it
+ * is pod-personal), not merely see it.
+ *
+ * CREATE floors BOTH ends on visibility: you cannot declare a dependency on
+ * something you cannot see. DELETE floors only the BLOCKED end: a blocker the
+ * reader cannot see (`hidden` in the neighbourhood, its status never
+ * revealed) would otherwise hold their unit forever with no way out — the
+ * owner of the blocked end may always drop the edge.
  */
 export async function validateDependencyEdge(
   edge: DependencyEdgeInput,
   userId: string,
-  requestWorkspaceId: string | null = null
+  requestWorkspaceId: string | null = null,
+  action: "create" | "delete" = "create"
 ): Promise<
   { ok: true; workspaceId: string | null } | ({ ok: false } & DependencyRefusal)
 > {
@@ -308,11 +327,15 @@ export async function validateDependencyEdge(
           : "A unit of work cannot replace itself",
     };
   }
-  const refusal = await checkLinkEndpointsVisible(
-    edge,
-    userId,
-    requestWorkspaceId
-  );
+  const refusal =
+    action === "delete"
+      ? await checkLinkEndpointVisible(
+          edge.fromType,
+          edge.fromId,
+          userId,
+          requestWorkspaceId
+        )
+      : await checkLinkEndpointsVisible(edge, userId, requestWorkspaceId);
   if (refusal) {
     return {
       ok: false,
@@ -321,10 +344,24 @@ export async function validateDependencyEdge(
       error: refusal.error,
     };
   }
-  return {
-    ok: true,
-    workspaceId: await endpointWorkspaceId(edge.fromType, edge.fromId),
-  };
+  const home = await endpointHome(edge.fromType, edge.fromId);
+  try {
+    await assertWorkspaceWrite(db, userId, {
+      workspaceId: home?.workspaceId ?? null,
+      ownerId: home?.ownerId ?? null,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "forbidden",
+      httpStatus: 403,
+      error:
+        err instanceof Error
+          ? err.message
+          : "You cannot change what this waits on.",
+    };
+  }
+  return { ok: true, workspaceId: home?.workspaceId ?? null };
 }
 
 /** Validate + write, ungoverned — for doors whose write is already authorized. */
@@ -497,7 +534,8 @@ export async function governedRemoveDependencyLink(
   const valid = await validateDependencyEdge(
     input.edge,
     input.userId,
-    input.requestWorkspaceId ?? null
+    input.requestWorkspaceId ?? null,
+    "delete"
   );
   if (!valid.ok) {
     const { ok: _ok, ...refusal } = valid;
@@ -554,11 +592,19 @@ export async function applyApprovedDependencyLink(input: {
     toId: d.toId,
     linkType: d.linkType as DependencyLinkType,
   };
-  const valid = await validateDependencyEdge(edge, input.ownerUserId);
+  const valid = await validateDependencyEdge(
+    edge,
+    input.ownerUserId,
+    null,
+    input.action
+  );
   if (!valid.ok) {
     return {
       ok: false,
-      why: `${valid.error}. Both ends must still exist and be visible to the proposal's owner.`,
+      why:
+        input.action === "delete"
+          ? `${valid.error}. The waiting end must still exist and be writable by the proposal's owner.`
+          : `${valid.error}. Both ends must still exist and be visible to the proposal's owner, who must be able to write the waiting end.`,
     };
   }
   const attribution = { proposalId: input.proposalId };
@@ -595,6 +641,53 @@ export interface DependencyState {
   openBlockers: OpenBlocker[];
   /** Every declared blocker (outgoing `blocked_by`), open or cleared. */
   declared: DependencyNodeRef[];
+}
+
+const refKey = (r: DependencyNodeRef) => `${r.kind}:${r.id}`;
+
+/**
+ * Follow `replaces` INTO `start` (`X --replaces--> blocker`), bounded by
+ * {@link MAX_REPLACEMENT_HOPS}. Returns every `replaces` edge walked and adds
+ * each replacement it reaches to `seen` (cycle-safe). THE one walk — the
+ * one-node and the many-node readers both call it, so they cannot drift.
+ */
+async function followReplacements(
+  start: readonly DependencyNodeRef[],
+  seen: Set<string>
+): Promise<DependencyEdge[]> {
+  const walked: DependencyEdge[] = [];
+  let frontier: DependencyNodeRef[] = [...start];
+  for (let hop = 0; hop < MAX_REPLACEMENT_HOPS && frontier.length; hop++) {
+    const rows = await db
+      .select({
+        fromType: links.fromType,
+        fromId: links.fromId,
+        toType: links.toType,
+        toId: links.toId,
+        linkType: links.linkType,
+      })
+      .from(links)
+      .where(
+        and(
+          eq(links.linkType, REPLACES_LINK_TYPE),
+          or(
+            ...frontier.map((r) =>
+              and(eq(links.toType, r.kind as never), eq(links.toId, r.id))
+            )
+          )
+        )
+      );
+    walked.push(...rows);
+    frontier = rows
+      .map((r) => ({ kind: r.fromType as string, id: r.fromId }))
+      .filter((r) => {
+        const k = refKey(r);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+  }
+  return walked;
 }
 
 async function readStates(
@@ -739,38 +832,8 @@ export async function readDependencyState(
   }));
 
   // Follow `replaces` INTO the frontier: `X --replaces--> blocker`.
-  let frontier: DependencyNodeRef[] = declared;
-  const seen = new Set(frontier.map((r) => `${r.kind}:${r.id}`));
-  for (let hop = 0; hop < MAX_REPLACEMENT_HOPS && frontier.length; hop++) {
-    const rows = await db
-      .select({
-        fromType: links.fromType,
-        fromId: links.fromId,
-        toType: links.toType,
-        toId: links.toId,
-        linkType: links.linkType,
-      })
-      .from(links)
-      .where(
-        and(
-          eq(links.linkType, REPLACES_LINK_TYPE),
-          or(
-            ...frontier.map((r) =>
-              and(eq(links.toType, r.kind as never), eq(links.toId, r.id))
-            )
-          )
-        )
-      );
-    edges.push(...rows);
-    frontier = rows
-      .map((r) => ({ kind: r.fromType as string, id: r.fromId }))
-      .filter((r) => {
-        const k = `${r.kind}:${r.id}`;
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-  }
+  const seen = new Set(declared.map(refKey));
+  edges.push(...(await followReplacements(declared, seen)));
 
   const refs = [...seen].map((k) => {
     const i = k.indexOf(":");
@@ -840,36 +903,13 @@ export async function readDependencyFacts(
   ]);
   const edges: DependencyEdge[] = [...declaredRows];
 
-  // Follow `replaces` INTO the blockers, bounded — exactly as the one-node read.
-  let frontier: DependencyNodeRef[] = declaredRows.map((r) => ({
+  // Follow `replaces` INTO the blockers, bounded — the one-node read's helper.
+  const blockers: DependencyNodeRef[] = declaredRows.map((r) => ({
     kind: r.toType as string,
     id: r.toId,
   }));
-  const seen = new Set(frontier.map(nodeKey));
-  for (let hop = 0; hop < MAX_REPLACEMENT_HOPS && frontier.length; hop++) {
-    const rows = await db
-      .select(cols)
-      .from(links)
-      .where(
-        and(
-          eq(links.linkType, REPLACES_LINK_TYPE),
-          or(
-            ...frontier.map((r) =>
-              and(eq(links.toType, r.kind as never), eq(links.toId, r.id))
-            )
-          )
-        )
-      );
-    edges.push(...rows);
-    frontier = rows
-      .map((r) => ({ kind: r.fromType as string, id: r.fromId }))
-      .filter((r) => {
-        const k = nodeKey(r);
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-  }
+  const seen = new Set(blockers.map(nodeKey));
+  edges.push(...(await followReplacements(blockers, seen)));
   const dependents = dependentRows.map((r) => ({
     kind: r.fromType as string,
     id: r.fromId,
@@ -958,4 +998,43 @@ export function trpcCodeForDependencyRefusal(
     : httpStatus === 403
       ? "FORBIDDEN"
       : "NOT_FOUND";
+}
+
+/**
+ * The dependency edge a relation reader's id names: the LINK id a relation
+ * read returned (`storedAs: "link"`), or the relation id migration 0301 moved
+ * (`metadata.migratedFromRelationId`). `null` when it names neither. No
+ * authorization here — the caller hands the edge to a governed door, which
+ * floors it.
+ */
+export async function findDependencyEdgeByRelationReadId(
+  id: string
+): Promise<DependencyEdgeInput | null> {
+  const [row] = await db
+    .select({
+      fromType: links.fromType,
+      fromId: links.fromId,
+      toType: links.toType,
+      toId: links.toId,
+      linkType: links.linkType,
+    })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, DEPENDENCY_LINK_TYPE),
+        or(
+          eq(links.id, id),
+          drizzleSql`${links.metadata}->>'migratedFromRelationId' = ${id}`
+        )
+      )
+    )
+    .limit(1);
+  if (!row) return null;
+  return {
+    fromType: row.fromType as string,
+    fromId: row.fromId,
+    toType: row.toType as string,
+    toId: row.toId,
+    linkType: DEPENDENCY_LINK_TYPE,
+  };
 }

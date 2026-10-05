@@ -322,6 +322,18 @@ export async function traverseEntityGraph(params: {
   relationshipTypes?: string[];
   /** When set, only traverse relations within these workspaces (shared-pod safety). */
   workspaceIds?: string[];
+  /**
+   * Edges that are relations to the reader but are not stored in `relations`
+   * — the dependency edge (`links` `blocked_by`, read as `blocks` /
+   * `depends_on`). The api injects its ONE visibility-floored projection
+   * (`services/links/dependency-relation-read.ts`); this package cannot
+   * import the access layer. Already filtered to `relationshipTypes`.
+   */
+  readExtraEdges?: (
+    entityId: string
+  ) => Promise<
+    Array<{ source_entity_id: string; target_entity_id: string; type: string }>
+  >;
 }): Promise<
   Array<{
     entityId: string;
@@ -337,6 +349,7 @@ export async function traverseEntityGraph(params: {
     maxDepth = 2,
     relationshipTypes,
     workspaceIds,
+    readExtraEdges,
   } = params;
   const safeDepth = Math.min(maxDepth, 3);
   const hasWsFilter = workspaceIds && workspaceIds.length > 0;
@@ -397,6 +410,10 @@ export async function traverseEntityGraph(params: {
                 AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
               LIMIT 50
             `;
+      }
+
+      if (readExtraEdges) {
+        rows = [...rows, ...(await readExtraEdges(node.entityId))];
       }
 
       for (const row of rows) {

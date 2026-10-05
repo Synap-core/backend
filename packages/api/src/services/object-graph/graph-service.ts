@@ -61,6 +61,7 @@ import { ownAdjunctFilter, authoredByUser } from "../agent-identity-service.js";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
+import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 import {
   userVisibleWhere,
   workspaceLensWhere,
@@ -166,6 +167,8 @@ export interface GraphNode {
 export interface GraphNeighbor extends GraphNode {
   /** linkType (config edge) or relationType (data edge). */
   edgeType: string;
+  /** The far end is on the edge but not visible to the reader (no name, no state). */
+  hidden?: true;
   direction: "outgoing" | "incoming" | "structural";
   /** Which substrate the edge came from — glass-box provenance. */
   via:
@@ -749,7 +752,12 @@ export async function getLinkNeighbors(
     // A document is owner-private: one the caller cannot see is another
     // person's raw capture — dropped, never surfaced as a bare id.
     if (!node && r.kind === "document") return [];
+    // A table-backed far end that did not hydrate is on the edge but not
+    // visible to this reader (a blocker in another space): flag it so the
+    // shared model names it "Hidden blocker" and withholds its state.
+    const hidden = !node && KIND_TABLE[tableKindOf(r.kind)] !== undefined;
     return {
+      ...(hidden ? { hidden: true as const } : {}),
       // The hydrated kind: an intake-source document is emitted as `capture`.
       kind: node?.kind ?? r.kind,
       id: r.id,
@@ -779,50 +787,55 @@ export async function getLinkNeighbors(
 export function connectionsToNeighbors(
   connections: EntityConnection[]
 ): GraphNeighbor[] {
-  return connections.map((c) => {
-    const isEntity = c.source === "graph" || c.source === "property";
-    const isSession = c.source === "focus_session";
-    const id = isSession
-      ? (c.focusSessionId ?? c.entityId)
-      : isEntity
-        ? c.entityId
-        : (c.channelId ?? c.entityId);
+  // A dependency read as a relation (`storedAs: "link"`) is the same `links`
+  // `blocked_by` row the envelope's links half already carries — folding it
+  // in again would draw one dependency twice under two edge types.
+  return connections
+    .filter((c) => c.storedAs !== "link")
+    .map((c) => {
+      const isEntity = c.source === "graph" || c.source === "property";
+      const isSession = c.source === "focus_session";
+      const id = isSession
+        ? (c.focusSessionId ?? c.entityId)
+        : isEntity
+          ? c.entityId
+          : (c.channelId ?? c.entityId);
 
-    return {
-      kind: isEntity ? "entity" : isSession ? "session" : "channel",
-      id,
-      name: isEntity
-        ? (c.entity?.title ?? c.label ?? id)
-        : isSession
-          ? (c.focusSessionGoal ?? c.label ?? id)
-          : (c.channelTitle ?? c.label ?? id),
-      subtype: isEntity ? (c.entity?.type ?? null) : null,
-      subtypes: isEntity
-        ? [
-            ...(c.entity?.type ? [c.entity.type] : []),
-            ...(c.entity?.facetSlugs ?? []),
-          ]
-        : [],
-      workspaceId: isEntity
-        ? (c.entity?.workspaceId ?? null)
-        : isSession
-          ? (c.focusSessionWorkspaceId ?? null)
-          : (c.channelWorkspaceId ?? null),
-      edgeType:
-        c.relationType ??
-        c.propertySlug ??
-        c.channelRelationshipType ??
-        c.label,
-      direction: c.direction,
-      via: isEntity
-        ? c.source === "graph"
-          ? "relations"
-          : "property"
-        : isSession
-          ? "session"
-          : "channel",
-    };
-  });
+      return {
+        kind: isEntity ? "entity" : isSession ? "session" : "channel",
+        id,
+        name: isEntity
+          ? (c.entity?.title ?? c.label ?? id)
+          : isSession
+            ? (c.focusSessionGoal ?? c.label ?? id)
+            : (c.channelTitle ?? c.label ?? id),
+        subtype: isEntity ? (c.entity?.type ?? null) : null,
+        subtypes: isEntity
+          ? [
+              ...(c.entity?.type ? [c.entity.type] : []),
+              ...(c.entity?.facetSlugs ?? []),
+            ]
+          : [],
+        workspaceId: isEntity
+          ? (c.entity?.workspaceId ?? null)
+          : isSession
+            ? (c.focusSessionWorkspaceId ?? null)
+            : (c.channelWorkspaceId ?? null),
+        edgeType:
+          c.relationType ??
+          c.propertySlug ??
+          c.channelRelationshipType ??
+          c.label,
+        direction: c.direction,
+        via: isEntity
+          ? c.source === "graph"
+            ? "relations"
+            : "property"
+          : isSession
+            ? "session"
+            : "channel",
+      };
+    });
 }
 
 /** Focus kinds whose grants live in `vault_grants` (the grantables + the
@@ -1563,10 +1576,18 @@ export async function getStructureNeighbors(
         via: "structure",
       });
     }
+    // Kind-aware: a receipt (the container an agent's writes are filed
+    // under) is not a step of the track — the ONE kind predicate, as a WHERE.
+    // SESSION-KIND-LENS-EXEMPT: id-only structure refs, not a page of session rows — each id hydrates through hydrateNodes; receipts are excluded here by sessionKindWhere.
     const sessions = await db
       .select({ id: focusSessions.id })
       .from(focusSessions)
-      .where(eq(focusSessions.trackId, id))
+      .where(
+        and(
+          eq(focusSessions.trackId, id),
+          or(sessionKindWhere("work"), sessionKindWhere("run"))
+        )
+      )
       .orderBy(desc(focusSessions.createdAt))
       .limit(STRUCTURE_NEIGHBOR_CAP);
     for (const row of sessions) {

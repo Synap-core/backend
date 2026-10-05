@@ -56,6 +56,7 @@ import {
   type SystemMapOverview,
 } from "../services/object-graph/system-map.js";
 import { relationsRouter } from "./relations.js";
+import { readDependencyRelations } from "../services/links/dependency-relation-read.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
@@ -710,14 +711,24 @@ export const graphRouter = router({
         );
       }
 
-      const fetchedRelations = await db.query.relations.findMany({
-        where: relationWhere,
-        orderBy: [desc(relations.createdAt)],
-      });
+      const [fetchedRelations, dependencyRelations] = await Promise.all([
+        db.query.relations.findMany({
+          where: relationWhere,
+          orderBy: [desc(relations.createdAt)],
+        }),
+        // Dependencies are links now; the graph still draws them.
+        readDependencyRelations({
+          access: AccessContext.from(ctx),
+          touching: {
+            entityIds: input.entityIds,
+            mode: input.includeExternalRelations ? "either" : "both",
+          },
+        }),
+      ]);
 
       return {
         entities: fetchedEntities,
-        relations: fetchedRelations,
+        relations: [...fetchedRelations, ...dependencyRelations],
       };
     }),
 
@@ -817,6 +828,12 @@ export const graphRouter = router({
         ),
       });
 
+      // Dependencies are links now; both ends in the node set, as above.
+      const dependencyRelations = await readDependencyRelations({
+        access: AccessContext.from(ctx),
+        touching: { entityIds: ids, mode: "both" },
+      });
+
       const facetSlugsByEntity = await loadFacetSlugsBatch(
         db,
         ids,
@@ -827,7 +844,7 @@ export const graphRouter = router({
           ...entity,
           facetSlugs: facetSlugsByEntity.get(entity.id) ?? [],
         })),
-        relations: relationRows,
+        relations: [...relationRows, ...dependencyRelations],
       };
     }),
 
@@ -982,7 +999,12 @@ export const graphRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const refusal = await checkLinkEndpointsVisible(
-        { fromType: input.kind, fromId: input.id, toType: input.kind, toId: input.id },
+        {
+          fromType: input.kind,
+          fromId: input.id,
+          toType: input.kind,
+          toId: input.id,
+        },
         ctx.userId,
         ctx.workspaceId ?? null
       );
