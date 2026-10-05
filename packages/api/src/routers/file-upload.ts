@@ -105,7 +105,16 @@ export interface UploadEntityFields {
   profileSlug: string;
   storageKeyProperty: string;
   properties: Record<string, unknown>;
+  /**
+   * The project the upload is filed into (the lens it was made under — e.g. an
+   * asset added to a project's brand). Stamped by the materializer's one
+   * project-link door (`linkEntityToProject`), never re-derived here.
+   */
+  projectId?: string;
 }
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function parseUploadEntityFields(
   body: Record<string, unknown>
@@ -127,10 +136,15 @@ export function parseUploadEntityFields(
     }
     properties = parsed as Record<string, unknown>;
   }
+  const projectId = str(body["projectId"]);
+  if (projectId !== undefined && !UUID_RE.test(projectId)) {
+    return { error: "projectId must be a UUID" };
+  }
   return {
     profileSlug: str(body["profileSlug"]) ?? "file",
     storageKeyProperty: str(body["storageKeyProperty"]) ?? "storageKey",
     properties,
+    ...(projectId ? { projectId } : {}),
   };
 }
 
@@ -338,6 +352,8 @@ export async function uploadBufferAsFileEntity(params: {
   storageKeyProperty?: string;
   /** Extra entity properties merged in (e.g. from the multipart `properties`). */
   properties?: Record<string, unknown>;
+  /** File the entity into this project (see {@link UploadEntityFields.projectId}). */
+  projectId?: string;
 }): Promise<UploadedFileEntity> {
   const stored = await storeDocumentFromBuffer({
     userId: params.userId,
@@ -367,6 +383,8 @@ export async function createFileEntityForStoredDocument(
     profileSlug?: string;
     storageKeyProperty?: string;
     properties?: Record<string, unknown>;
+    /** File the entity into this project (see {@link UploadEntityFields.projectId}). */
+    projectId?: string;
     /**
      * Keep the document + bytes when the entity create fails. The presigned
      * finalize sets it: its bytes cannot be re-sent cheaply, and a retry
@@ -413,6 +431,10 @@ export async function createFileEntityForStoredDocument(
       {
         db,
         eventRepo: eventRepository,
+        // The materializer's project-link invariant — the same door
+        // (`linkEntityToProject`, visibility-checked) every create files
+        // `belongs_to_project` through.
+        projectId: params.projectId ?? null,
         // Attribute honestly: an agent-key upload is `ai_agent` (attributed to
         // the agent), a Kratos-session upload is `human`. Never falsify agent
         // writes as human in the audit trail.
@@ -490,6 +512,7 @@ fileUploadApp.post("/upload", async (c) => {
       profileSlug,
       storageKeyProperty,
       properties: extraProperties,
+      projectId,
     } = fields;
 
     // Validate required fields
@@ -551,6 +574,7 @@ fileUploadApp.post("/upload", async (c) => {
       profileSlug,
       storageKeyProperty,
       properties: extraProperties,
+      projectId,
     });
     // Use the canonical entity ID returned by the repository
     const createdEntityId = createdEntity.id;
@@ -699,7 +723,7 @@ fileUploadApp.post("/uploads", async (c) => {
 // ---------------------------------------------------------------------------
 // POST /uploads/finalize — step 3: the PUT landed; create the entity exactly as
 // `/upload` does. Body (JSON): { uploadToken, title?, channelId?, profileSlug?,
-// storageKeyProperty?, properties? }
+// storageKeyProperty?, properties?, projectId? }
 // ---------------------------------------------------------------------------
 fileUploadApp.post("/uploads/finalize", async (c) => {
   const userId = c.get("userId");
@@ -737,6 +761,7 @@ fileUploadApp.post("/uploads/finalize", async (c) => {
       profileSlug: fields.profileSlug,
       storageKeyProperty: fields.storageKeyProperty,
       properties: fields.properties,
+      projectId: fields.projectId,
       keepDocumentOnFailure: true,
     });
     return c.json(
