@@ -108,15 +108,43 @@ export const NODE_ZONE_SPECS = {
   related: { heading: "Related", empty: OMIT },
 } as const satisfies Record<NodeZone, NodeZoneSpec>;
 
-/** Heading per zone — {@link NODE_ZONE_SPECS}' `heading`, keyed by zone. */
-export const NODE_ZONE_HEADINGS: Readonly<Record<NodeZone, string>> = {
-  cameFrom: NODE_ZONE_SPECS.cameFrom.heading,
-  became: NODE_ZONE_SPECS.became.heading,
-  blockedBy: NODE_ZONE_SPECS.blockedBy.heading,
-  servesAndBlocks: NODE_ZONE_SPECS.servesAndBlocks.heading,
-  workingOnIt: NODE_ZONE_SPECS.workingOnIt.heading,
-  related: NODE_ZONE_SPECS.related.heading,
-};
+/** Heading per zone — DERIVED from {@link NODE_ZONE_SPECS}, never a second table. */
+export const NODE_ZONE_HEADINGS = Object.fromEntries(
+  NODE_ZONES.map((zone) => [zone, NODE_ZONE_SPECS[zone].heading])
+) as Readonly<Record<NodeZone, string>>;
+
+/**
+ * The read state of a node neighbourhood — ONE rule for every surface:
+ *
+ *   failed   the graph read failed (anything but NOT_FOUND)
+ *   missing  the graph said NOT_FOUND: the object does not exist or is not
+ *            visible — a different answer from "it has no ties"
+ *   loading  the graph is in flight, OR it landed but the relation vocabulary
+ *            is still pending (zone placement and labels read the vocabulary;
+ *            drawing before it lands paints user relations as "Related" and
+ *            then moves them). A FAILED vocabulary read does not hold the page:
+ *            the zones fall back to humanized slugs.
+ *   ready    draw the zones
+ */
+export type NodeNeighbourhoodState = "loading" | "failed" | "missing" | "ready";
+
+export function nodeNeighbourhoodState(input: {
+  query: {
+    isError: boolean;
+    isLoading?: boolean;
+    hasData: boolean;
+    /** The tRPC error code (`error.data.code`) when `isError`. */
+    errorCode?: string | null;
+  };
+  vocab: { pending: boolean };
+}): NodeNeighbourhoodState {
+  const { query, vocab } = input;
+  if (query.isError)
+    return query.errorCode === "NOT_FOUND" ? "missing" : "failed";
+  if (query.isLoading || !query.hasData) return "loading";
+  if (vocab.pending) return "loading";
+  return "ready";
+}
 
 /**
  * The empty answer of `zone` for THIS focus. "Nothing blocks it" is only true

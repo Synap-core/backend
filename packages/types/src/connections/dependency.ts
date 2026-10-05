@@ -307,3 +307,79 @@ export function dependencyLinkAsRelation(
     ? { sourceId: toId, targetId: fromId }
     : { sourceId: fromId, targetId: toId };
 }
+
+/**
+ * Marker on a relation-shaped row that is really THE dependency edge (a
+ * `links` `blocked_by` row): `id` is the LINK id, so a reader that writes back
+ * (delete, undo) goes through the link door, never the relation table.
+ */
+export const DEPENDENCY_STORED_AS = "link" as const;
+
+/** A `blocked_by` link as the relation readers see it. */
+export interface DependencyRelationRow {
+  /** The LINK id. */
+  id: string;
+  storedAs: typeof DEPENDENCY_STORED_AS;
+  type: RelationDependencyType;
+  sourceEntityId: string;
+  targetEntityId: string;
+  /**
+   * The relation row this edge was migrated from (0301), when there was one —
+   * so a reader that held the old id (a whiteboard arrow) can re-key to `id`.
+   */
+  legacyRelationId: string | null;
+  workspaceId: string | null;
+  metadata: Record<string, unknown>;
+  createdBy: string | null;
+  createdAt: Date | string;
+}
+
+/**
+ * Read ONE `blocked_by` link (entity ↔ entity) back as the relation row every
+ * relation reader returns. The slug is the one the edge was WRITTEN under
+ * (`metadata.relationType`, stamped by the relation door and migration 0301),
+ * so a `blocks` arrow reads back as `blocks` in the same direction; an edge
+ * written on the link door itself reads as `depends_on` (blocked → blocker).
+ * Any other link (non-entity end, other type) ⇒ `null`: it is not a relation.
+ */
+export function dependencyLinkAsRelationRow(link: {
+  id: string;
+  fromType: string;
+  fromId: string;
+  toType: string;
+  toId: string;
+  linkType: string;
+  workspaceId?: string | null;
+  metadata?: unknown;
+  createdBy?: string | null;
+  createdAt: Date | string;
+}): DependencyRelationRow | null {
+  if (link.linkType !== DEPENDENCY_LINK_TYPE) return null;
+  if (link.fromType !== "entity" || link.toType !== "entity") return null;
+  const metadata =
+    link.metadata &&
+    typeof link.metadata === "object" &&
+    !Array.isArray(link.metadata)
+      ? (link.metadata as Record<string, unknown>)
+      : {};
+  const type: RelationDependencyType =
+    metadata.relationType === "blocks" ? "blocks" : "depends_on";
+  const { sourceId, targetId } = dependencyLinkAsRelation(
+    type,
+    link.fromId,
+    link.toId
+  );
+  const legacy = metadata.migratedFromRelationId;
+  return {
+    id: link.id,
+    storedAs: DEPENDENCY_STORED_AS,
+    type,
+    sourceEntityId: sourceId,
+    targetEntityId: targetId,
+    legacyRelationId: typeof legacy === "string" ? legacy : null,
+    workspaceId: link.workspaceId ?? null,
+    metadata,
+    createdBy: link.createdBy ?? null,
+    createdAt: link.createdAt,
+  };
+}
