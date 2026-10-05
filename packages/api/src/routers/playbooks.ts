@@ -2490,6 +2490,19 @@ export const playbooksRouter = router({
          * `runPlaybookDoor`) pass `"owe"`.
          */
         onMissingRequired: z.enum(["refuse", "owe"]).optional(),
+        /**
+         * A goal template that replaces the playbook's own `goalTemplate` for
+         * THIS run — a rule's `goalOverride`. `@{arg:}` references are
+         * substituted against `params` (`resolveGoal`, the spine's one
+         * resolver). Optional and additive: absent ⇒ the playbook's goal.
+         */
+        goalOverride: z.string().trim().min(1).max(4000).optional(),
+        /**
+         * Which agent answers this run (`agents.slug`, the IS `agentType`).
+         * Absent ⇒ the default orchestrator. An unknown slug fails the run in
+         * the executor, never silently swaps agents.
+         */
+        agentType: z.string().trim().min(1).max(120).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2665,6 +2678,9 @@ export const playbooksRouter = router({
           ...(input.trackId && input.trackStage
             ? { trackStage: input.trackStage }
             : {}),
+          // A gated run keeps the goal + agent it was asked with.
+          ...(input.goalOverride ? { goalOverride: input.goalOverride } : {}),
+          ...(input.agentType ? { agentType: input.agentType } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -2708,6 +2724,10 @@ export const playbooksRouter = router({
         ...(input.onMissingRequired
           ? { onMissingRequired: input.onMissingRequired }
           : {}),
+        ...(input.goalOverride
+          ? { goalTemplateOverride: input.goalOverride }
+          : {}),
+        ...(input.agentType ? { agentType: input.agentType } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });

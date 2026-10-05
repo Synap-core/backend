@@ -363,6 +363,22 @@ describe("(6) playbook/run refuses a run whose arguments the PROPOSAL lost", () 
     expect(b).toContain("inner.playbookId");
     expect(b).toContain("raw.playbookId");
   });
+
+  it("replays the rule's goal + agent into the run door, which accepts them", () => {
+    // A propose-mode rule stores its `goalOverride` / `agentType` on the
+    // proposal (`proposeRulePlaybookRun`); approval lost both before, because
+    // `playbooks.run` had no such inputs. Scan-level (granularity: the
+    // executor block and the door's runPlaybook call) — the behaviour of the
+    // propose half is pinned in jobs `playbook-run-propose.test.ts`.
+    expect(b).toMatch(/goalOverride:\s*inner\.goalOverride/);
+    expect(b).toMatch(/agentType:\s*inner\.agentType/);
+    const door = readFileSync(
+      join(process.cwd(), "src/routers/playbooks.ts"),
+      "utf8"
+    );
+    expect(door).toMatch(/goalTemplateOverride:\s*input\.goalOverride/);
+    expect(door).toMatch(/agentType:\s*input\.agentType/);
+  });
 });
 
 describe("(6b) playbook/run is at-most-once — runPlaybook is NOT idempotent", () => {

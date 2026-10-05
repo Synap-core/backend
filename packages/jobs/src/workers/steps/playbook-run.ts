@@ -229,6 +229,16 @@ export async function executePlaybookRun(
       playbookName: data.playbookName,
       params: resolvedParams,
       subjectId: resolvedSubjectId ?? null,
+      // The rule's OWN goal and agent ride with the proposal, so the run a
+      // person approves is the run the rule described — not the playbook's
+      // defaults. The goal's {{mustache}} is resolved NOW, against this
+      // trigger's context, because the approval replay has no StepContext; an
+      // `@{arg:}` remainder is substituted against `params` by the run door.
+      ...(typeof data.goalOverride === "string" &&
+      data.goalOverride.trim() !== ""
+        ? { goalOverride: resolveTemplate(data.goalOverride, context) }
+        : {}),
+      ...(data.agentType ? { agentType: data.agentType } : {}),
       sessionId: automationContext.focusSessionId,
       stepRunId: attribution?.stepRunId,
       nodeId: attribution?.nodeId,

@@ -880,6 +880,10 @@ export async function proposeRulePlaybookRun(opts: {
   playbookName?: string;
   params: Record<string, unknown>;
   subjectId: string | null;
+  /** The rule's goal for the run (replaces the playbook's goalTemplate). */
+  goalOverride?: string;
+  /** The rule's agent selector (`agents.slug`). */
+  agentType?: string;
   sessionId?: string;
   stepRunId?: string;
   nodeId?: string;
@@ -929,6 +933,9 @@ export async function proposeRulePlaybookRun(opts: {
     ...(playbookName ? { playbookName, name: playbookName } : {}),
     params,
     ...(subjectId ? { subjectId } : {}),
+    // Replayed by the `playbook/run` approval executor into `playbooks.run`.
+    ...(opts.goalOverride ? { goalOverride: opts.goalOverride } : {}),
+    ...(opts.agentType ? { agentType: opts.agentType } : {}),
   };
 
   const { proposal, deduped } = await insertPendingProposal({

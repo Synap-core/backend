@@ -175,6 +175,28 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
     });
   });
 
+  it("the rule's own goal (mustache resolved now) and agent ride with the proposal", async () => {
+    h.selectResults.push([], [{ userType: "human" }]);
+    await executePlaybookRun(
+      {
+        playbookId: "pb-1",
+        mode: "propose",
+        goalOverride: "Qualify {{trigger.payload.title}} as a lead",
+        agentType: "sales",
+      },
+      context({ subjectId: "ent-1", title: "Acme" }),
+      "ws-1",
+      "user-1",
+      AUTOMATION as never
+    );
+    const row = (
+      h.insertPendingProposalMock.mock.calls as unknown[][]
+    )[0][0] as { data: { data: Record<string, unknown> } };
+    // Resolved against THIS trigger — the approval replay has no context.
+    expect(row.data.data.goalOverride).toBe("Qualify Acme as a lead");
+    expect(row.data.data.agentType).toBe("sales");
+  });
+
   it("an agent-owned rule proposes AS that agent", async () => {
     h.selectResults.push([], [{ userType: "agent" }]);
     await executePlaybookRun(

@@ -669,6 +669,18 @@ export function registerPlaybookExecutors(): void {
           typeof inner.trackStage === "string"
             ? { trackStage: inner.trackStage }
             : {}),
+          // The goal + agent the run was asked WITH (a propose-mode rule's
+          // `goalOverride` / `agentType`, or a gated `playbooks.run` that named
+          // them). Without these an approved rule run silently fell back to
+          // the playbook's goal and the default agent.
+          ...(typeof inner.goalOverride === "string" &&
+          inner.goalOverride.trim() !== ""
+            ? { goalOverride: inner.goalOverride }
+            : {}),
+          ...(typeof inner.agentType === "string" &&
+          inner.agentType.trim() !== ""
+            ? { agentType: inner.agentType }
+            : {}),
           // Attribution is the ONE dropped field the proposal can restore, so
           // the session/run/channel are owned by the agent that asked, exactly
           // as on the direct path (`actorId = agentUserId ?? userId`).
