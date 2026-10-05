@@ -26,6 +26,11 @@ import {
 import { channelContextItems } from "@synap/database/schema";
 import { authMiddleware } from "@synap/auth";
 import { refuseGuestSession } from "../access/guest-containment.js";
+import {
+  requestPresignedUpload,
+  storeDocumentFromPresignedUpload,
+  parsePresignedUploadKey,
+} from "./file-upload-presign.js";
 
 const logger = createLogger({ module: "file-upload" });
 
@@ -43,6 +48,11 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/zip",
+  // Brand fonts (C4: 5 MB cap). Font files are inert data — no script vector.
+  "font/woff2",
+  "font/woff",
+  "font/ttf",
+  "font/otf",
 ]);
 
 export function isAllowedMimeType(mimeType: string): boolean {
@@ -52,12 +62,128 @@ export function isAllowedMimeType(mimeType: string): boolean {
   return ALLOWED_MIME_TYPES.has(mimeType);
 }
 
-function brandAssetKindForMimeType(mimeType: string): string {
+const MB = 1024 * 1024;
+
+/**
+ * Per-mime upload ceiling (contract C4). The buffered multipart doors are still
+ * bounded by {@link MAX_FILE_SIZE} (the API holds the whole body in memory);
+ * anything larger goes through the presigned lane (`file-upload-presign.ts`),
+ * where the bytes go straight to object storage.
+ */
+export function maxUploadBytesForMimeType(mimeType: string): number {
+  if (mimeType.startsWith("video/")) return 500 * MB;
+  if (mimeType.startsWith("audio/")) return 100 * MB;
+  if (mimeType === "application/zip") return 200 * MB;
+  if (mimeType.startsWith("font/")) return 5 * MB;
+  return MAX_FILE_SIZE;
+}
+
+/** Byte cap of the buffered (multipart / base64) doors for this mime. */
+export function maxBufferedUploadBytes(mimeType: string): number {
+  return Math.min(MAX_FILE_SIZE, maxUploadBytesForMimeType(mimeType));
+}
+
+/** `brand-asset.asset-kind` for an upload's mime (contract C3). */
+export function brandAssetKindForMimeType(mimeType: string): string {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("video/")) return "video";
   if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("font/")) return "font";
   if (mimeType === "application/pdf") return "document";
   return "other";
+}
+
+/**
+ * The entity-shaping fields every upload door accepts — ONE parser, so the
+ * Kratos `/upload`, the Hub `/files` multipart door and the presigned finalize
+ * read `profileSlug` / `storageKeyProperty` / `properties` identically.
+ */
+export interface UploadEntityFields {
+  profileSlug: string;
+  storageKeyProperty: string;
+  properties: Record<string, unknown>;
+}
+
+export function parseUploadEntityFields(
+  body: Record<string, unknown>
+): UploadEntityFields | { error: string } {
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  let properties: Record<string, unknown> = {};
+  const raw = body["properties"];
+  if (raw !== undefined && raw !== null && raw !== "") {
+    let parsed: unknown = raw;
+    if (typeof raw === "string") {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return { error: "properties must be valid JSON" };
+      }
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { error: "properties must be a JSON object" };
+    }
+    properties = parsed as Record<string, unknown>;
+  }
+  return {
+    profileSlug: str(body["profileSlug"]) ?? "file",
+    storageKeyProperty: str(body["storageKeyProperty"]) ?? "storageKey",
+    properties,
+  };
+}
+
+/**
+ * The property bag a stored upload's entity is created with — shared by the
+ * direct materializer path and the governed `entities.create` path so both
+ * shape a `brand-asset` (asset-document-id + asset-kind) and a canonical `file`
+ * (no duplicated storage pointers) the same way.
+ */
+export function uploadEntityProperties(params: {
+  profileSlug: string;
+  storageKeyProperty?: string;
+  properties?: Record<string, unknown>;
+  mimeType: string;
+  size: number;
+  filename: string;
+  documentId: string;
+  storageKey: string;
+}): Record<string, unknown> {
+  const { profileSlug, mimeType, filename, documentId } = params;
+  const extraProperties = params.properties ?? {};
+  const storageKeyProperty = params.storageKeyProperty || "storageKey";
+  // Legacy callers can still choose the storage-key property, but brand uploads
+  // link through asset-document-id so asset-url remains an actual external URL.
+  const effectiveStorageKeyProperty =
+    profileSlug === "brand-asset" && storageKeyProperty === "asset-url"
+      ? "storageKey"
+      : storageKeyProperty;
+  const documentProperties =
+    profileSlug === "brand-asset"
+      ? {
+          "asset-document-id": documentId,
+          "asset-kind":
+            (extraProperties["asset-kind"] as string | undefined) ??
+            brandAssetKindForMimeType(mimeType),
+        }
+      : {};
+  // Canonical `file` entities keep their storage pointers on the documents
+  // row + entities.documentId ONLY — never duplicated into entity properties
+  // (and `fileName` is dropped in favour of the entity title). Other profiles
+  // (`brand-asset`) still receive the property pointers below.
+  const storagePointerProperties =
+    profileSlug === "file"
+      ? {}
+      : {
+          fileName: filename,
+          documentId,
+          [effectiveStorageKeyProperty]: params.storageKey,
+        };
+  return {
+    ...extraProperties,
+    ...documentProperties,
+    mimeType,
+    fileSize: params.size,
+    ...storagePointerProperties,
+  };
 }
 
 /**
@@ -210,63 +336,46 @@ export async function uploadBufferAsFileEntity(params: {
   /** Extra entity properties merged in (e.g. from the multipart `properties`). */
   properties?: Record<string, unknown>;
 }): Promise<UploadedFileEntity> {
-  const { userId, workspaceId, buffer, mimeType, filename } = params;
+  const stored = await storeDocumentFromBuffer({
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+    buffer: params.buffer,
+    mimeType: params.mimeType,
+    filename: params.filename,
+    title: params.title,
+  });
+  return createFileEntityForStoredDocument(stored, params);
+}
+
+/**
+ * The entity half of {@link uploadBufferAsFileEntity}: given a stored document
+ * (from the buffered door OR a finalized presigned upload), materialize its
+ * entity and — on failure — reverse the document + storage objects.
+ */
+export async function createFileEntityForStoredDocument(
+  stored: StoredDocument,
+  params: {
+    userId: string;
+    workspaceId: string | null;
+    mimeType: string;
+    filename: string;
+    title?: string;
+    actorAgentUserId?: string;
+    profileSlug?: string;
+    storageKeyProperty?: string;
+    properties?: Record<string, unknown>;
+  }
+): Promise<UploadedFileEntity> {
+  const { userId, workspaceId, mimeType, filename } = params;
   // Human-facing title: caller-supplied (e.g. `synap upload --title`) or the
   // filename. `filename` remains the storage key / originalFileName provenance.
   const displayTitle = params.title?.trim() || filename;
   const profileSlug = params.profileSlug || "file";
-  const storageKeyProperty = params.storageKeyProperty || "storageKey";
-  const extraProperties = params.properties ?? {};
-
-  // Store the blob → documents row + immutable v1 snapshot (the extracted
-  // store-only half). Behavior is identical to the previous inline body.
-  const stored = await storeDocumentFromBuffer({
-    userId,
-    workspaceId,
-    buffer,
-    mimeType,
-    filename,
-    title: params.title,
-  });
   const document = stored.document;
 
-  // Create entity via the governed materializer (wraps EntityRepository.create)
-  // — handles profile resolution, property indexing, event emission, plus
-  // provenance. A file upload is a direct HUMAN action, so provenance = human.
-  // Merge caller-provided properties. Legacy callers can still choose the
-  // storage-key property, but brand uploads link through asset-document-id so
-  // asset-url remains an actual external URL field.
-  const effectiveStorageKeyProperty =
-    profileSlug === "brand-asset" && storageKeyProperty === "asset-url"
-      ? "storageKey"
-      : storageKeyProperty;
-  const documentProperties =
-    profileSlug === "brand-asset"
-      ? {
-          "asset-document-id": document.id,
-          "asset-kind":
-            (extraProperties["asset-kind"] as string | undefined) ??
-            brandAssetKindForMimeType(mimeType),
-        }
-      : {};
-  // Canonical `file` entities keep their storage pointers on the documents
-  // row + entities.documentId ONLY — never duplicated into entity properties
-  // (and `fileName` is dropped in favour of the entity title). Other profiles
-  // (`brand-asset`) still receive the property pointers below.
-  const isCanonicalFile = profileSlug === "file";
-  const storagePointerProperties = isCanonicalFile
-    ? {}
-    : {
-        fileName: filename,
-        documentId: document.id,
-        [effectiveStorageKeyProperty]: stored.storageKey,
-      };
   // D1: the upload's workspace is a CONTEXT signal — route placement through the
   // one door so a pod-scope kind (e.g. a generic `file`) lands pod-wide (NULL)
-  // while a workspace-scoped one (e.g. `brand-asset`) stays in its lens. The 400
-  // requiring a workspace above is kept deliberately: the storage path and the
-  // brand-asset branch make the workspace context genuinely load-bearing here,
-  // so we demote pod-scope kinds via the resolver rather than by relaxing intake.
+  // while a workspace-scoped one (e.g. `brand-asset`) stays in its lens.
   const resolvedWorkspaceId = await resolveImportEntityPlacement(db, {
     userId,
     profileSlug,
@@ -281,13 +390,16 @@ export async function uploadBufferAsFileEntity(params: {
         workspaceId: resolvedWorkspaceId,
         userId,
         documentId: document.id,
-        properties: {
-          ...extraProperties,
-          ...documentProperties,
+        properties: uploadEntityProperties({
+          profileSlug,
+          storageKeyProperty: params.storageKeyProperty,
+          properties: params.properties,
           mimeType,
-          fileSize: buffer.length,
-          ...storagePointerProperties,
-        },
+          size: stored.size,
+          filename,
+          documentId: document.id,
+          storageKey: stored.storageKey,
+        }),
       },
       {
         db,
@@ -306,9 +418,8 @@ export async function uploadBufferAsFileEntity(params: {
     createdEntity = materialized.entity;
   } catch (createError) {
     try {
-      // Reverse-cascade via the service — deletes the `documents` row AND both
-      // storage objects (current + v1 snapshot), the two-object cleanup this
-      // block used to hand-roll.
+      // Reverse-cascade via the service — deletes the `documents` row AND its
+      // storage objects (current + any version snapshot).
       await new EntityBodyService(db, eventRepository).deleteBody({
         documentId: document.id,
       });
@@ -363,18 +474,13 @@ fileUploadApp.post("/upload", async (c) => {
     // Optional: caller-specified profile slug (default "file") and which property key
     // receives the storage path (default "storageKey"). Allows callers to create any
     // entity type in one round-trip instead of upload + separate create.
-    const profileSlug = (body["profileSlug"] as string | undefined) || "file";
-    const storageKeyProperty =
-      (body["storageKeyProperty"] as string | undefined) || "storageKey";
-    let extraProperties: Record<string, unknown> = {};
-    const propertiesRaw = body["properties"] as string | undefined;
-    if (propertiesRaw) {
-      try {
-        extraProperties = JSON.parse(propertiesRaw) as Record<string, unknown>;
-      } catch {
-        return c.json({ error: "properties must be valid JSON" }, 400);
-      }
-    }
+    const fields = parseUploadEntityFields(body);
+    if ("error" in fields) return c.json({ error: fields.error }, 400);
+    const {
+      profileSlug,
+      storageKeyProperty,
+      properties: extraProperties,
+    } = fields;
 
     // Validate required fields
     if (!workspaceId || typeof workspaceId !== "string") {
@@ -385,20 +491,26 @@ fileUploadApp.post("/upload", async (c) => {
       return c.json({ error: "file is required (multipart file field)" }, 400);
     }
 
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-      return c.json(
-        {
-          error: `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB`,
-        },
-        413
-      );
-    }
-
     // Validate MIME type
     const mimeType = file.type || "application/octet-stream";
     if (!isAllowedMimeType(mimeType)) {
       return c.json({ error: `MIME type not allowed: ${mimeType}` }, 415);
+    }
+
+    // Validate file size — this door buffers the body, so it is capped at the
+    // smaller of the mime's cap and 10MB; larger files use the presigned lane.
+    const maxBytes = maxBufferedUploadBytes(mimeType);
+    if (file.size > maxBytes) {
+      return c.json(
+        {
+          error: `File too large. Maximum size is ${maxBytes / 1024 / 1024}MB here${
+            maxUploadBytesForMimeType(mimeType) > maxBytes
+              ? " — use POST /uploads (presigned) for larger files"
+              : ""
+          }`,
+        },
+        413
+      );
     }
 
     const originalFileName = file.name || "unnamed";
@@ -432,50 +544,195 @@ fileUploadApp.post("/upload", async (c) => {
       "File entity created"
     );
 
-    // If channelId provided, link to channel context
-    if (channelId) {
-      try {
-        await db
-          .insert(channelContextItems)
-          .values({
-            channelId,
-            objectType: "entity",
-            objectId: createdEntityId,
-            relationshipType: "used_as_context",
-            userId,
-            workspaceId,
-          })
-          .onConflictDoNothing();
-      } catch (err) {
-        // Non-fatal — entity is still created
-        logger.warn(
-          { err, entityId: createdEntityId, channelId },
-          "Failed to link file to channel context"
-        );
-      }
-    }
-
-    // Generate a preview URL for images
-    let previewUrl: string | undefined;
-    if (mimeType.startsWith("image/")) {
-      try {
-        previewUrl = await storage.getSignedUrl(storageKey, 3600);
-      } catch {
-        // Non-fatal
-      }
-    }
-
-    return c.json({
-      entityId: createdEntityId,
-      fileName: originalFileName,
-      mimeType,
-      size: file.size,
-      storageKey,
-      documentId: document.id,
-      previewUrl: previewUrl ?? null,
-    });
+    return c.json(
+      await finishUpload({
+        userId,
+        workspaceId,
+        channelId,
+        entityId: createdEntityId,
+        documentId: document.id,
+        storageKey,
+        mimeType,
+        fileName: originalFileName,
+        size: file.size,
+      })
+    );
   } catch (error) {
     logger.error({ err: error }, "File upload failed");
+    return c.json({ error: "File upload failed" }, 500);
+  }
+});
+
+/**
+ * The shared tail of the Kratos upload doors (buffered `/upload` and presigned
+ * `/uploads/finalize`): optional channel-context link, image preview URL, and
+ * the response body — so both doors answer in the same shape.
+ */
+async function finishUpload(p: {
+  userId: string;
+  workspaceId: string | null;
+  channelId?: string;
+  entityId: string;
+  documentId: string;
+  storageKey: string;
+  mimeType: string;
+  fileName: string;
+  size: number;
+}) {
+  const { userId, workspaceId, channelId, mimeType, storageKey } = p;
+  const createdEntityId = p.entityId;
+  if (channelId) {
+    try {
+      await db
+        .insert(channelContextItems)
+        .values({
+          channelId,
+          objectType: "entity",
+          objectId: createdEntityId,
+          relationshipType: "used_as_context",
+          userId,
+          workspaceId,
+        })
+        .onConflictDoNothing();
+    } catch (err) {
+      // Non-fatal — entity is still created
+      logger.warn(
+        { err, entityId: createdEntityId, channelId },
+        "Failed to link file to channel context"
+      );
+    }
+  }
+
+  // Generate a preview URL for images
+  let previewUrl: string | undefined;
+  if (mimeType.startsWith("image/")) {
+    try {
+      previewUrl = await storage.getSignedUrl(storageKey, 3600);
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  return {
+    entityId: createdEntityId,
+    fileName: p.fileName,
+    mimeType,
+    size: p.size,
+    storageKey,
+    documentId: p.documentId,
+    previewUrl: previewUrl ?? null,
+  };
+}
+
+/** Kratos-door membership gate (the Hub door uses `verifyWorkspaceAccess`). */
+async function isWorkspaceMember(
+  userId: string,
+  workspaceId: string
+): Promise<boolean> {
+  const row = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+    columns: { id: true },
+  });
+  return !!row;
+}
+
+// ---------------------------------------------------------------------------
+// POST /uploads — presigned (large-file) upload, step 1: get a PUT URL.
+// Body (JSON): { workspaceId, filename, mimeType, size }
+// ---------------------------------------------------------------------------
+fileUploadApp.post("/uploads", async (c) => {
+  const userId = c.get("userId");
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+  let body: Record<string, unknown>;
+  try {
+    body = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+  const workspaceId = body.workspaceId;
+  if (typeof workspaceId !== "string" || !workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+  if (!(await isWorkspaceMember(userId, workspaceId))) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+  const ticket = await requestPresignedUpload({
+    userId,
+    workspaceId,
+    filename: typeof body.filename === "string" ? body.filename : "",
+    mimeType: typeof body.mimeType === "string" ? body.mimeType : "",
+    size: Number(body.size),
+  });
+  if (!ticket.ok) {
+    return c.json({ error: ticket.error, code: ticket.code }, ticket.status);
+  }
+  const { ok: _ok, ...rest } = ticket;
+  return c.json(rest);
+});
+
+// ---------------------------------------------------------------------------
+// POST /uploads/finalize — step 3: the PUT landed; create the entity exactly as
+// `/upload` does. Body (JSON): { uploadToken, title?, channelId?, profileSlug?,
+// storageKeyProperty?, properties? }
+// ---------------------------------------------------------------------------
+fileUploadApp.post("/uploads/finalize", async (c) => {
+  const userId = c.get("userId");
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+  let body: Record<string, unknown>;
+  try {
+    body = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+  const fields = parseUploadEntityFields(body);
+  if ("error" in fields) return c.json({ error: fields.error }, 400);
+  const uploadToken =
+    typeof body.uploadToken === "string" ? body.uploadToken : "";
+  const bound = parsePresignedUploadKey(uploadToken);
+  if (
+    bound?.workspaceId &&
+    !(await isWorkspaceMember(userId, bound.workspaceId))
+  ) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+  try {
+    const fin = await storeDocumentFromPresignedUpload({
+      userId,
+      uploadToken,
+      title: typeof body.title === "string" ? body.title : undefined,
+    });
+    if (!fin.ok) {
+      return c.json({ error: fin.error, code: fin.code }, fin.status);
+    }
+    const { entity } = await createFileEntityForStoredDocument(fin.stored, {
+      userId,
+      workspaceId: fin.workspaceId,
+      mimeType: fin.mimeType,
+      filename: fin.filename,
+      title: typeof body.title === "string" ? body.title : undefined,
+      profileSlug: fields.profileSlug,
+      storageKeyProperty: fields.storageKeyProperty,
+      properties: fields.properties,
+    });
+    return c.json(
+      await finishUpload({
+        userId,
+        workspaceId: fin.workspaceId,
+        channelId:
+          typeof body.channelId === "string" ? body.channelId : undefined,
+        entityId: entity.id,
+        documentId: fin.stored.documentId,
+        storageKey: fin.stored.storageKey,
+        mimeType: fin.mimeType,
+        fileName: fin.filename,
+        size: fin.stored.size,
+      })
+    );
+  } catch (error) {
+    logger.error({ err: error }, "Presigned upload finalize failed");
     return c.json({ error: "File upload failed" }, 500);
   }
 });

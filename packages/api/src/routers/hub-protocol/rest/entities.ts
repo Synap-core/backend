@@ -13,6 +13,7 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import {
   db,
   entities,
@@ -33,8 +34,20 @@ import {
   uploadBufferAsFileEntity,
   MAX_FILE_SIZE,
   isAllowedMimeType,
+  maxBufferedUploadBytes,
+  parseUploadEntityFields,
+  type UploadEntityFields,
 } from "../../file-upload.js";
-import { createGovernedFileEntityFromBuffer } from "../../create-governed-file-entity.js";
+import {
+  requestPresignedUpload,
+  storeDocumentFromPresignedUpload,
+  parsePresignedUploadKey,
+} from "../../file-upload-presign.js";
+import {
+  createGovernedFileEntityFromBuffer,
+  createGovernedFileEntityForStoredDocument,
+  type GovernedFileEntityResult,
+} from "../../create-governed-file-entity.js";
 import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { relationsRouter } from "../../relations.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
@@ -79,6 +92,7 @@ import {
   verifyWorkspaceReadAccess,
   verifyWorkspaceAccess,
   type HubHono,
+  type HubVariables,
   requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -141,6 +155,50 @@ async function buildUpdateImpact(params: {
 export const PARTIAL_HEADER = "X-Synap-Partial";
 /** Deepest `offset + limit` a scope=all merge asks of each lens. */
 const SCOPE_ALL_MAX_WINDOW = 5000;
+
+/**
+ * `/files` placement pin. `targetWorkspaceId` = the caller EXPLICITLY chose
+ * where the entity lives (`synap upload --workspace`), so it is passed to
+ * `entities.create` as rung 1; a bare `workspaceId` stays a context signal
+ * (D1: a pod-scope `file` lands pod-wide). Both given and different = 400.
+ */
+function resolveWorkspacePin(
+  body: Record<string, unknown>,
+  workspaceId: string | undefined
+):
+  | { workspaceId: string | undefined; pinWorkspace: boolean }
+  | { error: string } {
+  const target =
+    typeof body["targetWorkspaceId"] === "string" && body["targetWorkspaceId"]
+      ? (body["targetWorkspaceId"] as string)
+      : undefined;
+  if (!target) return { workspaceId, pinWorkspace: false };
+  if (workspaceId && workspaceId !== target) {
+    return { error: "workspaceId and targetWorkspaceId disagree" };
+  }
+  return { workspaceId: target, pinWorkspace: true };
+}
+
+/** The `/files` doors' governed answer — one shape for buffered + presigned. */
+function respondGovernedFile(
+  c: Context<{ Variables: HubVariables }>,
+  result: GovernedFileEntityResult
+) {
+  // Proposed (stricter policy): return the reviewable handle.
+  if (result.status === "proposed") {
+    return jsonGoverned(c, {
+      documentId: result.documentId,
+      proposalId: result.proposalId,
+      status: "proposed" as const,
+      reviewUrl: result.reviewUrl,
+    });
+  }
+  // Auto-approved: same `{ fileEntityId, documentId }` shape as before.
+  return c.json(
+    { fileEntityId: result.fileEntityId, documentId: result.documentId },
+    200
+  );
+}
 
 export function registerEntitiesRoutes(app: HubHono): void {
   // ── GET /users/:userId/entities ─────────────────────────────────────────
@@ -1821,6 +1879,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
     let bodyUserId: string | undefined;
     let bodyWorkspaceId: string | undefined;
     let bodyTitle: string | undefined;
+    // Multipart only: same entity-shaping fields as the Kratos `/upload` door
+    // (one parser), plus an explicit `targetWorkspaceId` placement pin.
+    let entityFields: UploadEntityFields | undefined;
+    let pinWorkspace = false;
 
     try {
       if (isMultipart) {
@@ -1844,6 +1906,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
         if (typeof body["title"] === "string" && body["title"]) {
           bodyTitle = body["title"];
         }
+        const fields = parseUploadEntityFields(body);
+        if ("error" in fields) return c.json({ error: fields.error }, 400);
+        entityFields = fields;
+        const pin = resolveWorkspacePin(body, bodyWorkspaceId);
+        if ("error" in pin) return c.json({ error: pin.error }, 400);
+        bodyWorkspaceId = pin.workspaceId;
+        pinWorkspace = pin.pinWorkspace;
         if (file.size > MAX_FILE_SIZE) {
           return c.json(
             {
@@ -1897,10 +1966,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (buffer.length === 0) {
       return c.json({ error: "Decoded file is empty" }, 400);
     }
-    if (buffer.length > MAX_FILE_SIZE) {
+    // Per-mime cap (C4), bounded by 10MB on this buffered door — larger files
+    // go through POST /files/uploads (presigned).
+    const maxBytes = maxBufferedUploadBytes(mimeType);
+    if (buffer.length > maxBytes) {
       return c.json(
         {
-          error: `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB`,
+          error: `File too large. Maximum size is ${maxBytes / 1024 / 1024}MB here — use POST /files/uploads for larger files`,
         },
         413
       );
@@ -2003,25 +2075,182 @@ export function registerEntitiesRoutes(app: HubHono): void {
         sessionId: c.get("sessionId") ?? null,
         keyType: c.get("keyType") as string | undefined,
         keyWorkspaceId: c.get("keyWorkspaceId") as string | null | undefined,
+        profileSlug: entityFields?.profileSlug,
+        storageKeyProperty: entityFields?.storageKeyProperty,
+        properties: entityFields?.properties,
+        pinWorkspace,
       });
-
-      // Proposed (stricter policy): return the reviewable handle.
-      if (result.status === "proposed") {
-        return jsonGoverned(c, {
-          documentId: result.documentId,
-          proposalId: result.proposalId,
-          status: "proposed" as const,
-          reviewUrl: result.reviewUrl,
-        });
-      }
-
-      // Auto-approved: same `{ fileEntityId, documentId }` shape as before.
-      return c.json(
-        { fileEntityId: result.fileEntityId, documentId: result.documentId },
-        200
-      );
+      return respondGovernedFile(c, result);
     } catch (err) {
       logger.error({ err }, "POST /files failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  // ── POST /files/uploads ─────────────────────────────────────────────────
+  // Presigned (large-file) lane, step 1. JSON { workspaceId, filename,
+  // mimeType, size, userId? } → { uploadUrl, method, headers, uploadToken,
+  // expiresAt, maxBytes }. The client PUTs the bytes to `uploadUrl` (straight
+  // to object storage — the API never holds them), then calls finalize. Caps
+  // per mime (C4): video 500MB, audio 100MB, zip 200MB, fonts 5MB, else 10MB.
+  app.post("/files/uploads", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    try {
+      checkHubRateLimit(c.get("apiKeyId") as string | undefined, "files");
+    } catch {
+      return c.json({ error: "Rate limit exceeded for /files" }, 429);
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const bodyUserId =
+      typeof body.userId === "string" ? body.userId : undefined;
+    if (!mayActAsUser(c, bodyUserId)) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
+    const userId = bodyUserId ?? authUserId;
+    const pin = resolveWorkspacePin(
+      body,
+      typeof body.workspaceId === "string" && body.workspaceId
+        ? body.workspaceId
+        : undefined
+    );
+    if ("error" in pin) return c.json({ error: pin.error }, 400);
+    if (!pin.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
+    const workspaceId =
+      getConfinedWorkspace(c, pin.workspaceId) ?? pin.workspaceId;
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+      return c.json(
+        { error: "Access denied: not a member of the target workspace" },
+        403
+      );
+    }
+    try {
+      const ticket = await requestPresignedUpload({
+        userId,
+        workspaceId,
+        filename: typeof body.filename === "string" ? body.filename : "",
+        mimeType: typeof body.mimeType === "string" ? body.mimeType : "",
+        size: Number(body.size),
+      });
+      if (!ticket.ok) {
+        return c.json(
+          { error: ticket.error, code: ticket.code },
+          ticket.status
+        );
+      }
+      const { ok: _ok, ...rest } = ticket;
+      return c.json(rest, 200);
+    } catch (err) {
+      logger.error({ err }, "POST /files/uploads failed");
+      return c.json({ error: "Failed to prepare upload" }, 500);
+    }
+  });
+
+  // ── POST /files/uploads/finalize ────────────────────────────────────────
+  // Step 3. JSON { uploadToken, title?, profileSlug?, storageKeyProperty?,
+  // properties?, targetWorkspaceId?, userId? }. Verifies the object landed
+  // (size + type), then mints the entity through the SAME governed path as the
+  // multipart `/files` door → `{ fileEntityId, documentId }` or a proposal.
+  app.post("/files/uploads/finalize", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    try {
+      checkHubRateLimit(c.get("apiKeyId") as string | undefined, "files");
+    } catch {
+      return c.json({ error: "Rate limit exceeded for /files" }, 429);
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const bodyUserId =
+      typeof body.userId === "string" ? body.userId : undefined;
+    if (!mayActAsUser(c, bodyUserId)) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
+    const userId = bodyUserId ?? authUserId;
+    const fields = parseUploadEntityFields(body);
+    if ("error" in fields) return c.json({ error: fields.error }, 400);
+    const uploadToken =
+      typeof body.uploadToken === "string" ? body.uploadToken : "";
+    // The workspace was bound into the token at request time; re-check
+    // membership + key confinement on it now (membership may have changed).
+    const bound = parsePresignedUploadKey(uploadToken);
+    if (bound?.workspaceId) {
+      const confined = getConfinedWorkspace(c, bound.workspaceId);
+      if (confined && confined !== bound.workspaceId) {
+        return c.json({ error: "Key is confined to another workspace" }, 403);
+      }
+      if (!(await verifyWorkspaceAccess(userId, bound.workspaceId))) {
+        return c.json(
+          { error: "Access denied: not a member of the target workspace" },
+          403
+        );
+      }
+    }
+    const pin = resolveWorkspacePin(body, bound?.workspaceId ?? undefined);
+    if ("error" in pin) return c.json({ error: pin.error }, 400);
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const title = typeof body.title === "string" ? body.title : undefined;
+    try {
+      const fin = await storeDocumentFromPresignedUpload({
+        userId,
+        uploadToken,
+        title,
+        actorAgentUserId: agentUserId,
+      });
+      if (!fin.ok) {
+        return c.json({ error: fin.error, code: fin.code }, fin.status);
+      }
+      if (!fin.workspaceId) {
+        return c.json({ error: "workspaceId is required" }, 400);
+      }
+      const result = await createGovernedFileEntityForStoredDocument(
+        fin.stored,
+        {
+          mimeType: fin.mimeType,
+          filename: fin.filename,
+          title,
+          userId,
+          workspaceId: fin.workspaceId,
+          agentUserId,
+          scopes: c.get("scopes") as string[],
+          sessionId: c.get("sessionId") ?? null,
+          keyType: c.get("keyType") as string | undefined,
+          keyWorkspaceId: c.get("keyWorkspaceId") as string | null | undefined,
+          profileSlug: fields.profileSlug,
+          storageKeyProperty: fields.storageKeyProperty,
+          properties: fields.properties,
+          pinWorkspace: pin.pinWorkspace,
+        }
+      );
+      return respondGovernedFile(c, result);
+    } catch (err) {
+      logger.error({ err }, "POST /files/uploads/finalize failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)

@@ -33,8 +33,8 @@ import { join } from "path";
  *
  *  (A) Every `required: true` slug the seed declares on `file` must be a
  *      property the governed door provably writes. The permitted set is DERIVED
- *      by parsing the door's own `properties: {...}` literal — never
- *      hand-copied here — so the two can't drift apart silently. Marking a seed
+ *      by calling the door's own property shaper (`uploadEntityProperties`) —
+ *      never hand-copied here — so the two can't drift apart silently. Marking a seed
  *      property required without teaching the door to write it fails this.
  *
  *  (B) The retirement that unlinks the fossil on already-seeded pods must still
@@ -64,27 +64,41 @@ const GOVERNED_DOOR_PATH = join(
  */
 const ENTITY_COLUMN_KEYS = ["title"];
 
-/** Keys the governed door writes into `properties: { … }`. */
-function doorSuppliedProperties(): string[] {
+/**
+ * Keys the governed door writes into the entity's properties for a canonical
+ * `file`. The door builds them with the shared `uploadEntityProperties` (the
+ * same shaping the Kratos `/upload` door uses), so the permitted set is DERIVED
+ * by calling it — behaviour, not a parse of a literal. The source check pins
+ * that the governed door's `entities.create` call still routes its properties
+ * through that helper, so the derivation keeps describing the real door.
+ */
+async function doorSuppliedProperties(): Promise<string[]> {
   const src = readFileSync(GOVERNED_DOOR_PATH, "utf8");
-  const call =
-    /profileSlug:\s*"file",[\s\S]{0,600}?properties:\s*\{([^{}]*)\}/.exec(src);
-  if (!call) {
+  if (
+    !/\.create\(\{[\s\S]{0,400}?properties:\s*uploadEntityProperties\(/.test(
+      src
+    )
+  ) {
     throw new Error(
-      `Could not parse the \`properties: { … }\` literal out of the governed ` +
-        `file door (${GOVERNED_DOOR_PATH}). This tripwire derives its permitted ` +
-        `required-set from that literal; if the door was restructured, update ` +
-        `the parse here — do NOT hand-maintain the key list.`
+      `The governed file door (${GOVERNED_DOOR_PATH}) no longer builds its ` +
+        `entities.create properties with uploadEntityProperties(...). Update ` +
+        `this tripwire's derivation — do NOT hand-maintain the key list.`
     );
   }
-  const keys = call[1]
-    .split(",")
-    .map((part) => part.split(":")[0].trim())
-    .filter((k) => /^[A-Za-z_$][\w$]*$/.test(k));
+  const { uploadEntityProperties } = await import("../routers/file-upload.js");
+  const keys = Object.keys(
+    uploadEntityProperties({
+      profileSlug: "file",
+      mimeType: "application/pdf",
+      size: 1,
+      filename: "a.pdf",
+      documentId: "d",
+      storageKey: "k",
+    })
+  );
   if (keys.length === 0) {
     throw new Error(
-      "Parsed the governed door's properties literal but found no keys — " +
-        "refusing to pass vacuously."
+      "The governed door supplies no properties — refusing to pass vacuously."
     );
   }
   return keys;
@@ -114,9 +128,9 @@ function seededFileProperties(): Array<{ slug: string; required: boolean }> {
 }
 
 describe("tripwire: file profile requires nothing the file doors omit", () => {
-  it("every required property on the seeded `file` profile is written by the governed door", () => {
+  it("every required property on the seeded `file` profile is written by the governed door", async () => {
     const supplied = new Set([
-      ...doorSuppliedProperties(),
+      ...(await doorSuppliedProperties()),
       ...ENTITY_COLUMN_KEYS,
     ]);
     const unmet = seededFileProperties()
