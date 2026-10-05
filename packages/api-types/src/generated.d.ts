@@ -110,6 +110,329 @@ export type ProvenanceKind = "human" | "ai_agent" | "system";
  * unchanged — the entity columns stay populated and the cell columns are NULL.
  */
 export type RelationEndpointKind = "entity" | "cell";
+declare const relations: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	name: "relations";
+	schema: undefined;
+	columns: {
+		id: import("drizzle-orm/pg-core").PgColumn<{
+			name: "id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: true;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		userId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "user_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "workspace_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		sourceEntityId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "source_entity_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		targetEntityId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "target_entity_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		sourceKind: import("drizzle-orm/pg-core").PgColumn<{
+			name: "source_kind";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgText";
+			data: RelationEndpointKind;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: RelationEndpointKind;
+		}>;
+		targetKind: import("drizzle-orm/pg-core").PgColumn<{
+			name: "target_kind";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgText";
+			data: RelationEndpointKind;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: RelationEndpointKind;
+		}>;
+		sourceCellId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "source_cell_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		targetCellId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "target_cell_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		type: import("drizzle-orm/pg-core").PgColumn<{
+			name: "type";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		metadata: import("drizzle-orm/pg-core").PgColumn<{
+			name: "metadata";
+			tableName: "relations";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: false;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdByKind: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_by_kind";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgText";
+			data: ProvenanceKind;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: ProvenanceKind;
+		}>;
+		createdByUserId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_by_user_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		agentUserId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "agent_user_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		sourceProposalId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "source_proposal_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		correlationId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "correlation_id";
+			tableName: "relations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_at";
+			tableName: "relations";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+	};
+	dialect: "pg";
+}>;
 declare const ChannelType: {
 	readonly THREAD: "thread";
 	readonly PERSONAL: "personal";
@@ -1905,6 +2228,18 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * playbook's own goalTemplate.
 		 */
 		goalOverride?: string;
+		/**
+		 * WHAT this node materializes (read through `readPlaybookRunMode`,
+		 * `@synap-core/types/automations`, which keeps this union and its runtime
+		 * list in sync both ways):
+		 *   - absent / `"run"` — an unattended run (every pre-existing node).
+		 *   - `"appointment"` — a `scheduled` session waiting for the human
+		 *     (`buildPlaybookRunFlowDefinition` from a playbook's `schedule.mode`).
+		 *   - `"propose"` — a governed `playbook/run` PROPOSAL; nothing starts until
+		 *     a person approves, and approval replays `playbooks.run` →
+		 *     `runPlaybook`. Producer: the rule grammar's `__mode` key.
+		 */
+		mode?: "run" | "appointment" | "propose";
 		errorHandling?: NodeErrorHandling;
 	};
 }
@@ -4470,19 +4805,34 @@ export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "t
  */
  | "spawned_from" | "provides_credential"
 /**
- * session --blocked_by--> session. A dependency between units of work: the
- * FROM session cannot proceed until the TO session closes.
+ * X --blocked_by--> Y. THE dependency between units of work, across kinds
+ * (`session` · `entity` · `track`, any pair — `DEPENDENCY_ENDPOINT_KINDS` in
+ * `@synap-core/types/connections`): the FROM end cannot proceed until the TO
+ * end clears by its own kind's status vocabulary. Entity relations
+ * `blocks` / `depends_on` are this edge under other names; the relation
+ * create door maps them here and migration 0301 moved the stored rows.
  *
  * Blocked-ness is DERIVED from the subset of these edges whose TARGET is
  * still open, never a stored `blocked` status on `focus_sessions` (prior
  * art: Atlassian's "flag, don't status" — a status can only hold one value,
  * so storing blocked-ness destroys the real state and then drifts from the
- * blockers). The reader is `session-blocked-by.ts`.
+ * blockers). The ONE producer is `services/links/dependency-links.ts`
+ * (session↔session through `session-blocked-by.ts`'s owner floor); the rule
+ * is `deriveOpenBlockers`.
  *
  * Unrelated to the run status `blocked_by_policy` — that is a governance
  * outcome on a single run, not an edge between sessions.
  */
  | "blocked_by"
+/**
+ * A --replaces--> B. "This step replaces that one" — B failed or was dropped
+ * and A is the attempt instead. Same endpoint kinds and producer as
+ * `blocked_by`. Read by the node neighbourhood (Related: "Replaces" /
+ * "Replaced by") and by `deriveOpenBlockers`: whoever waited on B now waits
+ * on A, so a replaced step can neither hold its dependents forever nor clear
+ * them early.
+ */
+ | "replaces"
 /**
  * project --uses--> workspace. INDEX of which domains (workspaces) an
  * engagement runs through. Stamped at provision time so a clean template
@@ -6857,10 +7207,10 @@ export interface KnownSourceHash {
  * (Linear triage shape), inline, never auto-run. So this module only RANKS and
  * EXPLAINS; nothing here runs a playbook or triggers an automation.
  *
- * PURE: candidates are loaded by the canonical matcher doors
- * (`playbooks.matchForEntity`, `automations.matchForEntity`) — which apply the
- * access layer — and handed in. Both doors call `rankRouteCandidates`, and the
- * capture followUp combines both lists per entity with
+ * PURE: candidates are loaded through the access layer and handed in —
+ * playbooks by `playbooks.matchForEntity` (which also calls
+ * `rankRouteCandidates`), propose-mode rules by `match-rules-for-entity.ts` —
+ * and the capture followUp combines both lists per entity with
  * `suggestRoutesForEntities`, so the ranking rule exists once.
  *
  * SIGNALS ARE LEXICAL + STRUCTURAL ONLY. Embeddings have no fallback provider
@@ -6914,6 +7264,16 @@ export interface RouteCandidate {
 	text?: ReadonlyArray<string | null | undefined>;
 	/** The kind the candidate is built for; `null` = fires for any kind. */
 	subjectProfileSlug: string | null;
+	/**
+	 * A RULE that PROPOSES (propose-mode `playbook_run`): confirming it files a
+	 * proposal, never a run. Only rules of this mode are suggested.
+	 */
+	proposes?: true;
+	/**
+	 * A PLAYBOOK built for a kind with no standing propose rule yet: a host may
+	 * offer "Always propose this", creating one through `skills.createRule`.
+	 */
+	alwaysProposeOffer?: true;
 }
 export type RouteSignal = {
 	type: "intent";
@@ -7928,6 +8288,45 @@ export interface SessionActivityWire {
 	live: SessionActivityLive;
 	/** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
 	unreadable: SessionActivitySource[];
+}
+declare const UNIT_STATES: readonly [
+	"not_started",
+	"working",
+	"needs_you",
+	"needs_review",
+	"blocked",
+	"scheduled",
+	"paused",
+	"done",
+	"unmeasured",
+	"failed"
+];
+export type UnitState = (typeof UNIT_STATES)[number];
+/**
+ * A palette token NAME. Every one of these already exists in Relay's theme
+ * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
+ * grow without a token existing on BOTH surfaces first.
+ */
+export type UnitTone = "primary" | "ai" | "info" | "error" | "success" | "textSecondary" | "textMuted";
+/** Which mark the state wears. Surfaces map these to their own icon set. */
+export type UnitGlyph = "person" | "scales" | "spark" | "clock" | "pause" | "link" | "check" | "question" | "alert" | "dashed-circle" | "lock" | "globe" | "users";
+/**
+ * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
+ * that has never started shows none at all. `dashed` means the progress is
+ * not real yet (scheduled) or not knowable (unmeasured); rendering either as
+ * a determinate 0% would assert a measurement nobody made.
+ */
+export type UnitRailKind = "none" | "determinate" | "striped" | "dashed";
+export interface UnitRail {
+	kind: UnitRailKind;
+	/** 0–100, and ONLY when `kind === "determinate"`. Null otherwise. */
+	pct: number | null;
+}
+export interface UnitStateView {
+	state: UnitState;
+	tone: UnitTone;
+	glyph: UnitGlyph;
+	rail: UnitRail;
 }
 /**
  * Which ledger a run came from.
@@ -9007,6 +9406,28 @@ declare const OperationalEventTypes: {
 		readonly description: "A relation between entities was removed.";
 		readonly filterKeys: [
 			"relationType"
+		];
+	};
+	readonly LINK_CREATED: {
+		readonly type: "link.create.completed";
+		readonly label: "Dependency declared";
+		readonly domain: "Links";
+		readonly description: "A unit of work was marked as blocked by (or replacing) another.";
+		readonly filterKeys: [
+			"linkType",
+			"fromType",
+			"toType"
+		];
+	};
+	readonly LINK_DELETED: {
+		readonly type: "link.delete.completed";
+		readonly label: "Dependency removed";
+		readonly domain: "Links";
+		readonly description: "A blocked-by (or replaces) edge was removed.";
+		readonly filterKeys: [
+			"linkType",
+			"fromType",
+			"toType"
 		];
 	};
 	readonly DOCUMENT_CREATED: {
@@ -10714,6 +11135,21 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
+export interface DependencyNodeRef {
+	kind: string;
+	id: string;
+}
+export interface OpenBlocker extends DependencyNodeRef {
+	/** The blocker as declared, when the open one is its replacement. */
+	replaces?: DependencyNodeRef;
+	hidden: boolean;
+}
+/** A relation row as the relation readers return it — plus the dependency marker. */
+export type RelationReadRow = typeof relations.$inferSelect & {
+	storedAs?: "link";
+	/** 0301: the relation id this dependency was migrated from, if any. */
+	legacyRelationId?: string | null;
+};
 declare const SHARE_KINDS: readonly [
 	"entity",
 	"document",
@@ -10878,6 +11314,12 @@ export interface EntityConnection {
 	source: EntityConnectionSource;
 	relationId?: string;
 	relationType?: string;
+	/**
+	 * `"link"`: this graph connection is THE dependency edge (a `links`
+	 * `blocked_by` row read as `blocks` / `depends_on`); `relationId` is the
+	 * link id. The object graph already carries it on its links half.
+	 */
+	storedAs?: "link";
 	propertySlug?: string;
 	propertyLabel?: string;
 	channelId?: string;
@@ -10996,11 +11438,23 @@ export interface GraphNode {
 	 */
 	subtypes: string[];
 	workspaceId: string | null;
+	/**
+	 * The object's RAW lifecycle status, as its own table stores it — session /
+	 * track / project / proposal / run `status`, an entity's `status` PROPERTY.
+	 * `null` = this kind (or this row) has no status; absent = not hydrated by
+	 * this read. Never mapped here: every surface maps it through the ONE state
+	 * derivation (`neighbourUnitState` → `resolveUnitState`).
+	 */
+	status?: string | null;
+	/** Last change to the row, ISO-8601 (a run: completed, else started). */
+	updatedAt?: string | null;
 }
 /** A neighbour = a node + the edge that connects it to the focused object. */
 export interface GraphNeighbor extends GraphNode {
 	/** linkType (config edge) or relationType (data edge). */
 	edgeType: string;
+	/** The far end is on the edge but not visible to the reader (no name, no state). */
+	hidden?: true;
 	direction: "outgoing" | "incoming" | "structural";
 	/** Which substrate the edge came from — glass-box provenance. */
 	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation" | "governed" | "produced-in" | "body" | "structure";
@@ -11031,6 +11485,13 @@ export interface GraphEnvelope {
 	 * "not found" instead of rendering the placeholder as a real entity.
 	 */
 	found: boolean;
+}
+export interface DependencyState {
+	blocked: boolean;
+	/** The blockers still holding it up, after `replaces` following. */
+	openBlockers: OpenBlocker[];
+	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
+	declared: DependencyNodeRef[];
 }
 /**
  * A track template this install made startable — a playbook the applier
@@ -14572,6 +15033,18 @@ export interface IntegrationRoutingRule {
 	channelId: string | null;
 	lastRunAt: string | null;
 }
+/** The rule-run facts a `rule-run` signal carries (`Signal.ruleRun`). */
+export interface RuleRunFacts {
+	automationId: string;
+	/** Runs of this rule inside the window (incl. in flight). */
+	runs: number;
+	/** Of those, how many failed. */
+	failed: number;
+	/** At least one run is still in flight (the run-status door says running). */
+	running: boolean;
+	/** The newest run's status — a quiet row's mark is read from it. */
+	latestStatus: string;
+}
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
 	/** An `objectNavTarget` kind: `proposal`, `channel`, `entity`, `automation`… */
@@ -14604,6 +15077,12 @@ export type SignalKind =
  * `isSessionWorkingNow` over `loadSessionLiveness`. Its facts ride in `live`.
  */
  | "live-session"
+/**
+ * A RULE whose runs opened no session, running inside the working window
+ * (Happening) — one row per rule, its runs folded (`foldRuleRuns`,
+ * `services/signals/rule-runs.ts`). Its facts ride in `ruleRun`.
+ */
+ | "rule-run"
 /**
  * One object a session PRODUCED (Produced) — an `outputs.landed` row,
  * verbatim, in `landed`.
@@ -14755,6 +15234,11 @@ export interface Signal {
 	source?: SignalSource;
 	/** `live-session` only: the liveness facts the "working now" rule read. */
 	live?: SessionActivityLive;
+	/**
+	 * `rule-run` only: the rule's runs inside the window — how many, how many
+	 * failed, whether one is in flight. The row's door is the rule.
+	 */
+	ruleRun?: RuleRunFacts;
 	/** `output` only: the produced object, as `outputs.landed` returns it. */
 	landed?: LandedObjectRow;
 	/** `activity` only: the ledger row, as `activity.list` returns it. */
@@ -14790,6 +15274,7 @@ export interface Signal {
 	/**
 	 * How many unread notifications this row folds — the same `(type, target)`
 	 * raised N times is ONE row with `repeatCount: N` ({@link foldNotifications}).
+	 * A `rule-run` row folds a rule's runs the same way (`repeatCount` = runs).
 	 * 1 on every other kind: a cluster says its size through `count`, and an
 	 * owed slot or a draft is never a repeat of anything.
 	 */
@@ -14832,6 +15317,48 @@ export interface StatusBanner {
 	/** Distinct issues, newest first. */
 	issues: StatusBannerIssue[];
 }
+/** An object-nav address (the `Signal.target` shape). The host routes it. */
+export interface LensDoor {
+	kind: string;
+	id: string;
+	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
+	view?: string;
+}
+/** A named container a pick belongs to — drawn as a DOOR chip. */
+export interface NextMoveContainer {
+	id: string;
+	name: string;
+}
+/**
+ * One start-tier candidate as the pod sends it (`signals.list({ lens:
+ * "page", picks: true })` → `page.picks.rows`, already ranked). Every field
+ * is read from stored data; none is estimated.
+ */
+export interface NextMoveWire {
+	/** Stable identity — `${door.kind}:${door.id}`; what a skip hides. */
+	key: string;
+	/** Object kind for the noun + icon (`task`, `session`). */
+	objectKind: string;
+	title: string;
+	door: LensDoor;
+	/** The verb that starts it: `start` (never begun) or `resume`. */
+	action: "start" | "resume";
+	/** Facts the score and the reason chips read. */
+	unblocks: number;
+	waitingSince: string | null;
+	project: NextMoveContainer | null;
+	track: NextMoveContainer | null;
+	draftReady: boolean;
+}
+/** The page's start tier — present only when the read asked for it. */
+export interface LensPagePicks {
+	/** Ranked (`rankNextMoves`), skips already removed, capped. */
+	rows: NextMoveWire[];
+	/** More candidates exist than were scanned or sent. */
+	truncated: boolean;
+	/** Halves that FAILED. Non-empty ⇒ never "nothing to do". */
+	unreadable: string[];
+}
 /** A sub-read's name — what `unreadable` reports. */
 export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "liveness" | "outputs" | "activity" | "events";
 /** One class of the lens page. */
@@ -14857,6 +15384,12 @@ export interface LensPageWire {
 	status: StatusBanner | null;
 	/** The health read failed: `status: null` then means NOT MEASURED. */
 	statusUnreadable: boolean;
+	/**
+	 * The next-hour START tier (`readNextMovePicks`), ranked by THE ranking
+	 * (`rankNextMoves`) — only when asked (`picks: true`) at pod / workspace
+	 * scope. Absent = not asked.
+	 */
+	picks?: LensPagePicks;
 }
 /**
  * resolveEntityOpenTarget — WHERE opening this entity should go, decided on the
@@ -23682,25 +24215,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				offset?: number | undefined;
 			};
 			output: {
-				relations: {
-					id: string;
-					userId: string;
-					workspaceId: string | null;
-					type: string;
-					createdByKind: ProvenanceKind | null;
-					createdByUserId: string | null;
-					agentUserId: string | null;
-					sourceProposalId: string | null;
-					correlationId: string | null;
-					createdAt: Date;
-					sourceEntityId: string | null;
-					targetEntityId: string | null;
-					sourceKind: RelationEndpointKind;
-					targetKind: RelationEndpointKind;
-					sourceCellId: string | null;
-					targetCellId: string | null;
-					metadata: unknown;
-				}[];
+				relations: RelationReadRow[];
 			};
 			meta: object;
 		}>;
@@ -23727,25 +24242,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 			};
 			output: {
-				relations: {
-					id: string;
-					userId: string;
-					workspaceId: string | null;
-					type: string;
-					createdByKind: ProvenanceKind | null;
-					createdByUserId: string | null;
-					agentUserId: string | null;
-					sourceProposalId: string | null;
-					correlationId: string | null;
-					createdAt: Date;
-					sourceEntityId: string | null;
-					targetEntityId: string | null;
-					sourceKind: RelationEndpointKind;
-					targetKind: RelationEndpointKind;
-					sourceCellId: string | null;
-					targetCellId: string | null;
-					metadata: unknown;
-				}[];
+				relations: RelationReadRow[];
 			};
 			meta: object;
 		}>;
@@ -23843,17 +24340,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 			};
 			output: {
+				id: string;
+				status: "created" | "exists";
+				storedAs: "link";
+				proposalId?: undefined;
+			} | {
 				status: "proposed";
 				proposalId: string;
 				id?: undefined;
+				storedAs?: undefined;
 			} | {
 				id: string;
 				status: "exists";
-				proposalId?: undefined;
 			} | {
 				id: string;
 				status: "created";
-				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -23902,10 +24403,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 			};
 			output: {
+				status: "deleted";
+				storedAs: "link";
+				proposalId?: undefined;
+			} | {
 				status: "proposed";
 				proposalId: string;
+				storedAs?: undefined;
 			} | {
 				status: "deleted";
+				storedAs?: undefined;
 				proposalId?: undefined;
 			};
 			meta: object;
@@ -24148,6 +24655,60 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				outgoing?: undefined;
 				incoming?: undefined;
 			};
+			meta: object;
+		}>;
+		addDependency: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				fromType: "entity" | "session" | "track";
+				fromId: string;
+				toType: "entity" | "session" | "track";
+				toId: string;
+				linkType: "blocked_by" | "replaces";
+			};
+			output: {
+				status: "created" | "exists";
+				linkId: string | null;
+				inserted: number;
+			} | {
+				status: "removed" | "absent";
+				removed: number;
+			} | {
+				status: "proposed";
+				proposalId: string;
+				reviewPath?: string;
+				reviewUrl?: string;
+			};
+			meta: object;
+		}>;
+		removeDependency: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				fromType: "entity" | "session" | "track";
+				fromId: string;
+				toType: "entity" | "session" | "track";
+				toId: string;
+				linkType: "blocked_by" | "replaces";
+			};
+			output: {
+				status: "created" | "exists";
+				linkId: string | null;
+				inserted: number;
+			} | {
+				status: "removed" | "absent";
+				removed: number;
+			} | {
+				status: "proposed";
+				proposalId: string;
+				reviewPath?: string;
+				reviewUrl?: string;
+			};
+			meta: object;
+		}>;
+		dependencyState: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: "entity" | "session" | "track";
+				id: string;
+			};
+			output: DependencyState;
 			meta: object;
 		}>;
 	}>>;
@@ -33110,6 +33671,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | undefined;
 				triggerSummary: string;
+				proposes: true;
 				score: number;
 				reason: string;
 				signals: RouteSignal[];
@@ -36905,6 +37467,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source?: string | undefined;
 				reasoning?: string | undefined;
 				onMissingRequired?: "refuse" | "owe" | undefined;
+				goalOverride?: string | undefined;
+				agentType?: string | undefined;
 			};
 			output: {
 				run: null;
@@ -38616,6 +39180,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					produced?: number | undefined;
 					happened?: number | undefined;
 				} | undefined;
+				picks?: boolean | undefined;
 				workspaceId?: string | null | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
@@ -38625,6 +39190,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				signals: Signal[];
 				page?: LensPageWire;
+			};
+			meta: object;
+		}>;
+		skipNextMove: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				key: string;
+				until: string;
+			};
+			output: {
+				until: string;
 			};
 			meta: object;
 		}>;
