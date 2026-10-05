@@ -2,9 +2,9 @@
  * Graph Router - Optimized Graph Queries
  *
  * Provides bulk endpoints for efficient graph rendering:
- * - getNode: Entity + all relations + related entity previews
- * - getSubgraph: Multiple entities with their relationships
- * - getPath: Shortest path between two entities
+ * - getObjectGraph: ANY object kind + its typed neighbourhood (the one door)
+ * - getSubgraph: Multiple entities with their relationships (studio graph page)
+ * - getFull / getStats: whole-graph fetch + totals (studio, Eve dashboard)
  *
  * These endpoints reduce N+1 queries and improve graph view performance.
  */
@@ -60,10 +60,10 @@ import type { LinkEndpointType } from "@synap/playbooks";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 
-// Entity read floor for the graph's legacy bulk fetches (getNode/getSubgraph) —
-// the ONE door with role-as-lens (facetLens), so they agree with getFull and
+// Entity read floor for the graph's legacy bulk fetch (getSubgraph) — the ONE
+// door with role-as-lens (facetLens), so it agrees with getFull and
 // entities.list. A bare `eq(entities.userId)` here was owner-only and hid
-// role-shared entities from co-members (NOT_FOUND on getNode, absent in getSubgraph).
+// role-shared entities from co-members (absent in getSubgraph).
 function graphEntityFloor(userId: string) {
   return accessScopeWhere({
     workspaceIdColumn: entities.workspaceId,
@@ -221,12 +221,6 @@ async function systemMapRoleScope(
   );
 }
 
-/**
- * Get a single node with full graph context
- *
- * Returns entity + all relations + related entity previews in one call.
- * Essential for graph view performance.
- */
 export const graphRouter = router({
   /**
    * A compact, truthful overview of the visible entity graph for Library's
@@ -579,8 +573,9 @@ export const graphRouter = router({
    * entity-backed kinds). The tRPC twin of `GET /graph/:type/:id` and the MCP
    * `synap_get_graph` tool: all three share `getObjectGraph` so the browser, the
    * agent, and external REST see the SAME graph. This is the UI's door to the
-   * "graph by default" envelope (the legacy getNode/getSubgraph below stay for
-   * the force-graph view's bulk fetches).
+   * "graph by default" envelope (the legacy getSubgraph below stays for the
+   * studio force-graph page's bulk fetch; `getNode` was deleted 2026-10-05 —
+   * zero callers in any repo, this envelope is its replacement).
    */
   getObjectGraph: podProcedure
     .input(
@@ -628,117 +623,6 @@ export const graphRouter = router({
         });
       }
       return envelope;
-    }),
-
-  /**
-   * Get entity with all its relationships and related entity previews
-   *
-   * @example
-   * const node = await synap.graph.getNode.query({
-   *   entityId: '123',
-   *   includeRelatedPreviews: true
-   * });
-   */
-  getNode: protectedProcedure
-    .input(
-      z.object({
-        entityId: z.string().uuid(),
-        includeRelations: z.boolean().default(true),
-        includeRelatedPreviews: z.boolean().default(true),
-        relationTypes: z.array(z.string()).optional(),
-      })
-    )
-    .query(async ({ input, ctx }) => {
-      // 1. Get the entity
-      const entity = await db.query.entities.findFirst({
-        where: and(
-          eq(entities.id, input.entityId),
-          graphEntityFloor(ctx.userId)
-        ),
-      });
-
-      if (!entity) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
-      }
-
-      if (!input.includeRelations) {
-        return { entity, relations: [], relatedEntities: [], stats: null };
-      }
-
-      // 2. Get all relations for this entity (both directions)
-      const whereClause = and(
-        graphRelationsFloor(ctx.userId),
-        or(
-          eq(relations.sourceEntityId, input.entityId),
-          eq(relations.targetEntityId, input.entityId)
-        ),
-        input.relationTypes
-          ? inArray(relations.type, input.relationTypes)
-          : undefined
-      );
-
-      const allRelations = await db.query.relations.findMany({
-        where: whereClause,
-        orderBy: [desc(relations.createdAt)],
-      });
-
-      // 3. Get related entity IDs
-      const relatedEntityIds = new Set<string>();
-      allRelations.forEach((rel) => {
-        // Polymorphic endpoints: a cell endpoint has a NULL entity id — skip it
-        // (this graph view traverses entity↔entity edges).
-        const otherId =
-          rel.sourceEntityId === input.entityId
-            ? rel.targetEntityId
-            : rel.sourceEntityId;
-        if (otherId !== null) relatedEntityIds.add(otherId);
-      });
-
-      // 4. Fetch related entity previews if requested
-      let relatedEntities: any[] = [];
-      if (input.includeRelatedPreviews && relatedEntityIds.size > 0) {
-        relatedEntities = await db.query.entities.findMany({
-          where: and(
-            graphEntityFloor(ctx.userId),
-            inArray(entities.id, Array.from(relatedEntityIds))
-          ),
-          columns: {
-            id: true,
-            type: true,
-            title: true,
-            preview: true,
-            createdAt: true,
-            updatedAt: true,
-          },
-        });
-      }
-
-      // 5. Calculate statistics
-      const outgoing = allRelations.filter(
-        (r) => r.sourceEntityId === input.entityId
-      );
-      const incoming = allRelations.filter(
-        (r) => r.targetEntityId === input.entityId
-      );
-
-      const byType: Record<string, number> = {};
-      allRelations.forEach((rel) => {
-        byType[rel.type] = (byType[rel.type] || 0) + 1;
-      });
-
-      const stats = {
-        total: allRelations.length,
-        outgoing: outgoing.length,
-        incoming: incoming.length,
-        byType,
-      };
-
-      return {
-        entity,
-        relations: allRelations,
-        relatedEntities,
-        stats,
-      };
     }),
 
   /**
