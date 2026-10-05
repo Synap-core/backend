@@ -177,6 +177,21 @@ describe("visibleSource — shown only when it adds something", () => {
     ).toBe(session);
     expect(visibleSource({ source: project }, { kind: "pod" })).toBe(project);
   });
+  it("a space filtered by its project hides that project's source (it says nothing new)", () => {
+    const scope: LensScope = {
+      kind: "workspace",
+      workspaceId: "w",
+      projectId: "p1",
+    };
+    expect(visibleSource({ source: project }, scope)).toBeNull();
+    expect(
+      visibleSource(
+        { source: project },
+        { kind: "workspace", workspaceId: "w" }
+      )
+    ).toBe(project);
+    expect(visibleSource({ source: session }, scope)).toBe(session);
+  });
   it("a different session on a session page is shown", () => {
     expect(
       visibleSource({ source: session }, { kind: "session", sessionId: "s2" })
@@ -198,6 +213,11 @@ describe("scope address", () => {
     expect(encodeLensScope({ kind: "project", projectId: "p" })).toBe(
       "project:p"
     );
+    // A space × project scope addresses the SPACE (the project rides on the
+    // surface lens, not in the token).
+    expect(
+      encodeLensScope({ kind: "workspace", workspaceId: "w", projectId: "p" })
+    ).toBe("workspace:w");
     expect(parseLensScope("nonsense:")).toBeUndefined();
   });
 });

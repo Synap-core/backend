@@ -31,7 +31,18 @@ export type LensScopeKind = (typeof LENS_SCOPE_KINDS)[number];
  */
 export type LensScope =
   | { kind: "pod" }
-  | { kind: "workspace"; workspaceId: string }
+  | {
+      kind: "workspace";
+      workspaceId: string;
+      /**
+       * The project FILTERING this space (BRIEF-lens-model: inside a space the
+       * selected project is a filter — "this space × this project"). The read
+       * ANDs it onto the workspace (`signals.list` composes the two). Absent ⇒
+       * the whole space. Not in the address token: a Show-all door carries
+       * the space; the project rides on the surface lens.
+       */
+      projectId?: string | null;
+    }
   | { kind: "project"; projectId: string }
   | { kind: "track"; trackId: string; projectId?: string | null }
   | {
@@ -62,7 +73,10 @@ export function lensScopeObject(
 /** The containers the scope sits INSIDE (never itself), as `kind:id` keys. */
 function ancestorKeys(scope: LensScope): Set<string> {
   const keys = new Set<string>();
-  if (scope.kind === "track" && scope.projectId) {
+  if (
+    (scope.kind === "track" || scope.kind === "workspace") &&
+    scope.projectId
+  ) {
     keys.add(`project:${scope.projectId}`);
   }
   if (scope.kind === "session") {
