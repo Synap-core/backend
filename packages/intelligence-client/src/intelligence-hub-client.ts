@@ -1709,7 +1709,10 @@ export class IntelligenceHubClient {
           ? body.code
           : response.status === 404
             ? "is_route_missing"
-            : "is_invalid_response",
+            : // An edge/body limit that answers before the route speaks no code.
+              response.status === 413
+              ? "audio_too_large"
+              : "is_invalid_response",
       error:
         typeof body?.error === "string"
           ? body.error
