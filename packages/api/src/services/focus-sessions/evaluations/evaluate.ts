@@ -9,7 +9,9 @@
  *                result must carry a boolean `passed`; anything else — including
  *                an execution ERROR — is `unmeasured` with the reason, never `fail`.
  *   judge      — the IS criteria judge, never the model that worked the session.
- *                A judge that could not run records nothing and says why.
+ *                It reads the produced work's CONTENT (`judge-material.ts`),
+ *                not only the output labels. A judge that could not run
+ *                records nothing and says why.
  *   human      — left unmeasured until the owner grades it.
  *
  * "Pending" = not already passing, not human-graded, attempts remaining. Every
@@ -37,6 +39,7 @@ import {
   type SessionEvaluationRow,
   type SessionEvaluationSummary,
 } from "./record.js";
+import { buildJudgeMaterial, loadProducedMaterial } from "./judge-material.js";
 
 /** What an agent posts: one entry per evidence key. */
 export type PostedEvidence = Record<
@@ -75,8 +78,6 @@ export type EvaluateSessionResult =
       /** True when this evaluation cleared a check gate and resumed the run. */
       resumed: boolean;
     } & SessionEvaluationSummary);
-
-const MATERIAL_MAX = 8000;
 
 /** Pure: which criteria still need a non-human check. */
 export function pendingCriteria(
@@ -128,37 +129,6 @@ export function capabilityVerdict(
     verdict: "unmeasured",
     rationale: `The check could not run (${result.kind}): ${why}`,
   };
-}
-
-function buildJudgeMaterial(
-  session: typeof focusSessions.$inferSelect,
-  rows: readonly SessionEvaluationRow[],
-  evidence?: PostedEvidence
-): string {
-  const outputs = Array.isArray(session.expectedOutputs)
-    ? (session.expectedOutputs as Array<{ label?: string; status?: string }>)
-    : [];
-  const parts = [
-    `GOAL: ${session.goal}`,
-    outputs.length
-      ? `OUTPUTS:\n${outputs.map((o) => `- ${o.label ?? "?"} [${o.status ?? "pending"}]`).join("\n")}`
-      : "",
-    session.verificationReport
-      ? `REPORT: ${JSON.stringify(session.verificationReport)}`
-      : "",
-    evidence && Object.keys(evidence).length
-      ? `POSTED EVIDENCE: ${JSON.stringify(evidence)}`
-      : "",
-    rows.length
-      ? `EARLIER CHECKS:\n${rows
-          .map(
-            (r) =>
-              `- ${r.criterionKey}: ${r.verdict}${r.rationale ? ` — ${r.rationale}` : ""}`
-          )
-          .join("\n")}`
-      : "",
-  ].filter(Boolean);
-  return parts.join("\n\n").slice(0, MATERIAL_MAX);
 }
 
 export async function evaluateSession(
@@ -260,6 +230,11 @@ export async function evaluateSession(
       });
       const modelId = (session.metadata as { modelId?: unknown } | null)
         ?.modelId;
+      // The judge reads the WORK, not its labels: the produced documents' and
+      // entities' content, floored to the session owner. A failed read throws
+      // into the catch below ("the judge could not run"), never a verdict
+      // over labels alone.
+      const produced = await loadProducedMaterial({ sessionId, userId });
       const judgement = await judgeSessionCriteria(
         svc.endpoint,
         svc.serviceApiKey,
@@ -269,7 +244,12 @@ export async function evaluateSession(
             statement: c.statement,
             ...(c.check.hint ? { hint: c.check.hint } : {}),
           })),
-          material: buildJudgeMaterial(session, rows, params.evidence),
+          material: buildJudgeMaterial(
+            session,
+            rows,
+            params.evidence,
+            produced
+          ),
           ...(typeof modelId === "string" && modelId
             ? { excludeModel: modelId }
             : {}),
