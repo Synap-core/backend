@@ -35,6 +35,11 @@ export interface WireGraphNeighbor {
   status?: string | null;
   /** The far end's last change, ISO-8601; absent on an older pod. */
   updatedAt?: string | null;
+  /**
+   * The far end exists on the edge but the reader cannot see it (a blocker in
+   * a space they are not in). Its name and status are NOT for this reader.
+   */
+  hidden?: boolean;
 }
 
 export function toConnectionNeighbors(
@@ -55,6 +60,7 @@ export function toConnectionNeighbors(
     // pod), `null` = read, and the far end has none — never folded together.
     ...(n.status !== undefined ? { status: n.status } : {}),
     ...(n.updatedAt !== undefined ? { updatedAt: n.updatedAt } : {}),
+    ...(n.hidden ? { hidden: true as const } : {}),
   }));
 }
 

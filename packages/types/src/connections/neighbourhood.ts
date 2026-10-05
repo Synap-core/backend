@@ -419,6 +419,19 @@ export interface NodeNeighbourItem {
    * lifecycle alone settles nothing — draw no mark, never a guess.
    */
   state: UnitStateView | null;
+  /**
+   * The far end is on the edge but the reader cannot see it. `title` is then
+   * {@link hiddenNeighbourTitle}, and status / state are withheld (a hidden
+   * blocker never reveals whether it is done). It still counts where it sits —
+   * a hidden blocker still blocks — and the owner of the waiting end may
+   * remove the edge (the pod floors that delete on the waiting end only).
+   */
+  hidden?: true;
+}
+
+/** What a hidden far end is called — never its name, never its state. */
+export function hiddenNeighbourTitle(zone: NodeZone): string {
+  return zone === "blockedBy" ? "Hidden blocker" : "Hidden item";
 }
 
 export interface NodeZoneSlice {
@@ -566,7 +579,7 @@ export function deriveNodeNeighbourhood(
       kind: n.kind === "entity" && subtype ? subtype : n.kind,
       graphKind: n.kind,
       subtype,
-      title: n.name,
+      title: n.hidden ? hiddenNeighbourTitle(zone) : n.name,
       edgeType,
       direction: n.direction,
       via,
@@ -574,13 +587,16 @@ export function deriveNodeNeighbourhood(
       label,
       reversed,
       poweredBy: isPoweredByEdge({ kind: n.kind, via }),
-      status: n.status ?? null,
-      updatedAt: n.updatedAt ?? null,
-      state: neighbourUnitState(
-        n.kind,
-        n.status,
-        blockedByFocus.has(`${n.kind}:${n.id}`) ? focusName : null
-      ),
+      status: n.hidden ? null : (n.status ?? null),
+      updatedAt: n.hidden ? null : (n.updatedAt ?? null),
+      state: n.hidden
+        ? null
+        : neighbourUnitState(
+            n.kind,
+            n.status,
+            blockedByFocus.has(`${n.kind}:${n.id}`) ? focusName : null
+          ),
+      ...(n.hidden ? { hidden: true as const } : {}),
     };
     const key = `${n.kind}:${n.id}`;
     const prev = best.get(key);

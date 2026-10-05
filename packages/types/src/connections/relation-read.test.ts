@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dependencyLinkAsRelationRow,
+  deriveNodeNeighbourhood,
   nodeNeighbourhoodState,
   normaliseDependencyRelation,
 } from "./index.js";
@@ -123,5 +124,30 @@ describe("nodeNeighbourhoodState", () => {
     expect(
       nodeNeighbourhoodState({ query: q({}), vocab: { pending: false } })
     ).toBe("ready");
+  });
+});
+
+describe("a hidden far end (M1)", () => {
+  it("reads as 'Hidden blocker' in Blocked by, with no status or mark (rules out 'name it by its id')", () => {
+    const n = deriveNodeNeighbourhood(
+      { kind: "entity", id: "F", status: "todo", title: "Focus" },
+      [
+        {
+          id: "X",
+          name: "X",
+          kind: "entity",
+          edgeType: "blocked_by",
+          direction: "outgoing",
+          via: "links",
+          status: "done",
+          hidden: true,
+        },
+      ]
+    );
+    const [item] = n.blockedBy.items;
+    expect(item.title).toBe("Hidden blocker");
+    expect(item.hidden).toBe(true);
+    expect(item.status).toBeNull();
+    expect(item.state).toBeNull();
   });
 });

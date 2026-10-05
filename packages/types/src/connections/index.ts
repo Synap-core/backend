@@ -69,6 +69,8 @@ export interface ConnectionNeighbor {
   status?: string | null;
   /** The far end's last change, ISO-8601; `undefined` = not read. */
   updatedAt?: string | null;
+  /** The far end is on the edge but invisible to the reader (see `WireGraphNeighbor.hidden`). */
+  hidden?: true;
 }
 
 /** One relation-type catalog row (`relations.listTypes` / `relationDefs.list`). */
