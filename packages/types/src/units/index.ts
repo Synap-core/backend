@@ -9,3 +9,4 @@ export * from "./templates.js";
 export * from "./work-from-template.js";
 export * from "./stage-space.js";
 export * from "./deliverable.js";
+export * from "./outcome.js";

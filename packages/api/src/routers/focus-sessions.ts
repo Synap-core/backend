@@ -52,7 +52,7 @@ import {
   UPDATABLE_SESSION_STATUSES,
 } from "../services/focus-sessions/session-statuses.js";
 import {
-  listSessionOutputs,
+  listSessionOutputsWithOutcomes,
   listOutputsForSessions,
 } from "../services/focus-sessions/session-outputs.js";
 import { attachLastAgentActivity } from "../services/focus-sessions/agent-activity.js";
@@ -2882,11 +2882,15 @@ export const focusSessionsRouter = router({
    * output ledgers (`produced` edges, `artifacts` rows, `expected_outputs`).
    *
    * Consumers must navigate with `refId`, never an artifact row id.
+   *
+   * Also carries the session's `outcomes` / `inputs` / `unattached` /
+   * `outcomeCounts` (`projectSessionOutcomes`, `@synap-core/types/units`) —
+   * render from these; never re-derive the split on a surface.
    */
   outputs: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const result = await listSessionOutputs({
+      const result = await listSessionOutputsWithOutcomes({
         db,
         userId: ctx.userId,
         sessionId: input.sessionId,

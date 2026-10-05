@@ -36,12 +36,19 @@ import {
   views,
   automations,
   playbooks,
+  sessionEvaluations,
   and,
   eq,
   inArray,
 } from "@synap/database";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
-import type { ExpectedOutput } from "@synap/playbooks";
+import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
+import {
+  projectSessionOutcomes,
+  type SessionInput,
+  type SessionOutcome,
+} from "@synap-core/types/units";
+import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { UUID_RE } from "./session-metadata.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
@@ -98,6 +105,64 @@ export interface SessionOutputsResult {
   outputs: SessionOutput[];
   /** Declared deliverables with no produced object behind them. */
   pendingExpected: ExpectedOutput[];
+}
+
+/**
+ * The per-session read (`listSessionOutputs`) — the three-ledger join PLUS the
+ * session's OUTCOMES / INPUTS / UNATTACHED, projected at read time by the ONE
+ * pure rule (`projectSessionOutcomes`, `@synap-core/types/units`) over the
+ * same slots, the session's criteria and its evaluation rows. ADDITIVE: every
+ * field of {@link SessionOutputsResult} is unchanged.
+ */
+export interface SessionOutputsWithOutcomes extends SessionOutputsResult {
+  /** What the session must yield; each carries its `evidence` (from `outputs`). */
+  outcomes: SessionOutcome<SessionOutput>[];
+  /** What it needs from the person; each points at the outcome it blocks. */
+  inputs: SessionInput[];
+  /** Produced outputs that serve no outcome. */
+  unattached: SessionOutput[];
+  /** Met / total over outcomes that were not retired. */
+  outcomeCounts: { met: number; total: number };
+}
+
+/** The session facts the projection reads beyond the join. */
+export interface OutcomeFacts {
+  criteria: unknown;
+  status: string | null;
+  evaluations: ReadonlyArray<{
+    criterionKey: string;
+    verdict: "pass" | "fail" | "unmeasured";
+    evaluatorKind: "evidence" | "capability" | "judge" | "human";
+    createdAt: Date | string;
+    attempt?: number;
+  }>;
+}
+
+/**
+ * Join result + session facts → the outcome read. Pure: the seam the door
+ * calls, so the projection's inputs are the door's real values.
+ */
+export function attachSessionOutcomes(
+  joined: SessionOutputsResult,
+  expectedOutputs: unknown,
+  facts: OutcomeFacts
+): SessionOutputsWithOutcomes {
+  const view = projectSessionOutcomes({
+    expectedOutputs,
+    criteria: readCriteria(facts.criteria),
+    evaluations: facts.evaluations,
+    produced: joined.outputs,
+    sessionTerminal: facts.status
+      ? isTerminalSessionStatus(facts.status)
+      : false,
+  });
+  return {
+    ...joined,
+    outcomes: view.outcomes,
+    inputs: view.inputs,
+    unattached: view.unattached,
+    outcomeCounts: view.counts,
+  };
 }
 
 export interface ListSessionOutputsParams {
@@ -326,12 +391,64 @@ export function joinSessionOutputs(
 export async function listSessionOutputs(
   params: ListSessionOutputsParams
 ): Promise<SessionOutputsResult | null> {
-  const { db: database, userId, sessionId, roster } = params;
+  const session = await loadReadableSession(params);
+  if (!session) return null;
+  return (await joinOne(params.db, params.userId, session)).result;
+}
 
+/**
+ * {@link listSessionOutputs} PLUS the session's outcomes / inputs /
+ * unattached — the read the session room asks for (`focusSessions.outputs`).
+ *
+ * A separate door rather than a flag on the join: the continuation packet and
+ * the closing report call the join and need none of this, and an extra
+ * evaluations read there would let a failure they do not care about turn
+ * their outputs section `unavailable`.
+ */
+export async function listSessionOutputsWithOutcomes(
+  params: ListSessionOutputsParams
+): Promise<SessionOutputsWithOutcomes | null> {
+  const session = await loadReadableSession(params);
+  if (!session) return null;
+  // Evaluation rows by the session id: the row above is the floor (the same
+  // contract `listOutputsForSessions` states for its ledgers).
+  const [joined, evaluations] = await Promise.all([
+    joinOne(params.db, params.userId, session),
+    params.db
+      .select({
+        criterionKey: sessionEvaluations.criterionKey,
+        verdict: sessionEvaluations.verdict,
+        evaluatorKind: sessionEvaluations.evaluatorKind,
+        createdAt: sessionEvaluations.createdAt,
+        attempt: sessionEvaluations.attempt,
+      })
+      .from(sessionEvaluations)
+      .where(eq(sessionEvaluations.sessionId, session.id)),
+  ]);
+  return attachSessionOutcomes(joined.result, joined.slots, {
+    criteria: session.criteria,
+    status: session.status,
+    evaluations,
+  });
+}
+
+interface ReadableSession {
+  id: string;
+  expectedOutputs: unknown;
+  criteria: unknown;
+  status: string | null;
+}
+
+async function loadReadableSession(
+  params: ListSessionOutputsParams
+): Promise<ReadableSession | null> {
+  const { db: database, userId, sessionId, roster } = params;
   const [session] = await database
     .select({
       id: focusSessions.id,
       expectedOutputs: focusSessions.expectedOutputs,
+      criteria: focusSessions.criteria,
+      status: focusSessions.status,
     })
     .from(focusSessions)
     .where(
@@ -341,29 +458,41 @@ export async function listSessionOutputs(
       )
     )
     .limit(1);
-  if (!session) return null;
+  return session ?? null;
+}
 
+/**
+ * The join for one floored session, with "What I looked at" on each slot's
+ * ask named through THIS reader's access floor (refs they cannot see dropped)
+ * — the same resolution the owed read applies (`looked-at.ts`), so the room,
+ * the ask page and the needs-you tray show one answer. Applied to
+ * `pendingExpected` (the room's ask cards) exactly as before; the resolved
+ * slots are also returned so the outcome projection's inputs carry the same
+ * ask. Lazy for the same reason as there: no provenance, no access-registry
+ * load.
+ */
+async function joinOne(
+  database: typeof db,
+  userId: string,
+  session: ReadableSession
+): Promise<{ result: SessionOutputsResult; slots: ExpectedOutput[] }> {
   const joined = await listOutputsForSessions(database, [session]);
   const result = joined.get(session.id) ?? {
     outputs: [],
     pendingExpected: [],
   };
-  // "What I looked at" on a pending slot's ask: named through THIS reader's
-  // access floor, refs they cannot see dropped — the same resolution the owed
-  // read applies (`looked-at.ts`), so the room, the ask page and the needs-you
-  // tray show one answer. Lazy for the same reason as there: no provenance,
-  // no access-registry load.
-  if (!result.pendingExpected.some((e) => e.ask?.lookedAt?.length)) {
-    return result;
+  const stored = Array.isArray(session.expectedOutputs)
+    ? (session.expectedOutputs as ExpectedOutput[])
+    : [];
+  if (!stored.some((e) => e?.ask?.lookedAt?.length)) {
+    return { result, slots: stored };
   }
   const { resolveLookedAtForReader } = await import("./looked-at.js");
-  return {
-    ...result,
-    pendingExpected: await resolveLookedAtForReader(
-      userId,
-      result.pendingExpected
-    ),
-  };
+  const [pendingExpected, slots] = await Promise.all([
+    resolveLookedAtForReader(userId, result.pendingExpected),
+    resolveLookedAtForReader(userId, stored),
+  ]);
+  return { result: { ...result, pendingExpected }, slots };
 }
 
 /**
