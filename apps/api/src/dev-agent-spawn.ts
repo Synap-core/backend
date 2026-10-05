@@ -13,9 +13,11 @@
  * provider env, the workspace's configured CLI launch command, and the PTY
  * lifecycle. It owns NO transport: callers supply `onData`/`onExit`.
  *
- * SECURITY: unchanged from the WS handler — callers are responsible for the
+ * SECURITY: callers are responsible for the
  * `workspace.settings.devplane.localTerminalEnabled` gate. This module spawns a
- * shell on the pod host and must never be reachable from an ungated door.
+ * shell on the pod host and must never be reachable from an ungated door. The
+ * shell itself comes from `spawnPodPty` (pod-pty.ts), which passes an env
+ * ALLOWLIST — the agent never inherits the pod's secrets.
  */
 
 import { db, eq } from "@synap/database";
@@ -23,6 +25,7 @@ import { workspaces } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { resolveProviderEnv } from "./local-terminal.js";
 import { resolveDevCwd } from "./dev-cwd.js";
+import { spawnPodPty } from "./pod-pty.js";
 
 const logger = createLogger({ module: "dev-agent-spawn" });
 
@@ -116,29 +119,9 @@ export async function spawnDevAgent(
     resolveLaunchCommand(workspaceId, instruction),
   ]);
 
-  // Lazy-import node-pty so the module only loads when needed.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-  let ptyModule: typeof import("node-pty");
-  try {
-    ptyModule = await import("node-pty");
-  } catch (err) {
-    logger.error({ err }, "node-pty not available");
-    throw new Error("node-pty not installed on this server");
-  }
-
-  const shell = process.env["SHELL"] ?? "/bin/bash";
-
-  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-  const ptyProcess: import("node-pty").IPty = ptyModule.spawn(shell, [], {
-    name: "xterm-256color",
-    cols: 220,
-    rows: 50,
+  const { pty: ptyProcess, shell } = await spawnPodPty({
     cwd,
-    env: {
-      ...process.env,
-      ...providerEnv,
-      ...(opts.extraEnv ?? {}),
-    } as Record<string, string>,
+    extraEnv: { ...providerEnv, ...(opts.extraEnv ?? {}) },
   });
 
   let killed = false;

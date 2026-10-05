@@ -30,6 +30,7 @@ import { workspaces } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { resolveVaultSecret } from "@synap/api";
 import { resolveDevCwd } from "./dev-cwd.js";
+import { sanitizePresetCommand, spawnPodPty, type PodPty } from "./pod-pty.js";
 // Shared cookie-free WS resolver; re-exported for claude-code.ts.
 import { resolveUserId } from "./ws-auth.js";
 export { resolveUserId };
@@ -116,7 +117,8 @@ export function handleLocalTerminalUpgrade(
 ): void {
   getWss().handleUpgrade(req, socket as any, head, async (ws) => {
     const url = new URL(req.url ?? "", "http://localhost");
-    const presetCmd = url.searchParams.get("cmd") ?? "";
+    // Pre-typed for the user to review — never allowed to submit itself.
+    const presetCmd = sanitizePresetCommand(url.searchParams.get("cmd") ?? "");
     const workspaceId = url.searchParams.get("workspaceId") ?? "";
 
     // Auth
@@ -151,33 +153,13 @@ export function handleLocalTerminalUpgrade(
     // No session here — the interactive terminal is not session-bound.
     const cwd = await resolveDevCwd(workspaceId);
 
-    // Lazy-import node-pty so the module only loads when needed
-    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-    let ptyModule: typeof import("node-pty");
+    let ptyProcess: PodPty["pty"];
+    let shell: string;
     try {
-      ptyModule = await import("node-pty");
-    } catch (err) {
-      logger.error({ err }, "node-pty not available");
-      sendJson(ws, {
-        type: "error",
-        message: "node-pty not installed on this server",
-      });
-      ws.close(1011, "node-pty unavailable");
-      return;
-    }
-
-    const shell = process.env["SHELL"] ?? "/bin/bash";
-
-    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-    let ptyProcess: import("node-pty").IPty;
-    try {
-      ptyProcess = ptyModule.spawn(shell, [], {
-        name: "xterm-256color",
-        cols: 220,
-        rows: 50,
+      ({ pty: ptyProcess, shell } = await spawnPodPty({
         cwd,
-        env: { ...process.env, ...providerEnv } as Record<string, string>,
-      });
+        extraEnv: providerEnv,
+      }));
     } catch (err: any) {
       logger.error({ err }, "Failed to spawn PTY");
       sendJson(ws, {
