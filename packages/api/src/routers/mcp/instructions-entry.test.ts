@@ -111,6 +111,20 @@ describe("entry-key MCP instructions", () => {
     }
   });
 
+  it("teach a typed `ask` on the human-owned slot, in the hand-back clause", () => {
+    // `ask` is also reflex 1 (recall), so slice the clause rather than grep.
+    const text = liveInstructions("entry");
+    const clause = text.slice(
+      text.indexOf("`blockedReason`"),
+      text.indexOf("`wait_for_answer`")
+    );
+    expect(clause).toContain("`ask`");
+    expect(clause).toContain("`recommended`");
+    for (const mode of ["confirm", "choose", "form", "act", "provide"]) {
+      expect(clause).toContain(mode);
+    }
+  });
+
   it("legacy / builder keys keep today's reflexes; entry keys get the entry text", () => {
     expect(liveInstructions("full")).toBe(SYNAP_INSTRUCTIONS);
     expect(liveInstructions("entry")).toBe(ENTRY_REFLEX_PROSE);

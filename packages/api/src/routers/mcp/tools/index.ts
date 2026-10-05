@@ -216,7 +216,7 @@ function buildAskJsonSchema(): Record<string, unknown> {
   >;
   delete derived.$schema;
   derived.description =
-    "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).";
+    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no; optional prompt), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
   return derived;
 }
 
@@ -229,7 +229,7 @@ const ASK_JSON_SCHEMA = buildAskJsonSchema();
 const ROOM_QUESTION_ASK_JSON_SCHEMA = {
   ...buildAskJsonSchema(),
   description:
-    "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended), 'form' (small flat form; never a secret), 'act' (something to do; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Omit for a free-text answer.",
+    "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Omit for a free-text answer.",
 };
 
 /**
@@ -1684,7 +1684,7 @@ export const tools = {
                     type: "string",
                     enum: ["human", "agent"],
                     description:
-                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them.",
+                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them. Always add an `ask` (confirm / choose / ...): without one the person sees only a bare 'I did this'.",
                   },
                   blockedReason: {
                     type: "string",
@@ -1821,7 +1821,7 @@ export const tools = {
                     type: "string",
                     enum: ["human", "agent"],
                     description:
-                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them.",
+                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them. Always add an `ask` (confirm / choose / ...): without one the person sees only a bare 'I did this'.",
                   },
                   blockedReason: {
                     type: "string",
@@ -1922,7 +1922,7 @@ export const tools = {
               },
               required: ["kind", "label"],
               description:
-                "Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason and a one-line why to put a named, classified blocker on the board instead of stalling silently.",
+                "Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason, a one-line why AND an `ask` (confirm yes/no, choose options, ...) so the person answers in one tap instead of a bare 'I did this' button.",
             },
             completeOutput: {
               type: "string",
@@ -3870,7 +3870,7 @@ export const tools = {
               enum: [...ROOM_POST_KINDS],
               default: "update",
               description:
-                "'question' when you need the person's answer — in a session room it pushes a notification to them (once per session per few hours). 'update' for progress and results — in-app only, never a push.",
+                "'question' when you need the person's answer (pair it with `slotLabel` + an `ask` so they get yes/no or options, not a bare button) — in a session room it pushes a notification to them (once per session per few hours). 'update' for progress and results — in-app only, never a push.",
             },
             slotLabel: {
               type: "string",

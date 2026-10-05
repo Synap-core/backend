@@ -56,6 +56,7 @@ describe("MCP instructions teach the session work loop", () => {
     ["advance the stage", "`currentStage`"],
     ["hand person-only work as a human-owned output", "`owner:'human'`"],
     ["…with a reason", "`blockedReason`"],
+    ["…choose carries ONE recommended option", "`recommended`"],
     [
       "…then wait for the answer instead of ending the turn",
       "`wait_for_answer`",
@@ -73,7 +74,11 @@ describe("MCP instructions teach the session work loop", () => {
       INSTRUCTIONS_BUDGET_BYTES
     );
     // 588 = grounding room with the reflexes as they were before the loop.
-    expect(groundingBudgetBytes()).toBeGreaterThanOrEqual(588);
+    // Lowered to 550 DELIBERATELY (2026-10-05): teaching `ask` on a human-owned
+    // slot (confirm/choose/…) cost 35 bytes (after trimming 25 elsewhere);
+    // without it agents filed bare "I did this" slots. Do not lower again
+    // without trimming an equal amount — grounding must keep a real window.
+    expect(groundingBudgetBytes()).toBeGreaterThanOrEqual(550);
   });
 
   it("is ROOM-FIRST: progress, questions and results go to the room; the chat may repeat", () => {
@@ -105,6 +110,21 @@ describe("MCP instructions teach the session work loop", () => {
     expect(work.indexOf("`list_tracks`")).toBeLessThan(
       work.indexOf("`start_track`")
     );
+  });
+
+  it("teaches a typed `ask` on the human-owned slot (not a bare 'I did this' button)", () => {
+    // `ask` also appears in reflex 1 (the recall door), so assert on the WORK
+    // reflex, in the hand-back clause, between blockedReason and wait_for_answer.
+    const work = text.split("\n").find((l) => l.startsWith("4. ")) ?? "";
+    const clause = work.slice(
+      work.indexOf("`blockedReason`"),
+      work.indexOf("`wait_for_answer`")
+    );
+    expect(clause).toContain("`ask`");
+    for (const mode of ["confirm", "choose", "form", "act", "provide"]) {
+      expect(clause).toContain(mode);
+    }
+    expect(clause).toContain("`recommended`");
   });
 
   it("grades BEFORE completing — the order is the rule", () => {
