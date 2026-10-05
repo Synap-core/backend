@@ -131,8 +131,12 @@ describe("resolveActionProgressive — the in-flight verb", () => {
     expect(resolveActionProgressive("proposal.reject")).toBe("Rejecting");
   });
   it("keeps the imperative where no progressive is curated, never a guessed tense", () => {
-    expect(resolveActionProgressive("approve")).toBe(resolveActionLabel("approve"));
-    expect(resolveActionProgressive("frobnicate_thing")).toBe("Frobnicate thing");
+    expect(resolveActionProgressive("approve")).toBe(
+      resolveActionLabel("approve")
+    );
+    expect(resolveActionProgressive("frobnicate_thing")).toBe(
+      "Frobnicate thing"
+    );
     expect(resolveActionProgressive(null)).toBe("");
   });
 });
@@ -160,6 +164,9 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("create", "past")).toBe("Created");
     expect(resolveActionLabel("run", "imperative")).toBe("Run");
     expect(resolveActionLabel("run", "past")).toBe("Ran");
+    // A propose-mode rule's THEN — two moods, like every verb.
+    expect(resolveActionLabel("propose", "imperative")).toBe("Propose");
+    expect(resolveActionLabel("propose", "past")).toBe("Proposed");
   });
 
   it("resolves a dotted proposalType by its last segment", () => {

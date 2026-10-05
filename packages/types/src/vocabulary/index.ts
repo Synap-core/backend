@@ -127,6 +127,9 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   archive: { imperative: "Archive", past: "Archived" },
   restore: { imperative: "Restore", past: "Restored" },
   run: { imperative: "Run", past: "Ran" },
+  // A propose-mode rule's THEN: it files a proposal instead of acting. Without
+  // the row the past mood humanized to "Propose" ("Rule X propose …").
+  propose: { imperative: "Propose", past: "Proposed" },
   // A NEW run of stored input with the current guidelines (intake plan §4.3 —
   // a rerun is a new session `spawned_from` the previous one). "Rerun" on the
   // button and pending item; "Reran" on the history receipt. Added ahead of its
