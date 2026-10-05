@@ -745,7 +745,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Get all relations for an entity — inbound and outbound. Returns typed edges with sourceEntityId, targetEntityId, and relation type. Check before synap_link_entities to avoid duplicates. Use to understand an entity's connections.",
+          "Get all relations for an entity — inbound and outbound. Returns typed edges with sourceEntityId, targetEntityId, and relation type. Dependencies ('blocks' / 'depends_on') are included: they are stored as one dependency link, so their row carries storedAs:'link' and a link id. Check before synap_link_entities to avoid duplicates. Use to understand an entity's connections.",
         inputSchema: {
           type: "object",
           properties: {
