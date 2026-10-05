@@ -427,6 +427,40 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
     expect(result.session.metadata).toMatchObject({ titleSource: "derived" });
   });
 
+  it("create says back an ask it dropped on a slot that is not the person's (warnings[])", async () => {
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      title: "Ask drop at birth",
+      goal: "Declare one human ask and one agent slot carrying an ask",
+      forceCreate: true,
+      expectedOutputs: [
+        {
+          kind: "decision",
+          label: "Ship it?",
+          owner: "human",
+          blockedReason: "decision",
+          why: "Only the person can ship",
+          ask: { mode: "confirm", prompt: "Ship it?" },
+        },
+        {
+          kind: "report",
+          label: "Agent report",
+          ask: { mode: "confirm", prompt: "dropped" },
+        },
+      ] as never,
+    });
+    if (result.status !== "created") throw new Error(result.status);
+    const slots = result.session.expectedOutputs as Array<{
+      label: string;
+      ask?: unknown;
+    }>;
+    expect(slots.find((o) => o.label === "Ship it?")?.ask).toBeDefined();
+    expect(slots.find((o) => o.label === "Agent report")?.ask).toBeUndefined();
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings?.[0]).toContain("Agent report");
+  });
+
   it("adoption KEEPS a name a person or agent chose", async () => {
     const auto = await receipt(CONV_A, "Create task Buy milk");
     await q(

@@ -44,7 +44,10 @@ import {
   matchSessionTemplate,
   type SessionPlaybookCandidates,
 } from "./match-session-template.js";
-import { sanitizeDeclaredOutputs } from "./update-session.js";
+import {
+  droppedAskWarnings,
+  sanitizeDeclaredOutputs,
+} from "./update-session.js";
 import { stampSlotKeys } from "./slot-keys.js";
 import {
   guidanceForBlockedSlots,
@@ -286,6 +289,12 @@ export type CreateFocusSessionResult =
        * created. `session.id` is then that session's id.
        */
       adopted?: true;
+      /**
+       * Part of the declaration the pod did not keep as sent — an `ask` on a
+       * slot that is not the person's is dropped. Said back, never silent
+       * (same rule as `updateSession`).
+       */
+      warnings?: string[];
     }
   | {
       /**
@@ -1021,9 +1030,17 @@ export async function createFocusSession(
     reason: { kind: "slots", before: [], after: sessionOut.expectedOutputs },
   });
 
+  const warnings = droppedAskWarnings(
+    (expectedOutputs ?? []) as Parameters<typeof droppedAskWarnings>[0],
+    (sessionOut.expectedOutputs ?? []) as Parameters<
+      typeof droppedAskWarnings
+    >[1]
+  );
+
   return {
     status: "created",
     session: sessionOut,
+    ...(warnings.length > 0 ? { warnings } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(parentLink ? { parentLink } : {}),
     ...(blockerLinks ? { blockerLinks } : {}),
