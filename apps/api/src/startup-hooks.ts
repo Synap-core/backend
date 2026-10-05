@@ -30,6 +30,7 @@ import {
   setDynamicCorsOrigins,
   ensureSynapCoreCapability,
   ensureSystemSkills,
+  ensureCoreRenderers,
   ensureCaptureAgent,
   ensureSessionNarrativeRule,
   reconcileCapabilitiesToTemplates,
@@ -695,6 +696,19 @@ export async function runStartupHooks(): Promise<void> {
     await ensureSystemSkills();
   } catch (err) {
     logger.warn({ err }, "Failed to seed system skills on startup (non-fatal)");
+  }
+
+  // Install the first-party MCP-Apps renderers FROM THE CATALOG and bind them
+  // pod-wide for outside AI hosts. Idempotent (installs only when missing or
+  // behind the catalog version), never overrides an admin's binding, non-fatal;
+  // a cell not yet in the catalog is skipped and retried next boot.
+  try {
+    await ensureCoreRenderers();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to ensure core renderers on startup (non-fatal)"
+    );
   }
 
   // Seed the pod-level CAPTURE AGENT — substrate, not surface. Fundamental
