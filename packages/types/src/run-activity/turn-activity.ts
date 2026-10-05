@@ -33,7 +33,8 @@
  *
  * ── Labels ────────────────────────────────────────────────────────────────
  * A known tool's words come from `resolveToolLabel` (vocabulary) in BOTH moods
- * — progressive while it runs, past once it settled. An unknown tool keeps the
+ * — progressive while it runs, past once it did its work, imperative when it did
+ * not (see `turnToolRowLabel`). An unknown tool keeps the
  * producer's title (stripped of its ellipsis) before falling back to the
  * humanized name. No local label map.
  */
@@ -134,6 +135,8 @@ export interface TurnToolLabel {
   progressive: string;
   /** "Searched your pod" — once it settled. */
   past: string;
+  /** "Search your pod" — when it did NOT happen (awaiting, rejected, failed…). */
+  imperative: string;
 }
 
 export type TurnActivityItem =
@@ -251,13 +254,32 @@ function labelFor(
     return {
       progressive: resolveToolLabel(toolName, "progressive"),
       past: resolveToolLabel(toolName, "past"),
+      imperative: resolveToolLabel(toolName, "imperative"),
     };
   }
   const authored = (step?.title?.trim() || step?.content?.trim())
     ?.replace(/[.…]+$/u, "")
     .trim();
   const fallback = resolveToolLabel(toolName);
-  return { progressive: authored || fallback, past: authored || fallback };
+  const label = authored || fallback;
+  return { progressive: label, past: label, imperative: label };
+}
+
+/**
+ * The ONE rule for which mood a tool row speaks in. Only a tool that actually
+ * did its work reads past ("Created entity"); one that is still going reads
+ * progressive; every other state — waiting on you, rejected, unknown, failed,
+ * cancelled, never settled — names an act that did NOT happen, so it reads
+ * imperative ("Create entity"), as a pending proposal does everywhere else.
+ */
+export function turnToolRowLabel(tool: {
+  state: TurnToolState;
+  label: TurnToolLabel;
+}): string {
+  if (tool.state === "running" || tool.state === "pending") {
+    return tool.label.progressive;
+  }
+  return tool.state === "done" ? tool.label.past : tool.label.imperative;
 }
 
 function bucketState(

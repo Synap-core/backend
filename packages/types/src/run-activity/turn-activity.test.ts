@@ -3,6 +3,7 @@ import {
   deriveTurnActivity,
   formatTurnSummary,
   turnMark,
+  turnToolRowLabel,
   TURN_PHASES,
   TURN_TOOL_STATES,
   type TurnActivityInput,
@@ -82,7 +83,7 @@ describe("deriveTurnActivity — tool states", () => {
         id: "tool-call-1-1700000000000-abc",
         toolName: "search_unified",
         state: "done",
-        label: { progressive: "Searching your pod", past: "Searched your pod" },
+        label: { progressive: "Searching your pod", past: "Searched your pod", imperative: "Search your pod" },
         detail: "2 results",
         durationMs: 400,
       },
@@ -158,6 +159,30 @@ describe("deriveTurnActivity — tool states", () => {
     });
     expect(a.summary.proposalCount).toBe(1); // deduped across stream + tool output
     expect(a.summary.awaitingCount).toBe(1);
+  });
+
+  it("a row speaks past only when the act happened — a filed proposal reads imperative", () => {
+    const steps = [
+      call(1, "create_entity"),
+      result(1, "create_entity", {
+        toolOutput: { status: "proposed", proposalId: "p1" },
+      }),
+    ];
+    const rowLabel = (bucket?: "applied" | "rejected") => {
+      const item = deriveTurnActivity({
+        steps,
+        streaming: false,
+        ...(bucket ? { proposalBuckets: { p1: bucket } } : {}),
+      }).items[0];
+      return item?.kind === "tool" ? turnToolRowLabel(item) : null;
+    };
+    // Waiting on you / rejected: the entity was NOT created.
+    expect(rowLabel()).toBe("Create entity");
+    expect(rowLabel("rejected")).toBe("Create entity");
+    // Approved and applied: now it was.
+    expect(rowLabel("applied")).toBe("Created entity");
+    const live = deriveTurnActivity({ steps: [call(1, "create_entity")], streaming: true }).items[0];
+    expect(live?.kind === "tool" ? turnToolRowLabel(live) : null).toBe("Creating entity");
   });
 
   it("a FAILED bucket read reads its filed proposal as unknown — never calm awaiting", () => {
