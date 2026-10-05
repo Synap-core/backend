@@ -104,9 +104,16 @@ export function sentenceCaseLabel(label: string): string {
 export interface ActionVerb {
   imperative: string;
   past: string;
+  /**
+   * What is happening NOW, while the action is in flight — a busy button
+   * ("Rejecting"). Optional and curated per row: only an action a person
+   * watches complete needs one. Read through {@link resolveActionProgressive},
+   * never as a third `VerbMood` (proposal titles have no "in flight" reading).
+   */
+  progressive?: string;
 }
 
-export type VerbMood = keyof ActionVerb;
+export type VerbMood = "imperative" | "past";
 
 /**
  * Curated verbs. Keys are matched on the LAST dotted segment as well as the
@@ -170,7 +177,7 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // Governance surfaces disagreed on this one ("Refused" vs "Rejected").
   // "Reject" is the canonical pair — it matches the API verb and the
   // `PROPOSAL_REJECTION_REASONS` taxonomy.
-  reject: { imperative: "Reject", past: "Rejected" },
+  reject: { imperative: "Reject", past: "Rejected", progressive: "Rejecting" },
   // A proposer retracting their own pending ask — NOT a review outcome.
   // Added 2026-09-07: `STATUS_LABELS.withdrawn` existed but there was no
   // ACTION verb, so `resolveActionLabel("withdraw", "past")` fell through to
@@ -334,6 +341,22 @@ export function resolveActionLabel(
   const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
   const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
   return verb ? verb[mood] : humanizeToken(action);
+}
+
+/**
+ * The in-flight verb for an action token — the busy label of the button that
+ * started it ("Rejecting"). A row without a curated `progressive` keeps its
+ * imperative: the button goes on naming what it does while its spinner says
+ * it is doing it, rather than guessing a tense nobody curated.
+ */
+export function resolveActionProgressive(
+  action: string | null | undefined
+): string {
+  if (!action) return "";
+  const key = action.toLowerCase();
+  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
+  const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
+  return verb?.progressive ?? resolveActionLabel(action, "imperative");
 }
 
 /** Which end of a lineage edge the reader is standing on. */

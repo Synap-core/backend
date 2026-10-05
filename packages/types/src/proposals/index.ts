@@ -70,12 +70,14 @@ export const PROPOSAL_REJECTION_REASON_LABELS: Record<
   ProposalRejectionReasonCode,
   string
 > = {
-  wrong_entity: "Wrong entity",
+  // Plain words: a person declining a proposal does not know our model's
+  // nouns (entity, kind, facet, workspace). The CODES stay the model's terms.
+  wrong_entity: "Wrong item",
   duplicate: "Duplicate",
-  wrong_kind_or_facet: "Wrong kind/facet",
-  wrong_link_type: "Wrong link type",
-  wrong_workspace: "Wrong workspace",
-  bad_data: "Bad data",
+  wrong_kind_or_facet: "Wrong type",
+  wrong_link_type: "Wrong connection",
+  wrong_workspace: "Wrong space",
+  bad_data: "Wrong details",
   not_relevant: "Not relevant",
   other: "Other",
 };

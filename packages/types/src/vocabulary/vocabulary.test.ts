@@ -7,6 +7,7 @@ import {
   humanizeToken,
   sentenceCaseLabel,
   resolveActionLabel,
+  resolveActionProgressive,
   resolveObjectNoun,
   OBJECT_NOUNS,
   buildObjectActionTitle,
@@ -121,6 +122,18 @@ describe("sentenceCaseLabel", () => {
     expect(sentenceCaseLabel("works_at")).toBe("Works at");
     expect(sentenceCaseLabel("worksAt")).toBe("Works at");
     expect(sentenceCaseLabel("")).toBe("");
+  });
+});
+
+describe("resolveActionProgressive — the in-flight verb", () => {
+  it("reads a curated progressive, on the whole token and its tail", () => {
+    expect(resolveActionProgressive("reject")).toBe("Rejecting");
+    expect(resolveActionProgressive("proposal.reject")).toBe("Rejecting");
+  });
+  it("keeps the imperative where no progressive is curated, never a guessed tense", () => {
+    expect(resolveActionProgressive("approve")).toBe(resolveActionLabel("approve"));
+    expect(resolveActionProgressive("frobnicate_thing")).toBe("Frobnicate thing");
+    expect(resolveActionProgressive(null)).toBe("");
   });
 });
 
