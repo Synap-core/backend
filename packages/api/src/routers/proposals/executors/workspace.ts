@@ -63,6 +63,7 @@ export function registerWorkspaceExecutors(): void {
 
       const {
         materializeWorkspaceCore,
+        materializeReportStatus,
         ComposeBaseUnavailableError,
         DependencyResolutionError,
         ComposeBaseNotFoundError,
@@ -127,7 +128,7 @@ export function registerWorkspaceExecutors(): void {
         ...((proposal.data as Record<string, unknown> | null | undefined) ??
           {}),
         materializedWorkspaceId: workspaceId,
-        materializeStatus: core.status,
+        materializeStatus: materializeReportStatus(core),
       };
 
       await db
@@ -732,6 +733,7 @@ export function registerWorkspaceExecutors(): void {
 
       const {
         materializeWorkspaceCore,
+        materializeReportStatus,
         ComposeBaseUnavailableError,
         DependencyResolutionError,
         ComposeBaseNotFoundError,
@@ -794,7 +796,7 @@ export function registerWorkspaceExecutors(): void {
         ...((proposal.data as Record<string, unknown> | null | undefined) ??
           {}),
         materializedWorkspaceId: workspaceId,
-        materializeStatus: core.status,
+        materializeStatus: materializeReportStatus(core),
       };
 
       await db

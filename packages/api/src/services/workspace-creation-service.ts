@@ -214,6 +214,48 @@ export async function reconcileWorkspaceIfStale(opts: {
  */
 const ADOPT_WRITE_ROLES = new Set(["owner", "admin", "editor"]);
 
+/**
+ * NAMED INSTANCES of a template. A template install is idempotent on its slug
+ * (`provisioning_proposal_id = <slug>`), which makes every template a singleton
+ * per user — the right default for a re-install. A caller that deliberately
+ * wants a SECOND copy (one Brand Library per brand, one per agency client)
+ * names it: the idempotency key becomes `<slug>:<normalized name>`, so
+ *   - the same name again reuses that instance (still idempotent), and
+ *   - a different name, or no name, never reaches it.
+ * The ONE derivation of that key — every door that accepts an instance name
+ * calls this, never re-derives it.
+ */
+export function normalizeWorkspaceInstanceName(instanceName: string): string {
+  return instanceName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export function workspaceInstanceKey(
+  slug: string | undefined,
+  instanceName?: string
+): string | undefined {
+  if (!slug) return undefined;
+  if (instanceName === undefined) return slug;
+  const normalized = normalizeWorkspaceInstanceName(instanceName);
+  if (!normalized) {
+    throw new Error(
+      `Instance name "${instanceName}" has no letters or digits — it cannot name a workspace instance.`
+    );
+  }
+  return `${slug}:${normalized}`;
+}
+
+/** True when `key` is a NAMED instance key of `slug` (`<slug>:<name>`). */
+export function isNamedInstanceKey(
+  key: string | undefined,
+  slug: string
+): boolean {
+  return !!key && key.startsWith(`${slug}:`);
+}
+
 interface LegacyWorkspaceMatch {
   id: string;
   settings: WorkspaceSettings | null;
@@ -269,6 +311,13 @@ async function findLegacyWorkspaceMatch(
   slug: string,
   userId: string
 ): Promise<LegacyWorkspaceMatch | null> {
+  // A NAMED instance (`provisioning_proposal_id = '<slug>:<name>'`) is never a
+  // legacy singleton: adopting it would re-stamp its key to `<slug>` and turn
+  // the named copy into the singleton (the next `--as <name>` would then
+  // create a duplicate). Compared by prefix with `left()`, not LIKE, so a `_`
+  // in a slug is never a wildcard.
+  const instancePrefix = `${slug}:`;
+  const notANamedInstance = drizzleSql`coalesce(left(${workspaces.provisioningProposalId}, ${instancePrefix.length}), '') <> ${instancePrefix}`;
   const selectCols = {
     id: workspaces.id,
     ownerId: workspaces.ownerId,
@@ -285,7 +334,11 @@ async function findLegacyWorkspaceMatch(
       eq(workspaceMembers.workspaceId, workspaces.id)
     )
     .where(
-      and(eq(workspaceMembers.userId, userId), eq(workspaces.packageSlug, slug))
+      and(
+        eq(workspaceMembers.userId, userId),
+        eq(workspaces.packageSlug, slug),
+        notANamedInstance
+      )
     );
 
   const bySubtype = await db
@@ -298,7 +351,8 @@ async function findLegacyWorkspaceMatch(
     .where(
       and(
         eq(workspaceMembers.userId, userId),
-        drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${slug}`
+        drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${slug}`,
+        notANamedInstance
       )
     );
 
@@ -566,7 +620,10 @@ export async function createWorkspaceFromDefinitionIdempotent(
     // door that never passed `proposalId`). Without this, such a workspace
     // duplicates on every reinstall instead of reconciling. See
     // `findLegacyWorkspaceMatch` for the two-tier predicate + overlay guardrail.
-    if (packageSlug) {
+    // Never for a NAMED instance: the legacy pool is the template's singleton
+    // lineage, so a first `--as <name>` install would adopt the singleton
+    // instead of creating its own workspace.
+    if (packageSlug && !isNamedInstanceKey(proposalId, packageSlug)) {
       const fallback = await findLegacyWorkspaceMatch(packageSlug, userId);
       if (fallback) {
         const currentSettings = fallback.settings;

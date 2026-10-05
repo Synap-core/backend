@@ -326,7 +326,7 @@ export const workspaceHandlers: McpHandlerMap = {
     // Granted (operator authority) → same materialize door as approve
     // (deps/compose aware). Do NOT use createWorkspaceFromDefinitionIdempotent
     // alone — it diverges from packages.apply / workspace/create approve.
-    const { materializeWorkspaceCore } =
+    const { materializeWorkspaceCore, materializeReportStatus } =
       await import("../../../services/workspace-materialization-service.js");
     const core = await materializeWorkspaceCore({
       definition: definition as Parameters<
@@ -344,11 +344,12 @@ export const workspaceHandlers: McpHandlerMap = {
           "Workspace materialize returned resolved-without-create (unexpected)",
       });
     }
+    const materializeStatus = materializeReportStatus(core);
     return ok({
       status: "created",
       workspaceId: core.workspaceId,
-      materializeStatus: core.status,
-      created: core.status === "created",
+      materializeStatus,
+      created: materializeStatus === "created",
     });
   },
   synap_declare_workspace_source: async (

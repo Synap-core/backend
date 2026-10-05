@@ -17,6 +17,7 @@ import {
   ComposeOverlayError,
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
+import { workspaceInstanceKey } from "../../../services/workspace-creation-service.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
 import { resolveProjectForPackInstall } from "../../../services/resolve-project-for-pack-install.js";
@@ -156,6 +157,15 @@ export const PackageApplySchema = z.object({
    * a silent auto-execute. A human CLI/browser install omits it → unchanged.
    */
   agentUserId: z.string().optional(),
+  /**
+   * Install a NAMED instance of this template — a deliberate second copy (one
+   * Brand Library per brand, one per agency client). The idempotency key
+   * becomes `<slug>:<normalized name>` (`workspaceInstanceKey`, the ONE
+   * derivation) and the workspace is named after it, so re-running with the
+   * same name reuses that instance. Absent → the template stays a singleton
+   * per user (re-install reuses it), exactly as before.
+   */
+  instanceName: z.string().trim().min(1).max(120).optional(),
   /**
    * Bypass ADVISORY preflight findings (e.g. the wave-2 pure `validateTemplate`
    * lint below). It MUST NOT bypass a LIVE structural failure — a profileKind
@@ -475,6 +485,30 @@ export function registerPackagesRoutes(app: HubHono): void {
     const agentUserId = body.agentUserId ?? c.get("agentUserId") ?? undefined;
     const result: Record<string, unknown> = {};
 
+    // ── Instance identity: singleton per template, or a NAMED instance ─────
+    // `idempotencyKey` is what the create path matches an existing workspace
+    // on; a named instance also names the workspace (the caller's name wins
+    // over the template's own `workspaceName`).
+    if (body.instanceName && body.targetWorkspaceId) {
+      return c.json(
+        {
+          error:
+            "instanceName names a NEW workspace; targetWorkspaceId installs onto an existing one — pass one, not both.",
+        },
+        400
+      );
+    }
+    let idempotencyKey: string | undefined;
+    try {
+      idempotencyKey = workspaceInstanceKey(
+        body._meta?.slug ?? undefined,
+        body.instanceName
+      );
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 400);
+    }
+    const workspaceName = body.instanceName ?? body.workspaceName;
+
     // ── LIVE preflight gate ───────────────────────────────────────────────
     // Run the write-free create-path resolver against the LIVE pod catalog
     // BEFORE governance/materialize. `preflightWorkspaceFromDefinition.ok` is
@@ -548,14 +582,14 @@ export function registerPackagesRoutes(app: HubHono): void {
       subjectType: "workspace",
       action: body.targetWorkspaceId ? "update" : "create",
       data: {
-        name: body.workspaceName ?? body._meta?.slug ?? "untitled",
+        name: workspaceName ?? body._meta?.slug ?? "untitled",
         definition: body,
-        workspaceName: body.workspaceName,
+        workspaceName,
         templateId: body._meta?.slug,
         packageSlug: body._meta?.slug,
         packageVersion: body._meta?.version,
         workspaceType: body.workspaceType,
-        proposalId: body._meta?.slug,
+        proposalId: idempotencyKey,
         createdBy: "provisioning",
         source: "packages.apply",
         ...(body.targetWorkspaceId
@@ -597,8 +631,8 @@ export function registerPackagesRoutes(app: HubHono): void {
         selfSlug: body._meta?.slug,
         // Idempotent-create passthrough — the EXACT args this door passed to
         // createWorkspaceFromDefinitionIdempotent before (Hub never defers).
-        proposalId: body._meta?.slug ?? undefined,
-        workspaceName: body.workspaceName,
+        proposalId: idempotencyKey,
+        workspaceName,
         templateId: body._meta?.slug ?? undefined,
         packageSlug: body._meta?.slug,
         packageVersion: body._meta?.version,

@@ -176,6 +176,25 @@ export type MaterializeCoreResult =
       dependencies: ResolvedPackageDependency[];
     };
 
+/**
+ * The HONEST status of a materialization, for a report (proposal payload, MCP
+ * reply). `MaterializeCoreResult.status === "created"` names the BRANCH (the
+ * idempotent-create path ran), not the outcome: that path returns an EXISTING
+ * workspace when the idempotency key already matched. Reporting the branch
+ * told users a template install "created" a workspace it had only reused.
+ *   - `"created"`  — a new workspace was provisioned just now.
+ *   - `"reused"`   — the idempotency key matched an existing workspace.
+ *   - `"composed"` — layered onto a base / `--onto` target workspace.
+ */
+export type MaterializeReportStatus = "created" | "reused" | "composed";
+
+export function materializeReportStatus(
+  core: Exclude<MaterializeCoreResult, { status: "resolved" }>
+): MaterializeReportStatus {
+  if (core.status === "created" && !core.created.created) return "reused";
+  return core.status;
+}
+
 export interface MaterializeWorkspaceCoreInput {
   /** ALREADY extends-resolved by the caller (see `resolveWorkspaceExtends`). */
   definition: WorkspaceDefinitionInput;
