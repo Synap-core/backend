@@ -49,6 +49,7 @@ import {
   type SessionOutcome,
 } from "@synap-core/types/units";
 import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
+import { createLogger } from "@synap-core/core";
 import { UUID_RE } from "./session-metadata.js";
 import { deriveSlotKeys } from "./slot-keys.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -781,20 +782,42 @@ async function resolveTitles(
   return { titles, entityProfiles };
 }
 
+const sectionLogger = createLogger({ module: "session-outcomes-section" });
+
+/** Why the outcomes section is unavailable — a stable code, never driver text. */
+export type SessionOutcomesUnavailableReason =
+  /** The session does not exist, or the caller cannot read it. */
+  | "session_not_readable"
+  /** The read failed (logged server-side). */
+  | "read_failed";
+
+/** THE outcomes section on the agent wire (MCP + Hub). */
+export type SessionOutcomesSection =
+  | {
+      status: "ok";
+      counts: SessionOutputsWithOutcomes["outcomeCounts"];
+      outcomes: SessionOutputsWithOutcomes["outcomes"];
+      inputs: SessionOutputsWithOutcomes["inputs"];
+      unattached: SessionOutputsWithOutcomes["unattached"];
+    }
+  | { status: "unavailable"; reason: SessionOutcomesUnavailableReason };
+
 /**
  * The session's outcomes + inputs as a READ SECTION — `{status:'ok', counts,
  * outcomes, inputs, unattached}`, or `{status:'unavailable', reason}` when the
  * read failed or the session is not readable (the continuation packet's section
  * contract: a failed section is NOT an empty one). The one reader behind MCP
  * `synap_get_session` and Hub `GET /focus-sessions/:id`, so both doors carry
- * the same `outcomes` from `listSessionOutputsWithOutcomes`.
+ * the same `outcomes` from `listSessionOutputsWithOutcomes`. A failure is
+ * LOGGED here; the wire carries only a stable code — the raw error can be
+ * driver/SQL text, and this section reaches external agents verbatim.
  */
 export async function readSessionOutcomesSection(
   params: ListSessionOutputsParams
-): Promise<Record<string, unknown>> {
+): Promise<SessionOutcomesSection> {
   try {
     const view = await listSessionOutputsWithOutcomes(params);
-    if (!view) return { status: "unavailable", reason: "session not readable" };
+    if (!view) return { status: "unavailable", reason: "session_not_readable" };
     return {
       status: "ok",
       counts: view.outcomeCounts,
@@ -803,9 +826,10 @@ export async function readSessionOutcomesSection(
       unattached: view.unattached,
     };
   } catch (err) {
-    return {
-      status: "unavailable",
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    sectionLogger.warn(
+      { err, sessionId: params.sessionId },
+      "session outcomes section read failed"
+    );
+    return { status: "unavailable", reason: "read_failed" };
   }
 }

@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
 import { proposedMessageFor } from "../../../utils/permission-check.js";
 import {
@@ -112,7 +113,7 @@ function parseSlotInputs(
 async function readSessionOutcomesSection(
   sessionId: string,
   userId: string
-): Promise<Record<string, unknown>> {
+): Promise<SessionOutcomesSection> {
   const { readSessionOutcomesSection: read } =
     await import("../../../services/focus-sessions/session-outputs.js");
   return read({ db, userId, sessionId });

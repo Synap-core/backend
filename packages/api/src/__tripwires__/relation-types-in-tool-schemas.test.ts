@@ -391,14 +391,6 @@ const AWAITING_DECISION: Readonly<Record<string, string>> = {
   // Research flow — `references` is the likely meaning, but that is a choice
   "synap/work-flow.md:source": "likely `references`; semantic, not a typo",
   "synap/SKILL.md:source": "generated from work-flow.md",
-  // linking.md's "pick a type" table — semantic neighbours exist, none exact
-  "synap/linking.md:child_of": "inverse of parent_of; directed defs only",
-  "synap/linking.md:belongs_to": "no def",
-  "synap/linking.md:authored_by": "inverse of created_by",
-  "synap/linking.md:works_with": "no def; `knows` is not equal",
-  "synap/linking.md:part_of": "no def (named in this file's own header)",
-  "synap/linking.md:from_meeting": "no def; `met_at` is not equal",
-  "synap/linking.md:anchored_in": "no def",
 };
 
 describe("TRIPWIRE: relation types taught in skill files must resolve", () => {

@@ -91,7 +91,7 @@ describe("Hub GET /focus-sessions/:id — outcomes", () => {
 });
 
 describe("readSessionOutcomesSection — a failed read is not an empty one", () => {
-  it("reports `unavailable` with the reason when the read throws", async () => {
+  it("reports `unavailable` with a STABLE code when the read throws — never the driver's text", async () => {
     const real = await vi.importActual<
       typeof import("../../../services/focus-sessions/session-outputs.js")
     >("../../../services/focus-sessions/session-outputs.js");
@@ -110,7 +110,8 @@ describe("readSessionOutcomesSection — a failed read is not an empty one", () 
     });
     expect(section).toEqual({
       status: "unavailable",
-      reason: "connection reset",
+      reason: "read_failed",
     });
+    expect(JSON.stringify(section)).not.toContain("connection reset");
   });
 });
