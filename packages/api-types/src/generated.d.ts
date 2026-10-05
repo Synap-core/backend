@@ -17234,6 +17234,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				includePodWide?: boolean | undefined;
 				workspaceId?: string | null | undefined;
 				projectId?: string | undefined;
+				projectWithinWorkspace?: boolean | undefined;
 				sourceProposalId?: string | undefined;
 				facetSlug?: string | undefined;
 				facetProfileId?: string | undefined;
@@ -17352,6 +17353,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug?: string | undefined;
 				includeGlobal?: boolean | undefined;
 				limit?: number | undefined;
+				projectId?: string | undefined;
+				withoutProject?: boolean | undefined;
 			};
 			output: {
 				entities: {
