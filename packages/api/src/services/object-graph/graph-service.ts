@@ -85,6 +85,7 @@ import {
   proposalPayloadTargetName,
 } from "../../routers/proposals/display.js";
 import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 
 /**
  * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
@@ -267,6 +268,13 @@ interface KindSpec {
    */
   namedBy?: "proposal" | "run";
   /**
+   * The display name is DERIVED from the row the floor already admitted, not
+   * one column. `session`: its short `title`, else the goal's first line
+   * (`resolveSessionTitle`, the one session-title door) — never the whole goal
+   * paragraph. `name` stays the column name-addressing matches on.
+   */
+  nameOf?: (row: Record<string, unknown>) => string;
+  /**
    * Where the row's lifecycle status lives: a column name, or `"property"` =
    * the entity's `status` property (`properties.status`, a string only).
    * Absent = the kind has no status (a capture, a document, a playbook…).
@@ -300,6 +308,11 @@ const KIND_TABLE: Record<string, KindSpec> = {
   session: {
     table: focusSessions,
     name: "goal",
+    nameOf: (row) =>
+      resolveSessionTitle({
+        title: row.title as string | null,
+        goal: row.goal as string | null,
+      }),
     status: "status",
     updatedAt: ["updatedAt"],
   },
@@ -385,7 +398,7 @@ function lensNarrowing(column: AnyPgColumn, lens: string | null | undefined) {
   return eq(column, lens);
 }
 
-function hydrationScopeWhere(
+export function hydrationScopeWhere(
   kind: string,
   t: any,
   userId: string,
@@ -607,7 +620,10 @@ export async function hydrateNodes(
           kind: graphKindOfRow(kind, row),
           id,
           name:
-            names?.get(id) ?? (row[spec.name] as string | null) ?? "(untitled)",
+            names?.get(id) ??
+            spec.nameOf?.(row) ??
+            (row[spec.name] as string | null) ??
+            "(untitled)",
           subtype,
           subtypes,
           workspaceId: (row.workspaceId as string | null) ?? null,
@@ -1519,6 +1535,9 @@ interface StructureRef {
  *            → its playbook  (`playbook_id`, outgoing `instantiated_from`)
  *            → its sessions  (`focus_sessions.track_id`, incoming `member_of`)
  *   session  → its track     (outgoing `member_of`)
+ *            → its project   (`project_id`,  outgoing `member_of`)
+ *            → its playbook  (`playbook_id`, outgoing `instantiated_from`)
+ *            (its parent session is a stored `spawned_from` link, not a column)
  *   project  → its tracks    (incoming `member_of`)
  *   proposal → what it governed (`target_*` + entities it materialized via
  *              `entities.source_proposal_id`; outgoing, `via: "governed"`)
@@ -1603,7 +1622,11 @@ export async function getStructureNeighbors(
     // Read through the ONE session read rule: an unreadable session must not
     // reveal which track it belongs to.
     const [session] = await db
-      .select({ trackId: focusSessions.trackId })
+      .select({
+        trackId: focusSessions.trackId,
+        projectId: focusSessions.projectId,
+        playbookId: focusSessions.playbookId,
+      })
       .from(focusSessions)
       .where(and(eq(focusSessions.id, id), sessionReadableWhere({ userId })))
       .limit(1);
@@ -1612,6 +1635,27 @@ export async function getStructureNeighbors(
         kind: "track",
         id: session.trackId,
         edgeType: "member_of",
+        direction: "outgoing",
+        via: "structure",
+      });
+    }
+    // The context the session works inside: the project it serves and the
+    // method it was started from. (`template_id` is the loose text stub
+    // `playbook_id` superseded — not a joinable id, so not read here.)
+    if (session?.projectId) {
+      refs.push({
+        kind: "project",
+        id: session.projectId,
+        edgeType: "member_of",
+        direction: "outgoing",
+        via: "structure",
+      });
+    }
+    if (session?.playbookId) {
+      refs.push({
+        kind: "playbook",
+        id: session.playbookId,
+        edgeType: "instantiated_from",
         direction: "outgoing",
         via: "structure",
       });
@@ -1743,7 +1787,7 @@ export async function getStructureNeighbors(
 /**
  * Merge every neighbour source into ONE list, de-duplicated.
  *
- * Two de-dup rules, and the second is the one live dogfood found:
+ * Three de-dup rules; the second and third are ones live dogfood found:
  *
  *  1. **Same edge, twice** — de-dup on `(kind, id, edgeType, via)`, so an object
  *     linked twice the same way isn't double-counted.
@@ -1756,6 +1800,12 @@ export async function getStructureNeighbors(
  *     stored edge is primary. The temporal row SURVIVES when no `produced` link
  *     exists for that session — e.g. an update made inside a session, which
  *     creates no `produced` link and whose only trace is the events spine.
+ *
+ *  3. **Column and link, one fact** — a `structure` row (an FK column read as
+ *     an edge) is dropped when a stored `links` edge already joins the focus
+ *     to the SAME object in the SAME direction: a playbook-started session
+ *     carries both `playbook_id` and an `instantiated_from` link, and its
+ *     `project_id` beside a `targets` link. The stored edge is primary.
  *
  * Order matters: `linkNeighbors` must come before `temporalNeighbors` so the
  * stored edge is the one that lands.
@@ -1775,9 +1825,22 @@ export function mergeNeighbors(
       .map((n) => n.id)
   );
 
+  // Far ends already joined by a STORED link, per direction.
+  const linkedEnds = new Set(
+    all
+      .filter((n) => n.via === "links")
+      .map((n) => `${n.kind}:${n.id}:${n.direction}`)
+  );
+
   const seen = new Set<string>();
   const neighbors: GraphNeighbor[] = [];
   for (const n of all) {
+    if (
+      n.via === "structure" &&
+      linkedEnds.has(`${n.kind}:${n.id}:${n.direction}`)
+    ) {
+      continue;
+    }
     if (
       n.via === "produced-in" &&
       n.kind === "session" &&
@@ -1991,7 +2054,8 @@ export async function resolveByName(
     return {
       kind,
       id: row.id as string,
-      name: (row[spec.name] as string | null) ?? "(untitled)",
+      name:
+        spec.nameOf?.(row) ?? (row[spec.name] as string | null) ?? "(untitled)",
       subtype: rowSubtype,
       subtypes: rowSubtype ? [rowSubtype] : [],
       workspaceId: (row.workspaceId as string | null) ?? null,

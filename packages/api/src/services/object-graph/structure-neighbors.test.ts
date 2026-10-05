@@ -14,10 +14,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   queues: new Map<unknown, Record<string, unknown>[][]>(),
+  /** Optional answer by (table, selected columns) — wins over the queue. */
+  answer: null as
+    | null
+    | ((
+        table: unknown,
+        cols: Record<string, unknown> | undefined
+      ) => Record<string, unknown>[] | undefined),
+  links: [] as Record<string, unknown>[],
 }));
 
 vi.mock("../links/links-service.js", () => ({
-  getLinksFor: vi.fn(async () => []),
+  getLinksFor: vi.fn(async () => h.links),
 }));
 vi.mock("../../utils/workspace-membership.js", () => ({
   resolveFacetVisibilityScope: vi.fn(async () => ({})),
@@ -42,8 +50,9 @@ vi.mock("@synap/database", async (importOriginal) => {
     return self;
   };
   const fakeDb = {
-    select: () => ({
-      from: (table: unknown) => chain(h.queues.get(table)?.shift() ?? []),
+    select: (cols?: Record<string, unknown>) => ({
+      from: (table: unknown) =>
+        chain(h.answer?.(table, cols) ?? h.queues.get(table)?.shift() ?? []),
     }),
   };
   return {
@@ -74,6 +83,8 @@ function queue(table: unknown, ...reads: Record<string, unknown>[][]) {
 
 beforeEach(() => {
   h.queues = new Map();
+  h.answer = null;
+  h.links = [];
 });
 
 describe("track focus", () => {
@@ -212,5 +223,104 @@ describe("run focus", () => {
     const nb = deriveNodeNeighbourhood({ kind: "run", id: RUN }, env.neighbors);
     expect(nb.cameFrom.items.map((i) => i.id)).toEqual([AUTOMATION]);
     expect(nb.related.items.map((i) => i.id)).toEqual([ENTITY]);
+  });
+});
+
+describe("session focus", () => {
+  const SESSION_ROW = {
+    id: S1,
+    title: "Audit linkage",
+    goal: "Audit every place we link things, list the gaps with file:line evidence and propose waves.\nSecond line.",
+    status: "active",
+    workspaceId: null,
+  };
+  /** Fold read (it selects `playbookId`) vs hydration (select *). */
+  function sessionDb(fold: Record<string, unknown>) {
+    h.answer = (table, cols) => {
+      if (table === schema.focusSessions) {
+        return cols && "playbookId" in cols ? [fold] : [SESSION_ROW];
+      }
+      if (table === schema.projects)
+        return [{ id: PROJECT, name: "Synap", status: "active" }];
+      if (table === schema.playbooks)
+        return [{ id: PLAYBOOK, name: "Dev session" }];
+      if (table === schema.projectTracks)
+        return [{ id: TRACK, name: "Linkage", status: "active" }];
+      return undefined;
+    };
+  }
+
+  it("lists its project and its playbook (the context it works inside), named by title", async () => {
+    sessionDb({ trackId: TRACK, projectId: PROJECT, playbookId: PLAYBOOK });
+    const env = await getObjectGraph(USER, "session", S1);
+    // Named by its short title, never the goal paragraph.
+    expect(env.object.name).toBe("Audit linkage");
+    const byId = Object.fromEntries(env.neighbors.map((n) => [n.id, n]));
+    expect(byId[PROJECT]).toMatchObject({
+      kind: "project",
+      edgeType: "member_of",
+      direction: "outgoing",
+      via: "structure",
+    });
+    expect(byId[PLAYBOOK]).toMatchObject({
+      kind: "playbook",
+      edgeType: "instantiated_from",
+      direction: "outgoing",
+      via: "structure",
+    });
+    const nb = deriveNodeNeighbourhood(
+      { kind: "session", id: S1 },
+      env.neighbors
+    );
+    expect(nb.servesAndBlocks.items.map((i) => i.id).sort()).toEqual(
+      [PROJECT, TRACK].sort()
+    );
+    expect(nb.cameFrom.items.map((i) => i.id)).toEqual([PLAYBOOK]);
+  });
+
+  it("an untitled session is named by the goal's first line", async () => {
+    sessionDb({ trackId: null, projectId: null, playbookId: null });
+    h.answer = ((inner) => (table, cols) =>
+      table === schema.focusSessions && !(cols && "playbookId" in cols)
+        ? [{ ...SESSION_ROW, title: null }]
+        : inner!(table, cols))(h.answer);
+    const env = await getObjectGraph(USER, "session", S1);
+    // The goal's FIRST line, clipped by the one title door — never the paragraph.
+    expect(env.object.name).toMatch(/^Audit every place we link things/);
+    expect(env.object.name).not.toContain("Second line");
+    expect(env.object.name.length).toBeLessThan(SESSION_ROW.goal.length);
+  });
+
+  it("does not repeat a playbook / project a stored link already names", async () => {
+    sessionDb({ trackId: null, projectId: PROJECT, playbookId: PLAYBOOK });
+    h.links = [
+      {
+        fromType: "session",
+        fromId: S1,
+        toType: "playbook",
+        toId: PLAYBOOK,
+        linkType: "instantiated_from",
+      },
+      {
+        fromType: "session",
+        fromId: S1,
+        toType: "project",
+        toId: PROJECT,
+        linkType: "targets",
+      },
+    ];
+    const env = await getObjectGraph(USER, "session", S1);
+    const rows = env.neighbors.map((n) => `${n.kind}:${n.edgeType}:${n.via}`);
+    expect(rows.sort()).toEqual(
+      ["playbook:instantiated_from:links", "project:targets:links"].sort()
+    );
+  });
+
+  it("an unreadable session contributes no context edges", async () => {
+    // The floored fold read returns nothing; nothing hydrates.
+    h.answer = (table) => (table === schema.focusSessions ? [] : undefined);
+    const env = await getObjectGraph(USER, "session", S1);
+    expect(env.found).toBe(false);
+    expect(env.neighbors).toEqual([]);
   });
 });
