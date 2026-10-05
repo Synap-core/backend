@@ -1057,11 +1057,12 @@ export class HubRestClient {
   }
 
   /**
-   * The caller's brand kit — `GET /brand/kit`. The pod resolves the brand
-   * workspace (project's used Brand Library → given workspace → pod default).
-   * "No brand" throws a 404 `HubApiError` whose body carries a typed `reason`
-   * (`no_brand_workspace` | `project_not_found`); any other failure throws too
-   * — never an empty kit.
+   * The caller's brand kit — `GET /brand/kit`. The pod resolves the Brand
+   * space and the brand identity in it: the project's brand, else the brand
+   * flagged default, else the only brand. "No brand" throws a 404
+   * `HubApiError` whose body carries a typed `reason` (`no-brand-space` |
+   * `no-brand-for-project` | `no-default-brand`) and a human `message`; any
+   * other failure throws too — never an empty kit.
    */
   async getBrandKit(options?: {
     format?: "json" | "css" | "frame-md";
@@ -1072,7 +1073,9 @@ export class HubRestClient {
     content: string;
     hash: string;
     brandWorkspaceId: string;
-    resolvedVia: "project" | "workspace" | "pod-default";
+    brandIdentityId: string;
+    projectId: string | null;
+    resolvedVia: "project" | "default-flag" | "only-brand";
   }> {
     const params = new URLSearchParams();
     if (options?.format) params.set("format", options.format);

@@ -1,9 +1,11 @@
 /**
  * Hub Protocol REST — GET /brand/kit
  *
- * Pins the wire contract (C2): 200 shape with brandWorkspaceId + resolvedVia,
- * a TYPED 404 for "no brand", and a 5xx — never an empty kit — when a read
- * fails.
+ * Pins the wire contract (C2, lens model): 200 = the kit + the resolution
+ * (`brandWorkspaceId`, `brandIdentityId`, `projectId`, `resolvedVia`), a TYPED
+ * 404 with `reason` + human `message` for each absence, and a 5xx — never an
+ * empty kit, never a 404 — when a read fails. The kit is exported by the REAL
+ * `exportResolvedBrandKit` from exactly the rows the resolver chose.
  */
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,9 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   resolution: null as unknown,
   resolveThrows: null as Error | null,
-  readThrows: null as Error | null,
+  kitSource: [] as Array<Record<string, unknown>>,
   resolveCalls: [] as Array<Record<string, unknown>>,
-  readCalls: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("./_shared.js", () => ({
@@ -28,20 +29,14 @@ vi.mock("./_shared.js", () => ({
   }),
 }));
 
-vi.mock("../../../services/brand/brand-kit-service.js", () => ({
-  resolveBrandWorkspace: async (args: Record<string, unknown>) => {
+vi.mock("../../../services/brand/brand-kit-service.js", async (orig) => ({
+  ...(await orig<
+    typeof import("../../../services/brand/brand-kit-service.js")
+  >()),
+  resolveBrand: async (args: Record<string, unknown>) => {
     h.resolveCalls.push(args);
     if (h.resolveThrows) throw h.resolveThrows;
-    return h.resolution;
-  },
-  readBrandKit: async (args: Record<string, unknown>) => {
-    h.readCalls.push(args);
-    if (h.readThrows) throw h.readThrows;
-    return {
-      format: args.format,
-      content: ":root {\n}\n",
-      hash: "00000000000abc",
-    };
+    return { resolution: h.resolution, kitSource: h.kitSource };
   },
 }));
 
@@ -64,59 +59,79 @@ function buildApp(scopes = ["hub-protocol.read"]): HubHono {
   return app;
 }
 
+const IDENTITY = "66666666-6666-4666-8666-666666666666";
+const S_COLOR = {
+  profileSlug: "brand-color",
+  title: "Ochre",
+  properties: { "color-role": "primary", "color-hex": "#B67A38" },
+};
+
 beforeEach(() => {
-  h.resolution = { ok: true, brandWorkspaceId: LIB, resolvedVia: "project" };
+  h.resolution = {
+    ok: true,
+    brandWorkspaceId: LIB,
+    brandIdentityId: IDENTITY,
+    projectId: PROJECT,
+    resolvedVia: "project",
+  };
+  h.kitSource = [S_COLOR];
   h.resolveThrows = null;
-  h.readThrows = null;
   h.resolveCalls.length = 0;
-  h.readCalls.length = 0;
 });
 
 describe("GET /brand/kit", () => {
-  it("returns the kit with its resolution, threading project + workspace", async () => {
+  it("returns the chosen brand's kit with its resolution, threading project + workspace", async () => {
     const res = await buildApp().request(
       `/brand/kit?format=css&projectId=${PROJECT}&workspaceId=${WS}`
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
       format: "css",
-      content: ":root {\n}\n",
-      hash: "00000000000abc",
       brandWorkspaceId: LIB,
+      brandIdentityId: IDENTITY,
+      projectId: PROJECT,
       resolvedVia: "project",
     });
+    expect(body.ok).toBeUndefined();
+    expect(body.content).toContain("--brand-primary: #b67a38;");
+    expect(body.hash).toMatch(/^[0-9a-f]{14}$/);
     expect(h.resolveCalls).toEqual([
       { userId: USER, projectId: PROJECT, workspaceId: WS },
-    ]);
-    expect(h.readCalls).toEqual([
-      { userId: USER, brandWorkspaceId: LIB, format: "css" },
     ]);
   });
 
   it("defaults the format to json", async () => {
     const res = await buildApp().request("/brand/kit");
     expect(res.status).toBe(200);
-    expect(h.readCalls[0]!.format).toBe("json");
+    expect(((await res.json()) as { format: string }).format).toBe("json");
   });
 
-  it("no brand is a TYPED 404 and reads nothing", async () => {
-    h.resolution = { ok: false, reason: "no_brand_workspace" };
-    const res = await buildApp().request("/brand/kit");
-    expect(res.status).toBe(404);
-    expect(((await res.json()) as { reason: string }).reason).toBe(
-      "no_brand_workspace"
-    );
-    expect(h.readCalls).toHaveLength(0);
-  });
-
-  it("an invisible project is a typed project_not_found 404", async () => {
-    h.resolution = { ok: false, reason: "project_not_found" };
-    const res = await buildApp().request(`/brand/kit?projectId=${PROJECT}`);
-    expect(res.status).toBe(404);
-    expect(((await res.json()) as { reason: string }).reason).toBe(
-      "project_not_found"
-    );
-  });
+  it.each([
+    ["no-brand-space", null],
+    ["no-brand-for-project", LIB],
+    ["no-default-brand", LIB],
+  ] as const)(
+    "%s is a TYPED 404 with the human message",
+    async (reason, brandWorkspaceId) => {
+      h.resolution = {
+        ok: false,
+        reason,
+        message: `msg ${reason}`,
+        brandWorkspaceId,
+        projectId: null,
+      };
+      const res = await buildApp().request("/brand/kit");
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({
+        error: `msg ${reason}`,
+        reason,
+        message: `msg ${reason}`,
+        brandWorkspaceId,
+        projectId: null,
+      });
+    }
+  );
 
   it("a failed resolution is a 5xx, never an empty kit or a 404", async () => {
     h.resolveThrows = new Error("db down");
@@ -125,12 +140,6 @@ describe("GET /brand/kit", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.content).toBeUndefined();
     expect(body.reason).toBeUndefined();
-  });
-
-  it("a failed kit read is a 5xx", async () => {
-    h.readThrows = new Error("timeout");
-    const res = await buildApp().request("/brand/kit");
-    expect(res.status).toBe(500);
   });
 
   it("rejects an unknown format and a malformed id with 400", async () => {

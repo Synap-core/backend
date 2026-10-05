@@ -15500,14 +15500,28 @@ export type EntityOpenTarget = {
 } | {
 	kind: "internal";
 };
-export type BrandResolvedVia = "project" | "workspace" | "pod-default";
+/** How the brand IDENTITY was chosen. */
+export type BrandResolvedVia = "project" | "default-flag" | "only-brand";
+/** Why there is no brand — a TYPED absence, never a failed read. */
+export type BrandAbsenceReason = "no-brand-space" | "no-brand-for-project" | "no-default-brand";
 export type BrandResolution = {
 	ok: true;
+	/** The Brand space. */
 	brandWorkspaceId: string;
+	/** The chosen `brand-identity` entity. */
+	brandIdentityId: string;
+	/** The project whose brand this is; null = the brand in no project. */
+	projectId: string | null;
 	resolvedVia: BrandResolvedVia;
 } | {
 	ok: false;
-	reason: "project_not_found" | "no_brand_workspace";
+	reason: BrandAbsenceReason;
+	/** A human sentence, safe to show a user or an agent as-is. */
+	message: string;
+	/** The Brand space when one exists (null for `no-brand-space`). */
+	brandWorkspaceId: string | null;
+	/** The project asked about, if any. */
+	projectId: string | null;
 };
 /**
  * Core API Router

@@ -4,22 +4,24 @@
  * GET /brand/kit?format=json|css|frame-md[&projectId][&workspaceId]
  *
  * The ONE door every agent, the CLI and the IS use to read the caller's brand:
- * it resolves the brand workspace (project → workspace → pod default, see
- * `services/brand/brand-kit-service.ts`) and returns the kit rendered by the
- * shared `@synap-core/types/brand-kit` module.
+ * it resolves the Brand space and the brand identity in it for the project
+ * (or the default brand) — see `services/brand/brand-kit-service.ts` — and
+ * returns the kit rendered by the shared `@synap-core/types/brand-kit` module.
  *
- *   200 `{ format, content, hash, brandWorkspaceId, resolvedVia }`
- *   404 `{ error, reason: "no_brand_workspace" | "project_not_found" }` — a
- *       TYPED absence; a caller may render "no brand".
- *   5xx on a failed read — never an empty kit.
+ *   200 `{ format, content, hash, brandWorkspaceId, brandIdentityId,
+ *          projectId, resolvedVia: "project" | "default-flag" | "only-brand" }`
+ *   404 `{ error, reason: "no-brand-space" | "no-brand-for-project" |
+ *          "no-default-brand", message, brandWorkspaceId, projectId }` — a
+ *       TYPED absence with a human `message`.
+ *   5xx on a failed read — never an empty kit, never a 404.
  */
 
 import { z } from "@hono/zod-openapi";
 import { BRAND_KIT_FORMATS } from "@synap-core/types/brand-kit";
 
 import {
-  readBrandKit,
-  resolveBrandWorkspace,
+  exportResolvedBrandKit,
+  resolveBrand,
 } from "../../../services/brand/brand-kit-service.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -46,12 +48,21 @@ const BrandKitResponseSchema = z.object({
   content: z.string(),
   hash: z.string(),
   brandWorkspaceId: z.string(),
-  resolvedVia: z.enum(["project", "workspace", "pod-default"]),
+  brandIdentityId: z.string(),
+  projectId: z.string().nullable(),
+  resolvedVia: z.enum(["project", "default-flag", "only-brand"]),
 });
 
 const BrandKitNotFoundSchema = z.object({
   error: z.string(),
-  reason: z.enum(["no_brand_workspace", "project_not_found"]),
+  reason: z.enum([
+    "no-brand-space",
+    "no-brand-for-project",
+    "no-default-brand",
+  ]),
+  message: z.string(),
+  brandWorkspaceId: z.string().nullable(),
+  projectId: z.string().nullable(),
 });
 
 export function registerBrandRoutes(app: HubHono): void {
@@ -61,11 +72,12 @@ export function registerBrandRoutes(app: HubHono): void {
     tags: ["Brand"],
     summary: "The caller's brand kit (json, css or frame-md)",
     description:
-      "Resolves the brand workspace — the project's used Brand Library, else " +
-      "the given workspace (or the brand source it declares), else the pod's " +
-      "brand provider — and returns the kit with a deterministic content " +
-      "`hash`. 404 with a typed `reason` when there is no brand; a failed " +
-      "read is a 5xx, never an empty kit.",
+      "Resolves the Brand space (the given workspace or the brand source it " +
+      "declares, else the pod's brand provider) and the brand identity in it — " +
+      "the project's brand, else the brand flagged default, else the only " +
+      "brand — and returns that brand's kit with a deterministic content " +
+      "`hash`. 404 with a typed `reason` and a human `message` when there is " +
+      "no brand; a failed read is a 5xx, never an empty kit.",
     request: { query: BrandKitQuerySchema },
     responses: {
       200: { description: "The kit", schema: BrandKitResponseSchema },
@@ -99,32 +111,19 @@ export function registerBrandRoutes(app: HubHono): void {
 
     const { format, projectId, workspaceId } = parsed.data;
     try {
-      const resolution = await resolveBrandWorkspace({
+      const { resolution, kitSource } = await resolveBrand({
         userId: acting.userId,
         projectId,
         workspaceId,
       });
       if (!resolution.ok) {
-        return c.json(
-          {
-            error:
-              resolution.reason === "project_not_found"
-                ? "Project not found"
-                : "No brand library is available to this caller",
-            reason: resolution.reason,
-          },
-          404
-        );
+        const { ok: _absent, ...absence } = resolution;
+        return c.json({ error: absence.message, ...absence }, 404);
       }
-      const kit = await readBrandKit({
-        userId: acting.userId,
-        brandWorkspaceId: resolution.brandWorkspaceId,
-        format,
-      });
+      const { ok: _ok, ...resolved } = resolution;
       return c.json({
-        ...kit,
-        brandWorkspaceId: resolution.brandWorkspaceId,
-        resolvedVia: resolution.resolvedVia,
+        ...exportResolvedBrandKit(kitSource, format),
+        ...resolved,
       });
     } catch (err) {
       logger.error({ err }, "brand.kit failed");
