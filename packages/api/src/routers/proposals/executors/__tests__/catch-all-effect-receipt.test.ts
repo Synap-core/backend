@@ -417,12 +417,59 @@ describe("(3b) link/create blocked_by", () => {
     dependencyCalls.length = 0;
     dependencyAnswer = { ok: false, why: "Entity not found." };
     const a = blockedByArgs();
-    (a.payload as { data: Record<string, unknown> }).data.linkType =
-      "replaces";
+    (a.payload as { data: Record<string, unknown> }).data.linkType = "replaces";
     await expect(catchAll().execute(a)).rejects.toThrow(/Entity not found/);
     expect(dbUpdates).toHaveLength(0);
     expect(auditCalls).toHaveLength(0);
     dependencyAnswer = { ok: true, rows: 1 };
+  });
+
+  it("a LEGACY relation/create `blocks` (filed before 0301) goes through the dependency door, direction-normalised — never a raw relation row", async () => {
+    dependencyCalls.length = 0;
+    dependencyAnswer = { ok: true, rows: 1 };
+    const a = args("relation", "create");
+    a.userId = APPROVER;
+    a.proposal.subjectUserId = OWNER;
+    (a.payload as { data: Record<string, unknown> }).data = {
+      sourceEntityId: BLOCKER,
+      targetEntityId: BLOCKED,
+      type: "blocks",
+      metadata: { note: "kept" },
+    };
+    const result = await catchAll().execute(a);
+    expect(result.effect).toMatchObject({
+      applied: "verified",
+      rows: 1,
+      subject: "link",
+    });
+    expect(dependencyCalls).toHaveLength(1);
+    // A blocks B  ⇔  B --blocked_by--> A
+    expect(dependencyCalls[0]).toMatchObject({
+      action: "create",
+      ownerUserId: OWNER,
+      data: {
+        fromType: "entity",
+        fromId: BLOCKED,
+        toType: "entity",
+        toId: BLOCKER,
+        linkType: "blocked_by",
+        metadata: { note: "kept", relationType: "blocks" },
+      },
+    });
+    expect(auditCalls).toHaveLength(0);
+  });
+
+  it("any other relation/create still hands off to the materializer", async () => {
+    dependencyCalls.length = 0;
+    const a = args("relation", "create");
+    (a.payload as { data: Record<string, unknown> }).data = {
+      sourceEntityId: BLOCKER,
+      targetEntityId: BLOCKED,
+      type: "works_with",
+    };
+    const result = await catchAll().execute(a);
+    expect(result.effect?.applied).toBe("deferred");
+    expect(dependencyCalls).toHaveLength(0);
   });
 
   it("other link types still hand off to the materializer", async () => {

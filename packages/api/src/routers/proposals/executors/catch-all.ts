@@ -4,7 +4,10 @@ import { ProposalStatus } from "@synap/database/schema";
 import { auditLog } from "../../../utils/audit-log.js";
 import { addSessionBlocker } from "../../../services/focus-sessions/session-blocked-by.js";
 import { applyApprovedDependencyLink } from "../../../services/links/dependency-links.js";
-import { isDependencyLinkType } from "@synap-core/types/connections";
+import {
+  isDependencyLinkType,
+  normaliseDependencyRelation,
+} from "@synap-core/types/connections";
 import {
   registerProposalExecutor,
   type ProposalEffect,
@@ -349,6 +352,56 @@ export function registerCatchAllExecutor(): void {
             rows: applied.rows,
             subject: "link",
           });
+        }
+
+        // A `relation/create` for `blocks` / `depends_on` filed BEFORE those
+        // slugs moved onto the dependency edge (4eacdeaf, migration 0301) is
+        // the same fact: apply it through THE dependency door, direction-
+        // normalised and floored on the owner — never as a raw relation row
+        // that would undo 0301 one approval at a time.
+        if (
+          targetType === "relation" &&
+          changeType === "create" &&
+          typeof eventPayload.sourceEntityId === "string" &&
+          typeof eventPayload.targetEntityId === "string"
+        ) {
+          const dependency = normaliseDependencyRelation(
+            eventPayload.type as string,
+            eventPayload.sourceEntityId,
+            eventPayload.targetEntityId
+          );
+          if (dependency) {
+            const metadata =
+              eventPayload.metadata &&
+              typeof eventPayload.metadata === "object" &&
+              !Array.isArray(eventPayload.metadata)
+                ? (eventPayload.metadata as Record<string, unknown>)
+                : {};
+            const applied = await applyApprovedDependencyLink({
+              action: "create",
+              data: {
+                fromType: "entity",
+                fromId: dependency.fromId,
+                toType: "entity",
+                toId: dependency.toId,
+                linkType: dependency.linkType,
+                metadata: { ...metadata, relationType: eventPayload.type },
+              },
+              ownerUserId: proposal.subjectUserId,
+              proposalId: input.proposalId,
+            });
+            if (!applied.ok) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message: `Approval for '${doorKey}' (${String(eventPayload.type)}) refused: ${applied.why} Nothing was applied.`,
+              });
+            }
+            return settle({
+              applied: "verified",
+              rows: applied.rows,
+              subject: "link",
+            });
+          }
         }
 
         // ── THE HONESTY GATE ────────────────────────────────────────────────

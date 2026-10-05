@@ -72,6 +72,7 @@ import {
 import type { SynapEvent } from "@synap-core/core";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
+import { isRelationDependencyType } from "@synap-core/types/connections";
 import {
   resolveMaterializedEntityWorkspaceId,
   resolveMaterializedFacetWorkspaceId,
@@ -1110,6 +1111,17 @@ async function materializeRelation(
     logger.error(
       { id, sourceEntityId, targetEntityId, type },
       "Relation materialization refused an exposure edge; skipping"
+    );
+    return;
+  }
+  // `blocks` / `depends_on` are THE dependency edge (`links` `blocked_by`)
+  // since migration 0301; the api applies an approved one through the
+  // dependency door (proposals catch-all executor). A raw relation row here
+  // would undo 0301 — refused, skipped (never thrown: no poison loop).
+  if (isRelationDependencyType(type)) {
+    logger.error(
+      { id, sourceEntityId, targetEntityId, type },
+      "Relation materialization refused a dependency slug (it is a links blocked_by edge); skipping"
     );
     return;
   }
