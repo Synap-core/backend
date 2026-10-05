@@ -75,7 +75,10 @@ import { closeSessionViaDoor } from "../utils/session-close.js";
 import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import { subjectEntityIdFromPayload } from "../utils/run-subject.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
-import { tripNeverWorkedBreaker } from "./automation-breaker.js";
+import {
+  tripNeverWorkedBreaker,
+  tripBrokeAfterWorkingBreaker,
+} from "./automation-breaker.js";
 import {
   beginAiUsageCapture,
   type AiUsageCollector,
@@ -129,7 +132,11 @@ import {
   executeProposalsQueryStep,
 } from "./steps/ledger-query.js";
 import { executePlaybookRun } from "./steps/playbook-run.js";
-import type { PlaybookRunMode } from "@synap-core/types/automations";
+import {
+  AUTOMATION_SKIP_REASONS,
+  type AutomationSkipReason,
+  type PlaybookRunMode,
+} from "@synap-core/types/automations";
 
 import type {
   ExecutionPayload,
@@ -1917,12 +1924,19 @@ async function executeAutomationFlow(params: {
     // A run whose ONLY failures were governance policy-blocks reads as the calm
     // `blocked_by_policy` outcome; any genuine transport/infra error mixed in
     // keeps it the red `failed` — an actual error still needs the failed lens.
-    const finalStatus =
+    const settledStatus =
       stepsFailed > 0
         ? stepsBlockedByPolicy === stepsFailed
           ? "blocked_by_policy"
           : "failed"
         : "completed";
+    // A run whose LAST act was a dedup skip (a propose-mode THEN found its
+    // pending proposal) did nothing — it reads `skipped` with the reason token
+    // on the run row, exactly as a daily-cap skip does in the matcher, instead
+    // of a `completed` that claims work happened.
+    const skipReason =
+      settledStatus === "completed" ? runSkipReasonOf(outputSummary) : null;
+    const finalStatus = skipReason ? ("skipped" as const) : settledStatus;
     await db
       .update(automationRuns)
       .set(
@@ -1930,7 +1944,7 @@ async function executeAutomationFlow(params: {
           finalStatus,
           stepsCompleted,
           stepsFailed,
-          firstFailureMessage,
+          firstFailureMessage: skipReason ?? firstFailureMessage,
           outputSummary,
         })
       )
@@ -1951,6 +1965,19 @@ async function executeAutomationFlow(params: {
       await db
         .delete(automationClaims)
         .where(eq(automationClaims.ownerRunId, runId));
+    }
+
+    // A skipped run touches no counter — same as the matcher's daily-cap and
+    // claim skips, which never reach this executor: a skip is neither a success
+    // nor a failure, and it must not consume the daily cap either.
+    if (finalStatus === "skipped") {
+      logger.info(
+        { runId, automationId, reason: skipReason },
+        "Automation run skipped — its THEN found nothing to do"
+      );
+      await closeSessionIfOwned();
+      await postRunSummary(runId);
+      return outputSummary ?? {};
     }
 
     // Update automation stats. RETURNING the fresh counters so the never-worked
@@ -1984,6 +2011,15 @@ async function executeAutomationFlow(params: {
         failureCount: statsAfter.failureCount,
         reason: firstFailureMessage,
       });
+      // …and its other half: a rule that HAS worked and now fails every time.
+      if (finalStatus === "failed") {
+        await tripBrokeAfterWorkingBreaker({
+          automationId,
+          status: statsAfter.status,
+          successCount: statsAfter.successCount,
+          reason: firstFailureMessage,
+        });
+      }
     }
 
     logger.info(
@@ -2037,14 +2073,36 @@ const LEDGER_ERROR_MAX = 2000;
  * row's one-line summary, and the counts a roll-up would restate are already
  * structured columns rendered beside it by `runStepSummary`.
  */
+/**
+ * The skip reason a run's OUTPUT says it ended on, or null. A run is a skip
+ * when its last step with output reported `{ status: "skipped", reason }` with
+ * a reason from {@link AUTOMATION_SKIP_REASONS} — today the propose-mode
+ * `playbook_run` that found its pending proposal (`already_proposed`). Only a
+ * KNOWN token counts, so an arbitrary step echoing `status: "skipped"` in its
+ * payload cannot turn a working run into a skip.
+ */
+export function runSkipReasonOf(
+  outputSummary: Record<string, unknown> | null
+): AutomationSkipReason | null {
+  const last = outputSummary?.lastStepOutput as
+    { status?: unknown; reason?: unknown } | null | undefined;
+  if (!last || typeof last !== "object" || last.status !== "skipped") {
+    return null;
+  }
+  const known = Object.values(AUTOMATION_SKIP_REASONS) as string[];
+  return typeof last.reason === "string" && known.includes(last.reason)
+    ? (last.reason as AutomationSkipReason)
+    : null;
+}
+
 export function buildRunTerminalUpdate(input: {
-  finalStatus: "completed" | "failed" | "blocked_by_policy";
+  finalStatus: "completed" | "failed" | "blocked_by_policy" | "skipped";
   stepsCompleted: number;
   stepsFailed: number;
   firstFailureMessage: string | null;
   outputSummary: Record<string, unknown> | null;
 }): {
-  status: "completed" | "failed" | "blocked_by_policy";
+  status: "completed" | "failed" | "blocked_by_policy" | "skipped";
   stepsCompleted: number;
   stepsFailed: number;
   completedAt: Date;

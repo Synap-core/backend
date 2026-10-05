@@ -27,7 +27,16 @@
  * `automation.broken` notification, so this stays one mechanism, not a second
  * private channel.
  */
-import { db, eq, and, automations, drizzleSql } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  inArray,
+  automations,
+  automationRuns,
+  drizzleSql,
+} from "@synap/database";
 import { logger } from "./automation-executor-logger.js";
 
 /**
@@ -48,11 +57,10 @@ import { logger } from "./automation-executor-logger.js";
  * failure an hour, forever) evade the breaker, which is the same invisibility
  * defect wearing a different hat.
  *
- * KNOWN, DELIBERATE GAP: an automation that succeeded once and then broke
- * forever is NOT caught — `successCount` is a lifetime counter, so "consecutive
- * failures since the last success" is not derivable from the columns that exist
- * today. Catching that case needs either a new `consecutive_failures` column or
- * a per-failure scan of `automation_runs`; it is deliberately not built here.
+ * The OTHER half — an automation that succeeded once and then broke forever —
+ * is {@link tripBrokeAfterWorkingBreaker} below: `successCount` is a lifetime
+ * counter, so "consecutive failures since the last success" is read off the
+ * run ledger instead (a bounded per-failure scan, no new column).
  */
 export const NEVER_WORKED_FAILURE_LIMIT = 10;
 
@@ -141,6 +149,124 @@ export async function tripNeverWorkedBreaker(input: {
     logger.warn(
       { err, automationId: input.automationId },
       "never-worked breaker write failed — automation left active"
+    );
+    return false;
+  }
+}
+
+// ── The worked-then-broke breaker ───────────────────────────────────────────
+
+/**
+ * How many SETTLED runs in a row must fail before a rule that HAS worked turns
+ * itself off. Same number as the never-worked limit, for the same reasons (a
+ * run only fails after its per-step retries are spent, so 10 is far past a
+ * blip), and so one sentence describes both breakers.
+ */
+export const CONSECUTIVE_FAILURE_LIMIT = 10;
+
+/**
+ * The statuses that SETTLE a run's verdict for this breaker. `skipped` (dedup,
+ * daily cap, precondition) and `blocked_by_policy` (governance said no —
+ * nothing broke) neither break nor heal the streak; `cancelled` is a person's
+ * act. Only a real success resets it and only a real failure extends it.
+ */
+export const STREAK_STATUSES = ["completed", "failed"] as const;
+
+/**
+ * Pure predicate. Trips only an ACTIVE rule that has succeeded at least once
+ * (the never-worked breaker owns `successCount === 0`) and whose newest
+ * {@link CONSECUTIVE_FAILURE_LIMIT} settled runs — newest first — all failed.
+ * Fewer settled runs than the limit never trips: "not enough evidence" is not
+ * "broken".
+ */
+export function shouldTripBrokeAfterWorking(input: {
+  status: string;
+  successCount: number;
+  /** Settled statuses ({@link STREAK_STATUSES}), newest first. */
+  recentSettled: readonly string[];
+}): boolean {
+  if (input.status !== "active" || input.successCount === 0) return false;
+  const window = input.recentSettled.slice(0, CONSECUTIVE_FAILURE_LIMIT);
+  return (
+    window.length >= CONSECUTIVE_FAILURE_LIMIT &&
+    window.every((s) => s === "failed")
+  );
+}
+
+/** The sentence the user reads when a rule that used to work is turned off. */
+export function brokeAfterWorkingMessage(reason: string | null): string {
+  const cause = reason?.trim()
+    ? ` Last failure: ${reason.trim().slice(0, REASON_MAX)}`
+    : "";
+  return (
+    `Turned off automatically after ${CONSECUTIVE_FAILURE_LIMIT} failed runs in a row (it had worked before).${cause}` +
+    ` Fix the flow, then set this automation back to Active to resume it.`
+  );
+}
+
+/**
+ * Trip the breaker on a rule that worked and then broke. Writes the same
+ * `status = 'error'` + `errorMessage` as the never-worked breaker, so the SAME
+ * `automation.broken` notification tells the owner — one mechanism, two
+ * causes. Reads at most {@link CONSECUTIVE_FAILURE_LIMIT} ledger rows, and
+ * only after a failure on a rule that has a success on record. Non-throwing.
+ */
+export async function tripBrokeAfterWorkingBreaker(input: {
+  automationId: string;
+  status: string;
+  successCount: number;
+  reason: string | null;
+}): Promise<boolean> {
+  if (input.status !== "active" || input.successCount === 0) return false;
+  try {
+    const recent = await db
+      .select({ status: automationRuns.status })
+      .from(automationRuns)
+      .where(
+        and(
+          eq(automationRuns.automationId, input.automationId),
+          inArray(automationRuns.status, [...STREAK_STATUSES])
+        )
+      )
+      .orderBy(desc(automationRuns.startedAt), desc(automationRuns.id))
+      .limit(CONSECUTIVE_FAILURE_LIMIT);
+    if (
+      !shouldTripBrokeAfterWorking({
+        status: input.status,
+        successCount: input.successCount,
+        recentSettled: recent.map((r) => r.status),
+      })
+    ) {
+      return false;
+    }
+    const flipped = await db
+      .update(automations)
+      .set({
+        status: "error",
+        errorMessage: brokeAfterWorkingMessage(input.reason),
+        updatedAt: new Date(),
+      })
+      // A concurrent human edit (pause, archive) wins over this write.
+      .where(
+        and(
+          eq(automations.id, input.automationId),
+          eq(automations.status, "active")
+        )
+      )
+      .returning({ id: automations.id });
+    if (flipped.length === 0) return false;
+    logger.error(
+      {
+        automationId: input.automationId,
+        limit: CONSECUTIVE_FAILURE_LIMIT,
+      },
+      "Automation turned off by the worked-then-broke breaker (consecutive failures)"
+    );
+    return true;
+  } catch (err) {
+    logger.warn(
+      { err, automationId: input.automationId },
+      "worked-then-broke breaker read/write failed — automation left active"
     );
     return false;
   }
