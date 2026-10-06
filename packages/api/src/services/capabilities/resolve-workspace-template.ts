@@ -23,7 +23,7 @@
  *      — fall back to the frozen `@synap-core/workspace-templates` bundle.
  *      Never throws. Cache-miss behavior is BYTE-IDENTICAL to before this
  *      module existed. The bundle is an offline/first-boot FALLBACK only —
- *      the CP catalog (kept current via `publish-official.mjs` →
+ *      the CP catalog (kept current via `synap market publish --official` →
  *      `POST {CP}/api/packages`, no npm publish involved) is the live source
  *      of truth; a pod never needs the npm package rebuilt to see a template
  *      update.

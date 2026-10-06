@@ -102,15 +102,21 @@ views/entityLinks, missing view scope, entityLink predicates). A template that
 **declares `dependencies`** (compose/require another template) passes through
 this HTTP door **without** that validation — composition-aware server-side
 validation is not yet wired for ad-hoc publishes (official templates are
-validated corpus-wide from their YAML by `publish-official.mjs` before it
-posts). Don't claim a composed publish was fully validated; say what actually ran.
+validated corpus-wide from their YAML by the official publish
+(`synap market publish --official`) before it posts). Don't claim a composed publish was fully validated; say what actually ran.
 
 **Official templates — ONE writer.** The official template catalog has ONE
-writer: `synap-app/packages/workspace-templates/scripts/publish-official.mjs` →
-`POST /api/packages` (`publishPackageCore`). The CP never reseeds on deploy;
-`seed-templates.ts` is an insert-only, by-hand bootstrap for an empty catalog.
-A YAML change reaches pods only when that script runs (CI on `main`, or by hand
-with `SYNAP_CP_PUBLISH_TOKEN`); a CP-door change ships CP-deploy first, then publish.
+writer: `synap market publish --official [slug...]` (the founder's command: its
+`synap login` session must own the `synap-official` vendor; it previews the diff
+against the live catalog and asks before writing; `--dry-run` previews only) →
+ONE implementation `synap-app/packages/workspace-templates/scripts/publish-official-lib.mjs`
+→ `POST /api/packages` (`publishPackageCore`). `scripts/publish-official.mjs` is
+only its CI wrapper (`publish-official-templates.yml`). The CP never reseeds on
+deploy; `seed-templates.ts` is an insert-only, by-hand bootstrap for an empty
+catalog. A YAML change reaches pods only when that publish runs; a CP-door change
+ships CP-deploy first, then publish. `definition.sourcePackage` (the
+`mergeCatalog` winner signal) is official-only — the CP rejects it (403) from any
+other publisher, so never put it in an ad-hoc package.
 
 ## What you're producing
 
