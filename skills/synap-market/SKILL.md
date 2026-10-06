@@ -69,6 +69,38 @@ any door: the `synap` CLI, MCP (`market_search` / `run_capability`), or the Hub 
 API. **Everything that is config, not code, can be a template** — workspaces, entity
 profiles/views, renderers (cells), capabilities, skills, automations.
 
+## The authoring order — bottom-up, ALWAYS
+
+Everything installable is a **standalone package**, and packages form a graph: a
+bigger one **declares `dependencies[]`** on smaller ones, and the pod installs the
+missing ones in the same governed pass. So author from the SMALLEST piece up:
+
+1. **Basic objects** — entity types (profiles), **skills**, capabilities, cells,
+   views, workflow/automations. Each is publishable on its OWN and is useful before
+   any container exists. A skill package is one skill: its documentation or code.
+2. **Containers** — a **space** (a `workspace` template) that declares
+   `dependencies[]` on the basic objects it needs, and activates its skills with a
+   `skills:` block.
+3. **Compositions** — a **project / suite** ("truck") that `require`s the spaces.
+
+Publish the small pieces FIRST, then the space, then install. Nothing in the chain
+waits on a container.
+
+**The two verbs are different, and confusing them is the classic mistake:**
+
+- `dependencies[]` = what gets **INSTALLED** — the pod materialises the package if
+  it is not already there (idempotent; a second pass reports `found`).
+- `skills:` inside a template = what gets **LINKED** to that space, and in which
+  mode (`always` / `on-demand`). It names a skill some `dependencies[]` entry —
+  usually its own — already installed. Declaring the link without the dependency
+  installs cleanly and links NOTHING.
+
+**Never inline what is already a package.** Copying a skill's text into a template,
+or re-declaring a profile set that ships as a dependency, forks the thing and stops
+it converging. Depend on it; let the install bring it. And **never** seed a skill
+into the backend (`skills/synap/…`) to make a template resolve — that directory is
+not the marketplace. Publish it as a package.
+
 ## The two reflexes
 
 1. **DISCOVER before you invent.** Before scaffolding a new template or
@@ -366,19 +398,41 @@ synap market scaffold --kind cell my-card   # → my-card.cell.json  {category, 
 synap market publish my-card.cell.json       # category:"cell", same publish client
 ```
 
-`--kind view` works the same. `--kind skill` is refused today (no standalone skill
-schema yet — author skills _inside_ a capability). The door is category-gated: only
-`category:"workspace"` runs the WorkspaceYaml validator + lossless normalization;
-every other kind is stored pod-native as-is (a capability/cell is NOT a WorkspaceYaml).
+`--kind view` works the same, and so does **`--kind skill`** — a skill ships as its
+own package now:
+
+```bash
+synap market scaffold --kind skill my-method   # → my-method.skill.json
+# definition.skill = { slug, name, kind: "instruction"|"code", body | code, … }
+synap market publish my-method.skill.json
+```
+
+Author a skill a template needs as its OWN package, never nested inside a
+capability (the nested form still exists for a capability's own verbs, but it is
+not how a space gets a skill). The `slug` is the skill's `load_skill` ref and
+**cannot start with `system/`** — that namespace is reserved for seeded skills.
+
+The door is category-gated: only `category:"workspace"` runs the WorkspaceYaml
+validator + lossless normalization; every other kind is stored pod-native as-is (a
+capability/cell/skill is NOT a WorkspaceYaml). A `category:"skill"` publish must
+carry a non-empty `definition.skill` with documentation or code — the pod refuses a
+bodiless skill at install, so the CP refuses it at publish.
 
 ### Compose — ship a whole stack in one install
 
 A template declares `dependencies[]` (`{kind, relation: compose|require}`) so
 installing it installs its whole stack in one governed pass. The resolver
-materializes **workspace / capability / cell** dependencies today; skill/view/workflow
-are _accepted and composable but not yet installed standalone_ (pending appliers) —
-so a workspace template can ship its cells + capabilities + a base workspace as ONE
-install. Compose, don't inline.
+materializes **workspace / capability / cell / skill** dependencies today;
+**view and workflow are accepted and composable but not yet installed
+standalone** (pending appliers) — so a space can ship its cells + capabilities +
+skills + a base workspace as ONE install. Compose, don't inline.
+
+Author these BOTTOM-UP: publish the skill/cell/capability first, then the template
+that requires it. `dependencies[]` is the INSTALL; the template's own `skills:`
+block is the LINK to the space (and its mode). A link with no matching dependency
+installs cleanly and links nothing — silently, because a missing dependency is
+non-fatal by design (`required-absent` in the resolver's report, which you should
+read rather than assume).
 
 ### `unpublish <slug>`
 

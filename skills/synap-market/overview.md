@@ -42,6 +42,38 @@ any door: the `synap` CLI, MCP (`market_search` / `run_capability`), or the Hub 
 API. **Everything that is config, not code, can be a template** — workspaces, entity
 profiles/views, renderers (cells), capabilities, skills, automations.
 
+## The authoring order — bottom-up, ALWAYS
+
+Everything installable is a **standalone package**, and packages form a graph: a
+bigger one **declares `dependencies[]`** on smaller ones, and the pod installs the
+missing ones in the same governed pass. So author from the SMALLEST piece up:
+
+1. **Basic objects** — entity types (profiles), **skills**, capabilities, cells,
+   views, workflow/automations. Each is publishable on its OWN and is useful before
+   any container exists. A skill package is one skill: its documentation or code.
+2. **Containers** — a **space** (a `workspace` template) that declares
+   `dependencies[]` on the basic objects it needs, and activates its skills with a
+   `skills:` block.
+3. **Compositions** — a **project / suite** ("truck") that `require`s the spaces.
+
+Publish the small pieces FIRST, then the space, then install. Nothing in the chain
+waits on a container.
+
+**The two verbs are different, and confusing them is the classic mistake:**
+
+- `dependencies[]` = what gets **INSTALLED** — the pod materialises the package if
+  it is not already there (idempotent; a second pass reports `found`).
+- `skills:` inside a template = what gets **LINKED** to that space, and in which
+  mode (`always` / `on-demand`). It names a skill some `dependencies[]` entry —
+  usually its own — already installed. Declaring the link without the dependency
+  installs cleanly and links NOTHING.
+
+**Never inline what is already a package.** Copying a skill's text into a template,
+or re-declaring a profile set that ships as a dependency, forks the thing and stops
+it converging. Depend on it; let the install bring it. And **never** seed a skill
+into the backend (`skills/synap/…`) to make a template resolve — that directory is
+not the marketplace. Publish it as a package.
+
 ## The two reflexes
 
 1. **DISCOVER before you invent.** Before scaffolding a new template or
