@@ -165,6 +165,33 @@ describe("onboarding.restartJourney (real procedure, PGlite)", () => {
     ).toEqual([]);
   });
 
+  it("keeps a supplied completed-step prefix, so ONE step can be re-run", async () => {
+    await seedCompleted(USER);
+
+    const journey = await caller(USER).restartJourney({
+      ...POD,
+      firstActionId: "connect",
+      completedActionIds: ["tools"],
+    });
+
+    expect(journey!.status).toBe("active");
+    expect(journey!.completedAt).toBeNull();
+    expect(journey!.progress.currentActionId).toBe("connect");
+    // The discriminating assertion for this field. Without the pass-through,
+    // mergeJourneyProgress falls back to restartJourneyProgress's [] and this
+    // goes red — which is the negative control.
+    expect(journey!.progress.completedActionIds).toEqual(["tools"]);
+    // Chosen values survive a restart whether or not a prefix is supplied.
+    expect(journey!.progress.values).toEqual({
+      tools: [{ name: "Notion", key: "notion", state: "wanted" }],
+    });
+
+    const [row] = await rowOf(USER);
+    expect(
+      (row!.progress as { completedActionIds: string[] }).completedActionIds
+    ).toEqual(["tools"]);
+  });
+
   it("startJourney still cannot move a completed journey (restart is its own door)", async () => {
     await seedCompleted(USER);
     await expect(caller(USER).startJourney(POD)).rejects.toThrow("cannot move");

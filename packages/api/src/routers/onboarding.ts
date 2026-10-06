@@ -823,8 +823,10 @@ export const onboardingRouter = router({
   /**
    * Start the caller's OWN journey over, from ANY status (completed, dismissed,
    * paused, active, offered, or none yet) → active. Completed steps are
-   * cleared, the current step becomes `firstActionId` (absent when not given),
-   * `completedAt` is cleared, and chosen values (e.g. the tools list) are kept.
+   * cleared — UNLESS `completedActionIds` is supplied, which is how ONE step is
+   * re-run while the steps before it stay done — the current step becomes
+   * `firstActionId` (absent when not given), `completedAt` is cleared, and
+   * chosen values (e.g. the tools list) are kept.
    * History is kept: `startedAt` stays, `evidence.restarts` counts up and
    * `evidence.restartedAt` is stamped.
    */
@@ -832,6 +834,14 @@ export const onboardingRouter = router({
     .input(
       journeyIdentitySchema.extend({
         firstActionId: z.string().min(1).max(200).optional(),
+        // Optional and additive. Omit it and the restart clears the prefix
+        // exactly as before; supply it and the prefix is preserved, which is
+        // what makes a single step re-runnable after the journey completed.
+        // Same shape as progressPatchSchema.completedActionIds.
+        completedActionIds: z
+          .array(z.string().min(1).max(200))
+          .max(200)
+          .optional(),
       })
     )
     .mutation(({ ctx, input }) =>
@@ -841,8 +851,17 @@ export const onboardingRouter = router({
         templateVersion: input.templateVersion,
         status: "active",
         restart: true,
-        ...(input.firstActionId
-          ? { progress: { currentActionId: input.firstActionId } }
+        ...(input.firstActionId || input.completedActionIds
+          ? {
+              progress: {
+                ...(input.firstActionId
+                  ? { currentActionId: input.firstActionId }
+                  : {}),
+                ...(input.completedActionIds
+                  ? { completedActionIds: input.completedActionIds }
+                  : {}),
+              },
+            }
           : {}),
       })
     ),
