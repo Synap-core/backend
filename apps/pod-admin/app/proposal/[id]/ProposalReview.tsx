@@ -275,7 +275,16 @@ export function ProposalReview({
      row has only ids); a segment whose source is missing is dropped, never
      defaulted, so this line can never assert a requester nobody resolved. */
   const requestedParts = [
-    p.authorName ? `Requested by ${p.authorName}` : undefined,
+    // An Application is the requester — name it, and keep the human it acts
+    // for. `appName` rides the display projection; read defensively because the
+    // published types may lag the pod.
+    (p as { appName?: string }).appName
+      ? `Requested by ${(p as { appName?: string }).appName}${
+          p.authorName ? ` (for ${p.authorName})` : ""
+        }`
+      : p.authorName
+        ? `Requested by ${p.authorName}`
+        : undefined,
     workspace.data?.name ? `in ${workspace.data.name}` : undefined,
     p.createdAt ? formatRelative(p.createdAt) : undefined,
   ].filter((part): part is string => !!part);
