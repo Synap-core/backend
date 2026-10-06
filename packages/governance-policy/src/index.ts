@@ -459,6 +459,11 @@ export const ADMIN_ACTIONS_LIVE: readonly GateEventKey[] = [
   // workspaces may see and use a kind — a SCOPE CHANGE like `relation.expose`,
   // so no rule / autoApproveFor entry may lift it to auto-execute.
   "profile.grant_access",
+  // Vault redeem grant. Real gate: `hub-protocol/rest/vault.ts`
+  // POST /vault/secrets/:id/grant passes `vault` + `grant`. It hands a
+  // principal the ability to read a secret's plaintext — a SCOPE CHANGE over a
+  // credential, so no rule / autoApproveFor entry may lift it for an agent.
+  "vault.grant",
 ];
 
 /**
@@ -1791,6 +1796,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "tool/update": "disruptive", // egress
   "track/create": "disruptive", // struct: a new ongoing method on a project
   "track/update": "reversible", // advance / params / status — orchestration
+  "vault/grant": "disruptive", // scope: a principal may now redeem a secret
   "view/create": "reversible",
   "view/update": "reversible",
   "whiteboard/place": "reversible",
@@ -2027,6 +2033,10 @@ export const GATE_WRITE_DOORS = {
   // service (`services/tracks`).
   "track/create": "gate",
   "track/update": "gate",
+  // Direct vault grant (`hub-protocol/rest/vault.ts` POST /vault/secrets/:id/grant).
+  // An agent caller passes the owner check as its linked human, so the door
+  // gates: the human owner grants directly, an agent proposes.
+  "vault/grant": "gate",
   "view/create": "gate",
   "view/update": "gate",
   "whiteboard/place": "gate",

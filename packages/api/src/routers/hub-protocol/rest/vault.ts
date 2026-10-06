@@ -33,13 +33,18 @@ import {
   secretAuditLog,
   proposals,
   users,
-  vaultGrants,
 } from "@synap/database/schema";
 
 import { NotificationService } from "../../../notifications/NotificationService.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { secretsVaultRouter } from "../../secrets-vault.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import {
+  applyVaultSecretGrant,
+  findActiveSecretGrant,
+} from "../../../services/vault-secret-grant.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -432,7 +437,8 @@ export function registerVaultRoutes(app: HubHono): void {
   });
 
   // ── POST /vault/secrets/{id}/grant ─────────────────────────────────────────
-  // Direct, OWNER-gated grant of redeem access to a vault secret — the headless
+  // OWNER-gated and GOVERNED (gate `vault/grant`): the human owner grants
+  // directly; an agent key files a proposal. Direct grant of redeem access to a vault secret — the headless
   // equivalent of the UI "grant access to this ability" flow (which is proposal-
   // based). Lets the CLI authorize an external client (e.g. the Discord bridge)
   // to redeem a capability credential it just provisioned, so the token lives
@@ -474,20 +480,6 @@ export function registerVaultRoutes(app: HubHono): void {
     }
 
     const scope = parsed.data.scope ?? "permanent";
-    const now = Date.now();
-    let expiresAt: Date | null;
-    let maxUses: number | null;
-    if (scope === "once") {
-      expiresAt = new Date(now + 15 * 60 * 1000);
-      maxUses = 1;
-    } else if (scope === "permanent") {
-      expiresAt = null;
-      maxUses = null;
-    } else {
-      expiresAt = new Date(now + (parsed.data.ttlMinutes ?? 60) * 60 * 1000);
-      maxUses = null;
-    }
-
     const grantedTo = parsed.data.grantedTo ?? null;
     const grantWorkspaceId = parsed.data.workspaceId ?? null;
     try {
@@ -500,55 +492,59 @@ export function registerVaultRoutes(app: HubHono): void {
     }
 
     try {
-      // Idempotent: reuse an active, identically-scoped grant.
-      const existing = await db.query.vaultGrants.findFirst({
-        where: and(
-          eq(vaultGrants.grantableType, "secret"),
-          eq(vaultGrants.grantableId, secretId),
-          grantedTo
-            ? eq(vaultGrants.grantedTo, grantedTo)
-            : isNull(vaultGrants.grantedTo),
-          grantWorkspaceId
-            ? eq(vaultGrants.workspaceId, grantWorkspaceId)
-            : isNull(vaultGrants.workspaceId),
-          isNull(vaultGrants.revokedAt)
-        ),
-        columns: { id: true, scope: true, expiresAt: true },
-      });
-      if (
-        existing &&
-        (existing.expiresAt === null || existing.expiresAt > new Date())
-      ) {
-        return c.json({
-          grantId: existing.id,
-          scope: existing.scope ?? scope,
-          expiresAt: existing.expiresAt
-            ? existing.expiresAt.toISOString()
-            : null,
-          reused: true,
-        });
-      }
+      // Idempotent: an identical active grant adds no authority — reuse it
+      // before the gate so a re-run never files a duplicate proposal.
+      const reused = await findActiveSecretGrant(
+        secretId,
+        grantedTo,
+        grantWorkspaceId
+      );
+      if (reused) return c.json(reused);
 
-      const [grant] = await db
-        .insert(vaultGrants)
-        .values({
-          grantableType: "secret",
-          grantableId: secretId,
-          execMode: "auto",
+      // GOVERNED. The owner check above passes for an AGENT key as its linked
+      // human, so without the gate an agent could hand itself (or any
+      // principal) permanent, auto-mode redeem access to any of its human's
+      // secrets — bypassing the /vault/request approval flow. `vault.grant`
+      // sits on the ADMIN floor: an agent always proposes; the human owner
+      // grants directly.
+      const agentUserId = c.get("agentUserId") as string | undefined;
+      const perm = await checkPermissionOrPropose({
+        userId: acting.userId,
+        agentUserId,
+        workspaceId: grantWorkspaceId,
+        subjectType: "vault",
+        action: "grant",
+        data: {
+          id: secretId,
+          secretId,
           grantedTo,
           workspaceId: grantWorkspaceId,
           scope,
-          expiresAt,
-          maxUses,
+          ttlMinutes: parsed.data.ttlMinutes ?? null,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        return c.json({ error: perm.reason ?? "Not permitted" }, 403);
+      }
+      if ("proposalId" in perm && perm.proposalId) {
+        return jsonGoverned(c, {
+          status: "proposed",
+          proposalId: perm.proposalId,
+          message:
+            "Vault access request filed for approval — the grant exists once the owner approves it.",
+        });
+      }
+
+      return c.json(
+        await applyVaultSecretGrant({
+          secretId,
+          grantedTo,
+          workspaceId: grantWorkspaceId,
+          scope,
+          ttlMinutes: parsed.data.ttlMinutes ?? null,
           createdBy: acting.userId,
         })
-        .returning({ id: vaultGrants.id });
-
-      return c.json({
-        grantId: grant.id,
-        scope,
-        expiresAt: expiresAt ? expiresAt.toISOString() : null,
-      });
+      );
     } catch (err) {
       logger.error({ err, secretId }, "vault.grant failed");
       return c.json(
