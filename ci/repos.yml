@@ -29,7 +29,7 @@ repos:
     # App internals are release-managed by changesets. Contract packages are not:
     # their version is a lockstep stamp across three files and is bumped only
     # when the generated surface changes. See ci/README.md "Release classes".
-    node: "22.18.0"          # must satisfy engines.node (>=22.18.0)
+    node: "22.18.0" # must satisfy engines.node (>=22.18.0)
     pnpm_from: packageManager
     changeset_ignore: .changeset/config.json
     publish_workflows:
@@ -84,19 +84,23 @@ changeset_exceptions:
       outside every pnpm-workspace glob, so changesets cannot reach it either
       way; it is released deliberately and manually.
 
+# Package names with exactly ONE home on disk. check.mjs rule 7 fails when any
+# other package.json — public or private, in any repo — declares the name.
+single_home:
+  - package: "@synap-core/control-plane-types"
+    home: synap-app/packages/core/control-plane-types
+    reason: >-
+      Resolved 2026-10-06. Two copies (synap-app 1.1.0, synap-control-plane-api
+      1.0.2) had drifted: browser compiled against the CP copy, relay and the
+      synap-app packages against synap-app's. synap-app is the home: the pnpm
+      workspace already resolved every consumer there, synap-app is the only repo
+      whose changesets workspace carries the name, and its standalone CI cannot
+      see a sibling repo. The CP — which produces these shapes but cannot import
+      the package (rootDir) — keeps its own derivation in src/lib and pins it to
+      this copy with src/lib/billing-state.parity.test.ts.
+
 # Cross-repo invariants that no single repo can enforce on its own.
 open_conflicts:
-  - package: "@synap-core/control-plane-types"
-    repos: [synap-app, synap-control-plane-api]
-    versions: ["1.1.0", "1.0.2"]
-    issue: >-
-      Two public packages share one npm name across two repos. synap-control-plane-api
-      has no npm publish workflow today, so only synap-app reaches the registry — but
-      the day cp-api gains a publisher, whoever runs last owns `latest` and consumers
-      get an unpredictable type surface. Decide the owner before that happens, and
-      before any monorepo migration, where it becomes a hard build error.
-    status: open
-
   - package: "@synap-core/chat-ui"
     repos: [synap-app, hestia-cli]
     versions: ["0.1.0", "0.1.0"]

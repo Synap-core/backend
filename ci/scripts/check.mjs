@@ -370,6 +370,76 @@ else {
   }
 }
 
+// ── 7. single-home packages ──────────────────────────────────────────────────
+if (!QUIET) console.log(`\n${D}── single-home packages ──${X}`);
+// Rule 5 only fails when TWO copies reach npm, and only sees public packages.
+// That let @synap-core/control-plane-types live in two repos for months: same
+// name, drifting content, browser compiling against one copy and relay against
+// the other. A name listed in `single_home` must be declared by exactly ONE
+// package.json on disk — public or private, any depth, any repo — at its home.
+//
+// The scan set is DERIVED: every top-level directory under ROOT (not only the
+// ones with a root package.json — a stray copy can sit in any tree), minus
+// dot-directories, NON_REPOS and git worktrees (detected structurally at every
+// level, so an agent worktree nested inside a repo is not a second copy).
+// WHAT THIS CANNOT SEE: a home whose repo is not checked out beside this one
+// (e.g. this repo's own CI) — that is reported as a warning, never as a pass.
+const singleHome = manifest.single_home ?? [];
+if (singleHome.length) {
+  const wanted = new Map(singleHome.map((e) => [e.package, []]));
+  let manifestsRead = 0;
+  const scan = (d, depth) => {
+    if (depth > 6) return;
+    let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of es) {
+      if (SKIP.has(e.name)) continue;
+      const f = join(d, e.name);
+      if (e.isDirectory()) {
+        if (e.name.charAt(0) === "." || isWorktree(f)) continue;
+        scan(f, depth + 1);
+      } else if (e.name === "package.json") {
+        manifestsRead++;
+        try {
+          const name = JSON.parse(readFileSync(f, "utf8")).name;
+          if (wanted.has(name)) wanted.get(name).push(relative(ROOT, d));
+        } catch {}
+      }
+    }
+  };
+  for (const e of readdirSync(ROOT, { withFileTypes: true })) {
+    if (!e.isDirectory() || e.name.charAt(0) === "." || SKIP.has(e.name) || NON_REPOS.has(e.name)) continue;
+    const top = join(ROOT, e.name);
+    if (isWorktree(top)) continue;
+    scan(top, 1);
+  }
+  // Non-vacuity: a walk that read almost nothing proves nothing.
+  if (manifestsRead < 50) {
+    fail(`single-home scan read only ${manifestsRead} package.json file(s) under ${ROOT} — ` +
+      `vacuous, not passing`);
+  } else {
+    pass(`single-home scan read ${manifestsRead} package.json file(s)`);
+  }
+  for (const { package: name, home } of singleHome) {
+    const found = wanted.get(name);
+    const homeRepo = home.split("/")[0];
+    if (!existsSync(join(ROOT, homeRepo))) {
+      warn(`${name}: home repo ${homeRepo}/ is not checked out under ${ROOT} — cannot check`);
+      continue;
+    }
+    if (found.length === 1 && found[0] === home) {
+      pass(`${name} has one home: ${home}`);
+    } else if (!found.includes(home)) {
+      // The self-check: the scan must see the copy it knows exists.
+      fail(`${name}: expected at ${home}, found ${found.length ? found.join(", ") : "nowhere"} ` +
+        `— the home moved or the scan went blind`);
+    } else {
+      fail(`${name}: ${found.length} package.json files declare this name — ` +
+        `${found.join(", ")}. Its ONE home is ${home}; delete the others ` +
+        `(see ci/repos.yml single_home)`);
+    }
+  }
+}
+
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log("");
 if (failures) { console.error(`${R}✗ ${failures} CI/CD conformance failure(s)${X}\n`); process.exit(1); }
