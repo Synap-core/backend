@@ -77,6 +77,9 @@ import { settleParentAutomationRunFromChild } from "@synap/jobs";
 
 const logger = createLogger({ module: "complete-focus-session" });
 
+/** The error a run carries when its session closed as `failed`. */
+export const SESSION_FAILED_RUN_ERROR = "The session closed as failed.";
+
 export interface CompleteFocusSessionParams {
   sessionId: string;
   userId: string;
@@ -276,9 +279,22 @@ export async function completeFocusSession(
     .limit(1);
 
   if (run) {
+    // The run's terminal status FOLLOWS how the session closed. Stamping
+    // `completed` on a failed/cancelled close hid the failure from the parent
+    // automation run (the settle helper only reacts to a `failed` child).
+    const runStatus =
+      terminalStatus === "failed"
+        ? "failed"
+        : terminalStatus === "cancelled"
+          ? "cancelled"
+          : "completed";
     await db
       .update(playbookRuns)
-      .set({ status: "completed", completedAt: new Date() })
+      .set({
+        status: runStatus,
+        completedAt: new Date(),
+        error: runStatus === "failed" ? SESSION_FAILED_RUN_ERROR : null,
+      })
       .where(eq(playbookRuns.id, run.id));
     // The parent automation run settles from its children (never throws).
     await settleParentAutomationRunFromChild({ playbookRunId: run.id });
