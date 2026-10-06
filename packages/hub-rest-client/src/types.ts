@@ -1794,6 +1794,13 @@ export interface HubSpaceBriefRuleRef {
   ruleId?: string;
 }
 
+/** A skill a space DECLARES — mirrors `SpaceBriefSkillRef`. */
+export interface HubSpaceBriefSkillRef {
+  slug: string;
+  mode: "always" | "on-demand";
+  when?: string;
+}
+
 /** A space's brief as stored at `settings.onboarding` (normalized). */
 export interface HubSpaceBrief {
   purpose?: string;
@@ -1805,6 +1812,7 @@ export interface HubSpaceBrief {
   doneWhen?: string;
   anchors?: HubSpaceBriefAnchor[];
   rules?: HubSpaceBriefRuleRef[];
+  skills?: HubSpaceBriefSkillRef[];
   fetch?: HubSpaceBriefFetchHint[];
 }
 
