@@ -2,9 +2,13 @@
  * REAL-POSTGRES (PGlite) test for migration 0309 — the `apps` table (App
  * Connect v1). Proves the hand-written SQL applies, is idempotent, and lands
  * the columns + the (owner, name) idempotency key the register door relies on.
- * The repository/routes are exercised in api
- * `routers/hub-protocol/rest/__tests__/apps.test.ts` — never replayed as
- * copied SQL here.
+ * Never replayed as copied SQL elsewhere.
+ *
+ * The REPOSITORY is exercised against this same SQL in
+ * `repositories/app-repository.pglite.test.ts` (register idempotency + revive,
+ * the client_id grant join, keyIdsFor). The ROUTES are exercised in api
+ * `routers/hub-protocol/rest/__tests__/apps.test.ts` — which MOCKS
+ * `AppRepository`, so that file proves the route, not the repository.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
