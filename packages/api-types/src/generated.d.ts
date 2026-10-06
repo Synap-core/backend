@@ -7469,20 +7469,275 @@ export type UndoPromotePropertyToBodyResult = {
 	reason: UndoPromoteToBodyRefusal;
 	message: string;
 };
-export type AiFailureClass = "quota" | "plan_quota" | "account_quota" | "not_entitled" | "credits_empty" | "access_suspended" | "account_inactive" | "budget" | "context_length" | "content_filter" | "cancelled" | "auth" | "rate_limit" | "timeout" | "circuit" | "upstream" | "bad_request" | "invalid_response" | "unknown";
+declare const UNIT_STATES: readonly [
+	"not_started",
+	"working",
+	"needs_you",
+	"needs_review",
+	"blocked",
+	"scheduled",
+	"paused",
+	"done",
+	"unmeasured",
+	"failed"
+];
+export type UnitState = (typeof UNIT_STATES)[number];
 /**
- * WIRE CONTRACT — the stable `code` emitted on `CHAT_STREAM_ERROR` alongside
- * `error` and `retryable`. The browser reads it to decide affordances (notably
- * whether a Retry button may be offered at all); it is NOT display text, so it
- * must stay stable even if the copy is reworded.
- *
- * One code per class we can actually EVIDENCE — no code exists for a state we
- * cannot distinguish. `upstream_error`, `bad_request` and `invalid_response`
- * are additions beyond the first six agreed with the app side; they are the
- * remaining classes this module can prove, and collapsing them into `unknown`
- * would throw away evidence we hold.
+ * A palette token NAME. Every one of these already exists in Relay's theme
+ * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
+ * grow without a token existing on BOTH surfaces first.
  */
-export type AiFailureCode = "provider_no_credit" | "quota_exhausted" | "account_quota_exceeded" | "not_entitled" | "credits_empty" | "access_suspended" | "account_inactive" | "llm_budget_exceeded" | "context_length_exceeded" | "content_filter" | "cancelled" | "provider_auth" | "rate_limited" | "timeout" | "circuit_open" | "upstream_error" | "bad_request" | "invalid_response" | "unknown";
+export type UnitTone = "primary" | "ai" | "info" | "error" | "success" | "textSecondary" | "textMuted";
+/** Which mark the state wears. Surfaces map these to their own icon set. */
+export type UnitGlyph = "person" | "scales" | "spark" | "clock" | "pause" | "link" | "check" | "question" | "alert" | "dashed-circle" | "lock" | "globe" | "users";
+/**
+ * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
+ * that has never started shows none at all. `dashed` means the progress is
+ * not real yet (scheduled) or not knowable (unmeasured); rendering either as
+ * a determinate 0% would assert a measurement nobody made.
+ */
+export type UnitRailKind = "none" | "determinate" | "striped" | "dashed";
+export interface UnitRail {
+	kind: UnitRailKind;
+	/** 0–100, and ONLY when `kind === "determinate"`. Null otherwise. */
+	pct: number | null;
+}
+export interface UnitStateView {
+	state: UnitState;
+	tone: UnitTone;
+	glyph: UnitGlyph;
+	rail: UnitRail;
+}
+export type TrackStagePosition = "done" | "active" | "not_started";
+export interface TrackStage {
+	key: string;
+	name: string;
+	/** The stage's closed rollup category, when the pinned stage declares one. */
+	category: string | null;
+	position: TrackStagePosition;
+	/** Sessions filed in this track at this stage — only when counts were given. */
+	sessionCount?: number;
+	/** The stage's own goal — the brief of a session started at this stage. */
+	goal?: string;
+	description?: string;
+	suggestedTasks?: string[];
+	/** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
+	expectedOutputs?: Array<Record<string, unknown>>;
+	/** Acceptance criteria of this stage, as pinned (objects with a `key`). */
+	criteria?: Array<Record<string, unknown> & {
+		key: string;
+	}>;
+	/** The entry gate's kind — a person approves (`human`) or a check measures. */
+	gate?: "human" | "check";
+	/** May the track sit in this stage indefinitely? */
+	indefinite?: boolean;
+	/**
+	 * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
+	 * (`workspaces.package_slug`), never a workspace id, so a method stays
+	 * portable across pods. `startStageSession` resolves it to a live workspace.
+	 */
+	domain?: string;
+	/**
+	 * ISO-8601 — present only on an EMERGENT stage: one added to the running
+	 * track (`addTrackStage`) rather than pinned from its method at start.
+	 */
+	addedAt?: string;
+}
+/**
+ * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
+ * first. A re-entered stage appears again — this is a timeline, not a map.
+ */
+export interface TrackStageHistoryEntry {
+	stageKey: string;
+	/** Where it came from — `null` for the entry recorded at birth/backfill. */
+	fromStage: string | null;
+	/** ISO-8601. */
+	enteredAt: string;
+	/** The user (or agent) id that moved it. */
+	actor: string;
+}
+/**
+ * WHY a paused track is paused — projected by the pod on every track read.
+ *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
+ *     marker, cleared on every status change);
+ *   - `human` — a person paused it, or a human stage gate awaits review;
+ *   - `null`  — the track is not paused (a stale marker never leaks).
+ */
+export type TrackPausedBy = "check" | "human" | null;
+/**
+ * The number a track steers by (`project_tracks.kpi`, 0302).
+ *
+ * `current` is STATED, never measured: nothing in the pod derives "qualified
+ * leads per month", so the value always travels with WHEN it was stated
+ * (`updatedAt`) and by whom (`updatedBy`). A surface must never present it as
+ * a live measurement.
+ *
+ * The target is REACHED when `current >= target` — a KPI is a number to grow
+ * toward. (A lower-is-better KPI is not modelled yet; state it as the number
+ * to reach, e.g. "days saved", not "days taken".)
+ *
+ * The DB mirror is `ProjectTrackKpi` (`@synap/database`, which cannot import
+ * this package); the pod pins the two equal at compile time.
+ */
+export interface TrackKpi {
+	label: string;
+	unit?: string;
+	target: number;
+	current?: number;
+	/** ISO-8601 — when `current` was last stated. */
+	updatedAt?: string;
+	/** The user (or agent) id that stated `current`. */
+	updatedBy?: string;
+}
+/** One counted day. `date` is the viewer's calendar day, `YYYY-MM-DD`. */
+export interface ActivityDay {
+	date: string;
+	count: number;
+}
+/** `activity.daily`'s answer. Sparse: a day with no act is absent. */
+export interface ActivityDaily {
+	/** First day of the window (inclusive), `YYYY-MM-DD` in `tz`. */
+	from: string;
+	/** Last day of the window (inclusive) — the viewer's today. */
+	to: string;
+	tz: string;
+	days: ActivityDay[];
+}
+declare const ACTIVITY_OUTCOMES: readonly [
+	"succeeded",
+	"failed",
+	"proposed",
+	"rejected",
+	"reverted",
+	"waiting",
+	"running",
+	"stopped"
+];
+export type ActivityOutcome = (typeof ACTIVITY_OUTCOMES)[number];
+/**
+ * WHO acted. An agent is named when the pod could name it (`id: null` = an
+ * agent that recorded no attributable identity, never a guess). `system` is a
+ * rule acting on its own (an automation run): `id`/`name` name the rule.
+ */
+export type ActivityActor = {
+	kind: "agent";
+	id: string | null;
+	name: string | null;
+} | {
+	kind: "human";
+	id: string;
+	name: string | null;
+	isViewer: boolean;
+} | {
+	kind: "system";
+	id: string | null;
+	name: string | null;
+};
+declare const ACTIVITY_SOURCES: readonly [
+	"proposal",
+	"decision",
+	"run",
+	"session"
+];
+export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
+/**
+ * The DOOR a row opens — through the route table (`objectNavTarget(kind, id)`).
+ * An applied proposal opens the object it made or changed; one that did not
+ * apply opens itself (`kind: "proposal"`), because its object may not exist.
+ * A run opens the run (`kind: "run"`, with its `flowType`), a session itself.
+ */
+export interface ActivityObjectRef {
+	/** Normalized object kind (`entity`, `document`, `proposal`, `run`, …). */
+	kind: string;
+	id: string;
+	/** What the object is called, when known. */
+	name: string | null;
+	/** An entity's profile slug, for its noun ("Person"), when known. */
+	profileSlug?: string | null;
+	/** A run's ledger (`automation` | `playbook`), for the run route. */
+	flowType?: string | null;
+}
+export interface ActivityRow {
+	/** Stable key, unique across sources: `<source>:<id>`. */
+	id: string;
+	source: ActivitySource;
+	/** When the act happened (ISO). The list is ordered by it, newest first. */
+	occurredAt: string;
+	actor: ActivityActor;
+	/** The vocabulary ACTION token (`create`, `approve`, `run`, `start`, …). */
+	action: string;
+	/** `resolveActionLabel(action, "past")` — "Created", "Approved", "Ran". */
+	verb: string;
+	/**
+	 * The headline. A proposal / decision row carries the proposal's own display
+	 * title (the pod's `proposalDisplaySummary` — the name every proposal door
+	 * leads with); a run its flow's name; a session its title.
+	 */
+	title: string;
+	object: ActivityObjectRef;
+	/** The proposal behind a proposal / decision row. */
+	proposalId: string | null;
+	project: {
+		id: string;
+		name: string | null;
+	} | null;
+	/**
+	 * The session it happened in — the provenance door. `null` when there is
+	 * none, or when the viewer may not read that session (decision D1).
+	 */
+	session: {
+		id: string;
+		title: string;
+	} | null;
+	outcome: ActivityOutcome;
+	/**
+	 * The Undo door — `proposals.revert(proposalId)` — on exactly ONE row per
+	 * revertable proposal: the decision row when a person approved it, the
+	 * proposal row when a rule auto-approved it. Undo reverts the WHOLE
+	 * proposal, so `changeCount` says how far it reaches (`null` = unknown).
+	 */
+	undo: {
+		proposalId: string;
+		changeCount: number | null;
+	} | null;
+	/** A failed run's own error line, when it recorded one. */
+	error: string | null;
+}
+export interface ActivityPage {
+	items: ActivityRow[];
+	/** Pass back as `cursor` for the next (older) page; `null` = no more. */
+	nextCursor: string | null;
+}
+/** An object-nav address (the `Signal.target` shape). The host routes it. */
+export interface LensDoor {
+	kind: string;
+	id: string;
+	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
+	view?: string;
+}
+declare const AI_FAILURE_CODES: readonly [
+	"provider_no_credit",
+	"quota_exhausted",
+	"account_quota_exceeded",
+	"not_entitled",
+	"credits_empty",
+	"access_suspended",
+	"account_inactive",
+	"llm_budget_exceeded",
+	"context_length_exceeded",
+	"content_filter",
+	"cancelled",
+	"provider_auth",
+	"rate_limited",
+	"timeout",
+	"circuit_open",
+	"upstream_error",
+	"bad_request",
+	"invalid_response",
+	"unknown"
+];
+export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
+export type AiFailureClass = "quota" | "plan_quota" | "account_quota" | "not_entitled" | "credits_empty" | "access_suspended" | "account_inactive" | "budget" | "context_length" | "content_filter" | "cancelled" | "auth" | "rate_limit" | "timeout" | "circuit" | "upstream" | "bad_request" | "invalid_response" | "unknown";
 /**
  * A COMMITTED PARTIAL turn — the client-shaped verdict.
  *
@@ -8406,45 +8661,6 @@ export interface SessionActivityWire {
 	live: SessionActivityLive;
 	/** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
 	unreadable: SessionActivitySource[];
-}
-declare const UNIT_STATES: readonly [
-	"not_started",
-	"working",
-	"needs_you",
-	"needs_review",
-	"blocked",
-	"scheduled",
-	"paused",
-	"done",
-	"unmeasured",
-	"failed"
-];
-export type UnitState = (typeof UNIT_STATES)[number];
-/**
- * A palette token NAME. Every one of these already exists in Relay's theme
- * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
- * grow without a token existing on BOTH surfaces first.
- */
-export type UnitTone = "primary" | "ai" | "info" | "error" | "success" | "textSecondary" | "textMuted";
-/** Which mark the state wears. Surfaces map these to their own icon set. */
-export type UnitGlyph = "person" | "scales" | "spark" | "clock" | "pause" | "link" | "check" | "question" | "alert" | "dashed-circle" | "lock" | "globe" | "users";
-/**
- * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
- * that has never started shows none at all. `dashed` means the progress is
- * not real yet (scheduled) or not knowable (unmeasured); rendering either as
- * a determinate 0% would assert a measurement nobody made.
- */
-export type UnitRailKind = "none" | "determinate" | "striped" | "dashed";
-export interface UnitRail {
-	kind: UnitRailKind;
-	/** 0–100, and ONLY when `kind === "determinate"`. Null otherwise. */
-	pct: number | null;
-}
-export interface UnitStateView {
-	state: UnitState;
-	tone: UnitTone;
-	glyph: UnitGlyph;
-	rail: UnitRail;
 }
 /**
  * Which ledger a run came from.
@@ -12895,87 +13111,6 @@ export interface SessionOutputDependencies {
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
 }
-export type TrackStagePosition = "done" | "active" | "not_started";
-export interface TrackStage {
-	key: string;
-	name: string;
-	/** The stage's closed rollup category, when the pinned stage declares one. */
-	category: string | null;
-	position: TrackStagePosition;
-	/** Sessions filed in this track at this stage — only when counts were given. */
-	sessionCount?: number;
-	/** The stage's own goal — the brief of a session started at this stage. */
-	goal?: string;
-	description?: string;
-	suggestedTasks?: string[];
-	/** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
-	expectedOutputs?: Array<Record<string, unknown>>;
-	/** Acceptance criteria of this stage, as pinned (objects with a `key`). */
-	criteria?: Array<Record<string, unknown> & {
-		key: string;
-	}>;
-	/** The entry gate's kind — a person approves (`human`) or a check measures. */
-	gate?: "human" | "check";
-	/** May the track sit in this stage indefinitely? */
-	indefinite?: boolean;
-	/**
-	 * The DOMAIN this stage is worked in: a workspace TEMPLATE slug
-	 * (`workspaces.package_slug`), never a workspace id, so a method stays
-	 * portable across pods. `startStageSession` resolves it to a live workspace.
-	 */
-	domain?: string;
-	/**
-	 * ISO-8601 — present only on an EMERGENT stage: one added to the running
-	 * track (`addTrackStage`) rather than pinned from its method at start.
-	 */
-	addedAt?: string;
-}
-/**
- * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
- * first. A re-entered stage appears again — this is a timeline, not a map.
- */
-export interface TrackStageHistoryEntry {
-	stageKey: string;
-	/** Where it came from — `null` for the entry recorded at birth/backfill. */
-	fromStage: string | null;
-	/** ISO-8601. */
-	enteredAt: string;
-	/** The user (or agent) id that moved it. */
-	actor: string;
-}
-/**
- * WHY a paused track is paused — projected by the pod on every track read.
- *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
- *     marker, cleared on every status change);
- *   - `human` — a person paused it, or a human stage gate awaits review;
- *   - `null`  — the track is not paused (a stale marker never leaks).
- */
-export type TrackPausedBy = "check" | "human" | null;
-/**
- * The number a track steers by (`project_tracks.kpi`, 0302).
- *
- * `current` is STATED, never measured: nothing in the pod derives "qualified
- * leads per month", so the value always travels with WHEN it was stated
- * (`updatedAt`) and by whom (`updatedBy`). A surface must never present it as
- * a live measurement.
- *
- * The target is REACHED when `current >= target` — a KPI is a number to grow
- * toward. (A lower-is-better KPI is not modelled yet; state it as the number
- * to reach, e.g. "days saved", not "days taken".)
- *
- * The DB mirror is `ProjectTrackKpi` (`@synap/database`, which cannot import
- * this package); the pod pins the two equal at compile time.
- */
-export interface TrackKpi {
-	label: string;
-	unit?: string;
-	target: number;
-	current?: number;
-	/** ISO-8601 — when `current` was last stated. */
-	updatedAt?: string;
-	/** The user (or agent) id that stated `current`. */
-	updatedBy?: string;
-}
 /** A session's deliverables, counted — the progress rail and the owed badge. */
 export interface DeliverableCounts {
 	/** Stamped done. */
@@ -14067,125 +14202,6 @@ export interface FunnelStep {
 	/** Closed rollup category — resolved via `resolveStageCategory` (legacy-safe). */
 	category: PlaybookStageCategory;
 	count: number;
-}
-/** One counted day. `date` is the viewer's calendar day, `YYYY-MM-DD`. */
-export interface ActivityDay {
-	date: string;
-	count: number;
-}
-/** `activity.daily`'s answer. Sparse: a day with no act is absent. */
-export interface ActivityDaily {
-	/** First day of the window (inclusive), `YYYY-MM-DD` in `tz`. */
-	from: string;
-	/** Last day of the window (inclusive) — the viewer's today. */
-	to: string;
-	tz: string;
-	days: ActivityDay[];
-}
-declare const ACTIVITY_OUTCOMES: readonly [
-	"succeeded",
-	"failed",
-	"proposed",
-	"rejected",
-	"reverted",
-	"waiting",
-	"running",
-	"stopped"
-];
-export type ActivityOutcome = (typeof ACTIVITY_OUTCOMES)[number];
-/**
- * WHO acted. An agent is named when the pod could name it (`id: null` = an
- * agent that recorded no attributable identity, never a guess). `system` is a
- * rule acting on its own (an automation run): `id`/`name` name the rule.
- */
-export type ActivityActor = {
-	kind: "agent";
-	id: string | null;
-	name: string | null;
-} | {
-	kind: "human";
-	id: string;
-	name: string | null;
-	isViewer: boolean;
-} | {
-	kind: "system";
-	id: string | null;
-	name: string | null;
-};
-declare const ACTIVITY_SOURCES: readonly [
-	"proposal",
-	"decision",
-	"run",
-	"session"
-];
-export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
-/**
- * The DOOR a row opens — through the route table (`objectNavTarget(kind, id)`).
- * An applied proposal opens the object it made or changed; one that did not
- * apply opens itself (`kind: "proposal"`), because its object may not exist.
- * A run opens the run (`kind: "run"`, with its `flowType`), a session itself.
- */
-export interface ActivityObjectRef {
-	/** Normalized object kind (`entity`, `document`, `proposal`, `run`, …). */
-	kind: string;
-	id: string;
-	/** What the object is called, when known. */
-	name: string | null;
-	/** An entity's profile slug, for its noun ("Person"), when known. */
-	profileSlug?: string | null;
-	/** A run's ledger (`automation` | `playbook`), for the run route. */
-	flowType?: string | null;
-}
-export interface ActivityRow {
-	/** Stable key, unique across sources: `<source>:<id>`. */
-	id: string;
-	source: ActivitySource;
-	/** When the act happened (ISO). The list is ordered by it, newest first. */
-	occurredAt: string;
-	actor: ActivityActor;
-	/** The vocabulary ACTION token (`create`, `approve`, `run`, `start`, …). */
-	action: string;
-	/** `resolveActionLabel(action, "past")` — "Created", "Approved", "Ran". */
-	verb: string;
-	/**
-	 * The headline. A proposal / decision row carries the proposal's own display
-	 * title (the pod's `proposalDisplaySummary` — the name every proposal door
-	 * leads with); a run its flow's name; a session its title.
-	 */
-	title: string;
-	object: ActivityObjectRef;
-	/** The proposal behind a proposal / decision row. */
-	proposalId: string | null;
-	project: {
-		id: string;
-		name: string | null;
-	} | null;
-	/**
-	 * The session it happened in — the provenance door. `null` when there is
-	 * none, or when the viewer may not read that session (decision D1).
-	 */
-	session: {
-		id: string;
-		title: string;
-	} | null;
-	outcome: ActivityOutcome;
-	/**
-	 * The Undo door — `proposals.revert(proposalId)` — on exactly ONE row per
-	 * revertable proposal: the decision row when a person approved it, the
-	 * proposal row when a rule auto-approved it. Undo reverts the WHOLE
-	 * proposal, so `changeCount` says how far it reaches (`null` = unknown).
-	 */
-	undo: {
-		proposalId: string;
-		changeCount: number | null;
-	} | null;
-	/** A failed run's own error line, when it recorded one. */
-	error: string | null;
-}
-export interface ActivityPage {
-	items: ActivityRow[];
-	/** Pass back as `cursor` for the next (older) page; `null` = no more. */
-	nextCursor: string | null;
 }
 export interface RunGroupsPage {
 	groups: RunGroup[];
@@ -15509,13 +15525,6 @@ export interface StatusBanner {
 	occurredAt: Date;
 	/** Distinct issues, newest first. */
 	issues: StatusBannerIssue[];
-}
-/** An object-nav address (the `Signal.target` shape). The host routes it. */
-export interface LensDoor {
-	kind: string;
-	id: string;
-	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
-	view?: string;
 }
 /** A named container a pick belongs to — drawn as a DOOR chip. */
 export interface NextMoveContainer {
