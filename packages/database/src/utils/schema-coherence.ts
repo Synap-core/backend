@@ -1536,6 +1536,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "trigger_event_id",
     addedBy: "0256_automation_runs_trigger_event_id.sql",
   },
+  // 0304 — the executor bumps it on every AI dispatch; without it every
+  // automation run that reaches a command/playbook_run node 500s.
+  {
+    table: "automation_runs",
+    column: "ai_dispatch_count",
+    addedBy: "0304_automation_runs_ai_dispatch_count.sql",
+  },
   {
     table: "mcp_servers",
     column: "auth",

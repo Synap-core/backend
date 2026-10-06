@@ -2384,6 +2384,7 @@ ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;  -- 019
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "summary_message_id" uuid;  -- 0199 (run-narration summary claim slot; soft ref to messages.id)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "path_taken" jsonb;  -- 0214 (per-run traversed/pruned edge ids; NULL = unknown)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "trigger_event_id" uuid;  -- 0256 (the events row that fired this run; NULL = cron/manual/webhook, or no event claimed)
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "ai_dispatch_count" integer NOT NULL DEFAULT 0;  -- 0304 (AI dispatches this run started; summed for the daily AI cap)
 
 CREATE INDEX IF NOT EXISTS "automation_runs_automation_id_idx"
   ON "automation_runs" ("automation_id");

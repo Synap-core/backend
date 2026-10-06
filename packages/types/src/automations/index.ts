@@ -131,6 +131,22 @@ export type {
   AutomationSkipReason,
 } from "./rule-run-policy.js";
 
+// ── AI dispatch guardrails: per-run / per-day caps, required filter, cooldown ─
+export {
+  AI_DISPATCH_GUARDRAILS,
+  AI_DISPATCH_NODE_TYPES,
+  NON_AI_DISPATCH_NODE_TYPES,
+  LOOP_BODY_NODE_TYPES,
+  isAiDispatchNode,
+  MAX_AI_DISPATCHES_PER_DAY_KEY,
+  MAX_AI_DISPATCHES_PER_DAY_CEILING,
+  readMaxAiDispatchesPerDay,
+  QUERY_SCOPE_ALL,
+  findUnfilteredAiFanouts,
+  unfilteredAiFanoutError,
+} from "./ai-dispatch-guardrails.js";
+export type { MaxAiDispatchesPerDayRead } from "./ai-dispatch-guardrails.js";
+
 // ── Rule health: "silent too long", derived from run history ───────────────
 export {
   ruleSilence,

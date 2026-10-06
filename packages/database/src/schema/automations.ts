@@ -1091,6 +1091,13 @@ export const automationRuns = pgTable(
 
     stepsCompleted: integer("steps_completed").default(0).notNull(),
     stepsFailed: integer("steps_failed").default(0).notNull(),
+    /**
+     * AI dispatches (IS commands + agent playbook runs) this run started,
+     * bumped as each one happens (0304). Summed over a rolling 24h for the
+     * per-automation daily AI cap — see `@synap-core/types/automations`
+     * `AI_DISPATCH_GUARDRAILS`.
+     */
+    aiDispatchCount: integer("ai_dispatch_count").default(0).notNull(),
     outputSummary: jsonb("output_summary").$type<Record<string, unknown>>(),
 
     // The automation definition this run executed (D3c) —

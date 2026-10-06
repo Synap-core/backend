@@ -129,6 +129,14 @@ export const AUTOMATION_SKIP_REASONS = {
   /** The flow's precondition read false for this event, so it did nothing.
    *  Run row (the executor's precondition gate). */
   conditionNotMet: "condition_not_met",
+  /** The run used its `maxAiDispatchesPerRun`; the remaining items did not
+   *  run. Step + run `error_message` (see `ai-dispatch-guardrails.ts`). */
+  aiDispatchCapReached: "ai_dispatch_cap_reached",
+  /** The automation used its rolling-24h `maxAiDispatchesPerDay`. Same rows. */
+  aiDailyCapReached: "ai_daily_cap_reached",
+  /** The subject's latest run of this playbook failed recently, so the
+   *  subject-idempotent path did not start another one. Step output. */
+  coolingDown: "cooling_down",
 } as const;
 export type AutomationSkipReason =
   (typeof AUTOMATION_SKIP_REASONS)[keyof typeof AUTOMATION_SKIP_REASONS];
