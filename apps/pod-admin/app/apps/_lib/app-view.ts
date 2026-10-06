@@ -12,7 +12,10 @@
  */
 
 import { summarizeGrant } from "@synap-core/types/grants";
-import { humanizeToken } from "@synap-core/types/vocabulary";
+import {
+  humanizeToken,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 
 /** One grant row as the pod's `apps.*` procedures serialize it. */
 export interface AppGrant {
@@ -69,14 +72,15 @@ export function appReach(app: AppRow): string {
   return lines.map((l) => [l.what, ...l.where].join(" · ")).join("; ");
 }
 
-export type AppStateLabel = "Has access" | "No access yet" | "Revoked";
-
 /** The one state MARK for an app — colour + words, derived in one place. */
 export function appState(app: AppRow): {
-  label: AppStateLabel;
+  label: string;
   color: "success" | "default";
 } {
-  if (app.revoked_at) return { label: "Revoked", color: "default" };
+  // "revoked" is a lifecycle status — its word comes from the vocabulary door,
+  // never a literal, so it can never drift from every other Revoked badge.
+  if (app.revoked_at)
+    return { label: resolveStatusLabel("revoked"), color: "default" };
   if ((app.grants ?? []).length > 0)
     return { label: "Has access", color: "success" };
   return { label: "No access yet", color: "default" };
