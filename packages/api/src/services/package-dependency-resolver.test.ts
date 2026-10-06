@@ -26,6 +26,7 @@ const {
   mockApplyPostWorkspace,
   mockLoadCapabilityTemplate,
   mockCreateCapabilityFromDefinition,
+  mockApplyMarketInstall,
   mockCreateHubCtx,
 } = vi.hoisted(() => ({
   mockDb: {
@@ -40,6 +41,7 @@ const {
   mockApplyPostWorkspace: vi.fn(),
   mockLoadCapabilityTemplate: vi.fn(),
   mockCreateCapabilityFromDefinition: vi.fn(),
+  mockApplyMarketInstall: vi.fn(),
   mockCreateHubCtx: vi.fn(),
 }));
 
@@ -82,6 +84,13 @@ vi.mock("./package-apply-post-workspace.js", () => ({
 vi.mock("./capabilities/create-from-definition.js", () => ({
   loadCapabilityTemplate: mockLoadCapabilityTemplate,
   createCapabilityFromDefinition: mockCreateCapabilityFromDefinition,
+}));
+
+// Skill-dependency install door — the same `applyMarketInstall` every other
+// standalone kind routes through. Mocked so a skill test never reaches the CP
+// catalog cache or the governed `skillsRouter.create`.
+vi.mock("./capabilities/marketplace-install.js", () => ({
+  applyMarketInstall: mockApplyMarketInstall,
 }));
 
 vi.mock("../routers/hub-protocol/utils.js", () => ({
@@ -1074,6 +1083,80 @@ describe("resolvePackageDependencies", () => {
       expect(
         result.installed.find((d) => d.slug === "enterprise-os")?.action
       ).toBe("required-absent");
+    });
+  });
+
+  // ── skill dependencies (standalone skill packages) ───────────────────────
+  // A `skill` dep used to fall through to `recordUnsupportedSiblingDependency`
+  // and be reported `required-absent` WITHOUT ever being installed — so a space
+  // that declared the skill installed into a space where the link silently
+  // resolved to nothing.
+  describe("skill dependencies", () => {
+    /** A db.select chain that supports the `.limit()` the skill lookup uses. */
+    const chainWith = (rows: unknown[]) => {
+      mockDb.select.mockImplementation(() => ({
+        from: () => ({ where: () => ({ limit: async () => rows }) }),
+      }));
+    };
+
+    const skillDef = () => ({
+      definition: {
+        dependencies: [
+          { slug: "creative-director", kind: "skill", relation: "require" },
+        ],
+      },
+      userId: USER,
+      selfSlug: "content-os",
+    });
+
+    it("INSTALLS a skill dependency instead of reporting required-absent", async () => {
+      chainWith([]); // not on the pod yet
+      mockApplyMarketInstall.mockResolvedValue({ kind: "skill", id: "s-1" });
+
+      const result = await resolvePackageDependencies(
+        skillDef() as Parameters<typeof resolvePackageDependencies>[0]
+      );
+
+      expect(
+        result.installed.find((d) => d.slug === "creative-director")
+      ).toMatchObject({ kind: "skill", relation: "require", action: "installed" });
+      expect(mockApplyMarketInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "skill",
+          slug: "creative-director",
+          workspaceId: null,
+        })
+      );
+    });
+
+    it("a skill ALREADY on the pod is `found`, never reinstalled", async () => {
+      // `skills.slug` carries a UNIQUE index and the applier's create always
+      // INSERTS — so a second install of the same package would throw on the
+      // index and surface as `required-absent`, i.e. a dependency that IS
+      // present reading as MISSING. The lookup is what prevents that.
+      chainWith([{ id: "existing-skill" }]);
+
+      const result = await resolvePackageDependencies(
+        skillDef() as Parameters<typeof resolvePackageDependencies>[0]
+      );
+
+      expect(
+        result.installed.find((d) => d.slug === "creative-director")?.action
+      ).toBe("found");
+      expect(mockApplyMarketInstall).not.toHaveBeenCalled();
+    });
+
+    it("a FAILING skill install degrades to required-absent, never throws", async () => {
+      chainWith([]);
+      mockApplyMarketInstall.mockRejectedValue(new Error("catalog unreachable"));
+
+      const result = await resolvePackageDependencies(
+        skillDef() as Parameters<typeof resolvePackageDependencies>[0]
+      );
+
+      const dep = result.installed.find((d) => d.slug === "creative-director");
+      expect(dep?.action).toBe("required-absent");
+      expect(dep?.message).toContain("catalog unreachable");
     });
   });
 });

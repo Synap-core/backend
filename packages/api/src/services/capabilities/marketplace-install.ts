@@ -942,10 +942,24 @@ export async function applyMarketInstall(
       // the CP (opt-in / just-authored skill package), mirroring the
       // automation/template kinds. workspaceId is optional (a skill is pod-wide
       // when the caller has no acting workspace).
-      const definition = (supplied ??
+      // The PUBLISHED definition NESTS the skill under `skill`, exactly as
+      // `capability` nests under `capability` and views under `views[]` — so
+      // unwrap it before reading the flat field names below. WITHOUT this unwrap
+      // every field reads `undefined`, and the create door then refuses ("A skill
+      // needs documentation or code"): the publish succeeds, the catalog row
+      // looks correct, and only the INSTALL fails — a shape mismatch no
+      // key-diff catches. Falls back to the resolved object itself, so a legacy
+      // flat definition (e.g. the `content-extraction-pack` command pack, which
+      // carries no `skill` slot at all) behaves exactly as it did before.
+      const resolved =
+        supplied ??
         (entry
           ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version))) as {
+          : await resolveDefinitionByKey(input.slug, input.version));
+      const definition = ((resolved as { skill?: Record<string, unknown> })
+        .skill ?? resolved) as {
+        /** The skill's own `load_skill` ref — see `skillFields.slug` below. */
+        slug?: string;
         name?: string;
         displayName?: string;
         description?: string;
@@ -1002,6 +1016,23 @@ export async function applyMarketInstall(
       const result = await skillsRouter.createCaller(ctx).create({
         workspaceId: input.workspaceId ?? undefined,
         ...skillFields,
+        /**
+         * The skill's OWN ref (`load_skill` slug). WITHOUT this the row lands
+         * with `slug = NULL` and can never be linked: a space's declared skills
+         * are resolved BY SLUG (`services/skills/template-skills.ts` matches
+         * `skills.slug`), so a package-installed skill would install cleanly and
+         * stay invisible to the space that depends on it. Falls back to the
+         * package slug, which for a standalone skill package IS its ref.
+         *
+         * Deliberately NOT part of `skillFields`: that object is the reconcile's
+         * merge BASELINE, and every baseline key must be writable by
+         * `skillsRouter.update` — which does not accept `slug` (identity is not
+         * an updating field). A baseline key the update door cannot write is
+         * silently stripped while the merge records it as applied — a durable
+         * lie. `marketplace-install.baseline-writability.tripwire.test.ts`
+         * enforces exactly this split.
+         */
+        slug: definition.slug ?? input.slug,
         metadata,
       });
       return { kind: "skill", ...result };

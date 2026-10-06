@@ -60,6 +60,8 @@ import {
   db,
   and,
   eq,
+  isNull,
+  skills,
   drizzleSql,
   workspaces,
   workspaceMembers,
@@ -538,7 +540,88 @@ async function ensureCellDependencyPresent(
   }
 }
 
-/** Kinds that have NO standalone by-slug applier on the pod yet — accepted on
+/**
+ * Ensure a `kind:'skill'` dependency is PRESENT on the pod for `userId`.
+ *
+ * A skill package installs through the SAME governed door every other skill
+ * install uses — `applyMarketInstall({kind:'skill'})` → `skillsRouter.create` —
+ * so the proposal membrane (`runMarketInstall`'s agent gate), the born-approved
+ * rule and the `slug` rules stay the applier's, never re-implemented here.
+ *
+ * ALREADY-PRESENT IS CHECKED FIRST, and that is load-bearing: `skills.slug`
+ * carries a UNIQUE index and `create` always INSERTS, so a second install of the
+ * same package would throw on the index and be reported `required-absent` — a
+ * dependency that IS present reading as missing. The check keys on the declared
+ * `slug`, pod-wide (`workspaceId IS NULL`), which is exactly the key a space's
+ * linker resolves against (`services/skills/template-skills.ts`).
+ *
+ * NON-FATAL: a cache-miss (skill not yet synced / retired) or any applier
+ * failure degrades to `required-absent` for THIS dep with a clear message — one
+ * unsynced skill never aborts the whole compound install.
+ */
+async function ensureSkillDependencyPresent(
+  slug: string,
+  userId: string,
+  resolved: Map<string, ResolveResult>,
+  installed: ResolvedPackageDependency[]
+): Promise<ResolveResult> {
+  // Namespaced cache key — a skill slug never collides with a workspace subtype,
+  // a capability slug or a cell slug in the SHARED map (diamond dedup).
+  const cacheKey = `skill:${slug}`;
+  const cached = resolved.get(cacheKey);
+  if (cached) return cached;
+
+  const record = (res: ResolveResult): ResolveResult => {
+    resolved.set(cacheKey, res);
+    installed.push({
+      slug,
+      kind: "skill",
+      relation: "require",
+      action: res.action,
+      message: res.message,
+    });
+    return res;
+  };
+
+  try {
+    const [existing] = await db
+      .select({ id: skills.id })
+      .from(skills)
+      .where(and(isNull(skills.workspaceId), eq(skills.slug, slug)))
+      .limit(1);
+    if (existing) {
+      return record({
+        action: "found",
+        message: `Skill "${slug}" is already on the pod — not reinstalled.`,
+      });
+    }
+
+    const { applyMarketInstall } = await import(
+      "./capabilities/marketplace-install.js"
+    );
+    await applyMarketInstall({
+      kind: "skill",
+      slug,
+      userId,
+      // Pod-wide: a bare dependency has no host workspace.
+      workspaceId: null,
+    });
+    return record({
+      action: "installed",
+      message: `Skill "${slug}" installed pod-wide from the catalog.`,
+    });
+  } catch (err) {
+    return record({
+      action: "required-absent",
+      message: `Skill "${slug}" could not be installed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+  }
+}
+
+/**
+ * Kinds that have NO standalone by-slug applier on the pod yet — accepted on
  * the wire (so a compound template carrying them never 400s at the door) but
  * surfaced as `required-absent`, non-fatal, until the pod grows a per-kind
  * catalog sync + applier. Kept in sync with `PackageDependencyKind`: the ONLY
@@ -883,11 +966,28 @@ export async function resolvePackageDependencies(
       continue;
     }
 
+    if (kind === "skill") {
+      // Skill deps are require-only siblings. Unlike a capability (credentialed
+      // tools) or a cell (an inert renderer), a skill is INSTRUCTIONS a space
+      // then links by slug — so installing it here is what makes the space's
+      // declared `skills:` resolve as `linked` rather than `unresolved`. The
+      // install runs BEFORE the linker by construction: this resolver is Step 0
+      // of `materializeWorkspaceCore`, and the linker runs later, inside
+      // `applyPackagePostWorkspace`.
+      await ensureSkillDependencyPresent(
+        dep.slug,
+        userId,
+        resolved,
+        installed
+      );
+      continue;
+    }
+
     if (kind !== "workspace") {
       // Every OTHER sibling kind has no standalone by-slug applier on the pod
       // yet — `automation` is a workspace-scoped WHEN→THEN flow with no host for a
-      // bare dependency, and `skill`/`view`/`workflow`/… are not synced into the
-      // pod's catalog with a standalone installer. Surface, never fatal (the same
+      // bare dependency, and `view`/`workflow` are not synced into the pod's
+      // catalog with a standalone installer. Surface, never fatal (the same
       // non-fatal degrade a missing capability/cell gets), so a compound install
       // proceeds and the unmet dependency is VISIBLE in the resolved graph.
       recordUnsupportedSiblingDependency(kind, dep.slug, installed);
