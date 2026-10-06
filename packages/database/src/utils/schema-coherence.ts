@@ -917,6 +917,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0307_grant_roles.sql",
   },
 
+  // apps — a developer's application identity (0309, App Connect v1). `public_id`
+  // is the app id AND the `client_id` a grant carries; a missing column means a
+  // pod is on a pre-0309 schema where register/list/grant-attach would 42703.
+  {
+    table: "apps",
+    column: "public_id",
+    addedBy: "0309_apps.sql",
+  },
+  {
+    table: "apps",
+    column: "approved_requests",
+    addedBy: "0309_apps.sql",
+  },
+
   // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
   // is on a pre-0206 schema where apiKeys.beginMcpConnect / POST /api/hub/mcp/redeem
   // would reference a missing table.

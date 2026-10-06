@@ -1760,6 +1760,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "apiKey/create": "disruptive", // scope (ADMIN)
   "apiKey/delete": "disruptive", // destroy / ADMIN
   "apiKey/update": "disruptive", // scope: a credential
+  "app/connect": "disruptive", // scope: grants an app reach into the pod
   "artifact/create": "reversible",
   "artifact/setState": "reversible",
   "automation/activate": "disruptive", // struct (2.09)
@@ -1932,6 +1933,12 @@ export const GATE_WRITE_DOORS = {
   "apiKey/create": "gate",
   "apiKey/delete": "gate",
   "apiKey/update": "gate",
+  // App Connect (2026-10-06): an app ASKS for the reach it needs and a human
+  // approves it. The approval executor writes `apps.approved_requests`; the
+  // bearer key is minted on demand by POST /apps/:id/key, so this door always
+  // proposes (filed via `createPendingProposal` — the gate ladder can grant an
+  // agent, and a granted connect would auto-authorize reach with no review).
+  "app/connect": "gate",
   "artifact/create": "gate",
   "artifact/setState": "gate",
   // An agent switching an automation on (`activate`, or `update` to active).

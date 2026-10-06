@@ -44,4 +44,5 @@ export * from "./agent-repository.js";
 export * from "./secrets-vault-repository.js";
 export * from "./account-recovery-code-repository.js";
 export * from "./grant-repository.js";
+export * from "./app-repository.js";
 export * from "./grant-role-repository.js";

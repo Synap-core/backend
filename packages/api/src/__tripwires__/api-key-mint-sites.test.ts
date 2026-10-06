@@ -59,6 +59,8 @@ const MINT_SITES: Record<string, string> = {
     "OAuth /token — authorization code → provisionSurfaceAgentKey.",
   "packages/api/src/routers/hub-protocol/rest/agent-users.ts":
     "POST /agent-users — human session only; 403 for an agent key (2026-10-06).",
+  "packages/api/src/routers/hub-protocol/rest/apps.ts":
+    "POST /apps/:id/key (App Connect, 2026-10-06) — runs ONLY after the app/connect proposal is approved; owner-only AND refuses an agent key (rest/apps.ts:293, else an agent key owned by the same human would pass the owner test); mints the app's user_pat and attaches its grant (client_id = app.public_id).",
   "packages/api/src/routers/hub-protocol/rest/keys.ts":
     "/keys/rotate-cli — hub_inbound read+write keys only, keeps expiry (2026-10-06).",
   "packages/api/src/routers/intelligence-registry.ts":

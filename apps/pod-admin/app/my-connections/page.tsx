@@ -1,24 +1,25 @@
 "use client";
 
 /**
- * /my-connections — self-service view of MY OWN Hub Protocol keys.
+ * /my-connections — self-service view of everything that reaches MY pod:
+ * Hub Protocol KEYS (CLI/agent) and Applications (App Connect v1).
  *
- * Any signed-in pod member (not just pod_admin) can already mint their own
- * CLI/agent key at `/connect`, but had no UI to see or revoke it afterward —
- * `apiKeys.list` / `apiKeys.revoke` exist and are already self-scoped to
- * `ctx.userId` (a member sees and can only touch their own keys), they were
- * just rendered exclusively inside the admin-gated Trust & Keys page. This
- * page is the self-service counterpart: same self-scoped procedures, no
- * pod_admin role required (see the `/my-connections` exemption in proxy.ts).
+ * Any signed-in pod member can already mint their own CLI/agent key at
+ * `/connect`; `apiKeys.list` / `apiKeys.revoke` exist and are already
+ * self-scoped to `ctx.userId` (a member sees and can only touch their own
+ * keys). This page is the self-service counterpart to the admin-gated Trust &
+ * Keys page. An APPLICATIONS section shows the apps the user owns — each app's
+ * `public_id` is the `client_id` its grant carries, and its reach is the same
+ * `summarizeGrant` model a key row renders.
  *
  * Badge derivation is shared with Trust & Keys — see `categorize()` in
  * `../(admin)/trust-keys/_lib/api-keys-section.tsx` — so "what type of
  * connection is this" never drifts between the two surfaces.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
-import { Ban, ChevronDown, Plug } from "lucide-react";
+import { Ban, ChevronDown, Plug, SquareCode } from "lucide-react";
 import { ConfirmModal } from "../(admin)/components/confirm-modal";
 import { trpc } from "../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../lib/auth-redirect";
@@ -30,6 +31,7 @@ import {
 } from "../(admin)/trust-keys/_lib/api-keys-section";
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
 import { summarizeGrant } from "@synap-core/types/grants";
+import { humanizeToken } from "@synap-core/types/vocabulary";
 
 /**
  * What a key may touch, in the words every grant surface uses
@@ -54,11 +56,117 @@ function connectionLabel(hubId: string | null | undefined): string {
   return hubId;
 }
 
+/**
+ * An Application the user owns (App Connect v1) — the app's stable `public_id`
+ * is what its grant carries as `client_id`. `grants` are its live reach.
+ */
+interface AppRow {
+  id: string;
+  public_id: string;
+  name: string;
+  description?: string | null;
+  mode: string;
+  created_at?: string | null;
+  revoked_at?: string | null;
+  last_used_at?: string | null;
+  grants: Array<{
+    permissions: string[];
+    workspaceIds?: string[] | null;
+    projectIds?: string[] | null;
+    entityIds?: string[] | null;
+  }>;
+}
+
+/**
+ * What an app may touch, in the words every grant surface uses — the SAME
+ * `summarizeGrant` model `<GrantSummary>` and the key rows render, so an app's
+ * reach and a key's reach never say different things.
+ */
+function appReach(app: AppRow): string {
+  // A registered app that was never connected has no grant AND no request
+  // filed — say so, never assert a request the user cannot see.
+  if (!app.grants || app.grants.length === 0) return "No access yet";
+  return app.grants
+    .map((g) => {
+      const s = summarizeGrant({
+        permissions: g.permissions,
+        workspaceIds: g.workspaceIds ?? null,
+        projectIds: g.projectIds ?? null,
+        entityIds: g.entityIds ?? null,
+      });
+      return [s.what, ...s.where].join(" · ");
+    })
+    .join("; ");
+}
+
 export default function MyConnectionsPage() {
   const keys = trpc.apiKeys.list.useQuery();
   const utils = trpc.useUtils();
   const [showRevoked, setShowRevoked] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<UnifiedKey | null>(null);
+
+  // Apps (App Connect v1) — fetched through the pod's tRPC door via a same-origin
+  // proxy (`/api/apps`), because the browser cannot reach the pod tRPC origin
+  // directly. Self-scoped server-side to this user.
+  const [apps, setApps] = useState<AppRow[] | null>(null);
+  const [appsError, setAppsError] = useState<string | null>(null);
+  const [pendingRevokeApp, setPendingRevokeApp] = useState<AppRow | null>(null);
+  const [revokingApp, setRevokingApp] = useState<string | null>(null);
+
+  const loadApps = useCallback(async () => {
+    setAppsError(null);
+    try {
+      const res = await fetch("/api/apps", { cache: "no-store" });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        setAppsError(b?.error ?? `Couldn't load your apps (${res.status}).`);
+        return;
+      }
+      const b = (await res.json()) as { apps?: AppRow[] };
+      setApps(b.apps ?? []);
+    } catch {
+      setAppsError("Couldn't load your apps. Try again.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadApps();
+  }, [loadApps]);
+
+  async function doRevokeApp(app: AppRow) {
+    setRevokingApp(app.public_id);
+    try {
+      const res = await fetch("/api/apps", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ publicId: app.public_id }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        addToast({
+          title: "Couldn't revoke",
+          description: b?.error ?? "Try again.",
+          color: "danger",
+        });
+        return;
+      }
+      addToast({ title: "App revoked", color: "default" });
+      await loadApps();
+    } catch {
+      addToast({
+        title: "Couldn't revoke",
+        description: "Network error.",
+        color: "danger",
+      });
+    } finally {
+      setRevokingApp(null);
+      setPendingRevokeApp(null);
+    }
+  }
 
   const revoke = trpc.apiKeys.revoke.useMutation({
     onSuccess: async (res) => {
@@ -132,14 +240,56 @@ export default function MyConnectionsPage() {
     <div className="mx-auto max-w-[900px] px-6 py-10">
       <header className="mb-6 max-w-2xl">
         <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          My connections
+          Apps &amp; access
         </h1>
         <p className="mt-1 text-[13px] leading-5 text-foreground/60">
-          Keys you&apos;ve minted for CLI, agent, or personal access to this
-          Pod. Revoking one here only affects you — it can&apos;t touch another
-          member&apos;s keys.
+          Every app you own and every key you&apos;ve minted for this Pod — with
+          exactly what each may touch. Revoking one here only affects you.
         </p>
       </header>
+
+      <section className="mb-9 space-y-3" aria-labelledby="apps">
+        <div className="flex items-center justify-between gap-3">
+          <h2 id="apps" className="text-sm font-medium text-foreground">
+            Apps
+          </h2>
+          {apps ? (
+            <span className="text-xs text-foreground/50">{apps.length}</span>
+          ) : null}
+        </div>
+
+        {appsError ? (
+          <div
+            role="alert"
+            className="rounded-lg border border-foreground/10 px-4 py-3"
+          >
+            <p className="text-xs text-danger">{appsError}</p>
+            <Button
+              size="sm"
+              variant="flat"
+              className="mt-2 min-h-10"
+              onPress={() => void loadApps()}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : apps === null ? (
+          <div className="flex items-center gap-3 px-1 py-3 text-sm text-foreground/55">
+            <Spinner size="sm" /> Loading your apps
+          </div>
+        ) : apps.length === 0 ? (
+          <AppEmptyState />
+        ) : (
+          apps.map((app) => (
+            <AppCard
+              key={app.id}
+              app={app}
+              isRevoking={revokingApp === app.public_id}
+              onRevoke={() => setPendingRevokeApp(app)}
+            />
+          ))
+        )}
+      </section>
 
       <section className="space-y-3" aria-labelledby="active-connections">
         <div className="flex items-center justify-between gap-3">
@@ -234,6 +384,26 @@ export default function MyConnectionsPage() {
         isPending={
           revoke.isPending && revoke.variables?.keyId === pendingRevoke?.id
         }
+      />
+
+      <ConfirmModal
+        isOpen={pendingRevokeApp !== null}
+        onClose={() => setPendingRevokeApp(null)}
+        onConfirm={() => {
+          if (!pendingRevokeApp) return;
+          void doRevokeApp(pendingRevokeApp);
+        }}
+        title={`Revoke "${pendingRevokeApp?.name ?? "this app"}"?`}
+        consequence={
+          <>
+            <p>This app loses access to this Pod and its key stops working.</p>
+            <p className="mt-2 text-foreground/65">
+              You can connect it again later — it will need a fresh approval.
+            </p>
+          </>
+        }
+        confirmLabel="Revoke app"
+        isPending={revokingApp === pendingRevokeApp?.public_id}
       />
     </div>
   );
@@ -337,6 +507,84 @@ function EmptyState() {
       >
         Connect an app
       </Button>
+    </div>
+  );
+}
+
+/** One app: its name, its stable public id, what it may touch, last used. */
+function AppCard({
+  app,
+  isRevoking = false,
+  onRevoke,
+}: {
+  app: AppRow;
+  isRevoking?: boolean;
+  onRevoke: () => void;
+}) {
+  const hasReach = app.grants.length > 0;
+  const meta = [
+    app.mode === "specific" ? "Specific access" : humanizeToken(app.mode),
+    app.created_at ? `created ${formatRelative(app.created_at)}` : null,
+    app.last_used_at
+      ? `last used ${formatRelative(app.last_used_at)}`
+      : "never used",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <Card shadow="none" className="border border-foreground/10 bg-content1">
+      <CardBody className="gap-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="break-words text-sm font-medium">{app.name}</p>
+            <p className="mt-1 text-xs text-foreground/55">
+              <span className="font-mono">{app.public_id}</span>
+            </p>
+          </div>
+          <Chip
+            size="sm"
+            variant="flat"
+            color={hasReach ? "success" : "default"}
+            className="shrink-0"
+          >
+            {hasReach ? "Has access" : "No access yet"}
+          </Chip>
+        </div>
+
+        <p className="text-xs text-foreground/70">
+          <span className="text-foreground/55">Can: </span>
+          {appReach(app)}
+        </p>
+        <p className="text-xs text-foreground/55">{meta}</p>
+
+        <div className="pt-1">
+          <Button
+            color="danger"
+            size="sm"
+            className="min-h-10"
+            variant="flat"
+            startContent={<Ban size={14} />}
+            isLoading={isRevoking}
+            onPress={onRevoke}
+          >
+            Revoke
+          </Button>
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function AppEmptyState() {
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5">
+      <div className="flex items-center gap-3 text-sm text-foreground/55">
+        <SquareCode size={17} className="shrink-0" />
+        You have no apps yet. Add a{" "}
+        <span className="font-mono">synap.app.json</span> to your repo and run{" "}
+        <span className="font-mono">synap app connect</span>.
+      </div>
     </div>
   );
 }
