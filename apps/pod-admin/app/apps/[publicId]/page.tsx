@@ -3,7 +3,7 @@
 /**
  * /apps/[public_id] — the detail page for ONE Application (App Connect v1).
  *
- * The row in "Apps & access" (`/my-connections`) opens here. This is where an
+ * The row in "Connected" (`/my-connections`) opens here. This is where an
  * app's full identity lives: its stable `public_id` (the `client_id` its grant
  * carries) with copy, what it may touch (its grants, in the words every grant
  * surface uses), when it was created and last used, and the Revoke door.
@@ -23,6 +23,7 @@ import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
 import { formatRelative } from "../../(admin)/trust-keys/_lib/format";
 import { appMode, appState, grantLines, type AppRow } from "../_lib/app-view";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
 
@@ -126,7 +127,7 @@ export default function AppDetailPage() {
         className="-ml-2 min-h-10 text-foreground/65"
         startContent={<ArrowLeft size={15} />}
       >
-        Apps &amp; access
+        Connected
       </Button>
 
       {state === "loading" ? (
@@ -206,7 +207,9 @@ function AppDetail({
       <Card shadow="none" className="border border-foreground/10 bg-content1">
         <CardBody className="gap-4 p-4">
           <div>
-            <p className="text-xs font-medium text-foreground/50">App id</p>
+            <p className="text-xs font-medium text-foreground/50">
+              {resolveObjectNoun("application")} id
+            </p>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <span className="break-all font-mono text-[12px] leading-5 text-foreground/75">
                 {app.public_id}
@@ -348,7 +351,7 @@ function Notice({
           variant="light"
           className="min-h-10"
         >
-          Back to apps &amp; access
+          Back to Connected
         </Button>
       </div>
     </div>

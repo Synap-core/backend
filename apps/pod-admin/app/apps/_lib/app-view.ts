@@ -1,6 +1,6 @@
 /**
  * Shared view model for an Application (App Connect v1), used by both the
- * "Apps & access" list (`/my-connections`) and one app's detail page
+ * "Connected" list (`/my-connections`) and one app's detail page
  * (`/apps/[publicId]`). Kept in one place so an app's REACH and its STATUS mark
  * can never say different things on the two surfaces that render them.
  *

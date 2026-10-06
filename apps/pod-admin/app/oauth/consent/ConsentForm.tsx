@@ -205,7 +205,7 @@ export function ConsentForm({
                 href="/my-connections"
                 className="text-foreground/65 underline underline-offset-2"
               >
-                My connections
+                Connected
               </a>
               .
             </p>

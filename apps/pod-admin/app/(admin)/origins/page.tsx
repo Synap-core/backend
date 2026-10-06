@@ -144,7 +144,7 @@ export default function ApplicationConnectionsPage() {
     <div className="max-w-[1100px] px-6 py-6">
       <header className="mb-6 max-w-2xl">
         <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Apps &amp; Connections
+          App origins
         </h1>
         <p className="mt-1 text-[13px] leading-5 text-foreground/60">
           Allowlist which browser website addresses (origins) may call this Pod.
@@ -384,7 +384,7 @@ function ConnectionCard({
             ) : null}
           </div>
           <Chip size="sm" color={statusColor(connection.status)} variant="flat">
-            {connection.status}
+            {resolveStatusLabel(connection.status)}
           </Chip>
         </div>
 
