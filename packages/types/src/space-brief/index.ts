@@ -109,6 +109,90 @@ export interface SpaceTemplateRule {
   sentence?: unknown;
 }
 
+// ─── Space-linked SKILLS ─────────────────────────────────────────────────────
+// A space DECLARES the skills its work needs; every AI working in that space is
+// told them (brief), they are ranked first for a find-skills ask, and an
+// `always` one is prepended to a session or run started there. Same shape as a
+// rule: the TEMPLATE declares, an applier LINKS the skill to the space, and the
+// brief keeps a ref. Before this, the only way a template could ask for a skill
+// was prose inside a playbook goal — which a model may or may not honour.
+
+/**
+ * How an AI working in a space loads a skill the space declares.
+ *
+ * `always` — prepended to every session and run started in the space, before the
+ *   model has to ask. For the skill that IS the space's job (a brand space's
+ *   creative director).
+ * `on-demand` — surfaced in the brief and ranked first for a find-skills ask;
+ *   loaded when the work calls for it, not on every turn.
+ */
+export type SpaceSkillMode = "always" | "on-demand";
+
+/** Every skill mode, in one place — the vocabulary `validateSpaceSkillDeclaration` enforces. */
+export const SPACE_SKILL_MODES: readonly SpaceSkillMode[] = [
+  "always",
+  "on-demand",
+];
+
+/** True when `v` is a known skill mode. */
+export function isSpaceSkillMode(v: unknown): v is SpaceSkillMode {
+  return (
+    typeof v === "string" &&
+    (SPACE_SKILL_MODES as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * A skill a workspace TEMPLATE declares (`skills[]` in the YAML). The pod LINKS
+ * each to the new space at install (`skills.workspaceId` + `scope:"workspace"`,
+ * approved skills only); the brief keeps a ref — exactly how `rules` work.
+ */
+export interface SpaceTemplateSkill {
+  /**
+   * The skill's ref: `system/<package>/<stem>` (e.g. `system/synap/creative-director`)
+   * or a bare stem (`creative-director`). A lowercase, hyphen-separated path —
+   * `validateSpaceSkillDeclaration` rejects anything else at AUTHOR time.
+   */
+  slug: string;
+  /**
+   * One line: when the skill applies ("any content ask — carousel, deck, video").
+   * SURFACED to the model in the brief; never parsed into a trigger.
+   */
+  when?: string;
+  /** How the skill loads in this space. */
+  mode: SpaceSkillMode;
+}
+
+/**
+ * A skill ref is a lowercase path: 1–3 `/`-separated segments, each starting
+ * with a letter or digit and continuing with letters, digits or `-`. Accepts a
+ * bare stem (`creative-director`) and the canonical `system/<pkg>/<stem>`; it
+ * rejects uppercase, whitespace, an empty segment, a leading or trailing slash,
+ * and a path deeper than three segments.
+ */
+const SPACE_SKILL_SLUG = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*){0,2}$/;
+
+/**
+ * Validate ONE declared skill. Returns a human-readable reason, or `null` when
+ * it is well-formed. The template validator and the pod's applier BOTH call
+ * this, so author time and install time cannot disagree on what a skill
+ * declaration is.
+ */
+export function validateSpaceSkillDeclaration(skill: unknown): string | null {
+  if (!isRecord(skill)) return "a skill must be an object: { slug, mode }";
+  const slug = text(skill.slug);
+  if (!slug) return "a skill needs a non-empty `slug`";
+  if (!SPACE_SKILL_SLUG.test(slug)) {
+    return `\`${slug}\` is not a valid skill slug — a lowercase path like system/synap/creative-director`;
+  }
+  if (!isSpaceSkillMode(skill.mode)) {
+    return `a skill's \`mode\` must be one of ${SPACE_SKILL_MODES.join(" | ")} (got ${JSON.stringify(
+      skill.mode ?? null
+    )})`;
+  }
+  return null;
+}
+
 /** The brief, as stored at `settings.onboarding`. */
 export interface SpaceBrief {
   /** What this space is for, day to day (steady state). */

@@ -4,13 +4,16 @@ import {
   SPACE_BRIEF_PRECEDENCE,
   SPACE_BRIEF_PRECEDENCE_NOTE,
   SPACE_BRIEF_TEMPLATE_FIELDS,
+  SPACE_SKILL_MODES,
   applySpaceBriefPatch,
   briefPurpose,
   diffSpaceBrief,
   isInterviewBrief,
+  isSpaceSkillMode,
   readSpaceBrief,
   resolveAuthoredDescription,
   resolveSpacePurpose,
+  validateSpaceSkillDeclaration,
   type SpaceBrief,
 } from "./index.js";
 
@@ -191,3 +194,79 @@ describe("resolveSpacePurpose — THE purpose ladder", () => {
   });
 });
 
+describe("validateSpaceSkillDeclaration — the skill a space declares", () => {
+  const good = [
+    { slug: "system/synap/creative-director", mode: "always" },
+    { slug: "system/synap-schema/extend-first", mode: "on-demand" },
+    // A bare stem resolves too (load_skill accepts one), so both are valid.
+    { slug: "creative-director", mode: "always" },
+    { slug: "biz/business-plan", mode: "on-demand" },
+    // `when` is surfaced prose, never parsed — free text is fine.
+    { slug: "x", mode: "always", when: "any content ask — carousel, deck" },
+  ] as const;
+
+  for (const skill of good) {
+    it(`accepts ${JSON.stringify(skill.slug)} / ${skill.mode}`, () => {
+      expect(validateSpaceSkillDeclaration(skill)).toBeNull();
+    });
+  }
+
+  // Each row names the ONE thing wrong; the message must mention the value or
+  // the mode so an author can act without reading this file.
+  const bad: Array<[string, unknown, RegExp]> = [
+    [
+      "uppercase",
+      { slug: "System/Synap/Creative-Director", mode: "always" },
+      /not a valid skill slug/,
+    ],
+    [
+      "whitespace",
+      { slug: "system/synap/creative director", mode: "always" },
+      /not a valid skill slug/,
+    ],
+    ["empty", { slug: "", mode: "always" }, /non-empty `slug`/],
+    ["missing slug", { mode: "always" }, /non-empty `slug`/],
+    [
+      "leading slash",
+      { slug: "/system/synap/x", mode: "always" },
+      /not a valid skill slug/,
+    ],
+    [
+      "trailing slash",
+      { slug: "system/synap/", mode: "always" },
+      /not a valid skill slug/,
+    ],
+    [
+      "empty segment",
+      { slug: "system//creative-director", mode: "always" },
+      /not a valid skill slug/,
+    ],
+    ["too deep", { slug: "a/b/c/d", mode: "always" }, /not a valid skill slug/],
+    [
+      "unknown mode",
+      { slug: "system/synap/x", mode: "sometimes" },
+      /`mode` must be one of/,
+    ],
+    ["missing mode", { slug: "system/synap/x" }, /`mode` must be one of/],
+    ["not an object", "system/synap/x", /must be an object/],
+  ];
+
+  for (const [label, skill, pattern] of bad) {
+    it(`rejects ${label}`, () => {
+      const reason = validateSpaceSkillDeclaration(skill);
+      expect(
+        reason,
+        "a malformed declaration must be rejected, not tolerated"
+      ).not.toBeNull();
+      expect(reason).toMatch(pattern);
+    });
+  }
+
+  it("the mode vocabulary is closed and shared", () => {
+    expect(SPACE_SKILL_MODES).toEqual(["always", "on-demand"]);
+    expect(isSpaceSkillMode("always")).toBe(true);
+    expect(isSpaceSkillMode("on-demand")).toBe(true);
+    expect(isSpaceSkillMode("sometimes")).toBe(false);
+    expect(isSpaceSkillMode(undefined)).toBe(false);
+  });
+});
