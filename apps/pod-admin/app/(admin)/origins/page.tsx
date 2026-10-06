@@ -384,7 +384,7 @@ function ConnectionCard({
             ) : null}
           </div>
           <Chip size="sm" color={statusColor(connection.status)} variant="flat">
-            {connection.status}
+            {resolveStatusLabel(connection.status)}
           </Chip>
         </div>
 
