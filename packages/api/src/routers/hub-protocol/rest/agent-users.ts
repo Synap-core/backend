@@ -51,6 +51,20 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       );
     }
 
+    // An AGENT key may not mint keys for agent identities: `ctx.userId` is its
+    // linked human, so createNamedAgent would hand it a fresh key AS any of the
+    // human's other agents (inheriting their rules, trust and cap). Same rule as
+    // /setup/service. The human's session or personal token can.
+    if (c.get("agentUserId")) {
+      return c.json(
+        {
+          error:
+            "An agent key cannot create agent users. Use the human's session or personal access token.",
+        },
+        403
+      );
+    }
+
     const callerId = c.get("userId") as string;
 
     let body: unknown;
@@ -415,6 +429,26 @@ export function registerAgentUsersRoutes(app: HubHono): void {
 
       // Effective user (agent keys: linked human). Creator or pod admin only.
       const callerId = c.get("userId") as string;
+
+      // An AGENT key passes the creator check as its human, so it could write
+      // its own auto-approve rules. It may TIGHTEN (a named posture, which never
+      // auto-approves beyond the floors; an empty list; writesRequireProposal
+      // true) but never widen — widening is the human's call.
+      if (c.get("agentUserId")) {
+        const widens =
+          (hasAutoApproveFor &&
+            (body!.autoApproveFor as string[]).length > 0) ||
+          body?.writesRequireProposal === false;
+        if (widens) {
+          return c.json(
+            {
+              error:
+                "An agent key cannot widen agent governance. Choose a posture, or widen it from the Synap app or with a personal access token.",
+            },
+            403
+          );
+        }
+      }
       const isCreator = agentUser.createdByUserId === callerId;
       if (!isCreator && !(await isPodAdmin(callerId))) {
         return c.json(
@@ -452,7 +486,13 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       delete persistedMeta.autoApproveFor;
       // A hand-set list is no longer the named posture it may have replaced.
       if (hasAutoApproveFor) delete persistedMeta.governancePosture;
-      const writesRequireProposal = body?.writesRequireProposal ?? false;
+      // An agent that omits the dial keeps the stored one: defaulting to false
+      // would be a silent widening.
+      const writesRequireProposal =
+        (body?.writesRequireProposal as boolean | undefined) ??
+        (c.get("agentUserId")
+          ? existingMeta.writesRequireProposal === true
+          : false);
       persistedMeta.writesRequireProposal = writesRequireProposal;
 
       await db
