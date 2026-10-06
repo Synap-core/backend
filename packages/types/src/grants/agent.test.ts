@@ -18,15 +18,16 @@ describe("agent capabilities ⇄ grant draft", () => {
   });
 
   // The old matrix stored "restricted, nothing ticked" as [] — full access.
-  it("a draft that grants no write is stored read-only, never as []", () => {
+  it("an empty draft is stored read-only, never as []", () => {
     expect(draftToAgentCapabilities({ permissions: [] })).toEqual([
       ...AGENT_READ_ONLY_CAPABILITIES,
     ]);
-    expect(
-      draftToAgentCapabilities({
-        permissions: ["entity.*.read", "document.read"],
-      })
-    ).toEqual([...AGENT_READ_ONLY_CAPABILITIES]);
+    // Read patterns round-trip as written — and stay restricted.
+    const reads = draftToAgentCapabilities({
+      permissions: ["entity.*.read", "document.read"],
+    });
+    expect(reads).toEqual(["entity.*.read", "document.read"]);
+    expect(isUnrestrictedAgent(reads)).toBe(false);
     expect(isUnrestrictedAgent(AGENT_READ_ONLY_CAPABILITIES)).toBe(false);
     // …and the read-only list permits no write.
     for (const action of ["create", "update", "delete"])

@@ -7,9 +7,9 @@
  * here and nowhere else:
  *
  *  - **Empty means unrestricted.** A stored `[]` (or the legacy `*.*`) is full
- *    access; the draft spells that `*`. And the reverse: a draft that grants
- *    no write must NOT be stored as `[]` (that would read as full access —
- *    the trap the old matrix had), so it is stored as the read-only list.
+ *    access; the draft spells that `*`. And the reverse: an EMPTY draft must
+ *    NOT be stored as `[]` (that would read as full access — the trap the old
+ *    matrix had), so it is stored as the read-only list.
  *  - **Reads are always allowed.** The gate exempts reads; an agent reads what
  *    its person can read. The editor shows the read column as on and locked
  *    (`AGENT_ALWAYS_ALLOWED`) rather than pretending a checkbox bounds it.
@@ -48,16 +48,13 @@ export function agentCapabilitiesToDraft(
   return { permissions: normalizeGrantPermissions(caps) };
 }
 
-const isReadOnlyPattern = (p: string): boolean => {
-  const segs = p.split(".");
-  return segs[segs.length - 1] === "read";
-};
-
 /** The draft → what `agentUsers.update({ capabilities })` stores. */
 export function draftToAgentCapabilities(draft: GrantDraft): string[] {
   const perms = normalizeGrantPermissions(draft.permissions);
   if (perms.includes("*")) return [];
-  if (perms.every(isReadOnlyPattern)) return [...AGENT_READ_ONLY_CAPABILITIES];
+  // Empty would read as unrestricted; any non-empty list permits only what
+  // it names, so read patterns are kept as written (a preset round-trips).
+  if (perms.length === 0) return [...AGENT_READ_ONLY_CAPABILITIES];
   return perms;
 }
 
