@@ -23,6 +23,7 @@ import {
   reportApproved,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
+import { settleParentAutomationRunFromChild } from "@synap/jobs";
 
 /** Register the playbook/* approve executors. */
 /**
@@ -820,6 +821,9 @@ export function registerPlaybookExecutors(): void {
           completedAt: terminal ? new Date() : run.completedAt,
         })
         .where(eq(playbookRuns.id, runId));
+      // A failed child of an automation run settles its parent (never throws).
+      if (terminal)
+        await settleParentAutomationRunFromChild({ playbookRunId: runId });
 
       // `session → produced → entity` provenance, workspace-validated and
       // capped exactly as the direct path does.

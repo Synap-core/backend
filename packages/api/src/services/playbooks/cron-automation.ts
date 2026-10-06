@@ -42,6 +42,7 @@ import { computeNextRunAt } from "@synap/jobs/workers/automation-cron-scheduler.
 import { flowValidationErrorMessage } from "../automations/validate-flow.js";
 import { createLogger } from "@synap-core/core";
 import { playbookRunNodeLabel } from "@synap-core/types/automations";
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbook-cron-automation" });
 
@@ -330,7 +331,9 @@ export async function materializePlaybookCronAutomation(
   // get here. Throwing would surface a 500 on a successful write, so we refuse
   // to persist the broken definition (an invalid flow never reaches the
   // executor) and say so loudly, leaving any existing backing row untouched.
-  const flowError = flowValidationErrorMessage(flowDefinition);
+  const flowError =
+    flowValidationErrorMessage(flowDefinition) ??
+    unfilteredAiFanoutError(flowDefinition);
   if (flowError) {
     logger.error(
       { playbookId: playbook.id, automationId: existingId, flowError },

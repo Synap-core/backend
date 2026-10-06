@@ -60,6 +60,10 @@ import {
 } from "../object-graph/graph-service.js";
 import { resolveLineageEdgeLabel } from "@synap-core/types/vocabulary";
 import { agentScorecard } from "./agent-scorecard.js";
+import {
+  automationDispatchFootprints,
+  type AutomationDispatchFootprint,
+} from "./automation-dispatch.js";
 import { diagnoseGlobal } from "./global.js";
 import {
   findCapabilityShadows,
@@ -765,14 +769,43 @@ async function diagnoseClass(
         limit: 100,
       });
       const failing = groups.filter((g) => g.failedCount > 0 || g.hasRunning);
+      // Per-automation AI dispatch + child-run failures (the children's own
+      // outcomes, not the parent's). A failed read is reported as such —
+      // never as an empty list, which would read as "nothing dispatched".
+      let automationDispatch: AutomationDispatchFootprint[] | null = null;
+      let automationDispatchError: string | undefined;
+      try {
+        automationDispatch = await automationDispatchFootprints({
+          userId,
+          workspaceId,
+        });
+      } catch (err) {
+        automationDispatchError =
+          err instanceof Error ? err.message : String(err);
+      }
+      const childFailing = (automationDispatch ?? []).filter(
+        (a) => a.childFailed7d > 0
+      );
+      const dispatchLine =
+        automationDispatch === null
+          ? " AI dispatch counts could not be read."
+          : childFailing.length > 0
+            ? ` ${childFailing.length} automation(s) started playbook runs that failed in the last 7 days.`
+            : "";
       return {
         mode: "class",
         type,
         summary:
-          groups.length === 0
+          (groups.length === 0
             ? "No automation or playbook runs."
-            : `${groups.length} flow(s); ${failing.length} with failures or in-flight runs.`,
-        detail: { groups },
+            : `${groups.length} flow(s); ${failing.length} with failures or in-flight runs.`) +
+          dispatchLine,
+        detail: {
+          groups,
+          ...(automationDispatch !== null
+            ? { automationDispatch }
+            : { automationDispatchError }),
+        },
       };
     }
 

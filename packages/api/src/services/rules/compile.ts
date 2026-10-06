@@ -78,6 +78,7 @@ import {
 // main and `events/index.js` bundles (see the same note in routers/automations.ts).
 import { validateEventPattern } from "@synap-core/types/events/unified";
 import { flowValidationErrorMessage } from "../automations/validate-flow.js";
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 /**
  * The clause a refusal is about, in the user's own sentence vocabulary. A rule
@@ -249,7 +250,8 @@ export function compileRuleSentence(
   // create/update doors run. It rejects an `output` node with no `outputType`,
   // a `command` node with no `commandId`, a dangling edge, an unknown node
   // type: every shape that would persist green and throw mid-run.
-  const flowError = flowValidationErrorMessage(flow);
+  const flowError =
+    flowValidationErrorMessage(flow) ?? unfilteredAiFanoutError(flow);
   if (flowError) {
     return fail("THEN", `The THEN cannot run: ${flowError}`);
   }

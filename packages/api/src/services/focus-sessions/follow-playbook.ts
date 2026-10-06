@@ -95,6 +95,7 @@ import {
 } from "./update-session.js";
 import { STAGE_GATE_TARGET_TYPE } from "../playbooks/stage-gate.js";
 import { buildDefinitionSnapshot } from "../playbooks/run-playbook.js";
+import { settleParentAutomationRunFromChild } from "@synap/jobs";
 
 /** Where the follow receipt lives on `focus_sessions.metadata`. */
 export const FOLLOWED_AT_METADATA_KEY = "followedAt";
@@ -648,6 +649,9 @@ async function releasePlaybook(
       .update(playbookRuns)
       .set({ status: "cancelled", completedAt: new Date() })
       .where(eq(playbookRuns.id, run.id));
+    // `cancelled` is not a failure, so the parent keeps its verdict — routed
+    // through the one helper anyway, so every terminal writer is uniform.
+    await settleParentAutomationRunFromChild({ playbookRunId: run.id });
   }
 
   const keptCriteria = readCriteria(updated?.criteria).length;

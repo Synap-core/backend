@@ -29,7 +29,20 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
     ...actual,
-    getDb: vi.fn(async () => ({ query: { focusSessions: { findFirst } } })),
+    getDb: vi.fn(async () => ({
+      query: { focusSessions: { findFirst } },
+      // The failed-run cooldown read (run-playbook.ts) — no prior run here.
+      select: () => {
+        const chain = {
+          from: () => chain,
+          innerJoin: () => chain,
+          where: () => chain,
+          orderBy: () => chain,
+          limit: async () => [],
+        };
+        return chain;
+      },
+    })),
     and: vi.fn((...c: unknown[]) => ({
       and: c.filter((x) => x !== undefined),
     })),

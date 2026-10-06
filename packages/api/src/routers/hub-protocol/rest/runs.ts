@@ -32,6 +32,7 @@ import {
   httpStatusForTrpcError,
   requireUuidParam,
 } from "./_shared.js";
+import { settleParentAutomationRunFromChild } from "@synap/jobs";
 
 // ── Unified-run read schemas (the cross-flow diagnose door) ──────────────────
 
@@ -331,6 +332,9 @@ export function registerRunsRoutes(app: HubHono): void {
         })
         .where(eq(playbookRuns.id, runId))
         .returning();
+      // A failed child of an automation run settles its parent (never throws).
+      if (terminal)
+        await settleParentAutomationRunFromChild({ playbookRunId: runId });
 
       // Record produced entities as `session → produced → entity` links (the
       // provenance edge for what this run generated). VALIDATE each id resolves

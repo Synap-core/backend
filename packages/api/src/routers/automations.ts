@@ -64,7 +64,11 @@ import {
   type RunnableCapabilityAction,
 } from "../services/capabilities/action-projection.js";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
-import { readMaxRunsPerDay } from "@synap-core/types/automations";
+import {
+  readMaxAiDispatchesPerDay,
+  readMaxRunsPerDay,
+  unfilteredAiFanoutError,
+} from "@synap-core/types/automations";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
 import {
   flowValidationErrorMessage,
@@ -606,6 +610,21 @@ function assertValidDailyCap(triggerConfig: unknown): void {
   if (!result.ok) {
     throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
   }
+  // The AI dispatch daily cap — the SAME reader the executor enforces it with.
+  const aiCap = readMaxAiDispatchesPerDay(triggerConfig);
+  if (!aiCap.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: aiCap.error });
+  }
+}
+
+/**
+ * CREATE/UPDATE-DOOR GATE for an AI fan-out over an unfiltered `query` — THE
+ * rule (`unfilteredAiFanoutError`, @synap-core/types/automations). Only the
+ * flow being submitted is checked; a stored automation is never rewritten.
+ */
+function assertFilteredAiFanout(flowDefinition: unknown): void {
+  const error = unfilteredAiFanoutError(flowDefinition);
+  if (error) throw new TRPCError({ code: "BAD_REQUEST", message: error });
 }
 
 async function prepareAutomationForMaterialization(
@@ -665,6 +684,7 @@ async function prepareAutomationForMaterialization(
   if (flowError) {
     throw new TRPCError({ code: "BAD_REQUEST", message: flowError });
   }
+  assertFilteredAiFanout(input.flowDefinition);
 
   // Normalize template-friendly skill names before either proposal storage or
   // final materialization, so every persisted flow dispatches by stable id.
@@ -2536,6 +2556,7 @@ export const automationsRouter = router({
             message: updateFlowError,
           });
         }
+        assertFilteredAiFanout(input.flowDefinition);
 
         // Keep the template-friendly skillName form executable on update too,
         // matching create's pre-persist normalization.

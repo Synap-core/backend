@@ -132,6 +132,7 @@ import { jsonGoverned } from "../proposal-response.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { settleParentAutomationRunFromChild } from "@synap/jobs";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -2963,6 +2964,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         .update(playbookRuns)
         .set({ status: "completed", completedAt: new Date() })
         .where(eq(playbookRuns.id, run.id));
+      // The parent automation run settles from its children (never throws).
+      await settleParentAutomationRunFromChild({ playbookRunId: run.id });
 
       return c.json({ status: "completed" as const });
     } catch (err) {

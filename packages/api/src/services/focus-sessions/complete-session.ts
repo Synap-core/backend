@@ -73,6 +73,7 @@ import {
   metadataAfterUnpin,
   shouldDropPin,
 } from "../playbooks/pinned-subject.js";
+import { settleParentAutomationRunFromChild } from "@synap/jobs";
 
 const logger = createLogger({ module: "complete-focus-session" });
 
@@ -279,6 +280,8 @@ export async function completeFocusSession(
       .update(playbookRuns)
       .set({ status: "completed", completedAt: new Date() })
       .where(eq(playbookRuns.id, run.id));
+    // The parent automation run settles from its children (never throws).
+    await settleParentAutomationRunFromChild({ playbookRunId: run.id });
   }
 
   const unfinishedOutputs = (

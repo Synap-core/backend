@@ -59,6 +59,7 @@ import {
 import { upsertSyncPeer } from "./sync-management.js";
 import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
 import { safeTokenEqual } from "@synap/auth";
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "sync-receive" });
 
@@ -687,7 +688,9 @@ const SUPPLEMENTARY_TABLES: Record<
         // it would leave the two pods permanently divergent with only a log line
         // to show for it, whereas a structurally broken flow fails loudly at
         // execution time exactly as it does on the peer.
-        const syncFlowError = flowValidationErrorMessage(values.flowDefinition);
+        const syncFlowError =
+          flowValidationErrorMessage(values.flowDefinition) ??
+          unfilteredAiFanoutError(values.flowDefinition);
         if (syncFlowError) {
           logger.warn(
             { table: "automations", rowId: row.id, flowError: syncFlowError },

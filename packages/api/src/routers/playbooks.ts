@@ -134,6 +134,7 @@ import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
 } from "../utils/keyset-cursor.js";
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbooks-router" });
 
@@ -2735,13 +2736,15 @@ export const playbooksRouter = router({
         throw err;
       });
 
-      if (skipped === "no-subject" || session === null) {
+      if (skipped !== undefined || session === null) {
         return {
           run: null,
           session: null,
           status: "skipped" as const,
           message:
-            "No pinned record was ready, and the fallback found nothing.",
+            skipped === "cooling_down"
+              ? "This record's last run failed recently, so another one was not started yet."
+              : "No pinned record was ready, and the fallback found nothing.",
           proposalId: null as string | null,
         };
       }
@@ -2886,7 +2889,10 @@ export const playbooksRouter = router({
       // saveFlow is the playbook-canvas author-time door that writes an
       // automation's flowDefinition (update in-place or first-save insert), so a
       // malformed flow must be rejected here too, not only via automations.*.
-      const flowError = flowValidationErrorMessage(input.flowDefinition);
+      const flowError =
+        flowValidationErrorMessage(input.flowDefinition) ??
+        // An AI fan-out over an unfiltered query — the guardrail rule.
+        unfilteredAiFanoutError(input.flowDefinition);
       if (flowError) {
         throw new TRPCError({ code: "BAD_REQUEST", message: flowError });
       }

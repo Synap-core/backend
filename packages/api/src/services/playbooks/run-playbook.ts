@@ -34,6 +34,7 @@ import {
   playbookRuns,
   playbookEnrollments,
   recordSessionSpawn,
+  drizzleSql,
 } from "@synap/database";
 import type {
   FocusSession,
@@ -71,6 +72,11 @@ import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
 import { proposeCapabilityEnable } from "../capabilities/propose-capability-enable.js";
 import { createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
+import {
+  AI_DISPATCH_GUARDRAILS,
+  AUTOMATION_SKIP_REASONS,
+} from "@synap-core/types/automations";
+import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import {
   decidePinnedSubject,
   fillSoleRequiredEntityParam,
@@ -113,6 +119,12 @@ export interface RunChainContext {
    * is a classification hazard for no gain).
    */
   triggerEventId?: string;
+  /**
+   * The `automation_step_runs` row that dispatched this run. Stamped nested
+   * under `automationChainContext` so a child failure flips THAT step
+   * (`settleParentAutomationRunFromChild`, @synap/jobs).
+   */
+  stepRunId?: string;
 }
 
 export interface RunPlaybookInput {
@@ -264,7 +276,13 @@ export type RunPlaybookResult =
        *  No session, no run, no event stamp. */
       run: null;
       session: null;
-      skipped: "no-subject";
+      /**
+       * `no-subject` — a pinned playbook had nobody eligible.
+       * `cooling_down` — the subject-idempotent path found this subject's
+       * latest run of the playbook FAILED within the cooldown window
+       * (`AI_DISPATCH_GUARDRAILS.failedSubjectCooldownHours`).
+       */
+      skipped: "no-subject" | typeof AUTOMATION_SKIP_REASONS.coolingDown;
       reused?: undefined;
       parentLink?: undefined;
     };
@@ -327,6 +345,9 @@ export function buildRunSessionMetadata(opts: {
             // spawned by a cron/manual run does not carry a null claim.
             ...(opts.chainContext.triggerEventId
               ? { triggerEventId: opts.chainContext.triggerEventId }
+              : {}),
+            ...(opts.chainContext.stepRunId
+              ? { stepRunId: opts.chainContext.stepRunId }
               : {}),
           },
         }
@@ -405,8 +426,12 @@ export const IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES = [
   FocusSessionStatus.SCHEDULED,
 ] as const;
 
-/** Max runs a single `query`/`rotating` fan-out may spawn (safety bound). */
-const MAX_INPUT_FANOUT = 50;
+/**
+ * Max runs a single `static`/`query` fan-out may spawn. Each run is an agent
+ * kickoff, so this IS the per-trigger AI dispatch cap — read from the ONE
+ * guardrails config, never restated here.
+ */
+const MAX_INPUT_FANOUT = AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerRun;
 
 /** Map a ChannelSpec.type to the channels.channelType enum (default THREAD). */
 function channelTypeFromSpec(spec: ChannelSpec | undefined) {
@@ -770,7 +795,7 @@ async function executeSingleRun(
   input: RunPlaybookInput,
   params: Record<string, unknown>,
   filing: RunFiling
-): Promise<PlaybookRunStarted> {
+): Promise<RunPlaybookResult> {
   const db = await getDb();
 
   // The owning principal: agent-user when an AI runs it, else the human.
@@ -803,6 +828,31 @@ async function executeSingleRun(
     });
     if (existing) {
       return { run: null, session: existing as FocusSession, reused: true };
+    }
+
+    // COOLDOWN — nothing in flight, but the subject's LATEST run of this
+    // playbook failed recently: do not start another one yet. Without this a
+    // subject whose run the reaper failed at 24h was re-dispatched on the very
+    // next cron, every day, failing the same way each time.
+    const cooling = await latestRunFailedWithinCooldown(
+      playbook.id,
+      input.subjectId
+    );
+    if (cooling) {
+      logger.info(
+        {
+          playbookId: playbook.id,
+          subjectId: input.subjectId,
+          failedRunId: cooling.runId,
+          cooldownHours: AI_DISPATCH_GUARDRAILS.failedSubjectCooldownHours,
+        },
+        "Subject is cooling down after a failed run — not starting another"
+      );
+      return {
+        run: null,
+        session: null,
+        skipped: AUTOMATION_SKIP_REASONS.coolingDown,
+      };
     }
   }
 
@@ -1094,6 +1144,9 @@ async function executeSingleRun(
     })
     .where(eq(playbookRuns.id, run.id))
     .returning();
+  // A failed child of an automation run settles its parent (never throws).
+  if (terminal)
+    await settleParentAutomationRunFromChild({ playbookRunId: run.id });
 
   // Re-load the session so the returned row reflects the wired channelId.
   const refreshed = (await db.query.focusSessions.findFirst({
@@ -1105,4 +1158,36 @@ async function executeSingleRun(
     session: refreshed,
     ...(parentLink ? { parentLink } : {}),
   };
+}
+
+/**
+ * The subject's LATEST run of this playbook, when it FAILED within
+ * `AI_DISPATCH_GUARDRAILS.failedSubjectCooldownHours`; else null. "Latest" is
+ * by run start, across every session of (playbook, subject) — a newer run that
+ * did not fail ends the cooldown.
+ */
+async function latestRunFailedWithinCooldown(
+  playbookId: string,
+  subjectId: string
+): Promise<{ runId: string } | null> {
+  const db = await getDb();
+  const [latest] = await db
+    .select({
+      id: playbookRuns.id,
+      status: playbookRuns.status,
+      recent: drizzleSql<boolean>`COALESCE(${playbookRuns.completedAt}, ${playbookRuns.startedAt}) > now() - (${AI_DISPATCH_GUARDRAILS.failedSubjectCooldownHours}::int * interval '1 hour')`,
+    })
+    .from(playbookRuns)
+    .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
+    .where(
+      and(
+        eq(playbookRuns.playbookId, playbookId),
+        eq(focusSessions.subjectEntityId, subjectId)
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt))
+    .limit(1);
+  return latest && latest.status === "failed" && latest.recent
+    ? { runId: latest.id }
+    : null;
 }
