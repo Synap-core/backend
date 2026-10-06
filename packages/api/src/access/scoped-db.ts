@@ -28,6 +28,7 @@ import {
   visibilityPredicate,
   withVisibility,
 } from "./visibility.js";
+import { grantReadPredicate } from "./grant-read.js";
 
 export interface ScopedFindOptions {
   where?: SQL;
@@ -48,7 +49,10 @@ export class ScopedDb {
     const entry = getVisibilityEntry(table);
     const { where, ...rest } = opts;
     const scoped = withVisibility(
-      visibilityPredicate(entry.rule, this.access),
+      withVisibility(
+        visibilityPredicate(entry.rule, this.access),
+        grantReadPredicate(entry.table)
+      ),
       where
     );
     return entry.query().findMany({ ...rest, where: scoped }) as Promise<T[]>;
@@ -61,7 +65,10 @@ export class ScopedDb {
     const entry = getVisibilityEntry(table);
     const { where, ...rest } = opts;
     const scoped = withVisibility(
-      visibilityPredicate(entry.rule, this.access),
+      withVisibility(
+        visibilityPredicate(entry.rule, this.access),
+        grantReadPredicate(entry.table)
+      ),
       where
     );
     return entry.query().findFirst({ ...rest, where: scoped }) as Promise<
@@ -72,7 +79,10 @@ export class ScopedDb {
   /** The raw visibility predicate for `table` — to compose into a db.select(). */
   predicate(table: object): SQL | undefined {
     const entry = getVisibilityEntry(table);
-    return visibilityPredicate(entry.rule, this.access);
+    return withVisibility(
+      visibilityPredicate(entry.rule, this.access),
+      grantReadPredicate(entry.table)
+    );
   }
 
   /**

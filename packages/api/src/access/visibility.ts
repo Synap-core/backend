@@ -136,6 +136,11 @@ export function getVisibilityEntry(table: object): VisibilityEntry {
   return entry;
 }
 
+/** Every registered table (used by tripwires to DERIVE coverage sets). */
+export function registeredTables(): object[] {
+  return [...REGISTRY.keys()];
+}
+
 /** True once `table` has a registered rule (used by tests / tripwires). */
 export function isRegistered(table: object): boolean {
   return REGISTRY.has(table);
