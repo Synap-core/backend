@@ -34,7 +34,7 @@ import {
   apiKeys,
   secrets,
 } from "@synap/database/schema";
-import { isNull } from "@synap/database";
+import { isNull, isNotNull } from "@synap/database";
 import { verifyPermission } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -57,6 +57,32 @@ import {
 const logger = createLogger({ module: "intelligence-registry" });
 
 const OPENCLAW_HUB_ID = "integration:openclaw";
+
+/**
+ * The user that OWNS the calling API key (`api_keys.user_id`). For an agent key
+ * this is the agent, whereas `ctx.userId` is the linked human after the identity
+ * remap — so anything that belongs to the key itself must be keyed by this.
+ */
+async function resolveKeyPrincipalUserId(ctx: {
+  apiKeyId?: string | null;
+}): Promise<string> {
+  const keyId = ctx.apiKeyId;
+  if (!keyId)
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Hub Protocol key required.",
+    });
+  const key = await db.query.apiKeys.findFirst({
+    columns: { userId: true },
+    where: eq(apiKeys.id, keyId),
+  });
+  if (!key)
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Hub Protocol key required.",
+    });
+  return key.userId;
+}
 
 // Simple ID generator (timestamp + random)
 const generateId = () =>
@@ -1095,13 +1121,11 @@ export const intelligenceRegistryRouter = router({
    */
   getServiceConfig: scopedProcedure(["hub-protocol.read"]).query(
     async ({ ctx }) => {
-      // ctx.userId is the agent user (the Hub Protocol key belongs to the agent)
-      const agentUserId = ctx.userId;
-      if (!agentUserId)
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Hub Protocol key required.",
-        });
+      // The service config belongs to the KEY PRINCIPAL — never `ctx.userId`,
+      // which `resolveKeyIdentity` remaps to the linked HUMAN for an agent key.
+      // Reading by `ctx.userId` handed any /setup/agent key its human's latest
+      // decrypted vault secret.
+      const agentUserId = await resolveKeyPrincipalUserId(ctx);
 
       if (!isServerVaultAvailable()) {
         throw new TRPCError({
@@ -1124,6 +1148,9 @@ export const intelligenceRegistryRouter = router({
         where: and(
           eq(secrets.userId, agentUserId),
           eq(secrets.encryptionMode, "server"),
+          // Only a service bootstrap blob (stored with its serviceId by
+          // provisionAgent / storeServiceSecret), never any other secret.
+          isNotNull(secrets.serviceId),
           isNull(secrets.deletedAt)
         ),
         orderBy: (t, { desc }) => [desc(t.createdAt)],
@@ -1181,14 +1208,9 @@ export const intelligenceRegistryRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // ctx.userId is the agent user — the Hub Protocol key issued during provisioning
-      // belongs to the agent. No need to pass agentUserId separately.
-      const agentUserId = ctx.userId;
-      if (!agentUserId)
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Hub Protocol key required.",
-        });
+      // Stored under the KEY PRINCIPAL, the same owner getServiceConfig reads —
+      // never `ctx.userId`, which is the linked human for an agent key.
+      const agentUserId = await resolveKeyPrincipalUserId(ctx);
 
       if (!isServerVaultAvailable()) {
         throw new TRPCError({
