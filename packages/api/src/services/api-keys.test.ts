@@ -25,7 +25,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Hub Key",
-        ["preferences", "notes"],
+        ["hub-protocol.read", "hub-protocol.write"],
         testHubId
       );
 
@@ -43,7 +43,10 @@ describe("ApiKeyService", () => {
       expect(storedKey.userId).toBe(testUserId);
       expect(storedKey.keyPrefix).toBe("synap_hub_test_");
       expect(storedKey.hubId).toBe(testHubId);
-      expect(storedKey.scope).toEqual(["preferences", "notes"]);
+      expect(storedKey.scope).toEqual([
+        "hub-protocol.read",
+        "hub-protocol.write",
+      ]);
       expect(storedKey.isActive).toBe(true);
 
       // Verify hash was created (not plain text)
@@ -56,7 +59,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test User Key",
-        ["preferences"]
+        ["hub-protocol.read"]
       );
 
       expect(key).toContain("synap_user_");
@@ -74,7 +77,7 @@ describe("ApiKeyService", () => {
       const { keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Expiring Key",
-        ["preferences"],
+        ["hub-protocol.read"],
         undefined,
         30 // 30 days
       );
@@ -99,7 +102,7 @@ describe("ApiKeyService", () => {
       const { keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"]
+        ["hub-protocol.read"]
       );
 
       const [storedKey] = await db
@@ -125,7 +128,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"]
+        ["hub-protocol.read"]
       );
 
       // Validate
@@ -149,7 +152,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"]
+        ["hub-protocol.read"]
       );
 
       await apiKeyService.revokeApiKey(keyId, testUserId);
@@ -165,7 +168,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"]
+        ["hub-protocol.read"]
       );
 
       // Get initial values
@@ -207,7 +210,7 @@ describe("ApiKeyService", () => {
       const { keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"]
+        ["hub-protocol.read"]
       );
 
       // Revoke
@@ -233,7 +236,7 @@ describe("ApiKeyService", () => {
         await apiKeyService.generateApiKey(
           testUserId,
           "Original Key",
-          ["preferences", "notes"],
+          ["hub-protocol.read", "hub-protocol.write"],
           testHubId
         );
 
@@ -255,7 +258,10 @@ describe("ApiKeyService", () => {
 
       expect(newKeyRecord.isActive).toBe(true);
       expect(newKeyRecord.rotatedFromId).toBe(oldKeyId);
-      expect(newKeyRecord.scope).toEqual(["preferences", "notes"]);
+      expect(newKeyRecord.scope).toEqual([
+        "hub-protocol.read",
+        "hub-protocol.write",
+      ]);
       expect(newKeyRecord.hubId).toBe(testHubId);
 
       // Verify old key is revoked
@@ -282,7 +288,7 @@ describe("ApiKeyService", () => {
       const { keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"]
+        ["hub-protocol.read"]
       );
 
       await apiKeyService.revokeApiKey(keyId, testUserId);
@@ -297,9 +303,13 @@ describe("ApiKeyService", () => {
   describe("listUserKeys", () => {
     it("should list all keys for a user", async () => {
       // Generate multiple keys
-      await apiKeyService.generateApiKey(testUserId, "Key 1", ["preferences"]);
-      await apiKeyService.generateApiKey(testUserId, "Key 2", ["notes"]);
-      await apiKeyService.generateApiKey(testUserId, "Key 3", ["tasks"]);
+      await apiKeyService.generateApiKey(testUserId, "Key 1", [
+        "hub-protocol.read",
+      ]);
+      await apiKeyService.generateApiKey(testUserId, "Key 2", [
+        "hub-protocol.write",
+      ]);
+      await apiKeyService.generateApiKey(testUserId, "Key 3", ["mcp.read"]);
 
       // List
       const keys = await apiKeyService.listUserKeys(testUserId);

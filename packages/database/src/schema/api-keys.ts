@@ -194,31 +194,31 @@ export const KEY_PREFIXES = {
  * Valid scopes for API keys
  */
 export const API_KEY_SCOPES = [
-  "preferences",
-  "calendar",
-  "notes",
-  "tasks",
-  "projects",
-  "conversations",
-  "entities",
-  "relations",
-  "knowledge_facts",
+  // Retired 2026-10-06 (centralisation audit): `preferences`, `calendar`,
+  // `notes`, `tasks`, `projects`, `conversations`, `entities`, `relations`,
+  // `knowledge_facts`, `webhook:manage`, `mcp.connect`. No door checked any of
+  // them, so a key carrying one was granted nothing it could see. Rows that
+  // still hold them keep working (scope is checked per door); they can no
+  // longer be minted. (`routers/hub.ts` has its OWN access-token vocabulary
+  // that reuses the nine data words — unrelated to API keys.)
   // n8n integration scopes
   "write:entities", // Create/update/delete entities via n8n
   "read:entities", // Search and read entities via n8n
   "ai:analyze", // AI content analysis
-  "webhook:manage", // Manage webhook subscriptions (Phase 2)
   // Hub Protocol scopes (for Intelligence Hub)
   "hub-protocol.read", // Read context from Data Pod
   "hub-protocol.write", // Write results back to Data Pod
-  "hub-protocol.admin", // Elevated Hub Protocol access (full entity/workspace control)
+  // NOT an elevation: every door treats it as an alias of hub-protocol.write.
+  // Its only effect is being privileged at mint (PRIVILEGED_MINT_SCOPES).
+  "hub-protocol.admin",
   // Data scopes (generic read/write used by integration presets)
-  "data.read", // Read entities, documents, relations
-  "data.write", // Write entities, documents, relations
+  // Enforced ONLY as aliases on /mcp (hub-protocol.read / .write). tRPC and
+  // Hub REST never read them — do not advertise them for those doors.
+  "data.read",
+  "data.write",
   // MCP scopes (for external AI tools)
   "mcp.read", // Read resources via MCP
   "mcp.write", // Execute tools via MCP
-  "mcp.connect", // Establish an MCP session
   // AI provider administration scope (deliberately NOT in the default agent
   // bundle). Creating or updating an ai_providers row sets the `baseUrl` the
   // Intelligence Service sends every prompt to, so this door can silently

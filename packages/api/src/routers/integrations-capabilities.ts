@@ -17,8 +17,9 @@ const CAPABILITIES_PAYLOAD = {
       description:
         "Read and write entities, views, and data via tRPC REST endpoints.",
       authMethod: "api-key",
-      requiredScopes: ["data.read"],
-      optionalScopes: ["data.write"],
+      // The scopes tRPC actually checks. `data.*` is only an /mcp alias.
+      requiredScopes: ["hub-protocol.read"],
+      optionalScopes: ["hub-protocol.write"],
       endpoints: {
         base: `${podUrl}/trpc`,
         auth: "Authorization: Bearer {apiKey}",
