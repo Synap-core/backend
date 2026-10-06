@@ -308,7 +308,12 @@ function KeyRow({
 
 // ─── Create modal ──────────────────────────────────────────────────────
 
-type CreateInput = { keyName: string; scope: string[]; expiresInDays?: number };
+type CreateInput = {
+  keyName: string;
+  scope: string[];
+  /** null = never (omitted = the 90-day default). */
+  expiresInDays?: number | null;
+};
 
 function CreateKeyModal({
   workspaceId: _workspaceId,
@@ -422,7 +427,7 @@ function CreateKeyModal({
               void onConfirm({
                 keyName: name.trim(),
                 scope: scopes,
-                expiresInDays: expiry === "never" ? undefined : Number(expiry),
+                expiresInDays: expiry === "never" ? null : Number(expiry),
               })
             }
           >

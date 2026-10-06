@@ -430,7 +430,8 @@ export function ApiKeysSection() {
               const res = await createSystem.mutateAsync({
                 keyName: input.keyName,
                 scope: input.scope,
-                expiresInDays: input.expiresInDays,
+                // A system key with no lifetime never expires.
+                expiresInDays: input.expiresInDays ?? undefined,
               });
               if (res.key) {
                 setRevealedKey({
@@ -629,7 +630,8 @@ type CreateKeyInput = {
   kind: "personal" | "system";
   keyName: string;
   scope: string[];
-  expiresInDays?: number;
+  /** null = never; a personal key omitted = 90 days. */
+  expiresInDays?: number | null;
 };
 
 function CreateKeyModal({
@@ -787,7 +789,7 @@ function CreateKeyModal({
                 kind,
                 keyName: name.trim(),
                 scope: scopes,
-                expiresInDays: expiry === "never" ? undefined : Number(expiry),
+                expiresInDays: expiry === "never" ? null : Number(expiry),
               })
             }
           >
