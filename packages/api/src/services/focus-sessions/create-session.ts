@@ -337,7 +337,7 @@ export async function createFocusSession(
     agentUserId,
     correlationId,
     channelId = null,
-    agentIds = [],
+    agentIds: requestedAgentIds = [],
     templateId: requestedTemplateId = null,
     expectedOutputs = [],
     parentSessionId = null,
@@ -346,6 +346,14 @@ export async function createFocusSession(
     clientKey = null,
   } = params;
   let templateId = requestedTemplateId;
+  // The agent that starts a session is on its roster. `origin: "agent"` says
+  // AN agent opened it; only `agentIds` says WHICH, and every surface names
+  // the agent from `agentIds` alone — without this, a session Raycast started
+  // read as the person's own, with no agent on it.
+  const agentIds =
+    agentUserId && !requestedAgentIds.includes(agentUserId)
+      ? [agentUserId, ...requestedAgentIds]
+      : requestedAgentIds;
 
   // TRACK FILING — first, so a bad handle refuses before any read or write.
   // A track names its project; the project ladder below then treats it as the
