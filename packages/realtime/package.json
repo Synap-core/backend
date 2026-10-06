@@ -25,6 +25,7 @@
     "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
+    "@synap/governance-policy": "workspace:*",
     "@synap/storage": "workspace:*",
     "@trpc/server": "^11.8.1",
     "bcrypt": "^6.0.0",
