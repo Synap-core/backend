@@ -362,13 +362,24 @@ async function assertLensAccess(
           )
         )!
       ),
-      columns: { id: true },
+      columns: { id: true, settings: true },
     });
     if (!project) {
       throw new TRPCError({
         code: "NOT_FOUND",
         message: "Project not found or inaccessible",
       });
+    }
+    // A PROJECT-ONLY lens has no workspace to read the brief/layout from, so the
+    // project's OWN settings carry them — build the SAME context shape as the
+    // workspace branch above. A `project_workspace` lens keeps the WORKSPACE's
+    // settings, which its branch already resolved.
+    if (lens.kind === "project") {
+      const settings = (project.settings ?? {}) as WorkspaceSettings;
+      workspaceContext = {
+        settings,
+        packageVersion: settings.packageVersion,
+      };
     }
   }
 
