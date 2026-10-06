@@ -218,4 +218,57 @@ describe("hub auth door enters the request write facts", () => {
     expect(await status("/api/hub/search")).toBe(403);
     expect(await status("/api/hub/entities/abc")).toBe(200);
   });
+
+  it("an agent key with NO grant (setup/agent, OAuth, synap init) keeps every door — search, ask, memory (W1 regression guard)", async () => {
+    findFirstUser.mockResolvedValue({ userType: "agent" });
+    getApiKeyStatus.mockResolvedValue({ status: "valid", record: keyRecord() });
+    const status = await fencedStatus([]);
+    for (const path of [
+      "/api/hub/search",
+      "/api/hub/knowledge",
+      "/api/hub/memory",
+      "/api/hub/graph/entity/x",
+      "/api/hub/events",
+    ])
+      expect(await status("GET", path)).toBe(200);
+    for (const path of [
+      "/api/hub/knowledge/ask",
+      "/api/hub/entities/retrieve",
+      "/api/hub/memory/search",
+    ])
+      expect(await status("POST", path)).toBe(200);
+  });
+
+  it("a key granted the explicit full access '*' keeps every door too", async () => {
+    findFirstUser.mockResolvedValue({ userType: "agent" });
+    getApiKeyStatus.mockResolvedValue({ status: "valid", record: keyRecord() });
+    const status = await fencedStatus([
+      {
+        id: "g",
+        permissions: ["*"],
+        workspaceIds: null,
+        projectIds: null,
+        entityIds: null,
+        expiresAt: null,
+        revokedAt: null,
+      },
+    ]);
+    expect(await status("GET", "/api/hub/search")).toBe(200);
+    expect(await status("POST", "/api/hub/knowledge/ask")).toBe(200);
+  });
 });
+
+/** Status codes a key gets through the REAL hub middleware, given its grant rows. */
+async function fencedStatus(rows: Array<Record<string, unknown>>) {
+  grantRows = rows;
+  const app = new Hono();
+  app.use("/api/hub/*", hubAuthMiddleware as never);
+  app.all("/api/hub/*", (c) => c.json({ ok: true }));
+  return async (method: string, path: string) =>
+    (
+      await app.request(path, {
+        method,
+        headers: { authorization: "Bearer synap_test" },
+      })
+    ).status;
+}
