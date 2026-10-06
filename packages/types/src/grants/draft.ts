@@ -52,8 +52,8 @@ export interface GrantDraft {
   readonly entityIds?: readonly string[] | null;
   /** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
   readonly expiresInDays?: number | null;
-  /** What the person calls it ("Portfolio site"). */
-  readonly label?: string;
+  /** What the person calls it ("Portfolio site"); a stored grant may have none. */
+  readonly label?: string | null;
 }
 
 /** One checkbox: a subject × action, and a kind for a qualified subject. */
@@ -181,7 +181,10 @@ function catalogRank(p: string): [number, number, string, number] {
   const qualified = isQualifiedGrantSubject(segs[0]);
   const kind = qualified ? (segs[1] ?? "") : "";
   const action = qualified ? segs[2] : segs[1];
-  const ai = action === undefined ? -1 : (GRANT_ACTIONS as readonly string[]).indexOf(action);
+  const ai =
+    action === undefined
+      ? -1
+      : (GRANT_ACTIONS as readonly string[]).indexOf(action);
   return [
     si === -1 ? GRANT_SUBJECT_CATALOG.length : si,
     kind === "*" || kind === "" ? 0 : 1,
@@ -222,7 +225,8 @@ export function normalizeGrantPermissions(
   // Compact: every catalog action granted on (subject, kind) → the subject
   // pattern. Coverage is computed on the full set, so one pass is complete.
   const list = [...valid];
-  const granted = (a: Atom) => list.some((p) => patternMatches(p, atomRequest(a)));
+  const granted = (a: Atom) =>
+    list.some((p) => patternMatches(p, atomRequest(a)));
   for (const spec of GRANT_SUBJECT_CATALOG) {
     if (isQualifiedGrantSubject(spec.subject)) {
       const kinds = new Set<string>(["*"]);
@@ -231,11 +235,17 @@ export function normalizeGrantPermissions(
         if (s[0] === spec.subject && s[1]) kinds.add(s[1]);
       }
       for (const kind of kinds) {
-        if (spec.actions.every((action) => granted({ subject: spec.subject, kind, action })))
+        if (
+          spec.actions.every((action) =>
+            granted({ subject: spec.subject, kind, action })
+          )
+        )
           valid.add(kind === "*" ? spec.subject : `${spec.subject}.${kind}`);
       }
     } else if (
-      spec.actions.every((action) => granted({ subject: spec.subject, kind: null, action }))
+      spec.actions.every((action) =>
+        granted({ subject: spec.subject, kind: null, action })
+      )
     ) {
       valid.add(spec.subject);
     }
@@ -346,15 +356,21 @@ export function setGrantLifetime(
   expiresInDays: number | null | undefined
 ): GrantDraft {
   const next = { ...draft };
-  if (expiresInDays === undefined) delete (next as { expiresInDays?: unknown }).expiresInDays;
-  else (next as { expiresInDays?: number | null }).expiresInDays = expiresInDays;
+  if (expiresInDays === undefined)
+    delete (next as { expiresInDays?: unknown }).expiresInDays;
+  else
+    (next as { expiresInDays?: number | null }).expiresInDays = expiresInDays;
   return next;
 }
 
 // ── lifetime ───────────────────────────────────────────────────────────────
 
 export type GrantLifetime =
-  | { readonly kind: "days"; readonly days: number; readonly isDefault: boolean }
+  | {
+      readonly kind: "days";
+      readonly days: number;
+      readonly isDefault: boolean;
+    }
   | { readonly kind: "never" };
 
 /** The lifetime a mint of this draft gets (mirrors `resolveKeyExpiry`). */
@@ -369,7 +385,11 @@ export function grantLifetime(draft: GrantDraft): GrantLifetime {
 
 export type GrantProblem =
   | { readonly code: "no-permissions" }
-  | { readonly code: "invalid-permission"; readonly pattern: string; readonly message: string }
+  | {
+      readonly code: "invalid-permission";
+      readonly pattern: string;
+      readonly message: string;
+    }
   | { readonly code: "invalid-lifetime"; readonly days: number };
 
 export type GrantValidation =
@@ -383,7 +403,8 @@ export function validateGrantDraft(draft: GrantDraft): GrantValidation {
     assertPermissions(draft.permissions);
   } catch {
     // assertPermissions stops at the first problem; list every one.
-    if (draft.permissions.length === 0) problems.push({ code: "no-permissions" });
+    if (draft.permissions.length === 0)
+      problems.push({ code: "no-permissions" });
     for (const pattern of draft.permissions) {
       try {
         parsePermission(pattern);
@@ -397,7 +418,10 @@ export function validateGrantDraft(draft: GrantDraft): GrantValidation {
     }
   }
   const d = draft.expiresInDays;
-  if (typeof d === "number" && (!Number.isInteger(d) || d < 1 || d > MAX_KEY_TTL_DAYS))
+  if (
+    typeof d === "number" &&
+    (!Number.isInteger(d) || d < 1 || d > MAX_KEY_TTL_DAYS)
+  )
     problems.push({ code: "invalid-lifetime", days: d });
   return problems.length === 0 ? { ok: true } : { ok: false, problems };
 }
