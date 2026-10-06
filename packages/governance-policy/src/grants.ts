@@ -166,3 +166,19 @@ export function assertPermissions(permissions: readonly string[]): void {
     throw new InvalidPermissionError("A grant needs at least one permission");
   for (const p of permissions) parsePermission(p);
 }
+
+/** A human-minted key lives 90 days unless the person picks otherwise. */
+export const DEFAULT_KEY_TTL_DAYS = 90;
+
+/**
+ * The expiry for a mint: omitted → DEFAULT_KEY_TTL_DAYS; a number → that many
+ * days; `null` → never (an explicit choice — the UI flags it).
+ */
+export function resolveKeyExpiry(
+  expiresInDays: number | null | undefined,
+  now: number = Date.now()
+): Date | null {
+  if (expiresInDays === null) return null;
+  const days = expiresInDays ?? DEFAULT_KEY_TTL_DAYS;
+  return new Date(now + days * 86_400_000);
+}

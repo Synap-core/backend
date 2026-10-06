@@ -27,6 +27,13 @@ import {
   sql,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
+import { resolveKeyExpiry } from "@synap/governance-policy/grants";
+import {
+  ExpiresInDaysSchema,
+  GrantInputSchema,
+  assertGrantInput,
+  attachGrantOrRevoke,
+} from "../services/key-grant.js";
 import {
   apiKeys,
   workspaceMembers,
@@ -209,12 +216,16 @@ export const apiKeysRouter = router({
           .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
           .min(1),
         hubId: z.string().optional(),
-        expiresInDays: z.number().int().min(1).max(365).optional(),
+        // Omitted → 90 days; a number → that many; null → never (W1f).
+        expiresInDays: ExpiresInDaysSchema,
         workspaceId: z.string().uuid().optional(),
+        /** What the key may touch (W1). Omitted = a legacy, ungranted key. */
+        grant: GrantInputSchema.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
+      assertGrantInput(input.grant);
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -237,6 +248,7 @@ export const apiKeysRouter = router({
           ...(input.expiresInDays !== undefined
             ? { expiresInDays: input.expiresInDays }
             : {}),
+          ...(input.grant ? { grant: input.grant } : {}),
         },
       });
 
@@ -263,10 +275,8 @@ export const apiKeysRouter = router({
       // Generate key (plaintext - will be hashed in repository)
       const key = generateApiKey(keyPrefix);
 
-      // Calculate expiration
-      const expiresAt = input.expiresInDays
-        ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
-        : undefined;
+      // Expiration: omitted → 90 days, a number → that many, null → never.
+      const expiresAt = resolveKeyExpiry(input.expiresInDays);
 
       // 2. Direct DB operation via repository (handles bcrypt hashing)
       const database = await getDb();
@@ -280,12 +290,23 @@ export const apiKeysRouter = router({
           key,
           hubId: input.hubId,
           scope: input.scope,
-          expiresAt,
+          expiresAt: expiresAt ?? undefined,
           userId: ctx.userId,
           keyType: input.hubId ? "hub_inbound" : "user_pat",
         },
         ctx.userId
       );
+
+      if (input.grant) {
+        await attachGrantOrRevoke({
+          apiKeyId: apiKey.id,
+          principalUserId: ctx.userId,
+          onBehalfOf: ctx.userId,
+          grant: input.grant,
+          expiresAt,
+          createdBy: ctx.userId,
+        });
+      }
 
       // 3. Audit log
       auditLog({

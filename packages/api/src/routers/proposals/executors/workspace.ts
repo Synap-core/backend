@@ -1444,15 +1444,23 @@ export function registerWorkspaceExecutors(): void {
       } as unknown as Context);
 
       const hubId = (inner.hubId ?? raw.hubId) as string | undefined;
-      const expiresInDays = (inner.expiresInDays ?? raw.expiresInDays) as
-        number | undefined;
+      // `null` = never (explicit) and must survive the replay; only an ABSENT
+      // value falls back to the door's 90-day default.
+      const expiresInDays = (
+        "expiresInDays" in inner ? inner.expiresInDays : raw.expiresInDays
+      ) as number | null | undefined;
+      // The grant the requester asked for — replayed verbatim; minting the key
+      // WITHOUT it would hand the requester a full-access legacy key.
+      const grant = (inner.grant ?? raw.grant) as
+        { permissions: string[] } | undefined;
 
       // The replay must APPLY, never re-propose — see `assertApplied`.
       const minted = await apiKeyCaller.create({
         keyName,
         scope,
         ...(hubId ? { hubId } : {}),
-        ...(typeof expiresInDays === "number" ? { expiresInDays } : {}),
+        ...(expiresInDays !== undefined ? { expiresInDays } : {}),
+        ...(grant ? { grant } : {}),
         ...(keyWorkspaceId ? { workspaceId: keyWorkspaceId } : {}),
       });
       assertApplied(minted);

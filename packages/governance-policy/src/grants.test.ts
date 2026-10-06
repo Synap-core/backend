@@ -11,6 +11,7 @@ import {
   parsePermission,
   patternMatches,
   permits,
+  resolveKeyExpiry,
   type GrantRequest,
 } from "./grants.js";
 
@@ -126,5 +127,20 @@ describe("allowedQualifiers — the SQL kind clause", () => {
 describe("assertPermissions", () => {
   it("refuses an empty grant (a key with nothing is not a key)", () => {
     expect(() => assertPermissions([])).toThrow(InvalidPermissionError);
+  });
+});
+
+describe("resolveKeyExpiry — 90 days by default, custom, or never", () => {
+  const now = Date.UTC(2026, 9, 6);
+  it("defaults to 90 days", () => {
+    expect(resolveKeyExpiry(undefined, now)?.getTime()).toBe(
+      now + 90 * 86_400_000
+    );
+  });
+  it("honours a custom number of days", () => {
+    expect(resolveKeyExpiry(7, now)?.getTime()).toBe(now + 7 * 86_400_000);
+  });
+  it("null means never", () => {
+    expect(resolveKeyExpiry(null, now)).toBeNull();
   });
 });
