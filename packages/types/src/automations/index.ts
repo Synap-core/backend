@@ -193,3 +193,52 @@ export type {
   RuleFlowDefinition,
   BackendTrigger,
 } from "./sentence.js";
+
+// ── Typed text → rule pieces, and rule sentence → words (shared composers) ──
+//
+// Moved from relay-app's rule composer so relay, the browser composer and the
+// pod's `automations.parseRuleText` door read text and render a sentence with
+// ONE implementation. Pure, platform-agnostic.
+export {
+  matchRuleText,
+  matchGap,
+  ruleTextTokens,
+  labelCoverage,
+  splitRuleText,
+  MATCH_THRESHOLD,
+} from "./rule-text-match.js";
+export type {
+  RuleTextMatch,
+  RuleTextGap,
+  RuleTextHalves,
+  RuleTextEventOption,
+  RuleTextActionOption,
+} from "./rule-text-match.js";
+export {
+  parseConditionClauses,
+  matchObjectSegment,
+} from "./rule-text-clauses.js";
+export type { ParsedClause } from "./rule-text-clauses.js";
+export {
+  CRON_RECURRENCES,
+  cronExpressionOf,
+  matchCronRecurrence,
+  cronRecurrence,
+} from "./cron-recurrence.js";
+export type { CronRecurrence } from "./cron-recurrence.js";
+export {
+  CHANGED_KEY_PREFIX,
+  isChangedFlagKey,
+  conditionTakesValue,
+  conditionWindowLabel,
+  conditionOperatorLabel,
+  conditionClauses,
+  propertyLabel,
+  clauseText,
+  ruleSentenceText,
+} from "./rule-sentence-words.js";
+export type {
+  ConditionClause,
+  OperatorMood,
+  PropertyLabelSource,
+} from "./rule-sentence-words.js";
