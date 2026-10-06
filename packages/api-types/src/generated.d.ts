@@ -20915,6 +20915,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
 				hubId: string | null;
 				linkedUserId: string | null;
+				heldByAgent: boolean;
 				scope: string[];
 				isActive: boolean;
 				expiresAt: Date | null;

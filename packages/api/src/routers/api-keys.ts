@@ -19,6 +19,7 @@ import {
   db,
   and,
   eq,
+  or,
   inArray,
   getDb,
   EventRepository,
@@ -116,8 +117,14 @@ export const apiKeysRouter = router({
    * List API keys for the current user
    */
   list: protectedProcedure.query(async ({ ctx }) => {
+    // The keys you hold AND the keys your agents hold for you (`linkedUserId`).
+    // Agent keys are owned by the agent user, so a `userId`-only floor hid every
+    // connected agent and OAuth client from /my-connections (D6, 2026-10-06).
     const keys = await db.query.apiKeys.findMany({
-      where: eq(apiKeys.userId, ctx.userId),
+      where: or(
+        eq(apiKeys.userId, ctx.userId),
+        eq(apiKeys.linkedUserId, ctx.userId)
+      ),
       orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
     });
 
@@ -129,6 +136,8 @@ export const apiKeysRouter = router({
       keyType: key.keyType,
       hubId: key.hubId,
       linkedUserId: key.linkedUserId,
+      /** True when an agent acting for you holds this key, not you. */
+      heldByAgent: key.userId !== ctx.userId,
       scope: key.scope,
       isActive: key.isActive,
       expiresAt: key.expiresAt,
@@ -325,7 +334,11 @@ export const apiKeysRouter = router({
         where: eq(apiKeys.id, input.keyId),
       });
 
-      if (!key || key.userId !== ctx.userId) {
+      // Yours, or held by an agent acting for you (the keys `list` shows).
+      if (
+        !key ||
+        (key.userId !== ctx.userId && key.linkedUserId !== ctx.userId)
+      ) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "API key not found",
