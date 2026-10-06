@@ -443,6 +443,58 @@ describe("buildSpaceBrief", () => {
     expect(BRIEF_BUDGET_BYTES).toBe(2048);
   });
 
+  it("a space's SKILLS outlive the trim that sheds its rules", async () => {
+    // Both readers of this brief — the CLI's `orient` and the IS turn, which
+    // PREPENDS the `always` ones — read THIS object. So shedding `skills` does
+    // not drop a reminder (as shedding `rules` does: the pod applies those
+    // anyway), it drops the feature: the skill is linked and nothing shows it.
+    // Measured 2026-10-06: Brand's brief reaches the `rules` rung at 1895 B, so
+    // the original placement — skills immediately after rules — shed the skill
+    // in exactly the spaces that needed it.
+    const prose = (n: number) => "z".repeat(n);
+    h.ranked = Array.from({ length: 10 }, (_, i) =>
+      row(`kind-${i}`, { workspaceId: WS, entityCount: 1, description: prose(90) })
+    );
+    h.playbooks = Array.from({ length: 8 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-00000000000${i}`,
+      name: `A long playbook name number ${i} ${prose(60)}`,
+      description: prose(118),
+      workspaceId: WS,
+    }));
+    const brief = await build({
+      ...brandLibrary,
+      settings: {
+        onboarding: {
+          ...brandLibrary.settings.onboarding,
+          purpose: prose(240),
+          rules: Array.from({ length: 6 }, (_, i) => ({
+            key: `rule-${i}-${prose(24)}`,
+          })),
+          skills: [
+            {
+              slug: "creative-director",
+              mode: "always",
+              when: "every content ask in this space",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(briefBytes(brief)).toBeLessThanOrEqual(BRIEF_BUDGET_BYTES);
+    // Non-vacuity: the ladder really did run this far…
+    expect(brief.trimmed).toContain("rules");
+    // …and the space's declared skills survived it.
+    expect(brief.trimmed).not.toContain("skills");
+    expect(brief.skills).toEqual([
+      {
+        slug: "creative-director",
+        mode: "always",
+        when: "every content ask in this space",
+      },
+    ]);
+  });
+
   it("the playbook LIST is shed before purpose, persona, the root anchor and the kinds", async () => {
     const prose = (n: number) => "z".repeat(n);
     h.ranked = Array.from({ length: 8 }, (_, i) =>

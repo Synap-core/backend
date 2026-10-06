@@ -349,10 +349,6 @@ const TRIM_LADDER: Array<[string, (b: BuiltSpaceBrief) => boolean]> = [
   ],
   // Rule keys name rules the pod already applies; a list call re-reads them.
   ["rules", (b) => !!b.rules && (delete b.rules, true)],
-  // Same class as rules — the pod links them and re-reads on a call. `always`
-  // ones are prepended by the loader regardless, so losing the list here does
-  // not lose the skill, only the reminder of the on-demand ones.
-  ["skills", (b) => !!b.skills && (delete b.skills, true)],
   // The playbook LIST goes before purpose, persona, the root anchor and the
   // kinds (founder order 2026-09-28): its `total` stays, so the agent knows
   // to call list_playbooks. `items: []`, not deleted — synap-cli <= de24716
@@ -368,6 +364,18 @@ const TRIM_LADDER: Array<[string, (b: BuiltSpaceBrief) => boolean]> = [
   ],
   ["keyKinds.description:60", (b) => shortenKindDescriptions(b, 60)],
   ["persona", (b) => !!b.persona && (delete b.persona, true)],
+  // ── LAST to go, deliberately ─────────────────────────────────────────────
+  // A space's DECLARED SKILLS are not a re-readable convenience like `rules`
+  // (whose rows the pod applies anyway): they are what makes the space work,
+  // and BOTH readers of this brief — the CLI's `orient` and the IS turn, which
+  // prepends the `always` ones — read THIS object. Shedding them here does not
+  // drop a reminder, it drops the feature: the skill is linked, and nothing
+  // shows it. So they outlive prose, lists and persona in the budget fight.
+  //
+  // (Measured 2026-10-06: Brand's brief TRIMS — it reaches the `rules` rung at
+  // 1895 B. With `skills` immediately after `rules`, a linked skill was shed in
+  // exactly the spaces that needed it.)
+  ["skills", (b) => !!b.skills && (delete b.skills, true)],
 ];
 
 /** Shed sections until the brief fits; the last resort drops list tails. */
