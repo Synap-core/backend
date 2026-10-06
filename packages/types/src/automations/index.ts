@@ -246,6 +246,7 @@ export {
   cronExpressionOf,
   matchCronRecurrence,
   cronRecurrence,
+  cronWords,
 } from "./cron-recurrence.js";
 export type { CronRecurrence } from "./cron-recurrence.js";
 export {
@@ -264,3 +265,24 @@ export type {
   OperatorMood,
   PropertyLabelSource,
 } from "./rule-sentence-words.js";
+
+// ── A stored rule read back as words; the ONE WHEN/THEN phrasing ───────────
+export {
+  withArticle,
+  eventPatternWhenText,
+  actionPhrase,
+  ruleWhenWords,
+  ruleThenWords,
+} from "./stored-rule-words.js";
+export type { RuleWhenWords, RuleThenWords } from "./stored-rule-words.js";
+
+// ── A text-matcher reading → a rule sentence (composer + parse door) ───────
+export {
+  sentenceFromTextMatch,
+  clauseRestatesTrigger,
+} from "./rule-text-sentence.js";
+export type {
+  TextMatchEventOption,
+  TextMatchReading,
+  SentenceFromTextMatch,
+} from "./rule-text-sentence.js";

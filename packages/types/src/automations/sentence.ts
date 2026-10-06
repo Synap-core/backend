@@ -1375,6 +1375,20 @@ export function flowToConditions(
           operator: "less_than" as const,
           value: String(op.$lt),
         };
+      // The rest of `conditionToFilterValue`'s outputs, read back. Without
+      // these a stored `{ $within: "today" }` reloaded as `is "[object
+      // Object]"` — and re-saving wrote that string over the window.
+      // `$eq` is the explicit spelling of `is` (agents write it).
+      const inverse = [
+        ["$within", "is_within"],
+        ["$contains", "contains"],
+        ["$starts_with", "starts_with"],
+        ["$eq", "is"],
+      ] as const;
+      for (const [opKey, operator] of inverse) {
+        if (opKey in op)
+          return { id: `filter-${i}`, key, operator, value: String(op[opKey]) };
+      }
     }
     return {
       id: `filter-${i}`,

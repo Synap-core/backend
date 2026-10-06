@@ -52,7 +52,11 @@
  * nothing below ever humanises a frequency token.
  */
 
-import { buildCronExpression, type SentenceTrigger } from "./sentence.js";
+import {
+  buildCronExpression,
+  parseCron,
+  type SentenceTrigger,
+} from "./sentence.js";
 
 /** One offerable schedule. `trigger` is the value; `label` is what it reads as. */
 export interface CronRecurrence {
@@ -168,4 +172,74 @@ export function matchCronRecurrence(
 /** A recurrence by id. */
 export function cronRecurrence(id: string): CronRecurrence | undefined {
   return CRON_RECURRENCES.find((r) => r.id === id);
+}
+
+// ── Any stored cron, read back as words ─────────────────────────────────────
+//
+// MOVED HERE from `browser/…/apps/rules/rule-words.ts` (2026-10-06). The
+// closed list above labels what the composers OFFER; a stored rule may carry
+// any expression the grammar round-trips (an agent wrote it, or a template),
+// and the Rules page must still say it in the same phrasing. For every offered
+// recurrence the two agree — pinned in `cron-recurrence.test.ts`.
+
+const NUM = /^\d{1,2}$/;
+
+function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th"}`;
+}
+
+function weekdayName(day: number): string {
+  // 2023-01-01 was a Sunday, so day 0..6 maps onto that week.
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(2023, 0, 1 + (day % 7))));
+}
+
+function joinWords(words: readonly string[]): string {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/**
+ * A cron expression as words, in the phrasing of {@link CRON_RECURRENCES}
+ * ("Every day at 09:00 UTC", "Every Monday at 09:00 UTC", "On the 1st of the
+ * month, at 09:00 UTC"). Only the shapes `parseCron` round-trips are phrased —
+ * a step, range or list it would misread (`*\/15`) returns null, never a
+ * confident wrong sentence.
+ */
+export function cronWords(expression: string): string | null {
+  const parts = expression.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const [m, h, dom, mon, dow] = parts as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  if (!NUM.test(m) || mon !== "*") return null;
+  if (!(h === "*" || NUM.test(h))) return null;
+  if (!(dom === "*" || NUM.test(dom))) return null;
+  if (!(dow === "*" || dow === "1-5" || /^\d(,\d)*$/.test(dow))) return null;
+  if (h === "*") return dom === "*" && dow === "*" ? "Every hour" : null;
+
+  const parsed = parseCron(expression.trim());
+  const at = `at ${parsed.cronTime} ${ZONE}`;
+  switch (parsed.cronFrequency) {
+    case "daily":
+      return `Every day ${at}`;
+    case "weekdays":
+      return `Every weekday ${at}`;
+    case "weekly":
+      return `Every ${joinWords((parsed.cronDays ?? []).map(weekdayName))} ${at}`;
+    case "monthly":
+      return parsed.cronDayOfMonth
+        ? `On the ${ordinal(parsed.cronDayOfMonth)} of the month, ${at}`
+        : null;
+    default:
+      return null;
+  }
 }

@@ -52,12 +52,7 @@ import { getEventCatalog } from "@synap/events/event-types";
 // Vocabulary door — the ONE place machine tokens become human words. Trigger
 // events use PAST mood ("A task was created"); actions use IMPERATIVE mood
 // ("Create an entity"). Never a hand-written label map (see .claude/rules/vocabulary.md).
-import {
-  resolveActionLabel,
-  resolveObjectNoun,
-  humanizeToken,
-  OBJECT_KINDS,
-} from "@synap-core/types/vocabulary";
+import { humanizeToken, OBJECT_KINDS } from "@synap-core/types/vocabulary";
 import { listCapabilities } from "../services/capabilities/capability-registry.js";
 import {
   projectRunnableActions,
@@ -65,6 +60,8 @@ import {
 } from "../services/capabilities/action-projection.js";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import {
+  actionPhrase,
+  eventPatternWhenText,
   readMaxAiDispatchesPerDay,
   readMaxRunsPerDay,
   unfilteredAiFanoutError,
@@ -1419,20 +1416,14 @@ const OUTPUT_ACTION_SHAPES: Record<
   set_state: { verb: "set", objectKind: "state" },
 };
 
-const capitalize = (s: string): string =>
-  s.length ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-
-const withArticle = (noun: string): string =>
-  `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
-
 /** IMPERATIVE-mood label for a THEN action, via the vocabulary door. */
 function actionLabelFor(
   outputType: (typeof OUTPUT_NODE_TYPES)[number]
 ): string {
+  // The ONE THEN phrasing (@synap-core/types/automations) — the Rules page
+  // reads a stored action back through the same function.
   const shape = OUTPUT_ACTION_SHAPES[outputType];
-  const verb = resolveActionLabel(shape.verb, "imperative");
-  const noun = resolveObjectNoun(shape.objectKind).toLowerCase();
-  return `${verb} ${withArticle(noun)}`;
+  return actionPhrase(shape.verb, shape.objectKind);
 }
 
 /**
@@ -1502,15 +1493,13 @@ const SENTENCE_OUTPUT_TYPES = OUTPUT_NODE_TYPES.filter(
   (t): t is (typeof OUTPUT_NODE_TYPES)[number] => t in SENTENCE_ACTION_PARAMS
 );
 
-/** PAST-mood label for a WHEN trigger event pattern, via the vocabulary door. */
+/**
+ * PAST-mood label for a WHEN trigger event pattern — the ONE WHEN phrasing
+ * (`eventPatternWhenText`, @synap-core/types/automations), the same function
+ * the Rules page reads a stored trigger back through.
+ */
 function eventLabelFor(pattern: string, subject: string): string {
-  const parts = pattern.split(".");
-  const noun = resolveObjectNoun(subject).toLowerCase();
-  const action = parts[1];
-  // Full/action wildcard ("<subject>.*", "<subject>.<action>.*") — no single verb.
-  if (!action || action === "*") return `Any ${noun} activity`;
-  const past = resolveActionLabel(action, "past").toLowerCase();
-  return `${capitalize(withArticle(noun))} was ${past}`;
+  return eventPatternWhenText(pattern, [subject]);
 }
 
 /** The `profileSlug` an event option carries — the object kind it concerns. */

@@ -26,19 +26,16 @@
  */
 
 import {
-  actionOptionToSentenceAction,
+  clauseRestatesTrigger,
   conditionWindowLabel,
   cronRecurrence,
   CRON_RECURRENCES,
   matchGap,
   matchRuleText,
-  ruleTextTokens,
-  triggerToSentence,
+  sentenceFromTextMatch,
   type ConditionRow,
   type ParsedClause,
   type RuleSentenceValue,
-  type SentenceAction,
-  type SentenceTrigger,
 } from "@synap-core/types/automations";
 
 import type { ActionOption, EventOption } from "../../routers/automations.js";
@@ -128,49 +125,6 @@ function isOperator(op: string): op is ConditionRow["operator"] {
   return conditionOperatorSchema.safeParse(op).success;
 }
 
-/**
- * A clause becomes a WHERE row only when its words name a key this event can
- * actually be narrowed on (`EventOption.filterKeys`). Never a guessed key: a
- * filter on a field the event does not carry silently narrows the rule to
- * never. Entity PROPERTY slugs are resolved by the composer, which holds the
- * kind's property list; here they are reported, not dropped.
- */
-function clauseToRow(
-  clause: ParsedClause,
-  option: EventOption | undefined
-): ConditionRow | null {
-  const key = option?.filterKeys?.find((k) => norm(k) === norm(clause.field));
-  if (!key) return null;
-  return { id: key, key, operator: clause.operator, value: clause.value };
-}
-
-/**
- * "when an invoice is created, …" — the clause parser reads `when` as a
- * narrowing marker, so the trigger itself comes back as a clause ("invoice" is
- * "created"). A clause whose every word is already in the matched trigger's
- * label is the WHEN restated, not a narrowing; reporting it as an unresolved
- * condition would ask the user to fix something they never asked for.
- */
-function restatesTrigger(
-  clause: ParsedClause,
-  triggerLabel: string | null
-): boolean {
-  if (!triggerLabel) return false;
-  // The clause splitter only breaks on " , " / " and ", so the value of the
-  // restated WHEN usually runs on into the THEN ("created, send a …"). Hence:
-  // every FIELD word is in the label, and the value STARTS with a label word
-  // (the verb). A real narrowing names a field the label does not.
-  const label = new Set(ruleTextTokens(triggerLabel));
-  const field = ruleTextTokens(clause.field);
-  const firstValueWord = ruleTextTokens(clause.value)[0];
-  return (
-    field.length > 0 &&
-    field.every((w) => label.has(w)) &&
-    firstValueWord !== undefined &&
-    label.has(firstValueWord)
-  );
-}
-
 // ── The door ────────────────────────────────────────────────────────────────
 
 export async function parseRuleText(
@@ -186,7 +140,7 @@ export async function parseRuleText(
   let kind: string | null = null;
   let actionKeys = match.actions.map((a) => a.key);
   const clauses: ParsedClause[] = match.clauses.filter(
-    (c) => !restatesTrigger(c, match.trigger?.label ?? null)
+    (c) => !clauseRestatesTrigger(c, match.trigger?.label ?? null)
   );
   let source: ParseRuleTextResult["source"] = "matcher";
   let aiUnavailable = false;
@@ -276,55 +230,26 @@ export async function parseRuleText(
     ? vocabulary.events.find((e) => e.pattern === eventPattern)
     : undefined;
 
-  let trigger: SentenceTrigger | null = null;
-  if (eventOption) {
-    trigger = triggerToSentence("event", {
-      eventPattern: eventOption.pattern,
-      ...(eventOption.profileSlug
-        ? { profileSlug: eventOption.profileSlug }
-        : {}),
-    });
-  } else if (scheduleId) {
-    trigger = cronRecurrence(scheduleId)?.trigger ?? null;
-  } else if (match.objectSegment) {
-    // An object with no verb: a real, unsaveable trigger (`task.*`). It lands
-    // the composer on the right object instead of nowhere; the verb is a gap.
-    trigger = triggerToSentence("event", {
-      eventPattern: `${match.objectSegment}.*`,
-    });
-  }
-  // The kind binds a GENERIC entity trigger only — never overrides a kind the
-  // event option already carries.
-  if (
-    kind &&
-    trigger?.triggerType === "event" &&
-    trigger.subjectCategory === "entity" &&
-    !trigger.profileSlug
-  ) {
-    trigger = { ...trigger, profileSlug: kind };
-  }
-
-  const actions: SentenceAction[] = [];
-  for (const key of actionKeys) {
-    const option = vocabulary.actions.find((a) => a.key === key);
-    const built = option ? actionOptionToSentenceAction(option) : null;
-    if (built) actions.push(built);
-  }
-
-  const conditions: ConditionRow[] = [];
-  const unresolved: RuleParseGap[] = [];
-  for (const clause of clauses) {
-    const row = clauseToRow(clause, eventOption);
-    if (row && !conditions.some((c) => c.key === row.key)) {
-      conditions.push(row);
-    } else if (!row) {
-      unresolved.push({
-        slot: "condition",
-        field: clause.field,
-        reason: `“${clause.field}” is not a field this trigger can be narrowed on yet — pick it from the trigger's fields.`,
-      });
-    }
-  }
+  // ONE builder, shared with the browser composer's keystroke reading.
+  const built = sentenceFromTextMatch({
+    event: eventOption ?? null,
+    schedule:
+      !eventOption && scheduleId
+        ? (cronRecurrence(scheduleId)?.trigger ?? null)
+        : null,
+    objectSegment: match.objectSegment,
+    kind,
+    actions: actionKeys
+      .map((key) => vocabulary.actions.find((a) => a.key === key))
+      .filter((a): a is ActionOption => a !== undefined),
+    clauses,
+  });
+  const { trigger, actions } = built.sentence;
+  const unresolved: RuleParseGap[] = built.unresolvedClauses.map((clause) => ({
+    slot: "condition",
+    field: clause.field,
+    reason: `“${clause.field}” is not a field this trigger can be narrowed on yet — pick it from the trigger's fields.`,
+  }));
 
   const triggerComplete =
     trigger !== null &&
@@ -341,7 +266,7 @@ export async function parseRuleText(
     unresolved.push({ slot: "actions", reason: "What should happen?" });
   }
 
-  const sentence: RuleSentenceValue = { trigger, conditions, actions };
+  const sentence: RuleSentenceValue = built.sentence;
 
   let validation: ParseRuleTextResult["validation"] = null;
   if (triggerComplete && actions.length > 0) {
