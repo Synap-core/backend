@@ -14,6 +14,14 @@
  *                    operator-direct instead of through the governance membrane
  *   - instanceId   → per-instance rotation scoping
  *
+ * WIDENING GUARD (2026-10-06 centralisation audit). This door had no gate: ANY
+ * key — a read-only `service` key, a sub-token, a probe key — came out with the
+ * full CLI scope set, and `expiresInDays: undefined` made a 90-day key
+ * permanent. Only an agent/CLI key (`hub_inbound`) that already holds
+ * read+write may rotate, and its expiry is kept. The fixture used to be a
+ * read-only `service` key rotating to write: it pinned the escalation as
+ * correct.
+ *
  * Strategy mirrors `auth.test.ts`: build an ISOLATED Hono app that mounts only
  * a stub auth middleware + the keys route, and mock `_shared.js` so the test
  * does not pull in the full hub-protocol router graph (which needs a live DB).
@@ -66,7 +74,6 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerKeysRoutes } from "./keys.js";
 import { apiKeyService } from "../../../services/api-keys.js";
 import { INTEGRATION_HUB_SCOPES } from "../../../services/hub-integration-registration.js";
-import { resolveConfinedWorkspace } from "../confine-workspace.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -80,20 +87,23 @@ const BOUND_WORKSPACE = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
  * This combination is reachable in normal operation — agent keys minted for CLI
  * surfaces do carry `linkedUserId`.
  */
+const EXPIRES_AT = new Date(Date.now() + 30 * 86_400_000);
 const CONFINED_AGENT_KEY = {
   id: OLD_KEY_ID,
   userId: "user-1",
   keyName: "claude-code CLI",
   keyPrefix: "synap_user_",
   hubId: "synap-hub-prod",
-  scope: ["hub-protocol.read"], // stale scope set — intentionally refreshed
-  keyType: "service" as const,
+  // stale scope set — intentionally refreshed (read+write: no widening)
+  scope: ["hub-protocol.read", "hub-protocol.write", "mcp.read", "mcp.write"],
+  keyType: "hub_inbound" as const,
   description: "CLI key for the laptop",
   workspaceId: BOUND_WORKSPACE,
   linkedUserId: "operator-42",
   instanceId: "laptop-1",
+  parentKeyId: null,
   isActive: true,
-  expiresAt: null,
+  expiresAt: EXPIRES_AT,
 };
 
 // ─── Test app ───────────────────────────────────────────────────────────────
@@ -140,34 +150,11 @@ describe("POST /keys/rotate-cli — identity preservation", () => {
     expect(res.status).toBe(200);
 
     expect(identityArgOfLastMint()).toMatchObject({
-      keyType: "service",
+      keyType: "hub_inbound",
       workspaceId: BOUND_WORKSPACE,
       linkedUserId: "operator-42",
       instanceId: "laptop-1",
     });
-  });
-
-  it("keeps the rotated key confined to its bound workspace", async () => {
-    // End-to-consequence: feed the preserved fields to the real confinement
-    // resolver. Pre-fix these were undefined → `resolveConfinedWorkspace` took
-    // the legacy passthrough branch and the key became pod-wide.
-    await rotate();
-    const identity = identityArgOfLastMint()!;
-
-    expect(
-      resolveConfinedWorkspace(
-        identity.keyType as string,
-        identity.workspaceId as string,
-        null
-      )
-    ).toBe(BOUND_WORKSPACE);
-    expect(() =>
-      resolveConfinedWorkspace(
-        identity.keyType as string,
-        identity.workspaceId as string,
-        "some-other-workspace"
-      )
-    ).toThrow(/confined to workspace/);
   });
 
   it("preserves the key's description and human-facing identity fields", async () => {
@@ -207,7 +194,6 @@ describe("POST /keys/rotate-cli — identity preservation", () => {
     // must not gain a binding it never had.
     callingKeyRow = {
       ...CONFINED_AGENT_KEY,
-      keyType: "user_pat",
       workspaceId: null,
       linkedUserId: null,
       instanceId: null,
@@ -217,11 +203,50 @@ describe("POST /keys/rotate-cli — identity preservation", () => {
     await rotate();
 
     expect(identityArgOfLastMint()).toEqual({
-      keyType: "user_pat",
+      keyType: "hub_inbound",
       workspaceId: null,
       linkedUserId: null,
       instanceId: null,
       description: null,
     });
+  });
+});
+
+describe("POST /keys/rotate-cli — never widens a key", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    callingKeyRow = { ...CONFINED_AGENT_KEY };
+  });
+
+  const rotate = () =>
+    buildTestApp().request("/keys/rotate-cli", {
+      method: "POST",
+      headers: { "x-test-key-id": OLD_KEY_ID },
+    });
+
+  it("keeps the key's expiry instead of making it permanent", async () => {
+    const res = await rotate();
+    expect(res.status).toBe(200);
+    const days = vi.mocked(apiKeyService.generateApiKey).mock.calls.at(-1)![4];
+    expect(typeof days).toBe("number");
+    expect(days as number).toBeGreaterThan(29.9);
+    expect(days as number).toBeLessThanOrEqual(30);
+  });
+
+  it.each([
+    [
+      "a read-only service key",
+      { keyType: "service", scope: ["hub-protocol.read"] },
+    ],
+    ["a read-only agent key", { scope: ["hub-protocol.read", "mcp.read"] }],
+    ["a personal access token", { keyType: "user_pat" }],
+    ["a sub-token", { parentKeyId: "11111111-2222-3333-4444-555555555555" }],
+    ["a probe key", { scope: [...CONFINED_AGENT_KEY.scope, "probe"] }],
+  ])("refuses %s and mints nothing", async (_label, patch) => {
+    callingKeyRow = { ...CONFINED_AGENT_KEY, ...patch };
+    const res = await rotate();
+    expect(res.status).toBe(403);
+    expect(vi.mocked(apiKeyService.generateApiKey)).not.toHaveBeenCalled();
+    expect(vi.mocked(apiKeyService.revokeApiKey)).not.toHaveBeenCalled();
   });
 });

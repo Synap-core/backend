@@ -20,6 +20,32 @@ import {
 } from "./_codecs/_openapi.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
+/** Why this key may not self-rotate to the CLI scope set, or null if it may. */
+export function rotateCliRefusal(key: {
+  keyType: string;
+  scope: string[];
+  parentKeyId: string | null;
+}): string | null {
+  if (key.parentKeyId)
+    return "A sub-token cannot be rotated here; its parent key owns its lifetime.";
+  if (key.scope.includes("probe"))
+    return "A probe key cannot be rotated to the CLI scope set.";
+  if (key.keyType !== "hub_inbound")
+    return "Only an agent or CLI key can be rotated here.";
+  if (
+    !key.scope.includes("hub-protocol.read") ||
+    !key.scope.includes("hub-protocol.write")
+  )
+    return "This key is narrower than the CLI scope set; rotating it would widen it.";
+  return null;
+}
+
+/** Days left on an expiry (fractional), or undefined for a key that never expires. */
+function remainingDays(expiresAt: Date | null): number | undefined {
+  if (!expiresAt) return undefined;
+  return Math.max((expiresAt.getTime() - Date.now()) / 86_400_000, 1 / 1440);
+}
+
 export function registerKeysRoutes(app: HubHono): void {
   // ── POST /keys/rotate-cli ─────────────────────────────────────────────────
   app.openapi(
@@ -30,8 +56,9 @@ export function registerKeysRoutes(app: HubHono): void {
       summary: "Rotate the calling key to the latest CLI scope set",
       description:
         "Revokes the current key and issues a new one with the full " +
-        "INTEGRATION_HUB_SCOPES.cli scope set. Safe to call with a stale-scoped key — " +
-        "no extra scope check required beyond being active.",
+        "INTEGRATION_HUB_SCOPES.cli scope set, keeping its expiry. Only an agent/CLI " +
+        "key that already holds hub-protocol.read and hub-protocol.write qualifies; " +
+        "sub-tokens and probe keys are refused.",
       security: bearerSecurity,
       responses: {
         ...trpcErrorResponses,
@@ -51,6 +78,10 @@ export function registerKeysRoutes(app: HubHono): void {
         },
         400: {
           description: "Bad request",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        403: {
+          description: "This key cannot be rotated to the CLI scope set",
           content: { "application/json": { schema: ErrorSchema } },
         },
         401: {
@@ -85,6 +116,13 @@ export function registerKeysRoutes(app: HubHono): void {
         return c.json({ error: "Calling key not found" }, 400);
       }
 
+      // Self-rotation may refresh the CLI scope set, never WIDEN a key. Only an
+      // agent/CLI key (hub_inbound) that already holds read+write qualifies;
+      // a narrower key (a read-only service key, a sub-token bounded by its
+      // parent, a probe key) would come out with more authority than it has.
+      const refusal = rotateCliRefusal(keyRecord);
+      if (refusal) return c.json({ error: refusal }, 403);
+
       try {
         // SECURITY: this is a ROTATION, so the new key must be the SAME
         // credential with fresh material — only the SCOPE SET is deliberately
@@ -102,7 +140,10 @@ export function registerKeysRoutes(app: HubHono): void {
             keyRecord.keyName,
             INTEGRATION_HUB_SCOPES.cli as ApiKeyScope[],
             keyRecord.hubId ?? undefined,
-            undefined, // expiresInDays — unchanged by rotation
+            // Keep the key's lifetime: rotation is new material, not a new
+            // term. A `null` expiry passed as undefined used to make a 90-day
+            // agent key permanent.
+            remainingDays(keyRecord.expiresAt),
             // parentKeyId is deliberately NOT carried: passing it re-runs
             // sub-token validation, which enforces a scope SUBSET of the parent
             // — and this door intentionally RE-SCOPES to the CLI set, which need
