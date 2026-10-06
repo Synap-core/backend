@@ -43,9 +43,15 @@ import { AccessContext, scopedDb } from "./index.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { sessionReadableWhere } from "./session-visibility.js";
-import { channels, focusSessions, projects } from "@synap/database/schema";
+import {
+  channels,
+  focusSessions,
+  projects,
+  proposals,
+} from "@synap/database/schema";
 import { ownerPrivateVisibleWhere } from "@synap/database";
 import { hubViewsRouter } from "../routers/hub-protocol/views.js";
+import { proposalUserFloor } from "../routers/proposals/scope-conditions.js";
 
 const ALICE = "alice-grant";
 const WA = randomUUID();
@@ -59,6 +65,7 @@ const CHAN = randomUUID();
 const SESS = randomUUID();
 const PROJ = randomUUID();
 const VIEW = randomUUID();
+const PROP = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -121,6 +128,10 @@ beforeAll(async () => {
   await q(
     `insert into views (id, name, type, user_id, updated_at) values ($1, 'v', 'table', $2, now())`,
     [VIEW, ALICE]
+  );
+  await q(
+    `insert into proposals (id, created_by, status, workspace_id) values ($1, $2, 'pending', $3)`,
+    [PROP, ALICE, WA]
   );
 });
 
@@ -296,5 +307,16 @@ describe("the shared channel and session helpers honour the grant", () => {
     expect(await list()).toEqual([VIEW]);
     expect(await list({ permissions: ["view.read"] })).toEqual([VIEW]);
     expect(await list({ permissions: ["entity.read"] })).toEqual([]);
+  });
+
+  it("proposals (proposalUserFloor): proposal.read only", async () => {
+    const w = () => proposalUserFloor(ALICE);
+    expect(await ids(proposals, proposals.id, w)).toEqual([PROP]);
+    expect(
+      await ids(proposals, proposals.id, w, { permissions: ["proposal.read"] })
+    ).toEqual([PROP]);
+    expect(
+      await ids(proposals, proposals.id, w, { permissions: ["entity.read"] })
+    ).toEqual([]);
   });
 });

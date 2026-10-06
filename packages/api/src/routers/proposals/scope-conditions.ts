@@ -15,9 +15,11 @@
  * only `stepRunId`; the automation is reached through `automation_step_runs`.
  */
 
+import { grantReadPredicate } from "../../access/grant-read.js";
 import {
   eq,
   or,
+  and,
   isNull,
   isNotNull,
   drizzleSql,
@@ -70,10 +72,13 @@ import { authoredByUser } from "../../services/agent-identity-service.js";
  * (services/activity/list-activity.ts): personal proposals owner-gated there.
  */
 export function proposalUserFloor(userId: string): SQL {
-  return or(
+  const floor = or(
     userVisibleWhere(proposals.workspaceId, userId),
     authoredByUser(userId)
   ) as SQL;
+  // W1 — the calling key's grant (`proposal` subject), narrow-only.
+  const grant = grantReadPredicate(proposals);
+  return grant ? (and(floor, grant) as SQL) : floor;
 }
 
 /** The subset of `list`/`groups` input both procedures scope identically on. */

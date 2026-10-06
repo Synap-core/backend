@@ -53,6 +53,7 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/projects\/[^/]+\/?$/,
   /^\/projects\/[^/]+\/digest\/?$/,
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
+  /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
 ];
 
 /** Hub REST POST routes that READ without a seam (refused for scoped keys). */
@@ -87,6 +88,7 @@ export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
   "commands.listCommands",
   "commands.getCommand",
   "views.listViews",
+  "proposals.listProposals",
 ]);
 
 export const GRANT_DOOR_UNSUPPORTED =
