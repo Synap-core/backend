@@ -2825,6 +2825,18 @@ _ue_adopt_running() {
 }
 
 # ── from-source build (U6) ────────────────────────────────────────────────────
+# A build that dies partway (ENOSPC, a killed docker) leaves BuildKit cache
+# records whose containerd snapshots no longer exist. Every later build then
+# fails at its FIRST RUN with "failed to stat active key during commit:
+# snapshot ... does not exist" — and only a full cache clear removes them. The
+# post-update cap (_ue_prune_images) can never do it: it runs only after a
+# SUCCESSFUL applied update, so the very failure that poisons the cache also
+# makes the cure unreachable, and the pod self-locks (perso, 2026-10-06: five
+# retries, identical failure, until an operator ran `docker builder prune -af`).
+# Drop the cache after a FAILED build only — it holds no data, just rebuild
+# time, so the warm-cache cost is paid only once a build has already failed.
+_ue_build_cache_reset() { docker builder prune -af >/dev/null 2>&1 || true; }
+
 _ue_build_from_source() { # <out-manifest>
     local out="$1" repo_root sha tag be pa mig_dir last count carry
     repo_root="$(get_repo_root)"
@@ -2841,9 +2853,30 @@ _ue_build_from_source() { # <out-manifest>
     # build must never be mistakable for a published artifact (U6).
     be="synap-dev/backend:${tag}"
     pa="synap-dev/pod-admin:${tag}"
+    # Bound the cache BEFORE building and BEFORE the disk check. The cap in
+    # _ue_prune_images runs only after an APPLIED update, so it is skipped when
+    # the update is a no-op "already on release" — leaving up to ~11 GB of cache
+    # on a disk that then has only a few GB free. That is the state that makes
+    # the next from-source build ENOSPC, which is in turn what poisons the
+    # BuildKit cache (see _ue_build_cache_reset). Cap first so the check below
+    # measures the space the build will actually have.
+    docker builder prune -f --max-used-space 2gb >/dev/null 2>&1 \
+        || docker builder prune -f --keep-storage 2gb >/dev/null 2>&1 || true
+    # A from-source build is the single largest disk consumer this pod runs
+    # (~11 GB peak, perso 2026-10-05). Refuse below the floor rather than ENOSPC
+    # mid-layer.
+    _ue_disk_ok "${SYNAP_UPDATE_MIN_FREE_SOURCE_MB:-12288}" || return 1
     _ue_log "Building ${be} and ${pa} from ${repo_root} (commit ${sha:0:12})..."
-    docker build -f "$repo_root/deploy/Dockerfile" --build-arg "GIT_SHA=${sha}" -t "$be" "$repo_root" || { _ue_err "backend build failed. Nothing was changed."; return 1; }
-    docker build -f "$repo_root/apps/pod-admin/Dockerfile" -t "$pa" "$repo_root" || { _ue_err "pod-admin build failed. Nothing was changed."; return 1; }
+    if ! docker build -f "$repo_root/deploy/Dockerfile" --build-arg "GIT_SHA=${sha}" -t "$be" "$repo_root"; then
+        _ue_build_cache_reset
+        _ue_err "backend build failed. Nothing was changed."
+        return 1
+    fi
+    if ! docker build -f "$repo_root/apps/pod-admin/Dockerfile" -t "$pa" "$repo_root"; then
+        _ue_build_cache_reset
+        _ue_err "pod-admin build failed. Nothing was changed."
+        return 1
+    fi
     mig_dir="$repo_root/packages/database/migrations"
     last="$(ls "$mig_dir"/*.sql 2>/dev/null | sort | tail -1 | xargs -r basename)"
     count="$(ls "$mig_dir"/*.sql 2>/dev/null | wc -l | tr -d ' ')"
@@ -2959,8 +2992,8 @@ _ue_pull_images() { # <manifest> — before anything changes; a failure aborts t
     done
 }
 
-_ue_disk_ok() { # every filesystem the update writes to keeps SYNAP_UPDATE_MIN_FREE_MB free
-    local min="${SYNAP_UPDATE_MIN_FREE_MB:-2048}" dir free root
+_ue_disk_ok() { # every filesystem the update writes to keeps $1 / SYNAP_UPDATE_MIN_FREE_MB MB free
+    local min="${1:-${SYNAP_UPDATE_MIN_FREE_MB:-2048}}" dir free root
     root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
     for dir in "$(pwd)" "$root"; do
         [ -n "$dir" ] && [ -d "$dir" ] || continue

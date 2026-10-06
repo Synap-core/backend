@@ -119,7 +119,9 @@ case "$*" in
     ref="${*: -1}"; [ -n "${FAKE_PULL_FAIL:-}" ] && [[ "$ref" == *"$FAKE_PULL_FAIL"* ]] && { echo "manifest unknown" >&2; exit 1; }
     echo "$ref" >> "$F/images"; exit 0 ;;
   "build "*)
-    t=""; prev=""; for a in "$@"; do [ "$prev" = -t ] && t="$a"; prev="$a"; done; echo "$t" >> "$F/images"; exit 0 ;;
+    t=""; prev=""; for a in "$@"; do [ "$prev" = -t ] && t="$a"; prev="$a"; done
+    [ -n "${FAKE_BUILD_FAIL:-}" ] && { echo "build failed (injected)" >&2; exit 1; }
+    echo "$t" >> "$F/images"; exit 0 ;;
   "ps --filter publish"*) [ -n "${FAKE_PORT_HOLDER:-}" ] && echo "$FAKE_PORT_HOLDER"; exit 0 ;;
 esac
 exit 0
@@ -176,7 +178,7 @@ publish() { # <id> <last-migration> [with-bundle]
 }
 run_update() { # <args...>
   ( cd "$S"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL=https://rel.test \
-    SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_ASSUME_YES=1 \
+    SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_UPDATE_MIN_FREE_SOURCE_MB=1 SYNAP_ASSUME_YES=1 \
     SYNAP_UPDATE_NOTIFY_CMD="cat >> '$S/notified'" bash "$REPO/synap" update "$@" ) >"$S/out" 2>&1 </dev/null
 }
 cur_id()  { jq -r .id "$DEPLOY/state/current-release.json" 2>/dev/null; }
@@ -298,6 +300,24 @@ grep -qE "^builder prune -f --max-used-space 2gb" "$FAKE/log" && ok "source: bui
   && ok "source: recorded as release local-$tag12 (source:true)" || bad "source: env=$(envpin SYNAP_IMAGE_BACKEND) id=$(cur_id)"
 [ "$(envpin SYNAP_IMAGE_MINIO)" = "$(grep '^SYNAP_IMAGE_MINIO=' "$S/env.orig" | cut -d= -f2-)" ] && ok "source: third-party pins carried over from the previous release" || bad "source: minio pin lost"
 ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && grep -q "canary" "$FAKE/log" && ok "source: same backup + canary path as a release" || bad "source: skipped backup/canary"
+
+# ── 6b. --from-source, a FAILED build resets the BuildKit cache ───────────────
+# The lock-out this guards (perso, 2026-10-06): a build that dies mid-layer
+# leaves cache records whose containerd snapshots no longer exist, and every
+# retry then fails at its FIRST RUN with "failed to stat active key during
+# commit: snapshot ... does not exist". The post-update cap cannot clear that —
+# it runs only after a SUCCESSFUL applied update — so without a reset the pod
+# can never rebuild, however many times it is retried.
+setup sourcefail r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcefail: git fixture"
+: > "$FAKE/log"
+FAKE_BUILD_FAIL=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+[ "$rc" != 0 ] && ok "sourcefail: a failed build aborts the update" || { bad "sourcefail: rc=$rc (build failure ignored)"; show; }
+grep -qE "^builder prune -af" "$FAKE/log" && ok "sourcefail: the (poisoned) BuildKit cache is reset after a failed build" || bad "sourcefail: cache not reset after a failed build — the pod self-locks, every retry re-fails"
+[ "$(cur_id)" = "$R1" ] && ok "sourcefail: the release is unchanged after a failed build" || bad "sourcefail: current-release=$(cur_id)"
 
 # ── 7. edge=traefik: caddy never touched, every other service comes up ───────
 setup traefik r1; publish "$R2" 0012_new.sql
