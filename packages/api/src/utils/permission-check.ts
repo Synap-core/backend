@@ -1193,6 +1193,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     // default. Each line is a decision, not an oversight; see the per-rung
     // table above for why the corresponding rung no-ops.
     agentCapabilities: undefined, // rung 1
+    subjectKind: undefined, // rung 1 — read only alongside agentCapabilities
     isAgentOwnedWorkspace: undefined, // rung 3
     autoApproveFor: undefined, // rung 4 → rung 8 uses DEFAULT_AUTO_APPROVE
     writesRequireProposal: undefined, // rung 5 — no reachable source
@@ -1764,6 +1765,12 @@ async function evaluatePermission(
         action,
         channelCapabilities,
         subjectProfileSlug,
+        subjectEntityId:
+          typeof data?.id === "string"
+            ? data.id
+            : typeof data?.entityId === "string"
+              ? data.entityId
+              : null,
         subjectUoValidated,
         forcePropose: effectiveForcePropose,
         podAdminSchemaChange,

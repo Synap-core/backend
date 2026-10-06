@@ -5,10 +5,15 @@
  * per-table subject map and the project lens), which this package must not
  * import. The API REGISTERS it at load (`registerGrantReadProvider`), the same
  * pattern as `onApiKeysRevoked`; helpers here call `grantReadClauseFor(column)`.
- * A process that registers nothing (realtime, a script) adds no clause — and
- * carries no key grant either.
+ * A process that registers nothing (realtime, a script) carries no key grant,
+ * so it adds no clause. If a SCOPED grant ever reaches such a process the
+ * clause is deny-all: an unregistered provider must never read as "no limit".
+ *
+ * Imported by the API through its own subpath (`@synap/database/grant-read-hook`)
+ * so a test that mocks the `@synap/database` barrel still loads the real hook.
  */
-import type { SQL } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
+import { getRequestGrant } from "./request-write-context.js";
 
 type Provider = (table: object) => SQL | undefined;
 let provider: Provider | null = null;
@@ -20,7 +25,10 @@ export function registerGrantReadProvider(fn: Provider): void {
 
 /** The request's grant clause for the table that owns `column`, if any. */
 export function grantReadClauseFor(column: unknown): SQL | undefined {
-  if (!provider) return undefined;
+  if (!provider) {
+    const grant = getRequestGrant();
+    return grant && !grant.permissions.includes("*") ? sql`false` : undefined;
+  }
   const table = (column as { table?: object } | null)?.table;
   return table ? provider(table) : undefined;
 }

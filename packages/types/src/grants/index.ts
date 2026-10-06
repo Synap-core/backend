@@ -7,6 +7,7 @@
  *  - `draft`    — the value a selector edits (= the mint wire shape) and its ops.
  *  - `summary`  — the read-only rendering model.
  *  - `presets`  — named permission lists, the seed of ROLES.
+ *  - `agent`    — an agent's capability allowlist, edited as a grant.
  *
  * Pure and dependency-free: browser, Electron, landing, Node and CLI.
  */
@@ -15,3 +16,4 @@ export * from "./catalog.js";
 export * from "./draft.js";
 export * from "./summary.js";
 export * from "./presets.js";
+export * from "./agent.js";

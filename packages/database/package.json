@@ -31,6 +31,11 @@
       "import": "./dist/utils/channel-visibility.js",
       "default": "./dist/utils/channel-visibility.js"
     },
+    "./grant-read-hook": {
+      "types": "./dist/utils/grant-read-hook.d.ts",
+      "import": "./dist/utils/grant-read-hook.js",
+      "default": "./dist/utils/grant-read-hook.js"
+    },
     "./api-key-revocation": {
       "types": "./dist/utils/api-key-revocation.d.ts",
       "import": "./dist/utils/api-key-revocation.js",

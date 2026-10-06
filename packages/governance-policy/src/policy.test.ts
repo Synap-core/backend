@@ -211,6 +211,61 @@ describe("agentHasCapability", () => {
       false
     );
   });
+
+  // One grammar for keys and agents: the grant editor can limit an agent to
+  // a KIND. Legacy entries keep their meaning; a grant pattern adds only what
+  // it names.
+  it("reads grant-grammar patterns, down to one kind", () => {
+    const only = ["entity.knowledge.create"];
+    expect(
+      agentHasCapability("entity.create", "entity", only, "knowledge")
+    ).toBe(true);
+    expect(agentHasCapability("entity.create", "entity", only, "person")).toBe(
+      false
+    );
+    // Kind unknown → a kind-pinned pattern cannot be satisfied.
+    expect(agentHasCapability("entity.create", "entity", only)).toBe(false);
+    expect(
+      agentHasCapability("entity.update", "entity", only, "knowledge")
+    ).toBe(false);
+    expect(
+      agentHasCapability(
+        "entity.delete",
+        "entity",
+        ["entity.knowledge"],
+        "knowledge"
+      )
+    ).toBe(true);
+    expect(
+      agentHasCapability("document.update", "document", ["document"])
+    ).toBe(true);
+    expect(agentHasCapability("document.update", "document", ["*"])).toBe(true);
+    expect(agentHasCapability("view.create", "view", ["entity"], "x")).toBe(
+      false
+    );
+  });
+
+  it("an unparseable entry never matches by accident", () => {
+    expect(
+      agentHasCapability("entity.create", "entity", ["Entity..create"], "k")
+    ).toBe(false);
+  });
+
+  it("decideAgentPolicy passes the subject's kind to the capability check", () => {
+    const base = {
+      subjectType: "entity",
+      action: "create",
+      agentCapabilities: ["entity.knowledge.create"],
+    } as const;
+    expect(
+      decideAgentPolicy({ ...base, subjectProfileSlug: "person" } as never)
+        .verdict
+    ).toBe("deny");
+    expect(
+      decideAgentPolicy({ ...base, subjectProfileSlug: "knowledge" } as never)
+        .verdict
+    ).not.toBe("deny");
+  });
 });
 
 describe("isBlockedFilesystemPath", () => {

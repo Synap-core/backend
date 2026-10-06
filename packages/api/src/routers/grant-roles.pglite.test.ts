@@ -127,7 +127,9 @@ describe("grantRoles — a person's reusable permission lists", () => {
       name: "Forever reader",
       grant: { permissions: ["entity.*.read"], expiresInDays: null },
     });
-    expect(never.grant.expiresInDays).toBeNull();
+    expect(
+      (never.grant as { expiresInDays?: number | null }).expiresInDays
+    ).toBeNull();
     const none = await roles(ALICE).create({
       name: "No lifetime",
       grant: { permissions: ["document.read"] },

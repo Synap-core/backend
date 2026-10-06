@@ -18,6 +18,8 @@ export interface GrantRole {
   readonly name: string;
   readonly description: string;
   readonly grant: GrantDraft;
+  /** True for a role the person saved (`grantRoles.*`); absent for a preset. */
+  readonly stored?: boolean;
 }
 
 export const GRANT_PRESETS: readonly GrantRole[] = [
@@ -66,11 +68,27 @@ export function applyGrantRole(draft: GrantDraft, role: GrantRole): GrantDraft {
     ...draft,
     permissions: normalizeGrantPermissions(role.grant.permissions),
   };
-  if (role.grant.workspaceIds !== undefined) next.workspaceIds = role.grant.workspaceIds;
-  if (role.grant.projectIds !== undefined) next.projectIds = role.grant.projectIds;
+  if (role.grant.workspaceIds !== undefined)
+    next.workspaceIds = role.grant.workspaceIds;
+  if (role.grant.projectIds !== undefined)
+    next.projectIds = role.grant.projectIds;
   if (role.grant.entityIds !== undefined) next.entityIds = role.grant.entityIds;
-  if (role.grant.expiresInDays !== undefined) next.expiresInDays = role.grant.expiresInDays;
+  if (role.grant.expiresInDays !== undefined)
+    next.expiresInDays = role.grant.expiresInDays;
   return next;
+}
+
+/**
+ * The stored role a mint should record as its lineage (`grant.roleId`): the
+ * person's own role whose permissions the draft still equals. A preset, or a
+ * draft edited away from every role, records none.
+ */
+export function grantRoleLineage(
+  draft: GrantDraft,
+  roles: readonly GrantRole[]
+): string | undefined {
+  const role = matchGrantRole(draft, roles);
+  return role?.stored ? role.id : undefined;
 }
 
 /** The role whose permissions equal the draft's (by value), if any. */
@@ -81,6 +99,8 @@ export function matchGrantRole(
   const mine = normalizeGrantPermissions(draft.permissions);
   return roles.find((r) => {
     const theirs = normalizeGrantPermissions(r.grant.permissions);
-    return theirs.length === mine.length && theirs.every((p, i) => p === mine[i]);
+    return (
+      theirs.length === mine.length && theirs.every((p, i) => p === mine[i])
+    );
   });
 }

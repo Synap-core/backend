@@ -6,6 +6,7 @@ import { governanceCeilings } from "../schema/governance-ceilings.js";
 import { events } from "../schema/events.js";
 import { channels, ChannelType } from "../schema/channels.js";
 import { entities } from "../schema/entities.js";
+import { profiles } from "../schema/profiles.js";
 import {
   decideAgentPolicy,
   governanceLaneFor,
@@ -80,6 +81,12 @@ export interface ResolveAgentGovernanceInput {
   channelCapabilities?: Partial<ChannelCapabilityGrant> | null;
   /** Write subject's profile slug (chat door, governance-by-kind). Automation omits. */
   subjectProfileSlug?: string | null;
+  /**
+   * The entity the write targets, when known. Read ONLY to resolve its kind
+   * for a kind-limited agent capability (`entity.knowledge.update`) when the
+   * payload carried no profile slug.
+   */
+  subjectEntityId?: string | null;
   /** `uo_validated` of a user_observation subject (chat door). Automation omits. */
   subjectUoValidated?: boolean | null;
   /** Force a proposal even on an otherwise auto-approved write (chat door). Automation omits. */
@@ -1070,6 +1077,36 @@ export async function resolvePendingProposalCap(
 }
 
 /**
+ * The subject's kind for a KIND-LIMITED agent capability (`entity.<kind>.*`).
+ * The payload's slug when it carried one; else, only when the agent actually
+ * holds a kind-limited entity capability, the stored kind of the entity the
+ * write targets (the same derivation the key-grant check uses). Otherwise no
+ * read at all — an unrestricted agent pays nothing for this.
+ */
+async function capabilityKind(args: {
+  db: DbHandle;
+  subjectType: string;
+  capabilities: readonly string[] | null | undefined;
+  subjectProfileSlug?: string | null;
+  subjectEntityId?: string | null;
+}): Promise<string | undefined> {
+  if (args.subjectProfileSlug) return args.subjectProfileSlug;
+  if (args.subjectType !== "entity" || !args.subjectEntityId) return undefined;
+  const kindLimited = (args.capabilities ?? []).some((c) => {
+    const segs = c.split(".");
+    return segs[0] === "entity" && segs.length === 3 && segs[1] !== "*";
+  });
+  if (!kindLimited) return undefined;
+  const [row] = await args.db
+    .select({ slug: profiles.slug, type: entities.type })
+    .from(entities)
+    .leftJoin(profiles, eq(entities.profileId, profiles.id))
+    .where(eq(entities.id, args.subjectEntityId))
+    .limit(1);
+  return row?.slug ?? row?.type ?? undefined;
+}
+
+/**
  * Count the acting agent's auto-executed writes so far in the current UTC day —
  * rung 2.56's COUNT half. Uses the partial index `idx_events_ungoverned_agent`
  * (`(agent_user_id, timestamp) WHERE is_agent = true AND proposal_id IS NULL`):
@@ -1193,10 +1230,18 @@ export async function resolveAgentGovernanceDecision(
   // resolves the SAME verdict rung 4 used to for that exact write — the
   // engine's rung 4 (still present, untouched) simply never fires because its
   // input is now always `undefined`, deferring to rung 8's default whitelist.
+  const subjectKind = await capabilityKind({
+    db,
+    subjectType,
+    capabilities: agentMetadata?.capabilities,
+    subjectProfileSlug: input.subjectProfileSlug,
+    subjectEntityId: input.subjectEntityId,
+  });
   const basePolicyInput = {
     subjectType,
     action,
     agentCapabilities: agentMetadata?.capabilities,
+    subjectKind,
     writesRequireProposal: agentMetadata?.writesRequireProposal === true,
     governanceMode: getWorkspaceGovernanceMode(settings),
     isAgentOwnedWorkspace,

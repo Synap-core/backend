@@ -18,13 +18,10 @@
  * no project path) also fails closed.
  */
 
-import {
-  db,
-  getRequestGrant,
-  inArray,
-  or,
-  registerGrantReadProvider,
-} from "@synap/database";
+import { db, getRequestGrant, inArray, or } from "@synap/database";
+// Its own subpath: a test that mocks the `@synap/database` barrel must still
+// load the real hook (a module-load call into a mock export broke 6 suites).
+import { registerGrantReadProvider } from "@synap/database/grant-read-hook";
 import {
   agentConfigs,
   apiKeys,

@@ -435,6 +435,8 @@ export interface GrantMintInput {
     projectIds?: string[];
     entityIds?: string[];
     label?: string;
+    /** The stored role it was built from (lineage) — see `grantRoleLineage`. */
+    roleId?: string;
   };
   /** Omitted → 90 days; null → never. */
   expiresInDays?: number | null;

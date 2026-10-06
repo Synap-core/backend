@@ -81,6 +81,8 @@
 // Constants — the policy values (formerly duplicated in both gates)
 // ---------------------------------------------------------------------------
 
+import { patternMatches } from "./grants.js";
+
 /**
  * Default whitelist: agent actions that bypass proposal review.
  * Workspaces override via `settings.aiGovernance.autoApproveFor`.
@@ -965,18 +967,41 @@ export function isAutoApproved(
 
 /**
  * CBAC: does the agent's capability allowlist permit this event key?
- * Supports exact ("entity.create"), subject wildcard ("entity.*"), and "*.*".
+ *
+ * An allowlist entry is either a legacy key — exact ("entity.create"),
+ * subject wildcard ("entity.*"), "*.*" — or a pattern in the GRANT grammar
+ * (`./grants.ts`): `entity.knowledge.create`, `entity.knowledge`, `entity`,
+ * `*`. One grammar for keys and agents, so the one grant editor can limit an
+ * agent to a kind. Legacy entries keep their exact meaning (they are checked
+ * first); a grant pattern can only add what it says. `kind` is the subject's
+ * profile slug when the write targets an entity; unknown → only kind-agnostic
+ * patterns match.
  */
 export function agentHasCapability(
   eventKey: string,
   subjectType: string,
-  capabilities: readonly string[]
+  capabilities: readonly string[],
+  kind?: string | null
 ): boolean {
-  return (
+  if (
     capabilities.includes(eventKey) ||
     capabilities.includes(`${subjectType}.*`) ||
     capabilities.includes("*.*")
-  );
+  )
+    return true;
+  if (!eventKey.startsWith(`${subjectType}.`)) return false;
+  const req = {
+    subject: subjectType,
+    qualifier: kind ?? null,
+    action: eventKey.slice(subjectType.length + 1),
+  };
+  return capabilities.some((pattern) => {
+    try {
+      return patternMatches(pattern, req);
+    } catch {
+      return false; // not a grant pattern — the legacy check above had its say
+    }
+  });
 }
 
 /** Pure-read actions are exempt from write-governance (capabilities/proposal). */
@@ -1066,6 +1091,13 @@ export interface AgentPolicyInput {
    * the routing workspace. Absent/undefined → rule does not fire.
    */
   subjectProfileSlug?: string | null;
+  /**
+   * The write subject's KIND for the capability check (rung 1) when the gate
+   * payload carried no `subjectProfileSlug` (an update/delete by id): the
+   * resolver reads the stored kind. Never consulted by the by-kind rule, which
+   * keeps reading `subjectProfileSlug` alone.
+   */
+  subjectKind?: string | null;
   /**
    * The `uo_validated` property of a `user_observation` subject. Distinguishes
    * an EXPLICIT observation (user-stated, validated === true → auto-approve)
@@ -1302,7 +1334,12 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   if (
     caps &&
     caps.length > 0 &&
-    !agentHasCapability(eventKey, subjectType, caps)
+    !agentHasCapability(
+      eventKey,
+      subjectType,
+      caps,
+      input.subjectKind ?? input.subjectProfileSlug
+    )
   ) {
     return {
       verdict: "deny",
