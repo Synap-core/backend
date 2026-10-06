@@ -14,13 +14,14 @@ import {
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { integrationKindSchema } from "@synap-core/types";
-import { API_KEY_SCOPES } from "@synap/database/schema";
+import { API_KEY_SCOPES, grants } from "@synap/database/schema";
 import {
   db,
   and,
   eq,
   or,
   inArray,
+  isNull,
   getDb,
   EventRepository,
   ApiKeyRepository,
@@ -135,6 +136,33 @@ export const apiKeysRouter = router({
       orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
     });
 
+    // W1 — the active grant of each key (what it may touch), for the
+    // connections screen. A key with none is a legacy, ungranted key.
+    const activeGrants =
+      keys.length === 0
+        ? []
+        : await db
+            .select({
+              apiKeyId: grants.apiKeyId,
+              permissions: grants.permissions,
+              workspaceIds: grants.workspaceIds,
+              projectIds: grants.projectIds,
+              entityIds: grants.entityIds,
+              label: grants.label,
+              expiresAt: grants.expiresAt,
+            })
+            .from(grants)
+            .where(
+              and(
+                inArray(
+                  grants.apiKeyId,
+                  keys.map((k) => k.id)
+                ),
+                isNull(grants.revokedAt)
+              )
+            );
+    const grantByKey = new Map(activeGrants.map((g) => [g.apiKeyId, g]));
+
     // Remove sensitive fields (keyHash)
     return keys.map((key) => ({
       id: key.id,
@@ -145,6 +173,13 @@ export const apiKeysRouter = router({
       linkedUserId: key.linkedUserId,
       /** True when an agent acting for you holds this key, not you. */
       heldByAgent: key.userId !== ctx.userId,
+      /** What this key may touch (W1); null = a legacy, ungranted key. */
+      grant: (() => {
+        const g = grantByKey.get(key.id);
+        if (!g) return null;
+        const { apiKeyId: _k, ...rest } = g;
+        return rest;
+      })(),
       scope: key.scope,
       isActive: key.isActive,
       expiresAt: key.expiresAt,

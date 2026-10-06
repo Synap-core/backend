@@ -20916,6 +20916,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				hubId: string | null;
 				linkedUserId: string | null;
 				heldByAgent: boolean;
+				grant: {
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					expiresAt: Date | null;
+				} | null;
 				scope: string[];
 				isActive: boolean;
 				expiresAt: Date | null;
@@ -20956,8 +20964,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				keyName: string;
 				scope: string[];
 				hubId?: string | undefined;
-				expiresInDays?: number | undefined;
+				expiresInDays?: number | null | undefined;
 				workspaceId?: string | undefined;
+				grant?: {
+					permissions: string[];
+					workspaceIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+				} | undefined;
 			};
 			output: {
 				id: `${string}-${string}-${string}-${string}-${string}`;

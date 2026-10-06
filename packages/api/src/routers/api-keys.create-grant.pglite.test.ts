@@ -191,3 +191,23 @@ describe("key lifetime — 90 days by default, custom, or never", () => {
     expect((await keyRow(res.id)).expires_at).toBeNull();
   });
 });
+
+describe("apiKeys.list shows each key's grant (/my-connections)", () => {
+  it("returns the active grant, and null for an ungranted key", async () => {
+    const granted = await caller().create({
+      keyName: "Card site",
+      scope: ["hub-protocol.read"],
+      grant: { permissions: ["entity.person.read"], label: "Card site" },
+    });
+    const plain = await caller().create({
+      keyName: "plain",
+      scope: ["hub-protocol.read"],
+    });
+    const keys = await caller().list();
+    expect(keys.find((k) => k.id === granted.id)?.grant).toMatchObject({
+      permissions: ["entity.person.read"],
+      label: "Card site",
+    });
+    expect(keys.find((k) => k.id === plain.id)?.grant).toBeNull();
+  });
+});
