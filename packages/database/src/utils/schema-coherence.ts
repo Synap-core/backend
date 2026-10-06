@@ -890,6 +890,19 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0294_account_recovery_codes.sql",
   },
 
+  // grants — what one credential may touch (0305, W1). Absence means a pod is
+  // on a pre-0305 schema where key identity would fail to load a grant.
+  {
+    table: "grants",
+    column: "permissions",
+    addedBy: "0305_grants.sql",
+  },
+  {
+    table: "grants",
+    column: "api_key_id",
+    addedBy: "0305_grants.sql",
+  },
+
   // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
   // is on a pre-0206 schema where apiKeys.beginMcpConnect / POST /api/hub/mcp/redeem
   // would reference a missing table.

@@ -4827,3 +4827,25 @@ CREATE TABLE IF NOT EXISTS "backup_runs" (
 );
 CREATE INDEX IF NOT EXISTS "idx_backup_runs_kind_finished_at"
   ON "backup_runs" ("kind", "finished_at" DESC);
+
+-- Grants (0305): what ONE credential may touch (W1). The key stays the bearer;
+-- a grant bounds it. NULL id sets = no narrowing; NULL expires_at = never.
+CREATE TABLE IF NOT EXISTS "grants" (
+  "id"                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "api_key_id"        uuid        NOT NULL REFERENCES "api_keys"("id") ON DELETE CASCADE,
+  "principal_user_id" text        NOT NULL,
+  "on_behalf_of"      text        NOT NULL,
+  "permissions"       text[]      NOT NULL DEFAULT '{}'::text[],
+  "workspace_ids"     uuid[],
+  "project_ids"       uuid[],
+  "entity_ids"        uuid[],
+  "expires_at"        timestamptz,
+  "label"             text,
+  "client_id"         text,
+  "created_by"        text        NOT NULL,
+  "created_at"        timestamptz NOT NULL DEFAULT now(),
+  "revoked_at"        timestamptz,
+  "revoked_by"        text
+);
+CREATE INDEX IF NOT EXISTS "grants_api_key_idx" ON "grants" ("api_key_id");
+CREATE INDEX IF NOT EXISTS "grants_on_behalf_of_idx" ON "grants" ("on_behalf_of");
