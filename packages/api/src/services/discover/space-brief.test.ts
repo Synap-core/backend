@@ -231,6 +231,38 @@ describe("buildSpaceBrief", () => {
     expect(brief.more).toMatch(/list_playbooks/);
   });
 
+  it("carries the space's declared SKILLS, value for value", async () => {
+    // The built brief is what MCP `set_workspace_focus` and the CLI's `orient`
+    // hand a reader, so this is the door-level assertion for space-linked
+    // skills: the declaration must arrive, not merely be typed.
+    const brief = await build({
+      ...brandLibrary,
+      settings: {
+        onboarding: {
+          ...brandLibrary.settings.onboarding,
+          skills: [
+            {
+              slug: "system/synap/creative-director",
+              mode: "always",
+              when: "any content ask",
+            },
+          ],
+        },
+      },
+    });
+    expect(brief.skills).toEqual([
+      {
+        slug: "system/synap/creative-director",
+        mode: "always",
+        when: "any content ask",
+      },
+    ]);
+  });
+
+  it("a space that declares no skills exposes none", async () => {
+    expect((await build()).skills).toBeUndefined();
+  });
+
   it("purpose falls back to the onboarding goal when no description is authored", async () => {
     const brief = await build({ ...brandLibrary, description: null });
     expect(brief.purpose).toBe("Capture the brand's expressive DNA.");
