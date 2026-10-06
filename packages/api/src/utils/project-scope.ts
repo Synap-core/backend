@@ -42,6 +42,7 @@
  * legacy anchor twin entity. Any other role keeps today's semantics.
  */
 
+import { grantReadPredicate } from "../access/grant-read.js";
 import { and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
 import { not, sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -709,5 +710,18 @@ export function accessScopeWhere(args: {
       })
     : undefined;
 
-  return and(floor, workspaceNarrow, projectNarrow, sessionDocNarrow)!;
+  // W1 — the calling key's grant, for the table this predicate scopes (found
+  // from its id column). Narrow-only: grant ∩ floor. The same clause scopedDb
+  // applies, so a door that reads through this seam directly is bounded too.
+  const grantNarrow = grantReadPredicate(
+    (entityIdColumn as unknown as { table: object }).table
+  );
+
+  return and(
+    floor,
+    workspaceNarrow,
+    projectNarrow,
+    sessionDocNarrow,
+    grantNarrow
+  )!;
 }

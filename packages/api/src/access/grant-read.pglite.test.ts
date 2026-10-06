@@ -40,6 +40,7 @@ import { documents, entities } from "@synap/database/schema";
 import { runWithGrant } from "@synap/database";
 import type { GrantScope } from "@synap/governance-policy/grants";
 import { AccessContext, scopedDb } from "./index.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
 
 const ALICE = "alice-grant";
 const WA = randomUUID();
@@ -149,5 +150,44 @@ describe("scopedDb honours the key's grant (W1e)", () => {
     expect(await read(entities, { permissions: ["*"] })).toEqual(
       [K_A, K_B, T_A].sort()
     );
+  });
+});
+
+describe("the DATA-table seam (accessScopeWhere) honours the grant too", () => {
+  // Doors such as the entities router read through this seam directly, not
+  // through scopedDb — the clause must land here as well.
+  const seamRead = async (grant?: GrantScope) => {
+    const run = () =>
+      (
+        h.db as {
+          select: (c: object) => {
+            from: (t: object) => {
+              where: (w: unknown) => Promise<{ id: string }[]>;
+            };
+          };
+        }
+      )
+        .select({ id: entities.id })
+        .from(entities)
+        .where(
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId: ALICE,
+          })
+        );
+    const rows = grant ? await runWithGrant(grant, run) : await run();
+    return rows.map((r) => r.id).sort();
+  };
+
+  it("CONTROL — no grant: every row", async () => {
+    expect(await seamRead()).toEqual([K_A, K_B, T_A].sort());
+  });
+
+  it("a kind grant narrows the seam", async () => {
+    expect(await seamRead({ permissions: ["entity.task.read"] })).toEqual([
+      T_A,
+    ]);
   });
 });
