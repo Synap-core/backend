@@ -107,7 +107,7 @@ describe("placeSignal — the approved Proposed definition", () => {
         id: "c",
         kind: "notification",
         category: "system",
-        notificationType: "system.intelligence_degraded",
+        notificationType: "pod.storage_warning",
       }),
       sig({
         id: "e",
@@ -121,6 +121,17 @@ describe("placeSignal — the approved Proposed definition", () => {
     expect(p.blocking.map((s) => s.id)).toEqual(["a", "e", "d"]);
     expect(p.proposed.map((s) => s.id)).toEqual(["b"]);
     expect(p.banners.map((s) => s.id)).toEqual(["c"]);
+  });
+  it("system.intelligence_degraded is NOT a user status banner (operator-only, P4)", () => {
+    // It used to be the canonical banner example. It is now an operator
+    // notice (registry `informational`): the server never puts it on the
+    // needs-you lens, and the client list no longer names it.
+    expect(
+      STATUS_BANNER_NOTIFICATION_TYPES.has("system.intelligence_degraded")
+    ).toBe(false);
+    expect(STATUS_BANNER_NOTIFICATION_TYPES.has("pod.storage_warning")).toBe(
+      true
+    );
   });
 });
 
@@ -729,6 +740,7 @@ describe("lensStatusBanner — ONE, deduplicated", () => {
       title: "Pod unreachable",
       more: 1,
       target: null,
+      action: null,
       notificationIds: [],
     });
     expect(lensStatusBanner([])).toBeNull();

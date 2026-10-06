@@ -293,41 +293,44 @@ describe("signals.list — page lens reports failed halves per class", () => {
     const at = (m: number) => new Date(Date.UTC(2026, 9, 4, 10, m));
     const health = (id: string, m: number, title: string) => ({
       id,
-      type: "system.intelligence_degraded",
+      type: "pod.storage_warning",
       category: "system",
       title,
       sourceType: "system",
       sourceId: null,
       createdAt: at(m),
     });
+    // Storage is the health example: `system.intelligence_degraded` is an
+    // operator notice since P4 (registry `informational`) — the "op" row below
+    // must reach NEITHER the banner NOR Blocking.
     notifListSpy.mockResolvedValue({
       notifications: [
-        health("h1", 1, "Intelligence Hub is degraded"),
-        health("h2", 3, "Intelligence Hub is degraded"),
-        health("h3", 2, "Intelligence Hub is degraded"),
+        health("h1", 1, "Storage at 91% capacity"),
+        health("h2", 3, "Storage at 93% capacity"),
+        health("h3", 2, "Storage at 92% capacity"),
         {
-          id: "st",
-          type: "pod.storage_warning",
+          id: "op",
+          type: "system.intelligence_degraded",
           category: "system",
-          title: "Storage at 91% capacity",
+          title: "Operator check: AI service degraded",
           sourceType: "system",
           sourceId: null,
-          createdAt: at(0),
+          createdAt: at(5),
         },
       ],
     });
     const { page } = await caller().list({ lens: "page" });
     expect(page!.status).toMatchObject({
-      title: "Intelligence Hub is degraded",
+      title: "Storage at 93% capacity",
       issues: [
         {
-          type: "system.intelligence_degraded",
+          type: "pod.storage_warning",
           repeatCount: 3,
           notificationIds: ["h1", "h2", "h3"],
         },
-        { type: "pod.storage_warning", repeatCount: 1 },
       ],
     });
+    expect(page!.status!.issues).toHaveLength(1);
     expect(page!.blocking.total).toBe(0);
     expect(page!.blocking.rows).toEqual([]);
   });

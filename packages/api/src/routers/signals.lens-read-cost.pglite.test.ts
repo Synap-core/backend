@@ -267,11 +267,11 @@ beforeAll(async () => {
     240
   );
   await notify(
-    "system.intelligence_degraded",
+    "pod.storage_warning",
     "system",
     "system",
     null,
-    "Intelligence Hub is degraded",
+    "Storage at 91% capacity",
     250
   );
   for (let i = 0; i < 120; i++) {
@@ -422,14 +422,15 @@ describe("F7 — health at a narrow scope", () => {
     const status = [...NOTIFICATION_REGISTRY_MAP.values()].filter(
       (d) => d.needsYou === "status"
     );
-    expect(status.length).toBeGreaterThanOrEqual(2);
+    // One since P4 (`system.intelligence_degraded` became operator-only).
+    expect(status.length).toBeGreaterThanOrEqual(1);
     for (const d of status) expect(d.category).toBe("system");
   });
 
   it("the banner reaches a project page even when the health row is older than the pod's newest 100", async () => {
     const p = await page({ projectId: PN });
     expect(p.status?.issues.map((i) => i.type)).toEqual([
-      "system.intelligence_degraded",
+      "pod.storage_warning",
     ]);
     expect(p.statusUnreadable).toBe(false);
   });

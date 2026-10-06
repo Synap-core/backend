@@ -220,6 +220,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // was approved once, so "Approve" is the wrong word on that button — and for a
   // transient provider outage it is the reviewer's ONLY recovery.
   retry: { imperative: "Retry", past: "Retried" },
+  // AI availability CTAs (`@synap-core/types/ai-availability`) — the CP's
+  // `PodBillingAction` vocabulary. `ask_admin` is the member's verb whenever
+  // they cannot pay; `upgrade` also covers renewing a plan that has no AI.
+  top_up: { imperative: "Top up", past: "Topped up" },
+  upgrade: { imperative: "Upgrade", past: "Upgraded" },
+  ask_admin: { imperative: "Ask admin", past: "Asked admin" },
+  fix_payment: { imperative: "Fix payment", past: "Fixed payment" },
   // Put a REJECTED proposal back in the queue — the inverse of reject. Without
   // a row `resolveActionLabel("reopen", …)` fell through to `humanizeToken`,
   // which has no tense and only spelled "Reopen" by luck.
@@ -850,6 +857,15 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   shared: "Shared",
   link: "Shared by link",
   public: "Public",
+  // AI AVAILABILITY (`AiAvailabilityKind`, `@synap-core/types/ai-availability`)
+  // — the short state chip. Headlines and CTAs live in that module's copy deck.
+  credits_low: "Low credits",
+  credits_empty: "Out of credits",
+  not_entitled: "No AI plan",
+  suspended: "Suspended",
+  budget_paused: "Paused",
+  provider_issue: "AI issue",
+  service_down: "AI offline",
 };
 
 /**

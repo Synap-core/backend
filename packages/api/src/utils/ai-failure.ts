@@ -82,27 +82,13 @@ export type AiFailureClass =
  * are additions beyond the first six agreed with the app side; they are the
  * remaining classes this module can prove, and collapsing them into `unknown`
  * would throw away evidence we hold.
+ *
+ * The union itself lives in `@synap-core/types/ai-availability`
+ * (`AI_FAILURE_CODES`), where the UI availability model classifies every code
+ * at compile time — add a code THERE, and the build makes you classify it.
  */
-export type AiFailureCode =
-  | "provider_no_credit"
-  | "quota_exhausted"
-  | "account_quota_exceeded"
-  | "not_entitled"
-  | "credits_empty"
-  | "access_suspended"
-  | "account_inactive"
-  | "llm_budget_exceeded"
-  | "context_length_exceeded"
-  | "content_filter"
-  | "cancelled"
-  | "provider_auth"
-  | "rate_limited"
-  | "timeout"
-  | "circuit_open"
-  | "upstream_error"
-  | "bad_request"
-  | "invalid_response"
-  | "unknown";
+export type { AiFailureCode } from "@synap-core/types/ai-availability";
+import type { AiFailureCode } from "@synap-core/types/ai-availability";
 
 export interface AiFailureDescription {
   readonly class: AiFailureClass;

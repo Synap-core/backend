@@ -35,6 +35,8 @@ import { resolveActionLabel, resolveStatusLabel } from "../vocabulary/index.js";
 import { LENS_SECTION_LABELS } from "./classes.js";
 import type { LensDoor, LensRow, LensVerb } from "./rows.js";
 import type { LensScopeKind } from "./scope.js";
+// The CP / IS action vocabulary — the same `AiAction` `ai-availability` re-exports.
+import type { IsFailureAction as AiAction } from "../hub-protocol/index.js";
 
 export interface LensCounts {
   blocking: number | null;
@@ -382,7 +384,25 @@ export function lensHeaderModel<
 
 // ── The ONE status banner ───────────────────────────────────────────────────
 
-export type LensBannerTone = "error" | "info";
+/** Worst first: `error` (blocked) › `warning` (heads-up, e.g. low credits) › `info` (an operator condition). */
+export type LensBannerTone = "error" | "warning" | "info";
+
+const BANNER_TONE_RANK: { readonly [T in LensBannerTone]: number } = {
+  error: 0,
+  warning: 1,
+  info: 2,
+};
+
+/**
+ * The banner's ONE CTA (an AI availability state's `action`,
+ * `@synap-core/types/ai-availability`). Absent ⇒ no CTA — operator states
+ * never carry one.
+ */
+export interface LensBannerAction {
+  kind: AiAction;
+  /** Imperative-mood label (`resolveActionLabel(kind)`). */
+  label: string;
+}
 
 export interface LensBannerInput {
   /** Dedup key — the failing service / condition, not the notification id. */
@@ -394,6 +414,8 @@ export interface LensBannerInput {
   target?: LensDoor | null;
   /** The notifications behind it — dismissing the banner marks them read. */
   notificationIds?: readonly string[];
+  /** The banner's one CTA, when the condition has one. */
+  action?: LensBannerAction | null;
 }
 
 export interface LensBanner {
@@ -406,11 +428,13 @@ export interface LensBanner {
   target: LensDoor | null;
   /** EVERY folded condition's notifications: one dismiss clears the banner. */
   notificationIds: string[];
+  /** The lead condition's CTA; absent / null ⇒ no CTA. Optional so a host-built banner literal stays valid. */
+  action?: LensBannerAction | null;
 }
 
 /**
  * System health is ONE banner, never Needs-you rows: dedupe by `key`, lead
- * with the worst tone (error over info), newest first within a tone. Null
+ * with the worst tone (error › warning › info), newest first within a tone. Null
  * when nothing is wrong.
  */
 export function lensStatusBanner(
@@ -426,7 +450,8 @@ export function lensStatusBanner(
     if (!prev || time(b) > time(prev)) byKey.set(b.key, b);
   }
   const all = [...byKey.values()].sort((a, b) => {
-    if (a.tone !== b.tone) return a.tone === "error" ? -1 : 1;
+    if (a.tone !== b.tone)
+      return BANNER_TONE_RANK[a.tone] - BANNER_TONE_RANK[b.tone];
     return time(b) - time(a);
   });
   const lead = all[0];
@@ -437,6 +462,7 @@ export function lensStatusBanner(
     title: lead.title,
     more: all.length - 1,
     target: lead.target ?? null,
+    action: lead.action ?? null,
     notificationIds: [
       ...new Set(inputs.flatMap((b) => [...(b.notificationIds ?? [])])),
     ],

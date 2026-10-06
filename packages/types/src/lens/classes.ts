@@ -140,7 +140,9 @@ export interface PlaceableSignal {
  */
 export const STATUS_BANNER_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   "pod.storage_warning",
-  "system.intelligence_degraded",
+  // NOT `system.intelligence_degraded` (P4, 2026-10-06): that is an operator
+  // notice now (registry role `informational`, owner + Discord only). What a
+  // user sees about AI is `@synap-core/types/ai-availability`'s banner.
 ]);
 
 /**

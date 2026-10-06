@@ -151,6 +151,7 @@ describe("lensBannerOfStatus — ONE banner", () => {
       title: "Hub degraded (newer)",
       more: 1,
       target: null,
+      action: null,
       notificationIds: [],
     });
   });

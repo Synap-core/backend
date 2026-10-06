@@ -260,20 +260,30 @@ beforeAll(async () => {
   );
   // System health, twice (status banner, never Blocking).
   await notify(
-    "system.intelligence_degraded",
+    "pod.storage_warning",
     "system",
     "system",
     null,
-    "Intelligence Hub is degraded",
+    "Storage at 91% capacity",
     5
   );
+  await notify(
+    "pod.storage_warning",
+    "system",
+    "system",
+    null,
+    "Storage at 91% capacity",
+    3
+  );
+  // An OPERATOR notice (P4: registry `informational`) — newest of all, and
+  // still in neither the banner nor Blocking.
   await notify(
     "system.intelligence_degraded",
     "system",
     "system",
     null,
-    "Intelligence Hub is degraded",
-    3
+    "Operator check: AI service degraded",
+    1
   );
   // s2 has an IS turn running right now.
   await q(
@@ -403,9 +413,10 @@ describe("the needs-you duplicate causes", () => {
   it("system health is ONE banner, folded, and never a Blocking row", async () => {
     const p = await page({});
     expect(p.status).toMatchObject({
-      title: "Intelligence Hub is degraded",
-      issues: [{ type: "system.intelligence_degraded", repeatCount: 2 }],
+      title: "Storage at 91% capacity",
+      issues: [{ type: "pod.storage_warning", repeatCount: 2 }],
     });
+    expect(p.status?.issues).toHaveLength(1);
     expect(p.statusUnreadable).toBe(false);
     expect(p.blocking.rows.some((r) => r.category === "system")).toBe(false);
     // The banner travels to every scope — health is the pod's, not a container's.

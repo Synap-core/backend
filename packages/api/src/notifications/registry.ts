@@ -818,16 +818,26 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     // `connector.auth.expired` — that template asserts an expired credential,
     // and an IS outage is usually something else entirely. The body carries
     // the health endpoint's own detail rather than a guessed cause.
+    //
+    // OPERATOR-ONLY (P4, founder 2026-10-06). Its one producer
+    // (`notify-service-unhealthy.ts`) sends it to the pod OWNER — the pod's
+    // admin — plus the operator's Discord notice channel; no other member
+    // receives it. It is `informational`, not `status`: it stays in that
+    // admin's bell and never becomes the lens STATUS BANNER, because what
+    // users see about AI is the ONE availability model
+    // (`@synap-core/types/ai-availability`: a calm "AI is offline" with no
+    // CTA), not this operator diagnosis. The title never names the internal
+    // service ("Intelligence Hub is degraded").
     type: "system.intelligence_degraded",
     category: "system",
     label: "AI Service Degraded",
     icon: "brain-circuit",
     priority: "high",
-    titleTemplate: "{{connectorName}} is {{healthStatus}}",
+    titleTemplate: "Operator check: AI service {{healthStatus}}",
     bodyTemplate: "{{errorMessage}}",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
-    needsYou: "status",
+    needsYou: "informational",
   },
   {
     type: "system.issuer_pending_approval",

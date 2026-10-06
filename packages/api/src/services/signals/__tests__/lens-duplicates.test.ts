@@ -160,10 +160,13 @@ describe("cause 1 — a resolved container puts the notification in its session'
 });
 
 describe("system health — ONE banner, never needs-you", () => {
+  // The health example used to be `system.intelligence_degraded`; that is an
+  // operator notice now (P4, registry `informational`), so the remaining
+  // status type carries the folding contract.
   const degraded = (id: string, m: number, sourceId: string | null = null) =>
     n(id, {
-      type: "system.intelligence_degraded",
-      title: `Hub degraded (${m})`,
+      type: "pod.storage_warning",
+      title: `Storage warning (${m})`,
       category: "system",
       sourceType: "system",
       sourceId,
@@ -177,10 +180,10 @@ describe("system health — ONE banner, never needs-you", () => {
       degraded("c", 2),
     ]);
     expect(b).toMatchObject({
-      title: "Hub degraded (4)",
+      title: "Storage warning (4)",
       issues: [{ repeatCount: 3, notificationIds: ["a", "b", "c"] }],
     });
-    // Two DIFFERENT services degraded are two issues in one banner.
+    // Two DIFFERENT sources are two issues in one banner.
     expect(
       statusBanner([degraded("a", 1, "is-1"), degraded("b", 2, "is-2")])!.issues
     ).toHaveLength(2);
@@ -198,6 +201,34 @@ describe("system health — ONE banner, never needs-you", () => {
         clustersTruncated: false,
         clusters: [],
         notifications: rows,
+        notificationsTruncated: false,
+        owedSlots: [],
+        owedTruncated: false,
+      }).needsYou
+    ).toBe(0);
+  });
+
+  it("an AI-service degraded row is OPERATOR-only: no banner, no needs-you row, no count (P4)", () => {
+    const op = [
+      n("o1", {
+        type: "system.intelligence_degraded",
+        title: "Operator check: AI service degraded",
+        category: "system",
+        sourceType: "system",
+        sourceId: null,
+        createdAt: at(1),
+      }),
+    ];
+    expect(statusBanner(op)).toBeNull();
+    expect(
+      unionNeedsYou({ clusters: [], notifications: op, owedSlots: [] })
+    ).toEqual([]);
+    expect(
+      countNeedsYou({
+        distinctClusters: 0,
+        clustersTruncated: false,
+        clusters: [],
+        notifications: op,
         notificationsTruncated: false,
         owedSlots: [],
         owedTruncated: false,

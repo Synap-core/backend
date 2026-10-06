@@ -113,4 +113,14 @@ describe("intelligence health nudge", () => {
     expect(def).toBeDefined();
     expect(def!.bodyTemplate).toContain("{{errorMessage}}");
   });
+
+  it("is an OPERATOR notice: not the user status banner, never naming the internal service (P4)", () => {
+    const def = NOTIFICATION_REGISTRY_MAP.get("system.intelligence_degraded")!;
+    // `informational` = it stays in the pod admin's bell; the user-facing AI
+    // state is `@synap-core/types/ai-availability`, not this row.
+    expect(def.needsYou).toBe("informational");
+    expect(def.titleTemplate).not.toMatch(
+      /\{\{connectorName\}\}|Intelligence Hub/
+    );
+  });
 });
