@@ -39,6 +39,7 @@ import {
 } from "../(admin)/trust-keys/_lib/api-keys-section";
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
 import { summarizeGrant } from "@synap-core/types/grants";
+import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import {
   appMode,
   appReach,
@@ -297,7 +298,7 @@ export default function MyConnectionsPage() {
     <div className="mx-auto max-w-[900px] px-6 py-10">
       <header className="mb-6 max-w-2xl">
         <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Apps &amp; access
+          Connected
         </h1>
         <p className="mt-1 text-[13px] leading-5 text-foreground/60">
           Every app you own and every key you&apos;ve minted for this Pod — with
@@ -308,7 +309,7 @@ export default function MyConnectionsPage() {
       <section className="mb-9 space-y-3" aria-labelledby="apps">
         <div className="flex items-center justify-between gap-3">
           <h2 id="apps" className="text-sm font-medium text-foreground">
-            Apps
+            {resolveObjectNounPlural("application")}
           </h2>
           {apps ? (
             <span className="text-xs text-foreground/50">
@@ -433,7 +434,7 @@ export default function MyConnectionsPage() {
           </>
         }
         confirmLabel="Revoke key"
-        /* Scoped to THIS key — see connections/page.tsx for the cross-row
+        /* Scoped to THIS key — see origins/page.tsx for the cross-row
            staleness this prevents. */
         isPending={
           revoke.isPending && revoke.variables?.keyId === pendingRevoke?.id

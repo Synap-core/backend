@@ -26,7 +26,7 @@ const TABS: Tab[] = [
   { href: "/workspaces", label: "Workspaces" },
   { href: "/people", label: "People" },
   { href: "/entities", label: "Entities" },
-  { href: "/connections", label: "Apps & Connections" },
+  { href: "/origins", label: "App origins" },
   { href: "/trust-keys", label: "Trust & Keys" },
   { href: "/connectors", label: "Connectors" },
   { href: "/marketplace", label: "Marketplace" },

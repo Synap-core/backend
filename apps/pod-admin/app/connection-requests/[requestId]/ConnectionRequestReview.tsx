@@ -68,7 +68,7 @@ export function ConnectionRequestReview({
   }, []);
 
   function closeReview() {
-    router.push("/connections");
+    router.push("/origins");
   }
 
   const approve = trpc.applicationConnections.approveRequest.useMutation({
@@ -94,9 +94,9 @@ export function ConnectionRequestReview({
       if (isRequesterBrowser) {
         window.setTimeout(() => window.location.assign(data.returnUrl), 900);
       } else if (!isRequesterBrowser) {
-        // Owner reviewing from Apps & Connections: return to the inventory
+        // Owner reviewing from App origins: return to the inventory
         // after a short success beat so the page does not feel stuck.
-        window.setTimeout(() => router.push("/connections"), 1_200);
+        window.setTimeout(() => router.push("/origins"), 1_200);
       }
     },
     onError: (error) => {
@@ -117,7 +117,7 @@ export function ConnectionRequestReview({
         }),
         utils.applicationConnections.list.invalidate(),
       ]);
-      window.setTimeout(() => router.push("/connections"), 900);
+      window.setTimeout(() => router.push("/origins"), 900);
     },
     onError: (error) => {
       if (redirectToLoginIfUnauthorized(error)) return;
@@ -152,7 +152,7 @@ export function ConnectionRequestReview({
           </Alert>
           <div className="flex justify-end">
             <Button variant="flat" className="min-h-11" onPress={closeReview}>
-              Back to Apps &amp; Connections
+              Back to App origins
             </Button>
           </div>
         </CardBody>
@@ -318,13 +318,13 @@ export function ConnectionRequestReview({
           <Alert color="success" title="Connection approved" role="status">
             {autoReturning
               ? "Returning to the requesting app now so it can finish the connection."
-              : "Approved. Returning to Apps & Connections. The requester’s browser can finish with Check connection."}
+              : "Approved. Returning to App origins. The requester’s browser can finish with Check connection."}
           </Alert>
         ) : null}
 
         {declined ? (
           <Alert color="default" title="Request declined" role="status">
-            Returning to Apps &amp; Connections.
+            Returning to App origins.
           </Alert>
         ) : null}
 
