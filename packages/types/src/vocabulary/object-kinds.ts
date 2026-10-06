@@ -58,6 +58,7 @@ export type ObjectCategory =
   | "capability"
   | "command"
   | "tool"
+  | "application"
   | "agent"
   | "proposal"
   | "notification"
@@ -419,6 +420,17 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     color: ID(12),
     label: "Tool",
     labelPlural: "Tools",
+  },
+  // An Application (App Connect v1) — an app that REACHES the pod with a grant.
+  // NOT `category: "tool"`: a tool is what the pod USES (outbound); an
+  // application is what USES the pod (inbound). The user word is "App".
+  application: {
+    kind: "application",
+    category: "application",
+    icon: "SquareCode",
+    color: ID(11),
+    label: "App",
+    labelPlural: "Apps",
   },
 
   // ── Graph-only kinds ──

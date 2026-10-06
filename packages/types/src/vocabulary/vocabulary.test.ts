@@ -295,6 +295,17 @@ describe("resolveObjectNoun", () => {
     expect(resolveObjectNoun("env_variable")).toBe("Environment variable");
   });
 
+  it("names an Application 'App' — distinct from a Tool", () => {
+    // App Connect v1: an application is what USES the pod (inbound); a tool is
+    // what the pod USES (outbound). They must never collapse to one word.
+    expect(resolveObjectNoun("application")).toBe("App");
+    expect(resolveObjectNounPlural("application")).toBe("Apps");
+    expect(resolveObjectNoun("tool")).toBe("Tool");
+    expect(resolveObjectNoun("application")).not.toBe(
+      resolveObjectNoun("tool")
+    );
+  });
+
   it("re-checks OBJECT_NOUNS after aliasing, not just the raw key", () => {
     // The bug: `apikey` aliases to the canonical `api_key`, but the registry
     // has no `api_key` KIND (only OBJECT_NOUNS does) — so the resolver fell
