@@ -80,10 +80,12 @@ function keyRecord(over: Record<string, unknown> = {}) {
   };
 }
 
+// A seamed read path (`/entities/:id`), so a scoped key passes the W1 door
+// fence and the facts it entered can be observed downstream.
 async function factsSeenDownstream() {
   const app = new Hono();
   app.use("/api/hub/*", hubAuthMiddleware as never);
-  app.get("/api/hub/facts", async (c) => {
+  app.get("/api/hub/entities/facts", async (c) => {
     await new Promise((r) => setTimeout(r, 1));
     return c.json({
       actingAgent: getActingAgentUserId() ?? null,
@@ -91,7 +93,7 @@ async function factsSeenDownstream() {
       grant: getRequestGrant() ?? null,
     });
   });
-  const res = await app.request("/api/hub/facts", {
+  const res = await app.request("/api/hub/entities/facts", {
     headers: { authorization: "Bearer synap_test" },
   });
   return (await res.json()) as {
@@ -188,5 +190,32 @@ describe("hub auth door enters the request write facts", () => {
     expect((await factsSeenDownstream()).grant).toMatchObject({
       permissions: [],
     });
+  });
+
+  it("the fence refuses a scoped key on an unseamed read, admits a seamed one (W1)", async () => {
+    findFirstUser.mockResolvedValue({ userType: "agent" });
+    getApiKeyStatus.mockResolvedValue({ status: "valid", record: keyRecord() });
+    grantRows = [
+      {
+        id: "g1",
+        permissions: ["entity.read"],
+        workspaceIds: null,
+        projectIds: null,
+        entityIds: null,
+        expiresAt: null,
+        revokedAt: null,
+      },
+    ];
+    const app = new Hono();
+    app.use("/api/hub/*", hubAuthMiddleware as never);
+    app.get("/api/hub/*", (c) => c.json({ ok: true }));
+    const status = async (path: string) =>
+      (
+        await app.request(path, {
+          headers: { authorization: "Bearer synap_test" },
+        })
+      ).status;
+    expect(await status("/api/hub/search")).toBe(403);
+    expect(await status("/api/hub/entities/abc")).toBe(200);
   });
 });

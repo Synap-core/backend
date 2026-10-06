@@ -29,6 +29,11 @@
  * any other Hub Protocol caller.
  */
 
+import {
+  GRANT_DOOR_UNSUPPORTED,
+  isFencedGrant,
+  mcpToolAllowed,
+} from "../../access/grant-door-fence.js";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -536,6 +541,24 @@ mcpHttpApp.post("/", async (c) => {
       requestId,
       "This key is not an agent key. Run `synap init` to provision one."
     );
+  }
+
+  // ── 2c. W1 fence: a scoped key may only call READ tools whose reads are
+  // bounded by its grant (access/grant-door-fence.ts). Write tools pass to the
+  // gate. Unknown tool names fall through to the SDK's own error.
+  if (
+    isFencedGrant(grant) &&
+    (parsedBody as { method?: string } | null)?.method === "tools/call"
+  ) {
+    const toolName = (parsedBody as { params?: { name?: string } }).params
+      ?.name;
+    const tool = (await tools.list()).find((t) => t.name === toolName);
+    if (tool && !mcpToolAllowed(tool.name, tool.annotations?.readOnlyHint)) {
+      return jsonRpcForbidden(
+        (parsedBody as { id?: unknown } | null)?.id ?? null,
+        GRANT_DOOR_UNSUPPORTED
+      );
+    }
   }
 
   // Optional scoping from the URL: ?workspaceId= (workspace lens) and

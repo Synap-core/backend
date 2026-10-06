@@ -13,6 +13,11 @@
  * Skip auth for endpoints listed in skipAuthPaths.
  */
 
+import {
+  GRANT_DOOR_UNSUPPORTED,
+  isFencedGrant,
+  restDoorAllowed,
+} from "../../../access/grant-door-fence.js";
 import type { Context, Next } from "hono";
 import { createLogger } from "@synap-core/core";
 import {
@@ -383,6 +388,17 @@ export const hubAuthMiddleware = async (
     // (read AFTER every remap above set it). A plain human key enters no scope.
     // C1: the calling client, so an agent write without `X-Session-Id` groups
     // into THIS client's session (never the IS's shared key — see the helper).
+    // W1 fence: a scoped key may only READ through doors whose reads are
+    // bounded by its grant (access/grant-door-fence.ts). Fail closed.
+    if (isFencedGrant(keyIdentity.grant)) {
+      const rel = c.req.path.replace(/^\/api\/hub(?=\/)/, "");
+      if (!restDoorAllowed(c.req.method, rel)) {
+        return c.json(
+          { error: GRANT_DOOR_UNSUPPORTED, code: "GRANT_DOOR_UNSUPPORTED" },
+          403
+        );
+      }
+    }
     // W1: the key's grant bounds every write gate and scoped read below.
     return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
       runWithActingAgent(c.get("agentUserId") as string | undefined, () =>

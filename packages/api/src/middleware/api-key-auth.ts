@@ -4,6 +4,11 @@
  * Validates API keys and adds authentication context to tRPC procedures.
  */
 
+import {
+  GRANT_DOOR_UNSUPPORTED,
+  isFencedGrant,
+  trpcProcedureAllowed,
+} from "../access/grant-door-fence.js";
 import { t } from "../init-trpc.js";
 import { TRPCError } from "@trpc/server";
 import { apiKeyService } from "../services/api-keys.js";
@@ -48,161 +53,172 @@ function hasScope(keyScopes: string[], requiredScope: string): boolean {
  *
  * Validates Bearer token and enriches context with authentication data.
  */
-export const apiKeyMiddleware = t.middleware(async ({ ctx, next, path }) => {
-  // Short-circuit: if context is already authenticated with scopes (hub protocol server-side call),
-  // skip Bearer token extraction — auth already done at the Hono middleware layer.
-  if (ctx.authenticated && "scopes" in ctx && "apiKeyId" in ctx) {
-    const enriched = ctx as unknown as ApiKeyEnrichedContext;
-    if (
-      Array.isArray(enriched.scopes) &&
-      enriched.scopes.length > 0 &&
-      enriched.apiKeyId
-    ) {
-      const existingScopes = enriched.scopes;
-      const isHubProtocolKey = existingScopes.some((s: string) =>
-        s.startsWith("hub-protocol.")
-      );
-      return next({
-        ctx: {
-          ...ctx,
-          scopes: existingScopes,
-          apiKeyId: enriched.apiKeyId,
-          apiKeyName: enriched.apiKeyName ?? "hub-protocol",
-          authenticated: true as const,
-          // Preserve hub-protocol branding from createHubProtocolCallerContext
-          ...(isHubProtocolKey || enriched.isHubProtocol
-            ? { source: "intelligence", isHubProtocol: true }
-            : {}),
-        },
-      });
-    }
-  }
-
-  // Extract Authorization header
-  const authHeader = ctx.req?.headers?.get?.("authorization") || null;
-  const apiKey = extractApiKey(authHeader);
-
-  if (!apiKey) {
-    logger.warn({ path }, "API key middleware: No API key provided");
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "API key required. Provide via Authorization: Bearer <key>",
-    });
-  }
-
-  // Validate API key
-  const keyRecord = await apiKeyService.validateApiKey(apiKey);
-
-  if (!keyRecord) {
-    logger.warn(
-      { path, keyPrefix: apiKey.substring(0, 15) },
-      "Invalid or expired API key"
-    );
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Invalid or expired API key",
-    });
-  }
-
-  // Workspace isolation: a key scoped to a specific workspace cannot be used
-  // with a different workspace's X-Workspace-Id header.
-  if (keyRecord.workspaceId !== null) {
-    const requestedWorkspaceId =
-      ctx.req?.headers?.get?.("x-workspace-id") ?? null;
-    if (
-      requestedWorkspaceId !== null &&
-      requestedWorkspaceId !== keyRecord.workspaceId
-    ) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "API key is not authorized for this workspace",
-      });
-    }
-  }
-
-  // Check rate limiting
-  const allowed = apiKeyService.checkRateLimit(keyRecord.id, "request");
-  if (!allowed) {
-    logger.warn(
-      {
-        keyId: keyRecord.id,
-        keyName: keyRecord.keyName,
-        path,
-      },
-      "Rate limit exceeded"
-    );
-    // Include a machine-parseable Retry-After so bulk clients (Superwhisper
-    // store-first) can sleep the window instead of spinning. Window = 60s.
-    throw new TRPCError({
-      code: "TOO_MANY_REQUESTS",
-      message: "Rate limit exceeded. Retry after 60s.",
-      cause: { retryAfterSec: 60 },
-    });
-  }
-
-  // Auto-brand hub-protocol requests at the authentication boundary.
-  // Any API key with hub-protocol.* scope cannot masquerade as a human request.
-  const isHubProtocolKey = keyRecord.scope.some((s: string) =>
-    s.startsWith("hub-protocol.")
-  );
-
-  logger.debug(
-    {
-      userId: keyRecord.userId,
-      keyName: keyRecord.keyName,
-      scopes: keyRecord.scope,
-      path,
-      isHubProtocol: isHubProtocolKey,
-    },
-    "API key validated successfully"
-  );
-
-  // Agent-key identity remap — via the ONE door `resolveKeyIdentity`
-  // (access/key-identity.ts), mirroring the Hub REST auth middleware
-  // (hub-protocol-rest.ts) and the MCP HTTP handler (http-handler.ts) EXACTLY.
-  // `effectiveUserId` is the HUMAN (who OWNS the entities) when the key carries a
-  // `linkedUserId`; the acting AGENT (the key principal) is tracked as
-  // `agentUserId` — derived from the principal's `userType === 'agent'`, NOT from
-  // "has a linked human" — so WRITES still route through the governance membrane
-  // (checkPermissionOrPropose → propose, never auto-apply as the operator).
-  // Without this remap the tRPC hub-protocol door left `ctx.userId` = the agent
-  // principal, so `assertMayActAs(ctx, input.userId)` 403'd every CLI/BYOA call.
-  // For NON-agent keys (human PATs) `userId` stays `keyRecord.userId` and
-  // `agentUserId` stays undefined.
-  const { effectiveUserId, agentUserId, grant } =
-    await resolveKeyIdentity(keyRecord);
-
-  // Add authentication context, inside the request write facts: D8 probe key,
-  // D6 agent principal (see @synap/database request-write-context).
-  return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
-    runWithActingAgent(agentUserId, () =>
-      runWithGrant(grant, () =>
-        next({
+export const apiKeyMiddleware = t.middleware(
+  async ({ ctx, next, path, type }) => {
+    // Short-circuit: if context is already authenticated with scopes (hub protocol server-side call),
+    // skip Bearer token extraction — auth already done at the Hono middleware layer.
+    if (ctx.authenticated && "scopes" in ctx && "apiKeyId" in ctx) {
+      const enriched = ctx as unknown as ApiKeyEnrichedContext;
+      if (
+        Array.isArray(enriched.scopes) &&
+        enriched.scopes.length > 0 &&
+        enriched.apiKeyId
+      ) {
+        const existingScopes = enriched.scopes;
+        const isHubProtocolKey = existingScopes.some((s: string) =>
+          s.startsWith("hub-protocol.")
+        );
+        return next({
           ctx: {
             ...ctx,
-            userId: effectiveUserId,
-            agentUserId,
-            scopes: keyRecord.scope,
-            apiKeyId: keyRecord.id,
-            apiKeyName: keyRecord.keyName,
-            // The key's type + workspace binding — consumed by the hub-protocol
-            // service-key workspace confinement (resolveConfinedWorkspace). NOT an
-            // impersonation grant: identity is always floored to keyRecord.userId.
-            keyType: keyRecord.keyType,
-            keyWorkspaceId: keyRecord.workspaceId,
+            scopes: existingScopes,
+            apiKeyId: enriched.apiKeyId,
+            apiKeyName: enriched.apiKeyName ?? "hub-protocol",
             authenticated: true as const,
-            // Architecturally enforce: hub-protocol keys are always AI-sourced.
-            ...(isHubProtocolKey
+            // Preserve hub-protocol branding from createHubProtocolCallerContext
+            ...(isHubProtocolKey || enriched.isHubProtocol
               ? { source: "intelligence", isHubProtocol: true }
               : {}),
-            // W1 — what this key may touch (null = no grant).
-            grant,
           },
-        })
+        });
+      }
+    }
+
+    // Extract Authorization header
+    const authHeader = ctx.req?.headers?.get?.("authorization") || null;
+    const apiKey = extractApiKey(authHeader);
+
+    if (!apiKey) {
+      logger.warn({ path }, "API key middleware: No API key provided");
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "API key required. Provide via Authorization: Bearer <key>",
+      });
+    }
+
+    // Validate API key
+    const keyRecord = await apiKeyService.validateApiKey(apiKey);
+
+    if (!keyRecord) {
+      logger.warn(
+        { path, keyPrefix: apiKey.substring(0, 15) },
+        "Invalid or expired API key"
+      );
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Invalid or expired API key",
+      });
+    }
+
+    // Workspace isolation: a key scoped to a specific workspace cannot be used
+    // with a different workspace's X-Workspace-Id header.
+    if (keyRecord.workspaceId !== null) {
+      const requestedWorkspaceId =
+        ctx.req?.headers?.get?.("x-workspace-id") ?? null;
+      if (
+        requestedWorkspaceId !== null &&
+        requestedWorkspaceId !== keyRecord.workspaceId
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "API key is not authorized for this workspace",
+        });
+      }
+    }
+
+    // Check rate limiting
+    const allowed = apiKeyService.checkRateLimit(keyRecord.id, "request");
+    if (!allowed) {
+      logger.warn(
+        {
+          keyId: keyRecord.id,
+          keyName: keyRecord.keyName,
+          path,
+        },
+        "Rate limit exceeded"
+      );
+      // Include a machine-parseable Retry-After so bulk clients (Superwhisper
+      // store-first) can sleep the window instead of spinning. Window = 60s.
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Rate limit exceeded. Retry after 60s.",
+        cause: { retryAfterSec: 60 },
+      });
+    }
+
+    // Auto-brand hub-protocol requests at the authentication boundary.
+    // Any API key with hub-protocol.* scope cannot masquerade as a human request.
+    const isHubProtocolKey = keyRecord.scope.some((s: string) =>
+      s.startsWith("hub-protocol.")
+    );
+
+    logger.debug(
+      {
+        userId: keyRecord.userId,
+        keyName: keyRecord.keyName,
+        scopes: keyRecord.scope,
+        path,
+        isHubProtocol: isHubProtocolKey,
+      },
+      "API key validated successfully"
+    );
+
+    // Agent-key identity remap — via the ONE door `resolveKeyIdentity`
+    // (access/key-identity.ts), mirroring the Hub REST auth middleware
+    // (hub-protocol-rest.ts) and the MCP HTTP handler (http-handler.ts) EXACTLY.
+    // `effectiveUserId` is the HUMAN (who OWNS the entities) when the key carries a
+    // `linkedUserId`; the acting AGENT (the key principal) is tracked as
+    // `agentUserId` — derived from the principal's `userType === 'agent'`, NOT from
+    // "has a linked human" — so WRITES still route through the governance membrane
+    // (checkPermissionOrPropose → propose, never auto-apply as the operator).
+    // Without this remap the tRPC hub-protocol door left `ctx.userId` = the agent
+    // principal, so `assertMayActAs(ctx, input.userId)` 403'd every CLI/BYOA call.
+    // For NON-agent keys (human PATs) `userId` stays `keyRecord.userId` and
+    // `agentUserId` stays undefined.
+    const { effectiveUserId, agentUserId, grant } =
+      await resolveKeyIdentity(keyRecord);
+
+    // W1 fence: a scoped key may only QUERY procedures whose reads are bounded
+    // by its grant (access/grant-door-fence.ts). Mutations pass to the gate.
+    if (isFencedGrant(grant) && !trpcProcedureAllowed(type, path)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: GRANT_DOOR_UNSUPPORTED,
+      });
+    }
+
+    // Add authentication context, inside the request write facts: D8 probe key,
+    // D6 agent principal (see @synap/database request-write-context).
+    return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
+      runWithActingAgent(agentUserId, () =>
+        runWithGrant(grant, () =>
+          next({
+            ctx: {
+              ...ctx,
+              userId: effectiveUserId,
+              agentUserId,
+              scopes: keyRecord.scope,
+              apiKeyId: keyRecord.id,
+              apiKeyName: keyRecord.keyName,
+              // The key's type + workspace binding — consumed by the hub-protocol
+              // service-key workspace confinement (resolveConfinedWorkspace). NOT an
+              // impersonation grant: identity is always floored to keyRecord.userId.
+              keyType: keyRecord.keyType,
+              keyWorkspaceId: keyRecord.workspaceId,
+              authenticated: true as const,
+              // Architecturally enforce: hub-protocol keys are always AI-sourced.
+              ...(isHubProtocolKey
+                ? { source: "intelligence", isHubProtocol: true }
+                : {}),
+              // W1 — what this key may touch (null = no grant).
+              grant,
+            },
+          })
+        )
       )
-    )
-  );
-});
+    );
+  }
+);
 
 /**
  * Create a procedure that requires specific scopes
