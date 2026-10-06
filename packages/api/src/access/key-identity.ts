@@ -23,8 +23,9 @@
  * does not carry the owner's `userType`.
  */
 
-import { db, users, eq } from "@synap/database";
+import { db, users, eq, GrantRepository } from "@synap/database";
 import type { ApiKeyRecord } from "@synap/database";
+import type { GrantScope } from "@synap/governance-policy/grants";
 
 export interface ResolvedKeyIdentity {
   /** The identity that OWNS/SEES the data: the linked human, else the key owner. */
@@ -37,25 +38,38 @@ export interface ResolvedKeyIdentity {
   agentUserId: string | undefined;
   /** True iff the key principal (`keyRecord.userId`) has `userType === 'agent'`. */
   isAgent: boolean;
+  /**
+   * W1 — what this key may touch. `null` = a key that never had a grant
+   * (legacy: scopes + the human floor). A revoked/expired grant is DENY-ALL,
+   * never null. A failed grant read THROWS: guessing "no grant" would widen.
+   */
+  grant: GrantScope | null;
 }
 
 /**
  * Resolve the effective + agent identity for a validated API key.
  *
- * @param keyRecord - a validated `api_keys` row (only `userId` + `linkedUserId`
- *   are read; a `Pick` is accepted so unit tests can pass a minimal fixture).
+ * @param keyRecord - a validated `api_keys` row (`userId`, `linkedUserId`, and
+ *   `id` for the grant; a `Pick` is accepted so unit tests can pass a minimal
+ *   fixture — with no `id` there is no grant to load).
  */
 export async function resolveKeyIdentity(
-  keyRecord: Pick<ApiKeyRecord, "userId" | "linkedUserId">
+  keyRecord: Pick<ApiKeyRecord, "userId" | "linkedUserId"> & {
+    id?: string;
+  }
 ): Promise<ResolvedKeyIdentity> {
   const owner = await db.query.users.findFirst({
     where: eq(users.id, keyRecord.userId),
     columns: { userType: true },
   });
   const isAgent = owner?.userType === "agent";
+  const grant = keyRecord.id
+    ? await new GrantRepository(db).resolveForKey(keyRecord.id)
+    : null;
   return {
     effectiveUserId: keyRecord.linkedUserId ?? keyRecord.userId,
     agentUserId: isAgent ? keyRecord.userId : undefined,
     isAgent,
+    grant,
   };
 }

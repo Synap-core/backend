@@ -22,6 +22,7 @@ import {
   runWithProbeWrites,
   runWithActingAgent,
   runWithClientKey,
+  runWithGrant,
   clientKeyForApiKey,
   isProbeApiKey,
 } from "@synap/database";
@@ -382,9 +383,12 @@ export const hubAuthMiddleware = async (
     // (read AFTER every remap above set it). A plain human key enters no scope.
     // C1: the calling client, so an agent write without `X-Session-Id` groups
     // into THIS client's session (never the IS's shared key — see the helper).
+    // W1: the key's grant bounds every write gate and scoped read below.
     return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
       runWithActingAgent(c.get("agentUserId") as string | undefined, () =>
-        runWithClientKey(clientKeyForApiKey(keyRecord), () => next())
+        runWithClientKey(clientKeyForApiKey(keyRecord), () =>
+          runWithGrant(keyIdentity.grant, () => next())
+        )
       )
     );
   }

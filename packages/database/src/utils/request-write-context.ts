@@ -23,6 +23,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { PROBE_KEY_SCOPE } from "../schema/api-keys.js";
 import { entities } from "../schema/entities.js";
 import { PROFILE_ORIGIN_PROBE } from "../schema/profiles.js";
+import type { GrantScope } from "@synap/governance-policy/grants";
 
 export interface RequestWriteContext {
   /** D8 — the request's key is an explicitly declared probe key. */
@@ -33,6 +34,8 @@ export interface RequestWriteContext {
   readonly derivedSessionId?: string;
   /** C1 — which CLIENT is calling (the key it authenticated with). */
   readonly clientKey?: string;
+  /** W1 — what the calling key may touch (absent = a key with no grant). */
+  readonly grant?: GrantScope;
 }
 
 const storage = new AsyncLocalStorage<RequestWriteContext>();
@@ -131,6 +134,25 @@ export function runWithActingAgent<T>(
 /** The agent principal acting in this request, if any. */
 export function getActingAgentUserId(): string | undefined {
   return storage.getStore()?.actingAgentUserId;
+}
+
+// ═══ Concern: KEY GRANT (W1) ══════════════════════════════════════════════════
+//
+// The grant bounding the calling API key. Read by the write gate
+// (`checkPermissionOrPropose`) and the read floor (`scopedDb`). A key with no
+// grant enters no scope; a revoked/expired grant arrives as deny-all.
+
+/** Run `fn` with the calling key's grant recorded; no grant enters no scope. */
+export function runWithGrant<T>(
+  grant: GrantScope | null | undefined,
+  fn: () => T
+): T {
+  return grant ? runWithPatch({ grant }, fn) : fn();
+}
+
+/** The grant bounding the calling key, if any. */
+export function getRequestGrant(): GrantScope | undefined {
+  return storage.getStore()?.grant;
 }
 
 // ═══ Concern: DERIVED SESSION (A1) ════════════════════════════════════════════

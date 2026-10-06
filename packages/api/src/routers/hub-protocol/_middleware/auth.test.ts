@@ -31,6 +31,12 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         users: { findFirst: (...a: unknown[]) => findFirstUser(...a) },
       },
+      // W1: these keys carry no grant (GrantRepository.resolveForKey → null).
+      select: () => ({
+        from: () => ({
+          where: () => ({ orderBy: () => ({ limit: async () => [] }) }),
+        }),
+      }),
     },
   };
 });

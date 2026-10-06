@@ -15,6 +15,8 @@ import { Hono } from "hono";
 
 const getApiKeyStatus = vi.fn();
 const findFirstUser = vi.fn();
+/** The `grants` rows GrantRepository.resolveForKey reads (newest first). */
+let grantRows: Array<Record<string, unknown>> = [];
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
@@ -24,6 +26,12 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         users: { findFirst: (...a: unknown[]) => findFirstUser(...a) },
       },
+      // W1: these keys carry no grant (GrantRepository.resolveForKey → null).
+      select: () => ({
+        from: () => ({
+          where: () => ({ orderBy: () => ({ limit: async () => grantRows }) }),
+        }),
+      }),
     },
   };
 });
@@ -49,8 +57,12 @@ vi.mock("../../../services/external-user-mapping.js", () => ({
 }));
 
 const { hubAuthMiddleware } = await import("./auth.js");
-const { getActingAgentUserId, isProbeWriteContext, KEY_PREFIXES } =
-  await import("@synap/database");
+const {
+  getActingAgentUserId,
+  getRequestGrant,
+  isProbeWriteContext,
+  KEY_PREFIXES,
+} = await import("@synap/database");
 
 const AGENT = "agent-principal-user";
 
@@ -76,16 +88,22 @@ async function factsSeenDownstream() {
     return c.json({
       actingAgent: getActingAgentUserId() ?? null,
       probe: isProbeWriteContext(),
+      grant: getRequestGrant() ?? null,
     });
   });
   const res = await app.request("/api/hub/facts", {
     headers: { authorization: "Bearer synap_test" },
   });
-  return (await res.json()) as { actingAgent: string | null; probe: boolean };
+  return (await res.json()) as {
+    actingAgent: string | null;
+    probe: boolean;
+    grant: { permissions: string[] } | null;
+  };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  grantRows = [];
 });
 
 describe("hub auth door enters the request write facts", () => {
@@ -95,6 +113,7 @@ describe("hub auth door enters the request write facts", () => {
     expect(await factsSeenDownstream()).toEqual({
       actingAgent: AGENT,
       probe: false,
+      grant: null,
     });
   });
 
@@ -107,6 +126,7 @@ describe("hub auth door enters the request write facts", () => {
     expect(await factsSeenDownstream()).toEqual({
       actingAgent: null,
       probe: false,
+      grant: null,
     });
   });
 
@@ -130,5 +150,43 @@ describe("hub auth door enters the request write facts", () => {
       }),
     });
     expect((await factsSeenDownstream()).probe).toBe(true);
+  });
+
+  it("a key with a grant → the grant is the request's grant downstream (W1)", async () => {
+    findFirstUser.mockResolvedValue({ userType: "agent" });
+    getApiKeyStatus.mockResolvedValue({ status: "valid", record: keyRecord() });
+    grantRows = [
+      {
+        id: "g1",
+        permissions: ["entity.knowledge.read"],
+        workspaceIds: null,
+        projectIds: null,
+        entityIds: null,
+        expiresAt: null,
+        revokedAt: null,
+      },
+    ];
+    expect((await factsSeenDownstream()).grant).toMatchObject({
+      permissions: ["entity.knowledge.read"],
+    });
+  });
+
+  it("a key whose grant was revoked → deny-all downstream, never 'no grant'", async () => {
+    findFirstUser.mockResolvedValue({ userType: "agent" });
+    getApiKeyStatus.mockResolvedValue({ status: "valid", record: keyRecord() });
+    grantRows = [
+      {
+        id: "g1",
+        permissions: ["*"],
+        workspaceIds: null,
+        projectIds: null,
+        entityIds: null,
+        expiresAt: null,
+        revokedAt: new Date(),
+      },
+    ];
+    expect((await factsSeenDownstream()).grant).toMatchObject({
+      permissions: [],
+    });
   });
 });

@@ -54,6 +54,7 @@ import {
   inArray,
   runWithProbeWrites,
   runWithActingAgent,
+  runWithGrant,
   runWithClientKey,
   clientKeyForApiKey,
   isProbeApiKey,
@@ -508,7 +509,7 @@ mcpHttpApp.post("/", async (c) => {
   // auto-apply as the operator). Resolved BEFORE the reject gate so the gate can
   // ADMIT an agent principal (the `isAgent` bit) instead of keying off the
   // delegation fact.
-  const { effectiveUserId, agentUserId, isAgent } =
+  const { effectiveUserId, agentUserId, isAgent, grant } =
     await resolveKeyIdentity(keyRecord);
 
   // ── 2a. Guest containment: a guest never uses MCP (reads OR writes). The
@@ -597,7 +598,10 @@ mcpHttpApp.post("/", async (c) => {
   return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
     runWithActingAgent(agentUserId, () =>
       runWithClientKey(clientKeyForApiKey(keyRecord, conversationId), () =>
-        transport.handleRequest(c.req.raw, { parsedBody })
+        // W1: the key's grant bounds every write gate and scoped read below.
+        runWithGrant(grant, () =>
+          transport.handleRequest(c.req.raw, { parsedBody })
+        )
       )
     )
   );
