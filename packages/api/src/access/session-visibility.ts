@@ -44,6 +44,7 @@
  * it (option B was rejected: it would retroactively expose every filed session).
  *
  */
+import { grantReadPredicate } from "./grant-read.js";
 import {
   and,
   eq,
@@ -210,9 +211,14 @@ export function sessionReadableWhere(reader: SessionReader): SQL {
         )
       )!
     : owner;
-  return lens === undefined
-    ? base
-    : and(base, workspaceLensWhere(focusSessions.workspaceId, userId, lens))!;
+  const scoped =
+    lens === undefined
+      ? base
+      : and(base, workspaceLensWhere(focusSessions.workspaceId, userId, lens))!;
+  // W1 — the calling key's grant (`session` subject). Narrow-only; covers the
+  // ~20 session doors that read through this helper rather than scopedDb.
+  const grant = grantReadPredicate(focusSessions);
+  return grant ? and(scoped, grant)! : scoped;
 }
 
 /**

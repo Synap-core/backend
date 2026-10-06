@@ -41,6 +41,9 @@ import { runWithGrant } from "@synap/database";
 import type { GrantScope } from "@synap/governance-policy/grants";
 import { AccessContext, scopedDb } from "./index.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
+import { channelVisibilityWhere } from "../utils/channel-visibility.js";
+import { sessionReadableWhere } from "./session-visibility.js";
+import { channels, focusSessions } from "@synap/database/schema";
 
 const ALICE = "alice-grant";
 const WA = randomUUID();
@@ -50,6 +53,8 @@ const K_A = randomUUID(); // knowledge (via profile slug), workspace A
 const K_B = randomUUID(); // knowledge (via legacy type), workspace B
 const T_A = randomUUID(); // task, workspace A
 const DOC = randomUUID();
+const CHAN = randomUUID();
+const SESS = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -96,6 +101,14 @@ beforeAll(async () => {
   await q(
     `insert into documents (id, title, user_id, workspace_id) values ($1, 'd', $2, $3)`,
     [DOC, ALICE, WA]
+  );
+  await q(
+    `insert into channels (id, user_id, channel_type, status) values ($1, $2, 'ai_thread', 'active')`,
+    [CHAN, ALICE]
+  );
+  await q(
+    `insert into focus_sessions (id, user_id, goal, status) values ($1, $2, 'g', 'active')`,
+    [SESS, ALICE]
   );
 });
 
@@ -189,5 +202,53 @@ describe("the DATA-table seam (accessScopeWhere) honours the grant too", () => {
     expect(await seamRead({ permissions: ["entity.task.read"] })).toEqual([
       T_A,
     ]);
+  });
+});
+
+describe("the shared channel and session helpers honour the grant", () => {
+  type Sel = {
+    select: (c: object) => {
+      from: (t: object) => { where: (w: unknown) => Promise<{ id: string }[]> };
+    };
+  };
+  const ids = async (
+    table: object,
+    idCol: unknown,
+    where: () => unknown,
+    grant?: GrantScope
+  ) => {
+    const run = () =>
+      (h.db as Sel)
+        .select({ id: idCol as never })
+        .from(table)
+        .where(where());
+    const rows = grant ? await runWithGrant(grant, run) : await run();
+    return rows.map((r) => r.id);
+  };
+
+  it("channels: visible with no grant or channel.read, hidden from an entity-only grant", async () => {
+    const w = () => channelVisibilityWhere(ALICE);
+    expect(await ids(channels, channels.id, w)).toEqual([CHAN]);
+    expect(
+      await ids(channels, channels.id, w, { permissions: ["channel.read"] })
+    ).toEqual([CHAN]);
+    expect(
+      await ids(channels, channels.id, w, { permissions: ["entity.read"] })
+    ).toEqual([]);
+  });
+
+  it("sessions: visible with no grant or session.read, hidden from an entity-only grant", async () => {
+    const w = () => sessionReadableWhere({ userId: ALICE });
+    expect(await ids(focusSessions, focusSessions.id, w)).toEqual([SESS]);
+    expect(
+      await ids(focusSessions, focusSessions.id, w, {
+        permissions: ["session.read"],
+      })
+    ).toEqual([SESS]);
+    expect(
+      await ids(focusSessions, focusSessions.id, w, {
+        permissions: ["entity.read"],
+      })
+    ).toEqual([]);
   });
 });

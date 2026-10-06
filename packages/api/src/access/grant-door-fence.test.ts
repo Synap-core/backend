@@ -26,6 +26,9 @@ describe("restDoorAllowed", () => {
     ["GET", "/users/u1/entities", true],
     ["GET", "/documents/d1/raw", true],
     ["GET", "/brand/kit", true],
+    ["GET", "/threads/t1/messages", true],
+    ["GET", "/focus-sessions", true],
+    ["GET", "/focus-sessions/s1", false], // owner-only read, not the helper
     ["GET", "/search", false],
     ["GET", "/entities", false], // ?q= goes to Typesense — not seamed
     ["GET", "/knowledge", false],

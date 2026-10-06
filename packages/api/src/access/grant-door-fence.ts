@@ -38,6 +38,15 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/commands\/?$/,
   /^\/commands\/[^/]+\/?$/,
   /^\/brand\/kit\/?$/,
+  // Read only through the grant-aware channel / session helpers
+  // (utils/channel-visibility.ts, access/session-visibility.ts):
+  /^\/channels\/?$/,
+  /^\/threads\/?$/,
+  /^\/threads\/[^/]+\/messages\/?$/,
+  /^\/threads\/[^/]+\/branches\/?$/,
+  /^\/messaging\/channels\/?$/,
+  /^\/messaging\/linked-unread\/?$/,
+  /^\/focus-sessions\/?$/,
 ];
 
 /** Hub REST POST routes that READ without a seam (refused for scoped keys). */
