@@ -36,6 +36,7 @@ import {
   grantSubjectSpec,
   isQualifiedGrantSubject,
   type GrantAction,
+  type GrantSubjectSpec,
 } from "./catalog.js";
 
 /** The longest lifetime the mint door accepts (`ExpiresInDaysSchema`). */
@@ -68,6 +69,13 @@ export interface GrantCell {
 export interface GrantContext {
   /** Kind slugs offered as rows (a wildcard is split into these). */
   readonly kinds: readonly string[];
+  /**
+   * The subjects the editor offers (default GRANT_SUBJECT_CATALOG). Turning a
+   * cell OFF under a broad pattern (`*`) breaks it into THESE cells — an
+   * editor with more subjects (agents: profile, property_def) must pass its
+   * catalog, or those subjects would silently fall out of the grant.
+   */
+  readonly catalog?: readonly GrantSubjectSpec[];
 }
 
 export const EMPTY_GRANT_DRAFT: GrantDraft = { permissions: [] };
@@ -118,11 +126,12 @@ function safeMatches(pattern: string, req: GrantRequest): boolean {
 }
 
 /** The catalog cells a parsed pattern covers, at the pattern's own generality. */
-function expandToAtoms(segs: string[]): Atom[] {
+function expandToAtoms(
+  segs: string[],
+  catalog: readonly GrantSubjectSpec[] = GRANT_SUBJECT_CATALOG
+): Atom[] {
   const specs =
-    segs[0] === "*"
-      ? GRANT_SUBJECT_CATALOG
-      : GRANT_SUBJECT_CATALOG.filter((s) => s.subject === segs[0]);
+    segs[0] === "*" ? catalog : catalog.filter((s) => s.subject === segs[0]);
   const out: Atom[] = [];
   for (const spec of specs) {
     const qualified = isQualifiedGrantSubject(spec.subject);
@@ -288,7 +297,7 @@ export function toggleGrant(
       continue;
     }
     // Break the covering pattern into its catalog cells, minus the target.
-    for (const atom of expandToAtoms(segs)) {
+    for (const atom of expandToAtoms(segs, ctx.catalog)) {
       const covers =
         atom.subject === target.subject &&
         atom.action === target.action &&
