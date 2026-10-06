@@ -314,6 +314,12 @@ provisionRouter.post("/register-intelligence", async (c) => {
       const keyHash = await bcrypt.hash(hubProtocolApiKey, 12);
 
       // Replace only THIS IS's prior key (scoped per-IS — never cross-IS).
+      // Revoke through the one door first (drops the verification cache),
+      // then remove the replaced rows.
+      await revokeApiKeys(db, {
+        where: eq(apiKeys.hubId, isHubId),
+        reason: "Replaced by a re-provisioned IS key",
+      });
       await db.delete(apiKeys).where(eq(apiKeys.hubId, isHubId));
 
       await db.insert(apiKeys).values({

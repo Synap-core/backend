@@ -41,6 +41,7 @@ import {
   events as eventsTable,
 } from "@synap/database/schema";
 import { count, inArray } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import crypto from "node:crypto";
 import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
@@ -1695,6 +1696,13 @@ export const systemRouter = router({
           await tx
             .delete(workspaceMembers)
             .where(inArray(workspaceMembers.userId, childAgentIds));
+          // Through the revoke door first: a hard DELETE alone leaves the
+          // keys validating from the verification cache for up to 30s.
+          await revokeApiKeys(tx, {
+            where: inArray(apiKeys.userId, childAgentIds),
+            revokedBy: ctx.userId,
+            reason: "Owner deleted",
+          });
           await tx
             .delete(apiKeys)
             .where(inArray(apiKeys.userId, childAgentIds));
@@ -1702,6 +1710,11 @@ export const systemRouter = router({
         }
 
         // 3. API keys owned directly by the target.
+        await revokeApiKeys(tx, {
+          where: eq(apiKeys.userId, input.userId),
+          revokedBy: ctx.userId,
+          reason: "User deleted",
+        });
         await tx.delete(apiKeys).where(eq(apiKeys.userId, input.userId));
 
         // 4. The user row itself.
