@@ -1193,10 +1193,16 @@ export const apiKeysRouter = router({
         scopes: z
           .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
           .min(1),
+        /** Legacy absolute expiry; wins over expiresInDays when given. */
         expiresAt: z.date().optional(),
+        // Omitted → 90 days; a number → that many; null → never (W1f).
+        expiresInDays: ExpiresInDaysSchema,
+        /** What the key may touch (W1); always held inside this workspace. */
+        grant: GrantInputSchema.omit({ workspaceIds: true }).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertGrantInput(input.grant);
       if (!["owner", "admin"].includes(ctx.workspaceRole)) {
         throw new TRPCError({
           code: "FORBIDDEN",
@@ -1230,6 +1236,8 @@ export const apiKeysRouter = router({
 
       // Workspace-scoped keys are user PATs (not hub-inbound).
       const keyPrefix = "synap_user_";
+      const expiresAt =
+        input.expiresAt ?? resolveKeyExpiry(input.expiresInDays);
       const key = generateApiKey(keyPrefix);
 
       const database = await getDb();
@@ -1242,13 +1250,25 @@ export const apiKeysRouter = router({
           keyPrefix,
           key,
           scope: input.scopes,
-          expiresAt: input.expiresAt,
+          expiresAt: expiresAt ?? undefined,
           userId: ctx.userId,
           keyType: "user_pat",
           workspaceId: ctx.workspaceId,
         },
         ctx.userId
       );
+
+      if (input.grant) {
+        await attachGrantOrRevoke({
+          apiKeyId: apiKey.id,
+          principalUserId: ctx.userId,
+          onBehalfOf: ctx.userId,
+          // A workspace key's grant never reaches beyond its workspace.
+          grant: { ...input.grant, workspaceIds: [ctx.workspaceId] },
+          expiresAt,
+          createdBy: ctx.userId,
+        });
+      }
 
       auditLog({
         subjectType: "apiKey",

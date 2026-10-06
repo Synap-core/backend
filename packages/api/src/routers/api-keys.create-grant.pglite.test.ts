@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -209,5 +210,45 @@ describe("apiKeys.list shows each key's grant (/my-connections)", () => {
       label: "Card site",
     });
     expect(keys.find((k) => k.id === plain.id)?.grant).toBeNull();
+  });
+});
+
+describe("apiKeys.createForWorkspace with a grant (W1f)", () => {
+  const WS = randomUUID();
+  const wsCaller = () =>
+    apiKeysRouter.createCaller({
+      db: h.db,
+      authenticated: true,
+      userId: HUMAN,
+      workspaceId: WS,
+    } as never);
+
+  beforeAll(async () => {
+    await h.client!.query(
+      `insert into workspaces (id, name, owner_id, settings) values ($1, 'w', $2, '{}'::jsonb)`,
+      [WS, HUMAN]
+    );
+    await h.client!.query(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+      [randomUUID(), WS, HUMAN]
+    );
+  });
+
+  it("pins the grant to the key's workspace and defaults to 90 days", async () => {
+    const res = await wsCaller().createForWorkspace({
+      name: "ws site",
+      scopes: ["hub-protocol.read"],
+      grant: { permissions: ["entity.read"] },
+    });
+    expect(res.status).toBe("created");
+    const grant = await new GrantRepository(h.db as never).resolveForKey(
+      res.id
+    );
+    expect(grant).toMatchObject({
+      permissions: ["entity.read"],
+      workspaceIds: [WS],
+    });
+    const exp = new Date((await keyRow(res.id)).expires_at!).getTime();
+    expect(Math.abs(exp - (Date.now() + 90 * DAY))).toBeLessThan(60_000);
   });
 });
