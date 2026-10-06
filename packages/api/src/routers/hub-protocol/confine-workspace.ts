@@ -6,10 +6,11 @@
  * boundary: a service key is POSITIVELY PINNED to its bound workspace.
  *
  * Contract (the helper IS the contract):
- *   - Non-service key (any other keyType), OR a service key with NO binding
- *     (`keyWorkspaceId == null`) → return `requested` UNCHANGED. This is the
- *     ONLY behavior for those keys — legacy passthrough with ZERO back-compat
- *     impact. No existing key type ever changes behavior.
+ *   - A key with NO binding (`keyWorkspaceId == null`), whatever its type →
+ *     return `requested` UNCHANGED (legacy passthrough, pod-wide).
+ *   - (Until 2026-10-06 a NON-service key was passed through even WITH a
+ *     binding, so the pod-admin "workspace-scoped" keys were not confined.
+ *     Every bound key is now pinned, as its label promises.)
  *
  *     POD-WIDE BRIDGE MODEL: an UNBOUND service key (`keyType === "service"` &&
  *     `keyWorkspaceId == null`) is DELIBERATELY pod-wide — it never 403s on a
@@ -22,7 +23,7 @@
  *     (Hub REST, which 403s when `c.get("userId")` is absent). Confinement
  *     answers "which workspace"; attribution answers "who". Both must hold; the
  *     tripwire `__tripwires__/pod-wide-bridge-attribution.test.ts` locks it.
- *   - service key WITH a binding (`keyType === "service"` && `keyWorkspaceId`):
+ *   - ANY key WITH a binding (`keyWorkspaceId` set):
  *       · `requested == null`          → return `keyWorkspaceId` (positive pin:
  *                                         default to the bound workspace, never
  *                                         open pod-wide).
@@ -41,18 +42,22 @@ export function resolveConfinedWorkspace(
   keyWorkspaceId: string | null | undefined,
   requested: string | null | undefined
 ): string | null | undefined {
-  // Legacy passthrough — confinement applies ONLY to bound service keys.
-  if (keyType !== "service" || keyWorkspaceId == null) {
+  // An unbound key is pod-wide (legacy passthrough).
+  if (keyWorkspaceId == null) {
     return requested;
   }
 
-  // Bound service key → positive pin.
+  // ANY bound key → positive pin. This used to apply to `service` keys only,
+  // so the pod-admin "workspace-scoped" keys (`hub_inbound` from
+  // adminCreateServiceKey, `user_pat` from createForWorkspace) carried a
+  // binding that was a listing label and acted pod-wide (2026-10-06 audit).
+  void keyType;
   if (requested == null) return keyWorkspaceId;
   if (requested === keyWorkspaceId) return keyWorkspaceId;
 
   throw new TRPCError({
     code: "FORBIDDEN",
-    message: `Service key is confined to workspace ${keyWorkspaceId}`,
+    message: `This key is confined to workspace ${keyWorkspaceId}`,
   });
 }
 

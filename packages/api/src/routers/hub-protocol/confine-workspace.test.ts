@@ -12,20 +12,32 @@ const WS = "11111111-1111-1111-1111-111111111111";
 const OTHER = "22222222-2222-2222-2222-222222222222";
 
 describe("resolveConfinedWorkspace", () => {
-  // ── Legacy passthrough — the ONLY behavior for non-service keys ──────────
-  it("non-service key: returns requested UNCHANGED (bound workspace ignored)", () => {
-    expect(resolveConfinedWorkspace("hub_inbound", WS, OTHER)).toBe(OTHER);
-    expect(resolveConfinedWorkspace("hub_inbound", WS, null)).toBeNull();
-    expect(
-      resolveConfinedWorkspace("hub_inbound", WS, undefined)
-    ).toBeUndefined();
-    expect(resolveConfinedWorkspace("user_pat", WS, OTHER)).toBe(OTHER);
-    expect(resolveConfinedWorkspace("is_internal", WS, OTHER)).toBe(OTHER);
-  });
+  // ── ANY bound key is pinned (2026-10-06) ─────────────────────────────────
+  // These rows used to assert the OPPOSITE — "bound workspace ignored" for
+  // every non-service key — which pinned the defect: pod-admin
+  // "workspace-scoped" keys (hub_inbound, user_pat) acted pod-wide.
+  it.each(["hub_inbound", "user_pat", null, undefined])(
+    "%s key with a binding: refuses another workspace",
+    (keyType) => {
+      expect(() => resolveConfinedWorkspace(keyType, WS, OTHER)).toThrow(
+        /confined to workspace/
+      );
+    }
+  );
 
-  it("null/undefined keyType: returns requested UNCHANGED", () => {
-    expect(resolveConfinedWorkspace(null, WS, OTHER)).toBe(OTHER);
-    expect(resolveConfinedWorkspace(undefined, WS, OTHER)).toBe(OTHER);
+  it.each(["hub_inbound", "user_pat"])(
+    "%s key with a binding: defaults to and accepts its workspace",
+    (keyType) => {
+      expect(resolveConfinedWorkspace(keyType, WS, null)).toBe(WS);
+      expect(resolveConfinedWorkspace(keyType, WS, undefined)).toBe(WS);
+      expect(resolveConfinedWorkspace(keyType, WS, WS)).toBe(WS);
+    }
+  );
+
+  it("an unbound key of any type stays pod-wide", () => {
+    expect(resolveConfinedWorkspace("hub_inbound", null, OTHER)).toBe(OTHER);
+    expect(resolveConfinedWorkspace("user_pat", undefined, null)).toBeNull();
+    expect(resolveConfinedWorkspace("is_internal", null, OTHER)).toBe(OTHER);
   });
 
   // ── Service key WITHOUT binding — passthrough (never confines) ───────────
