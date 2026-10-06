@@ -194,6 +194,23 @@ export function validateSpaceSkillDeclaration(skill: unknown): string | null {
 }
 
 /**
+ * The row slugs a DECLARED ref may resolve to: the ref as written, plus its
+ * `system/`-prefixed form. A template may write the canonical
+ * `system/synap/creative-director` or the shorter `synap/creative-director`;
+ * both name the same row. Deliberately NOT a suffix scan — a bare stem does not
+ * match a nested `system/<pkg>/<stem>`, because several packages could carry
+ * that stem and a guess would link the wrong skill.
+ *
+ * The ONE expansion: the pod's applier uses it to resolve a link, the skill
+ * ranker to partition, and the IS to find the always-mode rows.
+ */
+export function spaceSkillSlugCandidates(slug: string): string[] {
+  const out = new Set<string>([slug]);
+  if (!slug.startsWith("system/")) out.add(`system/${slug}`);
+  return [...out];
+}
+
+/**
  * A declared skill AS STORED in the brief — the space's own copy.
  *
  * Unlike `SpaceBriefRuleRef`, which points at a rule ROW that carries the

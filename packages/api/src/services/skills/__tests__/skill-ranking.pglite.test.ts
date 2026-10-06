@@ -327,6 +327,69 @@ describe("S1 — rarer query words weigh more", () => {
   });
 });
 
+describe("S5 — the current space's OWN skills rank first", () => {
+  // "Scoping guide" matches `create a project` in its DESCRIPTION only — the
+  // cheapest tier — so it ranks LAST of the eight on its own. Linking it must
+  // lift it to the top: that is the guarantee, and a weight would not do it.
+  const LINKED_SLUG = "f/scoping-guide";
+  const withLinkedBrief = (linked: unknown) =>
+    h.client!.query(`update workspaces set settings = $2::jsonb where id = $1`, [
+      WS_MEMBER,
+      JSON.stringify({ onboarding: { skills: linked } }),
+    ]);
+
+  beforeAll(async () => {
+    await h.client!.query(
+      `insert into workspace_members (id, workspace_id, user_id) values ($1,$2,$3)`,
+      [randomUUID(), WS_MEMBER, RANK_USER]
+    );
+  });
+
+  it("the fixture is not vacuous: unlinked, it does NOT lead", async () => {
+    await withLinkedBrief([]);
+    const { rows } = await searchInstructionSkills({
+      userId: RANK_USER,
+      workspaceId: WS_MEMBER,
+      q: "create a project",
+      limit: 10,
+    });
+    expect(rows.length).toBeGreaterThan(1);
+    expect(names(rows)[0]).not.toBe("Scoping guide");
+  });
+
+  it("linking it lifts it above stronger lexical matches", async () => {
+    await withLinkedBrief([{ slug: LINKED_SLUG, mode: "always" }]);
+    const { rows } = await searchInstructionSkills({
+      userId: RANK_USER,
+      workspaceId: WS_MEMBER,
+      q: "create a project",
+      limit: 10,
+    });
+    expect(names(rows)[0]).toBe("Scoping guide");
+  });
+
+  it("a brief pointing at a slug no row carries leaves the order untouched", async () => {
+    await withLinkedBrief([{ slug: "system/synap/does-not-exist", mode: "always" }]);
+    const { rows } = await searchInstructionSkills({
+      userId: RANK_USER,
+      workspaceId: WS_MEMBER,
+      q: "create a project",
+      limit: 10,
+    });
+    expect(names(rows)[0]).not.toBe("Scoping guide");
+  });
+
+  it("only the CALLER's space partitions — the same query elsewhere is unchanged", async () => {
+    await withLinkedBrief([{ slug: LINKED_SLUG, mode: "always" }]);
+    const { rows } = await searchInstructionSkills({
+      userId: RANK_USER,
+      q: "create a project",
+      limit: 10,
+    });
+    expect(names(rows)[0]).not.toBe("Scoping guide");
+  });
+});
+
 describe("S3 — one matcher: SQL and JS rank identically", () => {
   const cases: Array<[string, string]> = [
     ["create a project", RANK_USER],

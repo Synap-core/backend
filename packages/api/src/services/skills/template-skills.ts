@@ -64,10 +64,23 @@ export interface TemplateSkillOutcome {
  * that stem and a silent guess would link the wrong skill. Matching is exact,
  * or exact after prefixing `system/` — nothing fuzzier.
  */
-function candidateSlugs(slug: string): string[] {
+export function candidateSlugs(slug: string): string[] {
   const out = new Set<string>([slug]);
   if (!slug.startsWith("system/")) out.add(`system/${slug}`);
   return [...out];
+}
+
+/**
+ * The row slugs a space's brief LINKS — every declared ref expanded to the
+ * candidate row spellings, so a ranker can match a declared
+ * `synap/creative-director` against the row `system/synap/creative-director`.
+ * The ONE expansion of a brief skill ref; `searchInstructionSkills` uses it to
+ * rank a space's own skills first.
+ */
+export function linkedRowSlugs(
+  refs: ReadonlyArray<{ slug: string }> | undefined
+): string[] {
+  return [...new Set((refs ?? []).flatMap((r) => candidateSlugs(r.slug)))];
 }
 
 /** The shape rule is SHARED with the template validator — author time == install time. */

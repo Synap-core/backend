@@ -22,8 +22,17 @@
  *
  * This is lexical, not semantic — the `skills` table has no embedding column.
  */
-import { and, db, drizzleSql, eq, type SQL } from "@synap/database";
+import {
+  and,
+  db,
+  drizzleSql,
+  eq,
+  inArray,
+  workspaces,
+  type SQL,
+} from "@synap/database";
 import { skills } from "@synap/database/schema";
+import { readSpaceBrief } from "@synap-core/types/space-brief";
 import {
   explainTermMatch,
   queryTerms,
@@ -32,6 +41,7 @@ import {
   type TermMatch,
 } from "../../utils/term-match.js";
 import { visibleSkillsWhere } from "./visibility.js";
+import { linkedRowSlugs } from "./template-skills.js";
 
 export interface InstructionSkillSearchInput {
   userId: string;
@@ -56,6 +66,20 @@ function clampInt(
 ): number {
   if (raw === undefined || !Number.isFinite(raw)) return fallback;
   return Math.min(Math.max(Math.trunc(raw), min), max);
+}
+
+/**
+ * The ROW slugs a space links, read from its brief. One query; an empty list
+ * (no brief, or a space that declares no skills) means "no partition" and the
+ * ranker falls back to the pod-wide ordering it always had.
+ */
+async function linkedSlugsOfSpace(workspaceId: string): Promise<string[]> {
+  const [row] = await db
+    .select({ settings: workspaces.settings })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  return linkedRowSlugs(readSpaceBrief(row?.settings)?.skills);
 }
 
 export async function searchInstructionSkills(
@@ -126,13 +150,29 @@ export async function searchInstructionSkills(
     SKILL_SEARCH_MAX_LIMIT
   );
   const offset = clampInt(input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-  const order: SQL[] = score
-    ? [
-        drizzleSql`${score} DESC`,
-        drizzleSql`${skills.name} ASC`,
-        drizzleSql`${skills.id} ASC`,
-      ]
-    : [drizzleSql`${skills.name} ASC`, drizzleSql`${skills.id} ASC`];
+
+  // ── The current space's OWN skills rank first ────────────────────────────
+  // A space declares skills (the brief's `skills`); the AI working there should
+  // find them ahead of the pod-wide catalog. A HARD partition, not a weight: the
+  // promise is "the space's skills first", and a weight would let a strong
+  // lexical match outrank the space's own skill — which is exactly the case
+  // (the space's skill is the one the model needs) this exists to win.
+  let linkedFirst: SQL | undefined;
+  if (input.workspaceId) {
+    const linked = await linkedSlugsOfSpace(input.workspaceId);
+    if (linked.length) {
+      linkedFirst = drizzleSql`CASE WHEN ${inArray(skills.slug, linked)} THEN 0 ELSE 1 END`;
+    }
+  }
+
+  const order: SQL[] = [
+    ...(linkedFirst ? [drizzleSql`${linkedFirst} ASC`] : []),
+    ...(score
+      ? [drizzleSql`${score} DESC`]
+      : []),
+    drizzleSql`${skills.name} ASC`,
+    drizzleSql`${skills.id} ASC`,
+  ];
 
   const [rows, counted] = await Promise.all([
     db
