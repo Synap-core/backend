@@ -52,6 +52,7 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/projects\/?$/,
   /^\/projects\/[^/]+\/?$/,
   /^\/projects\/[^/]+\/digest\/?$/,
+  /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
 ];
 
 /** Hub REST POST routes that READ without a seam (refused for scoped keys). */
@@ -72,6 +73,7 @@ export const GRANT_SAFE_MCP_READ_TOOLS: ReadonlySet<string> = new Set([
   "synap_resolve_identity",
   "synap_get_project",
   "synap_list_projects",
+  "synap_list_views",
 ]);
 
 /** tRPC QUERIES (by procedure path) that read only through a seam. */
@@ -84,6 +86,7 @@ export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
   "automations.getRun",
   "commands.listCommands",
   "commands.getCommand",
+  "views.listViews",
 ]);
 
 export const GRANT_DOOR_UNSUPPORTED =

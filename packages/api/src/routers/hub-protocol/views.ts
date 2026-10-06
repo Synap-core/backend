@@ -12,6 +12,7 @@
  *   - deleteView:  NOT exposed — agents cannot delete views
  */
 
+import { grantReadPredicate } from "../../access/grant-read.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../../trpc.js";
@@ -72,6 +73,8 @@ export const hubViewsRouter = router({
           // (eq userId). Without it the optional filters degrade to a null-where
           // returning every view on the pod.
           eq(views.userId, ctx.userId as string),
+          // W1 — the calling key's grant (`view` subject), narrow-only.
+          grantReadPredicate(views),
           input.workspaceId
             ? eq(views.workspaceId, input.workspaceId)
             : undefined,

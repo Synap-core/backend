@@ -45,6 +45,7 @@ import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { sessionReadableWhere } from "./session-visibility.js";
 import { channels, focusSessions, projects } from "@synap/database/schema";
 import { ownerPrivateVisibleWhere } from "@synap/database";
+import { hubViewsRouter } from "../routers/hub-protocol/views.js";
 
 const ALICE = "alice-grant";
 const WA = randomUUID();
@@ -57,6 +58,7 @@ const DOC = randomUUID();
 const CHAN = randomUUID();
 const SESS = randomUUID();
 const PROJ = randomUUID();
+const VIEW = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -116,6 +118,10 @@ beforeAll(async () => {
     PROJ,
     ALICE,
   ]);
+  await q(
+    `insert into views (id, name, type, user_id, updated_at) values ($1, 'v', 'table', $2, now())`,
+    [VIEW, ALICE]
+  );
 });
 
 const read = async (table: object, grant?: GrantScope) => {
@@ -268,5 +274,27 @@ describe("the shared channel and session helpers honour the grant", () => {
     expect(
       await ids(projects, projects.id, w, { permissions: ["entity.read"] })
     ).toEqual([]);
+  });
+
+  it("hub views.listViews: view.read only", async () => {
+    const list = async (grant?: GrantScope) => {
+      const caller = hubViewsRouter.createCaller({
+        db: h.db,
+        authenticated: true,
+        userId: ALICE,
+        apiKeyId: randomUUID(),
+        scopes: ["hub-protocol.read"],
+      } as never);
+      const run = () => caller.listViews({ userId: ALICE });
+      const rows = (
+        grant ? await runWithGrant(grant, run) : await run()
+      ) as Array<{
+        id: string;
+      }>;
+      return rows.map((r) => r.id);
+    };
+    expect(await list()).toEqual([VIEW]);
+    expect(await list({ permissions: ["view.read"] })).toEqual([VIEW]);
+    expect(await list({ permissions: ["entity.read"] })).toEqual([]);
   });
 });
