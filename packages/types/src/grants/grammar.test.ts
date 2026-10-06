@@ -13,7 +13,7 @@ import {
   permits,
   resolveKeyExpiry,
   type GrantRequest,
-} from "./grants.js";
+} from "./grammar.js";
 
 const readKnowledge: GrantRequest = {
   subject: "entity",

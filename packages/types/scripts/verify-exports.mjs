@@ -52,8 +52,31 @@ async function verify() {
     process.exit(1);
   }
 
+  // The grants sub-path (`@synap-core/types/grants`): the grammar the backend
+  // enforces and the model every grant selector renders. A sub-path whose
+  // dist lost a function would only fail at a consumer's runtime.
+  const GRANTS_RUNTIME_EXPORTS = [
+    "parsePermission",
+    "permits",
+    "resolveKeyExpiry",
+    "GRANT_SUBJECT_CATALOG",
+    "toggleGrant",
+    "summarizeGrant",
+    "GRANT_PRESETS",
+  ];
+  const grants = await import("../dist/grants/index.js");
+  const missingGrants = GRANTS_RUNTIME_EXPORTS.filter(
+    (name) => grants[name] === undefined
+  );
+  if (missingGrants.length > 0) {
+    console.error(
+      `Missing runtime exports from dist/grants/index.js: ${missingGrants.join(", ")}`
+    );
+    process.exit(1);
+  }
+
   console.log(
-    `All ${REQUIRED_RUNTIME_EXPORTS.length} runtime exports verified in dist/index.js and dist/events/index.js`
+    `All ${REQUIRED_RUNTIME_EXPORTS.length} runtime exports verified in dist/index.js and dist/events/index.js; ${GRANTS_RUNTIME_EXPORTS.length} in dist/grants/index.js`
   );
 }
 
