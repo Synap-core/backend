@@ -54,6 +54,7 @@ const state = {
   grantArgs: null as Record<string, unknown> | null,
   keyInput: null as Record<string, unknown> | null,
   revokedKeyCalls: [] as Array<Record<string, unknown>>,
+  revokedGrantKeyIdCalls: [] as string[][],
   approvedWrites: [] as Array<{ appId: string; requests: unknown }>,
   existingKeyIds: [] as string[],
   workspaceIds: [WORKSPACE_ID],
@@ -122,6 +123,15 @@ class FakeApiKeyRepository {
   }
 }
 
+/** The ONE grant write door — the cascade a rotate/revoke owes. */
+class FakeGrantRepository {
+  constructor(_db: unknown) {}
+  async revokeForKeys(apiKeyIds: string[], _revokedBy: string | null) {
+    state.revokedGrantKeyIdCalls.push(apiKeyIds);
+    return apiKeyIds.length;
+  }
+}
+
 class FakeEventRepository {
   constructor(_sql: unknown) {}
 }
@@ -133,6 +143,7 @@ vi.mock("@synap/database", async (importOriginal) => {
     db: fakeDb,
     AppRepository: FakeAppRepository,
     ApiKeyRepository: FakeApiKeyRepository,
+    GrantRepository: FakeGrantRepository,
     EventRepository: FakeEventRepository,
   };
 });
@@ -205,6 +216,7 @@ beforeEach(() => {
   state.grantArgs = null;
   state.keyInput = null;
   state.revokedKeyCalls = [];
+  state.revokedGrantKeyIdCalls = [];
   state.approvedWrites = [];
   state.existingKeyIds = [];
   state.workspaceIds = [WORKSPACE_ID];
@@ -301,6 +313,9 @@ describe("POST /apps/:id/key — mint after approval", () => {
     expect(json.keyId).toBe("key-0001");
     // Rotated the app's existing key first.
     expect(state.revokedKeyCalls).toHaveLength(1);
+    // …AND revoked that key's grant at the ONE grant write door, so the
+    // superseded key can never leave an active grant behind.
+    expect(state.revokedGrantKeyIdCalls).toEqual([["old-key-1"]]);
     // Granted exactly the approved reach, tagged with the app's public id.
     expect(state.grantArgs).toMatchObject({
       clientId: PUBLIC_ID,
@@ -336,6 +351,38 @@ describe("POST /apps/:id/key — mint after approval", () => {
 
     expect(res.status).toBe(403);
     expect(state.keyInput).toBeNull();
+  });
+});
+
+describe("DELETE /apps/:id — revoke cascades the keys' grants", () => {
+  it("revokes the app's grants, then its keys, then soft-deletes the app", async () => {
+    state.app = makeApp();
+    state.existingKeyIds = ["old-key-1", "old-key-2"];
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+
+    const res = await app.request(`/apps/${PUBLIC_ID}`, { method: "DELETE" });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { revoked: boolean; public_id: string };
+    expect(json).toMatchObject({ revoked: true, public_id: PUBLIC_ID });
+    // The app's grants are revoked at the ONE grant write door…
+    expect(state.revokedGrantKeyIdCalls).toEqual([
+      ["old-key-1", "old-key-2"],
+    ]);
+    // …and the keys themselves.
+    expect(state.revokedKeyCalls).toHaveLength(1);
+  });
+
+  it("NEGATIVE CONTROL: a non-owner revokes nothing — no grant, no key", async () => {
+    state.app = makeApp();
+    state.existingKeyIds = ["old-key-1"];
+    const app = makeApp_({ scopes: WRITE, userId: OTHER });
+
+    const res = await app.request(`/apps/${PUBLIC_ID}`, { method: "DELETE" });
+
+    expect(res.status).toBe(404);
+    expect(state.revokedGrantKeyIdCalls).toHaveLength(0);
+    expect(state.revokedKeyCalls).toHaveLength(0);
   });
 });
 

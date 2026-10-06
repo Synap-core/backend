@@ -17,7 +17,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db, inArray, AppRepository } from "@synap/database";
+import { db, inArray, AppRepository, GrantRepository } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { router, protectedProcedure } from "../trpc.js";
@@ -80,6 +80,9 @@ export const appsRouter = router({
       }
       const keyIds = await repo.keyIdsFor(found.app.publicId);
       if (keyIds.length > 0) {
+        // Revoke the keys' grants too (the ONE grant write door) before the
+        // keys themselves — a revoked app must not leave an active grant.
+        await new GrantRepository(db).revokeForKeys(keyIds, ctx.userId);
         await revokeApiKeys(db, {
           where: inArray(apiKeys.id, keyIds),
           revokedBy: ctx.userId,

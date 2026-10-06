@@ -1,6 +1,8 @@
 /**
  * REAL-POSTGRES (PGlite) test for `grants`: the 0305 migration SQL runs as
  * written, so the migration and the repository are proven against each other.
+ * (0307 is applied too — it adds `grants.role_id`, which `attach` writes; the
+ * harness predated 0307 and was red on every insert until this was added.)
  *
  * Pinned: a malformed pattern is never stored; one ACTIVE grant per key; a key
  * that never had a grant resolves to null (legacy), while a key whose grant was
@@ -21,6 +23,10 @@ const MIGRATION = readFileSync(
   resolve(HERE, "../../migrations/0305_grants.sql"),
   "utf8"
 );
+const ROLES = readFileSync(
+  resolve(HERE, "../../migrations/0307_grant_roles.sql"),
+  "utf8"
+);
 const KEY = "11111111-1111-4111-8111-111111111111";
 const OTHER_KEY = "22222222-2222-4222-8222-222222222222";
 
@@ -32,6 +38,7 @@ beforeAll(async () => {
   await pg.exec(`CREATE TABLE api_keys (id uuid PRIMARY KEY);
     INSERT INTO api_keys (id) VALUES ('${KEY}'), ('${OTHER_KEY}');`);
   await pg.exec(MIGRATION);
+  await pg.exec(ROLES); // grants.role_id — the column `attach` writes (0307)
   await pg.exec(MIGRATION); // idempotent
   repo = new GrantRepository(
     drizzle(pg, { schema }) as unknown as ConstructorParameters<
@@ -102,5 +109,37 @@ describe("GrantRepository (0305, PGlite)", () => {
     await attach();
     await pg.exec(`UPDATE grants SET revoked_at = now()`);
     expect(await repo.resolveForKey(KEY)).toMatchObject({ permissions: [] });
+  });
+
+  it("revokeForKeys revokes the given keys' grants and leaves others active", async () => {
+    await attach(); // KEY
+    await attach({ apiKeyId: OTHER_KEY }); // OTHER_KEY
+
+    const n = await repo.revokeForKeys([KEY], "human-9");
+
+    expect(n).toBe(1);
+    // KEY's grant is now deny-all; OTHER_KEY's grant is untouched.
+    expect(await repo.resolveForKey(KEY)).toMatchObject({ permissions: [] });
+    expect((await repo.resolveForKey(OTHER_KEY))?.permissions).toEqual([
+      "entity.knowledge.read",
+    ]);
+    // The revocation is attributed.
+    const { rows } = await pg.query<{ revoked_by: string | null }>(
+      "SELECT revoked_by FROM grants WHERE api_key_id = $1",
+      [KEY]
+    );
+    expect(rows).toEqual([{ revoked_by: "human-9" }]);
+  });
+
+  it("revokeForKeys touches only ACTIVE grants and reports zero when none", async () => {
+    await attach();
+    expect(await repo.revokeForKeys([KEY], "a")).toBe(1);
+    // Already revoked → nothing to revoke; the original attribution survives.
+    expect(await repo.revokeForKeys([KEY], "b")).toBe(0);
+    const { rows } = await pg.query<{ revoked_by: string | null }>(
+      "SELECT revoked_by FROM grants WHERE api_key_id = $1",
+      [KEY]
+    );
+    expect(rows).toEqual([{ revoked_by: "a" }]);
   });
 });

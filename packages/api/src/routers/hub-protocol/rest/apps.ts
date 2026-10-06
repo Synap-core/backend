@@ -19,7 +19,9 @@
  *
  * All rules live in `AppRepository` (the ONE write door) and the canonical
  * primitives: the mint is `ApiKeyRepository.create` + `attachGrantOrRevoke`
- * (GrantRepository); revoke is `revokeApiKeys`. The `app/connect` door ALWAYS
+ * (GrantRepository); revoke is `revokeApiKeys` + `GrantRepository.revokeForKeys`
+ * (a superseded or revoked key's grant is revoked in the same act, so a rotated
+ * key never leaves an active grant). The `app/connect` door ALWAYS
  * proposes — it files through `createPendingProposal` (NOT
  * `checkPermissionOrPropose`), because the gate ladder can answer `granted` for
  * an agent and a granted connect would auto-authorize reach with no review.
@@ -37,6 +39,7 @@ import {
   ApiKeyRepository,
   AppRepository,
   EventRepository,
+  GrantRepository,
   sql,
 } from "@synap/database";
 import { apiKeys, workspaces, KEY_PREFIXES } from "@synap/database/schema";
@@ -335,9 +338,13 @@ export function registerAppsRoutes(app: HubHono): void {
       }
 
       // Rotate: revoke every key already bound to this app (its grants stop
-      // resolving the moment the key is inactive).
+      // resolving the moment the key is inactive) AND revoke those keys' grants
+      // at the ONE grant write door, so a superseded key never leaves an active
+      // grant behind (the app "Can:" line counts reach only from an active key,
+      // which is exactly what hid the stale grant).
       const existingKeyIds = await repo.keyIdsFor(appRow.publicId);
       if (existingKeyIds.length > 0) {
+        await new GrantRepository(db).revokeForKeys(existingKeyIds, userId);
         await revokeApiKeys(db, {
           where: inArray(apiKeys.id, existingKeyIds),
           revokedBy: userId,
@@ -397,6 +404,9 @@ export function registerAppsRoutes(app: HubHono): void {
       }
       const keyIds = await repo.keyIdsFor(found.app.publicId);
       if (keyIds.length > 0) {
+        // Revoke the keys' grants too (the ONE grant write door), so revoking
+        // the app cannot leave an active grant behind.
+        await new GrantRepository(db).revokeForKeys(keyIds, userId);
         await revokeApiKeys(db, {
           where: inArray(apiKeys.id, keyIds),
           revokedBy: userId,

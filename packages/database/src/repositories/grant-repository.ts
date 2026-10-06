@@ -10,7 +10,7 @@
  * same key in the same transaction.
  */
 
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { assertPermissions } from "@synap/governance-policy/grants";
 import { db } from "../client-pg.js";
@@ -122,5 +122,31 @@ export class GrantRepository {
       .from(grants)
       .where(eq(grants.onBehalfOf, onBehalfOf))
       .orderBy(desc(grants.createdAt));
+  }
+
+  /**
+   * Revoke the active grants bound to these key ids (the cascade a key rotation
+   * or revoke owes). A rotated-away or revoked key otherwise leaves its `grants`
+   * row active — the bearer stops, but the grant does not — and the read filter
+   * that counts reach only from an ACTIVE key (`AppRepository`) is exactly what
+   * hid that from the UI. `resolveForKey` reads a revoked grant as deny-all, so
+   * this is what makes "the key stops working" true at the grant layer too.
+   *
+   * Only ACTIVE grants are touched: an already-revoked grant keeps its original
+   * `revoked_by`. Returns how many grants were revoked.
+   */
+  async revokeForKeys(
+    apiKeyIds: string[],
+    revokedBy?: string | null
+  ): Promise<number> {
+    if (apiKeyIds.length === 0) return 0;
+    const rows = await this.db
+      .update(grants)
+      .set({ revokedAt: new Date(), revokedBy: revokedBy ?? null })
+      .where(
+        and(inArray(grants.apiKeyId, apiKeyIds), isNull(grants.revokedAt))
+      )
+      .returning({ id: grants.id });
+    return rows.length;
   }
 }
