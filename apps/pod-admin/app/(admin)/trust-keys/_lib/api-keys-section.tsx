@@ -79,6 +79,13 @@ export interface UnifiedKey {
   workspaceId?: string | null;
   revokedAt?: Date | string | null;
   revokedReason?: string | null;
+  /** What the key may touch (W1; `apiKeys.list` only). null = no grant. */
+  grant?: {
+    permissions: string[];
+    workspaceIds?: string[] | null;
+    projectIds?: string[] | null;
+    entityIds?: string[] | null;
+  } | null;
   user?: {
     id: string;
     email: string | null;

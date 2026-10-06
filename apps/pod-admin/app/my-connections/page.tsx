@@ -29,6 +29,18 @@ import {
   type UnifiedKey,
 } from "../(admin)/trust-keys/_lib/api-keys-section";
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
+import { summarizeGrant } from "@synap-core/types/grants";
+
+/**
+ * What a key may touch, in the words every grant surface uses
+ * (`summarizeGrant` — the same model `<GrantSummary>` renders in the apps).
+ * A key with no grant is bounded only by what you can do yourself.
+ */
+function grantLine(grant: UnifiedKey["grant"]): string {
+  if (!grant) return "No grant: everything you can do";
+  const s = summarizeGrant(grant);
+  return [s.what, ...s.where].join(" · ");
+}
 
 /** Human label for a key's `hubId` — mirrors ConnectForm's integration list. */
 function connectionLabel(hubId: string | null | undefined): string {
@@ -281,6 +293,12 @@ function KeyCard({
           </div>
         </div>
 
+        {apiKey.isActive ? (
+          <p className="text-xs text-foreground/70">
+            <span className="text-foreground/55">Can: </span>
+            {grantLine(apiKey.grant)}
+          </p>
+        ) : null}
         <p className="text-xs text-foreground/55">{meta}</p>
 
         {onRevoke ? (
