@@ -17,6 +17,8 @@
  * declared value), so the two tests together cover the whole path.
  */
 import { describe, it, expect, vi } from "vitest";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const h = vi.hoisted(() => ({
   applyTemplateSkills: vi.fn(
@@ -51,6 +53,19 @@ const DECLARED = [
   },
 ];
 
+const here = dirname(fileURLToPath(import.meta.url));
+const WT_DEFINE = join(
+  here,
+  "../../../../../synap-app/packages/workspace-templates/src/define.ts"
+);
+const SLUG = "brand-library";
+
+/** The REAL sold template, through the real converter. */
+async function realPkg(): Promise<Record<string, unknown>> {
+  const { toPackageDefinition } = await import(/* @vite-ignore */ WT_DEFINE);
+  return toPackageDefinition(SLUG) as Record<string, unknown>;
+}
+
 type Parser = { parse: (v: unknown) => unknown };
 const inputOf = (name: "createFromDefinition" | "reconcileFromDefinition") =>
   (
@@ -60,25 +75,40 @@ const inputOf = (name: "createFromDefinition" | "reconcileFromDefinition") =>
   )._def.inputs[0]!;
 
 describe("template skills — every install door carries them to the applier", () => {
+  it("the SOLD template ships skills (non-vacuity — the template→wire half)", async () => {
+    // Closes the other half of the path: workspace-templates proves
+    // `toPackageDefinition` carries a declaration, the door cases below prove
+    // the doors forward one, and THIS proves the shipped brand-library really
+    // declares creative-director — so the whole chain is exercised on real data.
+    const skills = (await realPkg()).skills as Array<{
+      slug: string;
+      mode: string;
+    }>;
+    expect(Array.isArray(skills)).toBe(true);
+    expect(skills.length).toBeGreaterThan(0);
+    expect(skills.some((s) => s.slug.includes("creative-director"))).toBe(true);
+    expect(skills.every((s) => typeof s.mode === "string")).toBe(true);
+  });
+
   it("Hub /packages/apply: parsed body → applyPackagePostWorkspace → applyTemplateSkills", async () => {
-    const body = PackageApplySchema.parse({
-      _meta: { slug: "brand-library" },
-      skills: DECLARED,
-    }) as { skills?: unknown };
+    // Driven from the REAL definition, so the assertion is that the template's
+    // own declared value arrives at the applier.
+    const source = await realPkg();
+    const body = PackageApplySchema.parse(source) as { skills?: unknown[] };
     // The door must NOT have stripped it.
-    expect(body.skills).toEqual(DECLARED);
+    expect(body.skills).toEqual(source.skills);
 
     h.applyTemplateSkills.mockClear();
     const result = await applyPackagePostWorkspace({
       workspaceId: WS,
-      body: { _meta: { slug: "brand-library" }, skills: body.skills },
+      body: { _meta: { slug: SLUG }, skills: body.skills },
       userId: "u1",
       scopes: [],
     });
     expect(h.applyTemplateSkills).toHaveBeenCalledTimes(1);
     expect(h.applyTemplateSkills.mock.calls[0]![0]).toMatchObject({
       workspaceId: WS,
-      skills: DECLARED,
+      skills: source.skills,
     });
     expect(result.skills).toEqual([]);
   });
