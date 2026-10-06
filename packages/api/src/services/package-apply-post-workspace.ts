@@ -358,6 +358,15 @@ export interface PackagePostWorkspaceBody {
    * parser, and it drops a malformed entry instead of failing the install.
    */
   rules?: unknown[];
+  /**
+   * Skills the template DECLARES for this space (package `skills[]`) — linked
+   * by `applyTemplateSkills`: each is resolved to a pod-wide approved
+   * `system/…` skill and recorded in the brief (`onboarding.skills`). No row is
+   * created. Carried UNTRUSTED (`unknown[]`) on every door; `readTemplateSkills`
+   * is the one parser and drops a malformed entry instead of failing the
+   * install.
+   */
+  skills?: unknown[];
   projectId?: string;
 }
 
@@ -1011,6 +1020,29 @@ async function applyPackagePostWorkspaceInner(
       }
     } catch (e) {
       result.rules = { status: "error", message: (e as Error).message };
+    }
+  }
+
+  // ── Template skills (→ LINKED to the space; refs in the brief) ───────────
+  // A declared skill is not a row the pod creates — it is a pod-wide
+  // `system/<pkg>/<stem>` skill the pod already seeds, and the space LINKS it
+  // by naming it. The link is the brief's `onboarding.skills`, written through
+  // the brief's compare-and-set door (see `services/skills/template-skills.ts`).
+  // APPROVED ONLY: an unresolved or unapproved skill is REPORTED, never
+  // written — a space is never told to use a skill the pod would refuse to
+  // load, and a draft never reaches a model.
+  if (body.skills?.length && workspaceId) {
+    try {
+      const { applyTemplateSkills } = await import(
+        "./skills/template-skills.js"
+      );
+      result.skills = await applyTemplateSkills({
+        workspaceId,
+        userId,
+        skills: body.skills,
+      });
+    } catch (e) {
+      result.skills = { status: "error", message: (e as Error).message };
     }
   }
 

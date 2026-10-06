@@ -193,6 +193,21 @@ export function validateSpaceSkillDeclaration(skill: unknown): string | null {
   return null;
 }
 
+/**
+ * A declared skill AS STORED in the brief — the space's own copy.
+ *
+ * Unlike `SpaceBriefRuleRef`, which points at a rule ROW that carries the
+ * intent, a skill's content lives on the pod-wide `system/…` skill. The
+ * space-owned half — `mode` and `when` — therefore has nowhere else to live and
+ * is kept here verbatim.
+ */
+export interface SpaceBriefSkillRef {
+  /** The skill ref: `system/<pkg>/<stem>` or a bare stem. */
+  slug: string;
+  mode: SpaceSkillMode;
+  when?: string;
+}
+
 /** The brief, as stored at `settings.onboarding`. */
 export interface SpaceBrief {
   /** What this space is for, day to day (steady state). */
@@ -212,6 +227,13 @@ export interface SpaceBrief {
   anchors?: SpaceBriefAnchor[];
   /** Rules this space's template installed (refs, not bodies). */
   rules?: SpaceBriefRuleRef[];
+  /**
+   * Skills this space DECLARES — the space's own refs (slug + mode + when),
+   * written from the template's `skills[]` by the applier, which owns them.
+   * An `always` ref is prepended to every session/run started here; every ref
+   * is surfaced to an agent and ranked first for a find-skills ask.
+   */
+  skills?: SpaceBriefSkillRef[];
   /** Where to look before acting. */
   fetch?: SpaceBriefFetchHint[];
 }
@@ -236,6 +258,7 @@ export const SPACE_BRIEF_TEMPLATE_FIELDS = [
 /** Fields owned by an applier other than the brief reconcile. */
 export const SPACE_BRIEF_APPLIER_OWNED_FIELDS = [
   "rules",
+  "skills",
 ] as const satisfies ReadonlyArray<keyof SpaceBrief>;
 
 export type SpaceBriefTemplateField =
@@ -369,6 +392,26 @@ function readRuleRefs(v: unknown): SpaceBriefRuleRef[] | undefined {
   return out.length ? out : undefined;
 }
 
+/**
+ * A declared skill, or nothing. Stored JSONB is DATA: a row whose slug or mode
+ * is malformed reads as ABSENT rather than half-trusted — the same rule the
+ * authoring validator applies, so a hand-edited brief cannot smuggle in a mode
+ * the loader has never heard of.
+ */
+function readSkillRefs(v: unknown): SpaceBriefSkillRef[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: SpaceBriefSkillRef[] = [];
+  for (const raw of v) {
+    if (validateSpaceSkillDeclaration(raw) !== null) continue;
+    const rec = raw as { slug: unknown; mode: unknown; when?: unknown };
+    const slug = text(rec.slug);
+    if (!slug || !isSpaceSkillMode(rec.mode)) continue;
+    const when = text(rec.when);
+    out.push({ slug, mode: rec.mode, ...(when ? { when } : {}) });
+  }
+  return out.length ? out : undefined;
+}
+
 function readFetch(v: unknown): SpaceBriefFetchHint[] | undefined {
   if (!Array.isArray(v)) return undefined;
   const out: SpaceBriefFetchHint[] = [];
@@ -405,6 +448,7 @@ export function normalizeSpaceBrief(raw: unknown): SpaceBrief | null {
   const doneWhen = text(raw.doneWhen);
   const anchors = readAnchors(raw.anchors);
   const rules = readRuleRefs(raw.rules);
+  const skills = readSkillRefs(raw.skills);
   const fetch = readFetch(raw.fetch);
   return {
     ...(purpose ? { purpose } : {}),
@@ -416,6 +460,7 @@ export function normalizeSpaceBrief(raw: unknown): SpaceBrief | null {
     ...(doneWhen ? { doneWhen } : {}),
     ...(anchors ? { anchors } : {}),
     ...(rules ? { rules } : {}),
+    ...(skills ? { skills } : {}),
     ...(fetch ? { fetch } : {}),
   };
 }

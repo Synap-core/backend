@@ -697,6 +697,11 @@ export const definitionEngineProcedures = {
              * untrusted — `readTemplateRules` is the one parser.
              */
             rules: z.array(z.unknown()).optional(),
+            /**
+             * Declared skills (package `skills[]`) → `applyTemplateSkills`:
+             * each links to the space's brief. Untrusted like `rules`.
+             */
+            skills: z.array(z.unknown()).optional(),
           })
           .passthrough(),
         packageSlug: z.string().optional(),
@@ -909,6 +914,8 @@ export const definitionEngineProcedures = {
                   // The pinned workspace-templates type predates `rules`; the
                   // resolved body carries them (CP cache or bundle).
                   rules: (pkg as { rules?: unknown[] }).rules,
+                  // Same reason as `rules` above.
+                  skills: (pkg as { skills?: unknown[] }).skills,
                   // The rename the old cast erased.
                   flowAutomations:
                     pkg.automations as CreateDefinitionPostWorkspaceSlice["flowAutomations"],
@@ -1891,6 +1898,10 @@ export const definitionEngineProcedures = {
            * is not passthrough), so a reconcile could never converge rules.
            */
           rules: z.array(z.unknown()).optional(),
+          /**
+           * Declared skills — stripped by zod without this, exactly like rules.
+           */
+          skills: z.array(z.unknown()).optional(),
         }),
       })
     )
@@ -1929,7 +1940,8 @@ export const definitionEngineProcedures = {
           input.definition.playbooks?.length ||
           input.definition.flowAutomations?.length ||
           input.definition.actionPlacements?.length ||
-          input.definition.rules?.length)
+          input.definition.rules?.length ||
+          input.definition.skills?.length)
       ) {
         try {
           // Same builder as the create/compose branches — reconcile definitions

@@ -35,6 +35,7 @@ import {
   readSpaceBrief,
   resolveAuthoredDescription,
   resolveSpacePurpose as resolveSpacePurposeLeaf,
+  type SpaceBriefSkillRef,
 } from "@synap-core/types/space-brief";
 import type { HubProtocolCaller } from "../../routers/hub-protocol/rest/_shared.js";
 import { resolveProfileDescription } from "../../utils/profile-presentation.js";
@@ -105,6 +106,11 @@ export interface BuiltSpaceBrief {
   };
   /** Keys of the rules this space's template installed (the brief's refs). */
   rules?: string[];
+  /**
+   * Skills this space declares. An `always` one is already prepended to a
+   * session started here; the list is how the agent knows the rest.
+   */
+  skills?: SpaceBriefSkillRef[];
   expertise?: { starters?: string[]; blindSpots?: string[]; bar?: string };
   /** What this space wants filled: kind + what to capture. */
   collect?: Array<{ kind: string; what?: string; cardinality?: string }>;
@@ -343,6 +349,10 @@ const TRIM_LADDER: Array<[string, (b: BuiltSpaceBrief) => boolean]> = [
   ],
   // Rule keys name rules the pod already applies; a list call re-reads them.
   ["rules", (b) => !!b.rules && (delete b.rules, true)],
+  // Same class as rules — the pod links them and re-reads on a call. `always`
+  // ones are prepended by the loader regardless, so losing the list here does
+  // not lose the skill, only the reminder of the on-demand ones.
+  ["skills", (b) => !!b.skills && (delete b.skills, true)],
   // The playbook LIST goes before purpose, persona, the root anchor and the
   // kinds (founder order 2026-09-28): its `total` stays, so the agent knows
   // to call list_playbooks. `items: []`, not deleted — synap-cli <= de24716
@@ -492,6 +502,7 @@ export async function buildSpaceBrief(p: {
         }
       : undefined;
   const rules = stored.rules?.map((r) => r.key);
+  const skills = stored.skills;
 
   const [keyKinds, playbooks] = await Promise.all([
     (async () => {
@@ -535,6 +546,7 @@ export async function buildSpaceBrief(p: {
     ...(persona ? { persona } : {}),
     ...(anchors ? { anchors } : {}),
     ...(rules?.length ? { rules } : {}),
+    ...(skills?.length ? { skills } : {}),
     ...(expertise ? { expertise } : {}),
     ...(collect.length ? { collect } : {}),
     ...("status" in keyKinds

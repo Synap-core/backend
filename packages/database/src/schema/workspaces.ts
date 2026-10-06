@@ -552,6 +552,16 @@ export interface WorkspaceSpaceBriefRuleRef {
   ruleId?: string;
 }
 
+/** A skill mode — mirror of `SpaceSkillMode`. */
+export type WorkspaceSpaceSkillMode = "always" | "on-demand";
+
+/** A declared skill as stored in the brief — mirror of `SpaceBriefSkillRef`. */
+export interface WorkspaceSpaceBriefSkillRef {
+  slug: string;
+  mode: WorkspaceSpaceSkillMode;
+  when?: string;
+}
+
 export interface WorkspaceSpaceBrief {
   purpose?: string;
   goal?: string;
@@ -562,6 +572,7 @@ export interface WorkspaceSpaceBrief {
   doneWhen?: string;
   anchors?: WorkspaceSpaceBriefAnchor[];
   rules?: WorkspaceSpaceBriefRuleRef[];
+  skills?: WorkspaceSpaceBriefSkillRef[];
   fetch?: WorkspaceSpaceBriefFetchHint[];
 }
 

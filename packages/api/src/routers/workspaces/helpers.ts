@@ -67,6 +67,11 @@ export interface CreateDefinitionPostWorkspaceSlice {
   actionPlacements?: PackagePostWorkspaceBody["actionPlacements"];
   /** Template rules — forwarded verbatim; `applyTemplateRules` parses them. */
   rules?: PackagePostWorkspaceBody["rules"];
+  /**
+   * Declared skills — forwarded verbatim; `applyTemplateSkills` parses them and
+   * links each to the space's brief (approved ones only).
+   */
+  skills?: PackagePostWorkspaceBody["skills"];
 }
 
 /**
@@ -135,6 +140,7 @@ export function buildPostWorkspaceBodyFromDefinition(
       : undefined,
     actionPlacements: definition.actionPlacements,
     rules: definition.rules,
+    skills: definition.skills,
   };
 }
 

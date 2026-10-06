@@ -116,6 +116,7 @@ describe("field classification (non-vacuity)", () => {
         purpose: "p",
         anchors: [{ profileSlug: "k", role: "root" }],
         rules: [{ key: "r" }],
+        skills: [{ slug: "system/synap/creative-director", mode: "always" }],
         fetch: [{ query: "q" }],
       },
     })!;
@@ -268,5 +269,53 @@ describe("validateSpaceSkillDeclaration — the skill a space declares", () => {
     expect(isSpaceSkillMode("on-demand")).toBe(true);
     expect(isSpaceSkillMode("sometimes")).toBe(false);
     expect(isSpaceSkillMode(undefined)).toBe(false);
+  });
+});
+
+describe("the brief KEEPS the space's declared skills (stored JSONB is data)", () => {
+  const read = (skills: unknown) =>
+    readSpaceBrief({ onboarding: { purpose: "p", skills } });
+
+  it("round-trips a well-formed declaration, when included", () => {
+    const brief = read([
+      {
+        slug: "system/synap/creative-director",
+        mode: "always",
+        when: "any content ask",
+      },
+    ]);
+    expect(brief?.skills).toEqual([
+      {
+        slug: "system/synap/creative-director",
+        mode: "always",
+        when: "any content ask",
+      },
+    ]);
+  });
+
+  it("DROPS a malformed row rather than half-trusting it", () => {
+    // A hand-edited brief must not smuggle in a mode the loader has never heard
+    // of, nor a slug no skill could match — the same rule the authoring
+    // validator enforces. The well-formed row beside it still survives.
+    const brief = read([
+      { slug: "system/synap/creative-director", mode: "always" },
+      { slug: "Not A Slug", mode: "always" },
+      { slug: "system/synap/x", mode: "sometimes" },
+      { mode: "always" },
+      "nonsense",
+    ]);
+    expect(brief?.skills).toEqual([
+      { slug: "system/synap/creative-director", mode: "always" },
+    ]);
+  });
+
+  it("an array whose every row is malformed reads as ABSENT, not as []", () => {
+    const brief = read([{ slug: "System/X", mode: "always" }]);
+    expect(brief).not.toBeNull();
+    expect("skills" in brief!).toBe(false);
+  });
+
+  it("a brief with no skills key exposes none", () => {
+    expect(read(undefined)?.skills).toBeUndefined();
   });
 });

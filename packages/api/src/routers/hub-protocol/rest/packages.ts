@@ -412,6 +412,10 @@ export const PackageApplySchema = z.object({
   // rules. Untrusted on purpose (same as the CP schema): `readTemplateRules`
   // is the one parser and drops malformed entries rather than 400 the install.
   rules: z.array(z.unknown()).optional(),
+  // Declared skills (package `skills[]`) → `applyTemplateSkills`, which links
+  // each to the space's brief. Undeclared, zod STRIPS them and a Hub install
+  // never links a skill — the same failure `rules` had. Untrusted on purpose.
+  skills: z.array(z.unknown()).optional(),
   // Template-composition dependencies — resolved BEFORE the workspace step.
   // Mirrors TemplateDependency in @synap-core/workspace-templates verbatim.
   dependencies: z

@@ -1330,6 +1330,7 @@ export const SPACE_BRIEF_FIELD_LABELS: Readonly<
   doneWhen: "Done when",
   anchors: "Read first",
   rules: "Rules",
+  skills: "Skills",
   fetch: "Where to look",
 };
 
