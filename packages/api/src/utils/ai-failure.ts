@@ -31,6 +31,8 @@
  *   plan_quota       — an allowance (provider quota, spend guard) is used up
  *   account_quota    — THIS account's monthly plan quota (IS quota middleware)
  *   not_entitled     — the account's plan does not include AI (IS entitlement middleware)
+ *   credits_empty    — the pod's billing account has no AI credits left (IS account gate)
+ *   access_suspended — the account's subscription payment failed (IS account gate)
  *   account_inactive — this account's AI access is switched off (IS auth middleware)
  *   budget           — the shared monthly AI budget is used up (IS spend guard; NOT the provider)
  *   auth             — 401/403, credentials rejected by the AI service
@@ -42,13 +44,19 @@
  *   invalid_response — the call succeeded but the payload was unusable
  *   unknown          — no usable evidence. Say exactly that.
  */
-import type { IsFailureEnvelope } from "@synap-core/types";
+import type {
+  IsFailureAction,
+  IsFailureActor,
+  IsFailureEnvelope,
+} from "@synap-core/types";
 
 export type AiFailureClass =
   | "quota"
   | "plan_quota"
   | "account_quota"
   | "not_entitled"
+  | "credits_empty"
+  | "access_suspended"
   | "account_inactive"
   | "budget"
   | "context_length"
@@ -80,6 +88,8 @@ export type AiFailureCode =
   | "quota_exhausted"
   | "account_quota_exceeded"
   | "not_entitled"
+  | "credits_empty"
+  | "access_suspended"
   | "account_inactive"
   | "llm_budget_exceeded"
   | "context_length_exceeded"
@@ -104,6 +114,18 @@ export interface AiFailureDescription {
   readonly needsOperator: boolean;
   /** User-facing text. Never asserts an unverified cause. */
   readonly message: string;
+  /**
+   * WHO must act: `payer` for an account refusal, `operator` for a state no
+   * user can fix. Omitted when the class names neither (a transient fault, a
+   * prompt the user must change).
+   */
+  readonly actor?: IsFailureActor;
+  /**
+   * WHAT the actor does (`top_up`, `ask_admin`, …), exactly as the IS stated
+   * it for this caller; `none` for operator states. Omitted when not stated —
+   * never guessed.
+   */
+  readonly action?: IsFailureAction;
 }
 
 /** Extract an HTTP status from whatever shape the failure arrived in. */
@@ -196,6 +218,9 @@ const IS_CODE_TO_CLASS: Record<string, AiFailureClass> = {
   // not-entitled 403 became "credentials rejected" — both false.
   account_quota_exceeded: "account_quota",
   not_entitled: "not_entitled",
+  // The IS account gate (cached Control Plane billing state).
+  credits_empty: "credits_empty",
+  access_suspended: "access_suspended",
   account_inactive: "account_inactive",
   // OUR spend guard, not the provider: `quota_exhausted` above says "the AI
   // provider's quota", which is false for a fleet budget stop.
@@ -335,7 +360,24 @@ const COPY: Record<
     retryable: false,
     needsOperator: false,
     message:
-      "This account's plan does not include AI features right now (the subscription may have lapsed). Retrying will not help \u2014 renew or change the plan to use them.",
+      "This account's plan does not include AI features right now (the subscription may have lapsed). Retrying will not help.",
+  },
+  // The two account-gate states. Short and mark-first: like `not_entitled`,
+  // the ACTION sentence (who does what) is appended from the IS's `action`,
+  // see PAYER_ADVICE.
+  credits_empty: {
+    code: "credits_empty",
+    retryable: false,
+    needsOperator: false,
+    message:
+      "This pod is out of AI credits, so chat and agents are paused. Captures still save.",
+  },
+  access_suspended: {
+    code: "access_suspended",
+    retryable: false,
+    needsOperator: false,
+    message:
+      "AI is paused because the subscription payment failed. Captures still save.",
   },
   // The account itself is switched off — not a credentials fault (the 403
   // used to read "an operator has to fix the AI service credentials"). The
@@ -449,6 +491,63 @@ const COPY: Record<
 };
 
 /**
+ * Classes where the ACCOUNT'S payer must act (pay, renew, re-enable). Every
+ * `needsOperator` class is the operator's. Everything else names no actor.
+ */
+const PAYER_CLASSES: ReadonlySet<AiFailureClass> = new Set([
+  "credits_empty",
+  "access_suspended",
+  "not_entitled",
+  "account_quota",
+  "account_inactive",
+]);
+
+const ACTIONS: ReadonlySet<string> = new Set<IsFailureAction>([
+  "top_up",
+  "upgrade",
+  "ask_admin",
+  "fix_payment",
+  "none",
+]);
+
+/**
+ * The one sentence that tells THIS caller what to do, for the account-gate
+ * classes whose base copy deliberately stops before the action. Keyed by the
+ * IS's `action`, which the IS resolved for the caller (payer vs member).
+ */
+const PAYER_ADVICE: Partial<Record<IsFailureAction, string>> = {
+  top_up: " Top up credits to continue.",
+  upgrade: " Upgrade or renew the plan to continue.",
+  fix_payment: " Update the payment method to continue.",
+  ask_admin: " Ask a billing admin of this account to fix it.",
+};
+
+/**
+ * The account-gate classes whose action sentence comes from PAYER_ADVICE, and
+ * what each says when the IS stated no action (an older IS, or the legacy
+ * middleware refusal): the truth without a CTA nobody vouched for.
+ */
+const ADVICE_DEFAULT: Partial<Record<AiFailureClass, string>> = {
+  credits_empty: " Retrying will not help.",
+  access_suspended: " Retrying will not help.",
+  not_entitled: " Renew or change the plan to use them.",
+};
+
+function actorAndAction(
+  failureClass: AiFailureClass,
+  needsOperator: boolean,
+  envelope: IsFailureEnvelope | undefined
+): { actor?: IsFailureActor; action?: IsFailureAction } {
+  // Operator states never carry a user action, whatever the wire said.
+  if (needsOperator) return { actor: "operator", action: "none" };
+  if (!PAYER_CLASSES.has(failureClass)) return {};
+  const stated = envelope?.action;
+  return typeof stated === "string" && ACTIONS.has(stated)
+    ? { actor: "payer", action: stated as IsFailureAction }
+    : { actor: "payer" };
+}
+
+/**
  * Turn a failure — or an already-known class — into user-facing text.
  *
  * `reference` must be an id that ALREADY exists in the caller's scope (a
@@ -504,12 +603,27 @@ export function describeAiFailure(
       ? ` Reason: ${detail}.`
       : "";
 
+  const { actor, action } = actorAndAction(
+    failureClass,
+    copy.needsOperator,
+    envelope
+  );
+  // No stated action ⇒ no invented one: the base copy already says what is
+  // wrong, and the generic "retrying will not help" stands in for the CTA.
+  const adviceDefault = ADVICE_DEFAULT[failureClass];
+  const payerAdvice =
+    adviceDefault === undefined
+      ? ""
+      : ((action && PAYER_ADVICE[action]) ?? adviceDefault);
+
   return {
     class: failureClass,
     code: copy.code,
     retryable,
     needsOperator: copy.needsOperator,
-    message: `${copy.message}${because}${advice}${reference}`,
+    message: `${copy.message}${payerAdvice}${because}${advice}${reference}`,
+    ...(actor ? { actor } : {}),
+    ...(action ? { action } : {}),
   };
 }
 

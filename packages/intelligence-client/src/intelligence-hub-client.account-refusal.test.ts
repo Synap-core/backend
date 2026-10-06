@@ -39,6 +39,33 @@ const REFUSALS: Array<[string, number, Record<string, unknown>]> = [
       failure: { code: "not_entitled", retryable: false },
     },
   ],
+  // The IS account gate's 402s (`lib/account-gate.ts` → `accountRefusalBody`).
+  [
+    "credits_empty",
+    402,
+    {
+      error: "AI credits are used up",
+      failure: {
+        code: "credits_empty",
+        retryable: false,
+        actor: "payer",
+        action: "top_up",
+      },
+    },
+  ],
+  [
+    "access_suspended",
+    402,
+    {
+      error: "AI access is suspended",
+      failure: {
+        code: "access_suspended",
+        retryable: false,
+        actor: "payer",
+        action: "ask_admin",
+      },
+    },
+  ],
   [
     "account_inactive",
     403,

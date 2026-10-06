@@ -537,6 +537,9 @@ function extractFailureEnvelope(body: string): IsFailureEnvelope | undefined {
 const ACCOUNT_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "account_quota_exceeded",
   "not_entitled",
+  // The IS account gate (cached Control Plane billing state).
+  "credits_empty",
+  "access_suspended",
   "account_inactive",
   "llm_budget_exceeded",
 ]);

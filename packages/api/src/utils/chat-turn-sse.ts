@@ -198,6 +198,11 @@ export function createChatTurnFrameSequencer() {
         // from "not retryable": it tells the surface whether to point at the
         // user or at the operator. Omitted rather than guessed when unknown.
         ...(failure ? { needsOperator: failure.needsOperator } : {}),
+        // WHO acts and WHAT they do ("payer" + "top_up" / "ask_admin", or
+        // "operator" + "none"), so a client can offer the right door without
+        // re-deriving it. Additive; omitted when the verdict names neither.
+        ...(failure?.actor ? { actor: failure.actor } : {}),
+        ...(failure?.action ? { action: failure.action } : {}),
         ...(readout?.cancelled ? { cancelled: true } : {}),
       });
     },

@@ -7469,32 +7469,7 @@ export type UndoPromotePropertyToBodyResult = {
 	reason: UndoPromoteToBodyRefusal;
 	message: string;
 };
-/**
- * ONE door from an AI/IS failure to the words a user reads.
- *
- * The rule this module exists to enforce: **never assert a cause the code did
- * not verify, and never recommend an action that cannot work.** The bug it
- * replaces told users "the AI service is recovering from a temporary overload,
- * please try again shortly" while the real failure was `HTTP 402 Insufficient
- * Balance` — the LLM provider was out of credit. No amount of retrying could
- * ever have fixed that, and nothing was recovering from anything.
- *
- * Classification is EVIDENCE-ONLY: an HTTP status carried on the error, a
- * provider error code, or an unambiguous token in the error text. When there is
- * no evidence, the class is `unknown` and the copy SAYS so — it does not guess.
- *
- * Relationship to `classifyDispatchFailure` (connectors/external-dispatch.ts):
- * that is the sibling classifier for *connector dispatch* failures, which
- * always arrive with a known HTTP status and whose classes drive reconnect /
- * connect affordances in the browser. This one starts from a thrown `unknown`,
- * and needs the distinction that one does not carry — billing/quota exhaustion
- * (operator must act) vs. a retryable outage. It is deliberately a LEAF module
- * (no DB, no connector imports) so the MCP handlers and the chat send path can
- * import it without pulling the dispatch graph in. Keep the two precedence
- * orders in sync in spirit: no-credit and credential-rejection outrank
- * transient, because calling a 402 "temporary" is the exact defect above.
- */
-export type AiFailureClass = "quota" | "plan_quota" | "account_quota" | "not_entitled" | "account_inactive" | "budget" | "context_length" | "content_filter" | "cancelled" | "auth" | "rate_limit" | "timeout" | "circuit" | "upstream" | "bad_request" | "invalid_response" | "unknown";
+export type AiFailureClass = "quota" | "plan_quota" | "account_quota" | "not_entitled" | "credits_empty" | "access_suspended" | "account_inactive" | "budget" | "context_length" | "content_filter" | "cancelled" | "auth" | "rate_limit" | "timeout" | "circuit" | "upstream" | "bad_request" | "invalid_response" | "unknown";
 /**
  * WIRE CONTRACT — the stable `code` emitted on `CHAT_STREAM_ERROR` alongside
  * `error` and `retryable`. The browser reads it to decide affordances (notably
@@ -7507,7 +7482,7 @@ export type AiFailureClass = "quota" | "plan_quota" | "account_quota" | "not_ent
  * remaining classes this module can prove, and collapsing them into `unknown`
  * would throw away evidence we hold.
  */
-export type AiFailureCode = "provider_no_credit" | "quota_exhausted" | "account_quota_exceeded" | "not_entitled" | "account_inactive" | "llm_budget_exceeded" | "context_length_exceeded" | "content_filter" | "cancelled" | "provider_auth" | "rate_limited" | "timeout" | "circuit_open" | "upstream_error" | "bad_request" | "invalid_response" | "unknown";
+export type AiFailureCode = "provider_no_credit" | "quota_exhausted" | "account_quota_exceeded" | "not_entitled" | "credits_empty" | "access_suspended" | "account_inactive" | "llm_budget_exceeded" | "context_length_exceeded" | "content_filter" | "cancelled" | "provider_auth" | "rate_limited" | "timeout" | "circuit_open" | "upstream_error" | "bad_request" | "invalid_response" | "unknown";
 /**
  * A COMMITTED PARTIAL turn — the client-shaped verdict.
  *

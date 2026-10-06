@@ -203,6 +203,13 @@ export interface IsFailureEnvelope {
     | "account_quota_exceeded"
     /** IS entitlement middleware: the account's plan does not include AI. */
     | "not_entitled"
+    /**
+     * IS account gate (cached CP billing state): the pod's billing account has
+     * no AI credits left. Chat and agents are refused; capture still runs.
+     */
+    | "credits_empty"
+    /** IS account gate: the account's subscription payment failed (past due / paused). */
+    | "access_suspended"
     /** IS auth middleware: this account's AI access is switched off. */
     | "account_inactive"
     /** IS spend guard: the shared monthly LLM budget is used up (not the provider's quota). */
@@ -220,7 +227,23 @@ export interface IsFailureEnvelope {
   providerId?: string;
   providerCode?: string;
   retryAfterSeconds?: number;
+  /**
+   * WHO must act before this can work. Set by the IS on its account refusals
+   * (`payer`); `operator` for capacity / provider states no user can fix.
+   * Absent = not stated — never guess one.
+   */
+  actor?: IsFailureActor;
+  /**
+   * WHAT that actor does. Same vocabulary as the Control Plane billing state
+   * (`lib/billing-state.ts` `BILLING_ACTIONS`). `none` = no user action exists.
+   */
+  action?: IsFailureAction;
 }
+
+export type IsFailureActor = "payer" | "operator";
+
+export type IsFailureAction =
+  "top_up" | "upgrade" | "ask_admin" | "fix_payment" | "none";
 
 // =============================================================================
 // AI Step Types (Contract)
