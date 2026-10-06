@@ -13,6 +13,10 @@
     "./postures": {
       "types": "./dist/postures.d.ts",
       "import": "./dist/postures.js"
+    },
+    "./grants": {
+      "types": "./dist/grants.d.ts",
+      "import": "./dist/grants.js"
     }
   },
   "scripts": {
