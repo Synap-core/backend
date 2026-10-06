@@ -27,6 +27,7 @@ import {
   entities,
 } from "@synap/database/schema";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
+import { entityReadVisibleWhere } from "../entities/helpers.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "crypto";
 import { DeliveryService } from "../../services/DeliveryService.js";
@@ -815,7 +816,10 @@ export const signalsRouter = router({
           .where(
             and(
               isNull(entities.deletedAt),
-              sql`${entities.properties}->>'capturedFromFeed' = 'true'`
+              sql`${entities.properties}->>'capturedFromFeed' = 'true'`,
+              // The caller's entity floor — this feed used to return EVERY
+              // user's feed-captured entities (2026-10-06 inventory).
+              entityReadVisibleWhere(userId)
             )
           )
           .orderBy(desc(entities.createdAt))
@@ -828,7 +832,10 @@ export const signalsRouter = router({
           .where(
             and(
               isNull(entities.deletedAt),
-              sql`${entities.properties}->>'capturedFromFeed' = 'true'`
+              sql`${entities.properties}->>'capturedFromFeed' = 'true'`,
+              // The caller's entity floor — this feed used to return EVERY
+              // user's feed-captured entities (2026-10-06 inventory).
+              entityReadVisibleWhere(userId)
             )
           );
 

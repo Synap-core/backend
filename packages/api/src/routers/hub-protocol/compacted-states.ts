@@ -12,8 +12,32 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, desc } from "@synap/database";
-import { compactedStates } from "@synap/database/schema";
+import { db, eq, desc, and } from "@synap/database";
+import { channels, compactedStates } from "@synap/database/schema";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
+
+/**
+ * A compacted state is the summarised memory of ONE channel, so reading or
+ * writing it requires reading that channel. These procedures used to take a
+ * channelId/stateId and touch the row with no floor at all: any hub key could
+ * read another user's conversation summaries, or inject memory blocks into
+ * another user's next session bootstrap (2026-10-06 inventory). NOT_FOUND —
+ * never a distinguishable 403 — so channel ids are no existence oracle.
+ */
+async function assertChannelReadable(
+  userId: string | null | undefined,
+  channelId: string
+): Promise<void> {
+  const row = userId
+    ? await db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
+        .limit(1)
+    : [];
+  if (row.length === 0)
+    throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
+}
 
 const CompactedStateMetadataSchema = z
   .object({
@@ -56,7 +80,8 @@ export const compactedStatesRouter = router({
         metadata: CompactedStateMetadataSchema,
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      await assertChannelReadable(ctx.userId, input.channelId);
       // Auto-increment version if not provided
       let version = input.version;
       if (version === undefined) {
@@ -99,7 +124,8 @@ export const compactedStatesRouter = router({
    */
   getLatest: scopedProcedure(["hub-protocol.read"])
     .input(z.object({ channelId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await assertChannelReadable(ctx.userId, input.channelId);
       const state = await db.query.compactedStates.findFirst({
         where: eq(compactedStates.channelId, input.channelId),
         orderBy: [desc(compactedStates.version)],
@@ -113,7 +139,7 @@ export const compactedStatesRouter = router({
    */
   get: scopedProcedure(["hub-protocol.read"])
     .input(z.object({ stateId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const state = await db.query.compactedStates.findFirst({
         where: eq(compactedStates.id, input.stateId),
       });
@@ -124,6 +150,7 @@ export const compactedStatesRouter = router({
           message: "Compacted state not found",
         });
       }
+      await assertChannelReadable(ctx.userId, state.channelId);
 
       return state;
     }),
@@ -138,7 +165,8 @@ export const compactedStatesRouter = router({
         limit: z.number().int().min(1).max(20).default(5),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await assertChannelReadable(ctx.userId, input.channelId);
       const rows = await db.query.compactedStates.findMany({
         where: eq(compactedStates.channelId, input.channelId),
         orderBy: [desc(compactedStates.version)],

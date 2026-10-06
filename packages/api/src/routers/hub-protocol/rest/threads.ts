@@ -782,6 +782,10 @@ export function registerThreadsRoutes(app: HubHono): void {
       );
     }
     const { threadId } = c.req.valid("param");
+    // The caller's channel floor — this listed the branches of ANY thread for
+    // any hub key (2026-10-06 inventory).
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
     try {
       const branches = await db
         .select({
@@ -793,7 +797,8 @@ export function registerThreadsRoutes(app: HubHono): void {
         .where(
           and(
             eq(channels.parentChannelId, threadId),
-            eq(channels.status, "active")
+            eq(channels.status, "active"),
+            channelVisibilityWhere(userId)
           )
         )
         .orderBy(asc(channels.createdAt));
