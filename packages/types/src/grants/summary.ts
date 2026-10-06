@@ -59,7 +59,13 @@ export interface GrantSummary {
   /** null = no object pinning; else how many objects it is pinned to. */
   readonly entityCount: number | null;
   readonly lifetime: GrantLifetime;
-  /** One line: "Read Entities, Documents; Create Notes · 1 Space · 90 days". */
+  /** What it may do: "Read Entities, Documents; Create Notes" / "Full access". */
+  readonly what: string;
+  /** Narrowing, one part each: "1 Space", "2 Projects". Empty = anywhere. */
+  readonly where: readonly string[];
+  /** The draft's lifetime: "90 days" / "Never expires". */
+  readonly when: string;
+  /** One line: what · where · when. */
   readonly sentence: string;
 }
 
@@ -112,14 +118,32 @@ export function summarizeGrant(
     for (const spec of GRANT_SUBJECT_CATALOG) {
       const { subject } = spec;
       if (!isQualifiedGrantSubject(subject)) {
-        const actions = spec.actions.filter((action) => isGranted(d, { subject, action }));
+        const actions = spec.actions.filter((action) =>
+          isGranted(d, { subject, action })
+        );
         if (actions.length > 0)
-          rows.push({ key: subject, subject, kind: null, label: grantSubjectLabel(subject), actions, all: has(subject) });
+          rows.push({
+            key: subject,
+            subject,
+            kind: null,
+            label: grantSubjectLabel(subject),
+            actions,
+            all: has(subject),
+          });
         continue;
       }
-      const every = spec.actions.filter((action) => isGranted(d, { subject, kind: "*", action }));
+      const every = spec.actions.filter((action) =>
+        isGranted(d, { subject, kind: "*", action })
+      );
       if (every.length > 0)
-        rows.push({ key: subject, subject, kind: "*", label: grantSubjectLabel(subject), actions: every, all: has(subject) });
+        rows.push({
+          key: subject,
+          subject,
+          kind: "*",
+          label: grantSubjectLabel(subject),
+          actions: every,
+          all: has(subject),
+        });
       const kinds = new Set<string>();
       for (const p of valid) {
         const s = p.split(".");
@@ -127,7 +151,8 @@ export function summarizeGrant(
       }
       for (const kind of kinds) {
         const actions = spec.actions.filter(
-          (action) => !every.includes(action) && isGranted(d, { subject, kind, action })
+          (action) =>
+            !every.includes(action) && isGranted(d, { subject, kind, action })
         );
         if (actions.length > 0)
           rows.push({
@@ -154,8 +179,11 @@ export function summarizeGrant(
   else {
     const parts: string[] = [];
     for (const action of GRANT_ACTIONS) {
-      const labels = rows.filter((r) => r.all || r.actions.includes(action)).map((r) => r.label);
-      if (labels.length > 0) parts.push(`${grantActionLabel(action)} ${labels.join(", ")}`);
+      const labels = rows
+        .filter((r) => r.all || r.actions.includes(action))
+        .map((r) => r.label);
+      if (labels.length > 0)
+        parts.push(`${grantActionLabel(action)} ${labels.join(", ")}`);
     }
     if (other.length > 0) parts.push(`+${other.length} more`);
     what = parts.join("; ");
@@ -164,7 +192,8 @@ export function summarizeGrant(
   if (workspaceIds) where.push(count(workspaceIds.length, "workspace"));
   if (projectIds) where.push(count(projectIds.length, "project"));
   if (entityIds) where.push(count(entityIds.length, "entity"));
-  const when = lifetime.kind === "never" ? "Never expires" : `${lifetime.days} days`;
+  const when =
+    lifetime.kind === "never" ? "Never expires" : `${lifetime.days} days`;
 
   return {
     full,
@@ -175,6 +204,9 @@ export function summarizeGrant(
     projectIds,
     entityCount: entityIds ? entityIds.length : null,
     lifetime,
+    what,
+    where,
+    when,
     sentence: [what, ...where, when].join(" · "),
   };
 }
