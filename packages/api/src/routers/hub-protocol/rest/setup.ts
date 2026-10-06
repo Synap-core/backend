@@ -6,6 +6,13 @@
  * the regular API-key auth middleware (it does its own auth here).
  */
 
+import { resolveKeyExpiry } from "@synap/governance-policy/grants";
+import {
+  ExpiresInDaysSchema,
+  GrantInputSchema,
+  assertGrantInput,
+  attachGrantOrRevoke,
+} from "../../../services/key-grant.js";
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
@@ -1168,6 +1175,36 @@ export function registerSetupRoutes(app: HubHono): void {
         ? body.linkedUserId.trim()
         : undefined;
 
+    // ── W1: optional grant (pinned to this workspace) + lifetime ─────────────
+    // Lifetime: omitted → 90 days, a number → that many, null → never.
+    const parsedGrant =
+      body.grant === undefined
+        ? undefined
+        : GrantInputSchema.omit({ workspaceIds: true }).safeParse(body.grant);
+    if (parsedGrant && !parsedGrant.success) {
+      return c.json(
+        { error: "Invalid grant", details: parsedGrant.error.issues },
+        400
+      );
+    }
+    const grant = parsedGrant?.data;
+    try {
+      assertGrantInput(grant);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    const parsedTtl = ExpiresInDaysSchema.safeParse(body.expiresInDays);
+    if (!parsedTtl.success) {
+      return c.json(
+        {
+          error:
+            "expiresInDays must be a whole number of days (1–36500) or null",
+        },
+        400
+      );
+    }
+    const expiresAt = resolveKeyExpiry(parsedTtl.data);
+
     // ── Scopes: caller-declared, validated; default MINIMAL (never the agent bundle) ──
     let scopes: ApiKeyScope[];
     if (body.scopes === undefined) {
@@ -1295,6 +1332,7 @@ export function registerSetupRoutes(app: HubHono): void {
           scope: scopes,
           userId: ownerUserId,
           workspaceId: ws.id,
+          expiresAt: expiresAt ?? undefined,
           description: `Product-neutral service key for workspace ${ws.id} — created via ${auth.authMethod}`,
         },
         ownerUserId,
@@ -1302,6 +1340,18 @@ export function registerSetupRoutes(app: HubHono): void {
       );
       const registrationTrace = toRegistrationTrace(flowId, registration);
       const { apiKey, plainKey } = registration;
+
+      if (grant) {
+        // Attach before the key is handed out; a failure revokes the key.
+        await attachGrantOrRevoke({
+          apiKeyId: apiKey.id,
+          principalUserId: ownerUserId,
+          onBehalfOf: ownerUserId,
+          grant: { ...grant, workspaceIds: [ws.id] },
+          expiresAt,
+          createdBy: ownerUserId,
+        });
+      }
 
       if (registration.outcome !== "CONNECTED_VERIFIED") {
         logger.error(
@@ -1341,6 +1391,8 @@ export function registerSetupRoutes(app: HubHono): void {
         workspaceId: ws.id,
         scopes,
         keyType: "service" as const,
+        expiresAt: expiresAt ? expiresAt.toISOString() : null,
+        ...(grant ? { grant: { ...grant, workspaceIds: [ws.id] } } : {}),
         registration: registrationTrace,
       });
     } catch (err) {
