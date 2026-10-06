@@ -21350,6 +21350,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				scopes: string[];
 				expiresAt?: Date | undefined;
+				expiresInDays?: number | null | undefined;
+				grant?: {
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+				} | undefined;
 			};
 			output: {
 				id: `${string}-${string}-${string}-${string}-${string}`;
