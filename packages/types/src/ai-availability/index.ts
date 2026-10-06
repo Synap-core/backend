@@ -357,6 +357,23 @@ function worst(
 }
 
 /**
+ * Payer vs member, from the CP billing block: owner, admin and the pod's own
+ * user pay (founder decision); only `member` does not. A missing or failed
+ * read defaults to `payer`. The ONE reading of the CP's billing role, so no
+ * surface compares role tokens itself. It matters even where `action` is
+ * `none` (an `ok` or operator state), for example whether to offer Reprovision.
+ */
+export function resolveAiViewerRole(
+  billing: AiBillingInput | null | undefined
+): AiViewerRole {
+  return billing &&
+    billing.readFailed === false &&
+    billing.viewerRole === "member"
+    ? "member"
+    : "payer";
+}
+
+/**
  * Resolve the viewer's AI availability. Worst first across billing, the wire
  * refusal and health ({@link AI_AVAILABILITY_PRECEDENCE}).
  *
@@ -379,8 +396,7 @@ export function resolveAiAvailability(
     worst([billingKind, failureKind, healthKind(input.health)]) ??
     (readFailed ? null : "ok");
 
-  const role: AiViewerRole =
-    input.role ?? (cp?.viewerRole === "member" ? "member" : "payer");
+  const role: AiViewerRole = input.role ?? resolveAiViewerRole(cp);
   const canTopUp = input.canTopUp ?? cp?.canTopUp ?? false;
 
   if (kind === null) {

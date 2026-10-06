@@ -7,6 +7,7 @@ import {
   aiAvailabilityCopy,
   resolveAiAvailability,
   resolveAiFailureState,
+  resolveAiViewerRole,
   type AiBillingInput,
 } from "./index.js";
 import { lensStatusBanner } from "../lens/header.js";
@@ -145,6 +146,16 @@ describe("a failed billing read is not ok", () => {
 });
 
 describe("the CTA follows the viewer", () => {
+  it("only a CP `member` is a member; owner, admin, pod owner and an unread block pay", () => {
+    expect(resolveAiViewerRole(billing({ viewerRole: "member" }))).toBe(
+      "member"
+    );
+    for (const viewerRole of ["pod_owner", "owner", "admin"] as const)
+      expect(resolveAiViewerRole(billing({ viewerRole }))).toBe("payer");
+    expect(resolveAiViewerRole({ readFailed: true })).toBe("payer");
+    expect(resolveAiViewerRole(null)).toBe("payer");
+  });
+
   it("a member gets ask_admin", () => {
     const a = resolveAiAvailability({
       failureCode: "credits_empty",
