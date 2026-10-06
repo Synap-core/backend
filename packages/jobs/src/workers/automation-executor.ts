@@ -133,10 +133,20 @@ import {
 } from "./steps/ledger-query.js";
 import { executePlaybookRun } from "./steps/playbook-run.js";
 import {
+  AI_DISPATCH_GUARDRAILS,
   AUTOMATION_SKIP_REASONS,
+  isAiDispatchNode,
   type AutomationSkipReason,
   type PlaybookRunMode,
 } from "@synap-core/types/automations";
+import {
+  AiDispatchCapError,
+  aiCapMessage,
+  dispatchedNothing,
+  openAiDispatchBudget,
+  type AiCapReason,
+} from "./ai-dispatch-budget.js";
+import { resettleAutomationRunFromChildren } from "../utils/automation-parent-settle.js";
 
 import type {
   ExecutionPayload,
@@ -637,6 +647,23 @@ async function executeAutomationFlow(params: {
     let firstFailureMessage: string | null = null;
 
     /**
+     * The run's AI dispatch budget (`AI_DISPATCH_GUARDRAILS`): every
+     * `command` and run-mode `playbook_run` — top level or inside a loop —
+     * reserves one before it dispatches. Enforced HERE so every trigger origin
+     * (cron included) is covered. Lazy: no query until the first AI node.
+     */
+    const aiBudget = openAiDispatchBudget({
+      runId,
+      automationId,
+      triggerConfig: loadedAutomation.triggerConfig,
+    });
+    /** Reserve one AI dispatch for a top-level node, or refuse the step. */
+    const reserveAiDispatchOrThrow = async (): Promise<void> => {
+      const r = await aiBudget.reserve();
+      if (!r.ok) throw new AiDispatchCapError(r.reason, r.message);
+    };
+
+    /**
      * Persist WHICH PATH this run took (D3d) — the one write of the branch
      * decisions the executor alone knows. Called at BOTH terminal points of the
      * node walk (the delay suspension AND the final status update, which a
@@ -911,6 +938,8 @@ async function executeAutomationFlow(params: {
               // capability-grant/exec-mode gating for commands awaits the gate
               // helper being extracted to a shared package (jobs cannot import
               // @synap/api — circular dep).
+              // An IS task is a paid AI dispatch: reserve it first.
+              await reserveAiDispatchOrThrow();
               output = await executeCommandStep(
                 data,
                 context,
@@ -1083,7 +1112,8 @@ async function executeAutomationFlow(params: {
               // path (could resolve a large fetch/trigger array) — without a cap a
               // single run could fan out into thousands of paid IS dispatches.
               // Aligned with the query-node limit (100).
-              const MAX_LOOP_ITERATIONS = 100;
+              const MAX_LOOP_ITERATIONS =
+                AI_DISPATCH_GUARDRAILS.maxLoopIterations;
               const items = rawItems.slice(0, MAX_LOOP_ITERATIONS);
               if (rawItems.length > MAX_LOOP_ITERATIONS) {
                 logger.warn(
@@ -1157,7 +1187,13 @@ async function executeAutomationFlow(params: {
 
               // Execute the body subgraph for each item
               const iterationResults: unknown[] = [];
+              // Set when the AI dispatch budget refuses an item: that item and
+              // every later one are skipped, and the step is refused below
+              // with the count — never a silent truncation.
+              let aiCapped: { reason: AiCapReason; atItem: number } | null =
+                null;
               for (let i = 0; i < items.length; i++) {
+                if (aiCapped) break;
                 // Set loop context
                 context.loop = { item: items[i], index: i };
 
@@ -1168,6 +1204,16 @@ async function executeAutomationFlow(params: {
                 let itemFiltered = false;
 
                 for (const childNode of bodyNodes) {
+                  // AI dispatch budget, counted across iterations. A refusal
+                  // stops THIS item and every later one (see `aiCapped`).
+                  const childIsAi = isAiDispatchNode(childNode);
+                  if (childIsAi) {
+                    const r = await aiBudget.reserve();
+                    if (!r.ok) {
+                      aiCapped = { reason: r.reason, atItem: i };
+                      break;
+                    }
+                  }
                   try {
                     let childOutput: unknown = {};
 
@@ -1259,6 +1305,10 @@ async function executeAutomationFlow(params: {
                           producerAgentUserId,
                           { nodeId: childNode.id, stepRunId: stepRun.id }
                         );
+                        // Skipped / reused / proposed: no agent started.
+                        if (childIsAi && dispatchedNothing(childOutput)) {
+                          await aiBudget.release();
+                        }
                         break;
                       case "messages_query":
                         childOutput = await executeMessagesQueryStep(
@@ -1386,6 +1436,24 @@ async function executeAutomationFlow(params: {
               // Mark body nodes as completed so the main loop skips them
               for (const childId of bodyNodeIds) {
                 skippedNodes.add(childId);
+              }
+
+              // The budget refused an item: refuse the STEP with the reason and
+              // the count, so the run cannot read "completed" as if every item
+              // ran. A policy block — never retried, and the run settles
+              // `blocked_by_policy` unless a real error is mixed in.
+              if (aiCapped) {
+                throw new AiDispatchCapError(
+                  aiCapped.reason,
+                  aiCapMessage({
+                    reason: aiCapped.reason,
+                    perRun: aiBudget.perRun,
+                    perDay: aiBudget.perDay,
+                    usedToday: aiBudget.usedToday,
+                    skippedItems: items.length - aiCapped.atItem,
+                    totalItems: rawItems.length,
+                  })
+                );
               }
 
               output = {
@@ -1769,6 +1837,10 @@ async function executeAutomationFlow(params: {
                   "playbook_run node has no playbookId or playbookName"
                 );
 
+              // A run-mode playbook starts an agent: reserve it first.
+              const topIsAi = isAiDispatchNode(node);
+              if (topIsAi) await reserveAiDispatchOrThrow();
+
               output = await executePlaybookRun(
                 {
                   playbookId: data.playbookId,
@@ -1798,6 +1870,9 @@ async function executeAutomationFlow(params: {
                 producerAgentUserId,
                 { nodeId: node.id, stepRunId: stepRun.id }
               );
+              if (topIsAi && dispatchedNothing(output)) {
+                await aiBudget.release();
+              }
               break;
             }
           }
@@ -2023,6 +2098,14 @@ async function executeAutomationFlow(params: {
           reason: firstFailureMessage,
         });
       }
+    }
+
+    // A child playbook run that already FAILED while this run was still
+    // walking found it live and left it alone — settle from it now. Children
+    // that fail later re-settle this run from their own terminal writer.
+    // Never throws (see `automation-parent-settle.ts`).
+    if (finalStatus === "completed" || finalStatus === "blocked_by_policy") {
+      await resettleAutomationRunFromChildren(runId);
     }
 
     logger.info(

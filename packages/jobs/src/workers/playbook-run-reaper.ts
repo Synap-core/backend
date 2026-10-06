@@ -39,6 +39,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { closeSessionViaDoor } from "../utils/session-close.js";
+import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 
 const logger = createLogger({ module: "playbook-run-reaper" });
 
@@ -134,6 +135,14 @@ export async function handlePlaybookRunReaper(): Promise<void> {
     if (reaped.length === 0) {
       logger.debug("No stale playbook runs to reap");
       return;
+    }
+
+    // 1b. A reaped run that an automation started is a FAILED CHILD: settle
+    //     its parent run from it, so the rule's breakers see the failure
+    //     (the incident's runs all died here, and the parent read "completed").
+    //     Never throws; one parent read per reaped run.
+    for (const { id } of reaped) {
+      await settleParentAutomationRunFromChild({ playbookRunId: id });
     }
 
     // 2. Close each reaped run's orphaned session through the ONE door.

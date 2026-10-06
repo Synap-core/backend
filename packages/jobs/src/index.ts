@@ -42,6 +42,15 @@ export {
   stopLocalSyncDriver,
 } from "./workers/local-sync-driver.js";
 
+// A parent automation run settles from its children's outcomes — called by
+// every `playbook_runs` terminal writer in @synap/api (tripwire-enforced).
+export {
+  settleParentAutomationRunFromChild,
+  resettleAutomationRunFromChildren,
+  childFailureMessage,
+  type ParentSettleOutcome,
+} from "./utils/automation-parent-settle.js";
+
 // CP catalog sync — kind vocabulary (imported by @synap/api's catalog-cache-query.ts)
 export { type CatalogKind } from "./workers/cp-catalog-sync.js";
 export {

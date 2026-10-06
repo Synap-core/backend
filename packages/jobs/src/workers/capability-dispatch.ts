@@ -84,6 +84,12 @@ export interface PlaybookRunnerChainContext {
    * reads it; the spine stamps it onto the session it opens.
    */
   triggerEventId?: string;
+  /**
+   * The `automation_step_runs` row that dispatched this run (the playbook_run
+   * step, or the loop step that owns it). Stamped onto the session so a child
+   * failure can flip THAT step (`automation-parent-settle.ts`).
+   */
+  stepRunId?: string;
 }
 
 export interface PlaybookRunnerInput {
@@ -124,10 +130,11 @@ export interface PlaybookRunnerInput {
 
 export interface PlaybookRunnerResult {
   run: { id: string; status: string } | null;
-  /** Null only when `skipped` is `"no-subject"` — nothing was started. */
+  /** Null only when `skipped` is set — nothing was started. */
   session: { id: string; channelId: string | null } | null;
   reused?: boolean;
-  skipped?: "no-subject";
+  /** `cooling_down`: the subject's latest run of this playbook failed recently. */
+  skipped?: "no-subject" | "cooling_down";
 }
 
 type PlaybookRunner = (

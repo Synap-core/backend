@@ -304,6 +304,9 @@ export async function executePlaybookRun(
         ...(automationContext.triggerEventId
           ? { triggerEventId: automationContext.triggerEventId }
           : {}),
+        // The step row that dispatched this run, so a child failure can flip
+        // it (`utils/automation-parent-settle.ts`).
+        ...(attribution?.stepRunId ? { stepRunId: attribution.stepRunId } : {}),
       }
     : undefined;
 

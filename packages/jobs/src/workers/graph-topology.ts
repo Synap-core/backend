@@ -6,6 +6,7 @@
  * import between them.
  */
 import type { AutomationNode, AutomationEdge } from "@synap/database";
+import { LOOP_BODY_NODE_TYPES } from "@synap-core/types/automations";
 
 /**
  * Topological sort of nodes based on edges.
@@ -99,26 +100,10 @@ export function markDescendantsSkipped(
 // Node types a loop may dispatch per-item (mirrors the `switch (childNode.type)`
 // in the loop body). Traversal of a loop's body STOPS at any type not in this
 // set, so control/boundary nodes (switch, delay, nested loop, sub_automation)
-// run once in the main pass rather than being swallowed by the loop.
-const LOOP_BODY_NODE_TYPES = new Set<string>([
-  "command",
-  "output",
-  "playbook_run",
-  "messages_query",
-  "runs_query",
-  "proposals_query",
-  "query",
-  "fetch",
-  "transform",
-  // Per-item AI/gated verbs — dispatched once PER ITEM (MAX_LOOP_ITERATIONS
-  // caps the paid IS/provider fan-out). `condition` is a PER-ITEM FILTER with
-  // continue-semantics (skip the rest of THIS item's body), NOT the main-pass
-  // branch-pruning path. Nested `loop`/`switch` are deliberately EXCLUDED —
-  // they stay traversal boundaries to avoid exponential fan-out.
-  "condition",
-  "skill",
-  "capability",
-]);
+// run once in the main pass rather than being swallowed by the loop. The list
+// lives in `@synap-core/types/automations` so the AI fan-out filter rule reads
+// the SAME body the engine walks.
+const LOOP_BODY_TYPE_SET = new Set<string>(LOOP_BODY_NODE_TYPES);
 
 /**
  * The node ids a loop OWNS as its per-item body: the CONTIGUOUS chain of
@@ -142,7 +127,7 @@ export function computeLoopBodyNodeIds(
     const id = stack.pop() as string;
     if (bodyNodeIds.has(id)) continue;
     const bn = nodeById.get(id);
-    if (!bn || !LOOP_BODY_NODE_TYPES.has(bn.type)) continue; // boundary
+    if (!bn || !LOOP_BODY_TYPE_SET.has(bn.type)) continue; // boundary
     bodyNodeIds.add(id);
     for (const e of getOutEdges(edges, id)) stack.push(e.target);
   }
