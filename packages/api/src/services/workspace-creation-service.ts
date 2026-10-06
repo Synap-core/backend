@@ -25,8 +25,9 @@ import {
   and,
   eq,
   isNull,
-  isNotNull,
   or,
+  findWorkspaceIdentityConflict,
+  WorkspaceIdentityConflictError,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
   type WorkspaceSettings,
@@ -218,47 +219,12 @@ export async function reconcileWorkspaceIfStale(opts: {
  */
 const ADOPT_WRITE_ROLES = new Set(["owner", "admin", "editor"]);
 
-/**
- * NAMED INSTANCES of a template. A template install is idempotent on its slug
- * (`provisioning_proposal_id = <slug>`), which makes every template a singleton
- * per user — the right default for a re-install. A caller that deliberately
- * wants a SECOND copy (one Brand Library per brand, one per agency client)
- * names it: the idempotency key becomes `<slug>:<normalized name>`, so
- *   - the same name again reuses that instance (still idempotent), and
- *   - a different name, or no name, never reaches it.
- * The ONE derivation of that key — every door that accepts an instance name
- * calls this, never re-derives it.
+/*
+ * NAMED INSTANCES are retired (0308, founder 2026-10-06): a template is
+ * installed ONCE per pod — `workspaces_active_package_slug_unique` makes a
+ * second active copy impossible — so there is no `<slug>:<name>` key any more.
+ * The doors that accepted an instance name answer 400.
  */
-export function normalizeWorkspaceInstanceName(instanceName: string): string {
-  return instanceName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-export function workspaceInstanceKey(
-  slug: string | undefined,
-  instanceName?: string
-): string | undefined {
-  if (!slug) return undefined;
-  if (instanceName === undefined) return slug;
-  const normalized = normalizeWorkspaceInstanceName(instanceName);
-  if (!normalized) {
-    throw new Error(
-      `Instance name "${instanceName}" has no letters or digits — it cannot name a workspace instance.`
-    );
-  }
-  return `${slug}:${normalized}`;
-}
-
-/** True when `key` is a NAMED instance key of `slug` (`<slug>:<name>`). */
-export function isNamedInstanceKey(
-  key: string | undefined,
-  slug: string
-): boolean {
-  return !!key && key.startsWith(`${slug}:`);
-}
 
 interface LegacyWorkspaceMatch {
   id: string;
@@ -315,13 +281,10 @@ async function findLegacyWorkspaceMatch(
   slug: string,
   userId: string
 ): Promise<LegacyWorkspaceMatch | null> {
-  // A NAMED instance (`provisioning_proposal_id = '<slug>:<name>'`) is never a
-  // legacy singleton: adopting it would re-stamp its key to `<slug>` and turn
-  // the named copy into the singleton (the next `--as <name>` would then
-  // create a duplicate). Compared by prefix with `left()`, not LIKE, so a `_`
-  // in a slug is never a wildcard.
-  const instancePrefix = `${slug}:`;
-  const notANamedInstance = drizzleSql`coalesce(left(${workspaces.provisioningProposalId}, ${instancePrefix.length}), '') <> ${instancePrefix}`;
+  // Archived spaces are out: they hold no identity (0308) and a reinstall
+  // must not resurrect one. A former NAMED instance (`<slug>:<name>` key) that
+  // is the template's only active space IS its install now, so it is adopted.
+  const live = isNull(workspaces.archivedAt);
   const selectCols = {
     id: workspaces.id,
     ownerId: workspaces.ownerId,
@@ -341,7 +304,7 @@ async function findLegacyWorkspaceMatch(
       and(
         eq(workspaceMembers.userId, userId),
         eq(workspaces.packageSlug, slug),
-        notANamedInstance
+        live
       )
     );
 
@@ -356,7 +319,7 @@ async function findLegacyWorkspaceMatch(
       and(
         eq(workspaceMembers.userId, userId),
         drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${slug}`,
-        notANamedInstance
+        live
       )
     );
 
@@ -403,59 +366,44 @@ async function findLegacyWorkspaceMatch(
 
 /**
  * ONE SPACE PER DOMAIN — the create-time verdict (rule text:
- * `one-space-per-domain.ts`). Every create door that can mint a space an
- * agent asked for calls this BEFORE governance, so an agent's second Content
- * space is refused instead of becoming a proposal the user must decline.
+ * `one-space-per-domain.ts`). Every create door that can mint a space calls
+ * this BEFORE governance, so a second space of a domain is refused instead of
+ * becoming a proposal the user must decline — for EVERY caller, human or
+ * agent (founder 2026-10-06: no duplicate spaces, no user link).
  *
- * A request "mints a second domain space" when it would CREATE (the same
- * reuse decision `createWorkspaceFromDefinitionIdempotent` makes: an exact
- * idempotency-key hit, or — for the singleton key only — the legacy fallback)
- * AND a live space of that domain already exists:
- *   - template mode (`packageSlug`): a live member space installed from that
- *     template — the singleton, any named instance (`<slug>:<name>`), or a
- *     legacy row carrying the slug as `package_slug` / `workspaceSubtype`;
- *   - freehand mode (no slug): a live template-installed space whose name
- *     equals the requested one (case/space-insensitive).
- * Verdict: none found → `create`; found + agent caller → `refuse` with the
- * typed `{status:"exists"}` reply; found + human caller (incl. a human's
- * named instance) → `create` with a guidance `note` for the reply.
+ * What is left for this check after 0308: name and template identity are
+ * enforced pod-wide by the database and the idempotent create (an exact
+ * holder is REUSED, or refused as a typed 409 when the caller cannot write
+ * it). This catches the remaining twin — a live space of the same DOMAIN that
+ * does not hold the template slug: one whose `workspaceSubtype` or
+ * provisioning key names the template (e.g. a copy 0308 detached).
+ *   - reuse (key hit, pod-wide identity holder, legacy match) → `create`
+ *     (the idempotent create reuses; nothing new is minted);
+ *   - a domain twin the caller can see → `refuse` with the typed
+ *     `{status:"exists"}` reply;
+ *   - otherwise → `create`.
  */
 export type OneSpacePerDomainVerdict =
-  | {
-      action: "create";
-      note?: { existingWorkspaceId: string; guidance: string };
-    }
+  | { action: "create" }
   | {
       action: "refuse";
       reply: {
         status: "exists";
         workspaceId: string;
         workspaceName: string;
-        matchedBy: "template" | "name";
+        matchedBy: "template";
         guidance: string;
       };
     };
 
 export async function checkOneSpacePerDomain(input: {
   userId: string;
-  /** Present ⇔ an agent is acting — the refuse branch. */
-  agentUserId?: string | null;
   packageSlug?: string;
-  /** The idempotency key the create would use (`workspaceInstanceKey`). */
+  /** The idempotency key the create would use (the slug, for a template). */
   idempotencyKey?: string;
   workspaceName?: string;
 }): Promise<OneSpacePerDomainVerdict> {
   const { userId, packageSlug, idempotencyKey } = input;
-  const live = and(
-    eq(workspaceMembers.userId, userId),
-    isNull(workspaces.archivedAt)
-  );
-  const cols = {
-    id: workspaces.id,
-    name: workspaces.name,
-    ownerId: workspaces.ownerId,
-    createdAt: workspaces.createdAt,
-  };
 
   // Would this request REUSE? Then it mints nothing — never refuse a reinstall.
   if (idempotencyKey) {
@@ -475,75 +423,59 @@ export async function checkOneSpacePerDomain(input: {
       .limit(1);
     if (hit) return { action: "create" };
   }
-
-  let existing: { id: string; name: string } | undefined;
-  let matchedBy: "template" | "name" = "template";
-  if (packageSlug) {
-    if (
-      !isNamedInstanceKey(idempotencyKey, packageSlug) &&
-      (await findLegacyWorkspaceMatch(packageSlug, userId))
-    ) {
-      return { action: "create" };
-    }
-    const instancePrefix = `${packageSlug}:`;
-    const rows = await db
-      .select(cols)
-      .from(workspaces)
-      .innerJoin(
-        workspaceMembers,
-        eq(workspaceMembers.workspaceId, workspaces.id)
-      )
-      .where(
-        and(
-          live,
-          or(
-            eq(workspaces.packageSlug, packageSlug),
-            eq(workspaces.provisioningProposalId, packageSlug),
-            drizzleSql`left(${workspaces.provisioningProposalId}, ${instancePrefix.length}) = ${instancePrefix}`,
-            drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${packageSlug}`
-          )
-        )
-      );
-    existing = pickExisting(rows, userId);
-  } else if (input.workspaceName?.trim()) {
-    matchedBy = "name";
-    const rows = await db
-      .select(cols)
-      .from(workspaces)
-      .innerJoin(
-        workspaceMembers,
-        eq(workspaceMembers.workspaceId, workspaces.id)
-      )
-      .where(
-        and(
-          live,
-          isNotNull(workspaces.packageSlug),
-          drizzleSql`lower(trim(${workspaces.name})) = ${input.workspaceName.trim().toLowerCase()}`
-        )
-      );
-    existing = pickExisting(rows, userId);
+  // A pod-wide identity holder: the idempotent create reuses it (or refuses
+  // with the typed 409) — never a second space either way.
+  if (
+    await findWorkspaceIdentityConflict(db, {
+      packageSlug: packageSlug ?? null,
+      name: packageSlug ? null : (input.workspaceName ?? null),
+    })
+  ) {
+    return { action: "create" };
   }
+  if (!packageSlug) return { action: "create" };
+  if (await findLegacyWorkspaceMatch(packageSlug, userId)) {
+    return { action: "create" };
+  }
+
+  const instancePrefix = `${packageSlug}:`;
+  const rows = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      ownerId: workspaces.ownerId,
+      createdAt: workspaces.createdAt,
+    })
+    .from(workspaces)
+    .innerJoin(
+      workspaceMembers,
+      eq(workspaceMembers.workspaceId, workspaces.id)
+    )
+    .where(
+      and(
+        eq(workspaceMembers.userId, userId),
+        isNull(workspaces.archivedAt),
+        or(
+          eq(workspaces.provisioningProposalId, packageSlug),
+          drizzleSql`left(${workspaces.provisioningProposalId}, ${instancePrefix.length}) = ${instancePrefix}`,
+          drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${packageSlug}`
+        )
+      )
+    );
+  const existing = pickExisting(rows, userId);
   if (!existing) return { action: "create" };
-
-  const guidance = oneSpacePerDomainGuidance({
-    workspaceId: existing.id,
-    name: existing.name,
-  });
-  if (input.agentUserId) {
-    return {
-      action: "refuse",
-      reply: {
-        status: "exists",
-        workspaceId: existing.id,
-        workspaceName: existing.name,
-        matchedBy,
-        guidance,
-      },
-    };
-  }
   return {
-    action: "create",
-    note: { existingWorkspaceId: existing.id, guidance },
+    action: "refuse",
+    reply: {
+      status: "exists",
+      workspaceId: existing.id,
+      workspaceName: existing.name,
+      matchedBy: "template",
+      guidance: oneSpacePerDomainGuidance({
+        workspaceId: existing.id,
+        name: existing.name,
+      }),
+    },
   };
 }
 
@@ -778,16 +710,85 @@ export async function createWorkspaceFromDefinitionIdempotent(
       }
     }
 
+    // ── 1a. Pod-wide identity (0308) ───────────────────────────────────────────
+    // A template is installed ONCE per pod and a name is held by ONE active
+    // space — whoever owns it. Step 1 only sees the caller's memberships;
+    // here the holder is found pod-wide, BEFORE the legacy fallback, so the
+    // real install outranks a caller-owned copy that merely shares the domain
+    // (a twin 0308 detached would otherwise be adopted and keyed). A caller who may WRITE it (owner /
+    // admin / editor) gets it back, exactly like a reinstall; anyone else gets
+    // the typed 409 naming it — never a second space.
+    //   - template install → matched by slug only. A different space that
+    //     merely shares the name is NOT adopted (that would graft a template
+    //     onto an unrelated space); the create below refuses it as a typed 409.
+    //   - freehand create  → matched by name.
+    const requestedName = (
+      workspaceName ?? (definition as { workspaceName?: string }).workspaceName
+    )?.trim();
+    const holder = await findWorkspaceIdentityConflict(db, {
+      packageSlug: packageSlug ?? null,
+      name: packageSlug ? null : (requestedName ?? null),
+    });
+    if (holder) {
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, holder.existingWorkspaceId),
+          eq(workspaceMembers.userId, userId)
+        ),
+        columns: { role: true },
+      });
+      if (!membership || !ADOPT_WRITE_ROLES.has(membership.role)) {
+        throw new WorkspaceIdentityConflictError(
+          holder.field,
+          holder.value,
+          holder.existingWorkspaceId
+        );
+      }
+      const held = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, holder.existingWorkspaceId),
+        columns: { settings: true },
+      });
+      const currentSettings = (held?.settings ??
+        null) as WorkspaceSettings | null;
+      const resumed = await resumeIfFailed(
+        holder.existingWorkspaceId,
+        currentSettings
+      );
+      if (resumed) return resumed;
+      const { reconciled, report } = packageSlug
+        ? await reconcileWorkspaceIfStale({
+            workspaceId: holder.existingWorkspaceId,
+            packageSlug,
+            currentSettings,
+            userId,
+            callerVersion: packageVersion,
+            callerDefinition: definition,
+          })
+        : { reconciled: false, report: undefined };
+      logger.info(
+        {
+          userId,
+          field: holder.field,
+          workspaceId: holder.existingWorkspaceId,
+          reconciled,
+        },
+        "createFromDefinition: returning the pod-wide identity holder"
+      );
+      return {
+        workspaceId: holder.existingWorkspaceId,
+        created: false,
+        outcome: reconciled ? "reconciled" : "unchanged",
+        ...(reconciled && report ? { reconciled: report } : {}),
+      };
+    }
+
     // ── 1b. Fallback match for PRE-version-stamping legacy workspaces ──────────
     // Step 1 misses any workspace whose `provisioning_proposal_id` is NULL
     // (installed before migration 0039's column promotion, or created via a
     // door that never passed `proposalId`). Without this, such a workspace
     // duplicates on every reinstall instead of reconciling. See
     // `findLegacyWorkspaceMatch` for the two-tier predicate + overlay guardrail.
-    // Never for a NAMED instance: the legacy pool is the template's singleton
-    // lineage, so a first `--as <name>` install would adopt the singleton
-    // instead of creating its own workspace.
-    if (packageSlug && !isNamedInstanceKey(proposalId, packageSlug)) {
+    if (packageSlug) {
       const fallback = await findLegacyWorkspaceMatch(packageSlug, userId);
       if (fallback) {
         const currentSettings = fallback.settings;

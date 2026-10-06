@@ -60,6 +60,18 @@ vi.mock("../../../utils/permission-check.js", () => ({
 
 vi.mock("../../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 
+// The one-space verdict reads the DB; it is proven on PGlite
+// (one-space-per-domain.pglite.test.ts). This suite is about the preflight gate.
+vi.mock(
+  "../../../services/workspace-creation-service.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../services/workspace-creation-service.js")
+    >()),
+    checkOneSpacePerDomain: async () => ({ action: "create" }),
+  })
+);
+
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerPackagesRoutes } from "./packages.js";
 import type { HubHono, HubVariables } from "./_shared.js";
@@ -120,6 +132,8 @@ describe("POST /packages/apply — LIVE preflight gate", () => {
   it("returns 422 on a preflight LIVE failure and never reaches permission/materialize", async () => {
     mockPreflight.mockResolvedValue(conflictReport);
     const res = await apply(buildApp(), {
+      // A template body carries its slug (0308: no slug + no target = 400).
+      _meta: { slug: "client-pack" },
       profiles: [
         { slug: "client", displayName: "Client", profileKind: "role" },
       ],
@@ -136,6 +150,7 @@ describe("POST /packages/apply — LIVE preflight gate", () => {
   it("force:true does NOT bypass a LIVE structural failure (still 422)", async () => {
     mockPreflight.mockResolvedValue(conflictReport);
     const res = await apply(buildApp(), {
+      _meta: { slug: "client-pack" },
       force: true,
       profiles: [
         { slug: "client", displayName: "Client", profileKind: "role" },
@@ -186,6 +201,8 @@ describe("POST /packages/apply — LIVE preflight gate", () => {
     mockApplyPost.mockResolvedValue({});
 
     const res = await apply(buildApp(), {
+      // A template body carries its slug (0308: no slug + no target = 400).
+      _meta: { slug: "client-pack" },
       profiles: [{ slug: "client", displayName: "Client" }],
     });
     expect(res.status).toBe(201);

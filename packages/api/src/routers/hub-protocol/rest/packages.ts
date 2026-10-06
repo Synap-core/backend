@@ -17,10 +17,7 @@ import {
   ComposeOverlayError,
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
-import {
-  checkOneSpacePerDomain,
-  workspaceInstanceKey,
-} from "../../../services/workspace-creation-service.js";
+import { checkOneSpacePerDomain } from "../../../services/workspace-creation-service.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
 import { resolveProjectForPackInstall } from "../../../services/resolve-project-for-pack-install.js";
@@ -162,14 +159,11 @@ export const PackageApplySchema = z.object({
    */
   agentUserId: z.string().optional(),
   /**
-   * Install a NAMED instance of this template — a deliberate second copy (one
-   * Brand Library per brand, one per agency client). The idempotency key
-   * becomes `<slug>:<normalized name>` (`workspaceInstanceKey`, the ONE
-   * derivation) and the workspace is named after it, so re-running with the
-   * same name reuses that instance. Absent → the template stays a singleton
-   * per user (re-install reuses it), exactly as before.
+   * RETIRED (0308, founder 2026-10-06): a template is installed once per pod,
+   * so there are no named second instances. Still parsed so a caller that
+   * sends it gets an explicit 400 instead of a silently dropped field.
    */
-  instanceName: z.string().trim().min(1).max(120).optional(),
+  instanceName: z.string().optional(),
   /**
    * Bypass ADVISORY preflight findings (e.g. the wave-2 pure `validateTemplate`
    * lint below). It MUST NOT bypass a LIVE structural failure — a profileKind
@@ -499,40 +493,42 @@ export function registerPackagesRoutes(app: HubHono): void {
     const agentUserId = body.agentUserId ?? c.get("agentUserId") ?? undefined;
     const result: Record<string, unknown> = {};
 
-    // ── Instance identity: singleton per template, or a NAMED instance ─────
-    // `idempotencyKey` is what the create path matches an existing workspace
-    // on; a named instance also names the workspace (the caller's name wins
-    // over the template's own `workspaceName`).
-    if (body.instanceName && body.targetWorkspaceId) {
+    // ── Template identity (0308) ─────────────────────────────────────────
+    // A template is installed ONCE per pod, keyed by its slug. A body with no
+    // `_meta.slug` and no `targetWorkspaceId` has no identity: the approve
+    // executor used to fall back to the proposal row id, matched nothing, and
+    // minted a second, empty space beside the real one (incident 2026-10-06,
+    // `synap market update content-os`). Refused here, before governance.
+    if (body.instanceName !== undefined) {
       return c.json(
         {
           error:
-            "instanceName names a NEW workspace; targetWorkspaceId installs onto an existing one — pass one, not both.",
+            "instanceName is retired: a template is installed once per pod. To use it for a project, link the project to the existing space (`project_use_workspace`).",
         },
         400
       );
     }
-    let idempotencyKey: string | undefined;
-    try {
-      idempotencyKey = workspaceInstanceKey(
-        body._meta?.slug ?? undefined,
-        body.instanceName
+    const packageSlug = body._meta?.slug?.trim() || undefined;
+    if (!packageSlug && !body.targetWorkspaceId) {
+      return c.json(
+        {
+          error:
+            "This package has no `_meta.slug`, so it cannot be installed idempotently. Send the catalog slug in `_meta.slug`, or pass `targetWorkspaceId` to install onto an existing space.",
+        },
+        400
       );
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 400);
     }
-    const workspaceName = body.instanceName ?? body.workspaceName;
+    const idempotencyKey = packageSlug;
+    const workspaceName = body.workspaceName;
 
-    // ── One space per domain — BEFORE governance, so an agent's second
-    // domain space is refused (typed `exists`), never filed as a proposal. A
-    // human (incl. a named `--as` instance) may proceed; the reply carries the
-    // same guidance. `targetWorkspaceId` installs onto an existing space —
+    // ── One space per domain — BEFORE governance, so a second space of a
+    // domain is refused (typed `exists`), never filed as a proposal — for
+    // every caller. `targetWorkspaceId` installs onto an existing space —
     // nothing new is minted, so there is nothing to check.
     if (!body.targetWorkspaceId) {
       const verdict = await checkOneSpacePerDomain({
         userId,
-        agentUserId,
-        packageSlug: body._meta?.slug ?? undefined,
+        packageSlug,
         idempotencyKey,
         workspaceName,
       });
@@ -540,7 +536,6 @@ export function registerPackagesRoutes(app: HubHono): void {
       if (verdict.action === "refuse") {
         return c.json({ ...verdict.reply, error: verdict.reply.guidance }, 409);
       }
-      if (verdict.note) result.oneSpacePerDomain = verdict.note;
     }
 
     // ── LIVE preflight gate ───────────────────────────────────────────────

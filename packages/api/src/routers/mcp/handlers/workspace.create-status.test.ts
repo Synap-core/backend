@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   verdict: { action: "create" } as Record<string, unknown>,
   verdictArgs: null as null | Record<string, unknown>,
   materialized: 0,
+  materializeArgs: null as null | Record<string, unknown>,
 }));
 
 vi.mock("../../../services/workspace-creation-service.js", async (orig) => ({
@@ -34,8 +35,9 @@ vi.mock(
     ...(await orig<
       typeof import("../../../services/workspace-materialization-service.js")
     >()),
-    materializeWorkspaceCore: async () => (
+    materializeWorkspaceCore: async (a: Record<string, unknown>) => (
       h.materialized++,
+      (h.materializeArgs = a),
       {
         status: "created",
         workspaceId: "ws-1",
@@ -53,10 +55,10 @@ vi.mock(
 import { workspaceHandlers } from "./workspace.js";
 import type { McpToolContext } from "./shared.js";
 
-const create = async () => {
+const create = async (definition: Record<string, unknown> = {}) => {
   const res = await workspaceHandlers.synap_create_workspace!({
     toolName: "synap_create_workspace",
-    args: { name: "Brand Library", definition: {} },
+    args: { name: "Brand Library", definition },
     userId: "u1",
     agentUserId: "agent-1",
     apiKeyScopes: ["mcp.read", "mcp.write"],
@@ -73,6 +75,7 @@ beforeEach(() => {
   h.verdict = { action: "create" };
   h.verdictArgs = null;
   h.materialized = 0;
+  h.materializeArgs = null;
 });
 
 describe("synap_create_workspace — reply status is the outcome", () => {
@@ -96,11 +99,12 @@ describe("synap_create_workspace — reply status is the outcome", () => {
 });
 
 describe("synap_create_workspace — one space per domain", () => {
-  it("asks the verdict with the agent identity and the requested name", async () => {
+  it("asks the verdict with the requested name — no caller kind", async () => {
     await create();
-    expect(h.verdictArgs).toMatchObject({
+    expect(h.verdictArgs).toEqual({
       userId: "u1",
-      agentUserId: "agent-1",
+      packageSlug: undefined,
+      idempotencyKey: undefined,
       workspaceName: "Brand Library",
     });
   });
@@ -117,14 +121,18 @@ describe("synap_create_workspace — one space per domain", () => {
     expect(await create()).toEqual(reply);
     expect(h.materialized).toBe(0);
   });
+});
 
-  it("a human note rides on the created reply", async () => {
-    const note = { existingWorkspaceId: "ws-brand", guidance: "g" };
-    h.verdict = { action: "create", note };
-    expect(await create()).toMatchObject({
-      status: "created",
-      oneSpacePerDomain: note,
+describe("synap_create_workspace — template identity (0308)", () => {
+  it("a catalog definition's `_meta.slug` is threaded as the package slug and the key", async () => {
+    await create({ _meta: { slug: "brand-library" } });
+    expect(h.verdictArgs).toMatchObject({
+      packageSlug: "brand-library",
+      idempotencyKey: "brand-library",
     });
-    expect(h.materialized).toBe(1);
+    expect(h.materializeArgs).toMatchObject({
+      packageSlug: "brand-library",
+      proposalId: "brand-library",
+    });
   });
 });

@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   installCalls: [] as Array<Record<string, unknown>>,
   liveSlugs: new Set<string>(),
   verdict: { action: "create" } as Record<string, unknown>,
+  installError: null as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -67,6 +68,7 @@ vi.mock(
         input: Record<string, unknown>
       ) => {
         h.installCalls.push(input);
+        if (h.installError) throw h.installError;
         return { workspaceId: "ws-new", created: true };
       },
       // One-space-per-domain verdict is proven on PGlite
@@ -121,6 +123,7 @@ beforeEach(() => {
   h.liveSlugs = new Set();
   h.gateResult = {};
   h.verdict = { action: "create" };
+  h.installError = null;
 });
 
 describe("POST /workspaces/from-definition — D6 governance", () => {
@@ -182,12 +185,69 @@ describe("POST /workspaces/from-definition — one space per domain", () => {
     expect(h.installCalls).toEqual([]);
   });
 
-  it("a human note rides on the 200 reply", async () => {
-    const note = { existingWorkspaceId: "ws-podcasts", guidance: "g" };
-    h.verdict = { action: "create", note };
+  it("the verdict is asked without a caller kind — a human is refused like an agent", async () => {
+    h.verdict = {
+      action: "refuse",
+      reply: { status: "exists", guidance: "g" },
+    };
+    const { status } = await post(appAs(), definitionMintingKind);
+    expect(status).toBe(409);
+    expect(h.gateCalls).toEqual([]);
+  });
+});
+
+describe("POST /workspaces/from-definition — template identity (0308)", () => {
+  it("a TEMPLATE input with no `_meta.slug` and no `proposalId` → 400 before the verdict, the gate and the install", async () => {
+    const { proposalId: _p, ...noKey } = definitionMintingKind;
+    void _p;
+    for (const body of [
+      { ...noKey, templateId: "content-os" },
+      { ...noKey, _meta: { version: "h-1" } },
+    ]) {
+      const { status, body: res } = await post(appAs(), body);
+      expect(status).toBe(400);
+      expect(String(res.error)).toContain("_meta.slug");
+    }
+    expect(h.gateCalls).toEqual([]);
+    expect(h.installCalls).toEqual([]);
+  });
+
+  it("a FREEHAND input (no template marker) without a key still installs", async () => {
+    const { proposalId: _p, ...noKey } = definitionMintingKind;
+    void _p;
     h.gateResult = { granted: true };
-    const { status, body } = await post(appAs(), definitionMintingKind);
+    const { status } = await post(appAs(), noKey);
     expect(status).toBe(200);
-    expect(body.oneSpacePerDomain).toEqual(note);
+  });
+
+  it("`_meta.slug` is the identity: the install and the gate data key on it", async () => {
+    const { proposalId: _p, ...noKey } = definitionMintingKind;
+    void _p;
+    h.gateResult = { granted: true };
+    await post(appAs(), { ...noKey, _meta: { slug: "content-os" } });
+    expect(h.installCalls[0]).toMatchObject({
+      packageSlug: "content-os",
+      proposalId: "content-os",
+    });
+    expect(
+      (h.gateCalls[0] as { data: Record<string, unknown> }).data
+    ).toMatchObject({ packageSlug: "content-os", proposalId: "content-os" });
+  });
+
+  it("a typed identity conflict from the install → 409 naming the holder, never a 500", async () => {
+    const { WorkspaceIdentityConflictError } = await import("@synap/database");
+    h.gateResult = { granted: true };
+    h.installError = new WorkspaceIdentityConflictError(
+      "packageSlug",
+      "content-os",
+      "ws-holder"
+    );
+    const { status, body } = await post(appAs(), definitionMintingKind);
+    expect(status).toBe(409);
+    expect(body).toMatchObject({
+      reasonCode: "WORKSPACE_IDENTITY_CONFLICT",
+      field: "packageSlug",
+      existingWorkspaceId: "ws-holder",
+    });
   });
 });

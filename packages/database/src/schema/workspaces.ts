@@ -15,7 +15,7 @@ import {
   jsonb,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { users } from "./users.js";
 
 export type WorkspaceSidebarSurfacePlacement =
@@ -1031,53 +1031,76 @@ export interface WorkspaceSettings {
   };
 }
 
-export const workspaces = pgTable("workspaces", {
-  id: uuid("id").defaultRandom().primaryKey(),
+export const workspaces = pgTable(
+  "workspaces",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
 
-  // Ownership
-  ownerId: text("owner_id").notNull(),
+    // Ownership
+    ownerId: text("owner_id").notNull(),
 
-  // Metadata
-  name: text("name").notNull(),
-  description: text("description"),
-  domain: text("domain"),
-  // type column removed (migration 0153) — workspace_type is canonical
+    // Metadata
+    name: text("name").notNull(),
+    description: text("description"),
+    domain: text("domain"),
+    // type column removed (migration 0153) — workspace_type is canonical
 
-  // Settings (JSONB for flexibility)
-  settings: jsonb("settings").$type<WorkspaceSettings>().default({}).notNull(),
-  // {
-  //   defaultEntityTypes: ['note', 'task'],
-  //   theme: 'light',
-  //   aiEnabled: true,
-  //   allowExternalSharing: false
-  // }
+    // Settings (JSONB for flexibility)
+    settings: jsonb("settings")
+      .$type<WorkspaceSettings>()
+      .default({})
+      .notNull(),
+    // {
+    //   defaultEntityTypes: ['note', 'task'],
+    //   theme: 'light',
+    //   aiEnabled: true,
+    //   allowExternalSharing: false
+    // }
 
-  // Hot settings keys promoted to real indexed columns (migration 0039) for fast
-  // lookups (pod-admin resolver) + provisioning idempotency. settings JSONB is
-  // still dual-written for back-compat; query predicates use these columns.
-  systemSlug: text("system_slug"),
-  packageSlug: text("package_slug"),
-  provisioningProposalId: text("provisioning_proposal_id"),
-  provisioningStatus: text("provisioning_status"),
-  // Promoted from settings JSONB (migration 0042) for indexed lookup of agent workspaces.
-  workspaceType: text("workspace_type").notNull().default("personal"),
+    // Hot settings keys promoted to real indexed columns (migration 0039) for fast
+    // lookups (pod-admin resolver) + provisioning idempotency. settings JSONB is
+    // still dual-written for back-compat; query predicates use these columns.
+    systemSlug: text("system_slug"),
+    packageSlug: text("package_slug"),
+    provisioningProposalId: text("provisioning_proposal_id"),
+    provisioningStatus: text("provisioning_status"),
+    // Promoted from settings JSONB (migration 0042) for indexed lookup of agent workspaces.
+    workspaceType: text("workspace_type").notNull().default("personal"),
 
-  // Billing (optional - for managed hosting)
-  subscriptionTier: text("subscription_tier"), // 'solo', 'pro', 'team', 'enterprise'
-  subscriptionStatus: text("subscription_status"), // 'active', 'canceled', 'past_due', 'trialing'
-  stripeCustomerId: text("stripe_customer_id"),
+    // Billing (optional - for managed hosting)
+    subscriptionTier: text("subscription_tier"), // 'solo', 'pro', 'team', 'enterprise'
+    subscriptionStatus: text("subscription_status"), // 'active', 'canceled', 'past_due', 'trialing'
+    stripeCustomerId: text("stripe_customer_id"),
 
-  // Timestamps
-  createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  // Soft-archive: when set, the workspace is hidden from default list queries.
-  // Restore by setting back to NULL. Added in migration 0020.
-  archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
-});
+    // Timestamps
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // Soft-archive: when set, the workspace is hidden from default list queries.
+    // Restore by setting back to NULL. Added in migration 0020.
+    archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
+  },
+  (table) => ({
+    // Workspace identity (0308, founder 2026-10-06): POD-WIDE, no user link —
+    // no two ACTIVE spaces share a name (case/space-insensitive), and no two
+    // ACTIVE spaces come from the same template. Archived rows are free.
+    // Write doors map SQLSTATE 23505 to `WorkspaceIdentityConflictError`.
+    // Required at boot by `findMissingIndexes` (schema-coherence.ts).
+    activeNameUnique: uniqueIndex("workspaces_active_name_unique")
+      .on(sql`lower(btrim(${table.name}))`)
+      .where(sql`${table.archivedAt} IS NULL`),
+    activePackageSlugUnique: uniqueIndex(
+      "workspaces_active_package_slug_unique"
+    )
+      .on(table.packageSlug)
+      .where(
+        sql`${table.packageSlug} IS NOT NULL AND ${table.archivedAt} IS NULL`
+      ),
+  })
+);
 
 export const workspaceMembers = pgTable(
   "workspace_members",

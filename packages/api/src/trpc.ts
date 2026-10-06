@@ -75,6 +75,23 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
       throw mapSetupRequiredToTRPC(result.error.cause);
     }
 
+    // Same live path for a typed domain error (steps 3–4 of the order above):
+    // tRPC has already wrapped it as `INTERNAL_SERVER_ERROR` with the original
+    // as `cause`, so the `catch` below never sees it. Without this, every
+    // ConflictError / NotFoundError thrown by a resolver reached the client as
+    // an opaque 500 (probed 2026-10-06 through the fetch adapter).
+    if (!result.ok && result.error.code === "INTERNAL_SERVER_ERROR") {
+      const cause = result.error.cause;
+      if (isSynapLikeError(cause)) {
+        throw new TRPCError({
+          code: statusCodeToTRPCCode(cause.statusCode),
+          message: cause.message,
+          cause,
+        });
+      }
+      if (isDbDomainError(cause)) throw mapDbErrorToTRPC(cause);
+    }
+
     return result;
   } catch (error) {
     // Already a tRPC error — pass through. (Catches the rethrow above too.)

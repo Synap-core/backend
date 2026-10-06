@@ -94,6 +94,19 @@ CREATE INDEX IF NOT EXISTS "idx_workspaces_owner_workspace_type" ON "workspaces"
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "archived_at" timestamp with time zone;
 -- Domain self-description (mirrors 0152_workspace_domain.sql)
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "domain" text;
+-- Workspace identity (0308): no two ACTIVE spaces share a name, pod-wide.
+-- Guarded: on a re-run baseline over a pod that still holds duplicates, the
+-- index is left to 0308 (which dedupes first) instead of aborting boot.
+-- The active-template twin (package_slug) is created by 0308 only — the
+-- column itself arrives in 0039, not in this baseline.
+DO $$
+BEGIN
+  CREATE UNIQUE INDEX IF NOT EXISTS "workspaces_active_name_unique"
+    ON "workspaces" (lower(btrim("name")))
+    WHERE "archived_at" IS NULL;
+EXCEPTION WHEN unique_violation THEN
+  RAISE NOTICE 'baseline: workspaces_active_name_unique deferred to 0308 (duplicate active names present)';
+END $$;
 CREATE INDEX IF NOT EXISTS "workspaces_active_idx"
   ON "workspaces" ("created_at" DESC)
   WHERE "archived_at" IS NULL;

@@ -1,22 +1,24 @@
 /**
- * ONE SPACE PER DOMAIN — `checkOneSpacePerDomain` on PGlite, against the REAL
- * idempotent create (`createWorkspaceFromDefinitionIdempotent`, step 1 key hit
- * + step 1b legacy fallback) so "would this request REUSE?" is the same
- * answer the create gives, never a re-guess.
+ * ONE SPACE PER DOMAIN — `checkOneSpacePerDomain` on PGlite, with the REAL 0308
+ * indexes and the REAL idempotent create, so "would this request REUSE?" is
+ * the same answer the create gives, never a re-guess.
  *
- * Founder rule (2026-10-05): a space is a domain installed once; a project
- * filters it. An AGENT asking for a second space of a live domain is refused
- * with a typed `exists`; a HUMAN (incl. a named `--as` instance) proceeds with
- * the same guidance as a note. First installs and re-installs are unaffected.
+ * Founder rules: a space is a domain installed once; a project filters it
+ * (2026-10-05). No duplicate names or templates, no user link (2026-10-06) —
+ * so the verdict no longer depends on WHO asks: a human is refused exactly
+ * like an agent (the old human "note + create" minted the duplicates).
  *
- * Stubbed exactly as `workspace-named-instance.pglite.test.ts` (the create
- * inserts the workspace + owner membership rows only). Not covered here: the
- * doors' wiring (packages.instance-name / workspace.create-status /
- * workspaces.from-definition-governance tests).
+ * What the check still catches after 0308: a live DOMAIN twin that does not
+ * hold the template slug (a copy 0308 detached: subtype / key name the
+ * template). Exact holders are left to the create (reuse, or the typed 409).
+ * Doors' wiring: `packages.template-identity.test.ts` and siblings.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -26,7 +28,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+  const actual = await importOriginal<typeof import("@synap/database")>();
   const schema = await import("@synap/database/schema");
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");
@@ -34,33 +36,34 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   const db = drizzle(client, { schema });
+  const events = { append: async () => undefined };
   return {
     ...actual,
     db,
     getDb: async () => db,
     reconcileWorkspaceFromDefinition: async () => ({}),
-    // The create: one workspace row + an owner membership — all the
-    // idempotency queries read.
+    // The create: the REAL repository insert (so the identity pre-check and
+    // the 0308 indexes are live) + an owner membership.
     createWorkspaceFromDefinition: async (input: {
       userId: string;
       workspaceName?: string;
+      definition?: { workspaceName?: string };
       packageSlug?: string;
     }) => {
-      const id = uuid();
-      await client.query(
-        `insert into workspaces (id, name, owner_id, package_slug, settings) values ($1,$2,$3,$4,'{}'::jsonb)`,
-        [
-          id,
-          input.workspaceName ?? "Template",
-          input.userId,
-          input.packageSlug ?? null,
-        ]
+      const repo = new actual.WorkspaceRepository(db, events as never);
+      const ws = await repo.create(
+        {
+          name: input.workspaceName ?? input.definition?.workspaceName ?? "New",
+          ownerId: input.userId,
+          settings: input.packageSlug ? { packageSlug: input.packageSlug } : {},
+        },
+        input.userId
       );
       await client.query(
         `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
-        [uuid(), id, input.userId]
+        [uuid(), ws.id, input.userId]
       );
-      return { workspaceId: id };
+      return { workspaceId: ws.id };
     },
   };
 });
@@ -73,13 +76,14 @@ vi.mock("./capabilities/resolve-workspace-template.js", () => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import {
-  checkOneSpacePerDomain,
-  createWorkspaceFromDefinitionIdempotent,
-  workspaceInstanceKey,
-} from "./workspace-creation-service.js";
-import { ONE_SPACE_PER_DOMAIN_RULE } from "./one-space-per-domain.js";
 
+const M0308 = readFileSync(
+  resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../database/migrations/0308_workspace_identity_unique.sql"
+  ),
+  "utf8"
+);
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
 function ddlFor(table: PgTable): string {
@@ -93,7 +97,9 @@ function ddlFor(table: PgTable): string {
     const def =
       c.name === "created_at" || c.name === "updated_at"
         ? " default now()"
-        : "";
+        : c.name === "settings"
+          ? " default '{}'::jsonb"
+          : "";
     return `"${c.name}" ${type}${pk}${def}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
@@ -101,190 +107,167 @@ function ddlFor(table: PgTable): string {
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-const SLUG = "content-studio";
-const definition = { workspaceName: "Content Studio" } as never;
-const AGENT = "agent-1";
-
-function install(userId: string, instanceName?: string) {
-  return createWorkspaceFromDefinitionIdempotent({
-    definition,
-    userId,
-    packageSlug: SLUG,
-    proposalId: workspaceInstanceKey(SLUG, instanceName),
-    workspaceName: instanceName ?? "Content Studio",
-  });
-}
-
-function verdict(
-  userId: string,
-  opts: { agent?: boolean; instanceName?: string; freehandName?: string }
-) {
-  return checkOneSpacePerDomain({
-    userId,
-    agentUserId: opts.agent ? AGENT : undefined,
-    ...(opts.freehandName !== undefined
-      ? { workspaceName: opts.freehandName }
-      : {
-          packageSlug: SLUG,
-          idempotencyKey: workspaceInstanceKey(SLUG, opts.instanceName),
-          workspaceName: opts.instanceName,
-        }),
-  });
+/** A space inserted directly (a legacy / detached / foreign row). */
+async function seed(opts: {
+  name: string;
+  owner: string;
+  member?: { userId: string; role: string };
+  packageSlug?: string | null;
+  key?: string | null;
+  subtype?: string;
+  archived?: boolean;
+}): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into workspaces (id, name, owner_id, package_slug, provisioning_proposal_id, settings, archived_at)
+     values ($1,$2,$3,$4,$5,$6::jsonb,$7)`,
+    [
+      id,
+      opts.name,
+      opts.owner,
+      opts.packageSlug ?? null,
+      opts.key ?? null,
+      JSON.stringify(opts.subtype ? { workspaceSubtype: opts.subtype } : {}),
+      opts.archived ? new Date().toISOString() : null,
+    ]
+  );
+  const m = opts.member ?? { userId: opts.owner, role: "owner" };
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,$4)`,
+    [randomUUID(), id, m.userId, m.role]
+  );
+  return id;
 }
 
 beforeAll(async () => {
   for (const t of [schema.workspaces, schema.workspaceMembers]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
+  await h.client!.exec(M0308);
 });
 
+import {
+  checkOneSpacePerDomain,
+  createWorkspaceFromDefinitionIdempotent,
+} from "./workspace-creation-service.js";
+import { ONE_SPACE_PER_DOMAIN_RULE } from "./one-space-per-domain.js";
+
+const uniq = () => randomUUID().slice(0, 8);
+
+function verdict(userId: string, slug: string, name?: string) {
+  return checkOneSpacePerDomain({
+    userId,
+    packageSlug: slug,
+    idempotencyKey: slug,
+    workspaceName: name,
+  });
+}
+
 describe("one space per domain — template installs (PGlite)", () => {
-  it("first install (no live space) is unaffected — create, no note, even for an agent", async () => {
-    const U = randomUUID();
-    expect(await verdict(U, { agent: true })).toEqual({ action: "create" });
-    expect(
-      await verdict(U, { agent: true, instanceName: "Architech" })
-    ).toEqual({ action: "create" });
+  it("first install (nothing live) → create", async () => {
+    expect(await verdict(randomUUID(), `fresh-${uniq()}`)).toEqual({
+      action: "create",
+    });
   });
 
-  it("an AGENT's second Content space (named instance) is REFUSED with a typed exists + the guidance", async () => {
+  it("a re-install of the caller's own template space → create (the create reuses it)", async () => {
     const U = randomUUID();
-    const first = await install(U);
-    const v = await verdict(U, { agent: true, instanceName: "Architech" });
+    const slug = `studio-${uniq()}`;
+    await createWorkspaceFromDefinitionIdempotent({
+      definition: {} as never,
+      userId: U,
+      packageSlug: slug,
+      proposalId: slug,
+      workspaceName: `Studio ${slug}`,
+    });
+    expect(await verdict(U, slug)).toEqual({ action: "create" });
+  });
+
+  it("a holder of the slug owned by SOMEONE ELSE → create (the create hands it back or answers the typed 409)", async () => {
+    const slug = `shared-${uniq()}`;
+    await seed({
+      name: `Shared ${slug}`,
+      owner: randomUUID(),
+      packageSlug: slug,
+      key: slug,
+    });
+    expect(await verdict(randomUUID(), slug)).toEqual({ action: "create" });
+  });
+
+  it("a twin the caller can WRITE (subtype = slug) → create: the create adopts it, nothing new is minted", async () => {
+    const U = randomUUID();
+    const slug = `own-${uniq()}`;
+    await seed({ name: `Own ${slug}`, owner: U, subtype: slug });
+    expect(await verdict(U, slug)).toEqual({ action: "create" });
+  });
+
+  it("a live DOMAIN TWIN the caller cannot adopt is REFUSED with the typed exists + guidance — for any caller", async () => {
+    const U = randomUUID();
+    const slug = `brand-${uniq()}`;
+    const twin = await seed({
+      name: `Architech ${slug}`,
+      owner: randomUUID(),
+      member: { userId: U, role: "viewer" },
+      packageSlug: null,
+      subtype: slug,
+    });
+    const v = await verdict(U, slug);
     expect(v.action).toBe("refuse");
     if (v.action !== "refuse") return;
     expect(v.reply).toMatchObject({
       status: "exists",
-      workspaceId: first.workspaceId,
-      workspaceName: "Content Studio",
+      workspaceId: twin,
+      workspaceName: `Architech ${slug}`,
       matchedBy: "template",
     });
     expect(v.reply.guidance).toContain("`project_use_workspace`");
     expect(v.reply.guidance).toContain("`file_into_project`");
     expect(v.reply.guidance).toContain(ONE_SPACE_PER_DOMAIN_RULE);
+    // The verdict takes no caller kind any more — it cannot exempt a human.
+    expect(Object.keys(v)).toEqual(["action", "reply"]);
   });
 
-  it("a HUMAN's named `--as` instance is ALLOWED, with the same guidance as a note", async () => {
+  it("a former named-instance key without the slug column is a domain twin too", async () => {
     const U = randomUUID();
-    const first = await install(U);
-    const v = await verdict(U, { instanceName: "Architech" });
-    expect(v).toMatchObject({
-      action: "create",
-      note: { existingWorkspaceId: first.workspaceId },
+    const slug = `lib-${uniq()}`;
+    await seed({
+      name: `Client ${slug}`,
+      owner: U,
+      packageSlug: null,
+      key: `${slug}:client`,
     });
-    if (v.action === "create")
-      expect(v.note?.guidance).toContain(ONE_SPACE_PER_DOMAIN_RULE);
+    expect((await verdict(U, slug)).action).toBe("refuse");
   });
 
-  it("re-installs REUSE, so they are never refused — singleton and an existing named instance", async () => {
+  it("an ARCHIVED twin does not hold the domain", async () => {
     const U = randomUUID();
-    await install(U);
-    await install(U, "Architech"); // a human made it earlier
-    expect(await verdict(U, { agent: true })).toEqual({ action: "create" });
-    expect(
-      await verdict(U, { agent: true, instanceName: "architech" })
-    ).toEqual({ action: "create" });
-  });
-
-  it("an agent's UNNAMED install when only a named instance lives → refused (it would mint a second space)", async () => {
-    const U = randomUUID();
-    const named = await install(U, "Architech");
-    const v = await verdict(U, { agent: true });
-    expect(v).toMatchObject({
-      action: "refuse",
-      reply: { workspaceId: named.workspaceId },
+    const slug = `gone-${uniq()}`;
+    await seed({
+      name: `Gone ${slug}`,
+      owner: U,
+      subtype: slug,
+      archived: true,
     });
-    // …and the real create agrees it would have minted a new space.
-    const r = await install(U);
-    expect(r.created).toBe(true);
+    expect(await verdict(U, slug)).toEqual({ action: "create" });
   });
 
-  it("a legacy unkeyed singleton is ADOPTED by the create, so an agent re-install is not refused", async () => {
-    const U = randomUUID();
-    const legacy = randomUUID();
-    await q(
-      `insert into workspaces (id, name, owner_id, package_slug, settings) values ($1,'Content Studio',$2,$3,'{}'::jsonb)`,
-      [legacy, U, SLUG]
-    );
-    await q(
-      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
-      [randomUUID(), legacy, U]
-    );
-    expect(await verdict(U, { agent: true })).toEqual({ action: "create" });
-    // …but a named instance beside it is a second space.
-    expect(
-      (await verdict(U, { agent: true, instanceName: "Architech" })).action
-    ).toBe("refuse");
-  });
-
-  it("an ARCHIVED space does not hold the domain", async () => {
-    const U = randomUUID();
-    const first = await install(U);
-    await q(`update workspaces set archived_at = now() where id = $1`, [
-      first.workspaceId,
-    ]);
-    expect(
-      await verdict(U, { agent: true, instanceName: "Architech" })
-    ).toEqual({ action: "create" });
-  });
-
-  it("another user's space does not hold MY domain", async () => {
-    await install(randomUUID());
-    expect(
-      await verdict(randomUUID(), { agent: true, instanceName: "Architech" })
-    ).toEqual({ action: "create" });
+  it("another user's twin does not hold MY domain (the twin is not a pod identity)", async () => {
+    const slug = `theirs-${uniq()}`;
+    await seed({ name: `Theirs ${slug}`, owner: randomUUID(), subtype: slug });
+    expect(await verdict(randomUUID(), slug)).toEqual({ action: "create" });
   });
 });
 
-describe("one space per domain — freehand create_workspace by name (PGlite)", () => {
-  it("an agent naming a space after a live domain space (any case/spacing) is refused, matchedBy name", async () => {
+describe("one space per domain — freehand creates (PGlite)", () => {
+  it("a freehand name is never refused here — names are the identity door's job (reuse or typed 409)", async () => {
     const U = randomUUID();
-    const first = await install(U);
-    const v = await verdict(U, {
-      agent: true,
-      freehandName: "  content STUDIO ",
-    });
-    expect(v).toMatchObject({
-      action: "refuse",
-      reply: {
-        status: "exists",
-        workspaceId: first.workspaceId,
-        matchedBy: "name",
-      },
-    });
-  });
-
-  it("a human gets the note, and an unrelated name is untouched", async () => {
-    const U = randomUUID();
-    await install(U);
-    expect((await verdict(U, { freehandName: "Content Studio" })).action).toBe(
-      "create"
-    );
+    const name = `Content ${uniq()}`;
+    await seed({ name, owner: U, packageSlug: `content-${uniq()}` });
     expect(
-      (await verdict(U, { freehandName: "Content Studio" })) as {
-        note?: unknown;
-      }
-    ).toHaveProperty("note");
-    expect(await verdict(U, { agent: true, freehandName: "Podcasts" })).toEqual(
-      {
-        action: "create",
-      }
-    );
-  });
-
-  it("a name equal to a FREEHAND (non-template) space is not a domain duplicate", async () => {
-    const U = randomUUID();
-    const id = randomUUID();
-    await q(
-      `insert into workspaces (id, name, owner_id, settings) values ($1,'Scratch',$2,'{}'::jsonb)`,
-      [id, U]
-    );
-    await q(
-      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
-      [randomUUID(), id, U]
-    );
-    expect(await verdict(U, { agent: true, freehandName: "Scratch" })).toEqual({
-      action: "create",
-    });
+      await checkOneSpacePerDomain({ userId: U, workspaceName: name })
+    ).toEqual({ action: "create" });
+    expect(
+      await checkOneSpacePerDomain({ userId: U, workspaceName: "Podcasts" })
+    ).toEqual({ action: "create" });
   });
 });

@@ -32,6 +32,7 @@ import { governanceCeilingAxisEnum } from "../schema/governance-ceilings.js";
 import { entityExternalLinks } from "../schema/entity-external-links.js";
 import { notificationPreferences } from "../schema/notifications.js";
 import { documents } from "../schema/documents.js";
+import { workspaces } from "../schema/workspaces.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -1870,6 +1871,10 @@ const REQUIRED_INDEX_TABLES = [
   // (0300) to turn a concurrent second finalize into a 409; without it one
   // object can back two documents (deleting either deletes the other's bytes).
   documents,
+  // Workspace identity (0308): the pod-wide active-name and active-template
+  // unique indexes ARE the "one space per name / per template" rule; without
+  // them a race mints a twin and every typed-conflict pre-check is advisory.
+  workspaces,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

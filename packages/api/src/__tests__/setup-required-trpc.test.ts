@@ -38,6 +38,8 @@ import { t } from "../init-trpc.js";
 import { errorCatchingMiddleware } from "../trpc.js";
 import { SetupRequiredError } from "../services/proposals/setup-required-error.js";
 import type { Context } from "../context.js";
+import { NotFoundError } from "@synap-core/core";
+import { WorkspaceIdentityConflictError } from "@synap/database";
 
 const testRouter = t.router({
   missingField: t.procedure.use(errorCatchingMiddleware).mutation(() => {
@@ -52,6 +54,14 @@ const testRouter = t.router({
       failureClass: "no_connection",
       connection: { provider: "google", state: "missing" },
     });
+  }),
+  /** A typed domain refusal (0308) — must keep its 409 and its reasonCode. */
+  identityConflict: t.procedure.use(errorCatchingMiddleware).mutation(() => {
+    throw new WorkspaceIdentityConflictError("name", "Content OS", "ws-1");
+  }),
+  /** Any SynapError keeps its status (was an opaque 500 — probed 2026-10-06). */
+  notFound: t.procedure.use(errorCatchingMiddleware).mutation(() => {
+    throw new NotFoundError("Workspace", "ws-x");
   }),
   /** An honest unknown — MUST stay an opaque 500 (the unchanged contract). */
   boom: t.procedure.use(errorCatchingMiddleware).mutation(() => {
@@ -114,6 +124,20 @@ describe("tRPC door — setup-required payload survives the hop", () => {
     });
     // `missingFields` is present-but-empty for a pure connection failure.
     expect(error.data.missingFields).toEqual([]);
+  });
+
+  it("a typed SynapError keeps its status: identity conflict → CONFLICT/409 + reasonCode", async () => {
+    const { status, error } = await call("identityConflict");
+    expect(error.data.code).toBe("CONFLICT");
+    expect(status).toBe(409);
+    expect(error.data.reasonCode).toBe("WORKSPACE_IDENTITY_CONFLICT");
+    expect(error.message).toContain('"Content OS" already exists');
+  });
+
+  it("…and any other SynapError too (NotFoundError → NOT_FOUND/404)", async () => {
+    const { status, error } = await call("notFound");
+    expect(error.data.code).toBe("NOT_FOUND");
+    expect(status).toBe(404);
   });
 
   it("an unclassified error stays an opaque INTERNAL_SERVER_ERROR", async () => {

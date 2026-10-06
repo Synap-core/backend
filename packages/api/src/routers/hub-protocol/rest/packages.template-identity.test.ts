@@ -1,14 +1,16 @@
 /**
- * Hub Protocol REST — POST /packages/apply NAMED INSTANCES (`instanceName`).
+ * Hub Protocol REST — POST /packages/apply TEMPLATE IDENTITY (0308).
  *
- * The door must turn `instanceName` into the ONE idempotency key
- * (`workspaceInstanceKey`: `<slug>:<normalized name>`) and the workspace name
- * on BOTH paths that carry it — the governance gate's stored data (which the
- * `workspace/create` approve executor replays) and the granted materialize —
- * and keep the singleton key (`<slug>`) when no name is given. The key's
- * create/reuse semantics are proven against a real DB in
- * `services/workspace-named-instance.pglite.test.ts`; this file covers the
- * door's wiring, with the same isolated-Hono harness as
+ * A template is installed ONCE per pod, keyed by its slug (founder
+ * 2026-10-06). The door must:
+ *   - refuse a body with no `_meta.slug` and no `targetWorkspaceId` (400,
+ *     before governance) — the incident: a slug-less `market update` became a
+ *     proposal keyed on its own row id and minted a second, empty space;
+ *   - refuse the retired `instanceName` (400) instead of silently dropping it;
+ *   - key both the governance data (replayed by the approve executor) and the
+ *     granted materialize on the slug.
+ * Create/reuse semantics against real indexes: `services/workspace-template-
+ * once.pglite.test.ts`. Same isolated-Hono harness as
  * `packages.preflight-gate.test.ts`.
  */
 
@@ -118,7 +120,7 @@ const PKG = {
   profiles: [{ slug: "brand_color", displayName: "Color" }],
 };
 
-describe("POST /packages/apply — named instances", () => {
+describe("POST /packages/apply — template identity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPreflight.mockResolvedValue(okReport);
@@ -131,62 +133,60 @@ describe("POST /packages/apply — named instances", () => {
     });
   });
 
-  it("no instanceName → singleton key = slug, template's own name (unchanged default)", async () => {
+  it("keys the GATE data (replayed on approve) and the granted materialize on the slug", async () => {
     mockCheckPermission.mockResolvedValue({ status: "applied" });
     const res = await apply(buildApp(), PKG);
     expect(res.status).toBe(201);
     expect(mockCheckPermission.mock.calls[0][0].data).toMatchObject({
       proposalId: "brand-library",
+      packageSlug: "brand-library",
       workspaceName: "Brand Library",
     });
     expect(mockMaterialize.mock.calls[0][0]).toMatchObject({
       proposalId: "brand-library",
+      packageSlug: "brand-library",
       workspaceName: "Brand Library",
     });
   });
 
-  it("instanceName → <slug>:<normalized> key + the instance's name, on the GATE data the approve executor replays", async () => {
-    mockCheckPermission.mockResolvedValue({ proposalId: "prop-1" });
-    const res = await apply(buildApp(), {
-      ...PKG,
-      instanceName: "Architech Brand",
-    });
-    expect(res.status).toBeLessThan(300);
-    expect(mockCheckPermission.mock.calls[0][0].data).toMatchObject({
-      name: "Architech Brand",
-      workspaceName: "Architech Brand",
-      proposalId: "brand-library:architech-brand",
-      packageSlug: "brand-library",
-    });
-    // Proposed → nothing materialized yet.
+  it("no `_meta.slug` and no target → 400, before governance (the incident)", async () => {
+    const { _meta: _drop, ...noSlug } = PKG;
+    void _drop;
+    for (const body of [noSlug, { ...noSlug, _meta: { version: "h-1" } }]) {
+      const res = await apply(buildApp(), body);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain(
+        "_meta.slug"
+      );
+    }
+    expect(mockVerdict).not.toHaveBeenCalled();
+    expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockMaterialize).not.toHaveBeenCalled();
   });
 
-  it("instanceName → the same key + name on the GRANTED materialize", async () => {
-    mockCheckPermission.mockResolvedValue({ status: "applied" });
-    await apply(buildApp(), { ...PKG, instanceName: "Architech Brand" });
-    expect(mockMaterialize.mock.calls[0][0]).toMatchObject({
-      proposalId: "brand-library:architech-brand",
-      workspaceName: "Architech Brand",
-      packageSlug: "brand-library",
-    });
-  });
-
-  it("instanceName + targetWorkspaceId → 400, before governance", async () => {
+  it("no slug but a targetWorkspaceId is fine — it installs onto that space", async () => {
+    mockCheckPermission.mockResolvedValue({ proposalId: "p" });
+    const { _meta: _drop, ...noSlug } = PKG;
+    void _drop;
     const res = await apply(buildApp(), {
-      ...PKG,
-      instanceName: "Architech Brand",
+      ...noSlug,
       targetWorkspaceId: "8f894661-db21-4f6d-ba30-5334f7b67bef",
     });
-    expect(res.status).toBe(400);
-    expect(mockCheckPermission).not.toHaveBeenCalled();
-    expect(mockMaterialize).not.toHaveBeenCalled();
+    expect(res.status).toBeLessThan(300);
+    expect(mockCheckPermission).toHaveBeenCalled();
   });
 
-  it("an instanceName with no letters or digits → 400, never the singleton", async () => {
-    const res = await apply(buildApp(), { ...PKG, instanceName: "!!!" });
+  it("instanceName is retired → 400, never a second copy", async () => {
+    const res = await apply(buildApp(), {
+      ...PKG,
+      instanceName: "Architech Brand",
+    });
     expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain(
+      "retired"
+    );
     expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(mockMaterialize).not.toHaveBeenCalled();
   });
 });
 
@@ -202,20 +202,19 @@ describe("POST /packages/apply — one space per domain", () => {
     });
   });
 
-  it("asks the verdict with the instance key, the agent and the name", async () => {
+  it("asks the verdict with the slug key and the name — no caller kind", async () => {
     mockVerdict.mockResolvedValue({ action: "create" });
     mockCheckPermission.mockResolvedValue({ proposalId: "p" });
-    await apply(buildApp("agent-1"), { ...PKG, instanceName: "Architech" });
-    expect(mockVerdict.mock.calls[0][0]).toMatchObject({
+    await apply(buildApp("agent-1"), PKG);
+    expect(mockVerdict.mock.calls[0][0]).toEqual({
       userId: "user-1",
-      agentUserId: "agent-1",
       packageSlug: "brand-library",
-      idempotencyKey: "brand-library:architech",
-      workspaceName: "Architech",
+      idempotencyKey: "brand-library",
+      workspaceName: "Brand Library",
     });
   });
 
-  it("refused → 409 with the typed `exists` body, BEFORE governance (no proposal filed)", async () => {
+  it("refused → 409 with the typed `exists` body, BEFORE governance — for a HUMAN too", async () => {
     const reply = {
       status: "exists",
       workspaceId: "ws-brand",
@@ -224,26 +223,14 @@ describe("POST /packages/apply — one space per domain", () => {
       guidance: "g",
     };
     mockVerdict.mockResolvedValue({ action: "refuse", reply });
-    const res = await apply(buildApp("agent-1"), {
-      ...PKG,
-      instanceName: "Architech",
-    });
-    expect(res.status).toBe(409);
-    // `error` carries the guidance: Hub clients surface a 4xx through it.
-    expect(await res.json()).toEqual({ ...reply, error: reply.guidance });
+    for (const app of [buildApp("agent-1"), buildApp()]) {
+      const res = await apply(app, PKG);
+      expect(res.status).toBe(409);
+      // `error` carries the guidance: Hub clients surface a 4xx through it.
+      expect(await res.json()).toEqual({ ...reply, error: reply.guidance });
+    }
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockMaterialize).not.toHaveBeenCalled();
-  });
-
-  it("a human's note rides on the created reply", async () => {
-    const note = { existingWorkspaceId: "ws-brand", guidance: "g" };
-    mockVerdict.mockResolvedValue({ action: "create", note });
-    mockCheckPermission.mockResolvedValue({ status: "applied" });
-    const res = await apply(buildApp(), { ...PKG, instanceName: "Architech" });
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body.oneSpacePerDomain).toEqual(note);
-    expect(body.workspace).toMatchObject({ outcome: "created" });
   });
 
   it("targetWorkspaceId installs onto an existing space — no verdict asked", async () => {

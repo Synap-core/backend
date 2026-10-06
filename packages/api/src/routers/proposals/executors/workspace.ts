@@ -71,18 +71,51 @@ export function registerWorkspaceExecutors(): void {
       } =
         await import("../../../services/workspace-materialization-service.js");
 
+      // Template identity (0308): a template proposal installs under its slug
+      // (installed once per pod). Falling back to the proposal ROW id as the
+      // key matched nothing and minted a second, empty space beside the real
+      // one (incident 2026-10-06: a catalog definition with no `_meta.slug`).
+      // A template proposal with neither a slug nor an explicit key is refused;
+      // only a freehand create may still key on its proposal id.
+      const innerDefinition = (inner.definition ?? {}) as Record<
+        string,
+        unknown
+      > & { _meta?: { slug?: unknown } };
+      const metaSlug = innerDefinition._meta?.slug;
+      const packageSlug =
+        (inner.packageSlug as string | undefined) ??
+        (typeof metaSlug === "string" && metaSlug.trim()
+          ? metaSlug.trim()
+          : undefined);
+      const explicitKey = inner.proposalId as string | undefined;
+      const isTemplateProposal = !!(
+        packageSlug ||
+        inner.templateId ||
+        innerDefinition._meta ||
+        inner.source === "packages.apply"
+      );
+      if (isTemplateProposal && !packageSlug && !explicitKey) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This template proposal carries no package slug and no idempotency key, so approving it would create a duplicate space. Re-submit it with the catalog slug (`_meta.slug`).",
+        });
+      }
+
       let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
       try {
         core = await materializeWorkspaceCore({
-          definition: (inner.definition ??
-            {}) as import("@synap/database").WorkspaceDefinitionInput,
+          definition:
+            innerDefinition as unknown as import("@synap/database").WorkspaceDefinitionInput,
           userId,
           agentUserId: proposal.agentUserId ?? undefined,
           proposalId:
-            (inner.proposalId as string | undefined) ?? input.proposalId,
+            explicitKey ??
+            (isTemplateProposal ? packageSlug : undefined) ??
+            input.proposalId,
           workspaceName: (inner.workspaceName as string | undefined) ?? name,
           templateId: inner.templateId as string | undefined,
-          packageSlug: inner.packageSlug as string | undefined,
+          packageSlug,
           workspaceType: inner.workspaceType as
             "personal" | "agent" | "project" | "operational" | undefined,
           createdBy:

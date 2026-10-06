@@ -24,10 +24,12 @@
 
 import {
   and,
+  assertWorkspaceIdentityFree,
   automations,
   count,
   drizzleSql,
   eq,
+  toWorkspaceIdentityError,
   workspaces,
   type getDb,
 } from "@synap/database";
@@ -111,10 +113,33 @@ export async function setWorkspaceArchived(
   const archivedAt = args.archive ? now : null;
 
   return database.transaction(async (tx) => {
+    // RESTORE re-enters the active set, so it must not collide with a space
+    // that took the same name or template while this one was archived (0308).
+    // The space is restored only once the user renames one of the two.
+    let identity: { name: string | null; packageSlug: string | null } = {
+      name: null,
+      packageSlug: null,
+    };
+    if (!args.archive) {
+      const [row] = await tx
+        .select({ name: workspaces.name, packageSlug: workspaces.packageSlug })
+        .from(workspaces)
+        .where(eq(workspaces.id, args.workspaceId));
+      if (row) {
+        identity = { name: row.name, packageSlug: row.packageSlug };
+        await assertWorkspaceIdentityFree(tx, {
+          ...identity,
+          excludeId: args.workspaceId,
+        });
+      }
+    }
     await tx
       .update(workspaces)
       .set({ archivedAt, updatedAt: now })
-      .where(eq(workspaces.id, args.workspaceId));
+      .where(eq(workspaces.id, args.workspaceId))
+      .catch((err: unknown) => {
+        throw toWorkspaceIdentityError(err, identity);
+      });
 
     if (args.archive) {
       const stamp = JSON.stringify({

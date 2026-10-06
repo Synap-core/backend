@@ -732,6 +732,33 @@ export const definitionEngineProcedures = {
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Template identity (0308): a catalog definition's `_meta.slug` IS its
+      // identity (installed once per pod) — adopt it when the caller did not
+      // pass `packageSlug`. A template input (`templateId`/`templateName`/
+      // `_meta`) with no slug, no explicit `proposalId` and no target
+      // `workspaceId` has no identity and would mint a second space on every
+      // call (incident 2026-10-06), so it is refused.
+      const meta = (input.definition as { _meta?: { slug?: unknown } })._meta;
+      if (
+        !input.packageSlug &&
+        typeof meta?.slug === "string" &&
+        meta.slug.trim()
+      ) {
+        input.packageSlug = meta.slug.trim();
+      }
+      if (
+        (input.templateId || input.templateName || meta) &&
+        !input.packageSlug &&
+        !input.proposalId &&
+        !input.workspaceId
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This template definition has no package slug (`packageSlug` or `_meta.slug`), no `proposalId` and no target `workspaceId`, so it cannot be installed idempotently.",
+        });
+      }
+
       // CRM workspace creation is an explicit Pod-owner action. The frontend
       // also hides the action for members, but this server gate is the source
       // of truth and prevents direct API calls from bypassing that policy.

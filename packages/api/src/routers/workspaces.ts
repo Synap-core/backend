@@ -35,6 +35,7 @@ import {
   eventRepository,
   ProfileResolutionService,
   WorkspaceRepository,
+  assertWorkspaceIdentityFree,
   WorkspaceMemberRepository,
   drizzleSql,
   projectWorkspaceSettings,
@@ -86,6 +87,18 @@ const coreProcedures = {
     .mutation(async ({ input, ctx }) => {
       const { randomUUID } = await import("crypto");
       const workspaceId = randomUUID();
+
+      // 0. Identity (0308): a name another ACTIVE space holds — or a template
+      // slug another space installed — is a typed 409 BEFORE governance, never
+      // a proposal that could only fail on approval. A typed name is never
+      // suffixed.
+      await assertWorkspaceIdentityFree(db, {
+        name: input.name,
+        packageSlug:
+          typeof input.settings?.packageSlug === "string"
+            ? input.settings.packageSlug
+            : null,
+      });
 
       // 1. Permission check (no workspaceId yet → auto-granted for personal)
       const perm = await checkPermissionOrPropose({
@@ -517,6 +530,16 @@ const coreProcedures = {
               unsafe.join(", "),
           });
         }
+      }
+
+      // 0b. Identity (0308): a rename onto a name another ACTIVE space holds
+      // is refused as a typed 409 BEFORE governance — never filed as a
+      // proposal that could only fail on approval.
+      if (input.name) {
+        await assertWorkspaceIdentityFree(db, {
+          name: input.name,
+          excludeId: input.id,
+        });
       }
 
       // 1. Permission check

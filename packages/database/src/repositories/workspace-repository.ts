@@ -28,6 +28,10 @@ import {
   EXPOSURE_POLICY_SETTINGS_KEY,
   withoutExposurePolicy,
 } from "../utils/exposure-policy-settings.js";
+import {
+  assertWorkspaceIdentityFree,
+  toWorkspaceIdentityError,
+} from "../utils/workspace-identity.js";
 
 export interface PurgeWorkspaceResult {
   entityIds: string[];
@@ -87,6 +91,10 @@ export class WorkspaceRepository extends BaseRepository<
    */
   async create(data: CreateWorkspaceInput, userId: string): Promise<Workspace> {
     const s = (data.settings ?? {}) as WorkspaceSettings;
+    // Identity (0308): pre-check names the existing space and keeps a
+    // caller's transaction alive; the catch below is the race backstop.
+    const identity = { name: data.name, packageSlug: s.packageSlug ?? null };
+    await assertWorkspaceIdentityFree(this.db, identity);
     const [workspace] = await this.db
       .insert(workspaces)
       .values({
@@ -107,7 +115,10 @@ export class WorkspaceRepository extends BaseRepository<
         // declared type ("agent"/"operational") reaches the column, not just JSONB.
         ...(s.workspaceType ? { workspaceType: s.workspaceType } : {}),
       } as NewWorkspace)
-      .returning();
+      .returning()
+      .catch((err: unknown) => {
+        throw toWorkspaceIdentityError(err, identity);
+      });
 
     // Emit completed event
     await this.emitWorkspaceCompleted("create", workspace, userId);
@@ -125,6 +136,13 @@ export class WorkspaceRepository extends BaseRepository<
     userId: string
   ): Promise<Workspace> {
     const s = data.settings as WorkspaceSettings | undefined;
+    // Identity (0308): a rename, or a settings REPLACE that sets a template
+    // slug, must not take an identity another active space holds.
+    const identity = {
+      name: data.name ?? null,
+      packageSlug: s ? (s.packageSlug ?? null) : null,
+    };
+    await assertWorkspaceIdentityFree(this.db, { ...identity, excludeId: id });
     const [workspace] = await this.db
       .update(workspaces)
       .set({
@@ -151,7 +169,10 @@ export class WorkspaceRepository extends BaseRepository<
         updatedAt: new Date(),
       } as Partial<NewWorkspace>)
       .where(eq(workspaces.id, id))
-      .returning();
+      .returning()
+      .catch((err: unknown) => {
+        throw toWorkspaceIdentityError(err, identity);
+      });
 
     if (!workspace) {
       throw new Error("Workspace not found");
@@ -178,6 +199,15 @@ export class WorkspaceRepository extends BaseRepository<
     patch: Partial<WorkspaceSettings>,
     userId: string
   ): Promise<Workspace> {
+    // Identity (0308): a patch that stamps a template slug must not give this
+    // space a template another active space already holds.
+    const identity = { name: null, packageSlug: patch.packageSlug ?? null };
+    if (identity.packageSlug) {
+      await assertWorkspaceIdentityFree(this.db, {
+        ...identity,
+        excludeId: id,
+      });
+    }
     const [workspace] = await this.db
       .update(workspaces)
       .set({
@@ -205,7 +235,10 @@ export class WorkspaceRepository extends BaseRepository<
         updatedAt: new Date(),
       } as Partial<NewWorkspace>)
       .where(eq(workspaces.id, id))
-      .returning();
+      .returning()
+      .catch((err: unknown) => {
+        throw toWorkspaceIdentityError(err, identity);
+      });
 
     if (!workspace) {
       throw new Error("Workspace not found");

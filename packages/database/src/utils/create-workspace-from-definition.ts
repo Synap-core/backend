@@ -1085,10 +1085,21 @@ export async function createWorkspaceFromDefinition(
         // Update workspace name via direct DB update
         const { workspaces } = await import("../schema/workspaces.js");
         const { eq } = await import("drizzle-orm");
+        const { assertWorkspaceIdentityFree, toWorkspaceIdentityError } =
+          await import("./workspace-identity.js");
+        // Identity (0308): the AI-proposed name must not be another active
+        // space's name — refused as a typed conflict, never a raw 23505.
+        await assertWorkspaceIdentityFree(dbConn, {
+          name: resolvedName,
+          excludeId: workspaceId,
+        });
         await dbConn
           .update(workspaces)
           .set({ name: resolvedName })
-          .where(eq(workspaces.id, workspaceId));
+          .where(eq(workspaces.id, workspaceId))
+          .catch((err: unknown) => {
+            throw toWorkspaceIdentityError(err, { name: resolvedName });
+          });
       }
     }
   }

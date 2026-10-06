@@ -21,6 +21,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
+import { findMissingIndexes } from "./utils/schema-coherence.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const M0308 = readFileSync(
@@ -30,6 +31,23 @@ const M0308 = readFileSync(
 
 let pg: PGlite;
 const notices: string[] = [];
+let missingBefore: Array<{ table: string; missing: string[] }> = [];
+
+function queryOver(db: PGlite) {
+  return async <T>(
+    strings: TemplateStringsArray,
+    ...values: unknown[]
+  ): Promise<T> => {
+    const text = strings.reduce(
+      (acc, s, i) => acc + s + (i < values.length ? `$${i + 1}` : ""),
+      ""
+    );
+    return (await db.query(text, values)).rows as T;
+  };
+}
+const workspacesOnly = async (
+  p: Promise<Array<{ table: string; missing: string[] }>>
+) => (await p).filter((r) => r.table === "workspaces");
 
 interface Row {
   id: string;
@@ -159,6 +177,7 @@ beforeAll(async () => {
     key: "eve-crm",
   });
 
+  missingBefore = await workspacesOnly(findMissingIndexes(queryOver(pg)));
   const res = await pg.exec(M0308);
   // PGlite surfaces RAISE NOTICE through the result's `notices`, when present.
   for (const r of res as Array<{ notices?: Array<{ message?: string }> }>) {
@@ -229,6 +248,21 @@ describe("migration 0308 — pre-index dedupe", () => {
 });
 
 describe("migration 0308 — the invariants hold after it", () => {
+  it("the boot check (findMissingIndexes) requires both indexes: missing before, present after", async () => {
+    expect(missingBefore).toEqual([
+      {
+        table: "workspaces",
+        missing: [
+          "workspaces_active_name_unique",
+          "workspaces_active_package_slug_unique",
+        ],
+      },
+    ]);
+    await expect(
+      workspacesOnly(findMissingIndexes(queryOver(pg)))
+    ).resolves.toEqual([]);
+  });
+
   it("both unique indexes exist", async () => {
     const r = await pg.query<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes WHERE tablename = 'workspaces'

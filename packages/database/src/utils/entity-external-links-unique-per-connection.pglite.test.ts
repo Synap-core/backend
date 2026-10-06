@@ -33,6 +33,10 @@ const MIGRATION = readFileSync(
 let pg: PGlite;
 
 /** postgres.js `sql\`…\`` shape over PGlite: interpolations become $n params. */
+const onlyThisTable = async (
+  p: Promise<Array<{ table: string; missing: string[] }>>
+) => (await p).filter((r) => r.table === "entity_external_links");
+
 function queryOver(db: PGlite) {
   return async <T>(
     strings: TemplateStringsArray,
@@ -89,7 +93,11 @@ afterAll(async () => {
 
 describe("0261 — entity_external_links unique per connection", () => {
   it("before the migration, the boot check reports the per-connection key missing", async () => {
-    await expect(findMissingIndexes(queryOver(pg))).resolves.toEqual([
+    // Scoped to this table: the boot check also covers tables this file does
+    // not create (e.g. `workspaces`, 0308).
+    await expect(
+      onlyThisTable(findMissingIndexes(queryOver(pg)))
+    ).resolves.toEqual([
       {
         table: "entity_external_links",
         missing: ["entity_external_links_provider_external_id_connection_idx"],
@@ -104,7 +112,9 @@ describe("0261 — entity_external_links unique per connection", () => {
     await pg.transaction(async (tx) => {
       await tx.exec(MIGRATION);
     });
-    await expect(findMissingIndexes(queryOver(pg))).resolves.toEqual([]);
+    await expect(
+      onlyThisTable(findMissingIndexes(queryOver(pg)))
+    ).resolves.toEqual([]);
   });
 
   it("backfills a NULL connection id to the direct-import sentinel and pins NOT NULL", async () => {

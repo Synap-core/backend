@@ -4,7 +4,7 @@
  */
 
 import { kratosAdmin } from "@synap/auth";
-import { getDb } from "@synap/database";
+import { getDb, nextFreeWorkspaceName } from "@synap/database";
 import { and, eq } from "drizzle-orm";
 import { users, workspaces, workspaceMembers } from "@synap/database/schema";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
@@ -318,11 +318,18 @@ export async function ensureWorkspaceForUser(
   const existing = await findUserDefaultWorkspaceId(db, identityId);
   if (existing) return existing;
 
+  // A SYSTEM-GENERATED default: names are unique pod-wide (0308), so the
+  // second user's "My Workspace" becomes "My Workspace (2)" instead of
+  // failing the index (founder decision (a), 2026-10-06).
+  const workspaceName = await nextFreeWorkspaceName(
+    db,
+    name ? `${name}'s Workspace` : "My Workspace"
+  );
   const [workspace] = await db
     .insert(workspaces)
     .values({
       ownerId: identityId,
-      name: name ? `${name}'s Workspace` : "My Workspace",
+      name: workspaceName,
       workspaceType: "personal",
       settings: {},
     })

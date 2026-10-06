@@ -19,6 +19,8 @@ import {
   desc,
   eventRepository,
   WorkspaceRepository,
+  isWorkspaceIdentityConflictError,
+  nextFreeWorkspaceName,
   type AgentMetadata,
 } from "@synap/database";
 import { syncAutoApproveRules } from "@synap/database/agent-governance";
@@ -810,7 +812,25 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     const metadata = agentRow.agentMetadata as AgentMetadata | null;
     const agentType = metadata?.agentType ?? "agent";
     const proposalId = idempotencyKey ?? `agent-workspace-${agentUserId}`;
-    const name = workspaceName ?? `${agentType} Knowledge Base`;
+    // A typed name is the caller's: never suffixed (a taken one gets the typed
+    // 409). The system default is suffixed "(2)"… only when this agent has no
+    // space yet — a re-provision reaches its own space by key and must not
+    // rename it (founder decision (a), 2026-10-06).
+    const defaultName = `${agentType} Knowledge Base`;
+    let name = workspaceName;
+    if (name === undefined) {
+      const [own] = await db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(
+          and(
+            eq(workspaces.provisioningProposalId, proposalId),
+            isNull(workspaces.archivedAt)
+          )
+        )
+        .limit(1);
+      name = own ? defaultName : await nextFreeWorkspaceName(db, defaultName);
+    }
 
     try {
       const result = await createWorkspaceFromDefinitionIdempotent({
@@ -1008,11 +1028,32 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     // re-materialises through the `workspace/create` executor as a human.
     const agentUserId = c.get("agentUserId") as string | undefined;
 
+    // Template identity (0308): a catalog definition carries its slug in
+    // `_meta.slug`; that slug IS its identity (installed once per pod). A
+    // template input with neither a slug nor an explicit key has none — it
+    // would mint a second space on every call — so it is refused.
+    const meta = (definition as { _meta?: { slug?: unknown } })._meta;
+    const packageSlug =
+      typeof meta?.slug === "string" && meta.slug.trim()
+        ? meta.slug.trim()
+        : undefined;
+    const isTemplateInput = !!(templateId || templateName || meta);
+    if (isTemplateInput && !packageSlug && !proposalId) {
+      return c.json(
+        {
+          error:
+            "This template definition has no `_meta.slug` and no `proposalId`, so it cannot be created idempotently. Send the catalog slug in `_meta.slug`.",
+        },
+        400
+      );
+    }
+    const idempotencyKey = proposalId ?? packageSlug;
+
     // One space per domain — same verdict as /packages/apply, before governance.
     const domainVerdict = await checkOneSpacePerDomain({
       userId: ownerId,
-      agentUserId,
-      idempotencyKey: proposalId,
+      packageSlug,
+      idempotencyKey,
       workspaceName:
         workspaceName ??
         (definition as { workspaceName?: string }).workspaceName,
@@ -1051,7 +1092,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         workspaceName,
         templateId,
         workspaceType,
-        proposalId,
+        proposalId: idempotencyKey,
+        ...(packageSlug ? { packageSlug } : {}),
         createdBy: "provisioning",
         source: "hub.workspaces.from-definition",
       },
@@ -1079,7 +1121,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           typeof createWorkspaceFromDefinitionIdempotent
         >[0]["definition"],
         userId: ownerId,
-        proposalId,
+        proposalId: idempotencyKey,
+        packageSlug,
         workspaceName,
         templateId,
         templateName,
@@ -1092,13 +1135,23 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         {
           workspaceId: result.workspaceId,
           created: result.created,
-          ...(domainVerdict.note
-            ? { oneSpacePerDomain: domainVerdict.note }
-            : {}),
         },
         200
       );
     } catch (err) {
+      // Identity (0308): the name or template is held by an active space the
+      // caller cannot write — a refusal the caller can act on, never a 500.
+      if (isWorkspaceIdentityConflictError(err)) {
+        return c.json(
+          {
+            error: err.message,
+            reasonCode: err.reasonCode,
+            field: err.field,
+            existingWorkspaceId: err.existingWorkspaceId,
+          },
+          409
+        );
+      }
       const message = err instanceof Error ? err.message : String(err);
       logger.error(
         { err, userId, agentType, proposalId },

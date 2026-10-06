@@ -84,6 +84,7 @@ export * from "./utils/user-visible-where.js";
 export * from "./utils/catalog-sync-stamps.js";
 export * from "./utils/cp-relay-credential.js";
 export * from "./utils/workspace-client-projection.js";
+export * from "./utils/workspace-identity.js";
 export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
 export * from "./utils/governance-rule-provenance.js";

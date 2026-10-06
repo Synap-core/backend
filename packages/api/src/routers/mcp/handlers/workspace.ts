@@ -283,22 +283,26 @@ export const workspaceHandlers: McpHandlerMap = {
       return ok({ error: "name is required" });
     }
     const definition = (args.definition ?? {}) as object;
-    const idempotencyKey = args.proposalId as string | undefined;
-    // One space per domain — BEFORE governance: an agent naming a space after
-    // an existing domain space is refused (typed `exists`), a human proceeds
-    // with the same guidance in the reply.
+    // Template identity (0308): a catalog definition's `_meta.slug` IS its
+    // identity — installed once per pod, reused on a re-run.
+    const metaSlug = (definition as { _meta?: { slug?: unknown } })._meta?.slug;
+    const packageSlug =
+      typeof metaSlug === "string" && metaSlug.trim()
+        ? metaSlug.trim()
+        : undefined;
+    const idempotencyKey =
+      (args.proposalId as string | undefined) ?? packageSlug;
+    // One space per domain — BEFORE governance: a second space of a domain is
+    // refused (typed `exists`) for every caller.
     const { checkOneSpacePerDomain } =
       await import("../../../services/workspace-creation-service.js");
     const domainVerdict = await checkOneSpacePerDomain({
       userId,
-      agentUserId,
+      packageSlug,
       idempotencyKey,
       workspaceName: name,
     });
     if (domainVerdict.action === "refuse") return ok(domainVerdict.reply);
-    const domainNote = domainVerdict.note
-      ? { oneSpacePerDomain: domainVerdict.note }
-      : {};
     const { checkPermissionOrPropose, proposedMessageFor } =
       await import("../../../utils/permission-check.js");
     const perm = await checkPermissionOrPropose({
@@ -313,6 +317,7 @@ export const workspaceHandlers: McpHandlerMap = {
         definition,
         workspaceName: name,
         proposalId: idempotencyKey,
+        ...(packageSlug ? { packageSlug, templateId: packageSlug } : {}),
         createdBy: "provisioning",
         source: "mcp.synap_create_workspace",
       },
@@ -336,7 +341,6 @@ export const workspaceHandlers: McpHandlerMap = {
         reviewPath: perm.reviewPath,
         reviewUrl: perm.reviewUrl,
         ...(perm.deduped ? { deduped: true } : {}),
-        ...domainNote,
       });
     }
     // Granted (operator authority) → same materialize door as approve
@@ -351,6 +355,7 @@ export const workspaceHandlers: McpHandlerMap = {
       userId,
       agentUserId: agentUserId ?? undefined,
       proposalId: idempotencyKey,
+      ...(packageSlug ? { packageSlug, templateId: packageSlug } : {}),
       workspaceName: name,
       createdBy: "provisioning",
     });
@@ -367,7 +372,6 @@ export const workspaceHandlers: McpHandlerMap = {
       workspaceId: core.workspaceId,
       materializeStatus,
       created: materializeStatus === "created",
-      ...domainNote,
     });
   },
   synap_declare_workspace_source: async (

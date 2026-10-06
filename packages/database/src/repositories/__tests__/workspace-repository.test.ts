@@ -8,6 +8,10 @@ const mockDb = {
       findFirst: vi.fn(),
     },
   },
+  // The identity pre-check (0308) reads: no other active space holds it.
+  select: vi.fn(() => ({
+    from: () => ({ where: () => ({ limit: async () => [] }) }),
+  })),
   insert: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),

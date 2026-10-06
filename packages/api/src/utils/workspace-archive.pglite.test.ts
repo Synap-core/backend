@@ -17,6 +17,9 @@
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -36,7 +39,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { WorkspaceRepository } from "@synap/database";
+import {
+  WorkspaceRepository,
+  WorkspaceIdentityConflictError,
+} from "@synap/database";
 import { setWorkspaceArchived } from "./workspace-archive.js";
 import { archivedUsesTargetRemovable } from "./project-workspace.js";
 
@@ -89,6 +95,16 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  // The REAL workspace identity indexes (0308) — restore must respect them.
+  await h.client!.exec(
+    readFileSync(
+      resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../database/migrations/0308_workspace_identity_unique.sql"
+      ),
+      "utf8"
+    )
+  );
 
   await q(
     `insert into workspaces (id, name, owner_id) values
@@ -182,6 +198,57 @@ describe("setWorkspaceArchived — archive pauses the workspace's automations", 
     expect(ws.rows[0]!.archived_at).toBeNull();
     expect((await statusOf(A_ACTIVE_1)).status).toBe("paused");
     expect((await statusOf(A_ACTIVE_2)).status).toBe("paused");
+  });
+});
+
+describe("setWorkspaceArchived — restore respects workspace identity (0308)", () => {
+  it("restoring into a name another ACTIVE space took is a typed 409 — the space stays archived", async () => {
+    const archived = randomUUID();
+    const taker = randomUUID();
+    await q(
+      `insert into workspaces (id, name, owner_id, archived_at) values ($1,'Clash',$2, now())`,
+      [archived, OWNER]
+    );
+    await q(
+      `insert into workspaces (id, name, owner_id) values ($1,' clash ',$2)`,
+      [taker, STRANGER]
+    );
+    const err = await setWorkspaceArchived(await db(), {
+      workspaceId: archived,
+      archive: false,
+    }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(WorkspaceIdentityConflictError);
+    expect(err).toMatchObject({ field: "name", existingWorkspaceId: taker });
+    const row = await q<{ archived_at: unknown }>(
+      `select archived_at from workspaces where id = $1`,
+      [archived]
+    );
+    expect(row.rows[0]!.archived_at).not.toBeNull();
+  });
+
+  it("…and into a template another ACTIVE space now holds", async () => {
+    const archived = randomUUID();
+    const holder = randomUUID();
+    await q(
+      `insert into workspaces (id, name, owner_id, package_slug, archived_at) values ($1,'Old CRM',$2,'crm-x', now())`,
+      [archived, OWNER]
+    );
+    await q(
+      `insert into workspaces (id, name, owner_id, package_slug) values ($1,'New CRM',$2,'crm-x')`,
+      [holder, OWNER]
+    );
+    await expect(
+      setWorkspaceArchived(await db(), {
+        workspaceId: archived,
+        archive: false,
+      })
+    ).rejects.toMatchObject({
+      field: "packageSlug",
+      existingWorkspaceId: holder,
+    });
   });
 });
 
