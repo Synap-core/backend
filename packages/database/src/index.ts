@@ -57,6 +57,7 @@ export * from "./utils/entity-project-membership.js";
 export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";
 export * from "./utils/request-write-context.js";
+export * from "./utils/grant-read-hook.js";
 export * from "./utils/exposure-policy-settings.js";
 export * from "./utils/backup-status.js";
 export * from "./utils/entity-create-guardrails.js";

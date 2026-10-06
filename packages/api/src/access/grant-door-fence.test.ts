@@ -29,6 +29,8 @@ describe("restDoorAllowed", () => {
     ["GET", "/threads/t1/messages", true],
     ["GET", "/focus-sessions", true],
     ["GET", "/focus-sessions/s1", false], // owner-only read, not the helper
+    ["GET", "/projects/p1", true],
+    ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
     ["GET", "/search", false],
     ["GET", "/entities", false], // ?q= goes to Typesense — not seamed
     ["GET", "/knowledge", false],

@@ -43,7 +43,8 @@ import { AccessContext, scopedDb } from "./index.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { sessionReadableWhere } from "./session-visibility.js";
-import { channels, focusSessions } from "@synap/database/schema";
+import { channels, focusSessions, projects } from "@synap/database/schema";
+import { ownerPrivateVisibleWhere } from "@synap/database";
 
 const ALICE = "alice-grant";
 const WA = randomUUID();
@@ -55,6 +56,7 @@ const T_A = randomUUID(); // task, workspace A
 const DOC = randomUUID();
 const CHAN = randomUUID();
 const SESS = randomUUID();
+const PROJ = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -110,6 +112,10 @@ beforeAll(async () => {
     `insert into focus_sessions (id, user_id, goal, status) values ($1, $2, 'g', 'active')`,
     [SESS, ALICE]
   );
+  await q(`insert into projects (id, name, user_id) values ($1, 'p', $2)`, [
+    PROJ,
+    ALICE,
+  ]);
 });
 
 const read = async (table: object, grant?: GrantScope) => {
@@ -249,6 +255,18 @@ describe("the shared channel and session helpers honour the grant", () => {
       await ids(focusSessions, focusSessions.id, w, {
         permissions: ["entity.read"],
       })
+    ).toEqual([]);
+  });
+
+  it("projects (ownerPrivateVisibleWhere, via the database hook): project.read only", async () => {
+    const w = () =>
+      ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, ALICE);
+    expect(await ids(projects, projects.id, w)).toEqual([PROJ]);
+    expect(
+      await ids(projects, projects.id, w, { permissions: ["project.read"] })
+    ).toEqual([PROJ]);
+    expect(
+      await ids(projects, projects.id, w, { permissions: ["entity.read"] })
     ).toEqual([]);
   });
 });

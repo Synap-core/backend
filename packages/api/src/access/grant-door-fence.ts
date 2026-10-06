@@ -47,6 +47,11 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/messaging\/channels\/?$/,
   /^\/messaging\/linked-unread\/?$/,
   /^\/focus-sessions\/?$/,
+  // Read only through ownerPrivateVisibleWhere (grant hook, `project` subject)
+  // plus seamed entity reads:
+  /^\/projects\/?$/,
+  /^\/projects\/[^/]+\/?$/,
+  /^\/projects\/[^/]+\/digest\/?$/,
 ];
 
 /** Hub REST POST routes that READ without a seam (refused for scoped keys). */
@@ -65,6 +70,8 @@ export const GRANT_SAFE_MCP_READ_TOOLS: ReadonlySet<string> = new Set([
   "synap_get_relations",
   "synap_list_tracks",
   "synap_resolve_identity",
+  "synap_get_project",
+  "synap_list_projects",
 ]);
 
 /** tRPC QUERIES (by procedure path) that read only through a seam. */

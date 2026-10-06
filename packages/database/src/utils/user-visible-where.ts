@@ -38,6 +38,7 @@
  * grandfathered because `events` has no `workspace_id` column to lens on.
  */
 
+import { grantReadClauseFor } from "./grant-read-hook.js";
 import {
   and,
   eq,
@@ -263,11 +264,14 @@ export function ownerPrivateVisibleWhere(
   ownerColumn: AnyPgColumn,
   userId: string
 ): SQL {
-  return or(
+  const floor = or(
     and(isNull(workspaceIdColumn), eq(ownerColumn, userId)),
     and(
       isNotNull(workspaceIdColumn),
       userVisibleWhere(workspaceIdColumn, userId)
     )
   )!;
+  // W1 — the calling key's grant for this table (narrow-only).
+  const grant = grantReadClauseFor(ownerColumn);
+  return grant ? and(floor, grant)! : floor;
 }

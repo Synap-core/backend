@@ -18,7 +18,13 @@
  * no project path) also fails closed.
  */
 
-import { db, getRequestGrant, inArray, or } from "@synap/database";
+import {
+  db,
+  getRequestGrant,
+  inArray,
+  or,
+  registerGrantReadProvider,
+} from "@synap/database";
 import {
   agentConfigs,
   apiKeys,
@@ -204,3 +210,7 @@ export function grantReadPredicate(table: object): SQL | undefined {
   const grant = getRequestGrant();
   return grant ? grantReadClause(table, grant) : undefined;
 }
+
+// Database-level visibility helpers (e.g. ownerPrivateVisibleWhere) cannot
+// import this module; they reach the same clause through the hook.
+registerGrantReadProvider(grantReadPredicate);
