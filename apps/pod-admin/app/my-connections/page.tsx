@@ -12,15 +12,23 @@
  * `public_id` is the `client_id` its grant carries, and its reach is the same
  * `summarizeGrant` model a key row renders.
  *
+ * Each app row is a DOOR: the name links to `/apps/[public_id]`, where the
+ * app's id, reach, dates and Revoke live. Revoked apps no longer vanish — they
+ * sit in a "Revoked apps" disclosure (the read opts into them via
+ * `apps.list { includeRevoked }`), mirroring the keys' own Revoked section.
+ * Every list here is capped with a "Show all N".
+ *
  * Badge derivation is shared with Trust & Keys — see `categorize()` in
  * `../(admin)/trust-keys/_lib/api-keys-section.tsx` — so "what type of
  * connection is this" never drifts between the two surfaces.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
 import { Ban, ChevronDown, Plug, SquareCode } from "lucide-react";
 import { ConfirmModal } from "../(admin)/components/confirm-modal";
+import { CopyButton } from "../_lib/copy-button";
 import { trpc } from "../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../lib/auth-redirect";
 import {
@@ -31,7 +39,18 @@ import {
 } from "../(admin)/trust-keys/_lib/api-keys-section";
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
 import { summarizeGrant } from "@synap-core/types/grants";
-import { humanizeToken } from "@synap-core/types/vocabulary";
+import {
+  appMode,
+  appReach,
+  appState,
+  type AppRow,
+} from "../apps/_lib/app-view";
+
+/** How many rows a list shows before it offers "Show all N" (ui-composition §4). */
+const LIST_CAP = 6;
+
+/** The command that registers an Application — the empty state's way out. */
+const CONNECT_COMMAND = "synap app connect";
 
 /**
  * What a key may touch, in the words every grant surface uses
@@ -57,57 +76,91 @@ function connectionLabel(hubId: string | null | undefined): string {
 }
 
 /**
- * An Application the user owns (App Connect v1) — the app's stable `public_id`
- * is what its grant carries as `client_id`. `grants` are its live reach.
+ * A bounded list: show at most `cap`, then a "Show all N" that expands in
+ * place. Keeps a detail surface from becoming an unbounded column without
+ * hiding anything — an explicit "Show all" always names the real total.
  */
-interface AppRow {
-  id: string;
-  public_id: string;
-  name: string;
-  description?: string | null;
-  mode: string;
-  created_at?: string | null;
-  revoked_at?: string | null;
-  last_used_at?: string | null;
-  grants: Array<{
-    permissions: string[];
-    workspaceIds?: string[] | null;
-    projectIds?: string[] | null;
-    entityIds?: string[] | null;
-  }>;
+function Capped<T>({
+  items,
+  cap = LIST_CAP,
+  children,
+}: {
+  items: T[];
+  cap?: number;
+  children: (item: T) => ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (items.length <= cap) return <>{items.map(children)}</>;
+  const shown = expanded ? items : items.slice(0, cap);
+  return (
+    <>
+      {shown.map(children)}
+      <Button
+        variant="light"
+        size="sm"
+        className="min-h-10 self-start"
+        onPress={() => setExpanded((v) => !v)}
+      >
+        {expanded ? "Show fewer" : `Show all ${items.length}`}
+      </Button>
+    </>
+  );
 }
 
-/**
- * What an app may touch, in the words every grant surface uses — the SAME
- * `summarizeGrant` model `<GrantSummary>` and the key rows render, so an app's
- * reach and a key's reach never say different things.
- */
-function appReach(app: AppRow): string {
-  // A registered app that was never connected has no grant AND no request
-  // filed — say so, never assert a request the user cannot see.
-  if (!app.grants || app.grants.length === 0) return "No access yet";
-  return app.grants
-    .map((g) => {
-      const s = summarizeGrant({
-        permissions: g.permissions,
-        workspaceIds: g.workspaceIds ?? null,
-        projectIds: g.projectIds ?? null,
-        entityIds: g.entityIds ?? null,
-      });
-      return [s.what, ...s.where].join(" · ");
-    })
-    .join("; ");
+/** A collapsed "Revoked" history — the shared shape for apps and for keys. */
+function SectionDisclosure({
+  id,
+  label,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  id: string;
+  label: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 py-1 text-left"
+      >
+        <span id={id} className="text-sm font-medium text-foreground/70">
+          {label}
+        </span>
+        <span className="flex items-center gap-2 text-xs text-foreground/50">
+          {count}
+          <ChevronDown
+            size={15}
+            className={
+              open ? "rotate-180 transition-transform" : "transition-transform"
+            }
+          />
+        </span>
+      </button>
+      {open ? <div className="space-y-3">{children}</div> : null}
+    </>
+  );
 }
 
 export default function MyConnectionsPage() {
   const keys = trpc.apiKeys.list.useQuery();
   const utils = trpc.useUtils();
-  const [showRevoked, setShowRevoked] = useState(false);
+  const [showRevokedKeys, setShowRevokedKeys] = useState(false);
+  const [showRevokedApps, setShowRevokedApps] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<UnifiedKey | null>(null);
 
   // Apps (App Connect v1) — fetched through the pod's tRPC door via a same-origin
   // proxy (`/api/apps`), because the browser cannot reach the pod tRPC origin
-  // directly. Self-scoped server-side to this user.
+  // directly. Self-scoped server-side to this user. The read includes REVOKED
+  // apps (see the route → `apps.list { includeRevoked }`) so they can show under
+  // "Revoked apps" instead of vanishing.
   const [apps, setApps] = useState<AppRow[] | null>(null);
   const [appsError, setAppsError] = useState<string | null>(null);
   const [pendingRevokeApp, setPendingRevokeApp] = useState<AppRow | null>(null);
@@ -229,6 +282,10 @@ export default function MyConnectionsPage() {
   const active = all.filter((k) => k.isActive);
   const revoked = all.filter((k) => !k.isActive);
 
+  const allApps = apps ?? [];
+  const activeApps = allApps.filter((a) => !a.revoked_at);
+  const revokedApps = allApps.filter((a) => a.revoked_at);
+
   /* Was a native `window.confirm`. Same shared modal the admin surfaces use —
      revoking your own key is exactly as consequential as an admin revoking it,
      so it should not look like a cheaper decision. */
@@ -254,7 +311,9 @@ export default function MyConnectionsPage() {
             Apps
           </h2>
           {apps ? (
-            <span className="text-xs text-foreground/50">{apps.length}</span>
+            <span className="text-xs text-foreground/50">
+              {activeApps.length}
+            </span>
           ) : null}
         </div>
 
@@ -277,18 +336,34 @@ export default function MyConnectionsPage() {
           <div className="flex items-center gap-3 px-1 py-3 text-sm text-foreground/55">
             <Spinner size="sm" /> Loading your apps
           </div>
-        ) : apps.length === 0 ? (
+        ) : activeApps.length === 0 ? (
           <AppEmptyState />
         ) : (
-          apps.map((app) => (
-            <AppCard
-              key={app.id}
-              app={app}
-              isRevoking={revokingApp === app.public_id}
-              onRevoke={() => setPendingRevokeApp(app)}
-            />
-          ))
+          <Capped items={activeApps}>
+            {(app) => (
+              <AppCard
+                key={app.id}
+                app={app}
+                isRevoking={revokingApp === app.public_id}
+                onRevoke={() => setPendingRevokeApp(app)}
+              />
+            )}
+          </Capped>
         )}
+
+        {revokedApps.length > 0 ? (
+          <SectionDisclosure
+            id="revoked-apps"
+            label="Revoked apps"
+            count={revokedApps.length}
+            open={showRevokedApps}
+            onToggle={() => setShowRevokedApps((v) => !v)}
+          >
+            <Capped items={revokedApps}>
+              {(app) => <AppCard key={app.id} app={app} />}
+            </Capped>
+          </SectionDisclosure>
+        ) : null}
       </section>
 
       <section className="space-y-3" aria-labelledby="active-connections">
@@ -304,55 +379,34 @@ export default function MyConnectionsPage() {
         {active.length === 0 ? (
           <EmptyState />
         ) : (
-          active.map((key) => (
-            <KeyCard
-              key={key.id}
-              apiKey={key}
-              isRevoking={
-                revoke.isPending && revoke.variables?.keyId === key.id
-              }
-              onRevoke={() => confirmRevoke(key)}
-            />
-          ))
+          <Capped items={active}>
+            {(key) => (
+              <KeyCard
+                key={key.id}
+                apiKey={key}
+                isRevoking={
+                  revoke.isPending && revoke.variables?.keyId === key.id
+                }
+                onRevoke={() => confirmRevoke(key)}
+              />
+            )}
+          </Capped>
         )}
       </section>
 
       {revoked.length > 0 ? (
-        <section
-          className="mt-9 space-y-3"
-          aria-labelledby="revoked-connections"
-        >
-          <button
-            type="button"
-            onClick={() => setShowRevoked((v) => !v)}
-            aria-expanded={showRevoked}
-            className="flex w-full items-center justify-between gap-2 py-1 text-left"
+        <section className="mt-9" aria-labelledby="revoked-connections">
+          <SectionDisclosure
+            id="revoked-connections"
+            label="Revoked"
+            count={revoked.length}
+            open={showRevokedKeys}
+            onToggle={() => setShowRevokedKeys((v) => !v)}
           >
-            <span
-              id="revoked-connections"
-              className="text-sm font-medium text-foreground/70"
-            >
-              Revoked
-            </span>
-            <span className="flex items-center gap-2 text-xs text-foreground/50">
-              {revoked.length}
-              <ChevronDown
-                size={15}
-                className={
-                  showRevoked
-                    ? "rotate-180 transition-transform"
-                    : "transition-transform"
-                }
-              />
-            </span>
-          </button>
-          {showRevoked ? (
-            <div className="space-y-3">
-              {revoked.map((key) => (
-                <KeyCard key={key.id} apiKey={key} />
-              ))}
-            </div>
-          ) : null}
+            <Capped items={revoked}>
+              {(key) => <KeyCard key={key.id} apiKey={key} />}
+            </Capped>
+          </SectionDisclosure>
         </section>
       ) : null}
 
@@ -511,7 +565,11 @@ function EmptyState() {
   );
 }
 
-/** One app: its name, its stable public id, what it may touch, last used. */
+/**
+ * One app. The whole row is a DOOR to `/apps/[public_id]` — the name is the
+ * real link (its accessible name), stretched over the card; Revoke is the one
+ * control that stays above the overlay. A revoked app renders read-only.
+ */
 function AppCard({
   app,
   isRevoking = false,
@@ -519,11 +577,11 @@ function AppCard({
 }: {
   app: AppRow;
   isRevoking?: boolean;
-  onRevoke: () => void;
+  onRevoke?: () => void;
 }) {
-  const hasReach = app.grants.length > 0;
+  const state = appState(app);
   const meta = [
-    app.mode === "specific" ? "Specific access" : humanizeToken(app.mode),
+    appMode(app.mode),
     app.created_at ? `created ${formatRelative(app.created_at)}` : null,
     app.last_used_at
       ? `last used ${formatRelative(app.last_used_at)}`
@@ -533,11 +591,21 @@ function AppCard({
     .join(" · ");
 
   return (
-    <Card shadow="none" className="border border-foreground/10 bg-content1">
+    <Card
+      shadow="none"
+      className="relative border border-foreground/10 bg-content1"
+    >
       <CardBody className="gap-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="break-words text-sm font-medium">{app.name}</p>
+            <p className="break-words text-sm font-medium">
+              <Link
+                href={`/apps/${app.public_id}`}
+                className="rounded-sm after:absolute after:inset-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              >
+                {app.name}
+              </Link>
+            </p>
             <p className="mt-1 text-xs text-foreground/55">
               <span className="font-mono">{app.public_id}</span>
             </p>
@@ -545,10 +613,10 @@ function AppCard({
           <Chip
             size="sm"
             variant="flat"
-            color={hasReach ? "success" : "default"}
+            color={state.color}
             className="shrink-0"
           >
-            {hasReach ? "Has access" : "No access yet"}
+            {state.label}
           </Chip>
         </div>
 
@@ -558,19 +626,21 @@ function AppCard({
         </p>
         <p className="text-xs text-foreground/55">{meta}</p>
 
-        <div className="pt-1">
-          <Button
-            color="danger"
-            size="sm"
-            className="min-h-10"
-            variant="flat"
-            startContent={<Ban size={14} />}
-            isLoading={isRevoking}
-            onPress={onRevoke}
-          >
-            Revoke
-          </Button>
-        </div>
+        {onRevoke ? (
+          <div className="relative z-10 pt-1">
+            <Button
+              color="danger"
+              size="sm"
+              className="min-h-10"
+              variant="flat"
+              startContent={<Ban size={14} />}
+              isLoading={isRevoking}
+              onPress={onRevoke}
+            >
+              Revoke
+            </Button>
+          </div>
+        ) : null}
       </CardBody>
     </Card>
   );
@@ -579,12 +649,18 @@ function AppCard({
 function AppEmptyState() {
   return (
     <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5">
-      <div className="flex items-center gap-3 text-sm text-foreground/55">
-        <SquareCode size={17} className="shrink-0" />
-        You have no apps yet. Add a{" "}
-        <span className="font-mono">synap.app.json</span> to your repo and run{" "}
-        <span className="font-mono">synap app connect</span>.
+      <div className="flex items-start gap-3 text-sm text-foreground/55">
+        <SquareCode size={17} className="mt-0.5 shrink-0" />
+        <span>
+          You have no apps yet. Add a{" "}
+          <span className="font-mono">synap.app.json</span> to your repo and run
+          the command below from it.
+        </span>
       </div>
+      {/* The escape hatch: apps are registered from a repo, which this web page
+          cannot do for you — hand over the exact command instead of a door that
+          goes nowhere. */}
+      <CopyButton text={CONNECT_COMMAND} label={CONNECT_COMMAND} />
     </div>
   );
 }

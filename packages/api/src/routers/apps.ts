@@ -60,11 +60,31 @@ function toApp(row: {
 }
 
 export const appsRouter = router({
-  /** The caller's own apps, each with the reach it may touch. */
-  list: protectedProcedure.query(async ({ ctx }) => {
-    const rows = await new AppRepository(db).listForOwner(ctx.userId);
-    return rows.map(toApp);
-  }),
+  /**
+   * The caller's own apps, each with the reach it may touch. `includeRevoked`
+   * (default false) is the human self-service opt-in: pod-admin's "Apps & access"
+   * page renders revoked apps in its "Revoked apps" section instead of letting
+   * them vanish. The agent-facing `/api/hub/apps` list never opts in.
+   */
+  list: protectedProcedure
+    .input(z.object({ includeRevoked: z.boolean().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const rows = await new AppRepository(db).listForOwner(ctx.userId, {
+        includeRevoked: input?.includeRevoked ?? false,
+      });
+      return rows.map(toApp);
+    }),
+
+  /** One of the caller's own apps, by public id — floored on the owner. */
+  get: protectedProcedure
+    .input(z.object({ publicId: z.string().min(1).max(200) }))
+    .query(async ({ ctx, input }) => {
+      const found = await new AppRepository(db).getByPublicId(input.publicId);
+      if (!found || found.app.ownerUserId !== ctx.userId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "App not found" });
+      }
+      return toApp(found);
+    }),
 
   /**
    * Revoke an app: revoke its keys (which stops its grants resolving), then

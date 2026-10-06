@@ -189,14 +189,26 @@ export class AppRepository {
   }
 
   /**
-   * The owner's apps (newest first) with each app's live grants. Revoked apps
-   * are excluded — a revoked app is gone from every surface.
+   * The owner's apps (newest first) with each app's live grants.
+   *
+   * Revoked apps are excluded by DEFAULT — the agent-facing `/api/hub/apps`
+   * contract treats a revoked app as gone. The human self-service surface
+   * (`apps.list` → pod-admin) opts IN with `includeRevoked`, so a revoked app
+   * shows under "Revoked" instead of silently vanishing. A revoked app's live
+   * grants read empty here because revoke revokes its keys (`apps.revoke`), and
+   * this projection only counts reach from an ACTIVE key.
    */
-  async listForOwner(ownerUserId: string): Promise<AppWithGrants[]> {
+  async listForOwner(
+    ownerUserId: string,
+    opts: { includeRevoked?: boolean } = {}
+  ): Promise<AppWithGrants[]> {
+    const where = opts.includeRevoked
+      ? eq(apps.ownerUserId, ownerUserId)
+      : and(eq(apps.ownerUserId, ownerUserId), isNull(apps.revokedAt));
     const rows = await this.db
       .select()
       .from(apps)
-      .where(and(eq(apps.ownerUserId, ownerUserId), isNull(apps.revokedAt)))
+      .where(where)
       .orderBy(desc(apps.createdAt));
     if (rows.length === 0) return [];
 

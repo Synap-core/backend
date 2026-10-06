@@ -21588,7 +21588,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				includeRevoked?: boolean | undefined;
+			} | undefined;
 			output: {
 				id: string;
 				public_id: string;
@@ -21608,6 +21610,31 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string | null;
 				}[];
 			}[];
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: {} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				last_used_at: Date | null;
+				grants: {
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+				}[];
+			};
 			meta: object;
 		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
