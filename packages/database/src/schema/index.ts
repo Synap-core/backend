@@ -153,6 +153,7 @@ export * from "./pod-settings.js";
 // Account recovery codes (pod-local one-time look-up secrets, hashed)
 export * from "./account-recovery-codes.js";
 export * from "./grants.js";
+export * from "./grant-roles.js";
 
 // NEW: Source Configs & Subscriptions (pluggable feed source providers)
 export * from "./source-configs.js";

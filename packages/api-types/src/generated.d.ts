@@ -21095,6 +21095,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					projectIds?: string[] | undefined;
 					entityIds?: string[] | undefined;
 					label?: string | undefined;
+					roleId?: string | undefined;
 				} | undefined;
 			};
 			output: {
@@ -21340,6 +21341,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					projectIds?: string[] | undefined;
 					entityIds?: string[] | undefined;
 					label?: string | undefined;
+					roleId?: string | undefined;
 				} | undefined;
 			};
 			output: {
@@ -21369,6 +21371,150 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				status: "revoked";
 				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+	}>>;
+	grantRoles: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				opRef?: string | undefined;
+				reasonCode?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				name: string;
+				description: string;
+				stored: true;
+				grant: {
+					expiresInDays: null;
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				} | {
+					expiresInDays: number;
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				} | {
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				};
+				createdAt: Date;
+				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				grant: {
+					permissions: string[];
+					workspaceIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					entityIds?: string[] | undefined;
+					expiresInDays?: number | null | undefined;
+				};
+				description?: string | undefined;
+			};
+			output: {
+				id: string;
+				name: string;
+				description: string;
+				stored: true;
+				grant: {
+					expiresInDays: null;
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				} | {
+					expiresInDays: number;
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				} | {
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				};
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				grant: {
+					permissions: string[];
+					workspaceIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					entityIds?: string[] | undefined;
+					expiresInDays?: number | null | undefined;
+				};
+				id: string;
+				description?: string | undefined;
+			};
+			output: {
+				id: string;
+				name: string;
+				description: string;
+				stored: true;
+				grant: {
+					expiresInDays: null;
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				} | {
+					expiresInDays: number;
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				} | {
+					entityIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					workspaceIds?: string[] | undefined;
+					permissions: string[];
+				};
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		archive: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				archived: true;
 			};
 			meta: object;
 		}>;

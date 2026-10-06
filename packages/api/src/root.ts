@@ -10,6 +10,7 @@ import { suggestionsRouter } from "./routers/suggestions.js";
 import { systemRouter } from "./routers/system.js";
 import { hubRouter } from "./routers/hub.js";
 import { apiKeysRouter } from "./routers/api-keys.js";
+import { grantRolesRouter } from "./routers/grant-roles.js";
 import { healthRouter } from "./routers/health.js";
 import { webhooksRouter } from "./routers/webhooks.js";
 import { documentsRouter } from "./routers/documents.js";
@@ -112,6 +113,7 @@ export const coreRouter = router({
   system: systemRouter,
   hub: hubRouter,
   apiKeys: apiKeysRouter,
+  grantRoles: grantRolesRouter,
   health: healthRouter,
   integrations: webhooksRouter,
   documents: documentsRouter,

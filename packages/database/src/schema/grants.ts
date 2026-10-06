@@ -20,6 +20,7 @@
 import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { apiKeys } from "./api-keys.js";
+import { grantRoles } from "./grant-roles.js";
 
 export const grants = pgTable(
   "grants",
@@ -44,6 +45,10 @@ export const grants = pgTable(
     label: text("label"),
     /** OAuth client / app identity (W2). */
     clientId: text("client_id"),
+    /** The role this grant was minted from (lineage only — never a live link). */
+    roleId: uuid("role_id").references(() => grantRoles.id, {
+      onDelete: "set null",
+    }),
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

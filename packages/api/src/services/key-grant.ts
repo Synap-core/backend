@@ -11,7 +11,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db, eq, GrantRepository } from "@synap/database";
+import { db, eq, GrantRepository, GrantRoleRepository } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
@@ -26,6 +26,12 @@ export const GrantInputSchema = z.object({
   projectIds: z.array(z.string().uuid()).max(64).optional(),
   entityIds: z.array(z.string().uuid()).max(256).optional(),
   label: z.string().max(120).optional(),
+  /**
+   * The stored role this grant was built from (lineage). Recorded only when
+   * the role is the minting person's own; the PERMISSIONS above are what bind
+   * the key — a role is a template, never a live link.
+   */
+  roleId: z.string().uuid().optional(),
 });
 export type GrantInput = z.infer<typeof GrantInputSchema>;
 
@@ -63,6 +69,17 @@ export async function attachGrantOrRevoke(args: {
   clientId?: string | null;
 }): Promise<void> {
   try {
+    if (
+      args.grant.roleId &&
+      !(await new GrantRoleRepository(db).findOwned(
+        args.onBehalfOf,
+        args.grant.roleId
+      ))
+    )
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "That role is not one of yours.",
+      });
     await new GrantRepository(db).attach({
       apiKeyId: args.apiKeyId,
       principalUserId: args.principalUserId,
@@ -74,6 +91,7 @@ export async function attachGrantOrRevoke(args: {
       expiresAt: args.expiresAt,
       label: args.grant.label ?? null,
       clientId: args.clientId ?? null,
+      roleId: args.grant.roleId ?? null,
       createdBy: args.createdBy,
     });
   } catch (err) {

@@ -4849,3 +4849,24 @@ CREATE TABLE IF NOT EXISTS "grants" (
 );
 CREATE INDEX IF NOT EXISTS "grants_api_key_idx" ON "grants" ("api_key_id");
 CREATE INDEX IF NOT EXISTS "grants_on_behalf_of_idx" ON "grants" ("on_behalf_of");
+
+-- grant roles (0307) — reusable permission lists; grants.role_id = lineage.
+CREATE TABLE IF NOT EXISTS "grant_roles" (
+  "id"              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"         text        NOT NULL,
+  "name"            text        NOT NULL,
+  "description"     text        NOT NULL DEFAULT '',
+  "permissions"     text[]      NOT NULL DEFAULT '{}'::text[],
+  "workspace_ids"   uuid[],
+  "project_ids"     uuid[],
+  "entity_ids"      uuid[],
+  "expires_in_days" integer,
+  "never_expires"   boolean     NOT NULL DEFAULT false,
+  "created_at"      timestamptz NOT NULL DEFAULT now(),
+  "updated_at"      timestamptz NOT NULL DEFAULT now(),
+  "archived_at"     timestamptz
+);
+CREATE INDEX IF NOT EXISTS "grant_roles_user_idx" ON "grant_roles" ("user_id");
+
+ALTER TABLE "grants" ADD COLUMN IF NOT EXISTS "role_id" uuid
+  REFERENCES "grant_roles"("id") ON DELETE SET NULL;

@@ -28,6 +28,8 @@ export interface AttachGrantInput {
   expiresAt: Date | null;
   label?: string | null;
   clientId?: string | null;
+  /** The role it was minted from (lineage). */
+  roleId?: string | null;
   createdBy: string;
 }
 
@@ -74,6 +76,7 @@ export class GrantRepository {
           expiresAt: input.expiresAt,
           label: input.label ?? null,
           clientId: input.clientId ?? null,
+          roleId: input.roleId ?? null,
           createdBy: input.createdBy,
         })
         .returning();
