@@ -21,6 +21,9 @@
  *
  * Routes (STATIC BEFORE DYNAMIC — Hono is first-match):
  *   POST /rules/classify   — classify a natural-language rule. READ-ONLY.
+ *   POST /rules/parse      — typed text → a rule sentence (picks + validation).
+ *                            NEVER saves; `skills.parseRule`'s twin, same
+ *                            service (`services/rules/parse-text.ts`).
  *   POST /rules            — create a rule (governed).
  *   GET  /rules            — list rules under the caller's visibility floor.
  *
@@ -45,6 +48,13 @@ import {
 } from "./_shared.js";
 import { classifyRuleIntent } from "../../../services/knowledge/classify-intent.js";
 import { createRuleGoverned } from "../../../services/rules/create.js";
+import {
+  askIsParseRule,
+  loadParseRuleVocabulary,
+  parseRuleText,
+} from "../../../services/rules/parse-text.js";
+import { AccessContext } from "../../../access/context.js";
+import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
 import {
   RULE_CATEGORY,
@@ -68,6 +78,12 @@ const ClassifyRuleBodySchema = z.object({
       profiles: z.array(z.string()).optional(),
     })
     .optional(),
+});
+
+const ParseRuleBodySchema = z.object({
+  text: z.string().trim().min(1).max(2000),
+  /** The lens the rule is authored under — narrows the menus. */
+  workspaceId: z.string().uuid().optional(),
 });
 
 const ShapeMatchSchema = z.object({
@@ -168,6 +184,26 @@ export function registerRulesRoutes(app: HubHono): void {
 
   registerOpenApi(app, {
     method: "post",
+    path: "/rules/parse",
+    tags: ["Rules"],
+    summary: "Parse typed text into a rule sentence",
+    description:
+      "Turns a typed rule into a structured WHEN / ONLY IF / THEN sentence built from the caller's own trigger, action and kind menus. The shared deterministic matcher runs first; the intelligence service is asked only for the halves it left open, and may only pick from those menus. The sentence is validated with the rule compiler (`validation`). Open slots come back in `unresolved`. NEVER saves — create with `POST /rules`. An unreachable assistant returns the matcher's reading with `aiUnavailable: true`.",
+    request: { body: ParseRuleBodySchema },
+    responses: {
+      200: {
+        description: "Parsed sentence",
+        schema: z.object({}).passthrough(),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      429: { description: "Rate limited", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
     path: "/rules",
     tags: ["Rules"],
     summary: "Create a rule (governed)",
@@ -234,6 +270,61 @@ export function registerRulesRoutes(app: HubHono): void {
       parsed.data.context ?? {}
     );
     return c.json(route);
+  });
+
+  /**
+   * POST /rules/parse
+   *
+   * Typed text → a structured rule sentence, for a composer or an agent to
+   * show BEFORE anything is saved. Same service as `skills.parseRule`: the
+   * shared matcher first, the IS only for the halves it left open, validated
+   * with `compileRuleSentence`. READ-ONLY — creation stays `POST /rules`.
+   * An unreachable IS is `aiUnavailable: true`, never an empty parse.
+   */
+  app.post("/rules/parse", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const raw = await c.req.json().catch(() => null);
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+    const parsed = ParseRuleBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      parsed.data.workspaceId ?? null
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+
+    const acting = await resolveActingContext(c, {
+      ...(confined.workspaceId ? { workspaceId: confined.workspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    try {
+      checkHubRateLimit(c.get("apiKeyId") as string | undefined, "rules.parse");
+      const vocabulary = await loadParseRuleVocabulary({
+        access: AccessContext.agent({ userId: acting.userId }),
+        userId: acting.userId,
+        workspaceId: acting.workspaceId ?? null,
+      });
+      return c.json(
+        await parseRuleText(parsed.data.text, vocabulary, askIsParseRule)
+      );
+    } catch (err) {
+      logger.error({ err }, "rules.parse failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
   });
 
   /**

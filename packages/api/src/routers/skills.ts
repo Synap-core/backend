@@ -30,6 +30,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import { ruleNotExpiredWhere } from "../services/rules/expiry.js";
 import { ruleSentenceSchema } from "../services/rules/sentence-schema.js";
+import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import { safeExternalFetch } from "@synap/shared-utils";
 import {
   checkPermissionOrPropose,
@@ -539,6 +540,44 @@ export const skillsRouter = router({
       // Pinned by `skills.createRule.contract.test.ts` — if this ever starts
       // throwing, that surface silently loses its refusal message.
       return result;
+    }),
+
+  /**
+   * PARSE typed text into a rule sentence a composer shows as chips — NEVER
+   * saves. Saving stays `createRule` (governed).
+   *
+   * Runs the SHARED matcher first (the one relay and the browser run on every
+   * keystroke) and asks the intelligence service only for the halves it left
+   * open, from the caller's OWN menus (`availableTriggerEvents` /
+   * `availableActions` / kinds). The result is validated with
+   * `compileRuleSentence` — the compiler `createRule` runs — and returns
+   * `{ sentence, picks, unresolved, source, aiUnavailable?, warnings,
+   * validation }`. An unreachable IS is `aiUnavailable: true` with the
+   * matcher's reading, never an empty parse. See `services/rules/parse-text.ts`.
+   *
+   * Rate-limited per user on the shared AI bucket. Hub REST twin:
+   * `POST /rules/parse`.
+   */
+  parseRule: protectedProcedure
+    .use(aiRateLimitMiddleware)
+    .input(
+      z.object({
+        text: z.string().trim().min(1).max(2000),
+        /** The lens the rule is authored under — narrows the menus. */
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { parseRuleText, askIsParseRule, loadParseRuleVocabulary } =
+        await import("../services/rules/parse-text.js");
+      const { AccessContext } = await import("../access/context.js");
+      const vocabulary = await loadParseRuleVocabulary({
+        access: AccessContext.from(ctx),
+        userId,
+        workspaceId: input.workspaceId ?? ctx.workspaceId ?? null,
+      });
+      return parseRuleText(input.text, vocabulary, askIsParseRule);
     }),
 
   /**

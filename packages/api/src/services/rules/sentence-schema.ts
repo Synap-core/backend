@@ -110,7 +110,7 @@ const cronFrequencySchema = z.enum([
   "custom",
 ]);
 
-const conditionOperatorSchema = z.enum([
+export const conditionOperatorSchema = z.enum([
   "is",
   "is_not",
   "contains",

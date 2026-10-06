@@ -193,6 +193,11 @@ export {
   // The standing "propose this playbook for every new <kind>" sentence.
   proposePlaybookOnKindSentence,
   flowToConditions,
+  // THEN constructors (moved from automation-intent's sentence-io, 2026-10-06).
+  makeSentenceAction,
+  makeCapabilityAction,
+  makePlaybookRunAction,
+  actionOptionToSentenceAction,
 } from "./sentence.js";
 export type {
   ActionType,
@@ -208,6 +213,7 @@ export type {
   RuleFlowEdge,
   RuleFlowDefinition,
   BackendTrigger,
+  SentenceActionOption,
 } from "./sentence.js";
 
 // ── Typed text → rule pieces, and rule sentence → words (shared composers) ──

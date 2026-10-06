@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   dbWrites: 0,
   findManyRows: [] as Array<Record<string, unknown>>,
   actorError: null as string | null,
+  isCalls: 0,
+  isDown: false,
 }));
 
 vi.mock("@synap/database", () => ({
@@ -87,6 +89,49 @@ vi.mock("../../../services/skills/visibility.js", () => ({
     workspaceId,
   }),
 }));
+
+// The parse door: the REAL `parseRuleText` (shared matcher + compiler), with
+// only the vocabulary load and the IS leg replaced.
+vi.mock("../../../services/rules/parse-text.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../services/rules/parse-text.js")
+    >();
+  return {
+    ...actual,
+    loadParseRuleVocabulary: async () => ({
+      events: [
+        {
+          pattern: "entity.created",
+          label: "An entity was created",
+          source: "catalog",
+        },
+      ],
+      actions: [
+        {
+          key: "notification",
+          label: "Send a notification",
+          nodeType: "output",
+          outputType: "notification",
+        },
+      ],
+      kinds: [],
+    }),
+    askIsParseRule: async () => {
+      h.isCalls++;
+      if (h.isDown) throw new Error("IS parse-rule answered 503");
+      return {
+        sentence: {
+          eventPattern: null,
+          scheduleId: null,
+          kind: null,
+          conditions: [],
+          actionKeys: ["notification"],
+        },
+      };
+    },
+  };
+});
 
 // NOT mocked — the classifier is the thing under test on the classify door.
 import { registerRulesRoutes } from "./rules.js";
@@ -357,5 +402,62 @@ describe("route ordering — /rules/classify is not shadowed", () => {
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("shadowed");
     expect(json).toHaveProperty("shapes");
+  });
+});
+
+describe("POST /rules/parse", () => {
+  beforeEach(() => {
+    h.isCalls = 0;
+    h.isDown = false;
+  });
+
+  it("needs read scope", async () => {
+    const res = await buildApp({ scopes: [] }).request(
+      "/rules/parse",
+      post({ text: "x" })
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses an empty text", async () => {
+    const res = await buildApp().request("/rules/parse", post({ text: "  " }));
+    expect(res.status).toBe(400);
+  });
+
+  it("parses, asks the IS only for the open half, validates, and NEVER creates", async () => {
+    const res = await buildApp().request(
+      "/rules/parse",
+      post({ text: "when an entity is created, frobnicate it" })
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      source: string;
+      picks: { eventPattern: string | null; actionKeys: string[] };
+      validation: { ok: boolean } | null;
+    };
+    expect(h.isCalls).toBe(1);
+    expect(json.source).toBe("ai");
+    expect(json.picks).toMatchObject({
+      eventPattern: "entity.created",
+      actionKeys: ["notification"],
+    });
+    expect(json.validation).toEqual({ ok: true });
+    expect(h.createCalls).toHaveLength(0);
+    expect(h.dbWrites).toBe(0);
+  });
+
+  it("a dead IS is a 200 with aiUnavailable and the matcher's reading — not an error, not empty", async () => {
+    h.isDown = true;
+    const res = await buildApp().request(
+      "/rules/parse",
+      post({ text: "when an entity is created, frobnicate it" })
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      aiUnavailable?: boolean;
+      picks: { eventPattern: string | null };
+    };
+    expect(json.aiUnavailable).toBe(true);
+    expect(json.picks.eventPattern).toBe("entity.created");
   });
 });

@@ -1686,7 +1686,7 @@ function buildEventCatalog(): EventOption[] {
  * of the IS prompting a model from a frozen list baked into its own source.
  * One catalog, one set of floors, for the human picker and the AI door alike.
  */
-async function resolveAvailableTriggerEvents(
+export async function resolveAvailableTriggerEvents(
   access: AccessContext,
   scope: RuleScope
 ): Promise<EventOption[]> {
@@ -1790,7 +1790,7 @@ async function resolveAvailableTriggerEvents(
  * same reason as `resolveAvailableTriggerEvents` above: `generateFlow` forwards
  * it to the IS so the flow prompt advertises only actions this pod can run.
  */
-async function resolveAvailableActions(
+export async function resolveAvailableActions(
   access: AccessContext,
   scope: RuleScope
 ): Promise<ActionOption[]> {

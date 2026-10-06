@@ -809,6 +809,113 @@ export function proposePlaybookOnKindSentence(input: {
   };
 }
 
+// ── THEN constructors: a vocabulary action → an executor-true SentenceAction ─
+//
+// MOVED HERE from `@synap-core/automation-intent`'s `sentence-io.ts`
+// (2026-10-06) so a SERVER door can build a sentence from the pod's own action
+// options — the text→rule parse door (`skills.parseRule`) does exactly that
+// before validating with `compileRuleSentence`. They spell the module-private
+// bookkeeping keys above, which is why they live beside them: a constructor in
+// another package would have to re-spell `__nodeType` & co., and the rule door
+// strips by EXACT membership of `BOOKKEEPING_KEYS`. `sentence-io.ts` re-exports
+// these, so every app importer is unchanged.
+
+/** Build an executor-true OUTPUT `SentenceAction` from a chosen vocabulary action. */
+export function makeSentenceAction(
+  outputType: string,
+  actionKey: string,
+  params: Record<string, unknown> = {}
+): SentenceAction {
+  return {
+    // The THEN is keyed on outputType (executor-true), not the `ActionType`
+    // lineage, so `type` is intentionally null.
+    type: null,
+    config: {
+      [OUTPUT_TYPE_KEY]: outputType,
+      [CAPABILITY_ACTION_KEY]: actionKey,
+      ...params,
+    },
+  };
+}
+
+/**
+ * Build a capability-verb `SentenceAction` — compiles to a `type:"capability"`
+ * flow node. `actionKey` is `verb:<verbId>`, matching the pod's
+ * `ActionOption.key`, so selection and round-trip stay stable.
+ */
+export function makeCapabilityAction(
+  capabilityId: string,
+  verbId: string,
+  params: Record<string, unknown> = {}
+): SentenceAction {
+  return {
+    type: null,
+    config: {
+      [CAPABILITY_NODE_TYPE_KEY]: "capability",
+      [CAPABILITY_ID_KEY]: capabilityId,
+      [CAPABILITY_VERB_ID_KEY]: verbId,
+      [CAPABILITY_ACTION_KEY]: `verb:${verbId}`,
+      ...params,
+    },
+  };
+}
+
+/**
+ * Build a playbook-run `SentenceAction` — a THEN that spawns a session running
+ * `playbookId`, optionally driven by `agentType` and stating a `goal`. Compiles
+ * to a `type:"playbook_run"` node; `actionKey` is `playbook:<id>`.
+ */
+export function makePlaybookRunAction(
+  playbookId: string,
+  params: Record<string, unknown> = {},
+  agentType?: string,
+  goal?: string
+): SentenceAction {
+  return {
+    type: null,
+    config: {
+      [CAPABILITY_NODE_TYPE_KEY]: "playbook_run",
+      [PLAYBOOK_ID_KEY]: playbookId,
+      ...(agentType ? { [PLAYBOOK_AGENT_TYPE_KEY]: agentType } : {}),
+      ...(goal ? { [PLAYBOOK_GOAL_KEY]: goal } : {}),
+      [CAPABILITY_ACTION_KEY]: `playbook:${playbookId}`,
+      ...params,
+    },
+  };
+}
+
+/** The least of the pod's `ActionOption` a THEN can be built from. */
+export interface SentenceActionOption {
+  key: string;
+  nodeType: "output" | "capability" | "playbook_run";
+  outputType?: string;
+  capabilityId?: string;
+  verbId?: string;
+  playbookId?: string;
+}
+
+/**
+ * The sentence action a vocabulary option compiles to, or `null` when the
+ * option is half-declared (a capability with no verb, a playbook_run with no
+ * playbook, an output with no outputType) — a null is a refusal to invent the
+ * missing half, never an empty action.
+ */
+export function actionOptionToSentenceAction(
+  option: SentenceActionOption
+): SentenceAction | null {
+  if (option.nodeType === "capability") {
+    return option.capabilityId && option.verbId
+      ? makeCapabilityAction(option.capabilityId, option.verbId)
+      : null;
+  }
+  if (option.nodeType === "playbook_run") {
+    return option.playbookId ? makePlaybookRunAction(option.playbookId) : null;
+  }
+  return option.outputType
+    ? makeSentenceAction(option.outputType, option.key)
+    : null;
+}
+
 /** The action's config with every `__`-prefixed bookkeeping key removed. */
 function persistedConfig(
   config: Record<string, unknown>
