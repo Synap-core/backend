@@ -979,6 +979,14 @@ export interface WorkspaceSpaceBriefRuleRef {
 	key: string;
 	ruleId?: string;
 }
+/** A skill mode — mirror of `SpaceSkillMode`. */
+export type WorkspaceSpaceSkillMode = "always" | "on-demand";
+/** A declared skill as stored in the brief — mirror of `SpaceBriefSkillRef`. */
+export interface WorkspaceSpaceBriefSkillRef {
+	slug: string;
+	mode: WorkspaceSpaceSkillMode;
+	when?: string;
+}
 export interface WorkspaceSpaceBrief {
 	purpose?: string;
 	goal?: string;
@@ -989,6 +997,7 @@ export interface WorkspaceSpaceBrief {
 	doneWhen?: string;
 	anchors?: WorkspaceSpaceBriefAnchor[];
 	rules?: WorkspaceSpaceBriefRuleRef[];
+	skills?: WorkspaceSpaceBriefSkillRef[];
 	fetch?: WorkspaceSpaceBriefFetchHint[];
 }
 /** `settings.onboardingSeed` — per-field hashes of what the reconcile wrote. */
@@ -5508,6 +5517,11 @@ export interface ReconcileReport {
 		created: string[];
 		updated: string[];
 		skipped: string[];
+		/** Flows refused by `opts.validateFlow` — not stored; `error` says why. */
+		rejected?: Array<{
+			name: string;
+			error: string;
+		}>;
 	};
 	/**
 	 * Default intelligence commands seeded create-if-missing (keyed on `title`).
@@ -12023,6 +12037,30 @@ export interface SpaceBriefRuleRef {
 	/** The installed rule row, once the pod created it. */
 	ruleId?: string;
 }
+/**
+ * How an AI working in a space loads a skill the space declares.
+ *
+ * `always` — prepended to every session and run started in the space, before the
+ *   model has to ask. For the skill that IS the space's job (a brand space's
+ *   creative director).
+ * `on-demand` — surfaced in the brief and ranked first for a find-skills ask;
+ *   loaded when the work calls for it, not on every turn.
+ */
+export type SpaceSkillMode = "always" | "on-demand";
+/**
+ * A declared skill AS STORED in the brief — the space's own copy.
+ *
+ * Unlike `SpaceBriefRuleRef`, which points at a rule ROW that carries the
+ * intent, a skill's content lives on the pod-wide `system/…` skill. The
+ * space-owned half — `mode` and `when` — therefore has nowhere else to live and
+ * is kept here verbatim.
+ */
+export interface SpaceBriefSkillRef {
+	/** The skill ref: `system/<pkg>/<stem>` or a bare stem. */
+	slug: string;
+	mode: SpaceSkillMode;
+	when?: string;
+}
 /** The brief, as stored at `settings.onboarding`. */
 export interface SpaceBrief {
 	/** What this space is for, day to day (steady state). */
@@ -12042,6 +12080,13 @@ export interface SpaceBrief {
 	anchors?: SpaceBriefAnchor[];
 	/** Rules this space's template installed (refs, not bodies). */
 	rules?: SpaceBriefRuleRef[];
+	/**
+	 * Skills this space DECLARES — the space's own refs (slug + mode + when),
+	 * written from the template's `skills[]` by the applier, which owns them.
+	 * An `always` ref is prepended to every session/run started here; every ref
+	 * is surfaced to an agent and ranked first for a find-skills ask.
+	 */
+	skills?: SpaceBriefSkillRef[];
 	/** Where to look before acting. */
 	fetch?: SpaceBriefFetchHint[];
 }
@@ -21519,6 +21564,63 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	apps: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				opRef?: string | undefined;
+				reasonCode?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: {} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				last_used_at: Date | null;
+				grants: {
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+				}[];
+			}[];
+			meta: object;
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				revoked: boolean;
+				publicId: string;
+			};
+			meta: object;
+		}>;
+	}>>;
 	health: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
@@ -26226,6 +26328,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					rules?: unknown[] | undefined;
+					skills?: unknown[] | undefined;
 				};
 				packageSlug?: string | undefined;
 				packageVersion?: string | undefined;
@@ -26404,6 +26507,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					rules?: unknown[] | undefined;
+					skills?: unknown[] | undefined;
 				};
 				dryRun?: boolean | undefined;
 			};
@@ -27105,6 +27209,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					embeddedViewIds: string[] | null;
 				};
 				droppedFilters: DroppedViewFilter[];
+			};
+			meta: object;
+		}>;
+		updateContent: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				viewId: string;
+				version: number;
+				store?: Record<string, unknown> | undefined;
+				elements?: unknown[] | undefined;
+				embeddedEntities?: string[] | undefined;
+			};
+			output: {
+				success: boolean;
+				viewId: string;
+				version: number;
+				broadcastSuccess: boolean;
+				status: string;
 			};
 			meta: object;
 		}>;
@@ -32657,7 +32778,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					enableProposalId?: string | undefined;
 					resolved?: true | undefined;
 					next?: {
-						kind: "run" | "none" | "add" | "connect" | "enable";
+						kind: "run" | "none" | "connect" | "add" | "enable";
 						hint: string;
 						url?: string | undefined;
 					} | undefined;
@@ -38806,6 +38927,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		setWorkspaceMembership: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				projectId: string;
+				workspaceId: string;
+				member: boolean;
+			};
+			output: {
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "updated";
+				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
@@ -39281,6 +39417,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				templateVersion?: string | undefined;
 				firstActionId?: string | undefined;
+				completedActionIds?: string[] | undefined;
 			};
 			output: {
 				id: string;
@@ -39423,7 +39560,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				tools: {
 					name: string;
-					state: "install" | "wanted" | "connect";
+					state: "connect" | "install" | "wanted";
 					providerKey?: string | undefined;
 				}[];
 				origin?: "settings" | "onboarding" | undefined;

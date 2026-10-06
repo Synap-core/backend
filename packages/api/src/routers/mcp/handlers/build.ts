@@ -507,6 +507,55 @@ export const buildHandlers: McpHandlerMap = {
       note: VIEWS_DIGEST_NOTE,
     });
   },
+  synap_update_view_content: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const viewId =
+      typeof args.viewId === "string" && args.viewId.trim()
+        ? args.viewId.trim()
+        : undefined;
+    if (!viewId) {
+      return ok({
+        error:
+          "viewId is required — the UUID of the whiteboard view to update.",
+      });
+    }
+    const version = args.version;
+    if (
+      typeof version !== "number" ||
+      !Number.isFinite(version) ||
+      version <= 0
+    ) {
+      return ok({
+        error:
+          "version is required and must be a positive number — it is the optimistic-locking version of the view's current content.",
+      });
+    }
+    const store =
+      typeof args.store === "object" && args.store !== null
+        ? (args.store as Record<string, unknown>)
+        : undefined;
+    if (!store) {
+      return ok({
+        error: "store is required — the canonical tldraw payload.",
+      });
+    }
+    const result = await caller.views.updateContent({
+      userId,
+      viewId,
+      store,
+      ...(Array.isArray(args.elements) ? { elements: args.elements } : {}),
+      ...(Array.isArray(args.embeddedEntities)
+        ? { embeddedEntities: args.embeddedEntities as string[] }
+        : {}),
+      version,
+      ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+    });
+    return ok(result);
+  },
   synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);

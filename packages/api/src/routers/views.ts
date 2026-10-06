@@ -310,6 +310,8 @@ const ViewRendererRefSchema = z.discriminatedUnion("kind", [
  * in-house phrasing `missingFieldsFromMessage` parses, so the failure record
  * gains `missingFields` for free and the repair affordance lights up.
  */
+export { ViewContentSchema, getViewCategory };
+
 export function describeViewConfigErrors(error: unknown): string {
   const issues =
     error && typeof error === "object" && "issues" in error
@@ -1795,6 +1797,153 @@ export const viewsRouter = router({
         view: updatedView,
         // Stored filters the grammar could not repair, removed by this save.
         droppedFilters,
+      };
+    }),
+
+  /**
+   * Update view content (Synchronous: Direct DB update with Yjs broadcast)
+   */
+  updateContent: protectedProcedure
+    .input(
+      z.object({
+        viewId: z.string().uuid(),
+        store: z.record(z.string(), z.unknown()).optional(),
+        elements: z.array(z.unknown()).optional(),
+        embeddedEntities: z.array(z.string().uuid()).optional(),
+        version: z.number().int().positive(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const view = await db.query.views.findFirst({
+        where: eq(views.id, input.viewId),
+      });
+
+      if (!view) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
+      }
+
+      await assertViewAccess(view, ctx.userId, "write");
+
+      // Ensure this is a canvas view
+      const expectedCategory = getViewCategory(view.type);
+      if (expectedCategory !== "canvas") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `View type '${view.type}' does not support content updates`,
+        });
+      }
+
+      // Prepare content to save
+      const content = {
+        version: input.version,
+        category: "canvas",
+        ...(input.store !== undefined ? { store: input.store } : {}),
+        ...(input.elements !== undefined ? { elements: input.elements } : {}),
+        ...(input.embeddedEntities !== undefined
+          ? { embeddedEntities: input.embeddedEntities }
+          : {}),
+      };
+
+      // Validate content structure
+      const parseResult = ViewContentSchema.safeParse(content);
+      if (!parseResult.success) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid view content structure",
+          cause: parseResult.error,
+        });
+      }
+
+      // Ensure content category matches view type
+      if (parseResult.data.category !== expectedCategory) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `View type '${view.type}' requires '${expectedCategory}' content, got '${parseResult.data.category}'`,
+        });
+      }
+
+      // Save content to storage + create version snapshot
+      let doc = null;
+      let newVersion = 0;
+      if (view.documentId) {
+        doc = await db.query.documents.findFirst({
+          where: eq(documents.id, view.documentId),
+        });
+
+        const contentStr = JSON.stringify(content);
+
+        // Whiteboards: always push to MinIO (canonical source for Yjs)
+        if (doc?.storageKey && view.type === "whiteboard") {
+          await storage.upload(
+            doc.storageKey,
+            Buffer.from(contentStr, "utf-8"),
+            { contentType: "application/json" }
+          );
+        }
+
+        newVersion = (doc?.currentVersion || 0) + 1;
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId: ctx.userId,
+          documentId: view.documentId,
+          versionId,
+          documentType: doc?.type ?? view.type,
+          mimeType: doc?.mimeType || "application/json",
+          content: contentStr,
+        });
+
+        await db.insert(documentVersions).values({
+          id: versionId,
+          documentId: view.documentId,
+          version: newVersion,
+          ...storedVersionValues(snapshot),
+          author: "user",
+          authorId: ctx.userId,
+          message: "Content update",
+        });
+
+        await db
+          .update(documents)
+          .set({
+            currentVersion: newVersion,
+            lastSavedVersion: newVersion,
+            updatedAt: new Date(),
+          })
+          .where(eq(documents.id, view.documentId));
+      }
+
+      // Broadcast reload to all clients in the Yjs room for this view
+      let broadcastSuccess = false;
+      try {
+        // Access the Yjs server instance through the context's socketIO
+        // The realtime server sets up Socket.IO and we can access it from context
+        if (ctx.socketIO && doc) {
+          // Broadcast to the Yjs room for this whiteboard document
+          const roomId = `whiteboard-${view.documentId}`;
+          // Emit to the view room in the presence namespace
+          const presenceNamespace = ctx.socketIO.of("/presence");
+          presenceNamespace.to(`view:${roomId}`).emit("yjs:reload", {
+            viewId: view.id,
+            documentId: view.documentId,
+            version: newVersion, // Use the new version we just set
+            timestamp: Date.now(),
+          });
+          broadcastSuccess = true;
+        }
+      } catch (error) {
+        // Log but don't fail the request if broadcast fails
+        console.warn(
+          "[views.updateContent] Failed to broadcast reload:",
+          error
+        );
+      }
+
+      return {
+        success: true,
+        viewId: view.id,
+        version: newVersion, // Return the new version
+        broadcastSuccess,
+        status: "updated",
       };
     }),
 

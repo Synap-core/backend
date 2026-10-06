@@ -19,9 +19,12 @@
  *
  * Lazy: a run that never reaches an AI node issues no query at all.
  *
- * Concurrency: two runs of the same automation racing can each pass the daily
- * check before either bumps its count, so the daily cap may be overshot by the
- * runs in flight at once. The per-run cap is exact.
+ * Concurrency: the daily reservation is ATOMIC. `reserve()` takes a
+ * transaction-scoped advisory lock keyed by the automation id, re-reads the
+ * rolling-24h sum inside it, and bumps this run's count before releasing — so
+ * two concurrent runs of one automation can never both pass the cap. (A plain
+ * conditional UPDATE would not do: under READ COMMITTED each run would still
+ * sum a snapshot that misses the other's bump.) The per-run cap is exact too.
  */
 import { db, and, eq, ne, drizzleSql, automationRuns } from "@synap/database";
 import {
@@ -128,7 +131,13 @@ export function openAiDispatchBudget(input: {
       .from(automationRuns)
       .where(eq(automationRuns.id, input.runId))
       .limit(1);
-    const [others] = await db
+    usedThisRun = own?.count ?? 0;
+    loaded = true;
+  };
+
+  /** Rolling-24h sum of the automation's OTHER runs. Call inside the lock. */
+  const sumOthers = async (tx: Pick<typeof db, "select">): Promise<number> => {
+    const [others] = await tx
       .select({
         total: drizzleSql<number>`COALESCE(SUM(${automationRuns.aiDispatchCount}), 0)::int`,
       })
@@ -142,9 +151,7 @@ export function openAiDispatchBudget(input: {
           drizzleSql`${automationRuns.startedAt} > now() - interval '24 hours'`
         )
       );
-    usedThisRun = own?.count ?? 0;
-    usedTodayByOthers = Number(others?.total ?? 0);
-    loaded = true;
+    return Number(others?.total ?? 0);
   };
 
   const bump = (delta: 1 | -1) =>
@@ -166,23 +173,42 @@ export function openAiDispatchBudget(input: {
     },
     async reserve() {
       await load();
-      const usedToday = usedTodayByOthers + usedThisRun;
-      const reason: AiCapReason | null =
-        usedThisRun >= perRun
-          ? AUTOMATION_SKIP_REASONS.aiDispatchCapReached
-          : usedToday >= perDay
-            ? AUTOMATION_SKIP_REASONS.aiDailyCapReached
-            : null;
-      if (reason) {
+      if (usedThisRun >= perRun) {
+        const reason = AUTOMATION_SKIP_REASONS.aiDispatchCapReached;
         return {
           ok: false,
           reason,
-          message: aiCapMessage({ reason, perRun, perDay, usedToday }),
+          message: aiCapMessage({
+            reason,
+            perRun,
+            perDay,
+            usedToday: usedTodayByOthers + usedThisRun,
+          }),
         };
       }
-      usedThisRun += 1;
-      await bump(1);
-      return { ok: true };
+      return db.transaction(async (tx): Promise<AiReservation> => {
+        await tx.execute(
+          drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${input.automationId}::text))`
+        );
+        usedTodayByOthers = await sumOthers(tx);
+        const usedToday = usedTodayByOthers + usedThisRun;
+        if (usedToday >= perDay) {
+          const reason = AUTOMATION_SKIP_REASONS.aiDailyCapReached;
+          return {
+            ok: false,
+            reason,
+            message: aiCapMessage({ reason, perRun, perDay, usedToday }),
+          };
+        }
+        await tx
+          .update(automationRuns)
+          .set({
+            aiDispatchCount: drizzleSql`${automationRuns.aiDispatchCount} + 1`,
+          })
+          .where(eq(automationRuns.id, input.runId));
+        usedThisRun += 1;
+        return { ok: true };
+      });
     },
     async release() {
       if (usedThisRun === 0) return;

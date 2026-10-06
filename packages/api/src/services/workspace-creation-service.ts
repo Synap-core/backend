@@ -15,6 +15,7 @@
  * with `created: false`. Otherwise create a new workspace and return
  * `created: true`.
  */
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import {
   createWorkspaceFromDefinition,
   reconcileWorkspaceFromDefinition,
@@ -152,6 +153,7 @@ export async function reconcileWorkspaceIfStale(opts: {
     }
 
     const report = await reconcileWorkspaceFromDefinition({
+      validateFlow: unfilteredAiFanoutError,
       workspaceId,
       userId,
       definition: workspaceDefinition,

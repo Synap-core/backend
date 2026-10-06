@@ -26,6 +26,7 @@
  * grant-vs-propose. Never widens a floor beyond what that existing path grants.
  */
 
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { z } from "@hono/zod-openapi";
 import {
   db,
@@ -196,6 +197,7 @@ export function registerPodAdoptRoutes(app: HubHono): void {
       );
 
       const report: ReconcileReport = await reconcileWorkspaceFromDefinition({
+        validateFlow: unfilteredAiFanoutError,
         workspaceId,
         userId: actingUserId,
         // Cross-package boundary cast — same one `resolve-workspace-template.ts`

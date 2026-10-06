@@ -26,6 +26,7 @@
  *     layering, never a destructive overwrite, never a second workspace.
  */
 
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import {
   db,
   eq,
@@ -205,6 +206,7 @@ export async function composeOntoBaseWorkspace(
       ownerId: baseWs.ownerId,
     });
     const report = await reconcileWorkspaceFromDefinition({
+      validateFlow: unfilteredAiFanoutError,
       workspaceId: composeTargetWorkspaceId,
       userId,
       definition:

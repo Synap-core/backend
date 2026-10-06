@@ -391,6 +391,28 @@ describe("per-automation daily AI cap — on the cron path", () => {
     expect(row.ai_dispatch_count).toBe(1);
   });
 
+  it("two runs racing for the last dispatch: exactly one gets it (atomic reservation)", async () => {
+    const perDay = AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerDayDefault;
+    const a = await automation({ flow: SINGLE_COMMAND });
+    await run(
+      a,
+      {},
+      { aiDispatchCount: perDay - 1, hoursAgo: 1, status: "completed" }
+    );
+    const r1 = await run(a);
+    const r2 = await run(a);
+
+    await Promise.all([execute(a, r1), execute(a, r2)]);
+
+    expect(h.commandCalls).toBe(1);
+    const rows = [await runRow(r1), await runRow(r2)];
+    expect(rows.map((x) => x.status).sort()).toEqual([
+      "blocked_by_policy",
+      "completed",
+    ]);
+    expect(rows.reduce((n, x) => n + Number(x.ai_dispatch_count), 0)).toBe(1);
+  });
+
   it("the cron scheduler enqueues runs to the executor queue this test drives", () => {
     // The cap lives in the executor; this pins that the cron path reaches it.
     const cron = readFileSync(

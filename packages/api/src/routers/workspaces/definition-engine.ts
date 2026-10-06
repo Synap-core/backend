@@ -7,6 +7,7 @@
  * byte-identical.
  */
 
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { z } from "zod";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import { protectedProcedure } from "../../trpc.js";
@@ -859,6 +860,7 @@ export const definitionEngineProcedures = {
         } else {
           try {
             report = await reconcileWorkspaceFromDefinition({
+              validateFlow: unfilteredAiFanoutError,
               workspaceId,
               userId: ctx.userId,
               definition:
@@ -1929,6 +1931,7 @@ export const definitionEngineProcedures = {
       }
 
       const report = await reconcileWorkspaceFromDefinition({
+        validateFlow: unfilteredAiFanoutError,
         workspaceId: input.workspaceId,
         userId: ctx.userId,
         definition: input.definition as unknown as WorkspaceDefinitionInput,

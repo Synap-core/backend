@@ -49,7 +49,11 @@ import { loadVisibleProject } from "../services/projects/load-visible-project.js
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
+  linkProjectToWorkspace,
+  unlinkProjectFromWorkspace,
 } from "../utils/project-workspace.js";
+import { checkLinkEndpointsVisible } from "./hub-protocol/rest/link-endpoint-visibility.js";
+import { stampAutoApprovedCreate } from "../services/proposals/stamp-materialized.js";
 
 // ─── Legacy project stages (READ-ONLY until the next wave) ─────────────────────
 
@@ -700,6 +704,132 @@ export const projectsRouter = router({
         workspaceId: project.workspaceId ?? undefined,
       });
 
+      return { status: "updated" as const };
+    }),
+
+  /**
+   * Link or unlink a workspace to a project — the project's cross-cutting INDEX.
+   *
+   * `project --uses--> workspace`. The project must be visible (loaded first,
+   * gated on its own workspace, same floor `loadVisibleProject` enforces).
+   * The workspace is checked via `checkLinkEndpointsVisible` before the gate:
+   * an unreachable workspace must not become a proposal the approval would
+   * never resolve. Removal is idempotent — `unlinkProjectFromWorkspace`
+   * reports `rows: 0` when there was nothing to delete rather than erroring.
+   *
+   * Governed at pod scope (`workspaceId: null`) because a project is a
+   * cross-cutting lens and lives outside any single workspace; the gate reads
+   * the caller's RBAC across all visible workspaces. An agent always proposes;
+   * a human may auto-apply depending on their governance rule.
+   */
+  setWorkspaceMembership: podProcedure
+    .input(
+      z.object({
+        projectId: z.string().uuid(),
+        workspaceId: z.string().uuid(),
+        member: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+
+      // The PROJECT must be visible first — same floor as `get`, `automations`,
+      // `fileEntities`, etc. Without it, passing any project id could write a
+      // `uses` edge on a project the caller cannot see.
+      const project = await loadVisibleProject(db, input.projectId, ctx.userId);
+      if (!project) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
+
+      // Endpoint floor: the workspace must be visible to the caller BEFORE we
+      // ask governance to decide. Otherwise an agent could propose a link to a
+      // workspace the user cannot reach, and the approval would fail to land.
+      const endpointRefusal = await checkLinkEndpointsVisible(
+        {
+          fromType: "project",
+          fromId: input.projectId,
+          toType: "workspace",
+          toId: input.workspaceId,
+        },
+        ctx.userId,
+        input.workspaceId
+      );
+      if (endpointRefusal) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: endpointRefusal.error,
+        });
+      }
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? undefined,
+        workspaceId: undefined,
+        subjectType: "link",
+        action: input.member ? "create" : "delete",
+        reasoning: input.member
+          ? "Project uses workspace (INDEX, not ACL)"
+          : "Project no longer uses workspace",
+        data: {
+          title: input.member
+            ? "project --uses--> workspace"
+            : "remove project --uses--> workspace",
+          fromType: "project",
+          fromId: input.projectId,
+          toType: "workspace",
+          toId: input.workspaceId,
+          linkType: "uses",
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      if (input.member) {
+        const result = await linkProjectToWorkspace(db, {
+          projectId: input.projectId,
+          workspaceId: input.workspaceId,
+          userId: ctx.userId,
+        });
+        if (!result.linked) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message:
+              result.reason === "workspace_not_found"
+                ? "Workspace not found"
+                : "Project not found",
+          });
+        }
+        // Stamp an undo record for the auto-approved case so the edge can be
+        // rolled back without losing provenance.
+        const stampId =
+          "granted" in perm ? perm.autoApprovedProposalId : undefined;
+        await stampAutoApprovedCreate({
+          receiptId: stampId,
+          record: result.linkId ? { linkIds: [result.linkId] } : {},
+          door: "projects.setWorkspaceMembership",
+        });
+        return { status: "updated" as const };
+      }
+
+      const removed = await unlinkProjectFromWorkspace(db, {
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+        userId: ctx.userId,
+      });
+      if (!removed.unlinked) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
       return { status: "updated" as const };
     }),
 

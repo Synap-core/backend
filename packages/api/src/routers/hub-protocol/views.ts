@@ -31,6 +31,10 @@ import {
   renderableArrangeError,
 } from "../../services/cells/renderables.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+import { ViewContentSchema, getViewCategory } from "../views.js";
+
+// Re-export for external use
+export { ViewContentSchema, getViewCategory };
 
 /** A single widget placement in the bento grid */
 const BentoWidgetInputSchema = z.object({
@@ -415,5 +419,180 @@ export const hubViewsRouter = router({
         widgetCount: blocks.length,
         message: `Arranged ${blocks.length} cell${blocks.length !== 1 ? "s" : ""} in dashboard`,
       };
+    }),
+
+  /**
+   * Update whiteboard content (shapes/elements/storage)
+   * Requires: hub-protocol.write scope
+   * Governance: view.updateContent is NOT auto-approved — generates a proposal
+   */
+  updateContent: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        viewId: z.string().uuid(),
+        store: z.record(z.string(), z.unknown()).optional(),
+        elements: z.array(z.unknown()).optional(),
+        embeddedEntities: z.array(z.string().uuid()).optional(),
+        version: z.number().int().positive(),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
+        workspaceId: z.string().uuid().optional(),
+        /**
+         * The declared session-output slot this update fulfils, exactly as
+         * declared on `focus_sessions.expectedOutputs[].label`. Forwarded to
+         * `recordSessionArtifact` below, never guessed when absent.
+         */
+        expectedLabel: z.string().optional(),
+        /** Pin the update to a project (W2a) — see `views.updateContent`. */
+        projectId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId!;
+      // Resolve workspaceId — look it up if not provided
+      let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+      const db = await getDb();
+      const view = await db.query.views.findFirst({
+        where: and(eq(views.id, input.viewId), eq(views.userId, userId)),
+        columns: {
+          workspaceId: true,
+          type: true,
+          documentId: true,
+          name: true,
+        },
+      });
+      if (!view) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
+      }
+      if (workspaceId && workspaceId !== view.workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "View does not belong to the requested workspace",
+        });
+      }
+      workspaceId = view.workspaceId ?? undefined;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "workspaceId is required for view updates",
+        });
+      }
+
+      // Ensure this is a canvas view
+      const expectedCategory = getViewCategory(view.type);
+      if (expectedCategory !== "canvas") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `View type '${view.type}' does not support content updates`,
+        });
+      }
+
+      // Prepare content to save
+      const content = {
+        version: input.version,
+        category: "canvas",
+        ...(input.store !== undefined ? { store: input.store } : {}),
+        ...(input.elements !== undefined ? { elements: input.elements } : {}),
+        ...(input.embeddedEntities !== undefined
+          ? { embeddedEntities: input.embeddedEntities }
+          : {}),
+      };
+
+      // Validate content structure
+      const parseResult = ViewContentSchema.safeParse(content);
+      if (!parseResult.success) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Invalid view content structure",
+          cause: parseResult.error,
+        });
+      }
+
+      // Ensure content category matches view type
+      if (parseResult.data.category !== expectedCategory) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `View type '${view.type}' requires '${expectedCategory}' content, got '${parseResult.data.category}'`,
+        });
+      }
+
+      // Governance check — view.updateContent is NOT in auto-approve whitelist
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: input.agentUserId,
+        workspaceId,
+        subjectType: "view",
+        action: "updateContent",
+        source: "intelligence",
+        reasoning: input.reasoning,
+        sourceMessageId: ctx.sourceMessageId ?? undefined,
+        sessionId: ctx.sessionId ?? undefined,
+        data: {
+          id: input.viewId,
+          version: input.version,
+          store: input.store,
+          elements: input.elements,
+          embeddedEntities: input.embeddedEntities,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          message: proposedMessageFor(
+            perm.proposalType,
+            "View content update proposed for review"
+          ),
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          view: null,
+        };
+      }
+
+      // Execute the update via the regular views router
+      const callerContext = await createHubProtocolCallerContext(
+        userId,
+        ctx.scopes || [],
+        workspaceId,
+        ctx.sourceMessageId ?? undefined
+      );
+      const caller = regularViewsRouter.createCaller(callerContext);
+
+      const result = await caller.updateContent({
+        viewId: input.viewId,
+        store: input.store,
+        elements: input.elements,
+        embeddedEntities: input.embeddedEntities,
+        version: input.version,
+      });
+
+      // OUTPUT LEDGER — record that this view content was updated for the session
+      if (
+        ctx.sessionId &&
+        result &&
+        typeof result === "object" &&
+        "viewId" in result &&
+        result.viewId
+      ) {
+        await recordSessionArtifact({
+          sessionId: ctx.sessionId,
+          workspaceId: input.workspaceId ?? null,
+          userId,
+          kind: "view",
+          refId: result.viewId,
+          title: `${view.name} (content update)`,
+          agentUserId: input.agentUserId,
+          expectedLabel: input.expectedLabel,
+        });
+      }
+
+      return result;
     }),
 });

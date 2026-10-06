@@ -3892,6 +3892,53 @@ export const tools = {
         },
       },
       {
+        name: "synap_update_view_content",
+        annotations: {
+          title: "Update whiteboard content",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description: `Update the content of an existing whiteboard view (add/move/delete shapes). Goes through governance.`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            viewId: {
+              type: "string",
+              description: "View UUID to update",
+            },
+            store: {
+              type: "object",
+              description: "Canonical tldraw payload",
+            },
+            elements: {
+              type: "array",
+              description: "Optional elements array",
+            },
+            embeddedEntities: {
+              type: "array",
+              items: { type: "string" },
+              description: "Optional UUID array of embedded entities",
+            },
+            version: {
+              type: "number",
+              description: "For optimistic locking",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["viewId", "store", "version"],
+        },
+      },
+      {
         name: "synap_list_views",
         annotations: {
           title: "List views",

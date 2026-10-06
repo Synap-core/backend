@@ -53,6 +53,7 @@ export { registerProjectsRoutes } from "./projects.js";
 export { registerTracksRoutes } from "./tracks.js";
 export { registerSharesRoutes } from "./shares.js";
 export { registerFormsRoutes } from "./forms.js";
+export { registerAppsRoutes } from "./apps.js";
 export { registerPackagesRoutes } from "./packages.js";
 export { registerRelationsRoutes } from "./relations.js";
 export { registerLinksRoutes } from "./links.js";

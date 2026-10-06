@@ -4883,3 +4883,24 @@ CREATE INDEX IF NOT EXISTS "grant_roles_user_idx" ON "grant_roles" ("user_id");
 
 ALTER TABLE "grants" ADD COLUMN IF NOT EXISTS "role_id" uuid
   REFERENCES "grant_roles"("id") ON DELETE SET NULL;
+
+-- apps (0309) — a developer's application identity (App Connect v1). `public_id`
+-- is the app id AND the `client_id` its grant carries; `approved_requests` is
+-- written only by the `app/connect` approval executor.
+CREATE TABLE IF NOT EXISTS "apps" (
+  "id"                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "owner_user_id"     text        NOT NULL,
+  "public_id"         text        NOT NULL UNIQUE,
+  "name"              text        NOT NULL,
+  "description"       text,
+  "logo_url"          text,
+  "mode"              text        NOT NULL DEFAULT 'specific',
+  "approved_requests" jsonb,
+  "metadata"          jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "last_used_at"      timestamptz,
+  "created_at"        timestamptz NOT NULL DEFAULT now(),
+  "revoked_at"        timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_name_unique"
+  ON "apps" ("owner_user_id", "name");
+CREATE INDEX IF NOT EXISTS "apps_owner_idx" ON "apps" ("owner_user_id");

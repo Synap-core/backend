@@ -121,6 +121,15 @@ export interface ReconcileOptions {
    */
   packageSlug?: string;
   packageVersion?: string;
+  /**
+   * Flow-persist validator for seeded automations: returns an error message, or
+   * null when the flow may be stored. INJECTED because this package has no
+   * `@synap-core/types` dependency — callers in `@synap/api` pass
+   * `unfilteredAiFanoutError` (the ONE AI fan-out filter rule every other flow
+   * door runs). A flow that fails is skipped (never stored) and reported under
+   * `automations.rejected`.
+   */
+  validateFlow?: (flow: unknown) => string | null;
 }
 
 /**
@@ -279,7 +288,13 @@ export interface ReconcileReport {
    *   `skipped` = stored hash equals the definition hash → no-op.
    * Values are automation names.
    */
-  automations: { created: string[]; updated: string[]; skipped: string[] };
+  automations: {
+    created: string[];
+    updated: string[];
+    skipped: string[];
+    /** Flows refused by `opts.validateFlow` — not stored; `error` says why. */
+    rejected?: Array<{ name: string; error: string }>;
+  };
   /**
    * Default intelligence commands seeded create-if-missing (keyed on `title`).
    * `created` = title absent → inserted; `skipped` = title already present
@@ -1271,6 +1286,19 @@ export async function reconcileWorkspaceFromDefinition(
       nodes: [],
       edges: [],
     }) as unknown as FlowDefinition;
+
+    const flowError = opts.validateFlow?.(flowDefinition) ?? null;
+    if (flowError) {
+      logger.warn(
+        { workspaceId, automation: auto.name, error: flowError },
+        "Skipping seeded automation: its flow failed validation"
+      );
+      (report.automations.rejected ??= []).push({
+        name: auto.name,
+        error: flowError,
+      });
+      continue;
+    }
 
     // Stable content key of the definition's flow + description. The definition
     // entry is constructed deterministically (same object shape every apply), so

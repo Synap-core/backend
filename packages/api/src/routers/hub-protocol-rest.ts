@@ -55,6 +55,7 @@ import {
   registerTracksRoutes,
   registerSharesRoutes,
   registerFormsRoutes,
+  registerAppsRoutes,
   registerPackagesRoutes,
   registerProposalsRoutes,
   registerRelationsRoutes,
@@ -305,6 +306,7 @@ registerProjectsRoutes(app); // /projects*
 registerTracksRoutes(app); // /tracks*
 registerSharesRoutes(app); // /shares* (Sites W2 S3 owner share doors)
 registerFormsRoutes(app); // /forms* (Sites W4 owner public-form doors)
+registerAppsRoutes(app); // /apps* (App Connect v1 — register/connect/key/revoke)
 registerPackagesRoutes(app); // /packages*
 registerRelationsRoutes(app); // /relations*
 registerLinksRoutes(app); // /links (config/runtime graph; knowledge↔config bridge)

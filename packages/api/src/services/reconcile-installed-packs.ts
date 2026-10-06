@@ -23,6 +23,7 @@
  * untouched.
  */
 
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import {
   db,
   eventRepository,
@@ -84,6 +85,7 @@ export async function reconcileInstalledPacks(opts: {
         continue;
       }
       await reconcileWorkspaceFromDefinition({
+        validateFlow: unfilteredAiFanoutError,
         workspaceId: opts.workspaceId,
         userId: opts.ownerId,
         definition: overlayDefinitionForIdentifiedBase(

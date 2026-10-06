@@ -1,3 +1,4 @@
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -954,6 +955,7 @@ export function registerWorkspaceExecutors(): void {
       await workspaceRepo.mergeSettings(workspaceId, settingsPatch, userId);
 
       const report = await reconcileWorkspaceFromDefinition({
+        validateFlow: unfilteredAiFanoutError,
         workspaceId,
         userId,
         definition: resolved.workspaceDefinition as unknown as Parameters<

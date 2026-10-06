@@ -28,33 +28,11 @@ export type PodCallResult<T> =
   | { ok: false; status: number; message: string; code?: string };
 
 /**
- * Call one tRPC mutation as the cookie-bearing operator.
- *
- * Errors are RETURNED, never thrown and never flattened into a boolean. A
- * caller that cannot tell "the pod refused" from "the pod never answered" is
- * exactly how an install that landed once reported "failed: Unknown error".
+ * Read a tRPC HTTP response into the discriminated result, parsing the
+ * SuperJSON envelope. Shared by the query and mutation callers so the two
+ * cannot disagree about what a pod answer means.
  */
-export async function callPodMutation<T>(
-  procedure: string,
-  input: unknown,
-  cookie: string
-): Promise<PodCallResult<T>> {
-  let res: Response;
-  try {
-    res = await fetch(`${INTERNAL_POD_URL}/trpc/${procedure}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Cookie: cookie,
-      },
-      body: JSON.stringify({ json: input }),
-      cache: "no-store",
-    });
-  } catch {
-    return { ok: false, status: 502, message: "Could not reach this pod." };
-  }
-
+async function readPodEnvelope<T>(res: Response): Promise<PodCallResult<T>> {
   const text = await res.text();
   let body: unknown;
   try {
@@ -111,4 +89,67 @@ export async function callPodMutation<T>(
   }
 
   return { ok: true, data: envelope.result.data.json as T };
+}
+
+/**
+ * Call one tRPC mutation as the cookie-bearing operator.
+ *
+ * Errors are RETURNED, never thrown and never flattened into a boolean. A
+ * caller that cannot tell "the pod refused" from "the pod never answered" is
+ * exactly how an install that landed once reported "failed: Unknown error".
+ */
+export async function callPodMutation<T>(
+  procedure: string,
+  input: unknown,
+  cookie: string
+): Promise<PodCallResult<T>> {
+  let res: Response;
+  try {
+    res = await fetch(`${INTERNAL_POD_URL}/trpc/${procedure}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Cookie: cookie,
+      },
+      body: JSON.stringify({ json: input }),
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, status: 502, message: "Could not reach this pod." };
+  }
+
+  return readPodEnvelope<T>(res);
+}
+
+/**
+ * Call one tRPC QUERY as the cookie-bearing operator.
+ *
+ * QUERIES RIDE GET, NOT POST: the pod mounts `fetchRequestHandler`, which reads
+ * the HTTP METHOD to decide procedure type — a query called by POST is served
+ * as a mutation and refused (PROCEDURE_TYPE_MISMATCH). So a query is a GET with
+ * the SuperJSON input in the single `input` search param; a no-input procedure
+ * omits it entirely.
+ */
+export async function callPodQuery<T>(
+  procedure: string,
+  input: unknown,
+  cookie: string
+): Promise<PodCallResult<T>> {
+  const query =
+    input === undefined
+      ? ""
+      : `?input=${encodeURIComponent(JSON.stringify({ json: input }))}`;
+  let res: Response;
+  try {
+    res = await fetch(`${INTERNAL_POD_URL}/trpc/${procedure}${query}`, {
+      method: "GET",
+      headers: { Accept: "application/json", Cookie: cookie },
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, status: 502, message: "Could not reach this pod." };
+  }
+
+  return readPodEnvelope<T>(res);
 }

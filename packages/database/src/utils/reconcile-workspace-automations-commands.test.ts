@@ -406,3 +406,43 @@ describe("reconcile: base report flow gains the chart freeze (W5d)", () => {
     expect(captured.updates).toHaveLength(0);
   });
 });
+
+describe("reconcile: injected flow validator (AI fan-out rule)", () => {
+  const refuse = (): string => "unfiltered fan-out";
+
+  it("a flow the validator refuses is neither inserted nor updated, and is reported", async () => {
+    existingAutomation = undefined;
+    const report = await reconcileWorkspaceFromDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+      definition: { flowAutomations: [AUTO] },
+      validateFlow: refuse,
+    });
+    expect(captured.inserts).toHaveLength(0);
+    expect(captured.updates).toHaveLength(0);
+    expect(report.automations.created).toEqual([]);
+    expect(report.automations.rejected).toEqual([
+      { name: "Generate report", error: "unfiltered fan-out" },
+    ]);
+
+    existingAutomation = { id: "a", version: 1, metadata: { seedVersion: 1 } };
+    await reconcileWorkspaceFromDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+      definition: { flowAutomations: [AUTO] },
+      validateFlow: refuse,
+    });
+    expect(captured.updates).toHaveLength(0);
+  });
+
+  it("a passing validator changes nothing", async () => {
+    const report = await reconcileWorkspaceFromDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+      definition: { flowAutomations: [AUTO] },
+      validateFlow: () => null,
+    });
+    expect(report.automations.created).toEqual(["Generate report"]);
+    expect(report.automations.rejected).toBeUndefined();
+  });
+});

@@ -20,6 +20,7 @@
  * the generated `workspaces:` type in api-types stays byte-identical.
  */
 
+import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { z } from "zod";
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import {
@@ -445,6 +446,7 @@ const coreProcedures = {
           // template identity.
           const baseDef = baseTemplate.workspaceDefinition;
           const baseReport = await reconcileWorkspaceFromDefinition({
+            validateFlow: unfilteredAiFanoutError,
             workspaceId: input.id,
             userId: ctx.userId,
             definition: {
