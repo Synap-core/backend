@@ -514,3 +514,54 @@ describe("project scope on edit and activation", () => {
     expect(gateCalls).toHaveLength(0);
   });
 });
+
+describe("run policy survives a recompile", () => {
+  // `automations.update` REPLACES triggerConfig, and the sentence compiler
+  // never emits the daily cap — so without the carry, saving a rule from the
+  // composer silently removed the "≤ N a day" the user set on the detail.
+  it("keeps triggerConfig.maxRunsPerDay (and the AI-dispatch cap) on an in-place edit", async () => {
+    automationRows = [
+      {
+        ...automationRows[0],
+        triggerConfig: {
+          eventPattern: "entity.update.completed",
+          maxRunsPerDay: 3,
+          maxAiDispatchesPerDay: 7,
+        },
+      },
+    ];
+    const result = await update({ sentence: GOOD_SENTENCE });
+    expect(result).toMatchObject({ status: "updated" });
+    const viaRouter = automationUpdates.find((u) => u.viaRouter);
+    const tc = viaRouter?.triggerConfig as Record<string, unknown>;
+    expect(tc.maxRunsPerDay).toBe(3);
+    expect(tc.maxAiDispatchesPerDay).toBe(7);
+    // The sentence's own keys come from the compiler, never the old row.
+    expect(tc.eventPattern).toBe("entity.create.completed");
+  });
+
+  it("keeps the cap when a scope change re-creates the behaviour", async () => {
+    automationRows = [
+      {
+        ...automationRows[0],
+        workspaceId: "other-ws",
+        triggerConfig: { maxRunsPerDay: 2 },
+      },
+    ];
+    const result = await update({
+      sentence: GOOD_SENTENCE,
+      scope: { kind: "workspace", workspaceId: "ws-1" },
+    });
+    expect(result).toMatchObject({ status: "updated" });
+    const def = materializeCalls.at(-1)?.definition as Record<string, unknown>;
+    expect((def.triggerConfig as Record<string, unknown>).maxRunsPerDay).toBe(
+      2
+    );
+  });
+
+  it("adds no cap the behaviour never had", async () => {
+    await update({ sentence: GOOD_SENTENCE });
+    const viaRouter = automationUpdates.find((u) => u.viaRouter);
+    expect(viaRouter?.triggerConfig).not.toHaveProperty("maxRunsPerDay");
+  });
+});

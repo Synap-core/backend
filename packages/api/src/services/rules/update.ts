@@ -58,6 +58,10 @@
  */
 
 import { db, skills, automations, eq, and, inArray } from "@synap/database";
+import {
+  MAX_AI_DISPATCHES_PER_DAY_KEY,
+  MAX_RUNS_PER_DAY_KEY,
+} from "@synap-core/types/automations";
 import { createLogger } from "@synap-core/core";
 import type { Context } from "../../context.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -81,6 +85,33 @@ import { applyRuleProjectScope } from "./scope.js";
 import { readRuleSentence } from "./sentence-schema.js";
 import { readRuleAutomationIds } from "./lineage.js";
 import { snapshotBehaviours } from "./create.js";
+
+/**
+ * `triggerConfig` keys that are RUN POLICY set on the behaviour (the Rules
+ * page's daily cap, the AI-dispatch cap), not part of the rule sentence. A
+ * recompile carries them from the automation it replaces; every other key is
+ * the sentence's and comes from the compiler alone (carrying all old keys would
+ * keep a stale `eventPattern` across an event → schedule edit).
+ */
+export const RULE_RUN_POLICY_TRIGGER_KEYS = [
+  MAX_RUNS_PER_DAY_KEY,
+  MAX_AI_DISPATCHES_PER_DAY_KEY,
+] as const;
+
+export function withRunPolicy(
+  compiled: Record<string, unknown>,
+  previous: unknown
+): Record<string, unknown> {
+  const prev =
+    previous && typeof previous === "object"
+      ? (previous as Record<string, unknown>)
+      : {};
+  const carried: Record<string, unknown> = {};
+  for (const key of RULE_RUN_POLICY_TRIGGER_KEYS) {
+    if (prev[key] != null && !(key in compiled)) carried[key] = prev[key];
+  }
+  return { ...compiled, ...carried };
+}
 
 const logger = createLogger({ module: "rules-update" });
 
@@ -348,6 +379,7 @@ export async function updateRuleGoverned(
           id: automations.id,
           workspaceId: automations.workspaceId,
           metadata: automations.metadata,
+          triggerConfig: automations.triggerConfig,
         })
         .from(automations)
         .where(inArray(automations.id, linkedIds))
@@ -364,6 +396,14 @@ export async function updateRuleGoverned(
 
   if (compiled) {
     const reusable = owned.find((a) => a.workspaceId === targetWorkspaceId);
+    // The run POLICY the user set on the behaviour — not part of the sentence,
+    // so the compiler never emits it, and `automations.update` REPLACES
+    // `triggerConfig` wholesale. Without this carry, re-saving a rule from the
+    // composer silently dropped its daily cap (the Rules page "≤ N a day").
+    const triggerConfig = withRunPolicy(
+      compiled.trigger.triggerConfig,
+      (reusable ?? owned[0])?.triggerConfig
+    );
     // Any owned automation we are NOT reusing is retired — including one left
     // in the wrong workspace by a scope change, which `automations.update`
     // cannot move.
@@ -388,7 +428,7 @@ export async function updateRuleGoverned(
           name: ruleNameFromIntent(intent),
           description: intent,
           triggerType: compiled.trigger.triggerType,
-          triggerConfig: compiled.trigger.triggerConfig,
+          triggerConfig,
           flowDefinition: compiled.flow,
           metadata: {
             ruleId: input.ruleId,
@@ -421,7 +461,7 @@ export async function updateRuleGoverned(
             name: ruleNameFromIntent(intent),
             description: intent,
             triggerType: compiled.trigger.triggerType,
-            triggerConfig: compiled.trigger.triggerConfig,
+            triggerConfig,
             flowDefinition: compiled.flow,
             status: "active",
             source: "user",
