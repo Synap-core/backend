@@ -104,6 +104,7 @@ import type { RaiseProposalCapRequest } from "../services/proposals/recommend-ra
 import { propertyLinkLevel } from "./profile-schema-write-access.js";
 import { profileOwnershipRequirement } from "./profile-pod-wide-fields.js";
 import { isPodAdmin } from "./workspace-role.js";
+import { grantWriteDenial } from "./grant-write-check.js";
 import {
   decideAgentPolicy,
   findMatchingPattern,
@@ -1275,6 +1276,25 @@ async function evaluatePermission(
       projectId,
     })
   );
+
+  // 0. W1 — the calling key's GRANT. A write the grant does not permit is
+  // DENIED (never proposed: approving it would widen the grant). No grant on
+  // the request = a legacy key, unchanged. Before every other rung so no
+  // policy, rule or role can let an out-of-grant write through.
+  const grantDenied = await grantWriteDenial({
+    subjectType,
+    action,
+    workspaceId,
+    projectId,
+    data: data as Record<string, unknown> | undefined,
+  });
+  if (grantDenied) {
+    logger.warn(
+      { subjectType, action, userId, agentUserId, workspaceId },
+      "Write refused by the key's grant"
+    );
+    return { denied: true, reason: grantDenied };
+  }
 
   // 1. Pod/owner scope (no workspace lens).
   //
