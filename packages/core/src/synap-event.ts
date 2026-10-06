@@ -97,6 +97,15 @@ export const SynapEventSchema = z.object({
   // STRIPPED, which is exactly how a fully-plumbed provenance field has reached
   // zero rows before in this repo.
   sessionId: z.string().uuid().optional(),
+
+  // ── App attribution (persisted into the REAL events.app_id column, 0310) ───
+  // The APPLICATION (`app_<uuid>` public_id) whose key produced this write,
+  // recorded ALONGSIDE `userId` (the connecting human) — never in `source`.
+  // Absent for a bare/human write. Declared HERE because `EventRepository.append`
+  // runs every payload through this schema: a field the schema does not know is
+  // SILENTLY STRIPPED, the exact way a fully-plumbed provenance field reaches
+  // zero rows. `text` (never uuid-validated) to match the column.
+  appId: z.string().optional(),
 });
 
 export type SynapEvent = z.infer<typeof SynapEventSchema>;

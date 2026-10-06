@@ -41,6 +41,13 @@ export interface ActiveGrant {
   projectIds: string[] | null;
   entityIds: string[] | null;
   expiresAt: Date | null;
+  /**
+   * The APPLICATION this credential acts as (`grants.client_id` = the app's
+   * `public_id`), or null for a bare key. Attribution only — it rides onto the
+   * identity's grant so `getRequestGrant()?.clientId` is readable at write time
+   * and a write can be stamped "via <app>". Never an enforcement input.
+   */
+  clientId: string | null;
 }
 
 const emptyToNull = (v?: string[] | null) =>
@@ -102,6 +109,8 @@ export class GrantRepository {
         entityIds: grants.entityIds,
         expiresAt: grants.expiresAt,
         revokedAt: grants.revokedAt,
+        // The app identity, carried so a write can be attributed "via <app>".
+        clientId: grants.clientId,
       })
       .from(grants)
       .where(eq(grants.apiKeyId, apiKeyId))
@@ -143,9 +152,7 @@ export class GrantRepository {
     const rows = await this.db
       .update(grants)
       .set({ revokedAt: new Date(), revokedBy: revokedBy ?? null })
-      .where(
-        and(inArray(grants.apiKeyId, apiKeyIds), isNull(grants.revokedAt))
-      )
+      .where(and(inArray(grants.apiKeyId, apiKeyIds), isNull(grants.revokedAt)))
       .returning({ id: grants.id });
     return rows.length;
   }

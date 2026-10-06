@@ -42,6 +42,13 @@ export interface ResolvedKeyIdentity {
    * W1 — what this key may touch. `null` = a key that never had a grant
    * (legacy: scopes + the human floor). A revoked/expired grant is DENY-ALL,
    * never null. A failed grant read THROWS: guessing "no grant" would widen.
+   *
+   * APP ATTRIBUTION: this is also the carrier of the app identity — `ActiveGrant
+   * .clientId` (the app's `public_id`, i.e. `grants.client_id`) rides WITH the
+   * grant. Every key-auth door enters it via `runWithGrant(grant, …)`, so
+   * `getRequestGrant()?.clientId` is readable at write time and a governed write
+   * can be stamped "via <app>" next to the connecting human. Attribution only —
+   * it never widens what the grant permits.
    */
   grant: GrantScope | null;
 }

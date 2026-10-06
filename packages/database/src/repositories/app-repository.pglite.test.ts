@@ -211,3 +211,32 @@ describe("AppRepository.keyIdsFor", () => {
     expect(await repo.keyIdsFor(app.publicId)).toEqual([]);
   });
 });
+
+describe("GrantRepository.resolveForKey — carries the app identity (Attribution)", () => {
+  it("returns clientId so a key-auth door can attribute the write to its app", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+    await seedKey(KEY_A);
+    await attachGrant(KEY_A, app.publicId);
+
+    const grant = await grants.resolveForKey(KEY_A);
+    expect(grant?.clientId).toBe(app.publicId);
+  });
+
+  it("returns clientId null for a bare key with no app", async () => {
+    await seedKey(KEY_B);
+    await attachGrant(KEY_B, null);
+    const grant = await grants.resolveForKey(KEY_B);
+    expect(grant?.clientId ?? null).toBeNull();
+  });
+
+  it("keeps clientId on a revoked grant (deny-all) — attribution is not an enforcement input", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+    await seedKey(KEY_A);
+    await attachGrant(KEY_A, app.publicId);
+    await grants.revokeForKeys([KEY_A], OWNER);
+
+    const grant = await grants.resolveForKey(KEY_A);
+    expect(grant?.permissions).toEqual([]); // deny-all
+    expect(grant?.clientId).toBe(app.publicId);
+  });
+});

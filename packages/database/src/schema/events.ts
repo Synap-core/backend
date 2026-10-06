@@ -108,6 +108,15 @@ export const events = pgTable(
     // this value in scope; before 0241 it reached only the automation matcher.
     // No FK — events are append-only history, sessions are deletable.
     sessionId: uuid("session_id"),
+
+    // ─── App attribution (App Connect v1, 0310) ─────────────────────────────
+    // The APPLICATION (its `public_id`, `app_<uuid>`) whose key produced this
+    // write, or NULL for a bare/human write. Recorded ALONGSIDE `user_id` (the
+    // connecting human) — never smuggled into `source` — so the spine can say
+    // "via <app>" and the human at once. Text, not a FK (the app row is
+    // revocable; events are immutable history). Stamped from the request's
+    // grant (`getRequestGrant()?.clientId`) by `auditLog`.
+    appId: text("app_id"),
   },
   (table) => ({
     // ✨ COMPOSITE PK: Required for TimescaleDB hypertable with primary key

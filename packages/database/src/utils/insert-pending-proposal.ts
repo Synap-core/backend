@@ -135,6 +135,13 @@ export interface InsertPendingProposalInput {
    * plain default-propose case.
    */
   governanceReason?: string | null;
+  /**
+   * APP ATTRIBUTION (App Connect v1) — the `public_id` (`app_<uuid>`) of the
+   * APPLICATION whose key filed this proposal, or null for a bare/human write.
+   * Read by the caller off the request's grant (`getRequestGrant()?.clientId`).
+   * Attribution only; it never affects governance.
+   */
+  appId?: string | null;
 }
 
 export interface InsertPendingProposalResult {
@@ -316,6 +323,11 @@ export const PROPOSAL_PROVENANCE_KEYS = [
   "stepRunId",
   "nodeId",
   "governanceReason",
+  // APP ATTRIBUTION (App Connect v1) — the app's `public_id` whose key filed
+  // the proposal. Listed here (not only written) so the parity tripwire forces
+  // BOTH inserts — PENDING and the AUTO_APPROVED receipt — to name it, exactly
+  // as it forced `subjectUserId` onto both.
+  "appId",
 ] as const;
 
 /**
@@ -499,6 +511,8 @@ export async function insertPendingProposal(
         ...(input.governanceReason
           ? { governanceReason: input.governanceReason }
           : {}),
+        // APP ATTRIBUTION — the app's public_id whose key filed this proposal.
+        ...(input.appId ? { appId: input.appId } : {}),
       })
       .returning();
 

@@ -173,6 +173,15 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "governance_reason",
     addedBy: "0238_proposals_governance_reason.sql",
   },
+  // proposals — APP ATTRIBUTION (0310, App Connect v1). The app's `public_id`
+  // whose key filed the proposal, read by the review projection to render
+  // "via <app>". Both proposal-writing doors (PENDING + AUTO_APPROVED receipt)
+  // name it, so without the column every governed app-key write 42703s.
+  {
+    table: "proposals",
+    column: "app_id",
+    addedBy: "0310_app_attribution.sql",
+  },
   // proposal_cluster_mutes — durable per-pod mute of a rejection SHAPE-cluster
   // (0233). If the table/column is missing, the mute door + the rejected-clusters
   // read's active-mute filter throw. Column check confirms the table exists.
@@ -1212,6 +1221,16 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "events",
     column: "session_id",
     addedBy: "0241_events_session_id_column.sql",
+  },
+  // events — APP ATTRIBUTION (0310, App Connect v1). The app's `public_id`
+  // whose key produced the write, recorded next to `user_id`. `auditLog` stamps
+  // it on every append, so without the column every event append during an
+  // app-key request 42703s. `events` is a hypertable; the ALTER is a nullable,
+  // no-default ADD COLUMN (supported on a compressed hypertable).
+  {
+    table: "events",
+    column: "app_id",
+    addedBy: "0310_app_attribution.sql",
   },
 
   // vault_grants → capability grants generalization (0142). The polymorphic

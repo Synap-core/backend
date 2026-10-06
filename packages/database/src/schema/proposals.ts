@@ -249,6 +249,13 @@ export const proposals = pgTable(
     // which carries REJECTION semantics; this carries CREATION-TIME governance
     // cause. NULL for human-authored proposals and the plain default-propose case.
     governanceReason: text("governance_reason"),
+    // APP ATTRIBUTION (App Connect v1): the APPLICATION (its `public_id`,
+    // `app_<uuid>`) whose key filed this proposal, or NULL for a bare/human
+    // write. Stamped from the request's grant (`getRequestGrant()?.clientId`)
+    // at the write door, so a proposal filed by an app can render "via <app>"
+    // while still naming the connecting human (`subjectUserId`). Text, not a
+    // FK — the app row is revocable/deletable and attribution must survive it.
+    appId: text("app_id"),
     comments: jsonb("comments").default("[]"),
     // Revision history (D3b): append-only before/after snapshots of every
     // reviseProposal edit — the "human corrected the AI" quality signal the
@@ -343,6 +350,8 @@ export interface Proposal {
   dedupHash: string | null;
   rejectionReason: string | null;
   reasonCode: string | null;
+  /** The app's `public_id` whose key filed this proposal, or null. */
+  appId: string | null;
   comments: unknown;
   revisionHistory: ProposalRevision[];
   createdAt: Date;

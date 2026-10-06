@@ -5,7 +5,12 @@
  * Replaces emitRequestEvent for audit-only logging.
  */
 
-import { EventRepository, eventRepository, sql } from "@synap/database";
+import {
+  EventRepository,
+  eventRepository,
+  sql,
+  getRequestGrant,
+} from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import { createUnifiedEvent } from "@synap/jobs";
 import type { SubjectType, EventAction, EventPhase } from "@synap/jobs";
@@ -67,6 +72,12 @@ export async function auditLog(
   opts: AuditLogOpts
 ): Promise<EventRecord | null> {
   try {
+    // APP ATTRIBUTION (App Connect v1): if this request authenticated with an
+    // APP's key, its grant carries the app's `public_id` — stamp it onto every
+    // event appended in this request's async context, ALONGSIDE `user_id` (the
+    // connecting human). Read from the ONE request context here (not threaded
+    // through callers): a flag passed to ~30 doors is a flag one door forgets.
+    const appId = getRequestGrant()?.clientId ?? undefined;
     // `.validated` appends MUST go through the singleton `eventRepository`, which
     // carries the registered hooks — crucially the materialization hook that
     // enqueues the DB write when a `.validated` event lands. A fresh
@@ -123,6 +134,9 @@ export async function auditLog(
       proposalId: opts.proposalId ?? undefined,
       // Temporal spine (0241): the focus session that produced this write.
       sessionId: opts.sessionId ?? undefined,
+      // App attribution (0310): the application whose key produced this write,
+      // beside the human `userId`. Undefined for a bare/human write.
+      appId,
       // Column is `text` — widen to string for compat between UnifiedEvent and EventRecord source unions
       source: event.source as
         "api" | "automation" | "sync" | "migration" | "system" | "intelligence",

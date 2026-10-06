@@ -102,6 +102,12 @@ export interface EventRecord {
   // The focus session this write belongs to. Undefined for a write that
   // happened outside any session and for rows written before the column existed.
   sessionId?: string;
+
+  // ── App attribution (0310) ──────────────────────────────────────────────────
+  // The APPLICATION (`app_<uuid>` public_id) whose key produced this write,
+  // recorded beside `userId` (the connecting human). Undefined for a bare/human
+  // write and for rows written before the column existed.
+  appId?: string;
 }
 
 export interface EventStreamOptions {
@@ -286,11 +292,12 @@ export class EventRepository {
           finish_reason,
           workspace_id,
           proposal_id,
-          session_id
+          session_id,
+          app_id
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
-          $26
+          $26, $27
         )
         RETURNING *
       `,
@@ -331,6 +338,10 @@ export class EventRepository {
           // Temporal spine (0241). The focus session that produced this write;
           // null when it happened outside any session.
           validated.sessionId ?? null,
+          // App attribution (0310). The application whose key produced this
+          // write; null for a bare/human write (and on rows written before the
+          // column existed — the schema field is optional and coerced here).
+          validated.appId ?? null,
         ]
       );
 
@@ -1327,6 +1338,8 @@ export class EventRepository {
       proposalId: (row.proposal_id as string | null) ?? undefined,
       // Temporal spine real column (0241). Absent on pre-migration rows.
       sessionId: (row.session_id as string | null) ?? undefined,
+      // App attribution real column (0310). Absent on pre-migration rows.
+      appId: (row.app_id as string | null) ?? undefined,
     };
   }
 }

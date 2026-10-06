@@ -31,6 +31,7 @@ import {
   resolveAgentProposalSessionOnce,
   deriveProposalProjectId,
   getActingAgentUserId,
+  getRequestGrant,
   type InsertPendingProposalResult,
   type ResolveOrCreateAgentProposalSessionInput,
 } from "@synap/database";
@@ -2036,6 +2037,12 @@ async function evaluatePermission(
               stepRunId: stepRunId ?? undefined,
               nodeId: nodeId ?? undefined,
               governanceReason: opts.governanceReason ?? undefined,
+              // APP ATTRIBUTION (App Connect v1): the app whose key drove this
+              // auto-approved write, read from the request's grant, so the
+              // receipt reads "via <app>" beside the connecting human.
+              ...(getRequestGrant()?.clientId
+                ? { appId: getRequestGrant()?.clientId }
+                : {}),
             })
             .returning({ id: proposals.id });
           // Thread the receipt id back so the caller can stamp it onto the
@@ -2312,6 +2319,12 @@ async function evaluatePermission(
               stepRunId: stepRunId ?? undefined,
               nodeId: nodeId ?? undefined,
               governanceReason: opts.governanceReason ?? undefined,
+              // APP ATTRIBUTION (App Connect v1): the app whose key drove this
+              // auto-approved write, read from the request's grant, so the
+              // receipt reads "via <app>" beside the connecting human.
+              ...(getRequestGrant()?.clientId
+                ? { appId: getRequestGrant()?.clientId }
+                : {}),
             })
             .returning({ id: proposals.id });
           autoApprovedProposalId = receipt?.id;
@@ -3275,6 +3288,10 @@ async function createPendingProposalRow(
       nodeId: input.nodeId,
       expiresAt: input.expiresAt,
       governanceReason: input.governanceReason,
+      // APP ATTRIBUTION (App Connect v1): when this request authenticated with
+      // an APP's key, its grant carries the app's `public_id` — record it so
+      // the proposal reads "via <app>" while still naming the human.
+      appId: getRequestGrant()?.clientId ?? null,
     },
     tx
   );

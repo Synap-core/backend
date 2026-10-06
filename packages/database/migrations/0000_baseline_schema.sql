@@ -271,6 +271,10 @@ CREATE TABLE IF NOT EXISTS "events" (
   -- only handle on the spine that carries an INTENT (the session's goal).
   -- NULL = the write happened outside any session. No FK, same reason as above.
   "session_id"     uuid,
+  -- App attribution (0310): the application (`app_<uuid>` public_id) whose key
+  -- produced this write, next to `user_id` (the connecting human). NULL = bare
+  -- / human write. No FK — the app row is revocable, events are immutable.
+  "app_id"         text,
   PRIMARY KEY ("id", "timestamp")
 );
 -- NOTE on ALTER for "events": it is a TimescaleDB hypertable with columnstore
@@ -297,6 +301,9 @@ ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "workspace_id"  text;
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "proposal_id"   uuid;
 -- Temporal spine as a first-class column (0241).
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "session_id"    uuid;
+-- App attribution as a first-class column (0310). Nullable, no default —
+-- supported on a compressed hypertable (same reasoning as the ALTERs above).
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "app_id"        text;
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"
   ON "events" ("subject_type", "subject_id", "timestamp");
@@ -1929,6 +1936,7 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "rejection_reason"  text,
   "reason_code"       text,
   "governance_reason" text,
+  "app_id"            text,
   "comments"          jsonb DEFAULT '[]',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"        timestamp with time zone NOT NULL DEFAULT now()
@@ -1963,6 +1971,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "external_dispatched_at" timest
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reason_code" text;  -- 0232 (structured rejection cause; app-level enum, free-text fallback stays)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "governance_reason" text;  -- 0238 (structured governance cause at creation; PROPOSE_REASON key, distinct from rejection reason_code)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "app_id" text;  -- 0310 (the app's public_id whose key filed this proposal; attribution only, no FK)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "comments" jsonb DEFAULT '[]';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();

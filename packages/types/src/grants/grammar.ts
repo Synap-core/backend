@@ -53,6 +53,13 @@ export interface GrantScope {
   projectIds?: readonly string[] | null;
   /** null/undefined = no object pinning. */
   entityIds?: readonly string[] | null;
+  /**
+   * The APPLICATION this credential acts as — the app's `public_id`
+   * (`grants.client_id`), or null/undefined for a bare key with no app
+   * identity. ATTRIBUTION ONLY: it lets a write be recorded "via <app>"
+   * alongside the connecting human; it NEVER widens what the grant permits.
+   */
+  clientId?: string | null;
 }
 
 export interface GrantRequest {

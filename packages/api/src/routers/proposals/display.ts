@@ -54,6 +54,7 @@ import {
   documents,
   agents,
   governanceRules,
+  apps,
 } from "@synap/database/schema";
 import { visibleAgentsWhere } from "../hub-protocol/rest/link-endpoint-visibility.js";
 import {
@@ -309,6 +310,15 @@ type DisplayEnrichedProposal = ProposalRow &
     /** APPROVER — the human who reviewed it. Absent while the proposal is pending. */
     approverName?: string;
     targetName?: string;
+    /**
+     * APP ATTRIBUTION (App Connect v1) — the resolved NAME of the application
+     * whose key filed this proposal (its `public_id` rides the row as the
+     * machine field `appId`, from `ProposalRow`), so a surface reads
+     * "via synap.live" while `subjectUserId`/`authorName` still name the
+     * connecting HUMAN. Absent when `appId` is null and when the viewer does not
+     * own the app (never a raw id in its place).
+     */
+    appName?: string;
     /**
      * SETUP — the manifest-derived gap for a `capability.install` proposal
      * (params still owed, connection state, `blocking`). Declared here so the
@@ -1176,8 +1186,18 @@ export async function enrichProposalsForDisplay(
   };
   const trackPlaybookIds = visibleTrackIds("playbook");
   const trackAutomationIds = visibleTrackIds("automation");
-  // SECOND ROUND — the two reads that need the first batch, run together.
-  const [ownerRows, runTracks] = await Promise.all([
+  // SECOND ROUND — the reads that need the first batch, run together.
+  //
+  // APP ATTRIBUTION (App Connect v1): the `public_id`s of the apps whose keys
+  // filed proposals on this page (`proposals.app_id`, read straight off the
+  // row). Resolved to the app's NAME in the same round — one batched query for
+  // the whole page, floored to the VIEWER's own apps (`owner_user_id = userId`),
+  // so a proposal naming an app the viewer does not own resolves to no name and
+  // never leaks a stranger's app label. An id the viewer cannot resolve falls
+  // back to no name, exactly like every other name batch here; the raw `appId`
+  // is still emitted as a machine field.
+  const appPublicIds = uniqueStrings(rows.map((row) => row.appId ?? undefined));
+  const [ownerRows, runTracks, appRows] = await Promise.all([
     ownerIds.length > 0
       ? db
           .select({
@@ -1200,8 +1220,22 @@ export async function enrichProposalsForDisplay(
           automationIds: trackAutomationIds,
         })
       : Promise.resolve(new Map<string, RunGroup>()),
+    appPublicIds.length > 0
+      ? db
+          .select({ publicId: apps.publicId, name: apps.name })
+          .from(apps)
+          .where(
+            and(
+              inArray(apps.publicId, appPublicIds),
+              eq(apps.ownerUserId, userId)
+            )
+          )
+      : Promise.resolve([] as Array<{ publicId: string; name: string }>),
   ]);
   for (const row of ownerRows) userById.set(row.id, row);
+  const appNameByPublicId = new Map(
+    appRows.map((row) => [row.publicId, row.name])
+  );
   const receiptRules = toReceiptRules(receiptRuleRows, userById);
   const trackForRow = (idx: number): ProposalTrack | undefined => {
     const flow = trackFlowByRow[idx];
@@ -1508,6 +1542,12 @@ export async function enrichProposalsForDisplay(
       // agent-only failure detail that projection just stripped.
       ...proposalSetupFields(row.id, enrichedData, setups),
       authorName,
+      // APP ATTRIBUTION — the app whose key filed this proposal ("via <app>").
+      // The machine field `appId` already rides the row spread above; this adds
+      // the resolved NAME (present only when the viewer owns the app).
+      ...(row.appId && appNameByPublicId.has(row.appId)
+        ? { appName: appNameByPublicId.get(row.appId)! }
+        : {}),
       // The three roles, each absent when it does not apply (see above).
       ...(agentActorName ? { agentActorName } : {}),
       ...(guest ? { actorKind: guest.actorKind, formId: guest.formId } : {}),
