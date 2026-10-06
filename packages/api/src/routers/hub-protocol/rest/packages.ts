@@ -45,6 +45,7 @@ import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
 import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import { packagePlaybookDefinitionSchema } from "../../../schemas/playbook-definition.js";
+import { appliedPackageVersion } from "../../../services/applied-package-version.js";
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -478,7 +479,17 @@ export function registerPackagesRoutes(app: HubHono): void {
 
   app.post("/packages/apply", async (c) => {
     const userId = c.get("userId");
-    const body = PackageApplySchema.parse(await c.req.json());
+    const raw = (await c.req.json()) as Record<string, unknown>;
+    const body = PackageApplySchema.parse(raw);
+    // The pod never trusts a caller's version LABEL: a caller that asks for a
+    // stamp gets the version of the definition it actually sent (the CP's own
+    // rule, over the RAW body — zod would strip fields the CP hashed). Set on
+    // `body` once, so the proposal payload, the create/compose stamp and the
+    // post-workspace layers all record the same honest value.
+    // See `services/applied-package-version.ts` (incident 2026-10-06).
+    if (body._meta?.version !== undefined) {
+      body._meta.version = appliedPackageVersion(raw);
+    }
     // Honor a body-supplied `agentUserId` (the IS `propose_workspace_template`
     // seam) with the context one as fallback — the canonical governed-write
     // pattern every sibling Hub door already uses (cells/entities/automations).
