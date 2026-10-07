@@ -336,12 +336,19 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
     expect(opCalls().map((c) => headersOf(c).Authorization)).toEqual([TOKEN_1, TOKEN_1]);
   });
 
-  it("calls the per-account apiUrl, never the sign-in host, and fills accountId", async () => {
+  it("calls the per-account apiUrl, never the sign-in host, and fills a DECLARED accountId only", async () => {
     await run(B2_CONFIG, {
       method: "POST",
       path: "/b2api/v4/b2_list_buckets",
       body: { bucketName: "synap-backups", accountId: "spoofed" },
     });
+    // An op whose body does not declare accountId never receives it.
+    await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_file_names",
+      body: { bucketId: "b1" },
+    });
+    expect(JSON.parse(String(opCalls()[1]!.init.body))).toEqual({ bucketId: "b1" });
     const op = opCalls()[0]!;
     expect(op.url).toBe(`${API_URL}/b2api/v4/b2_list_buckets`);
     expect(op.init.method).toBe("POST");

@@ -1771,15 +1771,16 @@ async function sessionAuthCall(args: {
     let body = input.body;
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
-      // Session-derived fields (e.g. B2's accountId) come from the provider's
-      // own sign-in and OVERRIDE a caller value — they describe the credential.
-      if (
-        typeof body === "object" &&
-        body !== null &&
-        !Array.isArray(body) &&
-        Object.keys(session.bodyValues).length > 0
-      ) {
-        body = { ...(body as Record<string, unknown>), ...session.bodyValues };
+      // Session-derived fields (e.g. B2's accountId) fill ONLY the slots the
+      // request body declares (key present, any value) and OVERRIDE that value —
+      // they describe the credential. An operation that does not take the field
+      // never receives it (B2 rejects unknown fields).
+      if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+        const declared = body as Record<string, unknown>;
+        const fill = Object.fromEntries(
+          Object.entries(session.bodyValues).filter(([k]) => k in declared)
+        );
+        if (Object.keys(fill).length > 0) body = { ...declared, ...fill };
       }
     }
     headers[config.token.header] = `${config.token.prefix}${session.token}`;

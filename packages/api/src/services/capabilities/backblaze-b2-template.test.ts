@@ -288,7 +288,7 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
     ...over,
   });
 
-  it("every call carries the sign-in's accountId (bodyFrom)", async () => {
+  it("a declared accountId slot is filled from the sign-in (bodyFrom)", async () => {
     b2 = () => ({ buckets: [bucket()] });
     await runSkill("b2_list_buckets", {});
     expect(ops[0]).toEqual({ op: "b2_list_buckets", body: { accountId: "acct-1" } });
@@ -328,7 +328,8 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
     const r = await runSkill("b2_backup_freshness", { bucketName: "synap-pod-backups", podId: POD });
     expect(ops[1]).toEqual({
       op: "b2_list_file_names",
-      body: { bucketId: "bkt-1", prefix: `pods/${POD}/snapshots/`, maxFileCount: 1000, accountId: "acct-1" },
+      // No accountId: b2_list_file_names does not take one (B2 rejects unknown fields).
+      body: { bucketId: "bkt-1", prefix: `pods/${POD}/snapshots/`, maxFileCount: 1000 },
     });
     expect(r).toMatchObject({ present: true, snapshotCount: 2, recent: true, maxAgeHours: 26 });
     expect(r.ageHours).toBeCloseTo(2, 0);

@@ -49,7 +49,11 @@ export interface SessionAuthConfig {
   token: { path: string; header: string; prefix: string; ttlSeconds: number };
   /** Dot-path in the sign-in response to the API base URL for later calls. */
   baseUrlFrom: string | null;
-  /** Request-body fields filled from the sign-in response (body field → path). */
+  /**
+   * Request-body fields filled from the sign-in response (body field → path).
+   * Applied only to a field the request body DECLARES (key present, e.g.
+   * `accountId: null`), whose value it replaces; absent keys stay absent.
+   */
   bodyFrom: Record<string, string>;
   /** Which failure means "the token is dead — sign in again and retry once". */
   reauthOn: { status: number; codePath: string; codes: string[] | null };
