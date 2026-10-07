@@ -59,6 +59,9 @@ export const GRANT_SUBJECT_GROUPS: readonly GrantSubjectGroup[] = [
 
 const OTHER_GROUP = { id: "other", label: "Other" } as const;
 
+/** The label of a kind-qualified subject's "every kind" row (copy). */
+export const EVERY_KIND_ROW_LABEL = "Every kind";
+
 /** One line per subject: what granting it reaches. */
 export const GRANT_SUBJECT_DESCRIPTIONS: Readonly<Record<string, string>> = {
   entity: "Every kind of record, including kinds added later",
@@ -165,10 +168,7 @@ export function buildGrantSections({
         )
       )
       .sort((a, b) => a.label.localeCompare(b.label));
-    return [
-      rowFor(spec, "*", grantSubjectLabel(spec.subject), own),
-      ...kindRows,
-    ];
+    return [rowFor(spec, "*", EVERY_KIND_ROW_LABEL, own), ...kindRows];
   };
 
   const grouped = new Set(GRANT_SUBJECT_GROUPS.flatMap((g) => g.subjects));
