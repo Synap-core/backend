@@ -35,7 +35,15 @@ import {
   CAPABILITY_INTENTS,
   unknownIntents,
 } from "@synap-core/types/capability-intents";
-import { playbookStagesSchema } from "./playbook-stage.js";
+import {
+  playbookStagesSchema,
+  relationTypeSlugSchema,
+} from "./playbook-stage.js";
+import {
+  humanOnlyStatusesSchema,
+  playbookActivatorsSchema,
+  playbookSubjectProfileSchema,
+} from "./playbook-process.js";
 import { sessionCriteriaSchema } from "./session-criteria.js";
 import { playbookScheduleInputSchema } from "./playbook-schedule.js";
 
@@ -73,6 +81,27 @@ const jsonRecord = z.record(z.string(), z.unknown());
  */
 export const playbookExpectedOutputSchema = z.looseObject({
   ask: AskSchema.nullable().optional(),
+  /**
+   * The relation type written output → subject when the slot is satisfied —
+   * see `ExpectedOutput.relationToSubject`. Slug-shaped, the SAME schema the
+   * stage-level slot uses.
+   */
+  relationToSubject: relationTypeSlugSchema.optional(),
+});
+
+/**
+ * `metadata` — the owner's free-form bag, with ONE conventional key typed:
+ * `lineage` (where the process comes from — an APQC PCF id, a named method,
+ * O*NET task ids). Convention only: nothing branches on it.
+ */
+export const playbookMetadataSchema = z.looseObject({
+  lineage: z
+    .looseObject({
+      apqc: z.string().max(200).optional(),
+      method: z.string().max(500).optional(),
+      onet: z.array(z.string().max(100)).max(50).optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -174,12 +203,29 @@ export const playbookDefinitionSchema = z.object({
   criteria: sessionCriteriaSchema.optional(),
   /** See `playbookRequiredIntentsSchema` — what this process needs the pod to do. */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
-  /** `{ profileSlug, filter? }` — the entity kind the playbook operates over. */
-  subjectProfile: jsonRecord.optional(),
+  /**
+   * `{ profileSlug, filter?, statusProperty? }` — the entity kind the playbook
+   * operates over, and the property holding its lifecycle. STORES the folded
+   * `activators` / `humanOnlyStatuses` too (schemas/playbook-process.ts).
+   */
+  subjectProfile: playbookSubjectProfileSchema.optional(),
+  /**
+   * When the process starts — DECLARATIONS compiled into governed rules at
+   * install/create (services/playbooks/playbook-activators.ts). Folded into
+   * `subjectProfile` for storage by `foldProcessIntoSubjectProfile`.
+   */
+  activators: playbookActivatorsSchema.optional(),
+  /**
+   * Subject status values NO stage covers on purpose (e.g. Idea, Archived) —
+   * a person sets them, the process neither writes nor follows them. Should a
+   * stage still map to one, the advance's subject write always files a
+   * proposal, whoever drove it. Folded into `subjectProfile` like `activators`.
+   */
+  humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
   /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
   schedule: playbookScheduleInputSchema.optional(),
-  /** Free-form → `playbooks.metadata` (e.g. the propose-only governance marker). */
-  metadata: jsonRecord.optional(),
+  /** Free-form → `playbooks.metadata` (e.g. the propose-only governance marker, `lineage`). */
+  metadata: playbookMetadataSchema.optional(),
   executor: playbookExecutorSchema.optional(),
   status: playbookStatusSchema.optional(),
   scope: playbookScopeSchema.optional(),

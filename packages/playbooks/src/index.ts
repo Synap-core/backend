@@ -595,6 +595,59 @@ export interface ExpectedOutput {
    * answer; the answer's `question` keeps what was asked.
    */
   ask?: SlotAsk | null;
+  /**
+   * The relation type written OUTPUT → SUBJECT when this slot is satisfied
+   * (e.g. `made_for`, `derived_from`). DECLARED by the playbook author (or the
+   * declaring agent) — saying how a deliverable relates to the run's subject
+   * closes nothing, so it is client-declarable like `why`. Read ONLY by the
+   * satisfy door (api `services/focus-sessions/satisfy-expected-output.ts`),
+   * which writes the edge through the relation door once `done` is stamped.
+   */
+  relationToSubject?: string;
+  /**
+   * RECEIPT of the output → subject edge {@link relationToSubject} asked for —
+   * SERVER-STAMPED by the satisfy door, never authored. `linked` names the
+   * relation row; `skipped` says why no edge was written (no subject, no
+   * produced entity to link, or the relation type is not defined in the
+   * subject's workspace). Recorded on the slot rather than failing the satisfy:
+   * a missing relation type must never un-deliver a deliverable.
+   */
+  subjectEdge?: SlotSubjectEdge;
+}
+
+/** See {@link ExpectedOutput.subjectEdge}. */
+export interface SlotSubjectEdge {
+  status: "linked" | "skipped";
+  relationType: string;
+  /** The entity that served the slot (the edge's source). */
+  outputEntityId?: string;
+  /** The relation row (present when `linked`). */
+  relationId?: string;
+  /** Why no edge (present when `skipped`). */
+  reason?: string;
+  /** ISO timestamp of the attempt. */
+  at: string;
+}
+
+/**
+ * A playbook ACTIVATOR — a DECLARATION that the process starts (or is
+ * proposed) when a subject of `subjectProfile.profileSlug` is created or
+ * ENTERS a status. Never runtime engine code: the pod compiles each into a
+ * governed rule (api `services/playbooks/playbook-activators.ts`) linked in
+ * `playbook_automations` with role `"activator"`.
+ */
+export interface PlaybookActivator {
+  on: "created" | "enters_status";
+  /** Required when `on === "enters_status"` — the status value entered. */
+  status?: string;
+  /** `run` starts the run; `propose` files a proposal (the public default). */
+  mode: "run" | "propose";
+}
+
+/** Where a failed stage gate sends the run — see {@link PlaybookStage.onFail}. */
+export interface PlaybookStageOnFail {
+  /** Stage key (or name) the run returns to. */
+  toStage: string;
 }
 
 /**
@@ -847,6 +900,18 @@ export interface PlaybookStage {
    * absent ⇒ the project's home workspace.
    */
   domain?: string;
+  /**
+   * The value of the playbook's `subjectProfile.statusProperty` this stage
+   * CORRESPONDS to. Advancing a run INTO the stage writes it to the run's
+   * subject (governed); the subject ENTERING the value advances an open run on
+   * it to this stage. Absent ⇒ the stage is not tied to the subject lifecycle.
+   */
+  subjectStatus?: string;
+  /**
+   * Where the run returns when this stage's gate FAILS — a rejected human gate
+   * or a check gate that holds. Absent ⇒ today's behaviour (the run pauses).
+   */
+  onFail?: PlaybookStageOnFail;
 }
 
 /**
@@ -1348,24 +1413,6 @@ export interface RunResult {
   /** Ids of artifacts/entities produced (used to write `produced` links). */
   producedIds?: string[];
   error?: string;
-  /**
-   * The EXTERNAL agent reference when the external-agent executor handed the
-   * run to an agent binding — persisted by the runner on
-   * `playbook_runs.external_agent` (structural mirror of the database's
-   * `PlaybookRunExternalAgent`; this package stays dependency-free).
-   */
-  externalAgent?: RunExternalAgentRef;
-}
-
-/** See `RunResult.externalAgent`. */
-export interface RunExternalAgentRef {
-  agentUserId: string;
-  toolId: string;
-  provider: string;
-  externalId: string | null;
-  url: string | null;
-  status: "running" | "needs_input" | "done" | "failed" | "cancelled";
-  startedAt: string;
 }
 
 /**

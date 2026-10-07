@@ -314,6 +314,13 @@ export interface PackagePostWorkspaceBody {
     expectedOutputs?: Record<string, unknown>[];
     /** → `playbooks.criteria`; validated by `playbooks.create`. */
     criteria?: unknown[];
+    /**
+     * Process declarations (schemas/playbook-process.ts) — folded into
+     * `subjectProfile` by the projection, then compiled into governed rules by
+     * `applyPlaybookActivators` after the playbook exists.
+     */
+    activators?: unknown[];
+    humanOnlyStatuses?: unknown[];
   }>;
   loops?: Array<{
     templateKey?: string;

@@ -53,6 +53,7 @@ import {
   packagePlaybookDefinitionSchema,
   type PackagePlaybookDefinition,
 } from "../../schemas/playbook-definition.js";
+import { foldProcessIntoSubjectProfile } from "../../schemas/playbook-process.js";
 
 /** Definition fields the applier writes from the template — reconciled. */
 export const PLAYBOOK_MANAGED_FIELDS = [
@@ -89,12 +90,20 @@ export const PLAYBOOK_MANAGED_FIELDS = [
  *  - `metadata` — the owner's bag, and it CARRIES `marketSource` itself.
  *  - `grants`   — link edges, not row fields; re-ensured idempotently on every
  *                 apply by `grantPlaybookLinks`.
+ *  - `activators` / `humanOnlyStatuses` — NOT unreconciled: they have no
+ *                 column and are FOLDED into `subjectProfile` (managed) by
+ *                 {@link projectPlaybookDefinition} through the one fold
+ *                 (`foldProcessIntoSubjectProfile`), so a template change to
+ *                 them reaches pods as a `subjectProfile` change. Listed here
+ *                 only because they are not row fields of their own.
  */
 export const PLAYBOOK_UNMANAGED_FIELDS = [
   "name",
   "status",
   "metadata",
   "grants",
+  "activators",
+  "humanOnlyStatuses",
 ] as const satisfies ReadonlyArray<keyof PackagePlaybookDefinition>;
 
 export type PlaybookManagedField = (typeof PLAYBOOK_MANAGED_FIELDS)[number];
@@ -124,6 +133,13 @@ export function projectPlaybookDefinition<
     const v = (def as Record<string, unknown>)[k];
     if (v !== undefined) out[k] = v;
   }
+  // The process declarations ride INSIDE `subjectProfile` (no column of their
+  // own) — folded here so the applier's create, the stamped baseline and the
+  // reconcile's `desired` all carry them, through the ONE fold.
+  const folded = foldProcessIntoSubjectProfile(
+    def as Parameters<typeof foldProcessIntoSubjectProfile>[0]
+  );
+  if (folded !== undefined) out.subjectProfile = folded;
   return out as Pick<T, PlaybookManagedField & keyof T>;
 }
 

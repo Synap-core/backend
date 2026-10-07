@@ -69,6 +69,13 @@ import {
   type PlaybookStageCategory,
 } from "@synap/playbooks";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
+import {
+  foldProcessIntoSubjectProfile,
+  humanOnlyStatusesSchema,
+  playbookActivatorsSchema,
+  playbookSubjectProfileSchema,
+  ProcessDeclarationError,
+} from "../schemas/playbook-process.js";
 import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
 import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
 import {
@@ -326,6 +333,24 @@ export const createInputSchema = playbookDefinitionSchema.extend({
     .optional(),
 });
 
+/**
+ * The ONE fold of the process declarations, as a tRPC refusal: an activator
+ * with no subject kind is a BAD_REQUEST, not a stored rule that would fire on
+ * every entity.
+ */
+function foldProcessDeclarationsOrRefuse(
+  def: Parameters<typeof foldProcessIntoSubjectProfile>[0]
+): Record<string, unknown> | undefined {
+  try {
+    return foldProcessIntoSubjectProfile(def) ?? undefined;
+  } catch (err) {
+    if (err instanceof ProcessDeclarationError) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    }
+    throw err;
+  }
+}
+
 export const updateInputSchema = z.object({
   id: z.string().uuid(),
   agentUserId: z.string().uuid().optional(),
@@ -352,7 +377,12 @@ export const updateInputSchema = z.object({
    * change cannot make the patch and the create accept different slugs.
    */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
-  subjectProfile: jsonRecord.optional(),
+  /** See `playbookDefinitionSchema.subjectProfile` — the same schema. */
+  subjectProfile: playbookSubjectProfileSchema.optional(),
+  /** See `playbookDefinitionSchema.activators` — folded into `subjectProfile`. */
+  activators: playbookActivatorsSchema.optional(),
+  /** See `playbookDefinitionSchema.humanOnlyStatuses` — folded likewise. */
+  humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
   /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
   schedule: playbookScheduleInputSchema.optional(),
   executor: executorRefSchema.optional(),
@@ -1692,6 +1722,10 @@ export const playbooksRouter = router({
       // Decode an agent's XML-escaped name once, at the one create door —
       // see `entities/create.ts` for the full rationale.
       if (input.name) input.name = decodeHtmlEntities(input.name);
+      // The process declarations (`activators`, `humanOnlyStatuses`) are stored
+      // INSIDE `subjectProfile` — folded ONCE, here, so the gate payload, the
+      // approval replay and the insert all carry the same stored shape.
+      input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
       // Dangling `subjectProfile` slugs are refused here, before the gate.
       await assertSubjectProfileResolves(await getDb(), input.subjectProfile);
       // …and so are goal placeholders no run will fill.
@@ -1979,6 +2013,21 @@ export const playbooksRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: existing.workspaceId,
       });
+
+      // 2a. Fold the process declarations into `subjectProfile` (their storage)
+      // over the row's CURRENT subject when the patch does not restate it.
+      if (
+        input.activators !== undefined ||
+        input.humanOnlyStatuses !== undefined
+      ) {
+        input.subjectProfile = foldProcessDeclarationsOrRefuse({
+          subjectProfile:
+            input.subjectProfile ??
+            (existing.subjectProfile as Record<string, unknown> | null),
+          activators: input.activators,
+          humanOnlyStatuses: input.humanOnlyStatuses,
+        }) as typeof input.subjectProfile;
+      }
 
       // 2b. A patch that REPOINTS the subject must name a slug that resolves —
       // same guard and same reason as the create door. Only when the field is

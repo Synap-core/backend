@@ -398,6 +398,20 @@ export const expectedOutputWireSchema = z.object({
   // "clear the ask" needs an explicit `null`.
   // Explicitly type the ask to preserve discriminated union inference.
   ask: z.custom<Ask>().nullable().optional(),
+  // The relation type written output → subject on satisfy. DECLARED (a
+  // playbook slot's own declaration carried onto the session), never stamped.
+  relationToSubject: z.string().max(80).optional(),
+  // The satisfy door's receipt for that edge. Round-trip only, like `answer`.
+  subjectEdge: z
+    .object({
+      status: z.enum(["linked", "skipped"]),
+      relationType: z.string(),
+      outputEntityId: z.string().optional(),
+      relationId: z.string().optional(),
+      reason: z.string().optional(),
+      at: z.string(),
+    })
+    .optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -500,6 +514,9 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   // "this is a yes/no" or "pick one of these" closes nothing and receipts
   // nothing — the ANSWER is the receipt, and it stays server-stamped.
   "ask",
+  // HOW a deliverable relates to the run's subject. Declaring it closes
+  // nothing — the edge is written only by the satisfy door, after `done`.
+  "relationToSubject",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -543,6 +560,9 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // The decision entity the answer files into. An agent that could author it
   // would make the person's next answer overwrite a decision it names.
   "decisionId",
+  // The output → subject edge receipt (`satisfy-expected-output.ts`). An agent
+  // that could author it would claim a link nobody wrote.
+  "subjectEdge",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -576,6 +596,9 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // Same erasure reason: a client that predates typed asks must not turn a
   // "pick one of these" back into a bare free-text slot by renaming a sibling.
   "ask",
+  // Same erasure reason: a client that never heard of it must not drop the
+  // edge the playbook declared by renaming a sibling.
+  "relationToSubject",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**

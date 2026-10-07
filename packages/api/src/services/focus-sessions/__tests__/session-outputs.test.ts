@@ -466,6 +466,13 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
       },
     ],
     decisionId: "66666666-6666-6666-6666-666666666666",
+    relationToSubject: "made_for",
+    subjectEdge: {
+      status: "skipped",
+      relationType: "made_for",
+      reason: "relation type not defined",
+      at: "2026-09-08T16:00:00.000Z",
+    },
     answer: {
       text: "Use the EU account",
       messageId: "55555555-5555-5555-5555-555555555555",

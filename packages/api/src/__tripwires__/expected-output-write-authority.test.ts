@@ -86,6 +86,12 @@ const STORED: Required<
     },
   ],
   decisionId: "66666666-6666-6666-6666-666666666666",
+  subjectEdge: {
+    status: "linked",
+    relationType: "made_for",
+    relationId: "88888888-8888-8888-8888-888888888888",
+    at: "2026-09-01T16:00:00.000Z",
+  },
   answer: {
     text: "Use the EU account",
     messageId: "55555555-5555-5555-5555-555555555555",
@@ -126,6 +132,13 @@ const FORGED: typeof STORED = {
   answerHistory: [],
   // An agent pointing the person's next answer at a decision it chose.
   decisionId: "77777777-7777-7777-7777-777777777777",
+  // An agent claiming an output → subject edge nobody wrote.
+  subjectEdge: {
+    status: "linked",
+    relationType: "made_for",
+    relationId: "99999999-9999-9999-9999-999999999999",
+    at: "2026-09-08T16:00:00.000Z",
+  },
   // An agent putting words in the person's mouth — and handing itself the slot.
   answer: {
     text: "Sure, ship it",

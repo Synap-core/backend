@@ -80,6 +80,13 @@ const FORGED: Record<string, unknown> = {
   ],
   // An agent pointing the person's answer at a decision it chose.
   decisionId: "forged-decision",
+  // An agent claiming an output → subject edge nobody wrote.
+  subjectEdge: {
+    status: "linked",
+    relationType: "made_for",
+    relationId: "forged-relation",
+    at: "2020-01-01T00:00:00.000Z",
+  },
   answer: {
     text: "forged",
     messageId: null,

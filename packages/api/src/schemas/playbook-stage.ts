@@ -43,6 +43,21 @@ export const playbookStageCategorySchema = z.enum(
   ]
 );
 
+/**
+ * A relation-type slug (`made_for`, `derived_from`) — what a slot's
+ * `relationToSubject` names. Shared by the stage-level and playbook-level slot
+ * schemas so the two levels cannot accept different spellings.
+ */
+export const relationTypeSlugSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .regex(/^[a-z][a-z0-9_-]*$/, {
+    message:
+      'relationToSubject must be a relation type slug (lowercase, e.g. "made_for")',
+  });
+
 const STAGE_DOMAIN_MESSAGE =
   'Stage domain must be a workspace template slug (lowercase, e.g. "crm"), not a workspace id or name';
 
@@ -83,6 +98,8 @@ export const playbookStageSchema = z.looseObject({
         icon: z.string().optional(),
         // Parsed, not carried: a pinned stage's slots become a session's.
         ask: AskSchema.nullable().optional(),
+        /** See `ExpectedOutput.relationToSubject` — the edge written output → subject on satisfy. */
+        relationToSubject: relationTypeSlugSchema.optional(),
       })
     )
     .optional(),
@@ -144,6 +161,21 @@ export const playbookStageSchema = z.looseObject({
       { message: STAGE_DOMAIN_MESSAGE }
     )
     .optional(),
+  /**
+   * The subject status value this stage corresponds to — see
+   * `PlaybookStage.subjectStatus`. Meaningful only when the playbook's
+   * `subjectProfile.statusProperty` names the property; a stage carrying one
+   * on a playbook without it is inert (never refused: the property may be
+   * declared later).
+   */
+  subjectStatus: z.string().trim().min(1).max(200).optional(),
+  /**
+   * Where a failed gate returns the run — see `PlaybookStage.onFail`. STRICT
+   * like `gate`: it is a control, and a misspelled key must not survive.
+   */
+  onFail: z
+    .strictObject({ toStage: z.string().trim().min(1).max(200) })
+    .optional(),
 });
 
 // ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
@@ -187,6 +219,13 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // Agent guidance revised by the lessons scanner on the LIVE playbook; a
   // pinned copy would go stale.
   "lessons",
+  // A track has NO entity subject (services/tracks/* use subjectType "track"),
+  // so a stage's tie to a subject's lifecycle value has nothing to write and
+  // nothing to follow on a track; it governs session RUNS of the playbook.
+  "subjectStatus",
+  // The failed-gate return path is applied by the SESSION run's gate
+  // (`stage-on-fail.ts`); a track's gate holds and resumes explicitly.
+  "onFail",
 ] as const satisfies ReadonlyArray<keyof PlaybookStage>;
 
 type ClassifiedStageField =
