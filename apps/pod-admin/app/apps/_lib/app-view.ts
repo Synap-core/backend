@@ -1,21 +1,24 @@
 /**
  * Shared view model for an Application (App Connect v1), used by both the
  * "Connected" list (`/my-connections`) and one app's detail page
- * (`/apps/[publicId]`). Kept in one place so an app's REACH and its STATUS mark
- * can never say different things on the two surfaces that render them.
+ * (`/apps/[publicId]`).
  *
- * What an app may touch is read through `summarizeGrant` — the SAME model a key
- * row renders — so an app's reach and a key's reach are worded identically.
- * `when` is deliberately NOT surfaced: an app grant carries no expiry field, so
- * `summarizeGrant` would fall back to the DEFAULT key TTL (90 days) — a
- * lifetime nobody set. Only `what` and `where` are shown, as the row already did.
+ * The derivation now lives ONCE in `@synap-core/types/apps/app-view` so this
+ * app, relay and the browser can never word an app's REACH or its STATUS
+ * differently. This file keeps its own public names (and its HeroUI chip
+ * `color` vocabulary) and delegates.
  */
 
-import { summarizeGrant } from "@synap-core/types/grants";
 import {
-  humanizeToken,
-  resolveStatusLabel,
-} from "@synap-core/types/vocabulary";
+  appMode as sharedAppMode,
+  appReach as sharedAppReach,
+  appStateFacts,
+  grantLines as sharedGrantLines,
+  type AppGrantLike,
+  type GrantView,
+} from "@synap-core/types/apps/app-view";
+
+export type { AppGrantLike, GrantView };
 
 /** One grant row as the pod's `apps.*` procedures serialize it. */
 export interface AppGrant {
@@ -41,23 +44,9 @@ export interface AppRow {
   grants: AppGrant[];
 }
 
-/** One grant, in the words every grant surface uses. */
-export interface GrantView {
-  what: string;
-  where: string[];
-}
-
 /** What an app may touch, one line per grant. Empty when it has no live grant. */
 export function grantLines(app: AppRow): GrantView[] {
-  return (app.grants ?? []).map((g) => {
-    const s = summarizeGrant({
-      permissions: g.permissions,
-      workspaceIds: g.workspaceIds ?? null,
-      projectIds: g.projectIds ?? null,
-      entityIds: g.entityIds ?? null,
-    });
-    return { what: s.what, where: [...s.where] };
-  });
+  return sharedGrantLines(app);
 }
 
 /**
@@ -66,10 +55,7 @@ export function grantLines(app: AppRow): GrantView[] {
  * yet", which would claim it never had any.
  */
 export function appReach(app: AppRow): string {
-  if (app.revoked_at) return "Access removed";
-  const lines = grantLines(app);
-  if (lines.length === 0) return "No access yet";
-  return lines.map((l) => [l.what, ...l.where].join(" · ")).join("; ");
+  return sharedAppReach(app);
 }
 
 /** The one state MARK for an app — colour + words, derived in one place. */
@@ -77,13 +63,8 @@ export function appState(app: AppRow): {
   label: string;
   color: "success" | "default";
 } {
-  // "revoked" is a lifecycle status — its word comes from the vocabulary door,
-  // never a literal, so it can never drift from every other Revoked badge.
-  if (app.revoked_at)
-    return { label: resolveStatusLabel("revoked"), color: "default" };
-  if ((app.grants ?? []).length > 0)
-    return { label: "Has access", color: "success" };
-  return { label: "No access yet", color: "default" };
+  const facts = appStateFacts(app);
+  return { label: facts.label, color: facts.tone === "ok" ? "success" : "default" };
 }
 
 /**
@@ -92,5 +73,5 @@ export function appState(app: AppRow): {
  * than leaking a raw token.
  */
 export function appMode(mode: string): string {
-  return mode === "specific" ? "Specific access" : humanizeToken(mode);
+  return sharedAppMode(mode);
 }

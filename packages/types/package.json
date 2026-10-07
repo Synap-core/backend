@@ -52,6 +52,10 @@
       "types": "./dist/grants/index.d.ts",
       "import": "./dist/grants/index.js"
     },
+    "./apps/app-view": {
+      "types": "./dist/apps/app-view.d.ts",
+      "import": "./dist/apps/app-view.js"
+    },
     "./surfaces": {
       "types": "./dist/surfaces/index.d.ts",
       "import": "./dist/surfaces/index.js"
