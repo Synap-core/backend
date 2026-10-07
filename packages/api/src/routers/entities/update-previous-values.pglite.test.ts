@@ -9,7 +9,7 @@
  * ENTERS published") and the subject→stage follow both read these keys.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const holder = vi.hoisted(() => ({
