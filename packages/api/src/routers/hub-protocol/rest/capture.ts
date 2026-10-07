@@ -994,6 +994,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         aiProjectConfidence: body.aiProjectConfidence,
         aiProjectReason: body.aiProjectReason,
         sessionId,
+        intentText: body.intentText,
       });
       return c.json(result);
     } catch (err) {

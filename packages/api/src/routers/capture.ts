@@ -2697,6 +2697,16 @@ const captureBaseRouter = router({
          * `existingEntityId` (the caller links the anchor op to this id).
          */
         anchorEntityId: z.string().uuid().optional(),
+        /**
+         * What the person actually TYPED (or said) for this capture — the raw
+         * text the structurer read. Used ONLY to rank the route suggestions
+         * (playbooks / rules / running sessions) by intent, the same way the
+         * Hub REST structure door already ranks by `body.text`. Without it the
+         * tRPC door ranked by kind alone, so "prep the DJ set" could not lift
+         * the DJ playbook over any other playbook built for the same kind.
+         * Never stored, never written to an entity.
+         */
+        intentText: z.string().max(4000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -4561,6 +4571,8 @@ const captureBaseRouter = router({
         entities: created
           .filter((c) => !c.linked)
           .map((c) => ({ entityId: c.entityId, profileSlug: c.profileSlug })),
+        // Rank by what the person SAID — parity with the Hub REST door.
+        intentText: input.intentText,
       });
 
       return {

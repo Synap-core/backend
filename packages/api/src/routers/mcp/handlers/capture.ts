@@ -1168,6 +1168,8 @@ const captureHandler: McpToolHandler = async (
     // independently resolves the same project.
     // (The AI project fields ride in the mapper spread above.)
     ...(args.projectId ? { projectId: args.projectId as string } : {}),
+    // The raw text ranks the route suggestions by intent (never stored).
+    ...(captureRawText ? { intentText: captureRawText.slice(0, 4000) } : {}),
   });
   // execute() returns the AI's pendingWorkspaceSwitch when a suggestion is
   // outstanding — surfaced at the top level for the caller. It never moves

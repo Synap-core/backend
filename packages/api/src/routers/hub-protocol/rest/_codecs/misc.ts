@@ -520,6 +520,11 @@ export const CaptureExecuteRequestSchema = z
      * only when the caller owns that session.
      */
     sessionId: z.string().uuid().optional(),
+    /**
+     * The raw text the person captured. Ranks the route suggestions by
+     * intent (never stored). Same field as the tRPC `capture.execute` input.
+     */
+    intentText: z.string().max(4000).optional(),
   })
   .openapi("CaptureExecuteRequest");
 
