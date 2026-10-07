@@ -103,6 +103,26 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * Agent types an AGENT key (`api_key_surface`) may provision without a
+ * human-owned key: the external CLIENT a person connects (claude-code, cursor,
+ * raycast…). This is a SURFACE identity — which program holds the key — and is
+ * deliberately NOT the same concept as:
+ *   - the IS persona keys (`AGENT_TYPES` in synap-intelligence-service
+ *     `config/models.ts`: orchestrator/meta/personal/code/… — WHICH agent
+ *     answers a turn; routing accepts any string);
+ *   - the browser's `CompanionMode` (`builtin | terminal | headless` — WHERE the
+ *     desktop companion runs, not an agent type at all).
+ * Do not merge those lists into this one.
+ *
+ * KNOWN DRIFT (same concept, three lists — reported W7 2026-10-08, not merged
+ * because widening this allowlist is a governance decision): synap-cli
+ * `SURFACE_NAMES` (`src/lib/pod.ts`) also names chatgpt, chatgpt-oauth,
+ * opencode, aider, windsurf, goose, zed, vscode, grok, and omits openwebui;
+ * `synap mcp` (`src/commands/mcp.ts`) keeps a third, shorter list. An agent key
+ * provisioning one of the CLI-only names is refused here with
+ * SURFACE_AGENT_TYPE_REQUIRED.
+ */
 const SURFACE_AGENT_TYPES = [
   "claude-code",
   "claude-desktop",
@@ -2404,7 +2424,10 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
     // than show the approver a part of what the key could do.
     if (keyGrant && keyGrant.scopes.length !== 1) {
       return c.json(
-        { error: "This pending key carries several grants — review it in Pod admin." },
+        {
+          error:
+            "This pending key carries several grants — review it in Pod admin.",
+        },
         409
       );
     }
