@@ -5086,6 +5086,7 @@ export interface EventRecord {
 	workspaceId?: string;
 	proposalId?: string;
 	sessionId?: string;
+	appId?: string;
 }
 /**
  * One bucket of agent-run spend — a UTC day, or the whole window (`total`).
@@ -15864,6 +15865,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string;
 				proposalId?: string;
 				sessionId?: string;
+				appId?: string;
 			})[];
 			meta: object;
 		}>;
@@ -19771,6 +19773,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					rejectionReason: string | null;
 					reasonCode: string | null;
 					governanceReason: string | null;
+					appId: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
 					class: ProposalClass;
@@ -19784,6 +19787,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					principal?: ProposalPrincipal;
 					approverName?: string;
 					targetName?: string;
+					appName?: string;
 					setup?: ProposalSetup;
 					sessionGoal?: string;
 					sessionPrivate?: true;
@@ -19842,6 +19846,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					rejectionReason: string | null;
 					reasonCode: string | null;
 					governanceReason: string | null;
+					appId: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
 					class: ProposalClass;
@@ -19855,6 +19860,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					principal?: ProposalPrincipal;
 					approverName?: string;
 					targetName?: string;
+					appName?: string;
 					setup?: ProposalSetup;
 					sessionGoal?: string;
 					sessionPrivate?: true;
@@ -19983,6 +19989,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				rejectionReason: string | null;
 				reasonCode: string | null;
 				governanceReason: string | null;
+				appId: string | null;
 				comments: unknown;
 				revisionHistory: ProposalRevision[];
 				class: ProposalClass;
@@ -19996,6 +20003,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				principal?: ProposalPrincipal;
 				approverName?: string;
 				targetName?: string;
+				appName?: string;
 				setup?: ProposalSetup;
 				sessionGoal?: string;
 				sessionPrivate?: true;
