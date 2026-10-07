@@ -22,8 +22,19 @@ import { ArrowLeft, Ban } from "lucide-react";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
 import { formatRelative } from "../../(admin)/trust-keys/_lib/format";
-import { appMode, appState, grantLines, type AppRow } from "../_lib/app-view";
+import {
+  chipColor,
+  revokeConsequence,
+  type AppDetailRow,
+} from "../_lib/app-view";
+import { appMode, grantLines } from "@synap-core/types/apps/app-view";
+import {
+  resolveAppConnection,
+  resolveConnectionAction,
+} from "@synap-core/types/membrane";
+import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+
 
 type LoadState = "loading" | "ready" | "missing" | "error";
 
@@ -32,7 +43,7 @@ export default function AppDetailPage() {
   const publicId = params?.publicId ?? "";
   const router = useRouter();
 
-  const [app, setApp] = useState<AppRow | null>(null);
+  const [app, setApp] = useState<AppDetailRow | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
@@ -65,7 +76,7 @@ export default function AppDetailPage() {
         setState("error");
         return;
       }
-      const b = (await res.json()) as { app?: AppRow };
+      const b = (await res.json()) as { app?: AppDetailRow };
       if (!b.app) {
         setState("missing");
         return;
@@ -102,7 +113,10 @@ export default function AppDetailPage() {
         });
         return;
       }
-      addToast({ title: "App revoked", color: "default" });
+      addToast({
+        title: resolveConnectionAction("revoke").pastLabel,
+        color: "default",
+      });
       // The revoked app now lives under "Revoked apps" on the list.
       router.push("/my-connections");
     } catch {
@@ -157,16 +171,20 @@ export default function AppDetailPage() {
         isOpen={confirmRevoke}
         onClose={() => setConfirmRevoke(false)}
         onConfirm={() => void doRevoke()}
-        title={`Revoke "${app?.name ?? "this app"}"?`}
+        title={`${resolveConnectionAction("revoke").label} "${app?.name ?? "this app"}"?`}
         consequence={
           <>
-            <p>This app loses access to this Pod and its key stops working.</p>
+            <p>
+              {app
+                ? revokeConsequence(resolveAppConnection(app).state)
+                : null}
+            </p>
             <p className="mt-2 text-foreground/65">
-              You can connect it again later — it will need a fresh approval.
+              Its history stays. Connecting it again needs a fresh approval.
             </p>
           </>
         }
-        confirmLabel="Revoke app"
+        confirmLabel={resolveConnectionAction("revoke").label}
         isPending={revoking}
       />
     </div>
@@ -178,13 +196,19 @@ function AppDetail({
   onRevoke,
   revoking,
 }: {
-  app: AppRow;
+  app: AppDetailRow;
   onRevoke: () => void;
   revoking: boolean;
 }) {
-  const state = appState(app);
+  const view = resolveAppConnection(app);
   const lines = grantLines(app);
-  const revoked = Boolean(app.revoked_at);
+  const revoked = view.state === "revoked";
+  const asked = app.pending_request
+    ? summarizeAppConnectRequest({
+        appName: app.name,
+        requests: app.pending_request.requests,
+      })
+    : null;
 
   return (
     <div className="mt-6">
@@ -199,10 +223,42 @@ function AppDetail({
             </p>
           ) : null}
         </div>
-        <Chip size="sm" variant="flat" color={state.color} className="shrink-0">
-          {state.label}
+        <Chip
+          size="sm"
+          variant="flat"
+          color={chipColor(view.tone)}
+          className="shrink-0"
+        >
+          {view.label}
         </Chip>
       </header>
+
+      {view.state === "asking" && asked && app.pending_request ? (
+        <section
+          className="mb-6 rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
+          aria-labelledby="asks"
+        >
+          <h2 id="asks" className="text-sm font-medium text-foreground">
+            Asks for
+          </h2>
+          <ul className="mt-2 flex flex-col gap-1">
+            {asked.lines.map((l) => (
+              <li key={l.workspaceId} className="text-[13px] text-foreground/80">
+                {l.text}
+              </li>
+            ))}
+          </ul>
+          <Button
+            as={Link}
+            href={`/proposal/${encodeURIComponent(app.pending_request.proposal_id)}`}
+            color="primary"
+            size="sm"
+            className="mt-3 min-h-10"
+          >
+            {resolveConnectionAction("review").label}
+          </Button>
+        </section>
+      ) : null}
 
       <Card shadow="none" className="border border-foreground/10 bg-content1">
         <CardBody className="gap-4 p-4">
@@ -291,12 +347,11 @@ function AppDetail({
             isLoading={revoking}
             onPress={onRevoke}
           >
-            Revoke access
+            {resolveConnectionAction("revoke").label}
           </Button>
           <p className="mt-2 max-w-2xl text-[11.5px] text-foreground/50">
-            Revoking cuts off this Pod immediately and stops the app&apos;s key
-            from working. It does not delete the app from this list — it moves
-            under &ldquo;Revoked apps&rdquo;.
+            {revokeConsequence(view.state)} It does not delete the app from
+            this list — it moves under &ldquo;Revoked apps&rdquo;.
           </p>
         </div>
       ) : null}

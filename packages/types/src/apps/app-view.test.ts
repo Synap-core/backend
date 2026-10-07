@@ -1,5 +1,5 @@
 /**
- * The ONE derivation of an Application's reach and standing.
+ * The ONE derivation of an Application's reach.
  *
  * Three surfaces render this (pod-admin, relay, the browser) and each maps the
  * FACTS into its own UI type, so this file pins the facts themselves. The
@@ -13,17 +13,13 @@
  *   - A REVOKED app reads "Access removed", never "No access yet": revoke killed
  *     its keys, so it has no LIVE reach. "No access yet" would claim it never
  *     had any, which is a different and false statement.
- *   - The revoked WORD comes from the vocabulary door, so it can never drift
- *     from every other Revoked badge in the product.
  */
 import { describe, expect, it } from "vitest";
-import { resolveStatusLabel } from "../vocabulary/index.js";
 import {
   appMode,
   appReach,
   appReachLines,
   appReachText,
-  appStateFacts,
   type AppStateLike,
 } from "./app-view.js";
 
@@ -38,37 +34,6 @@ const app = (over: Partial<AppStateLike> = {}): AppStateLike => ({
   revoked_at: null,
   grants: [GRANT],
   ...over,
-});
-
-describe("appStateFacts — the standing, worded once", () => {
-  it("reads a live app as ok", () => {
-    const f = appStateFacts(app());
-    expect(f).toMatchObject({ revoked: false, hasReach: true, label: "Has access", tone: "ok" });
-  });
-
-  it("takes the revoked WORD from the vocabulary door, never a literal", () => {
-    const f = appStateFacts(app({ revoked_at: "2026-10-06T13:00:00.000Z" }));
-    // The assertion is against the DOOR, so this cannot pass by both sides
-    // hard-coding the same string.
-    expect(f.label).toBe(resolveStatusLabel("revoked"));
-    expect(f).toMatchObject({ revoked: true, tone: "none" });
-  });
-
-  it("says an app with no grant has no access yet", () => {
-    expect(appStateFacts(app({ grants: [] }))).toMatchObject({
-      hasReach: false,
-      label: "No access yet",
-      tone: "none",
-    });
-  });
-
-  it("revoked OUTRANKS a grant it still carries", () => {
-    // The grants array is untouched by revoke, so this is the real shape of a
-    // revoked app: grants present, reach gone. Revoked must win.
-    const f = appStateFacts(app({ revoked_at: "2026-10-06T13:00:00.000Z", grants: [GRANT] }));
-    expect(f.revoked).toBe(true);
-    expect(f.label).toBe(resolveStatusLabel("revoked"));
-  });
 });
 
 describe("reach — the two renderings, and the line that must never blur", () => {

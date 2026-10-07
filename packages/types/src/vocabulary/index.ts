@@ -720,6 +720,9 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   // get two chips, never one shared "Dev approval".
   dev_plan_approval: "Approve a plan",
   dev_deploy_approval: "Approve a deploy",
+  // An Application asking for reach — the chip names the question, not the
+  // `app/connect` door it arrived through.
+  app_connect: "Access request",
 };
 
 // ─── Tool kinds (one user word, the kind on the detail) ──────────────────────

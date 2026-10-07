@@ -184,6 +184,10 @@ export const KIND_INTENT: Readonly<Record<string, ProposalIntent>> = {
   governance_tighten_posture: "governance",
   governance_structure_guideline: "governance",
   governance_work_guideline: "governance",
+
+  // An Application asking for reach (`app/connect`): approving it decides who
+  // may act — never a create, whatever its payload looks like.
+  app_connect: "access",
 };
 
 /**

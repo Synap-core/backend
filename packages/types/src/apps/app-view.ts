@@ -1,14 +1,11 @@
 /**
  * `@synap-core/types/apps/app-view` — the ONE derivation of an Application's
- * REACH and its STATE (App Connect v1).
+ * REACH (App Connect v1). Its STANDING is the membrane's
+ * (`resolveAppConnection`, `@synap-core/types/membrane`), never this file's.
  *
- * Three surfaces render an app's reach and standing — pod-admin's
- * `apps/_lib/app-view.ts`, relay's `governance/apps.ts` and the browser's
- * `apps/connected/app-view.ts`. Each kept its own copy; the copies drifted
- * (the browser rendered `'Revoked'` by hand where the other two went through
- * the vocabulary door, and its reach string dropped the "No access yet" case
- * the summary surfaces show). This leaf is the single source they delegate to,
- * so the same app can never reach two surfaces worded differently.
+ * Three surfaces render an app's reach — pod-admin, relay and the browser.
+ * This leaf is the single source they read, so the same app can never reach
+ * two surfaces worded differently.
  *
  * What an app may touch is read through `summarizeGrant` — the SAME model a key
  * row renders — so an app's reach and a key's reach are worded identically.
@@ -17,14 +14,11 @@
  * nobody set. Only `what` and `where` are shown.
  *
  * Pure and dependency-free beyond this package's own leaves (`./grants`,
- * `./vocabulary`): safe in browser, Electron, Next.js and Node contexts. It
- * exports the FACTS, never a UI type — each surface maps the state facts into
- * its own mark (a HeroUI chip colour, a relay tone, an `OverviewMark`).
+ * `./vocabulary`): safe in browser, Electron, Next.js and Node contexts.
  */
 
 import { summarizeGrant } from "../grants/index.js";
-import { resolveAppConnectionState } from "../membrane/index.js";
-import { humanizeToken, resolveStatusLabel } from "../vocabulary/index.js";
+import { humanizeToken } from "../vocabulary/index.js";
 
 /** One grant row as the pod's `apps.*` procedures serialize it. */
 export interface AppGrantLike {
@@ -35,7 +29,7 @@ export interface AppGrantLike {
 }
 
 /**
- * What the reach/state derivation reads: an app's live reach (`grants`, empty
+ * What the reach derivation reads: an app's live reach (`grants`, empty
  * once revoked) and its revocation stamp. Structural, so any app row shape the
  * three surfaces carry satisfies it.
  */
@@ -95,53 +89,6 @@ export function appReachText(app: AppStateLike): string {
  */
 export function appReach(app: AppStateLike): string {
   return appReachText(app) || "No access yet";
-}
-
-/**
- * The tone of an app's state, as a surface-agnostic fact. `attention` is
- * reserved — no current state maps to it; a revoked app is a STATE, not an
- * alarm, and every surface renders it neutral, matching each other.
- */
-export type AppStateTone = "ok" | "none";
-
-/** The FACTS behind an app's state mark — colour-agnostic, worded once. */
-export interface AppStateFacts {
-  /** The app was revoked (a revoked app has no live reach, whatever its grants say). */
-  revoked: boolean;
-  /** It currently holds at least one live grant. */
-  hasReach: boolean;
-  /** "Revoked" (vocabulary door) / "Has access" / "No access yet". */
-  label: string;
-  /** The MARK tone, for each surface to map into its own UI type. */
-  tone: AppStateTone;
-}
-
-/**
- * A REACH-shaped projection of the ONE app state rule
- * (`resolveAppConnectionState`, `@synap-core/types/membrane`): revoked
- * outranks everything, then whether the app holds any reach. It no longer
- * decides anything itself — it narrows the membrane state to the three words
- * the current app surfaces render.
- *
- * Retiring: Connected's rows and pages move onto `resolveAppConnection`
- * (state chip + one action); this stays only until its three callers do.
- *
- * `revoked`'s WORD comes from the vocabulary door (`resolveStatusLabel`), never
- * a literal, so an app's Revoked badge can never drift from every other one.
- */
-export function appStateFacts(app: AppStateLike): AppStateFacts {
-  const state = resolveAppConnectionState(app);
-  const revoked = state === "revoked";
-  const hasReach = !revoked && (app.grants ?? []).length > 0;
-  if (revoked)
-    return {
-      revoked,
-      hasReach,
-      label: resolveStatusLabel("revoked"),
-      tone: "none",
-    };
-  if (hasReach) return { revoked, hasReach, label: "Has access", tone: "ok" };
-  return { revoked, hasReach, label: "No access yet", tone: "none" };
 }
 
 /**

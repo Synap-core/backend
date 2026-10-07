@@ -13,7 +13,6 @@ import {
 import { Check, X, ShieldCheck, ExternalLink } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
 import {
-  buildObjectActionTitle,
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
@@ -33,6 +32,7 @@ import { isUuid } from "../../open/open-params";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
+import { proposalHeading } from "./proposal-heading";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -251,22 +251,17 @@ export function ProposalReview({
   }
 
   const status = String(p.status ?? "pending");
-  const proposalType = String(p.proposalType ?? "change");
   /* The heading names what APPROVING WILL DO, so the verb is imperative —
      "Create workspace", not "Created workspace". Until 2026-09-06 this printed
      `p.proposalType` verbatim, so the highest-stakes page in the product, the
      one a stranger reaches from an email, greeted them with `entity.create`.
      That exact leak is named in .claude/rules/vocabulary.md. */
-  const heading = buildObjectActionTitle({
-    action: proposalType,
-    objectKind: String(p.targetType ?? ""),
-    objectName: p.targetName ? String(p.targetName) : undefined,
-  });
+  const payload = p.request.data ?? p.data;
+  const { heading, appConnect } = proposalHeading(p, payload);
   const reasoning =
     typeof p.review.reasoning === "string" && p.review.reasoning.trim()
       ? p.review.reasoning
       : undefined;
-  const payload = p.request.data ?? p.data;
   const actionable = isActionable(status);
   const busy = approve.isPending || reject.isPending;
 
@@ -380,14 +375,36 @@ export function ProposalReview({
           </div>
         )}
 
-        <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-          <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/45">
-            Details
-          </p>
-          <pre className="max-h-96 overflow-auto text-xs leading-relaxed text-foreground/75">
-            {JSON.stringify(payload, null, 2)}
-          </pre>
-        </div>
+        {appConnect ? (
+          <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+            <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/45">
+              Asks for
+            </p>
+            <ul className="flex flex-col gap-1">
+              {appConnect.lines.map((line) => (
+                <li
+                  key={line.workspaceId}
+                  className="text-[13px] text-foreground/80"
+                >
+                  {line.text}
+                </li>
+              ))}
+            </ul>
+            <p className="text-[12px] text-foreground/55">
+              It gets a key only after you approve, and its writes still follow
+              your review rules.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+            <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/45">
+              Details
+            </p>
+            <pre className="max-h-96 overflow-auto text-xs leading-relaxed text-foreground/75">
+              {JSON.stringify(payload, null, 2)}
+            </pre>
+          </div>
+        )}
 
         {actionable ? (
           !rejecting ? (

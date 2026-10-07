@@ -46,7 +46,18 @@ describe("resolveProposalIntent — the mark", () => {
     expect(resolveProposalIntent({ kind: "composite" }).intent).toBe("create");
   });
 
-  it("an access CLASS outranks the kind — the union has no access kind", () => {
+  it("an app's request for access is an access kind, whatever class the row carries", () => {
+    // The pod's `proposals.get` row carries no `class`: the KIND alone must say
+    // "access", or the request reads as a green Create (the app/connect bug).
+    const view = resolveProposalIntent({ kind: "app_connect" });
+    expect(view.intent).toBe("access");
+    expect(view.glyph).toBe("key");
+    expect(view.silhouette).toBe("emphasis");
+    expect(resolveProposalImpact({ kind: "app_connect" })).toBe("high");
+    expect(isSwipeSafe({ kind: "app_connect", revertable: true })).toBe(false);
+  });
+
+  it("an access CLASS outranks the kind", () => {
     const view = resolveProposalIntent({ kind: "create", class: "access" });
     expect(view.intent).toBe("access");
     expect(view.glyph).toBe("key");

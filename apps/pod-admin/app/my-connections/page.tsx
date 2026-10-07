@@ -40,10 +40,14 @@ import {
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
 import { summarizeGrant } from "@synap-core/types/grants";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import { appMode, appReach } from "@synap-core/types/apps/app-view";
 import {
-  appMode,
-  appReach,
-  appState,
+  resolveAppConnection,
+  resolveConnectionAction,
+} from "@synap-core/types/membrane";
+import {
+  chipColor,
+  revokeConsequence,
   type AppRow,
 } from "../apps/_lib/app-view";
 
@@ -208,7 +212,10 @@ export default function MyConnectionsPage() {
         });
         return;
       }
-      addToast({ title: "App revoked", color: "default" });
+      addToast({
+        title: resolveConnectionAction("revoke").pastLabel,
+        color: "default",
+      });
       await loadApps();
     } catch {
       addToast({
@@ -284,8 +291,9 @@ export default function MyConnectionsPage() {
   const revoked = all.filter((k) => !k.isActive);
 
   const allApps = apps ?? [];
-  const activeApps = allApps.filter((a) => !a.revoked_at);
-  const revokedApps = allApps.filter((a) => a.revoked_at);
+  const isRevoked = (a: AppRow) => resolveAppConnection(a).state === "revoked";
+  const activeApps = allApps.filter((a) => !isRevoked(a));
+  const revokedApps = allApps.filter(isRevoked);
 
   /* Was a native `window.confirm`. Same shared modal the admin surfaces use —
      revoking your own key is exactly as consequential as an admin revoking it,
@@ -448,16 +456,20 @@ export default function MyConnectionsPage() {
           if (!pendingRevokeApp) return;
           void doRevokeApp(pendingRevokeApp);
         }}
-        title={`Revoke "${pendingRevokeApp?.name ?? "this app"}"?`}
+        title={`${resolveConnectionAction("revoke").label} "${pendingRevokeApp?.name ?? "this app"}"?`}
         consequence={
           <>
-            <p>This app loses access to this Pod and its key stops working.</p>
+            <p>
+              {pendingRevokeApp
+                ? revokeConsequence(resolveAppConnection(pendingRevokeApp).state)
+                : null}
+            </p>
             <p className="mt-2 text-foreground/65">
-              You can connect it again later — it will need a fresh approval.
+              Its history stays. Connecting it again needs a fresh approval.
             </p>
           </>
         }
-        confirmLabel="Revoke app"
+        confirmLabel={resolveConnectionAction("revoke").label}
         isPending={revokingApp === pendingRevokeApp?.public_id}
       />
     </div>
@@ -580,7 +592,7 @@ function AppCard({
   isRevoking?: boolean;
   onRevoke?: () => void;
 }) {
-  const state = appState(app);
+  const view = resolveAppConnection(app);
   const meta = [
     appMode(app.mode),
     app.created_at ? `created ${formatRelative(app.created_at)}` : null,
@@ -611,14 +623,16 @@ function AppCard({
               <span className="font-mono">{app.public_id}</span>
             </p>
           </div>
-          <Chip
-            size="sm"
-            variant="flat"
-            color={state.color}
-            className="shrink-0"
-          >
-            {state.label}
-          </Chip>
+          {view.showChip ? (
+            <Chip
+              size="sm"
+              variant="flat"
+              color={chipColor(view.tone)}
+              className="shrink-0"
+            >
+              {view.label}
+            </Chip>
+          ) : null}
         </div>
 
         <p className="text-xs text-foreground/70">
@@ -638,7 +652,7 @@ function AppCard({
               isLoading={isRevoking}
               onPress={onRevoke}
             >
-              Revoke
+              {resolveConnectionAction("revoke").label}
             </Button>
           </div>
         ) : null}

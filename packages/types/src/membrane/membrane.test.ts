@@ -24,7 +24,6 @@ import {
   type ConnectionKind,
   type ConnectionState,
 } from "./index.js";
-import { appStateFacts } from "../apps/app-view.js";
 
 const NOW = Date.parse("2026-10-07T12:00:00Z");
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
@@ -600,27 +599,5 @@ describe("isAppPublicId", () => {
     expect(isAppPublicId("1e1e1e1e-0000-4000-8000-0000000000aa")).toBe(false);
     expect(isAppPublicId(null)).toBe(false);
     expect(isAppPublicId(undefined)).toBe(false);
-  });
-});
-
-describe("app-view is a projection of the membrane rule", () => {
-  it("an asking app with no grant has no reach and is not revoked", () => {
-    const app = { grants: [], pending_request: PENDING };
-    expect(resolveAppConnection(app, { now: NOW }).state).toBe("asking");
-    expect(appStateFacts(app)).toMatchObject({
-      revoked: false,
-      hasReach: false,
-      label: "No access yet",
-    });
-  });
-
-  it("revoked wins in both — a revoked app with stale grants never reads 'Has access'", () => {
-    const app = { revoked_at: daysAgo(1), grants: GRANT };
-    expect(resolveAppConnection(app, { now: NOW }).state).toBe("revoked");
-    expect(appStateFacts(app)).toMatchObject({
-      revoked: true,
-      hasReach: false,
-      tone: "none",
-    });
   });
 });

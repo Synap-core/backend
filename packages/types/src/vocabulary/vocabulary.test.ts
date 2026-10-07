@@ -684,6 +684,7 @@ describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
     "automation_run",
     "dev_plan_approval",
     "dev_deploy_approval",
+    "app_connect",
   ];
 
   it("settles the facet/composite fork between relay and proposal-ui", () => {
@@ -713,6 +714,10 @@ describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
     expect(resolveProposalKindLabel("governance_work_guideline")).toBe(
       "Work guideline"
     );
+  });
+
+  it("names an app's request for access, not its door", () => {
+    expect(resolveProposalKindLabel("app_connect")).toBe("Access request");
   });
 
   it("gives each dev-loop gate its OWN chip", () => {
