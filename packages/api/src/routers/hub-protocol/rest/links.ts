@@ -130,7 +130,19 @@ const LINK_TYPES = [
   // `deriveOpenBlockers`, which re-points B's dependents at A).
   "replaces",
   "uses",
+  // participant(agent) --dispatched_via--> tool: an external agent's BINDING.
+  // Listed because it has a producer (the type-SSOT tripwire demands it), and
+  // REFUSED below: only a person binds an agent, through
+  // `agentUsers.setBinding`. An agent writing it could re-point its own
+  // dispatch at a tool of its choosing.
+  "dispatched_via",
 ] as const;
+
+/** Link types this door names but never writes — each has its own human door. */
+const HUMAN_DOOR_LINK_TYPES: Readonly<Record<string, string>> = {
+  dispatched_via:
+    "dispatched_via links bind an agent to the tool the pod dispatches it through; a person sets them with agentUsers.setBinding, never through this door",
+};
 
 /**
  * Refusals from the `blocked_by` floor. `not_found` is 404 for BOTH a missing
@@ -220,6 +232,9 @@ export function registerLinksRoutes(app: HubHono): void {
         400
       );
     }
+
+    const humanDoor = HUMAN_DOOR_LINK_TYPES[parsed.data.linkType];
+    if (humanDoor) return c.json({ error: humanDoor }, 403);
 
     // Bind acting identity + workspace to the authenticated principal, and
     // membership-check the workspace (closes the IDOR — same as POST /relations).

@@ -58,7 +58,8 @@ export type ToolAuthBinding =
  *
  * ── THIS IS THE SEED, NOT THE VOCABULARY ────────────────────────────────────
  * THE SSOT IS THE `capability_intents` TABLE (migrations `0283` seeded the 13
- * below; `0284` added `publish_post`, deliberately NOT a member of this union).
+ * below; `0284` added `publish_post` and `0314` added `delegate_agent_task`, both
+ * deliberately NOT members of this union).
  * Read membership at runtime through the table; this array exists so a fresh pod
  * resolves the 13 seed slugs before any query, and so the applier can REJECT an
  * unknown value instead of persisting one.

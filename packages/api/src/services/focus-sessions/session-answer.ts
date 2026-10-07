@@ -57,7 +57,6 @@ import {
   db,
   messages,
   users,
-  apiKeys,
   focusSessions,
   MessageAuthorType,
   and,
@@ -93,6 +92,7 @@ import {
 } from "../messaging/post-message.js";
 import { findNewestSlotThreadSeed } from "./slot-thread.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
+import { resolveAgentReach } from "../agent-dispatch/agent-binding.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import {
   attestExpectedOutput,
@@ -207,57 +207,97 @@ export async function claimQuestionAnswered(
 
 /**
  * Can the POD run this agent (an Intelligence-Service agent), as opposed to an
- * agent that works through its own door key and reads the answer itself?
+ * agent that works through its own door key?
  *
- * The derived signal: an external agent (Claude Code, Raycast, a named CLI
- * agent) authenticates with a key OWNED by its agent user
- * (`provisionSurfaceAgentKey` mints `api_keys.user_id = agentUser`); a pod-run
- * agent acts through the IS, whose only key is `is_internal`. So "owns a
- * non-internal key, live or revoked" ⇒ external ⇒ never woken here. A revoked
- * key still counts: the principal was external, and an IS turn under its name
- * would be an impersonation either way.
+ * Built on THE reach rule (`resolveAgentReach`, `services/agent-dispatch`):
+ * only reach `'pod'` returns its agent type. An external agent — one that owns
+ * a non-internal key (live or revoked: `provisionSurfaceAgentKey` mints
+ * `api_keys.user_id = agentUser`; a pod-run agent acts only through the IS's
+ * `is_internal` key) or one bound for dispatch (`dispatched_via`) — is never
+ * given an IS turn: that would be an impersonation.
  */
 export async function podRunAgentType(
   agentUserId: string
 ): Promise<string | null> {
+  if ((await resolveAgentReach(agentUserId)) !== "pod") return null;
   const [agent] = await db
-    .select({ agentType: users.agentType, userType: users.userType })
+    .select({ agentType: users.agentType })
     .from(users)
     .where(eq(users.id, agentUserId))
     .limit(1);
-  const agentType = agent?.agentType?.trim();
-  if (!agent || agent.userType !== "agent" || !agentType) return null;
-  const [ownKey] = await db
-    .select({ id: apiKeys.id })
-    .from(apiKeys)
-    .where(
-      and(
-        eq(apiKeys.userId, agentUserId),
-        drizzleSql`${apiKeys.keyType} IS DISTINCT FROM 'is_internal'`
-      )
-    )
-    .limit(1);
-  return ownKey ? null : agentType;
+  return agent?.agentType?.trim() || null;
 }
 
 /**
- * The agent TYPE to wake, or `null` for "nobody the pod can run". The asker
- * wins outright — when a question exists, only its author may be woken (never
- * a bystander agent answering someone else's question).
+ * WHO an answer wakes, and HOW — reach-aware.
+ *   `{ reach: 'pod', agentType }`         an IS turn (`triggerAutoRespond`);
+ *   `{ reach: 'dispatch', agentUserId }`  the agent's binding `send` verb
+ *                                         (`wakeExternalAgent`);
+ *   `null`                                nobody — a `'pull'` agent reads the
+ *                                         answer itself on its next turn.
+ */
+export type WakeTarget =
+  | { reach: "pod"; agentType: string }
+  | { reach: "dispatch"; agentUserId: string; agentType: string | null };
+
+/**
+ * The asker wins outright — when a question exists, only its author may be
+ * woken (never a bystander agent answering someone else's question). Without
+ * one: the slot's `delegatedTo` (an agent TYPE the pod runs), then the first
+ * staffed agent the pod can reach (pod-run or dispatch; pull agents are skipped).
+ */
+export async function resolveWakeTarget(p: {
+  askingAgentUserId?: string | null;
+  slot?: ExpectedOutput | null;
+  agentIds?: string[];
+}): Promise<WakeTarget | null> {
+  const targetFor = async (agentUserId: string): Promise<WakeTarget | null> => {
+    const reach = await resolveAgentReach(agentUserId);
+    if (reach === "dispatch") {
+      const [agent] = await db
+        .select({ agentType: users.agentType })
+        .from(users)
+        .where(eq(users.id, agentUserId))
+        .limit(1);
+      return {
+        reach,
+        agentUserId,
+        agentType: agent?.agentType?.trim() || null,
+      };
+    }
+    if (reach === "pod") {
+      const agentType = await podRunAgentType(agentUserId);
+      return agentType ? { reach, agentType } : null;
+    }
+    return null;
+  };
+  if (p.askingAgentUserId) return targetFor(p.askingAgentUserId);
+  const delegated = p.slot?.delegatedTo?.trim();
+  if (delegated) return { reach: "pod", agentType: delegated };
+  for (const agentId of p.agentIds ?? []) {
+    const target = await targetFor(agentId);
+    if (target) return target;
+  }
+  return null;
+}
+
+/**
+ * The agent TYPE to wake with an IS turn, or `null` for "nobody the pod runs".
+ * A dispatch target is NOT a type — callers that can reach one use
+ * `resolveWakeTarget`; this stays for the IS-only doors (ask-about-slot).
  */
 export async function resolveWakeAgentType(p: {
   askingAgentUserId?: string | null;
   slot?: ExpectedOutput | null;
   agentIds?: string[];
 }): Promise<string | null> {
-  if (p.askingAgentUserId) return podRunAgentType(p.askingAgentUserId);
-  const delegated = p.slot?.delegatedTo?.trim();
-  if (delegated) return delegated;
-  for (const agentId of p.agentIds ?? []) {
-    const type = await podRunAgentType(agentId);
-    if (type) return type;
-  }
-  return null;
+  const target = await resolveWakeTarget(p);
+  return target?.reach === "pod" ? target.agentType : null;
+}
+
+/** The agent type a wake target names — the result's `wokeAgentType`. */
+function wakeTargetLabel(target: WakeTarget | null): string | null {
+  return target?.agentType ?? null;
 }
 
 async function wake(p: {
@@ -266,16 +306,26 @@ async function wake(p: {
   content: string;
   ownerId: string;
   sessionId: string;
-  agentType: string | null;
+  target: WakeTarget | null;
+  /** What the answer was about, for the external agent's `send`. */
+  slotLabel?: string | null;
 }): Promise<boolean> {
-  if (!p.agentType) return false;
+  if (!p.target) return false;
+  if (p.target.reach === "dispatch") {
+    // W1: reach is decided; the binding's `send` (wakeExternalAgent) lands in W3.
+    logger.info(
+      { sessionId: p.sessionId, agentUserId: p.target.agentUserId },
+      "answer: dispatch agent not woken yet (no send door)"
+    );
+    return false;
+  }
   return triggerAutoRespond({
     channelId: p.channelId,
     userMessageId: p.messageId,
     content: p.content,
     sourceUserId: p.ownerId,
     focusSessionId: p.sessionId,
-    agentType: p.agentType,
+    agentType: p.target.agentType,
   });
 }
 
@@ -456,9 +506,10 @@ export async function recordOwnerRoomReply(p: {
           content: p.content,
           ownerId: p.userId,
           sessionId: session.id,
-          agentType: await resolveWakeAgentType({
+          target: await resolveWakeTarget({
             askingAgentUserId: question.agentUserId,
           }),
+          slotLabel: question.slotLabel,
         })
       : false;
 
@@ -496,7 +547,7 @@ export type AnswerSessionSlotResult =
       messageId: string | null;
       /** The agent question this answered, when one was open for the slot. */
       questionId: string | null;
-      /** The agent type woken, or `null` when none the pod can run. */
+      /** The agent type woken (an IS turn, or a dispatched agent's `send`), or `null` when none the pod can reach. */
       wokeAgentType: string | null;
       triggered: boolean;
       /**
@@ -729,18 +780,20 @@ export async function answerSessionSlot(p: {
         });
         if (claimed) questionId = question.id;
       }
-      wokeAgentType = await resolveWakeAgentType({
+      const target = await resolveWakeTarget({
         askingAgentUserId: questionId ? question?.agentUserId : null,
         slot: answered.before,
         agentIds: answered.session.agentIds,
       });
+      wokeAgentType = wakeTargetLabel(target);
       triggered = await wake({
         channelId: session.channelId,
         messageId,
         content: text,
         ownerId: p.userId,
         sessionId: session.id,
-        agentType: wokeAgentType,
+        target,
+        slotLabel: answered.expectedLabel,
       });
     } catch (err) {
       logger.warn(
@@ -854,18 +907,20 @@ export async function attestSessionSlot(p: {
         });
         if (claimed) questionId = question.id;
       }
-      wokeAgentType = await resolveWakeAgentType({
+      const target = await resolveWakeTarget({
         askingAgentUserId: questionId ? question?.agentUserId : null,
         slot: attested.before,
         agentIds: attested.session.agentIds,
       });
+      wokeAgentType = wakeTargetLabel(target);
       triggered = await wake({
         channelId,
         messageId,
         content,
         ownerId: p.userId,
         sessionId: attested.session.id,
-        agentType: wokeAgentType,
+        target,
+        slotLabel: attested.expectedLabel,
       });
     } catch (err) {
       logger.warn(

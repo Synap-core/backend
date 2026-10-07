@@ -1,6 +1,7 @@
 ## The intent vocabulary — one SSOT, three mirrors
 
-**What a capability DOES** — `send_message`, `generate_media`, `publish_post` — is the
+**What a capability DOES** — `send_message`, `generate_media`, `publish_post`,
+`delegate_agent_task` — is the
 ROUTING axis over the verb catalog. A verb's id is vendor-keyed (`gmail_send`,
 `unipile_send_message`); its `intent` says what it MEANS, so an agent can ask for
 "send a message" without already knowing the vendor.
@@ -78,6 +79,9 @@ a package that consumes nothing would go stale in the one direction that is invi
 2. **Add it to mirror 1** — `ABSTRACT_VERBS` in `packages/database/src/schema/tools.ts`,
    **only if it is a SEED slug**. A post-seed row does not belong there (that is what
    `publish_post` / `REGISTERED_EXTRAS` is for).
+   Post-seed rows today: `publish_post` (0284, write) and `delegate_agent_task`
+   (0314, act — every verb of an external-agent binding, `tools.config.agentBinding`:
+   start / send / status / cancel).
 3. **Add it to mirror 2** — `ABSTRACT_INTENTS` or `REGISTERED_EXTRAS` in
    `packages/types/src/capability-intents/index.ts`. Then **`cd packages/types && pnpm build`** —
    consumers typecheck against the built `dist/`, so a skipped rebuild makes your gate lie.

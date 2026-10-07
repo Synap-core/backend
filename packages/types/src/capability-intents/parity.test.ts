@@ -39,6 +39,7 @@ const MIGRATIONS_DIR = join(HERE, "../../../../packages/database/migrations");
 const MIGRATIONS = [
   join(MIGRATIONS_DIR, "0283_capability_intents.sql"),
   join(MIGRATIONS_DIR, "0284_publish_post_intent.sql"),
+  join(MIGRATIONS_DIR, "0314_delegate_agent_task_intent.sql"),
 ];
 
 /**

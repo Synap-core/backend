@@ -1274,7 +1274,10 @@ export type LinkType =
   // project --uses--> workspace. INDEX of which domains an engagement runs
   // through. NOT an ACL — project members do not gain workspace membership
   // from this edge. Distinct from live `used` (session --used--> tool).
-  | "uses";
+  | "uses"
+  // participant(agentUserId) --dispatched_via--> tool. The external agent's
+  // BINDING (tools.config.agentBinding). Human-written only (agentUsers.setBinding).
+  | "dispatched_via";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

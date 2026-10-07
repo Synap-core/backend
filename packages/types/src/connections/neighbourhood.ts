@@ -235,6 +235,9 @@ export const LINK_EDGE_ROLES = {
   // on the other, so it is a plain tie ("Replaces" / "Replaced by").
   replaces: RELATED,
   uses: RELATED,
+  // participant(agent) --dispatched_via--> tool: the agent's dispatch binding
+  // — configuration of how it is reached, not work or lineage.
+  dispatched_via: RELATED,
 } as const satisfies Readonly<Record<string, EdgeRole>>;
 
 /**

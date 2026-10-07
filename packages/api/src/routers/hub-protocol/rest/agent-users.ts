@@ -20,6 +20,7 @@ import {
   NEVER_SEEN,
 } from "../../../services/agent-presence.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
+import { loadAgentDispatchSummaries } from "../../../services/agent-dispatch/agent-binding.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -222,6 +223,10 @@ export function registerAgentUsersRoutes(app: HubHono): void {
           );
         // Connected / last seen (V1 G3) — the CLI roster and `init` read it.
         const presence = await loadAgentPresence(mineAgents.map((r) => r.id));
+        // reach + binding (THE reach rule / THE binding reader, batched).
+        const dispatch = await loadAgentDispatchSummaries(
+          mineAgents.map((r) => r.id)
+        );
         return c.json(
           mineAgents.map((row) => {
             const meta = (row.agentMetadata ?? {}) as {
@@ -238,6 +243,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
               createdAt: row.createdAt,
               focusWorkspaceId: meta.focusWorkspaceId ?? null,
               ...(presence.get(row.id) ?? NEVER_SEEN),
+              reach: dispatch.get(row.id)?.reach ?? "pull",
+              binding: dispatch.get(row.id)?.binding ?? null,
             };
           })
         );
@@ -265,7 +272,16 @@ export function registerAgentUsersRoutes(app: HubHono): void {
           )
         )
         .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)));
-      return c.json(results);
+      const dispatch = await loadAgentDispatchSummaries(
+        results.map((r) => r.id)
+      );
+      return c.json(
+        results.map((r) => ({
+          ...r,
+          reach: dispatch.get(r.id)?.reach ?? "pull",
+          binding: dispatch.get(r.id)?.binding ?? null,
+        }))
+      );
     } catch (err) {
       logger.error({ err }, "listAgentUsers failed");
       return c.json(

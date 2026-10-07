@@ -76,6 +76,24 @@ export const WireAgentUserSchema = z
     name: z.string().nullable().optional(),
     agentMetadata: z.record(z.string(), z.unknown()).nullable().optional(),
     role: z.string().nullable().optional(),
+    /** How the pod reaches this agent (`resolveAgentReach`). */
+    reach: z.enum(["pod", "dispatch", "pull"]).optional(),
+    /** The dispatch binding (`resolveAgentBinding`); `error` when broken. */
+    binding: z
+      .object({
+        toolId: z.string().nullable(),
+        provider: z.string().nullable(),
+        supports: z
+          .object({
+            push: z.boolean(),
+            inputRequired: z.boolean(),
+            cancel: z.boolean(),
+          })
+          .nullable(),
+        error: z.object({ code: z.string(), message: z.string() }).optional(),
+      })
+      .nullable()
+      .optional(),
   })
   .passthrough()
   .openapi("AgentUser");

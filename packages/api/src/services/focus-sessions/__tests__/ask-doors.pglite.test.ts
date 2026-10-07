@@ -63,6 +63,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         channelMembers: actual.channelMembers as never,
         messages: actual.messages as never,
         apiKeys: actual.apiKeys as never,
+        // The reach rule reads `dispatched_via` binding edges.
+        links: actual.links as never,
       },
     }),
     eventRepository: { append: async () => undefined },
@@ -135,6 +137,7 @@ import {
   channelMembers,
   messages,
   apiKeys,
+  links,
   governanceRules,
 } from "@synap/database";
 import { FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE } from "../lifecycle-events.js";
@@ -316,6 +319,7 @@ describe("W2 typed ask doors", () => {
       channelMembers,
       messages,
       apiKeys,
+      links,
       governanceRules,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));

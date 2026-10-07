@@ -23,6 +23,7 @@
  *   tool                --provided_by-->       source       (tool backed by a provider)
  *   participant|channel --member_of-->         session      (room participants)
  *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL)
+ *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -195,7 +196,23 @@ export type LinkType =
    * edge. Entity membership stays `belongs_to_project` on the relations table.
    * Distinct from live `used` (session --used--> tool, run provenance).
    */
-  | "uses";
+  | "uses"
+  /**
+   * participant(agentUserId) --dispatched_via--> tool(toolId). The BINDING of an
+   * EXTERNAL agent identity (a `users.userType='agent'` row that works through
+   * its own door key) to the tool the pod hands it work through: a `tools` row
+   * with `kind:'external'`, `executor:'external-agent'` and a validated
+   * `config.agentBinding` ({ protocol, provider, supports, verbs }). AT MOST ONE
+   * per agent. Its existence is what makes an agent's reach `'dispatch'`
+   * (`resolveAgentReach`); its content is read ONLY through
+   * `resolveAgentBinding` (`services/agent-dispatch/agent-binding.ts`).
+   *
+   * HUMAN-WRITTEN ONLY, through `agentUsers.setBinding` — an agent that could
+   * write this edge could re-point its own dispatch at a tool of its choosing.
+   * The Hub REST links door lists it (the type-SSOT tripwire requires every
+   * produced type there) and refuses it explicitly.
+   */
+  | "dispatched_via";
 
 export const links = pgTable(
   "links",

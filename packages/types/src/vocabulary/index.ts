@@ -511,6 +511,9 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   spawned_from: { incoming: "Spawned" },
   provides_credential: { incoming: "Credential from" },
   uses: { incoming: "Used by" },
+  // participant(agent) --dispatched_via--> tool: how the pod hands that agent
+  // work. From the tool's side the row is the agent it dispatches.
+  dispatched_via: { outgoing: "Dispatched through", incoming: "Dispatches" },
 };
 
 export function resolveLineageEdgeLabel(

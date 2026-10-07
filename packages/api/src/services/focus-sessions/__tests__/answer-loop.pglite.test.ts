@@ -68,6 +68,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         channelMembers: actual.channelMembers as never,
         messages: actual.messages as never,
         apiKeys: actual.apiKeys as never,
+        // The reach rule reads `dispatched_via` binding edges.
+        links: actual.links as never,
       },
     }),
     eventRepository: { append: async () => undefined },
@@ -124,6 +126,7 @@ import {
   channelMembers,
   messages,
   apiKeys,
+  links,
 } from "@synap/database";
 import { postChannelMessage } from "../../messaging/post-message.js";
 import { FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE } from "../lifecycle-events.js";
@@ -299,6 +302,7 @@ describe("the answer loop", () => {
       channelMembers,
       messages,
       apiKeys,
+      links,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

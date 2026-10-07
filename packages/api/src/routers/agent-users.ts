@@ -59,6 +59,14 @@ import {
   type AgentDirection,
   type AgentOrigin,
 } from "@synap-core/types/agents";
+import { AccessContext, scopedDb } from "../access/index.js";
+import { links, tools } from "@synap/database/schema";
+import { createLink } from "../services/links/links-service.js";
+import {
+  AgentBindingError,
+  loadAgentDispatchSummaries,
+  parseAgentBindingTool,
+} from "../services/agent-dispatch/agent-binding.js";
 
 /**
  * Coverage floor: the values the `users.created_via` column accepts
@@ -498,9 +506,15 @@ export const agentUsersRouter = router({
         ctx.userId,
         rows.map((r) => r.id)
       );
+      // `reach` ('pod' | 'dispatch' | 'pull') + `binding` — THE reach rule and
+      // THE binding reader (`services/agent-dispatch`), batched. A broken
+      // binding renders as a binding carrying `error`, never as "not bound".
+      const dispatch = await loadAgentDispatchSummaries(rows.map((r) => r.id));
       return rows.map((r) => ({
         ...withViewerVerbs(withAgentOrigin(r), viewer),
         operatedByViewer: operated.has(r.id),
+        reach: dispatch.get(r.id)?.reach ?? ("pull" as const),
+        binding: dispatch.get(r.id)?.binding ?? null,
       }));
     }),
 
@@ -753,6 +767,124 @@ export const agentUsersRouter = router({
       });
 
       return { revokedCount: revoked.length };
+    }),
+
+  /**
+   * Bind an external agent to the tool the pod dispatches it through
+   * (`participant --dispatched_via--> tool`), or unbind it (`toolId: null`).
+   *
+   * HUMAN-ONLY: an agent key is refused — an agent that could bind itself could
+   * re-point its own dispatch at any tool. Same gate as `disconnect`: the
+   * agent's owner or a pod admin. The tool must be visible to the caller (the
+   * access-layer floor) and must be a VALID binding tool — an invalid one is
+   * refused here rather than bound and discovered broken at the first run.
+   * At most one binding per agent: binding replaces the previous edge.
+   */
+  setBinding: protectedProcedure
+    .input(
+      z.object({
+        agentUserId: z.string().uuid(),
+        toolId: z.string().uuid().nullable(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only a person can bind an agent — an agent key cannot.",
+        });
+      }
+      const callerId = ctx.userId;
+      const [agent] = await db
+        .select({ id: users.id, createdByUserId: users.createdByUserId })
+        .from(users)
+        .where(
+          and(eq(users.id, input.agentUserId), eq(users.userType, "agent"))
+        )
+        .limit(1);
+      if (!agent) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Agent user not found",
+        });
+      }
+      const isOwner =
+        !!agent.createdByUserId && agent.createdByUserId === callerId;
+      if (!isOwner && !(await isPodAdmin(callerId))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the agent's owner or a pod admin can bind it",
+        });
+      }
+
+      let toolWorkspaceId: string | null = null;
+      if (input.toolId) {
+        const tool = await scopedDb(AccessContext.from(ctx)).findFirst<{
+          id: string;
+          workspaceId: string | null;
+          kind: string;
+          executor: string | null;
+          status: string | null;
+          config: unknown;
+        }>(tools, { where: eq(tools.id, input.toolId) });
+        if (!tool) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
+        }
+        try {
+          parseAgentBindingTool(agent.id, tool);
+        } catch (err) {
+          if (err instanceof AgentBindingError) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+          }
+          throw err;
+        }
+        toolWorkspaceId = tool.workspaceId;
+      }
+
+      // Replace: drop every existing binding edge of this agent, then write
+      // the new one through the links write door.
+      const removed = await db
+        .delete(links)
+        .where(
+          and(
+            eq(links.fromType, "participant"),
+            eq(links.fromId, agent.id),
+            eq(links.toType, "tool"),
+            eq(links.linkType, "dispatched_via")
+          )
+        )
+        .returning({ toId: links.toId });
+      if (input.toolId) {
+        await createLink({
+          workspaceId: toolWorkspaceId,
+          fromType: "participant",
+          fromId: agent.id,
+          toType: "tool",
+          toId: input.toolId,
+          linkType: "dispatched_via",
+          metadata: { boundBy: callerId },
+        });
+      }
+
+      await auditLog({
+        subjectType: "link",
+        action: input.toolId ? "create" : "delete",
+        phase: "completed",
+        subjectId: agent.id,
+        userId: callerId,
+        data: {
+          linkType: "dispatched_via",
+          agentUserId: agent.id,
+          toolId: input.toolId,
+          previousToolIds: removed.map((r) => r.toId),
+          by: isOwner ? "owner" : "pod_admin",
+        },
+      });
+
+      const summary = (await loadAgentDispatchSummaries([agent.id])).get(
+        agent.id
+      )!;
+      return { agentUserId: agent.id, ...summary };
     }),
 
   /**

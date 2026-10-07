@@ -17,8 +17,8 @@
  *
  * ── WHY A MIRROR AND NOT AN IMPORT ─────────────────────────────────────────
  * THE SSOT IS THE POD's `capability_intents` TABLE, seeded by migrations
- * `0283_capability_intents.sql` (the 13) and `0284_publish_post_intent.sql`
- * (`publish_post`). Slugs live in ROWS, not in a TypeScript union.
+ * `0283_capability_intents.sql` (the 13), `0284_publish_post_intent.sql`
+ * (`publish_post`) and `0314_delegate_agent_task_intent.sql` (`delegate_agent_task`). Slugs live in ROWS, not in a TypeScript union.
  *
  * The pod cannot import this file: `@synap-core/types` devDepends on
  * `@synap/database`, so a reverse import is a build cycle. `@synap/database`
@@ -88,7 +88,10 @@ export const ABSTRACT_INTENTS = [
  * deliberately: a reader can see at a glance which slugs came from 0283 and
  * which were added after, rather than one flat list hiding the distinction.
  */
-export const REGISTERED_EXTRAS = ["publish_post"] as const;
+export const REGISTERED_EXTRAS = [
+  "publish_post",
+  "delegate_agent_task",
+] as const;
 
 /**
  * Every intent slug a capability or a workspace template may declare — the
