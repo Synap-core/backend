@@ -1,12 +1,18 @@
 /**
  * The ONE ordering of a list by how much it wants the reader's attention.
  *
- * Every surface that lists things that can go wrong — connections, tools,
- * channels, apps, providers — was inventing its own precedence: a `STATE_RANK`
- * in the tools model, a `rankOf(failure)` in the connectors model, an
- * `IDENTITY_STATUS_RANK` in the brand kit, a `rankOf(kind)` in governance.
- * Four tables, four vocabularies, four answers to "what goes on top", which is
- * how the same inbox reads differently on two screens.
+ * Four surfaces that list things which can go wrong each invented their own
+ * precedence — a `STATE_RANK` in the tools model, a `rankOf(failure)` in the
+ * connectors model, an `IDENTITY_STATUS_RANK` in the brand kit, a `rankOf(kind)`
+ * in governance. Four tables, four vocabularies, four answers to "what goes on
+ * top", which is how the same inbox reads differently on two screens.
+ *
+ * ⚠️ All four STILL EXIST and none of them imports this yet: today this module
+ * is a FIFTH table, not the one they converged on. (This docblock used to
+ * describe the consolidation in the past tense, which a reader cannot check and
+ * which was not true.) It has exactly one caller — `ConnectorGrid`, ordering
+ * its connection cards. Treat it as the door those four should come through,
+ * not as the door they already came through.
  *
  * This module owns the LADDER and the comparator, and nothing else. It names no
  * product value: a caller maps its own state to a rung
