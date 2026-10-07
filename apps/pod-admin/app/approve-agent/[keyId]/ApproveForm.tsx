@@ -1,17 +1,21 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { Button, CardBody, CardHeader } from "@heroui/react";
 import { Bot, Check, ShieldCheck, X } from "lucide-react";
 import { publicPodUrl } from "../../../lib/public-pod-url";
+import { summarizeGrant } from "@synap-core/types/grants";
 
-const SCOPES = [
-  "hub-protocol.read",
-  "hub-protocol.write",
-  "mcp.read",
-  "mcp.write",
-];
+/** What the pending key would be allowed to do — read from the pod, never assumed. */
+interface PendingDetails {
+  scopes: string[];
+  grant: { permissions: string[] } | null;
+}
+type DetailsRead =
+  | { state: "loading" }
+  | { state: "ok"; data: PendingDetails }
+  | { state: "failed"; message: string };
 
 type Step =
   | { kind: "idle" }
@@ -35,6 +39,34 @@ export function ApproveForm({
 }: ApproveFormProps) {
   const [step, setStep] = useState<Step>({ kind: "idle" });
   const podUrl = useMemo(() => publicPodUrl(), []);
+  const [details, setDetails] = useState<DetailsRead>({ state: "loading" });
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let live = true;
+    setDetails({ state: "loading" });
+    fetch(`${podUrl}/api/hub/setup/agent/pending/${keyId}/details`, {
+      credentials: "include",
+    })
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok)
+          throw new Error(
+            (body as { error?: string }).error || `Error (${res.status})`
+          );
+        if (live) setDetails({ state: "ok", data: body as PendingDetails });
+      })
+      .catch((err) => {
+        if (live)
+          setDetails({
+            state: "failed",
+            message: err instanceof Error ? err.message : "Couldn't read",
+          });
+      });
+    return () => {
+      live = false;
+    };
+  }, [podUrl, keyId, attempt]);
 
   const act = useCallback(
     async (action: "approve" | "reject") => {
@@ -108,18 +140,44 @@ export function ApproveForm({
               <Row label="Key ID" value={`${keyId.slice(0, 8)}…`} mono />
               <div className="pt-1.5">
                 <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/45">
-                  <ShieldCheck className="h-3 w-3" /> Scopes granted
+                  <ShieldCheck className="h-3 w-3" /> It will be able to
                 </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {SCOPES.map((s) => (
-                    <span
-                      key={s}
-                      className="rounded-md bg-foreground/[0.05] px-2 py-0.5 font-mono text-[11px] text-foreground/70 ring-1 ring-inset ring-foreground/10"
-                    >
-                      {s}
+                {details.state === "loading" && (
+                  <p className="text-[12.5px] text-foreground/45">Reading…</p>
+                )}
+                {details.state === "failed" && (
+                  <div className="flex items-center justify-between gap-2 text-[12.5px] text-danger">
+                    <span>
+                      Couldn&apos;t read what it asks for: {details.message}
                     </span>
-                  ))}
-                </div>
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      onPress={() => setAttempt((n) => n + 1)}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                )}
+                {details.state === "ok" && (
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-[13px] text-foreground/85">
+                      {details.data.grant
+                        ? summarizeGrant(details.data.grant).sentence
+                        : "Everything you can do (no grant)"}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {details.data.scopes.map((s) => (
+                        <span
+                          key={s}
+                          className="rounded-md bg-foreground/[0.05] px-2 py-0.5 font-mono text-[11px] text-foreground/70 ring-1 ring-inset ring-foreground/10"
+                        >
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -129,7 +187,8 @@ export function ApproveForm({
                 radius="md"
                 size="md"
                 className="flex-1 font-medium"
-                isDisabled={busy}
+                // Never approve blind: wait until what it asks for is read.
+                isDisabled={busy || details.state !== "ok"}
                 isLoading={busy && step.action === "approve"}
                 onPress={() => act("approve")}
                 startContent={
