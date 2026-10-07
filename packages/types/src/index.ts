@@ -115,3 +115,7 @@ export * from "./capture-routing-types.js";
 
 // Per-kind projection (pure, leaf module — browser/relay/CLI/IS safe)
 export * from "./projection/index.js";
+
+// Attention ladder — ONE ordering for any list of things that can go wrong
+// (pure, leaf module — browser/relay/CLI/IS safe)
+export * from "./attention-order.js";
