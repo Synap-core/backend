@@ -46,6 +46,14 @@ import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
 import { resolveCapabilityGrant } from "@synap/database";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+import {
+  getSession,
+  invalidateSession,
+  isSessionAuth,
+  parseSessionAuthConfig,
+  sessionCacheKey,
+  shouldReauth,
+} from "./session-auth.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../utils/permission-check.js";
@@ -1388,7 +1396,7 @@ export async function resolveDirectVaultCredential(args: {
   workspaceId?: string | null;
 }): Promise<
   | { ok: true; secret: string }
-  | { ok: false; result: Awaited<ReturnType<SchemeHandler>> }
+  | { ok: false; result: TriggerProviderActionResult }
 > {
   const { vaultId, secretRow, field, userId } = args;
   const ownerUserId = secretRow.userId;
@@ -1546,6 +1554,13 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   if (!resolved.ok) return resolved.result;
   const secret = resolved.secret;
 
+  // Opt-in "sign in, then call" mode (`config.auth.type: "session"`). A tool
+  // without that `type` never enters this branch, so every legacy static-key
+  // tool below runs byte-identically (pinned by session-auth.vault.test.ts).
+  if (isSessionAuth(toolConfig.auth)) {
+    return sessionAuthCall({ vaultId, secret, toolConfig, input });
+  }
+
   // (b) Build the outbound URL. SECURITY: when `config.baseUrl` is configured
   //     the destination host is FIXED at proposal-time — a call-time absolute
   //     `path` must NEVER override it (that would let a caller redirect a
@@ -1554,36 +1569,10 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   //     passes through validateExternalUrl below.
   const baseUrl =
     typeof toolConfig.baseUrl === "string" ? toolConfig.baseUrl : undefined;
-  let rawUrl: string;
-  if (baseUrl) {
-    // baseUrl wins: always compose host + path, ignoring any absolute scheme in
-    // `path`. Strip a leading scheme+host from `path` so it can't smuggle a host.
-    const relPath = path.replace(/^https?:\/\/[^/]+/i, "");
-    rawUrl = `${baseUrl.replace(/\/$/, "")}/${relPath.replace(/^\//, "")}`;
-  } else if (/^https?:\/\//i.test(path)) {
-    rawUrl = path;
-  } else {
-    return {
-      success: false,
-      status: 400,
-      errorCode: "bad_request",
-      error:
-        'vault:// tool requires either an absolute path or `config.baseUrl`. Set tool.config.baseUrl (e.g. "https://api.example.com").',
-    };
-  }
+  const target = composeVaultUrl(baseUrl, path);
+  if (!target.ok) return target.result;
+  const url = target.url;
 
-  // (c) SSRF guard — reuse the shared validator (blocks loopback/private/metadata).
-  const checked = validateExternalUrl(rawUrl);
-  if (!checked.valid) {
-    return {
-      success: false,
-      status: 400,
-      errorCode: "bad_request",
-      error: `Outbound URL rejected: ${checked.reason}`,
-    };
-  }
-
-  const url = checked.url;
   const auth = resolveVaultAuthConfig(toolConfig.auth);
   // SECURITY: spread caller-supplied custom headers FIRST so the fixed
   // Content-Type and the auth header set below always WIN — a custom header can
@@ -1598,19 +1587,83 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     headers[auth.name] = `${auth.prefix}${secret}`;
   }
 
+  const sent = await sendVaultRequest(url, {
+    method: method.toUpperCase(),
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  return sent.result;
+};
+
+/**
+ * Compose a vault tool's outbound URL and pass it through the SSRF guard.
+ * SECURITY: when a `baseUrl` is set the host is FIXED — a leading scheme+host in
+ * `path` is stripped so a call-time path can never smuggle another host. An
+ * absolute `path` is honoured only when no baseUrl is set.
+ */
+function composeVaultUrl(
+  baseUrl: string | undefined,
+  path: string
+):
+  | { ok: true; url: URL }
+  | { ok: false; result: TriggerProviderActionResult } {
+  let rawUrl: string;
+  if (baseUrl) {
+    // baseUrl wins: always compose host + path, ignoring any absolute scheme in
+    // `path`. Strip a leading scheme+host from `path` so it can't smuggle a host.
+    const relPath = path.replace(/^https?:\/\/[^/]+/i, "");
+    rawUrl = `${baseUrl.replace(/\/$/, "")}/${relPath.replace(/^\//, "")}`;
+  } else if (/^https?:\/\//i.test(path)) {
+    rawUrl = path;
+  } else {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        status: 400,
+        errorCode: "bad_request",
+        error:
+          'vault:// tool requires either an absolute path or `config.baseUrl`. Set tool.config.baseUrl (e.g. "https://api.example.com").',
+      },
+    };
+  }
+
+  // (c) SSRF guard — reuse the shared validator (blocks loopback/private/metadata).
+  const checked = validateExternalUrl(rawUrl);
+  if (!checked.valid) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        status: 400,
+        errorCode: "bad_request",
+        error: `Outbound URL rejected: ${checked.reason}`,
+      },
+    };
+  }
+  return { ok: true, url: checked.url };
+}
+
+/**
+ * Send one vault-tool request and map the response onto the shared result
+ * shape. `parsed` is returned beside the envelope so the session mode can read
+ * the provider's error code without re-parsing.
+ */
+async function sendVaultRequest(
+  url: URL,
+  init: { method: string; headers: Record<string, string>; body?: string }
+): Promise<{ result: TriggerProviderActionResult; parsed?: unknown }> {
   let res: Response;
   try {
-    res = await safeExternalFetch(url.toString(), {
-      method: method.toUpperCase(),
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    res = await safeExternalFetch(url.toString(), init);
   } catch (err) {
     return {
-      success: false,
-      status: 502,
-      errorCode: "unavailable",
-      error: `Outbound request failed: ${err instanceof Error ? err.message : String(err)}`,
+      result: {
+        success: false,
+        status: 502,
+        errorCode: "unavailable",
+        error: `Outbound request failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
     };
   }
 
@@ -1628,10 +1681,13 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
 
   if (res.ok) {
     return {
-      success: true,
-      status: res.status,
-      headers: respHeaders,
-      body: parsed,
+      parsed,
+      result: {
+        success: true,
+        status: res.status,
+        headers: respHeaders,
+        body: parsed,
+      },
     };
   }
   // Mirror nangoProxyEnvelope: a non-2xx must carry `errorCode` + a human
@@ -1641,14 +1697,117 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   // fallback, the CLI's `runResult.error ?? "Unknown error"`) has nothing to
   // show but "Unknown error".
   return {
-    success: false,
-    status: res.status,
-    headers: respHeaders,
-    body: parsed,
-    errorCode: statusToErrorCode(res.status),
-    error: extractProviderErrorMessage(res.status, parsed),
+    parsed,
+    result: {
+      success: false,
+      status: res.status,
+      headers: respHeaders,
+      body: parsed,
+      errorCode: statusToErrorCode(res.status),
+      error: extractProviderErrorMessage(res.status, parsed),
+    },
   };
-};
+}
+
+/**
+ * The `config.auth.type: "session"` call (see `session-auth.ts`): sign in with
+ * the vaulted `<id>:<secret>` (cached per credential), send the call with the
+ * returned token — to the per-account base URL when the config names one — and,
+ * when the provider says the token is dead, sign in again and retry ONCE.
+ *
+ * The destination host is fixed by the TOOL CONFIG (its `baseUrl`) or by the
+ * provider's own sign-in response (`baseUrlFrom`) — never by the caller's
+ * `path`, whose scheme+host is stripped exactly as in the legacy branch.
+ */
+async function sessionAuthCall(args: {
+  vaultId: string;
+  secret: string;
+  toolConfig: Record<string, unknown>;
+  input: TriggerProviderActionInput;
+}): Promise<TriggerProviderActionResult> {
+  const { vaultId, secret, toolConfig, input } = args;
+  const parsedConfig = parseSessionAuthConfig(toolConfig.auth);
+  if (!parsedConfig.ok) {
+    return {
+      success: false,
+      status: 400,
+      errorCode: "bad_request",
+      error: parsedConfig.error,
+    };
+  }
+  const config = parsedConfig.config;
+  const key = sessionCacheKey(vaultId, secret, config);
+
+  const attempt = async (): Promise<
+    | { done: true; result: TriggerProviderActionResult }
+    | {
+        done: false;
+        token: string;
+        result: TriggerProviderActionResult;
+        parsed?: unknown;
+      }
+  > => {
+    const s = await getSession(key, config, secret);
+    if (!s.ok) {
+      return {
+        done: true,
+        result: {
+          success: false,
+          status: s.status,
+          errorCode: statusToErrorCode(s.status),
+          error: s.error,
+        },
+      };
+    }
+    const session = s.session;
+    const baseUrl =
+      session.baseUrl ??
+      (typeof toolConfig.baseUrl === "string" ? toolConfig.baseUrl : undefined);
+    const target = composeVaultUrl(baseUrl, input.path);
+    if (!target.ok) return { done: true, result: target.result };
+
+    // Custom headers FIRST so the token header and Content-Type always win.
+    const headers: Record<string, string> = { ...(input.headers ?? {}) };
+    let body = input.body;
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      // Session-derived fields (e.g. B2's accountId) come from the provider's
+      // own sign-in and OVERRIDE a caller value — they describe the credential.
+      if (
+        typeof body === "object" &&
+        body !== null &&
+        !Array.isArray(body) &&
+        Object.keys(session.bodyValues).length > 0
+      ) {
+        body = { ...(body as Record<string, unknown>), ...session.bodyValues };
+      }
+    }
+    headers[config.token.header] = `${config.token.prefix}${session.token}`;
+
+    const sent = await sendVaultRequest(target.url, {
+      method: input.method.toUpperCase(),
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    return {
+      done: false,
+      token: session.token,
+      result: sent.result,
+      parsed: sent.parsed,
+    };
+  };
+
+  const first = await attempt();
+  if (first.done || first.result.success) return first.result;
+  if (!shouldReauth(config, first.result.status ?? 0, first.parsed)) {
+    return first.result;
+  }
+  // The token is dead (expired / revoked): forget it, sign in again, retry ONCE.
+  // A second failure is surfaced as-is — never a loop.
+  invalidateSession(key, first.token);
+  const second = await attempt();
+  return second.result;
+}
 
 // ── MCP env hardening (defense-in-depth, mirrors the IS-side guard) ──────────
 //
@@ -1945,6 +2104,14 @@ const mcpHandler: SchemeHandler = async ({ input, tool }) => {
     body: result.content ?? result,
   };
 };
+
+/**
+ * TEST-ONLY handle on the vault:// handler, so its HTTP behaviour (legacy static
+ * key AND the session mode) is pinned at the handler seam with `fetch` mocked —
+ * driving it through `triggerProviderAction` would need the whole gate + audit
+ * stack faked. Not a public API: production code dispatches via SCHEME_HANDLERS.
+ */
+export const __vaultHandlerForTests = vaultHandler;
 
 /** scheme → handler. Adding a connector type = one entry here. */
 const SCHEME_HANDLERS: Record<string, SchemeHandler> = {
