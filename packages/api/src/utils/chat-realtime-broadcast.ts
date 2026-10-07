@@ -123,15 +123,29 @@ export function emitChatEvent(options: ChatBroadcastOptions): void {
   notifyChatTurnObserver(options);
   if (!workspaceId && !userId && !channelId && !viewId) return;
 
-  // Fan out to webhook subscribers (fire-and-forget, never blocks)
-  dispatchWebhooksForEvent(event, data);
-
   // An explicit `channelId` comes from an internal door that already
   // authorized the channel; one only found in the payload may be caller-shaped
   // (`POST /events/broadcast` relays IS-supplied data), so it is trusted only
   // after the actor is proven a reader (below).
   const explicitChannel = channelId || null;
   const payloadChannel = explicitChannel ? null : channelIdInData(data);
+
+  // Fan out to webhook subscribers (fire-and-forget, never blocks) — only the
+  // subscriptions whose owner may read this channel (or, with no channel, the
+  // actor's own). Never every subscription on the pod.
+  const webhookChannel = explicitChannel ?? payloadChannel;
+  dispatchWebhooksForEvent(
+    event,
+    data,
+    webhookChannel
+      ? {
+          kind: "channel",
+          channelId: webhookChannel,
+          trusted: explicitChannel !== null,
+          actorUserId: userId,
+        }
+      : { kind: "user", userId }
+  );
 
   if (CHANNEL_ROOM_ONLY_EVENTS.has(event)) {
     // Never the workspace room; the channel room only when explicitly targeted.

@@ -475,12 +475,16 @@ export const mutateProcs = {
       // Dispatch webhooks for entity property updates (fire-and-forget, non-blocking)
       if (input.properties && oldEntity) {
         if (Object.keys(changedProperties).length > 0) {
-          dispatchWebhooksForEvent("entity.update.completed", {
-            entityId: input.id,
-            entityType: oldEntity.type,
-            workspaceId: governanceWorkspaceId,
-            changedProperties,
-          });
+          dispatchWebhooksForEvent(
+            "entity.update.completed",
+            {
+              entityId: input.id,
+              entityType: oldEntity.type,
+              workspaceId: governanceWorkspaceId,
+              changedProperties,
+            },
+            { kind: "entity", entityId: input.id }
+          );
         }
       }
 
