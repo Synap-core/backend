@@ -251,4 +251,22 @@ describe("apiKeys.createForWorkspace with a grant (W1f)", () => {
     const exp = new Date((await keyRow(res.id)).expires_at!).getTime();
     expect(Math.abs(exp - (Date.now() + 90 * DAY))).toBeLessThan(60_000);
   });
+
+  it("listForWorkspace shows each key's grant (the workspace keys page)", async () => {
+    const granted = await wsCaller().createForWorkspace({
+      name: "ws granted",
+      scopes: ["hub-protocol.read"],
+      grant: { permissions: ["entity.person.create"] },
+    });
+    const plain = await wsCaller().createForWorkspace({
+      name: "ws plain",
+      scopes: ["hub-protocol.read"],
+    });
+    const keys = await wsCaller().listForWorkspace();
+    expect(keys.find((k) => k.id === granted.id)?.grant).toMatchObject({
+      permissions: ["entity.person.create"],
+      workspaceIds: [WS],
+    });
+    expect(keys.find((k) => k.id === plain.id)?.grant).toBeNull();
+  });
 });

@@ -110,6 +110,30 @@ function generateApiKey(prefix: string): string {
   return `${prefix}${randomPart}`;
 }
 
+/**
+ * The ACTIVE grant of each key (what it may touch), keyed by key id. ONE
+ * read for every key list (personal + workspace), so both screens show the
+ * same grant. A key with no active grant is absent (a legacy, ungranted key).
+ */
+async function loadActiveGrantsByKey(keyIds: readonly string[]) {
+  const query = db
+    .select({
+      apiKeyId: grants.apiKeyId,
+      permissions: grants.permissions,
+      workspaceIds: grants.workspaceIds,
+      projectIds: grants.projectIds,
+      entityIds: grants.entityIds,
+      label: grants.label,
+      expiresAt: grants.expiresAt,
+    })
+    .from(grants)
+    .where(
+      and(inArray(grants.apiKeyId, [...keyIds]), isNull(grants.revokedAt))
+    );
+  const rows = keyIds.length === 0 ? [] : await query;
+  return new Map(rows.map(({ apiKeyId, ...grant }) => [apiKeyId, grant]));
+}
+
 export const apiKeysRouter = router({
   /**
    * The canonical set of scopes a key may carry — the SAME `API_KEY_SCOPES` the
@@ -138,30 +162,7 @@ export const apiKeysRouter = router({
 
     // W1 — the active grant of each key (what it may touch), for the
     // connections screen. A key with none is a legacy, ungranted key.
-    const activeGrants =
-      keys.length === 0
-        ? []
-        : await db
-            .select({
-              apiKeyId: grants.apiKeyId,
-              permissions: grants.permissions,
-              workspaceIds: grants.workspaceIds,
-              projectIds: grants.projectIds,
-              entityIds: grants.entityIds,
-              label: grants.label,
-              expiresAt: grants.expiresAt,
-            })
-            .from(grants)
-            .where(
-              and(
-                inArray(
-                  grants.apiKeyId,
-                  keys.map((k) => k.id)
-                ),
-                isNull(grants.revokedAt)
-              )
-            );
-    const grantByKey = new Map(activeGrants.map((g) => [g.apiKeyId, g]));
+    const grantByKey = await loadActiveGrantsByKey(keys.map((k) => k.id));
 
     // Remove sensitive fields (keyHash)
     return keys.map((key) => ({
@@ -174,12 +175,7 @@ export const apiKeysRouter = router({
       /** True when an agent acting for you holds this key, not you. */
       heldByAgent: key.userId !== ctx.userId,
       /** What this key may touch (W1); null = a legacy, ungranted key. */
-      grant: (() => {
-        const g = grantByKey.get(key.id);
-        if (!g) return null;
-        const { apiKeyId: _k, ...rest } = g;
-        return rest;
-      })(),
+      grant: grantByKey.get(key.id) ?? null,
       scope: key.scope,
       isActive: key.isActive,
       expiresAt: key.expiresAt,
@@ -1156,6 +1152,7 @@ export const apiKeysRouter = router({
       where: eq(apiKeys.workspaceId, ctx.workspaceId),
       orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
     });
+    const grantByKey = await loadActiveGrantsByKey(keys.map((k) => k.id));
 
     return keys.map((key) => ({
       id: key.id,
@@ -1173,6 +1170,8 @@ export const apiKeysRouter = router({
       revokedAt: key.revokedAt,
       revokedReason: key.revokedReason,
       workspaceId: key.workspaceId,
+      /** What this key may touch; null = a legacy, ungranted key. */
+      grant: grantByKey.get(key.id) ?? null,
     }));
   }),
 
