@@ -1,8 +1,9 @@
 /**
  * The grant selector model. Each row names the WRONG rule it rules out — a
  * table of representative rows would pass a toggle that drops the whole
- * covering pattern, a compaction that fires at three of four actions, or a
- * normaliser that promotes to `*`.
+ * covering pattern, a normaliser that widens ticked actions into a subject
+ * pattern (which grants gate verbs the catalog never shows), or one that
+ * promotes to `*`.
  */
 import { describe, expect, it } from "vitest";
 import { resolveObjectNounPlural } from "../vocabulary/index.js";
@@ -65,14 +66,28 @@ describe("toggleGrant ON", () => {
     );
     expect(d.permissions).toEqual(["entity.note.read"]);
   });
-  it("compacts all four actions on a kind to the kind pattern (entity.knowledge)", () => {
+  it("never widens four ticked actions into the kind pattern (entity.knowledge grants merge too)", () => {
     const d = setRowActions(
       EMPTY_GRANT_DRAFT,
       { subject: "entity", kind: "knowledge" },
       ["read", "create", "update", "delete"],
       ctx
     );
-    expect(d.permissions).toEqual(["entity.knowledge"]);
+    expect(d.permissions).toEqual([
+      "entity.knowledge.read",
+      "entity.knowledge.create",
+      "entity.knowledge.update",
+      "entity.knowledge.delete",
+    ]);
+  });
+  it("reading proposals stays proposal.read — never `proposal` (which approves)", () => {
+    const d = toggleGrant(
+      EMPTY_GRANT_DRAFT,
+      { subject: "proposal", action: "read" },
+      true,
+      ctx
+    );
+    expect(d.permissions).toEqual(["proposal.read"]);
   });
   it("does NOT compact three of four (rules out a >=3 threshold)", () => {
     const d = setRowActions(
@@ -91,7 +106,8 @@ describe("toggleGrant ON", () => {
     let d: GrantDraft = EMPTY_GRANT_DRAFT;
     for (const c of ALL_CELLS) d = toggleGrant(d, c, true, ctx);
     expect(d.permissions).not.toContain("*");
-    expect(d.permissions).toContain("entity");
+    expect(d.permissions).not.toContain("entity");
+    expect(d.permissions).not.toContain("proposal");
     expect(ALL_CELLS.every((c) => isGranted(d, c))).toBe(true);
   });
 });

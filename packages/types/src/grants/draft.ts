@@ -215,8 +215,10 @@ function compareRank(a: string, b: string): number {
 /**
  * The canonical spelling of a permission list: the governance spelling
  * normalised (`entity.read` → `entity.*.read`), duplicates and patterns
- * covered by a broader one dropped, a subject (or kind) with every catalog
- * action compacted to its subject pattern, catalog order. Invalid patterns are
+ * covered by a broader one dropped, catalog order. It NEVER compacts ticked
+ * actions into a subject pattern: `proposal` (or `entity.note`) grants EVERY
+ * action on it — approve, merge, delete — including ones the catalog does not
+ * offer, so "every box I can see" is not "everything". Invalid patterns are
  * kept verbatim at the end — validation reports them; normalising never hides
  * one.
  */
@@ -229,35 +231,6 @@ export function normalizeGrantPermissions(
     const segs = tryParse(raw);
     if (segs) valid.add(segs.join("."));
     else if (!invalid.includes(raw.trim())) invalid.push(raw.trim());
-  }
-
-  // Compact: every catalog action granted on (subject, kind) → the subject
-  // pattern. Coverage is computed on the full set, so one pass is complete.
-  const list = [...valid];
-  const granted = (a: Atom) =>
-    list.some((p) => patternMatches(p, atomRequest(a)));
-  for (const spec of GRANT_SUBJECT_CATALOG) {
-    if (isQualifiedGrantSubject(spec.subject)) {
-      const kinds = new Set<string>(["*"]);
-      for (const p of list) {
-        const s = p.split(".");
-        if (s[0] === spec.subject && s[1]) kinds.add(s[1]);
-      }
-      for (const kind of kinds) {
-        if (
-          spec.actions.every((action) =>
-            granted({ subject: spec.subject, kind, action })
-          )
-        )
-          valid.add(kind === "*" ? spec.subject : `${spec.subject}.${kind}`);
-      }
-    } else if (
-      spec.actions.every((action) =>
-        granted({ subject: spec.subject, kind: null, action })
-      )
-    ) {
-      valid.add(spec.subject);
-    }
   }
 
   const all = [...valid];
