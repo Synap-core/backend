@@ -294,6 +294,10 @@ export const DOMAIN_SUBJECT_TYPES = [
   "messaging_account",
   "notification",
   "tool",
+  // A connection's per-kind sync tick (`services/event-sync/connection-sync.ts`
+  // `emitProgress`): `connection_sync.progress`, data `{ provider, kind, phase,
+  // counts }`. The run's one completion fact is `connector_sync.complete`.
+  "connection_sync",
   // A method running inside a project (`project_tracks`, 0272). Emits
   // `track.create` / `track.update` / `track.stage_changed` (services/tracks),
   // the same shape `focus_session.stage_changed` has, so "when a track enters a
@@ -319,6 +323,8 @@ export type DomainSubjectType = (typeof DOMAIN_SUBJECT_TYPES)[number];
 const SUBJECT_EXTRA_ACTIONS: Record<string, readonly string[]> = {
   proposal: ["approved", "created", "rejected"],
   user: ["updated"],
+  // A key is revoked or replaced, never "deleted" / "updated" (`api-keys.ts`).
+  apiKey: ["revoke", "rotate"],
 };
 
 /**

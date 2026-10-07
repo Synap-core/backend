@@ -187,7 +187,7 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // shape, not an act, and humanized it leaked as a verb ("Graph …").
   "capture.graph": { imperative: "Capture", past: "Captured" },
   "import.graph": { imperative: "Import", past: "Imported" },
-  send: { imperative: "Send", past: "Sent" },
+  send: { imperative: "Send", past: "Sent", progressive: "Sending" },
   approve: {
     imperative: "Approve",
     past: "Approved",
@@ -365,6 +365,19 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
     past: "Removed for good",
     progressive: "Removing",
   },
+  // Lifecycle event lines (`events/connection-lines.ts`). An app's
+  // `app.request` is it ASKING FOR ACCESS — "Requested" names nothing.
+  request_access: {
+    imperative: "Ask for access",
+    past: "Asked for access",
+    progressive: "Asking for access",
+  },
+  // An agent posed a question on a session slot (`slot_asked`); the person
+  // marked a slot they owed as done (`slot_attested`); a message was posted
+  // into a channel (`channel_message.created`).
+  ask: { imperative: "Ask", past: "Asked", progressive: "Asking" },
+  attest: { imperative: "Mark done", past: "Marked done" },
+  post: { imperative: "Post", past: "Posted", progressive: "Posting" },
   see_failure: { imperative: "See what failed", past: "Saw what failed" },
   turn_on: {
     imperative: "Turn on",

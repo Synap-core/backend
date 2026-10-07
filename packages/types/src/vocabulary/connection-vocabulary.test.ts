@@ -21,6 +21,13 @@ const VERBS: Array<[string, string, string, string]> = [
   ["issue", "Issue", "Issued", "Issuing"],
   ["decline", "Decline", "Declined", "Declining"],
   ["disconnect", "Disconnect", "Disconnected", "Disconnecting"],
+  // Lifecycle event lines (events/connection-lines.ts).
+  ["request_access", "Ask for access", "Asked for access", "Asking for access"],
+  ["ask", "Ask", "Asked", "Asking"],
+  ["post", "Post", "Posted", "Posting"],
+  ["send", "Send", "Sent", "Sending"],
+  // No curated in-flight form: the busy button keeps naming what it does.
+  ["attest", "Mark done", "Marked done", "Mark done"],
 ];
 
 describe("connection verbs — three moods", () => {

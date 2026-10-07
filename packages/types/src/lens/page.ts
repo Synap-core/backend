@@ -29,6 +29,7 @@ import {
   type LensRow,
 } from "./rows.js";
 import type { LensSource } from "./scope.js";
+import type { ConnectionEventLine } from "../events/connection-lines.js";
 import type { LensPagePicks } from "./next-moves.js";
 import { repeatLabel } from "../needs-you/index.js";
 import { unitStateInputOfRunStatus } from "../units/state.js";
@@ -73,14 +74,17 @@ export interface LensPageSignal {
   /** `activity` only: the ledger row (`activity.list`). */
   activity?: ActivityRow | null;
   /**
-   * `event` only: the DATA change, when the row is a completed mutation of a
-   * record (`events` log). Absent on any other event (a governance phase, a
-   * connector family) — that row is not a data line.
+   * `event` only: the DATA change — a completed mutation of a record, or a
+   * connection lifecycle event carrying its `line` (`happenedItemOfEvent`).
+   * Absent on any other event (a governance phase, an unknown family) — that
+   * row is not a data line.
    */
   event?: {
     action: string;
     objectKind: string;
     origin: string | null;
+    /** A connection lifecycle line (`LensDataEvent.line`), when it is one. */
+    line?: ConnectionEventLine | null;
   } | null;
 }
 
@@ -224,6 +228,7 @@ export function happenedItems(
         door: s.target ?? null,
         occurredAt: at,
         origin: e.origin,
+        ...(e.line ? { line: e.line } : {}),
       },
     });
   }

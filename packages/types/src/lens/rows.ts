@@ -21,11 +21,19 @@ import {
 } from "../needs-you/index.js";
 import type { UnitStateInput } from "../units/state.js";
 import {
+  normalizeObjectKind,
   resolveActionLabel,
   resolveBlockedReasonLabel,
   resolveNeedsYouItemCount,
+  resolveObjectNoun,
+  resolveObjectNounPlural,
   resolveStatusLabel,
 } from "../vocabulary/index.js";
+import { parseRecordChange } from "../events/unified.js";
+import {
+  parseConnectionEvent,
+  type ConnectionEventLine,
+} from "../events/connection-lines.js";
 import type { ActivityActor, ActivityRow } from "../activity/index.js";
 import { calendarDayIn } from "../activity/heat.js";
 import { FAILURE_NOTIFICATION_TYPES, type AttentionClass } from "./classes.js";
@@ -431,6 +439,13 @@ export interface LensDataEvent {
    * service-name door (`resolveServiceName`). Null = no distinct writer.
    */
   origin: string | null;
+  /**
+   * A connection LIFECYCLE event ("Revoked API key", "Synced Gmail · 42 new",
+   * "Message from Ada on Telegram") — `parseConnectionEvent`'s line. Absent /
+   * null for a record change. Such an event is its own fact: it never batches.
+   * Words for either shape: {@link dataLineText}.
+   */
+  line?: ConnectionEventLine | null;
 }
 
 /** One data line: one change, or a batch of identical ones ("Created 101 contacts"). */
@@ -497,8 +512,10 @@ export function batchHappenedItems(
     if (item.kind === "data") {
       const e = item.event;
       if (
+        !e.line &&
         last &&
         isHappenedDataLine(last) &&
+        !last.events[0]!.line &&
         last.action === e.action &&
         last.objectKind === e.objectKind &&
         last.origin === e.origin
@@ -544,6 +561,119 @@ export function batchHappenedItems(
     });
   }
   return days;
+}
+
+/**
+ * The words of a data line — the ONE place a Happened data line becomes text,
+ * on every surface. A lifecycle event reads its own line ("Revoked API key",
+ * "Synced Gmail · 42 new"); a record change reads `<Verb> <noun>` ("Created
+ * person"), a batch `<Verb> <N> <nouns>` ("Created 101 people"). The noun keeps
+ * deliberate casing ("API key"), never `toLowerCase()`d into "api key".
+ */
+export function dataLineText(line: HappenedDataLine): string {
+  const lead = line.events[0]!;
+  if (lead.line) return lead.line.text;
+  const verb = resolveActionLabel(line.action, "past");
+  return line.count > 1
+    ? `${verb} ${line.count} ${inLineCase(resolveObjectNounPlural(line.objectKind))}`
+    : `${verb} ${inLineCase(resolveObjectNoun(line.objectKind))}`;
+}
+
+/** A noun inside a sentence: "Person" → "person", "API key" stays. */
+function inLineCase(noun: string): string {
+  return /^[A-Z][a-z]/.test(noun)
+    ? noun.charAt(0).toLowerCase() + noun.slice(1)
+    : noun;
+}
+
+/** One `events` log row as a reader holds it (`events.read`, the signals read). */
+export interface LoggedEvent {
+  id: string;
+  type: string;
+  timestamp: string | Date;
+  subjectType?: string | null;
+  subjectId?: string | null;
+  /** The writer column (`api` = the default path, never named). */
+  source?: string | null;
+  data?: unknown;
+}
+
+function dataRecord(data: unknown): Record<string, unknown> | null {
+  return data && typeof data === "object" && !Array.isArray(data)
+    ? (data as Record<string, unknown>)
+    : null;
+}
+
+function strField(data: Record<string, unknown> | null, key: string): string | null {
+  const v = data?.[key];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/**
+ * THE door from an `events` log row to a Happened data item: a record change
+ * (`parseRecordChange`) or a connection lifecycle event
+ * (`parseConnectionEvent`). Null = neither (a governance phase, an in-flight
+ * tick, an unknown family) — dropped, never drawn as a raw token.
+ *
+ * The record's kind is its profile slug when the payload named one. The writer
+ * is named only when it is not the default path (`source !== "api"`). A
+ * lifecycle line's door is its subject; an app opens by its public id, a
+ * message by its channel.
+ */
+export function happenedItemOfEvent(e: LoggedEvent): HappenedItem | null {
+  const at = new Date(e.timestamp);
+  if (!Number.isFinite(at.getTime())) return null;
+  const data = dataRecord(e.data);
+  const source = e.source?.trim() || null;
+  const origin = source && source !== "api" ? source : null;
+
+  const change = parseRecordChange(e.type);
+  if (change) {
+    const objectKind =
+      strField(data, "profileSlug") ??
+      normalizeObjectKind(e.subjectType ?? change.subject);
+    return {
+      kind: "data",
+      event: {
+        id: e.id,
+        action: change.action,
+        objectKind,
+        door: e.subjectId ? { kind: objectKind, id: e.subjectId } : null,
+        occurredAt: at.toISOString(),
+        origin,
+      },
+    };
+  }
+
+  const line = parseConnectionEvent(e.type, data);
+  if (!line) return null;
+  const subject = e.type.split(".")[0]!;
+  let door: LensDoor | null = null;
+  if (subject === "app") {
+    const id = strField(data, "publicId") ?? e.subjectId ?? null;
+    door = id ? { kind: "app", id } : null;
+  } else if (subject === "external_message" || subject === "channel_message") {
+    const id = strField(data, "channelId");
+    door = id ? { kind: "channel", id } : null;
+  } else if (e.subjectId && !subject.startsWith("webhook")) {
+    // A sync / sign-in event's subject is the connection itself.
+    const kind = line.objectKind === "connection"
+      ? "connection"
+      : normalizeObjectKind(e.subjectType ?? subject);
+    door = { kind, id: e.subjectId };
+  }
+  return {
+    kind: "data",
+    event: {
+      id: e.id,
+      action: line.action,
+      objectKind: line.objectKind,
+      door,
+      occurredAt: at.toISOString(),
+      origin,
+      line,
+    },
+  };
 }
 
 /**

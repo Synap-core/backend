@@ -353,5 +353,8 @@ export type {
   EventPhase,
   EventPattern,
 } from "./unified.js";
+// Connection lifecycle events → one human line (the non-CRUD half of the log).
+export { parseConnectionEvent } from "./connection-lines.js";
+export type { ConnectionEventLine } from "./connection-lines.js";
 // Re-exported under an alias to avoid clashing with the realtime EventName.
 export type { EventName as UnifiedEventName } from "./unified.js";
