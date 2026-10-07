@@ -946,6 +946,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "removed_at",
     addedBy: "0312_apps_removed_at.sql",
   },
+  // apps.agent_user_id — the app's own agent principal (0313). Missing means
+  // every app read and every app key issue would 42703.
+  {
+    table: "apps",
+    column: "agent_user_id",
+    addedBy: "0313_apps_agent_user.sql",
+  },
 
   // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
   // is on a pre-0206 schema where apiKeys.beginMcpConnect / POST /api/hub/mcp/redeem

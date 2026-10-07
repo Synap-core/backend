@@ -64,6 +64,7 @@ import {
   workspaceMembers,
   podMembers,
   projectMembers,
+  apps,
 } from "@synap/database/schema";
 import { agentUsersRouter } from "./agent-users.js";
 import { apiKeyService } from "../services/api-keys.js";
@@ -126,6 +127,8 @@ beforeAll(async () => {
     workspaceMembers,
     podMembers,
     projectMembers,
+    // `apps.agent_user_id` — the roster excludes an app's own agent.
+    apps,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   await q(
@@ -381,6 +384,33 @@ describe("agentUsers.list — the floor is one row per agent (W4 A1)", () => {
       );
     const rows = (await caller(OWNER).list({ workspaceId: [] })) as ListRow[];
     expect(rows.filter((r) => r.id === agent)).toHaveLength(1);
+  });
+});
+
+describe("agentUsers.list — an app's own agent is shown only as its app", () => {
+  it("an app agent is NOT on the roster; a plain agent of the same owner and shape is", async () => {
+    const [appAgent, plainAgent] = [randomUUID(), randomUUID()];
+    // Same shape on purpose (pod-wide, cli, same creator): the ONLY difference
+    // is that an `apps` row names one of them as its agent.
+    for (const [id, name] of [
+      [appAgent, "synap.live"],
+      [plainAgent, "Plain agent"],
+    ])
+      await q(
+        `insert into users (id, email, name, user_type, created_via, created_by_user_id) values ($1, $2, $3, 'agent', 'cli', $4)`,
+        [id, `${id}@x`, name, OWNER]
+      );
+    await q(
+      `insert into apps (id, owner_user_id, public_id, name, agent_user_id) values ($1, $2, $3, 'synap.live', $4)`,
+      [randomUUID(), OWNER, `app_${randomUUID()}`, appAgent]
+    );
+    for (const lens of [null, [] as string[]]) {
+      const ids = (
+        (await caller(OWNER).list({ workspaceId: lens })) as ListRow[]
+      ).map((r) => r.id);
+      expect(ids).toContain(plainAgent); // non-vacuity: the roster reads
+      expect(ids).not.toContain(appAgent);
+    }
   });
 });
 

@@ -3,7 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, and, inArray } from "@synap/database";
+import { db, eq, and, inArray, notAnAppAgent } from "@synap/database";
 import {
   syncAutoApproveRules,
   applyAgentPosture,
@@ -213,7 +213,12 @@ export function registerAgentUsersRoutes(app: HubHono): void {
           })
           .from(users)
           .where(
-            and(eq(users.userType, "agent"), eq(users.createdByUserId, userId))
+            and(
+              eq(users.userType, "agent"),
+              eq(users.createdByUserId, userId),
+              // An app's own agent is listed as its app, never as an agent.
+              notAnAppAgent(users.id)
+            )
           );
         // Connected / last seen (V1 G3) — the CLI roster and `init` read it.
         const presence = await loadAgentPresence(mineAgents.map((r) => r.id));
@@ -259,7 +264,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
             inArray(workspaceMembers.workspaceId, accessibleWsIds)
           )
         )
-        .where(eq(users.userType, "agent"));
+        .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)));
       return c.json(results);
     } catch (err) {
       logger.error({ err }, "listAgentUsers failed");

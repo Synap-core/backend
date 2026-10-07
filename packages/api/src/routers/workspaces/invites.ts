@@ -31,6 +31,7 @@ import {
   detachTeamMemberFacet,
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   type WorkspaceDefinitionInput,
+  notAnAppAgent,
 } from "@synap/database";
 import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
@@ -199,7 +200,12 @@ export const inviteProcedures = {
       }
 
       return await db.query.workspaceMembers.findMany({
-        where: eq(workspaceMembers.workspaceId, input.workspaceId),
+        // An app's own agent holds a membership (its approved reach) but is
+        // shown only as its app, never as a member.
+        where: and(
+          eq(workspaceMembers.workspaceId, input.workspaceId),
+          notAnAppAgent(workspaceMembers.userId)
+        ),
         orderBy: [desc(workspaceMembers.joinedAt)],
         with: { user: true },
       });

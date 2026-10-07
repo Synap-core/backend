@@ -134,7 +134,11 @@ export const appsRouter = router({
     .mutation(({ ctx, input }) =>
       // An agent principal is refused by the service from the request's
       // ambient acting agent (entered at every key-auth door).
-      issueKey({ publicId: input.publicId, ownerUserId: ctx.userId })
+      issueKey({
+        publicId: input.publicId,
+        ownerUserId: ctx.userId,
+        via: "ui",
+      })
     ),
 
   /** Rename an app. A name the caller already uses elsewhere is a CONFLICT. */

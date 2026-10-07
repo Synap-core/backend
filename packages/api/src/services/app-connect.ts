@@ -16,12 +16,25 @@
  *   app.rename.completed           { from, to }
  *   app.remove_for_good.completed  a revoked app hidden for good
  * The action segment is the vocabulary verb (`@synap-core/types/vocabulary`).
+ *
+ * GOVERNED LIKE AN AGENT (founder decision 2 — "a grant permits, never
+ * auto-approves"): each app acts as its OWN agent user (`apps.agent_user_id`,
+ * 0313), created when its key is first issued with the `ask-first` posture.
+ * The key is minted TO that agent and linked to the owner, exactly like an
+ * agent key, so `resolveKeyIdentity` reads `isAgent: true` and the ONE agent
+ * ladder (`resolveAgentGovernanceDecision`) decides every write — no second
+ * store. The grant still carries `client_id = public_id`, so the write is
+ * attributed "via <app>". The owner widens an app through ordinary governance
+ * rules on that agent (rung 2.8). The agent never appears as an agent
+ * (`notAnAppAgent`); it is shown only as its app.
  */
 
 import { randomBytes } from "crypto";
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  eq,
+  and,
   inArray,
   sql,
   getActingAgentUserId,
@@ -36,20 +49,25 @@ import {
 } from "@synap/database";
 import {
   apiKeys,
+  users,
+  workspaceMembers,
   workspaces,
   KEY_PREFIXES,
   type AppApprovedRequest,
 } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
+import { applyAgentPosture } from "@synap/database/agent-governance";
 import {
   assertPermissions,
   InvalidPermissionError,
+  parsePermission,
 } from "@synap/governance-policy/grants";
 import { createPendingProposal } from "../utils/permission-check.js";
 import { openLink } from "../utils/deep-links.js";
 import { auditLog } from "../utils/audit-log.js";
 import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
 import { attachGrantsOrRevoke, type GrantInput } from "./key-grant.js";
+import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
 
 /**
  * A request as a door sends it: a permission plus EITHER the workspace's id
@@ -238,6 +256,138 @@ export function grantsForApprovedRequests(
   }));
 }
 
+/** Which door issued an app's key — the provenance its agent user records. */
+export type AppKeyDoor = "cli" | "ui";
+
+/**
+ * The app's OWN agent user, created on first need: one per app (agent type =
+ * the app's `public_id`, so the (creator × type) singleton is per app), with
+ * the `ask-first` posture applied BEFORE the app is linked to it — an app is
+ * never linked to an agent that could auto-approve a write.
+ */
+export async function ensureAppAgent(
+  found: AppWithGrants,
+  via: AppKeyDoor
+): Promise<string> {
+  if (found.app.agentUserId) return found.app.agentUserId;
+  const { agentUserId } = await findOrCreateServiceAgentUser({
+    creatorId: found.app.ownerUserId,
+    agentType: found.app.publicId,
+    label: found.app.name,
+    metadata: {
+      description: `${found.app.name} — connected app (${found.app.publicId})`,
+    },
+    createdVia: via,
+  });
+  await applyAgentPosture({
+    db,
+    agentUserId,
+    posture: "ask-first",
+    createdBy: found.app.ownerUserId,
+  });
+  return new AppRepository(db).linkAgentUser(found.app.id, agentUserId);
+}
+
+/**
+ * The app agent's workspace memberships = EXACTLY the workspaces its owner
+ * approved (the RBAC floor every agent write is checked against —
+ * `verifyPermission` on the acting agent). The approval of `app/connect` is
+ * the consent; the grant still bounds which permissions apply in each.
+ * `viewer` where everything approved there is a read, else `editor`. A
+ * workspace no longer approved loses the membership; `[]` removes them all
+ * (revoke).
+ */
+async function syncAppAgentMemberships(
+  agentUserId: string,
+  ownerUserId: string,
+  approved: readonly AppApprovedRequest[]
+): Promise<void> {
+  const roles = new Map<string, "viewer" | "editor">();
+  for (const r of approved) {
+    const isRead = parsePermission(r.permission).at(-1) === "read";
+    const prior = roles.get(r.workspaceId);
+    roles.set(
+      r.workspaceId,
+      prior === "editor" || !isRead ? "editor" : "viewer"
+    );
+  }
+  const current = await db
+    .select({
+      id: workspaceMembers.id,
+      workspaceId: workspaceMembers.workspaceId,
+      role: workspaceMembers.role,
+    })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, agentUserId));
+  const stale = current.filter((m) => !roles.has(m.workspaceId));
+  if (stale.length > 0) {
+    await db.delete(workspaceMembers).where(
+      inArray(
+        workspaceMembers.id,
+        stale.map((m) => m.id)
+      )
+    );
+  }
+  for (const [workspaceId, role] of roles) {
+    const held = current.find((m) => m.workspaceId === workspaceId);
+    if (held) {
+      if (held.role !== role) {
+        await db
+          .update(workspaceMembers)
+          .set({ role })
+          .where(eq(workspaceMembers.id, held.id));
+      }
+      continue;
+    }
+    await db
+      .insert(workspaceMembers)
+      .values({
+        workspaceId,
+        userId: agentUserId,
+        role,
+        invitedBy: ownerUserId,
+      })
+      .onConflictDoNothing();
+  }
+}
+
+/**
+ * A key minted before 0313 is owned by the HUMAN (no agent, ungoverned). The
+ * first time it authenticates, move it onto the app's agent — same plaintext,
+ * so the app keeps working — and return that agent; `null` when the key is
+ * not an adoptable app key (not this owner's, app gone, or revoked).
+ * Idempotent: a re-run (e.g. from a cached key record) only returns the agent.
+ */
+export async function adoptLegacyAppKey(args: {
+  apiKeyId: string;
+  keyOwnerUserId: string;
+  publicId: string;
+}): Promise<string | null> {
+  const repo = new AppRepository(db);
+  const found = await repo.getByPublicId(args.publicId);
+  if (
+    !found ||
+    found.app.ownerUserId !== args.keyOwnerUserId ||
+    found.app.revokedAt
+  ) {
+    return null;
+  }
+  const keyIds = await repo.keyIdsFor(found.app.publicId);
+  if (!keyIds.includes(args.apiKeyId)) return null;
+  const agentUserId = await ensureAppAgent(found, "cli");
+  await syncAppAgentMemberships(
+    agentUserId,
+    found.app.ownerUserId,
+    found.app.approvedRequests ?? []
+  );
+  await repo.adoptKey({
+    apiKeyId: args.apiKeyId,
+    ownerUserId: found.app.ownerUserId,
+    agentUserId,
+  });
+  return agentUserId;
+}
+
 /** Revoke an app's keys AND their grants (the ONE grant write door). */
 async function revokeAppKeys(
   found: AppWithGrants,
@@ -266,11 +416,16 @@ async function revokeAppKeys(
  * because `synap login` / `pods add` keys come from
  * `apiKeys.connectIntegration`: owned by the human, no agent principal, no
  * grant.
+ *
+ * The key is minted to the app's OWN agent (`ensureAppAgent`) and linked to
+ * the owner, so its writes are governed like an agent's.
  */
 export async function issueKey(args: {
   publicId: string;
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** The door issuing it (the agent's provenance on first issue). */
+  via: AppKeyDoor;
 }): Promise<{ apiKey: string; keyId: string }> {
   if (args.actorAgentUserId ?? getActingAgentUserId()) {
     throw new TRPCError({
@@ -297,6 +452,8 @@ export async function issueKey(args: {
     });
   }
   const userId = args.ownerUserId;
+  const agentUserId = await ensureAppAgent(found, args.via);
+  await syncAppAgentMemberships(agentUserId, userId, approved);
   const rotated = await revokeAppKeys(
     found,
     userId,
@@ -312,7 +469,9 @@ export async function issueKey(args: {
       key: plaintext,
       scope: ["hub-protocol.read", "hub-protocol.write"],
       // Apps are long-lived; the grant is the bound, not the clock.
-      userId,
+      // Held by the app's agent, acting for its owner — an agent key's shape.
+      userId: agentUserId,
+      linkedUserId: userId,
       keyType: "user_pat",
       description: `App key for ${found.app.name} (${found.app.publicId})`,
     },
@@ -320,7 +479,7 @@ export async function issueKey(args: {
   );
   await attachGrantsOrRevoke({
     apiKeyId: keyRow.id,
-    principalUserId: userId,
+    principalUserId: agentUserId,
     onBehalfOf: userId,
     grants: grantsForApprovedRequests(approved),
     expiresAt: null,
@@ -345,6 +504,10 @@ export async function revokeApp(args: {
     args.ownerUserId,
     `App revoked: ${found.app.name}`
   );
+  // Its agent leaves every workspace: a revoked app reaches nothing.
+  if (found.app.agentUserId) {
+    await syncAppAgentMemberships(found.app.agentUserId, args.ownerUserId, []);
+  }
   await new AppRepository(db).revoke(found.app.id);
   await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.revoked, {
     revokedKeys,
@@ -368,6 +531,15 @@ export async function renameApp(args: {
     if (err instanceof AppNameTakenError)
       throw new TRPCError({ code: "CONFLICT", message: err.message });
     throw err;
+  }
+  // The app's agent carries the app's name — it is what a receipt names.
+  if (found.app.agentUserId) {
+    await db
+      .update(users)
+      .set({ name: to })
+      .where(
+        and(eq(users.id, found.app.agentUserId), eq(users.userType, "agent"))
+      );
   }
   await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.renamed, {
     from: found.app.name,

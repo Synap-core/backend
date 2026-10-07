@@ -21,9 +21,17 @@
  *
  * Costs ONE indexed PK lookup on `users` — `keyRecord` (a plain `api_keys` row)
  * does not carry the owner's `userType`.
+ *
+ * APP KEYS are agent keys: an Application acts as its own agent user, linked
+ * to its owner (`apps.agent_user_id`, 0313), so its writes run the agent
+ * ladder. A key minted before 0313 is still held by the human; when one
+ * authenticates (its grant names an app, `isAppPublicId`, and its holder is
+ * not an agent) it is adopted onto the app's agent here, once, and resolves
+ * as that agent from this request on. A failed adoption THROWS: answering
+ * "human" would let the key write ungoverned.
  */
 
-import { db, users, eq, GrantRepository } from "@synap/database";
+import { db, users, eq, GrantRepository, isAppPublicId } from "@synap/database";
 import type { ApiKeyRecord, KeyGrant } from "@synap/database";
 
 export interface ResolvedKeyIdentity {
@@ -72,6 +80,22 @@ export async function resolveKeyIdentity(
   const grant = keyRecord.id
     ? await new GrantRepository(db).resolveForKey(keyRecord.id)
     : null;
+  if (!isAgent && keyRecord.id && isAppPublicId(grant?.clientId)) {
+    const { adoptLegacyAppKey } = await import("../services/app-connect.js");
+    const appAgentUserId = await adoptLegacyAppKey({
+      apiKeyId: keyRecord.id,
+      keyOwnerUserId: keyRecord.userId,
+      publicId: grant!.clientId!,
+    });
+    if (appAgentUserId) {
+      return {
+        effectiveUserId: keyRecord.userId,
+        agentUserId: appAgentUserId,
+        isAgent: true,
+        grant,
+      };
+    }
+  }
   return {
     effectiveUserId: keyRecord.linkedUserId ?? keyRecord.userId,
     agentUserId: isAgent ? keyRecord.userId : undefined,

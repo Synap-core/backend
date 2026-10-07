@@ -4917,8 +4917,12 @@ CREATE TABLE IF NOT EXISTS "apps" (
   "created_at"        timestamptz NOT NULL DEFAULT now(),
   "revoked_at"        timestamptz,
   -- 0312: "Remove for good" — a revoked app hidden from every listing.
-  "removed_at"        timestamptz
+  "removed_at"        timestamptz,
+  -- 0313: the app's own agent principal (its key is minted to it).
+  "agent_user_id"     text        REFERENCES "users"("id") ON DELETE SET NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_name_unique"
   ON "apps" ("owner_user_id", "name");
 CREATE INDEX IF NOT EXISTS "apps_owner_idx" ON "apps" ("owner_user_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "apps_agent_user_unique"
+  ON "apps" ("agent_user_id") WHERE "agent_user_id" IS NOT NULL;

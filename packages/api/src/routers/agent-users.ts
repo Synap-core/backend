@@ -13,7 +13,15 @@ import {
   assertPodAdmin,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, inArray, isNull, drizzleSql } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  inArray,
+  isNull,
+  drizzleSql,
+  notAnAppAgent,
+} from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { isPodAdmin } from "../utils/workspace-role.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -91,6 +99,8 @@ export async function queryAgentUsers(
   // narrows within it. `null` lens = no tied rows (pod-wide only).
   const tiedConditions = [
     eq(users.userType, "agent"),
+    // An app's own agent is shown only as its app (Connected), never here.
+    notAnAppAgent(users.id),
     userVisibleWhere(workspaceMembers.workspaceId, ctx.userId),
   ];
 
@@ -141,6 +151,7 @@ export async function queryAgentUsers(
     .where(
       and(
         eq(users.userType, "agent"),
+        notAnAppAgent(users.id),
         drizzleSql`NOT EXISTS (SELECT 1 FROM ${workspaceMembers} WHERE ${workspaceMembers.userId} = ${users.id})`
       )
     );

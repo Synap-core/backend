@@ -26,6 +26,7 @@ const APP_UUID = "1e1e1e1e-0000-4000-8000-0000000000aa";
 const PUBLIC_ID = "app_1e1e1e1e-0000-4000-8000-0000000000aa";
 const WORKSPACE_ID = "2f2f2f2f-0000-4000-8000-0000000000bb";
 const PROPOSAL_ID = "3a3a3a3a-0000-4000-8000-0000000000cc";
+const APP_AGENT = "0ddddddd-0000-4000-8000-000000000004";
 
 function makeApp(overrides: Record<string, unknown> = {}) {
   return {
@@ -66,6 +67,8 @@ const state = {
   takenName: null as string | null,
   renamedTo: null as string | null,
   removed: false,
+  /** Order of the app-agent steps: create → posture → link. */
+  agentSteps: [] as string[],
 };
 
 function chain(result: unknown): any {
@@ -77,6 +80,7 @@ function chain(result: unknown): any {
     set: () => c,
     values: () => c,
     returning: () => Promise.resolve(result),
+    onConflictDoNothing: () => c,
     then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
       Promise.resolve(result).then(res, rej),
   };
@@ -87,6 +91,7 @@ const fakeDb: any = {
   select: () => chain(state.selectResult),
   update: () => chain([]),
   insert: () => chain([]),
+  delete: () => chain([]),
   transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(fakeDb),
   query: {},
 };
@@ -123,6 +128,10 @@ class FakeAppRepository {
   }
   async revoke(_id: string) {
     return state.app;
+  }
+  async linkAgentUser(_appId: string, agentUserId: string) {
+    state.agentSteps.push(`link:${agentUserId}`);
+    return agentUserId;
   }
   async rename(_id: string, name: string) {
     if (name === state.takenName) {
@@ -198,6 +207,24 @@ vi.mock("../../../../utils/permission-check.js", () => ({
   },
 }));
 
+vi.mock("../../../../services/agent-identity-service.js", () => ({
+  findOrCreateServiceAgentUser: async (opts: Record<string, unknown>) => {
+    state.agentSteps.push(`create:${opts.agentType}:${opts.createdVia}`);
+    return { agentUserId: APP_AGENT, email: "a@synap.agent" };
+  },
+}));
+
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  applyAgentPosture: async (input: {
+    agentUserId: string;
+    posture: string;
+  }) => {
+    state.agentSteps.push(`posture:${input.agentUserId}:${input.posture}`);
+    return { posture: input.posture, writesRequireProposal: true };
+  },
+}));
+
 vi.mock("../../../../services/key-grant.js", () => ({
   attachGrantsOrRevoke: async (args: Record<string, unknown>) => {
     state.grantArgs = args;
@@ -258,6 +285,7 @@ beforeEach(() => {
   state.takenName = null;
   state.renamedTo = null;
   state.removed = false;
+  state.agentSteps = [];
 });
 
 /** The app lifecycle events recorded, as `<subject>.<action>` + app id. */
@@ -363,11 +391,23 @@ describe("POST /apps/:id/key — mint after approval", () => {
     // …AND revoked that key's grant at the ONE grant write door, so the
     // superseded key can never leave an active grant behind.
     expect(state.revokedGrantKeyIdCalls).toEqual([["old-key-1"]]);
+    // The app acts as its OWN agent: created per app (type = public id),
+    // made ask-first BEFORE the app is linked to it.
+    expect(state.agentSteps).toEqual([
+      `create:${PUBLIC_ID}:cli`,
+      `posture:${APP_AGENT}:ask-first`,
+      `link:${APP_AGENT}`,
+    ]);
+    // The key is held by that agent and acts for the owner — an agent key.
+    expect(state.keyInput).toMatchObject({
+      userId: APP_AGENT,
+      linkedUserId: OWNER,
+    });
     // Granted exactly the approved reach, tagged with the app's public id.
     expect(state.grantArgs).toMatchObject({
       clientId: PUBLIC_ID,
       onBehalfOf: OWNER,
-      principalUserId: OWNER,
+      principalUserId: APP_AGENT,
       grants: [
         {
           permissions: ["entity.person.create"],

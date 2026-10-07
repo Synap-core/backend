@@ -14,6 +14,9 @@
  * time, so a proposal with no plaintext and a key minted only on demand means
  * no secret ever rests in a proposal.
  *
+ * The app acts as its own agent user (`agent_user_id`, 0313) — see
+ * `AppRepository.ensureAgentUser`.
+ *
  * ONE write door: `AppRepository` (repositories/app-repository.ts).
  */
 
@@ -27,6 +30,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { users } from "./users.js";
 
 /** One entry of `apps.approved_requests` — a permission bounded to a workspace. */
 export interface AppApprovedRequest {
@@ -65,6 +69,15 @@ export const apps = pgTable(
      * row and its events stay; every listing drops it.
      */
     removedAt: timestamp("removed_at", { withTimezone: true }),
+    /**
+     * The app's OWN agent principal (0313): its key is minted to this user and
+     * linked to the owner, so the app's writes are governed like an agent's
+     * (`ask-first` by default). Set when its key is first issued. Also the ONE
+     * predicate that keeps it out of agent rosters (`notAnAppAgent`).
+     */
+    agentUserId: text("agent_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
   },
   (t) => ({
     // One app per (owner, name) — the register door is idempotent by owner+name.

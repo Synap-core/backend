@@ -2919,6 +2919,9 @@ export interface CatalogSyncStamp {
  * time, so a proposal with no plaintext and a key minted only on demand means
  * no secret ever rests in a proposal.
  *
+ * The app acts as its own agent user (`agent_user_id`, 0313) — see
+ * `AppRepository.ensureAgentUser`.
+ *
  * ONE write door: `AppRepository` (repositories/app-repository.ts).
  */
 /** One entry of `apps.approved_requests` — a permission bounded to a workspace. */

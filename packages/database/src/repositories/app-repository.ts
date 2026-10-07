@@ -6,12 +6,13 @@
  * grant carries (`grants.client_id`). This repository owns register/upsert
  * (idempotent by owner+name), reads (with the app's live grants and pending
  * request), the approval write (`setApprovedRequests`), rename, revoke and
- * remove. It never mints a key and
- * never touches `grants` directly — the key/grant mint door is the route
- * (`attachGrantOrRevoke` → `GrantRepository`).
+ * remove, plus the app's agent link (`linkAgentUser`, `adoptKey`). It never
+ * mints a key and never touches `grants` directly — the key/grant mint door is
+ * the route (`attachGrantOrRevoke` → `GrantRepository`).
  */
 
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { db } from "../client-pg.js";
@@ -22,6 +23,7 @@ import {
 } from "../schema/apps.js";
 import { apiKeys } from "../schema/api-keys.js";
 import { grants } from "../schema/grants.js";
+import { GrantRepository } from "./grant-repository.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 
 export interface RegisterAppInput {
@@ -166,9 +168,31 @@ function newest(dates: Array<Date | null | undefined>): Date | null {
   return out;
 }
 
+/** The prefix of every app `public_id` (and so of every app grant's `client_id`). */
+export const APP_PUBLIC_ID_PREFIX = "app_";
+
+/** Is this grant `client_id` an Application's `public_id` (not an OAuth `dcr_` client)? */
+export function isAppPublicId(clientId: string | null | undefined): boolean {
+  return (
+    typeof clientId === "string" && clientId.startsWith(APP_PUBLIC_ID_PREFIX)
+  );
+}
+
 /** `app_<lowercased-uuid>` — the stable public id, used verbatim as `client_id`. */
 function makePublicId(): string {
-  return `app_${randomUUID().toLowerCase()}`;
+  return `${APP_PUBLIC_ID_PREFIX}${randomUUID().toLowerCase()}`;
+}
+
+/**
+ * THE ONE predicate that keeps an app's own agent user out of every agent
+ * roster: true for any user that is NOT some app's `agent_user_id`. An app
+ * agent is shown only as its app (Connected), never as an agent.
+ *
+ * Pass the users-id column of the query's own `users` reference (in a
+ * relational `findMany`, the callback's aliased column).
+ */
+export function notAnAppAgent(userIdColumn: AnyPgColumn) {
+  return sql`NOT EXISTS (SELECT 1 FROM ${apps} WHERE ${apps.agentUserId} = ${userIdColumn})`;
 }
 
 export class AppRepository {
@@ -389,15 +413,22 @@ export class AppRepository {
   }
 
   /**
-   * The api_keys ids bound to this app (via the grants whose `client_id` is the
-   * app's `public_id`). Used by the revoke door to revoke the app's keys.
+   * The api_keys ids bound to this app: the keys whose grants carry
+   * `client_id = public_id`, AND every key held by the app's own agent user
+   * (`agent_user_id`) — so revoking the app stops any key that acts as it,
+   * however it was minted. Used by the revoke door and the key listing.
    */
   async keyIdsFor(publicId: string): Promise<string[]> {
     const rows = await this.db
       .select({ apiKeyId: grants.apiKeyId })
       .from(grants)
       .where(eq(grants.clientId, publicId));
-    return [...new Set(rows.map((r) => r.apiKeyId))];
+    const held = await this.db
+      .select({ apiKeyId: apiKeys.id })
+      .from(apiKeys)
+      .innerJoin(apps, eq(apps.agentUserId, apiKeys.userId))
+      .where(eq(apps.publicId, publicId));
+    return [...new Set([...rows, ...held].map((r) => r.apiKeyId))];
   }
 
   /**
@@ -433,6 +464,52 @@ export class AppRepository {
       .where(inArray(apiKeys.id, keyIds));
     // Newest first: the key you just minted is the one you are looking for.
     return rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /**
+   * Link the app to its agent user — first writer wins (`agent_user_id IS
+   * NULL`), so two concurrent issues can never give one app two agents.
+   * Returns the agent user the app is linked to after the write.
+   */
+  async linkAgentUser(appId: string, agentUserId: string): Promise<string> {
+    await this.db
+      .update(apps)
+      .set({ agentUserId })
+      .where(and(eq(apps.id, appId), isNull(apps.agentUserId)));
+    const [row] = await this.db
+      .select({ agentUserId: apps.agentUserId })
+      .from(apps)
+      .where(eq(apps.id, appId))
+      .limit(1);
+    if (!row?.agentUserId) {
+      throw new Error(`App ${appId} could not be linked to its agent user`);
+    }
+    return row.agentUserId;
+  }
+
+  /**
+   * Move a key minted before 0313 (owned by the human, no linked user) onto
+   * the app's agent: `user_id` = agent, `linked_user_id` = owner — the shape
+   * every agent key has — and the grant's principal with it. The plaintext
+   * is untouched, so the key keeps working. Only a key still owned by
+   * `ownerUserId` moves; re-running is a no-op.
+   */
+  async adoptKey(args: {
+    apiKeyId: string;
+    ownerUserId: string;
+    agentUserId: string;
+  }): Promise<void> {
+    await this.db
+      .update(apiKeys)
+      .set({ userId: args.agentUserId, linkedUserId: args.ownerUserId })
+      .where(
+        and(eq(apiKeys.id, args.apiKeyId), eq(apiKeys.userId, args.ownerUserId))
+      );
+    await new GrantRepository(this.db).movePrincipal({
+      apiKeyId: args.apiKeyId,
+      from: args.ownerUserId,
+      to: args.agentUserId,
+    });
   }
 
   /** Soft-revoke the app (the route revokes its keys first). */

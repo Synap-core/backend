@@ -40,7 +40,7 @@ import {
   apiKeys,
   events as eventsTable,
 } from "@synap/database/schema";
-import { count, inArray } from "@synap/database";
+import { count, inArray, notAnAppAgent } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import crypto from "node:crypto";
 import { exec as execCb } from "node:child_process";
@@ -972,10 +972,11 @@ export const systemRouter = router({
       .select({ value: count() })
       .from(users)
       .where(eq(users.userType, "human"));
+    // An app's own agent is counted as its app, never as an agent.
     const [agentResult] = await db
       .select({ value: count() })
       .from(users)
-      .where(eq(users.userType, "agent"));
+      .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)));
     const [workspaceResult] = await db
       .select({ value: count() })
       .from(workspaces);
@@ -1008,9 +1009,12 @@ export const systemRouter = router({
       })
     )
     .query(async ({ input }) => {
-      // Build query with optional type filter
-      const conditions =
-        input.type !== "all" ? eq(users.userType, input.type) : undefined;
+      // Build query with optional type filter. An app's own agent is never a
+      // person or an agent of the pod — it is shown only as its app.
+      const conditions = and(
+        input.type !== "all" ? eq(users.userType, input.type) : undefined,
+        notAnAppAgent(users.id)
+      );
 
       const userList = await db.query.users.findMany({
         where: conditions,

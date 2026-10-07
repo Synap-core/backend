@@ -145,6 +145,28 @@ export class GrantRepository {
   }
 
   /**
+   * Re-point a key's grants from one principal to another — when the key
+   * itself moves to a new holder (an app key adopted by the app's own agent,
+   * `AppRepository.adoptKey`). Only rows still held by `from` move; what the
+   * grant permits and on whose behalf is unchanged.
+   */
+  async movePrincipal(args: {
+    apiKeyId: string;
+    from: string;
+    to: string;
+  }): Promise<void> {
+    await this.db
+      .update(grants)
+      .set({ principalUserId: args.to })
+      .where(
+        and(
+          eq(grants.apiKeyId, args.apiKeyId),
+          eq(grants.principalUserId, args.from)
+        )
+      );
+  }
+
+  /**
    * Revoke the active grants bound to these key ids (the cascade a key rotation
    * or revoke owes). A rotated-away or revoked key otherwise leaves its `grants`
    * row active — the bearer stops, but the grant does not — and the read filter

@@ -176,6 +176,7 @@ export function registerAppsRoutes(app: HubHono): void {
           publicId: c.req.param("id"),
           ownerUserId: userId,
           actorAgentUserId: c.get("agentUserId") as string | undefined,
+          via: "cli",
         })
       );
     } catch (err) {
