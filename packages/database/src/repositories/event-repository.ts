@@ -730,6 +730,25 @@ export class EventRepository {
        */
       sessionId?: string;
       /**
+       * Filter to the events one APPLICATION produced (`events.app_id`, the
+       * app's `public_id`).
+       *
+       * Migration 0310 added the column for ATTRIBUTION — "a governed write can
+       * say 'via <app>' alongside the human" — and stamped it from
+       * `getRequestGrant()?.clientId`. Until this reader it was write-only: the
+       * spine recorded which app did a thing and nothing could ask what an app
+       * had done. Same shape as `sessionId` above, same reason.
+       *
+       * The value is the app's `public_id` (`app_<uuid>`), NOT its uuid PK —
+       * that is what `grants.client_id` carries and what 0310 stamps, so a
+       * caller holding an app record already has the right string.
+       *
+       * TEXT with no FK on purpose (0310): an app is revocable and events are
+       * immutable history, so the attribution outlives the app. A revoked app's
+       * events therefore still answer "this app did X" — which is the point.
+       */
+      appId?: string;
+      /**
        * Filter to the events one AGENT produced (`events.agent_user_id`, a text
        * column matching `users.id`). The dedicated `events_agent_user_id_idx`
        * index has existed since 0131 with no reader — this is the reader: "show
@@ -858,6 +877,17 @@ export class EventRepository {
       // ORDER BY timestamp below is exactly the shape that index serves.
       query += ` AND session_id = $${paramIndex}`;
       params.push(filters.sessionId);
+      paramIndex++;
+    }
+
+    if (filters.appId) {
+      // Backed by the partial index `idx_events_app_id (app_id, timestamp)
+      // WHERE app_id IS NOT NULL` (migration 0311) — equality here plus the
+      // ORDER BY timestamp below is exactly the shape that index serves, and
+      // the partial predicate keeps the index to the attributed minority (0310
+      // leaves it NULL for every human/bare write).
+      query += ` AND app_id = $${paramIndex}`;
+      params.push(filters.appId);
       paramIndex++;
     }
 

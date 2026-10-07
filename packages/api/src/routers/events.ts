@@ -289,6 +289,16 @@ export const eventsRouter = router({
          * proposals half alone — see `signals.list`.
          */
         sessionId: z.string().uuid().optional(),
+        /**
+         * Narrow the stream to ONE application — every event a write made with
+         * that app's key produced (`events.app_id`, the app's `public_id`).
+         *
+         * `events.app_id` has carried the attribution since 0310 with no
+         * reader; this is the reader, and like `sessionId` it only ever narrows
+         * the existing `userId` floor. It is what lets an app's own page answer
+         * "what has this app done?" rather than only "what may it touch?".
+         */
+        appId: z.string().min(1).max(200).optional(),
         limit: z.number().min(1).max(500).default(50),
         lean: z.boolean().default(false),
         /**
@@ -310,6 +320,7 @@ export const eventsRouter = router({
         subjectType: input.subjectType,
         workspaceId: input.workspaceId,
         sessionId: input.sessionId,
+        appId: input.appId,
         // The notif-center lens: a workspace narrowing still shows the
         // pod-wide rows that belong to every workspace. An `eq` never matches
         // NULL, so without this the feed drops them silently.

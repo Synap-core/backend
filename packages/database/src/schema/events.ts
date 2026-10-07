@@ -154,6 +154,14 @@ export const events = pgTable(
     sessionIdIdx: index("idx_events_session_id")
       .on(table.sessionId, table.timestamp)
       .where(sql`${table.sessionId} IS NOT NULL`),
+
+    // INDEX: "what has this app done?" (0311). 0310 added `app_id` for
+    // attribution; this is the index its first READER needs. Partial
+    // (app_id IS NOT NULL) — a human/bare write leaves it NULL, so only the
+    // attributed minority is indexed. Mirrors 0311's CREATE INDEX exactly.
+    appIdIdx: index("idx_events_app_id")
+      .on(table.appId, table.timestamp)
+      .where(sql`${table.appId} IS NOT NULL`),
   })
 );
 

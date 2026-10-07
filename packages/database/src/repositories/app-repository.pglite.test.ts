@@ -46,7 +46,14 @@ beforeAll(async () => {
   await pg.exec(`CREATE TABLE api_keys (
     id            uuid PRIMARY KEY,
     is_active     boolean NOT NULL DEFAULT true,
-    last_used_at  timestamptz
+    last_used_at  timestamptz,
+    -- keysFor reads these; the real table is far wider and not needed here.
+    key_name      text NOT NULL DEFAULT 'Key',
+    key_prefix    text NOT NULL DEFAULT 'synap_hub_live_',
+    key_hash      text NOT NULL DEFAULT 'hash',
+    usage_count   bigint NOT NULL DEFAULT 0,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    revoked_at    timestamptz
   );`);
   await pg.exec(GRANTS);
   await pg.exec(ROLES);
@@ -238,5 +245,113 @@ describe("GrantRepository.resolveForKey — carries the app identity (Attributio
     const grant = await grants.resolveForKey(KEY_A);
     expect(grant?.permissions).toEqual([]); // deny-all
     expect(grant?.clientId).toBe(app.publicId);
+  });
+});
+
+/**
+ * `keysFor` — the app's keys as its own page shows them: what each is called,
+ * its scheme, when it was made, when it was last used and how often.
+ *
+ * The security property is the point of this block, and it is asserted
+ * BEHAVIOURALLY: a sentinel is written into `api_keys.key_hash`, and the whole
+ * returned payload must not contain it. That catches any future field that
+ * carries the hash — a "shape" assertion on today's field names would not.
+ */
+describe("AppRepository.keysFor — the app's keys, and never the secret", () => {
+  const SECRET_SENTINEL = "SENTINEL-bcrypt-hash-do-not-return";
+
+  async function seedNamedKey(
+    id: string,
+    over: Partial<{ name: string; prefix: string; revoked: boolean; madeAt: string; usedAt: string | null; uses: number }> = {}
+  ): Promise<void> {
+    await pg.query(
+      `INSERT INTO api_keys
+         (id, is_active, key_name, key_prefix, key_hash, usage_count, created_at, last_used_at, revoked_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        id,
+        !over.revoked,
+        over.name ?? "Key",
+        over.prefix ?? "synap_hub_live_",
+        SECRET_SENTINEL,
+        over.uses ?? 0,
+        over.madeAt ?? "2026-10-01T00:00:00Z",
+        over.usedAt ?? null,
+        over.revoked ? "2026-10-02T00:00:00Z" : null,
+      ]
+    );
+  }
+
+  it("lists only the keys whose grant carries THIS app's public_id", async () => {
+    const mine = await repo.register({ ownerUserId: OWNER, name: "intake" });
+    const theirs = await repo.register({ ownerUserId: OWNER, name: "other" });
+    await seedNamedKey(KEY_A);
+    await seedNamedKey(KEY_B);
+    await attachGrant(KEY_A, mine.publicId);
+    await attachGrant(KEY_B, theirs.publicId);
+
+    const keys = await repo.keysFor(mine.publicId);
+    expect(keys.map((k) => k.id)).toEqual([KEY_A]);
+  });
+
+  it("NEVER returns the secret — the hash is not in the payload at all", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "intake" });
+    await seedNamedKey(KEY_A, { name: "Vercel production", uses: 42 });
+    await attachGrant(KEY_A, app.publicId);
+
+    const keys = await repo.keysFor(app.publicId);
+    // Non-vacuity: there IS a row to leak from.
+    expect(keys).toHaveLength(1);
+    expect(JSON.stringify(keys)).not.toContain(SECRET_SENTINEL);
+    expect(JSON.stringify(keys)).not.toContain("hash");
+  });
+
+  it("carries what a person needs and nothing else", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "intake" });
+    await seedNamedKey(KEY_A, {
+      name: "Vercel production",
+      prefix: "synap_hub_live_",
+      uses: 42,
+      usedAt: "2026-10-05T09:30:00Z",
+    });
+    await attachGrant(KEY_A, app.publicId);
+
+    const [key] = await repo.keysFor(app.publicId);
+    expect(key).toMatchObject({
+      id: KEY_A,
+      keyName: "Vercel production",
+      keyPrefix: "synap_hub_live_",
+      usageCount: 42,
+      isActive: true,
+      revokedAt: null,
+    });
+    expect(key!.lastUsedAt?.toISOString()).toBe("2026-10-05T09:30:00.000Z");
+  });
+
+  it("still lists a REVOKED key — 'this app had a key' is a fact about the app", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "intake" });
+    await seedNamedKey(KEY_A, { revoked: true });
+    await attachGrant(KEY_A, app.publicId);
+
+    const keys = await repo.keysFor(app.publicId);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]!.isActive).toBe(false);
+    expect(keys[0]!.revokedAt).not.toBeNull();
+  });
+
+  it("is empty for an app with no key, and for an unknown id", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "intake" });
+    expect(await repo.keysFor(app.publicId)).toEqual([]);
+    expect(await repo.keysFor("app_00000000-0000-4000-8000-000000000000")).toEqual([]);
+  });
+
+  it("orders newest first — the key you just minted is the one you are looking for", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "intake" });
+    await seedNamedKey(KEY_A, { madeAt: "2026-09-01T00:00:00Z" });
+    await seedNamedKey(KEY_B, { madeAt: "2026-10-01T00:00:00Z" });
+    await attachGrant(KEY_A, app.publicId);
+    await attachGrant(KEY_B, app.publicId);
+
+    expect((await repo.keysFor(app.publicId)).map((k) => k.id)).toEqual([KEY_B, KEY_A]);
   });
 });

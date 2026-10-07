@@ -31,6 +31,23 @@ export interface RegisterAppInput {
   metadata?: Record<string, unknown> | null;
 }
 
+/**
+ * One of an app's keys, as the detail surface shows it. Carries no secret:
+ * `api_keys` holds a bcrypt hash only. `keyPrefix` is the SCHEME
+ * (`synap_hub_live_` …), not the key's own opening characters — those are not
+ * stored anywhere and cannot be recovered.
+ */
+export interface AppKeySummary {
+  id: string;
+  keyName: string;
+  keyPrefix: string;
+  createdAt: Date;
+  lastUsedAt: Date | null;
+  usageCount: number;
+  isActive: boolean;
+  revokedAt: Date | null;
+}
+
 /** An app plus the grants whose `client_id` is its `public_id`. */
 export interface AppWithGrants {
   app: AppRecord;
@@ -298,6 +315,41 @@ export class AppRepository {
       .from(grants)
       .where(eq(grants.clientId, publicId));
     return [...new Set(rows.map((r) => r.apiKeyId))];
+  }
+
+  /**
+   * An app's keys, as a PERSON reads them: what each key is called, its scheme,
+   * when it was made, when it was last used and how often.
+   *
+   * Never the secret — `api_keys` stores only a bcrypt hash, so there is
+   * nothing else to give. That is why an app's key can be listed here and still
+   * be unmintable-again from the UI: minting returns the plaintext ONCE, and
+   * losing it means minting a new one.
+   *
+   * The link is the grant: a key minted for an app carries
+   * `grants.client_id = apps.public_id` (`keyIdsFor`), which is also what makes
+   * its grant resolve. A key whose grants were all revoked is STILL listed —
+   * "this app has a revoked key" is a fact about the app, and hiding it would
+   * make a revoked app look like one that never had a key.
+   */
+  async keysFor(publicId: string): Promise<AppKeySummary[]> {
+    const keyIds = await this.keyIdsFor(publicId);
+    if (keyIds.length === 0) return [];
+    const rows = await this.db
+      .select({
+        id: apiKeys.id,
+        keyName: apiKeys.keyName,
+        keyPrefix: apiKeys.keyPrefix,
+        createdAt: apiKeys.createdAt,
+        lastUsedAt: apiKeys.lastUsedAt,
+        usageCount: apiKeys.usageCount,
+        isActive: apiKeys.isActive,
+        revokedAt: apiKeys.revokedAt,
+      })
+      .from(apiKeys)
+      .where(inArray(apiKeys.id, keyIds));
+    // Newest first: the key you just minted is the one you are looking for.
+    return rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   /** Soft-revoke the app (the route revokes its keys first). */

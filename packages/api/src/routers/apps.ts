@@ -75,15 +75,74 @@ export const appsRouter = router({
       return rows.map(toApp);
     }),
 
-  /** One of the caller's own apps, by public id — floored on the owner. */
+  /**
+   * Register an app for the caller — the HUMAN half of `POST /api/hub/apps`.
+   *
+   * That door authenticates with a Bearer / `X-Session-Token` key and never
+   * reads the Kratos cookie a browser session holds (see the module docblock),
+   * so a person adding an app from the UI has no door at all today. This is it,
+   * and it reuses the SAME `AppRepository.register`, so the CLI and the UI
+   * cannot mint two different kinds of app.
+   *
+   * IDEMPOTENT BY OWNER+NAME, exactly as `register` is: adding "My intake" twice
+   * hands back the SAME app, same `public_id`, rather than a twin. An app's
+   * stable id is the `client_id` its grants carry, so a second row would break
+   * every key already issued. A previously revoked app of that name is revived.
+   *
+   * Asks the MINIMUM to exist — name, and whatever the person chose to say.
+   * Reach (which permissions, which spaces) is NOT asked here: it is requested
+   * on the app's own page, where the person can see what it would mean
+   * (`OBJECT-CREATION-UX-PRINCIPLE`: land on the detail page, configure there).
+   */
+  create: protectedProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(200),
+        description: z.string().max(2000).nullish(),
+        logoUrl: z.string().url().max(2000).nullish(),
+        mode: z.string().max(40).nullish(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const repo = new AppRepository(db);
+      const registered = await repo.register({
+        ownerUserId: ctx.userId,
+        name: input.name,
+        description: input.description ?? null,
+        logoUrl: input.logoUrl ?? null,
+        mode: input.mode ?? null,
+        metadata: null,
+      });
+      // Re-read through the ONE projection so a create returns exactly what
+      // `get` returns — a caller never sees two shapes for one app.
+      const found = await repo.getByPublicId(registered.publicId);
+      if (!found) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "App registered but could not be read back.",
+        });
+      }
+      return toApp(found);
+    }),
+
+  /**
+   * One of the caller's own apps, by public id — floored on the owner.
+   *
+   * This is the DETAIL read, and it is the only one that carries `keys`: `list`
+   * is a browsable index of many apps, where a per-app key query would be an
+   * N+1 for data the list does not show. The two therefore differ by exactly
+   * one field, which is that field's whole reason for existing.
+   */
   get: protectedProcedure
     .input(z.object({ publicId: z.string().min(1).max(200) }))
     .query(async ({ ctx, input }) => {
-      const found = await new AppRepository(db).getByPublicId(input.publicId);
+      const repo = new AppRepository(db);
+      const found = await repo.getByPublicId(input.publicId);
       if (!found || found.app.ownerUserId !== ctx.userId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "App not found" });
       }
-      return toApp(found);
+      const keys = await repo.keysFor(found.app.publicId);
+      return { ...toApp(found), keys };
     }),
 
   /**

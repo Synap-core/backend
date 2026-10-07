@@ -342,6 +342,13 @@ CREATE INDEX IF NOT EXISTS "idx_events_session_id"
   ON "events" ("session_id", "timestamp")
   WHERE "session_id" IS NOT NULL;
 
+-- "What has this app done?" (migration 0311). `app_id` was added by 0310 for
+-- attribution; this is the index its first READER needs. Partial so only
+-- app-attributed rows are indexed (0310 leaves it NULL for every human write).
+CREATE INDEX IF NOT EXISTS "idx_events_app_id"
+  ON "events" ("app_id", "timestamp")
+  WHERE "app_id" IS NOT NULL;
+
 -- ─── 4. profiles + profile_workspace_access ──────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "profiles" (
