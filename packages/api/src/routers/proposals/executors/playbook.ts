@@ -255,6 +255,11 @@ export function registerPlaybookExecutors(): void {
         "criteria",
         "requiredIntents",
         "subjectProfile",
+        // The process declarations. The update door FOLDS them into
+        // `subjectProfile` before its gate, so a proposal carries them there;
+        // replayed by name too, so a payload that states them is never dropped.
+        "activators",
+        "humanOnlyStatuses",
         "schedule",
         "executor",
         "status",

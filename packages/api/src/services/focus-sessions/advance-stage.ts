@@ -49,10 +49,16 @@
  * silently inherit the wrong half of that pair.
  */
 
-import { db, focusSessions, eq } from "@synap/database";
+import { db, focusSessions, eq, and } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
+import { resolveStageRef } from "@synap/playbooks";
+import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import { applyStageGateOnAdvance } from "../playbooks/stage-gate.js";
+import {
+  writeStageSubjectStatus,
+  type StageSubjectStatusOutcome,
+} from "./stage-subject-status.js";
 
 const logger = createLogger({ module: "focus-sessions/advance-stage" });
 
@@ -85,6 +91,12 @@ export interface AdvanceSessionStageInput {
   agentUserId?: string | null;
   /** See the header — who wrote `focus_sessions.current_stage`. */
   stageWrite: "caller" | "door";
+  /**
+   * Set ONLY by this door when it returns a run to a failed check gate's
+   * `onFail` stage — so that return is never itself re-routed (a target whose
+   * own check also fails holds there, it does not ping-pong).
+   */
+  viaOnFail?: boolean;
 }
 
 export interface AdvanceSessionStageResult {
@@ -106,6 +118,14 @@ export interface AdvanceSessionStageResult {
    * and which do not. Present only when the stage entered is check-gated.
    */
   check?: { passed: boolean; failing: string[] };
+  /**
+   * The forward half of stage ↔ subject status: what happened to the entered
+   * stage's `subjectStatus` (written / proposed / skipped + why / failed).
+   * Absent when the stage was held by its gate (the approval writes it).
+   */
+  subjectStatus?: StageSubjectStatusOutcome;
+  /** Set when a failed check gate returned the run to its `onFail` stage. */
+  onFail?: { toStage: string };
 }
 
 const UNCHANGED: AdvanceSessionStageResult = {
@@ -180,17 +200,48 @@ export async function advanceSessionStage(
     fromStage,
   });
 
-  if (!gate) return { changed: true, gated: false, paused: false };
+  if (!gate) {
+    return {
+      changed: true,
+      gated: false,
+      paused: false,
+      subjectStatus: await writeStageSubjectStatus({
+        session,
+        toStage,
+        userId,
+        agentUserId: input.agentUserId ?? null,
+      }),
+    };
+  }
 
   if (gate.kind === "check") {
-    return {
+    const result: AdvanceSessionStageResult = {
       changed: true,
       gated: true,
       paused: gate.paused,
       check: { passed: gate.passed, failing: gate.failing },
     };
+    if (!gate.paused) {
+      result.subjectStatus = await writeStageSubjectStatus({
+        session,
+        toStage,
+        userId,
+        agentUserId: input.agentUserId ?? null,
+      });
+      return result;
+    }
+    // A HOLDING check gate whose stage declares `onFail` returns the run there
+    // (un-paused, through this same door) instead of leaving it parked. The
+    // hold's `metadata.checkGate` record stays — it is why the run went back.
+    if (!input.viaOnFail) {
+      const back = await returnToOnFailStage({ ...input, fromStage });
+      if (back) result.onFail = { toStage: back };
+    }
+    return result;
   }
 
+  // A human gate HOLDS the stage until a person answers: the subject status is
+  // written on approval (`playbook-stage-gate.ts` executor), not here.
   return {
     changed: true,
     gated: true,
@@ -198,4 +249,41 @@ export async function advanceSessionStage(
     proposalId: gate.proposalId,
     proposalType: gate.proposalType,
   };
+}
+
+/**
+ * The `onFail` return for a check gate that held: resolve the entered stage's
+ * `onFail.toStage` (key or name), un-pause the run (guarded on `paused`), and
+ * advance it there through THIS door with `viaOnFail` set. Returns the stage it
+ * went to, or null when the stage declares no (resolvable) `onFail`.
+ */
+async function returnToOnFailStage(
+  input: AdvanceSessionStageInput & { fromStage: string | null }
+): Promise<string | null> {
+  const { session, toStage } = input;
+  const proc = await loadSessionProcess({
+    sessionId: session.id,
+    playbookId: session.playbookId,
+  });
+  if (!proc) return null;
+  const stage = proc.stages.find((s) => s?.key === toStage);
+  const target = resolveStageRef(proc.stages, stage?.onFail?.toStage);
+  if (!target || target === toStage) return null;
+  const resumed = await db
+    .update(focusSessions)
+    .set({ status: "active", updatedAt: new Date() })
+    .where(
+      and(eq(focusSessions.id, session.id), eq(focusSessions.status, "paused"))
+    )
+    .returning({ id: focusSessions.id });
+  if (resumed.length === 0) return null;
+  await advanceSessionStage({
+    session: { ...session, currentStage: toStage },
+    toStage: target,
+    userId: input.userId,
+    agentUserId: input.agentUserId ?? null,
+    stageWrite: "door",
+    viaOnFail: true,
+  });
+  return target;
 }

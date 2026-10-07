@@ -50,6 +50,7 @@ export type { MessageEnvelope };
 import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
 import { deriveEventSubjectEntityId } from "../utils/run-subject.js";
+import { syncProcessOnEvent } from "../utils/process-sync.js";
 
 const logger = createLogger({ module: "automation-trigger-matcher" });
 
@@ -1176,6 +1177,23 @@ export async function handleAutomationTriggerMatch(job: {
   }
 
   const chainIds = new Set(effectiveContext?.chainAutomationIds ?? []);
+
+  // ── Process engine (no automation row involved) ────────────────────────
+  // A subject entering a status moves its open runs to the matching stage; a
+  // rejected stage gate returns its run to `onFail`. Both advance through the
+  // ONE advance door. Inside the depth floor above, so a status↔stage chain is
+  // bounded like any other. Non-fatal: never blocks the matching below.
+  try {
+    await syncProcessOnEvent({
+      eventType,
+      subjectId,
+      userId,
+      workspaceId,
+      data: data as Record<string, unknown> | undefined,
+    });
+  } catch (err) {
+    logger.warn({ err, eventType, subjectId }, "process sync failed (non-fatal)");
+  }
 
   // ── Find matching automations ──────────────────────────────────────────
   // Pod-wide inbound: a null event workspace (a shared / external channel with

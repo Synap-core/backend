@@ -16,7 +16,13 @@
  * REJECTION is deliberately not handled here: rejecting leaves the session
  * paused, which is already true. There is no honest rewind — nothing records
  * what the previous stage's state was — so a reject executor would have to
- * invent one.
+ * invent one. A stage that DECLARES where a rejection goes (`onFail.toStage`)
+ * is returned there by the process engine off the `proposal.rejected` event
+ * (`@synap/jobs` `utils/process-sync.ts`) — declared, not invented.
+ *
+ * APPROVAL also writes the stage's `subjectStatus` onto the run's subject
+ * (`writeStageSubjectStatus`) — the advance door holds that write while the
+ * gate is open, because entering the stage was not agreed yet.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -87,6 +93,20 @@ export function registerPlaybookStageGateExecutors(): void {
                 "resumed, closed or cancelled. The gate is answered; the session " +
                 "keeps the state its owner left it in.",
             };
+
+      // The person agreed to the stage: its `subjectStatus` (if any) is written
+      // NOW — the advance door skipped it while the gate held. As the approver,
+      // through the governed entity door; a skip/failure never un-approves.
+      if (resumed.length > 0 && session.currentStage) {
+        const { writeStageSubjectStatus } = await import(
+          "../../../services/focus-sessions/stage-subject-status.js"
+        );
+        await writeStageSubjectStatus({
+          session,
+          toStage: session.currentStage,
+          userId,
+        });
+      }
 
       await db
         .update(proposals)

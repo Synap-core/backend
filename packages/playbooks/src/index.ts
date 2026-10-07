@@ -953,6 +953,81 @@ export const DEFAULT_STAGE_GATE_PROPOSAL_TYPE: StageGateProposalType =
   "playbook.stage_gate";
 
 /**
+ * The subject-LIFECYCLE half of a stored `subjectProfile` — tolerant (stored
+ * jsonb is data). `statusProperty` names the subject kind's property holding
+ * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose.
+ * The api's `readPlaybookProcess` adds the zod-parsed `activators` on top.
+ */
+export function readSubjectLifecycle(subjectProfile: unknown): {
+  profileSlug: string | null;
+  statusProperty: string | null;
+  humanOnlyStatuses: string[];
+} {
+  const sp =
+    subjectProfile && typeof subjectProfile === "object"
+      ? (subjectProfile as Record<string, unknown>)
+      : {};
+  const str = (v: unknown) =>
+    typeof v === "string" && v.trim() ? v.trim() : null;
+  return {
+    profileSlug: str(sp.profileSlug),
+    statusProperty: str(sp.statusProperty),
+    humanOnlyStatuses: Array.isArray(sp.humanOnlyStatuses)
+      ? sp.humanOnlyStatuses.flatMap((v) => (str(v) ? [str(v)!] : []))
+      : [],
+  };
+}
+
+/**
+ * A stage REFERENCE (`onFail.toStage`) → the stage key it names: an exact key
+ * first, then a case-insensitive name. `null` when nothing matches — a dangling
+ * reference never guesses a stage.
+ */
+export function resolveStageRef(
+  stages: readonly unknown[],
+  ref: string | null | undefined
+): string | null {
+  const want = typeof ref === "string" ? ref.trim() : "";
+  if (!want) return null;
+  const list = stages.filter(
+    (s): s is { key: string; name?: unknown } =>
+      !!s && typeof s === "object" && typeof (s as { key?: unknown }).key === "string"
+  );
+  const byKey = list.find((s) => s.key === want);
+  if (byKey) return byKey.key;
+  const lower = want.toLowerCase();
+  const byName = list.find(
+    (s) => typeof s.name === "string" && s.name.trim().toLowerCase() === lower
+  );
+  return byName ? byName.key : null;
+}
+
+/**
+ * The stage a subject status value CORRESPONDS to (`PlaybookStage.subjectStatus`)
+ * — the first in declaration order. `null` when no stage covers the value
+ * (e.g. a `humanOnlyStatuses` value like "idea").
+ */
+export function stageForSubjectStatus(
+  stages: readonly unknown[],
+  value: unknown
+): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const v = value.trim();
+  for (const s of stages) {
+    if (!s || typeof s !== "object") continue;
+    const st = s as { key?: unknown; subjectStatus?: unknown };
+    if (
+      typeof st.key === "string" &&
+      typeof st.subjectStatus === "string" &&
+      st.subjectStatus.trim() === v
+    ) {
+      return st.key;
+    }
+  }
+  return null;
+}
+
+/**
  * Read a stage's gate. Takes `unknown` for the same reason
  * `resolveStageCategory` does — callers read a jsonb bag, and a stage stored
  * before gates existed must resolve to "no gate", never throw.

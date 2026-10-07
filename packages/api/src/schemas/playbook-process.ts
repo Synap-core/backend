@@ -20,7 +20,10 @@
  */
 
 import { z } from "zod";
-import type { PlaybookActivator } from "@synap/playbooks";
+import {
+  readSubjectLifecycle,
+  type PlaybookActivator,
+} from "@synap/playbooks";
 
 const statusValueSchema = z.string().trim().min(1).max(200);
 
@@ -143,25 +146,22 @@ export interface PlaybookProcess {
   activatorsInvalid: boolean;
 }
 
-/** Read the process contract out of a stored `subject_profile` jsonb. */
+/**
+ * Read the process contract out of a stored `subject_profile` jsonb. The
+ * lifecycle fields come from the ONE tolerant reader in @synap/playbooks
+ * (`readSubjectLifecycle`, shared with @synap/jobs); the activators are parsed
+ * here, with the write door's own schema.
+ */
 export function readPlaybookProcess(subjectProfile: unknown): PlaybookProcess {
   const sp =
     subjectProfile && typeof subjectProfile === "object"
       ? (subjectProfile as Record<string, unknown>)
       : {};
-  const profileSlug =
-    typeof sp.profileSlug === "string" && sp.profileSlug ? sp.profileSlug : null;
-  const statusProperty =
-    typeof sp.statusProperty === "string" && sp.statusProperty.trim()
-      ? sp.statusProperty.trim()
-      : null;
+  const lifecycle = readSubjectLifecycle(subjectProfile);
   const acts = playbookActivatorsSchema.safeParse(sp.activators ?? []);
-  const human = humanOnlyStatusesSchema.safeParse(sp.humanOnlyStatuses ?? []);
   return {
-    profileSlug,
-    statusProperty,
+    ...lifecycle,
     activators: acts.success ? (acts.data as PlaybookActivator[]) : [],
-    humanOnlyStatuses: human.success ? human.data : [],
     activatorsInvalid: !acts.success,
   };
 }
