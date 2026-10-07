@@ -1,10 +1,6 @@
 /**
  * Hub Protocol - Views Router
  *
- * Exposes view management to Intelligence Hub agents.
- * Delegates to the regular views API to ensure all validation,
- * event emission, and side-effect infrastructure is reused.
- *
  * Governance:
  *   - listViews:   auto-approved (read)
  *   - createView:  auto-approved (view.create in DEFAULT_AUTO_APPROVE)
@@ -216,7 +212,6 @@ export const hubViewsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.userId!;
-      // Resolve workspaceId — look it up if not provided
       let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const db = await getDb();
       const view = await db.query.views.findFirst({
@@ -278,7 +273,6 @@ export const hubViewsRouter = router({
         };
       }
 
-      // Execute the update
       const callerContext = await createHubProtocolCallerContext(
         userId,
         ctx.scopes || [],
@@ -388,7 +382,6 @@ export const hubViewsRouter = router({
         });
       }
 
-      // Build bento config from widget input
       // Merge config + props (config takes priority, props is legacy fallback)
       const blocks = input.widgets.map((w, i) => ({
         id: `cell-${i}-${Date.now()}`,
@@ -450,7 +443,6 @@ export const hubViewsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.userId!;
-      // Resolve workspaceId — look it up if not provided
       let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const db = await getDb();
       const view = await db.query.views.findFirst({
@@ -488,7 +480,6 @@ export const hubViewsRouter = router({
         });
       }
 
-      // Prepare content to save
       const content = {
         version: input.version,
         category: "canvas",
@@ -556,7 +547,6 @@ export const hubViewsRouter = router({
         };
       }
 
-      // Execute the update via the regular views router
       const callerContext = await createHubProtocolCallerContext(
         userId,
         ctx.scopes || [],

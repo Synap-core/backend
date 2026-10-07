@@ -5148,6 +5148,22 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 ];
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
 /**
+ * One of an app's keys, as the detail surface shows it. Carries no secret:
+ * `api_keys` holds a bcrypt hash only. `keyPrefix` is the SCHEME
+ * (`synap_hub_live_` …), not the key's own opening characters — those are not
+ * stored anywhere and cannot be recovered.
+ */
+export interface AppKeySummary {
+	id: string;
+	keyName: string;
+	keyPrefix: string;
+	createdAt: Date;
+	lastUsedAt: Date | null;
+	usageCount: number;
+	isActive: boolean;
+	revokedAt: Date | null;
+}
+/**
  * A user's own explicit choice for one kind's content, read from their
  * binding HISTORY, revoked rows included:
  *   - `"source"` — their latest binding is live and opens the source app;
@@ -15796,6 +15812,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "apiKey" | "member" | "chat" | "task" | undefined;
 				workspaceId?: string | undefined;
 				sessionId?: string | undefined;
+				appId?: string | undefined;
 				limit?: number | undefined;
 				lean?: boolean | undefined;
 				recordChanges?: boolean | undefined;
@@ -21620,11 +21637,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				description?: string | null | undefined;
+				logoUrl?: string | null | undefined;
+				mode?: "specific" | null | undefined;
+			};
+			output: {
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: {} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				last_used_at: Date | null;
+				grants: {
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+				}[];
+			};
+			meta: object;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				publicId: string;
 			};
 			output: {
+				keys: AppKeySummary[];
 				id: string;
 				public_id: string;
 				name: string;

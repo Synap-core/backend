@@ -741,9 +741,6 @@ export const viewsRouter = router({
       const yjsRoomId = docId ? `whiteboard-${docId}` : undefined;
 
       const dbInstance = await getDb();
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
       const eventRepo = eventRepository;
       const viewRepo = new ViewRepository(dbInstance, eventRepo);
 
@@ -1261,8 +1258,7 @@ export const viewsRouter = router({
           if (latestVersion) {
             try {
               content = JSON.parse(latestVersion.content);
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            } catch (_e) {
+            } catch {
               content = {};
             }
           }
@@ -1276,7 +1272,7 @@ export const viewsRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "View must have scopeProfileIds. Please recreate the view with profile scope.",
+            "View is missing scopeProfileIds — set them when creating the view (the profile scope determines which entities the view queries).",
         });
       }
 
@@ -1735,9 +1731,6 @@ export const viewsRouter = router({
 
       // Direct DB update via ViewRepository
       const dbInstance = await getDb();
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
       const eventRepo = eventRepository;
       const viewRepo = new ViewRepository(dbInstance, eventRepo);
 
@@ -1912,15 +1905,10 @@ export const viewsRouter = router({
           .where(eq(documents.id, view.documentId));
       }
 
-      // Broadcast reload to all clients in the Yjs room for this view
       let broadcastSuccess = false;
       try {
-        // Access the Yjs server instance through the context's socketIO
-        // The realtime server sets up Socket.IO and we can access it from context
         if (ctx.socketIO && doc) {
-          // Broadcast to the Yjs room for this whiteboard document
           const roomId = `whiteboard-${view.documentId}`;
-          // Emit to the view room in the presence namespace
           const presenceNamespace = ctx.socketIO.of("/presence");
           presenceNamespace.to(`view:${roomId}`).emit("yjs:reload", {
             viewId: view.id,
@@ -1931,7 +1919,6 @@ export const viewsRouter = router({
           broadcastSuccess = true;
         }
       } catch (error) {
-        // Log but don't fail the request if broadcast fails
         console.warn(
           "[views.updateContent] Failed to broadcast reload:",
           error

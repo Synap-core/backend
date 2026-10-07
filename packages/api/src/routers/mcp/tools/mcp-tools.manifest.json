@@ -1072,7 +1072,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
+      "description": "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4061,7 +4061,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Pin your runtime workspace focus so every subsequent write (create/update/capture) with no explicit workspaceId lands there — the 'use the CRM workspace until I say otherwise' scenario. ADVISORY: a call that DOES pass an explicit workspaceId still overrides the focus; reads are unaffected. Sticky in THIS conversation until cleared — another conversation keeps its own (set the same focus there to share it); the reply's `focusScope` says which. Pass `workspace` as a name (matched against your workspaces) or an id; omit it (or pass 'none'/'clear') to clear the focus.",
+      "description": "Pin your runtime workspace focus so every subsequent write (create/update/capture) with no explicit workspaceId lands there — the 'use the CRM workspace until I say otherwise' scenario. ADVISORY: a call that DOES pass an explicit workspaceId still overrides the focus; reads are unaffected. Sticky in THIS conversation until cleared — another conversation keeps its own (set the same focus there to share it); the reply's `focusScope` says which. Pass `workspace` as a name (matched against your workspaces) or an id; omit it (or pass 'none'/'clear') to clear the focus. Pinning a space also RETURNS its `brief` (purpose, the kinds it holds, its skills, its playbooks) — the same brief a pinned `synap_orient` serves, so focusing is also how you learn what the space knows before you work in it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4586,7 +4586,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List the workspaces (domain lenses) you can see, pod-wide — call this to find a workspace id instead of guessing from orient. Each row: id, name, description, workspaceType, your role, accessKind (member | pod_visible), archived, entityCount, and usedByProjectIds (projects that run through it — an INDEX, not an ACL). Link a project to one with synap_project_use_workspace.",
+      "description": "List the workspaces (domain lenses) you can see, pod-wide — call this to find a workspace id instead of guessing from orient. Each row: id, name, description, workspaceType, your role, accessKind (member | pod_visible), archived, entityCount, and usedByProjectIds (projects that run through it — an INDEX, not an ACL). Link a project to one with synap_project_use_workspace. To learn what a space is FOR and what it knows — its purpose, the kinds it holds, its rules and its skills — PIN it: pass its workspaceId to `synap_orient`, or `synap_set_workspace_focus`; both return that space's `brief`.",
       "inputSchema": {
         "type": "object",
         "properties": {

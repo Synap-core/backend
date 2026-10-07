@@ -24,6 +24,8 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 **Where the kinds are:** `orient` names the kinds in use, most-used first; the profile-listing tool lists every kind and role. A kind's property schema (fields, enums, required): over MCP, `get_entity` on any existing entity of that kind returns it as `effectiveProperties`; over HTTP, `GET /api/hub/discover?profileSlugs=<slug>`; CLI `synap discover`. A write that breaks the schema is rejected with the valid fields quoted.
 
+**The space brief — what a space is FOR, and what it KNOWS.** PIN a space and the pod hands you its **brief**: `purpose` + `persona` (what it is for), `keyKinds` (the kinds it holds), `rules`, `playbooks`, `anchors`, and — the one that changes how you work — **`skills`**: the agent know-how the space ACTIVATES, each `{ slug, mode, when? }`. Reach it by passing a `workspaceId` to `orient` (an unpinned orient carries NO brief — it is space-scoped), or by `set_workspace_focus`; its reply carries the same brief. **Read the mode:** `mode: 'always'` is in effect for every task in this space — `load_skill` its slug before you work; `mode: 'on-demand'` means load it when the task matches its `when`. A space's skills are the pod telling you _this domain has a way of doing things_ — honour them rather than improvising. Pin the space the moment you are about to work in one.
+
 **How they compose** (definitions: `concepts`):
 
 - A **project spans workspaces** and a **workspace spans projects**.
