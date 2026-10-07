@@ -19,7 +19,6 @@
 import {
   resolveAgentMark,
   type AgentMarkRowLike,
-  type AgentMarkTone,
 } from "../agents/index.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
 import {
@@ -228,8 +227,10 @@ const STATE_RULES: Record<
     others: ReadonlyArray<ConnectionAction | "END" | "PIN">;
   }
 > = {
+  // Ochre = it is asking (your call, nothing broke); warning orange is
+  // reserved for "you must act" (a lapsed sign-in or key).
   asking: {
-    tone: "warning",
+    tone: "primary",
     glyph: "scales",
     primary: "review",
     others: ["open"],
@@ -359,6 +360,19 @@ function isQuiet(lastSeen: Instant, now: number): boolean {
 
 // ── App ─────────────────────────────────────────────────────────────────────
 
+/** The prefix of every app `public_id` — and so of every app grant's `client_id`. */
+export const APP_PUBLIC_ID_PREFIX = "app_";
+
+/**
+ * Is this an Application's `public_id` (a grant `client_id` naming an app, not
+ * an OAuth `dcr_` client)? `@synap/database` mints with a mirror of this rule
+ * (it cannot import this package); `app-public-id-mirror.tripwire` keeps the
+ * two identical.
+ */
+export function isAppPublicId(ref: string | null | undefined): boolean {
+  return typeof ref === "string" && ref.startsWith(APP_PUBLIC_ID_PREFIX);
+}
+
 /** One key as `apps.get` returns it (camelCase, from `AppRepository.keysFor`). */
 export interface AppKeyLike {
   isActive?: boolean | null;
@@ -474,21 +488,6 @@ export function resolveAgentConnectionView(
     resolveAgentConnectionState(row, opts.now),
     opts
   );
-}
-
-/** The agent mark's tone on the shared tone list, so one chip draws both. */
-export function agentToneToUnitTone(tone: AgentMarkTone): UnitTone {
-  switch (tone) {
-    case "success":
-      return "success";
-    case "warning":
-      return "warning";
-    case "danger":
-      return "error";
-    case "neutral":
-    default:
-      return "textSecondary";
-  }
 }
 
 // ── Account (connector sign-ins) ────────────────────────────────────────────
@@ -676,15 +675,4 @@ export function resolveWebhookConnectionState(
   if (!w.active) return "off";
   if (w.lastDeliveryStatus === "failed") return "failing";
   return isQuiet(w.lastTriggeredAt, now) ? "quiet" : "ready";
-}
-
-export function resolveWebhookConnection(
-  w: WebhookConnectionLike,
-  opts: ConnectionViewOptions & { now?: number } = {}
-): ConnectionView {
-  return connectionView(
-    "webhook",
-    resolveWebhookConnectionState(w, opts.now),
-    opts
-  );
 }

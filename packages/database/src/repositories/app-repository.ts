@@ -170,15 +170,14 @@ function newest(dates: Array<Date | null | undefined>): Date | null {
   return out;
 }
 
-/** The prefix of every app `public_id` (and so of every app grant's `client_id`). */
+/**
+ * The prefix of every app `public_id` (and so of every app grant's
+ * `client_id`). A MIRROR of `@synap-core/types/membrane`'s constant — this
+ * package cannot import that one (types → dev @synap/database is a cycle);
+ * `isAppPublicId` lives there only, and `app-public-id-mirror.tripwire`
+ * (api) keeps the two prefixes identical.
+ */
 export const APP_PUBLIC_ID_PREFIX = "app_";
-
-/** Is this grant `client_id` an Application's `public_id` (not an OAuth `dcr_` client)? */
-export function isAppPublicId(clientId: string | null | undefined): boolean {
-  return (
-    typeof clientId === "string" && clientId.startsWith(APP_PUBLIC_ID_PREFIX)
-  );
-}
 
 /** `app_<lowercased-uuid>` — the stable public id, used verbatim as `client_id`. */
 function makePublicId(): string {

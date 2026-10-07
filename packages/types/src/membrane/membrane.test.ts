@@ -9,8 +9,8 @@ import {
   CONNECTION_KINDS,
   CONNECTION_QUIET_AFTER_DAYS,
   CONNECTION_STATES,
-  agentToneToUnitTone,
   connectionView,
+  isAppPublicId,
   needsYouConnections,
   resolveAccountConnectionState,
   resolveAgentConnectionState,
@@ -484,6 +484,11 @@ describe("the states table — one primary action per state", () => {
       }
   });
 
+  it("asking is ochre (primary), never the orange of 'you must act'", () => {
+    expect(connectionView("app", "asking").tone).toBe("primary");
+    expect(connectionView("app", "needs_signin").tone).toBe("warning");
+  });
+
   it("an app's lapsed key reads 'Key expired'; an account's reads 'Sign-in expired'", () => {
     expect(connectionView("app", "needs_signin").label).toBe("Key expired");
     expect(connectionView("account", "needs_signin").label).toBe(
@@ -496,12 +501,33 @@ describe("the states table — one primary action per state", () => {
 });
 
 describe("action rules", () => {
-  it("every action has words in both moods, never a raw token", () => {
+  it("every action has its words in both moods (imperative, past)", () => {
+    // Typed by action, so a new action cannot ship without its words here.
+    const WORDS: Record<(typeof CONNECTION_ACTIONS)[number], [string, string]> =
+      {
+        review: ["Review", "Reviewed"],
+        approve: ["Approve", "Approved"],
+        decline: ["Decline", "Declined"],
+        reconnect: ["Reconnect", "Reconnected"],
+        retry: ["Retry", "Retried"],
+        see_failure: ["See what failed", "Saw what failed"],
+        open: ["Open", "Opened"],
+        rename: ["Rename", "Renamed"],
+        pin: ["Pin", "Pinned"],
+        unpin: ["Unpin", "Unpinned"],
+        notifications: ["Set notifications", "Set notifications"],
+        turn_on: ["Turn on", "Turned on"],
+        revoke: ["Revoke", "Revoked"],
+        disconnect: ["Disconnect", "Disconnected"],
+        remove: ["Remove for good", "Removed for good"],
+        issue_key: ["Issue key", "Issued key"],
+        add_again: ["Add again", "Added again"],
+        connect: ["Connect", "Connected"],
+        cancel: ["Cancel", "Cancelled"],
+      };
     for (const a of CONNECTION_ACTIONS) {
       const spec = resolveConnectionAction(a);
-      expect(spec.label).not.toMatch(/_/);
-      expect(spec.pastLabel).not.toMatch(/_/);
-      expect(spec.label.length).toBeGreaterThan(0);
+      expect([spec.label, spec.pastLabel], a).toEqual(WORDS[a]);
     }
   });
 
@@ -565,12 +591,15 @@ describe("needsYouConnections", () => {
   });
 });
 
-describe("agentToneToUnitTone", () => {
-  it("maps every agent tone onto the shared list (danger is error, not warning)", () => {
-    expect(agentToneToUnitTone("success")).toBe("success");
-    expect(agentToneToUnitTone("warning")).toBe("warning");
-    expect(agentToneToUnitTone("danger")).toBe("error");
-    expect(agentToneToUnitTone("neutral")).toBe("textSecondary");
+describe("isAppPublicId", () => {
+  it("names an app's public id, never an OAuth client or a bare uuid", () => {
+    expect(isAppPublicId("app_1e1e1e1e-0000-4000-8000-0000000000aa")).toBe(
+      true
+    );
+    expect(isAppPublicId("dcr_someclient")).toBe(false);
+    expect(isAppPublicId("1e1e1e1e-0000-4000-8000-0000000000aa")).toBe(false);
+    expect(isAppPublicId(null)).toBe(false);
+    expect(isAppPublicId(undefined)).toBe(false);
   });
 });
 

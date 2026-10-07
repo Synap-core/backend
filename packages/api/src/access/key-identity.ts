@@ -34,7 +34,8 @@
  */
 
 import { UnauthorizedError } from "@synap-core/types";
-import { db, users, eq, GrantRepository, isAppPublicId } from "@synap/database";
+import { isAppPublicId } from "@synap-core/types/membrane";
+import { db, users, eq, GrantRepository } from "@synap/database";
 import type { ApiKeyRecord, KeyGrant } from "@synap/database";
 
 export interface ResolvedKeyIdentity {
