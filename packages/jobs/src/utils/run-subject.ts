@@ -73,6 +73,18 @@ export function deriveEventSubjectEntityId(
   // user-defined property named `entityId` could otherwise hijack the subject.
   if (subjectType === "entity") return asEntityId(input.subjectId);
 
+  // `focus_session.*` / `track.*` — the event's `subjectId` is the SESSION (or
+  // track), never an entity; the entity the session is ABOUT is published as
+  // `data.subjectId` (`complete-session.ts` close event, `advance-stage.ts`
+  // stage_changed). Reading only `data.entityId` here dropped it, so "when a
+  // session closes → run the follow-up on the same subject" silently bound no
+  // subject. `data.entityId` still wins when an emitter states it explicitly.
+  if (subjectType === "focus_session" || subjectType === "track") {
+    return (
+      asEntityId(input.data?.entityId) ?? asEntityId(input.data?.subjectId)
+    );
+  }
+
   // Every other emitter that knows which entity its event is about publishes it
   // explicitly as `data.entityId`: `entity_facet.*` carries the parent entity,
   // and `external_message.received` carries the channel's bound context entity

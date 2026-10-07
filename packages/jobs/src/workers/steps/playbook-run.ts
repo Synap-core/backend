@@ -178,10 +178,16 @@ export async function executePlaybookRun(
 
   // Resolve subject entity id from params or trigger payload (canonical source).
   // entityId is the loop-context alias for the iterated entity; subjectId is the
-  // explicit override; trigger.payload.subjectId is the fallback.
+  // explicit override. Then the RUN's own subject (`trigger.subject` =
+  // `automation_runs.subject_entity_id`, derived ONCE by `run-subject.ts`) —
+  // preferred over the raw `trigger.payload.subjectId`, which for a NON-entity
+  // event is the session / proposal id, not an entity: falling to it dropped
+  // the subject of every "session closed → follow-up" chain. The raw payload id
+  // stays the last resort (a manual trigger with no derived subject).
   const candidateSubjectId =
     (resolvedParams.entityId as string | undefined) ??
     (resolvedParams.subjectId as string | undefined) ??
+    context.trigger.subject ??
     (context.trigger.payload.subjectId as string | undefined) ??
     null;
 
