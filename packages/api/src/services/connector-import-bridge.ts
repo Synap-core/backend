@@ -443,6 +443,8 @@ export async function syncConnectionToImport(
       type: "connector.sync.failed",
       sourceType: "connector",
       sourceId: connectionId,
+      // The provider's ACCOUNT — gated on the person's notify level for it.
+      connection: { kind: "account", id: provider },
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       groupKey: connectorSyncFailedGroupKey(ctx.workspaceId, connectionId),

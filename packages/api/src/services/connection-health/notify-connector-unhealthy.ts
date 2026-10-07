@@ -198,6 +198,13 @@ export async function notifyConnectorUnhealthy(
     sourceType: "connector",
     userId: opts.userId,
     workspaceId: opts.workspaceId,
+    // A connector's key IS its provider — the Connected page's ACCOUNT key
+    // (`account:<provider>`), so the person's notify level for that account
+    // gates it. An intelligence service is no membrane connection: ungated.
+    connection:
+      (opts.watermarkTable ?? "tools") === "tools"
+        ? { kind: "account", id: opts.connectorKey }
+        : undefined,
     groupKey: `${opts.workspaceId ?? "pod"}:${notificationType}:${opts.connectorKey}`,
     data: { connectorName: opts.connectorName, ...opts.notificationData },
   }).catch((err) =>

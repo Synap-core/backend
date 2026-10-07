@@ -59,6 +59,7 @@ import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { importRouter } from "./routers/import.js";
 import { connectorsRouter } from "./routers/connectors-trpc.js";
 import { notifCenterRouter } from "./routers/notif-center.js";
+import { connectionPrefsRouter } from "./routers/connection-prefs.js";
 import { proactiveRouter } from "./routers/proactive.js";
 import { syncManagementRouter } from "./routers/sync-management.js";
 import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
@@ -170,6 +171,7 @@ export const coreRouter = router({
   import: importRouter,
   connectors: connectorsRouter,
   notifCenter: notifCenterRouter,
+  connectionPrefs: connectionPrefsRouter,
   proactive: proactiveRouter,
   sync: syncManagementRouter,
   trustedIssuers: trustedIssuersRouter,

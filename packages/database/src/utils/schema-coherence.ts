@@ -146,6 +146,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "push_prefs",
     addedBy: "0289_notification_preferences_push_prefs.sql",
   },
+  // notification_preferences — per-connection pin + notify level (0316).
+  // `NotificationService.create` reads it for every connection notice;
+  // missing, that read throws and the notice is lost (create is non-fatal).
+  {
+    table: "notification_preferences",
+    column: "connection_prefs",
+    addedBy: "0316_notification_preferences_connection_prefs.sql",
+  },
   // proposals — structured rejection cause code (0232). App-level enum
   // (PROPOSAL_REJECTION_REASONS in @synap-core/types), free-text
   // `rejection_reason` stays; the reject door persists this alongside it.

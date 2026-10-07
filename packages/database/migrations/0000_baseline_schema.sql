@@ -2562,6 +2562,7 @@ CREATE TABLE IF NOT EXISTS "notification_preferences" (
   "routing_rules"       jsonb   DEFAULT '{}',
   "sound_enabled"       boolean DEFAULT true,
   "push_prefs"          jsonb   NOT NULL DEFAULT '{}',
+  "connection_prefs"    jsonb   NOT NULL DEFAULT '{}',
   "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now()
 );
@@ -2575,6 +2576,7 @@ ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "quiet_hours_end
 ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "routing_rules" jsonb DEFAULT '{}';
 ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "sound_enabled" boolean DEFAULT true;
 ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "push_prefs" jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "connection_prefs" jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 

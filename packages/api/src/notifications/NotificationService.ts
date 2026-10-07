@@ -53,6 +53,14 @@ import {
   readPodPushSettings,
 } from "./push-decision.js";
 import type { DeliveryChannel, NotificationDef } from "./registry.js";
+import {
+  CONNECTION_PREF_DEFAULTS,
+  connectionNoticeDelivered,
+  connectionPrefKey,
+  readConnectionPrefs,
+  type ConnectionNotifyLevel,
+  type ConnectionRef,
+} from "./connection-prefs.js";
 import type {
   NotificationCategory,
   NotificationPriority,
@@ -96,6 +104,14 @@ export interface CreateNotificationInput {
 
   // Template data (fills {{variables}} in title/body)
   data: Record<string, unknown>;
+
+  /**
+   * The ONE connection this notice is about (`<kind>:<id>`, the Connected
+   * page's key). Set it on a type whose registry row declares
+   * `connectionNotice`: the row is then gated on that connection's notify
+   * level. Ignored on a type that declares none.
+   */
+  connection?: ConnectionRef;
 
   // Override registry defaults (optional)
   groupKey?: string;
@@ -300,6 +316,36 @@ async function recipientTimezone(userId: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Per-connection notify level
+// ---------------------------------------------------------------------------
+
+/**
+ * The person's notify level for one connection. A FAILED read degrades to the
+ * default (`problems`) and LOGS — the same cost asymmetry as
+ * `recipientTimezone`: a throw here would drop the whole notice inside
+ * `create()`'s non-fatal catch, so a broken preference read would silence
+ * exactly the "your connection stopped" news the default exists to deliver.
+ */
+async function connectionNotifyLevel(
+  userId: string,
+  connection: ConnectionRef
+): Promise<ConnectionNotifyLevel> {
+  try {
+    const prefs = await readConnectionPrefs(userId);
+    return (
+      prefs[connectionPrefKey(connection)]?.notify ??
+      CONNECTION_PREF_DEFAULTS.notify
+    );
+  } catch (err) {
+    logger.warn(
+      { err, userId, connection },
+      "Could not read connection notify level — applying the default"
+    );
+    return CONNECTION_PREF_DEFAULTS.notify;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Push tap target — WHERE a tap on the phone lands.
 // ---------------------------------------------------------------------------
 
@@ -476,6 +522,23 @@ export const NotificationService = {
           "Notification muted by user preference — skipping"
         );
         return undefined;
+      }
+
+      // Per-connection level — the person said what they hear about THIS
+      // connection. Not persisted when it says no: a notice they opted out of
+      // is not waiting in the bell either (same as a mute).
+      if (input.connection && def.connectionNotice) {
+        const level = await connectionNotifyLevel(
+          input.userId,
+          input.connection
+        );
+        if (!connectionNoticeDelivered(level, def.connectionNotice)) {
+          logger.debug(
+            { type: input.type, connection: input.connection, level },
+            "Connection notice off by the person's level for it — skipping"
+          );
+          return undefined;
+        }
       }
 
       // Quiet hours — suppress real-time emission (still persist to DB for later viewing)

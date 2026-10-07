@@ -189,6 +189,12 @@ export const notificationPreferences = pgTable(
     // (`@synap-core/types/push`). Read from the POD-WIDE row only (0289).
     pushPrefs: jsonb("push_prefs").notNull().default({}),
 
+    // Per-connection personalisation — `{ "<kind>:<id>": { pinned?, notify? } }`
+    // (kind = a membrane `CONNECTION_KINDS` member). Read from the POD-WIDE row
+    // only, as `push_prefs` is (0316). Shape + merge door: the api's
+    // `notifications/connection-prefs.ts`.
+    connectionPrefs: jsonb("connection_prefs").notNull().default({}),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

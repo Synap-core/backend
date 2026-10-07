@@ -15,6 +15,8 @@
  * route table by `navigate-object` below.
  */
 
+import type { ConnectionNoticeClass } from "./connection-prefs.js";
+
 export type DeliveryChannel = "in_app" | "os" | "telegram" | "email_digest";
 
 export interface NotificationActionDef {
@@ -158,6 +160,16 @@ export interface NotificationDef {
    * carries the NEWEST instance, so its door is the latest failure.
    */
   foldBy?: "groupKey";
+  /**
+   * This type is news ABOUT ONE CONNECTION, and which kind: `"problem"` (it
+   * stopped working / needs the person) or `"info"` (it worked). The producer
+   * names the connection (`CreateNotificationInput.connection`) and
+   * `NotificationService.create` gates the row on that connection's notify
+   * level (`connection-prefs.ts`): `nothing` drops both, `problems` (default)
+   * keeps `"problem"`, `everything` keeps both. Omit ⇒ not a connection notice,
+   * never gated.
+   */
+  connectionNotice?: ConnectionNoticeClass;
 }
 
 export type NotificationNeedsYouRole =
@@ -392,6 +404,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   {
     type: "connector.sync.complete",
     category: "data",
+    connectionNotice: "info",
     label: "Connector Sync Complete",
     icon: "refresh-cw",
     priority: "normal",
@@ -403,6 +416,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   {
     type: "connector.sync.failed",
     category: "data",
+    connectionNotice: "problem",
     label: "Connector Sync Failed",
     icon: "alert-circle",
     priority: "high",
@@ -429,6 +443,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   {
     type: "connector.auth.expired",
     category: "data",
+    connectionNotice: "problem",
     label: "Connector Auth Expired",
     icon: "key",
     priority: "high",
