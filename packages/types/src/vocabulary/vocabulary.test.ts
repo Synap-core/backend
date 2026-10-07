@@ -258,6 +258,17 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("declare_source")).toBe("Declare source");
   });
 
+  it("carries the tool-account verbs in both moods (they used to be hand-written at the call site)", () => {
+    // The fallback spells these correctly TODAY, which is why they were never
+    // noticed — but a fallback ignores mood, so `resolveActionLabel("connect",
+    // "past")` would have returned "Connect" on a history row. Two surfaces had
+    // already hand-written the map instead of calling this door.
+    expect(resolveActionLabel("connect", "imperative")).toBe("Connect");
+    expect(resolveActionLabel("connect", "past")).toBe("Connected");
+    expect(resolveActionLabel("reconnect", "imperative")).toBe("Reconnect");
+    expect(resolveActionLabel("reconnect", "past")).toBe("Reconnected");
+  });
+
   it("every curated verb defines both moods", () => {
     for (const [key, verb] of Object.entries(ACTION_VERBS)) {
       expect(verb.imperative, `${key}.imperative`).toBeTruthy();

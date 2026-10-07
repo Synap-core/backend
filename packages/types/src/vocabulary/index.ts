@@ -161,6 +161,14 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   install: { imperative: "Install", past: "Installed" },
   enable: { imperative: "Enable", past: "Enabled" },
   disable: { imperative: "Disable", past: "Disabled" },
+  // A tool's account: `connect` mints the sign-in, `reconnect` repairs one that
+  // lapsed. Both reached users by ACCIDENT — `humanizeToken` spells them
+  // correctly, which is exactly the coincidence this table exists to remove
+  // (see `received` above). Two surfaces had already hand-written them
+  // (`ConnectedApp`'s FIX_LABEL map, `ToolPage`'s reconnect ternary) the moment
+  // a label was needed; a third would have been inevitable.
+  connect: { imperative: "Connect", past: "Connected" },
+  reconnect: { imperative: "Reconnect", past: "Reconnected" },
   // Pause/resume is the register for something that RUNS (an automation with a
   // live trigger, a session): it was running and will run again. Enable/disable
   // is the register for a config FLAG. They are not synonyms — using the flag
