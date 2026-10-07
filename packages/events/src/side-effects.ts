@@ -163,6 +163,9 @@ const webhookDeliveryReactor: Reactor = {
       userId: payload.userId,
       workspaceId: payload.workspaceId,
       data: payload.data,
+      // The `events` row, so the webhook delivery log can reference it
+      // (webhook_deliveries.event_id is an FK to events.id — never a subject id).
+      eventId: payload.eventId ?? null,
     });
   },
 };
