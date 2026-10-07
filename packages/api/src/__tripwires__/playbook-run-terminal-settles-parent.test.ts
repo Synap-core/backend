@@ -123,7 +123,9 @@ describe("tripwire: a playbook_runs terminal writer settles the parent automatio
     // The writers known when this guard was written. New ones join the scan
     // by existing; this floor only proves the scan still SEES the old ones.
     for (const known of [
-      "api/src/routers/hub-protocol/rest/runs.ts",
+      // The capture write moved out of the Hub route into the ONE applier it
+      // now shares with the external-agent status poll (2026-10-08).
+      "api/src/services/runs/apply-run-capture.ts",
       "api/src/routers/hub-protocol/rest/focus-sessions.ts",
       "api/src/routers/proposals/executors/playbook.ts",
       "api/src/services/focus-sessions/follow-playbook.ts",

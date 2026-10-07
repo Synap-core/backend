@@ -1113,7 +1113,7 @@ async function executeSingleRun(
       // Agent selector — forwarded verbatim; the executor validates it.
       agentType: input.agentType ?? null,
       // Thread the run id so an external agent knows which run to capture back
-      // against (POST /api/hub/runs/{runId}/capture); webhookUrl rides params.
+      // against (POST /api/hub/runs/{runId}/capture).
       input: { ...params, runId: run.id },
       capabilities,
     });
@@ -1134,6 +1134,9 @@ async function executeSingleRun(
     result.status === "completed" ||
     result.status === "failed" ||
     result.status === "proposed";
+  const externalAgentPatch = result.externalAgent
+    ? { externalAgent: result.externalAgent }
+    : {};
   const [updated] = await db
     .update(playbookRuns)
     .set({
@@ -1141,6 +1144,11 @@ async function executeSingleRun(
       summary: result.summary ?? null,
       error: result.error ?? null,
       completedAt: terminal ? new Date() : null,
+      // The hand-off receipt of an external-agent dispatch (0315) — what the
+      // status poll and the cancel door read. Absent for every other executor.
+      // (Built outside this literal: the terminal-settles tripwire parses a
+      // brace-free `.set({...})`, and a nested object would blind it.)
+      ...externalAgentPatch,
     })
     .where(eq(playbookRuns.id, run.id))
     .returning();

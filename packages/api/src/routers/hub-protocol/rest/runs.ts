@@ -17,10 +17,10 @@
  */
 
 import { z } from "zod";
-import { db, eq, inArray, playbookRuns } from "@synap/database";
-import { entities } from "@synap/database/schema";
+import { db, eq, playbookRuns } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
-import { createLinks } from "../../../services/links/links-service.js";
+import { applyRunCapture } from "../../../services/runs/apply-run-capture.js";
+import { cancelRun } from "../../../services/agent-dispatch/cancel-run.js";
 import { listRuns, getRun } from "../../../services/runs/index.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -32,7 +32,6 @@ import {
   httpStatusForTrpcError,
   requireUuidParam,
 } from "./_shared.js";
-import { settleParentAutomationRunFromChild } from "@synap/jobs";
 
 // ── Unified-run read schemas (the cross-flow diagnose door) ──────────────────
 
@@ -216,6 +215,93 @@ export function registerRunsRoutes(app: HubHono): void {
 
   registerOpenApi(app, {
     method: "post",
+    path: "/runs/{runId}/cancel",
+    tags: ["Playbooks"],
+    summary: "Cancel a live playbook run (and its external agent task)",
+    description:
+      "Marks a running run cancelled. When the run was handed to an external agent whose binding supports cancel, the binding's cancel verb runs first and must succeed; otherwise the run is cancelled and the response says the agent could not be stopped from Synap. Human-only: an agent key gets 403.",
+    request: { params: z.object({ runId: z.string() }) },
+    responses: {
+      200: {
+        description: "Cancelled",
+        schema: z
+          .object({
+            id: z.string(),
+            status: z.string(),
+            externalCancelled: z.boolean().nullable().optional(),
+            note: z.string().optional(),
+          })
+          .passthrough(),
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Run not found", schema: ErrorSchema },
+      409: { description: "Run is not live", schema: ErrorSchema },
+      502: { description: "The agent's cancel failed", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/runs/:runId/cancel", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const runId = requireUuidParam(c, "runId");
+    if (runId instanceof Response) return runId;
+    // HUMAN-ONLY (v1): stopping work is the person's call. A governed agent
+    // cancel would file a `playbook_run/update` proposal whose approval
+    // replays a CAPTURE — it could never reach the binding's cancel verb.
+    if (c.get("agentUserId")) {
+      return c.json(
+        { error: "Only a person can cancel a run — an agent key cannot." },
+        403
+      );
+    }
+    try {
+      const run = await db.query.playbookRuns.findFirst({
+        where: eq(playbookRuns.id, runId),
+      });
+      if (!run) return c.json({ error: "Run not found" }, 404);
+      const acting = await resolveActingContext(c, {
+        workspaceId: run.workspaceId ?? undefined,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      if (run.workspaceId && run.workspaceId !== acting.workspaceId) {
+        return c.json({ error: "Run not found" }, 404);
+      }
+      const out = await cancelRun({ runId, userId: acting.userId });
+      if (out.status === "not_found")
+        return c.json({ error: "Run not found" }, 404);
+      if (out.status === "not_live") {
+        return c.json(
+          { error: `Run is ${out.runStatus}, not running — nothing to cancel` },
+          409
+        );
+      }
+      if (out.status === "cancel_failed") {
+        return c.json(
+          { error: `The agent's task could not be cancelled: ${out.message}` },
+          502
+        );
+      }
+      return c.json({
+        id: runId,
+        status: "cancelled",
+        externalCancelled: out.externalCancelled,
+        ...(out.note ? { note: out.note } : {}),
+      });
+    } catch (err) {
+      logger.error({ err, runId }, "runs.cancel failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "post",
     path: "/runs/{runId}/capture",
     tags: ["Playbooks"],
     summary: "Capture a playbook run's outcome",
@@ -316,69 +402,17 @@ export function registerRunsRoutes(app: HubHono): void {
         });
       }
 
-      // Approved → update the run. Terminal statuses stamp completed_at.
-      const nextStatus = body.status ?? run.status;
-      const terminal =
-        nextStatus === "completed" ||
-        nextStatus === "failed" ||
-        nextStatus === "proposed";
-      const [updated] = await db
-        .update(playbookRuns)
-        .set({
-          status: nextStatus,
-          summary: body.summary ?? run.summary,
-          error: body.error ?? run.error,
-          completedAt: terminal ? new Date() : run.completedAt,
-        })
-        .where(eq(playbookRuns.id, runId))
-        .returning();
-      // A failed child of an automation run settles its parent (never throws).
-      if (terminal)
-        await settleParentAutomationRunFromChild({ playbookRunId: runId });
-
-      // Record produced entities as `session → produced → entity` links (the
-      // provenance edge for what this run generated). VALIDATE each id resolves
-      // to an entity in the run's OWN workspace before linking — a capture-back
-      // caller must not fabricate provenance to arbitrary / cross-tenant ids.
-      // Capped to bound the write.
-      if (run.sessionId && run.workspaceId && body.producedEntityIds?.length) {
-        const requested = body.producedEntityIds.slice(0, 100);
-        const found = await db.query.entities.findMany({
-          where: inArray(entities.id, requested),
-          columns: { id: true, workspaceId: true },
-        });
-        const validIds = found
-          .filter((e) => e.workspaceId === run.workspaceId)
-          .map((e) => e.id);
-        if (validIds.length) {
-          await createLinks(
-            validIds.map((entityId) => ({
-              workspaceId: run.workspaceId,
-              fromType: "session" as const,
-              fromId: run.sessionId as string,
-              toType: "entity" as const,
-              toId: entityId,
-              linkType: "produced" as const,
-            }))
-          );
-        }
-      }
-
-      // Record invoked capabilities as `session → used → {tool|skill|command}` —
-      // the provenance the session room's "Tools & skills" Frame reads, and what
-      // promoteSessionToPlaybook re-grants. Capped; idempotent (links unique edge).
-      if (run.sessionId && run.workspaceId && body.usedCapabilities?.length) {
-        await createLinks(
-          body.usedCapabilities.slice(0, 100).map((cap) => ({
-            workspaceId: run.workspaceId,
-            fromType: "session" as const,
-            fromId: run.sessionId as string,
-            toType: cap.kind,
-            toId: cap.id,
-            linkType: "used" as const,
-          }))
-        );
-      }
+      // Approved → the ONE capture write (shared with the external-agent
+      // status poll): status/summary/error, terminal stamp, parent settle,
+      // produced + used provenance.
+      const updated = await applyRunCapture({
+        run,
+        status: body.status,
+        summary: body.summary,
+        error: body.error,
+        producedEntityIds: body.producedEntityIds,
+        usedCapabilities: body.usedCapabilities,
+      });
 
       return c.json({
         id: updated.id,

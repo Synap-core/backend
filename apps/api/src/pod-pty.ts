@@ -1,9 +1,9 @@
 /**
  * Pod PTY — the ONE place this server spawns a shell.
  *
- * Both pod spawners (`local-terminal.ts`, the interactive DevPlane terminal,
- * and `dev-agent-spawn.ts`, the coding-agent launcher) go through
- * `spawnPodPty`. A tripwire (`pod-pty.one-door.test.ts`) fails if any other
+ * The pod's one spawner (`local-terminal.ts`, the interactive DevPlane
+ * terminal) goes through `spawnPodPty`. (The coding-agent launcher
+ * `dev-agent-spawn.ts` was retired 2026-10-08 — Synap never spawns an agent.) A tripwire (`pod-pty.one-door.test.ts`) fails if any other
  * file in this package imports node-pty.
  *
  * SECURITY — why the env is an allowlist:

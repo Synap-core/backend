@@ -42,6 +42,38 @@ export type PlaybookRunStatus =
   // person an open slot — waiting on the human, never force-failed.
   | "waiting_on_you";
 
+/** The normalized state of an external agent's task (the `status` verb). */
+export type ExternalAgentState = "running" | "needs_input" | "done" | "failed";
+
+/**
+ * `playbook_runs.external_agent` — the run's external reference.
+ * `status` is the dispatch lifecycle: `running` / `needs_input` keep the poll
+ * going; `done` / `failed` / `cancelled` stop it.
+ */
+export interface PlaybookRunExternalAgent {
+  agentUserId: string;
+  toolId: string;
+  provider: string;
+  /** The provider's task id (from the `start` verb). */
+  externalId: string | null;
+  /** The provider's page for the task, when it gave one. */
+  url: string | null;
+  status: ExternalAgentState | "cancelled";
+  /** The last normalized status read, as posted to the room (poll idempotency). */
+  lastState?: {
+    state: ExternalAgentState;
+    url?: string;
+    prUrl?: string;
+    branch?: string;
+    previewUrl?: string;
+    summary?: string;
+  };
+  /** Fingerprint of `lastState` — the poll posts once per change. */
+  lastStateKey?: string;
+  polledAt?: string;
+  startedAt: string;
+}
+
 export const playbookRuns = pgTable(
   "playbook_runs",
   {
@@ -84,6 +116,12 @@ export const playbookRuns = pgTable(
     definitionSnapshot: jsonb("definition_snapshot"),
     /** Soft self-reference to the run this one replays (schema support only). */
     replayOf: uuid("replay_of"),
+    /**
+     * The EXTERNAL agent this run was dispatched to (0315) — the receipt of
+     * the hand-off, advanced by the status poll. NULL unless the
+     * external-agent executor started a task through an agent binding.
+     */
+    externalAgent: jsonb("external_agent").$type<PlaybookRunExternalAgent>(),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

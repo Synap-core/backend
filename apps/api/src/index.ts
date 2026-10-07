@@ -59,9 +59,7 @@ import {
   registerSessionCriteriaUnmetReactor,
   registerClosingReportReactor,
   registerDocumentDiagnosticsReactor,
-  registerDevAgentSpawner,
 } from "@synap/api";
-import { dispatchDevAgentRun } from "./dev-agent-dispatch.js";
 import { serve } from "@hono/node-server";
 import {
   startBoss,
@@ -1818,14 +1816,6 @@ try {
       // Any content save (a person's autosave, a restore, an approval): re-check
       // which embeds will not render, stamped with the revision it checked.
       registerDocumentDiagnosticsReactor();
-      // IoC: fill the BYOA local-spawn slot. The `external-agent` executor's
-      // no-webhook branch starts the workspace's coding CLI on this host; the
-      // spawn (node-pty + the DevPlane `localTerminalEnabled` gate) lives here,
-      // and @synap/api cannot import apps/api. Registered outside the pg-boss
-      // branch because `runPlaybook` dispatches in THIS process regardless of
-      // whether the queue is up. Until this call the branch fails the run with
-      // the reason — it never records an undispatched `running` run.
-      registerDevAgentSpawner((req) => dispatchDevAgentRun(req));
 
       if (config.server.localMode) {
         // Local mode: pg-boss is disabled (untested on PGlite and would

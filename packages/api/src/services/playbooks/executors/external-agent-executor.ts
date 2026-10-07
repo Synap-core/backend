@@ -1,155 +1,435 @@
 /**
- * ExternalAgentExecutor — the BYOA executor (Phase 3).
+ * ExternalAgentExecutor — hand a run to an EXTERNAL agent through its binding.
  *
- * "Bring Your Own Agent": a Playbook whose `executor` is `external-agent`
- * dispatches the run to an external agent (Claude Code, a CLI, a friend's
- * scraper). The verifiable cut shipped here is the WEBHOOK path: if the run
- * carries a webhook URL, POST the run envelope to it (fire-and-forget, bounded
- * timeout). The external agent then does its work with ITS OWN skills and
- * CAPTURES RESULTS BACK through the Hub Protocol (`POST /runs/:id/capture`) —
- * never with direct DB access.
+ * "Bring Your Own Agent", contract of 2026-10-08 ("Agents Synap can dispatch
+ * work to"). Synap NEVER spawns a coding agent itself and never posts to a
+ * caller-supplied URL: an agent is reached ONLY through the binding a person
+ * stored for it (`participant --dispatched_via--> tool`, the tool's
+ * `config.agentBinding`), whose `start` verb runs through `executeCapability`
+ * — governed, and attributed to the AGENT user.
  *
- * The webhook URL is read from the RunContext input (`webhookUrl`), which the
- * runner threads through from the playbook/tool config. `callbackUrl` in the
- * envelope tells the agent where to capture back.
+ * ── Which agent (the contract order, never a silent default) ────────────────
+ *   1. the run param `agentUserId` (or the same param answered onto the
+ *      session's `metadata.params` through the "choose an agent" slot);
+ *   2. the session roster's dispatchable agent (reach `'dispatch'`);
+ *   3. THE dispatchable agent, when exactly one exists on the pod;
+ *   4. otherwise the run FAILS and the person owes ONE slot, "Choose an
+ *      agent", whose ask lists the dispatchable agents. Answering it writes
+ *      `agentUserId` into the session's params; the next run uses it.
  *
- * The SIBLING dispatch shape is a LOCAL SPAWN: no webhookUrl ⇒ the pod starts
- * the coding CLI itself (DevPlane's `/api/devplane/claude-code` PTY), reached
- * through the `registerDevAgentSpawner` IoC slot because the spawn lives in
- * apps/api (node-pty + the DevPlane gate) and this package cannot import it.
- * Both shapes are fire-and-forget: the agent captures back via
- * `POST /api/hub/runs/:id/capture` exactly the same way.
+ * ── What the agent receives ─────────────────────────────────────────────────
+ * The task (goal fenced as UNTRUSTED data — it is the person's words and the
+ * answers fed back, not instructions from Synap), repos/branch when the run
+ * params carry them, the session and room ids, the run's capture path, the
+ * pod's MCP URL, and a REFERENCE to the agent's own key (`api_keys.id` +
+ * prefix — never the secret). How the key reaches the agent is the provider
+ * template's business; no secret is ever put in a prompt.
  *
- * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4,
- * external-agent executor; security: BYOA acts only through the Hub Protocol).
+ * ── Outcomes ────────────────────────────────────────────────────────────────
+ *   accepted  ⇒ run `running`, `externalAgent` recorded on the run (the poll
+ *               and the cancel door read it), a room update.
+ *   proposed  ⇒ run `proposed` — the start waits on a person's approval; the
+ *               room says so with the review link.
+ *   failed    ⇒ run `failed`, with the reason in the room. Never `running`
+ *               over a delivery nothing received.
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4).
  */
 
-import type { Executor, RunContext, RunResult } from "@synap/playbooks";
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
-import { getDevAgentSpawner } from "./dev-agent-spawner.js";
+import type {
+  Executor,
+  ExpectedOutput,
+  RunContext,
+  RunResult,
+} from "@synap/playbooks";
+import { createLogger } from "@synap-core/core";
+import {
+  db,
+  focusSessions,
+  playbooks,
+  users,
+  apiKeys,
+  and,
+  eq,
+  desc,
+  inArray,
+  isNull,
+  drizzleSql,
+} from "@synap/database";
+import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import {
+  AgentBindingError,
+  listDispatchableAgentIds,
+  resolveAgentBinding,
+  resolveAgentReachMany,
+  type AgentBinding,
+} from "../../agent-dispatch/agent-binding.js";
+import {
+  asOptionalString,
+  asRecord,
+  callBindingVerb,
+  fenceUntrustedData,
+  postDispatchNotice,
+} from "../../agent-dispatch/binding-call.js";
+import { RUN_PARAMS_METADATA_KEY } from "../playbook-lifecycle.js";
+import { paramOwedSlots } from "../../focus-sessions/param-slots.js";
+import { normalizeExpectedLabel } from "../../focus-sessions/expected-label.js";
+import { updateExpectedOutputsLocked } from "../../focus-sessions/delegate-output.js";
+import { notifySessionNeedsYou } from "../../focus-sessions/notify-needs-you.js";
+import { podPublicOrigin } from "../../../utils/deep-links.js";
 
-/** Fire-and-forget POST with a hard timeout; never throws. */
-async function postWebhook(url: string, body: unknown): Promise<boolean> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
-  try {
-    // safeExternalFetch re-validates every hop and rejects redirects, closing the
-    // redirect-to-internal SSRF gap left by the pre-validate at the call site.
-    const res = await safeExternalFetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    return res.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeout);
+const logger = createLogger({ module: "external-agent-executor" });
+
+/** The run param that names the agent (and the slot's `paramName`). */
+export const AGENT_USER_ID_PARAM = "agentUserId";
+/** The owed slot's label — one per session, merged by label. */
+export const CHOOSE_AGENT_SLOT_LABEL = "Answer: Choose an agent";
+
+interface SessionRow {
+  id: string;
+  userId: string;
+  agentIds: string[];
+  metadata: Record<string, unknown>;
+}
+
+export type RunAgentChoice =
+  | { kind: "agent"; agentUserId: string; via: "param" | "roster" | "single" }
+  | { kind: "invalid_param"; agentUserId: string }
+  | { kind: "choose"; candidates: string[] };
+
+/** THE "which agent does this run use" rule (pure over its reads). */
+export async function chooseRunAgent(p: {
+  paramAgentUserId: string | undefined;
+  rosterAgentIds: readonly string[];
+}): Promise<RunAgentChoice> {
+  if (p.paramAgentUserId) {
+    const reach = await resolveAgentReachMany([p.paramAgentUserId]);
+    return reach.get(p.paramAgentUserId) === "dispatch"
+      ? { kind: "agent", agentUserId: p.paramAgentUserId, via: "param" }
+      : { kind: "invalid_param", agentUserId: p.paramAgentUserId };
   }
+  if (p.rosterAgentIds.length > 0) {
+    const reach = await resolveAgentReachMany(p.rosterAgentIds);
+    const staffed = p.rosterAgentIds.find((id) => reach.get(id) === "dispatch");
+    if (staffed) return { kind: "agent", agentUserId: staffed, via: "roster" };
+  }
+  const candidates = await listDispatchableAgentIds();
+  if (candidates.length === 1) {
+    return { kind: "agent", agentUserId: candidates[0]!, via: "single" };
+  }
+  return { kind: "choose", candidates };
+}
+
+async function loadSession(sessionId: string): Promise<SessionRow | null> {
+  const row = await db.query.focusSessions.findFirst({
+    where: eq(focusSessions.id, sessionId),
+    columns: { id: true, userId: true, agentIds: true, metadata: true },
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.userId,
+    agentIds: Array.isArray(row.agentIds) ? (row.agentIds as string[]) : [],
+    metadata: asRecord(row.metadata),
+  };
+}
+
+/** The agent's own door key, by REFERENCE (id + prefix) — never the secret. */
+async function agentKeyRef(
+  agentUserId: string
+): Promise<{ apiKeyId: string; keyPrefix: string } | null> {
+  const [key] = await db
+    .select({ id: apiKeys.id, keyPrefix: apiKeys.keyPrefix })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.userId, agentUserId),
+        isNull(apiKeys.revokedAt),
+        drizzleSql`${apiKeys.keyType} IS DISTINCT FROM 'is_internal'`
+      )
+    )
+    .orderBy(desc(apiKeys.createdAt))
+    .limit(1);
+  return key ? { apiKeyId: key.id, keyPrefix: key.keyPrefix } : null;
+}
+
+/**
+ * Owe the person ONE "Choose an agent" slot. Its ask chooses among the
+ * dispatchable agents by NAME (value = the agent user id); answering it writes
+ * `agentUserId` into the session's params through the ONE answer door.
+ */
+async function oweChooseAgentSlot(p: {
+  session: SessionRow;
+  candidates: string[];
+  playbookName: string;
+}): Promise<void> {
+  const named = p.candidates.length
+    ? await db
+        .select({ id: users.id, name: users.name })
+        .from(users)
+        .where(inArray(users.id, p.candidates))
+    : [];
+  const owedAt = new Date().toISOString();
+  const [slot] = paramOwedSlots(
+    [
+      {
+        name: AGENT_USER_ID_PARAM,
+        label: "Choose an agent",
+        type: "choice",
+        options: p.candidates,
+        required: true,
+      },
+    ],
+    p.playbookName,
+    owedAt,
+    p.candidates.length === 0
+      ? "No agent is bound for dispatch yet — bind one to its provider in Settings › Agents, then run this again."
+      : "Several agents can take this work; pick the one that builds it, then run this again."
+  );
+  const chooseSlot: ExpectedOutput = {
+    ...slot!,
+    label: CHOOSE_AGENT_SLOT_LABEL,
+    kind: PARAM_SLOT_KIND,
+    ...(named.length > 0
+      ? {
+          ask: {
+            mode: "choose",
+            options: named.map((a) => ({
+              label: a.name?.trim() || "Agent",
+              value: a.id,
+            })),
+          },
+        }
+      : {}),
+  };
+  let before: ExpectedOutput[] = [];
+  let after: ExpectedOutput[] = [];
+  await updateExpectedOutputsLocked(p.session.id, (current) => {
+    // Merged by label: a second failed run never files the question twice.
+    const owed = current.some(
+      (o) =>
+        normalizeExpectedLabel(o?.label) ===
+          normalizeExpectedLabel(CHOOSE_AGENT_SLOT_LABEL) && o.status !== "done"
+    );
+    if (owed) return null;
+    before = current;
+    after = [
+      ...current.filter(
+        (o) =>
+          normalizeExpectedLabel(o?.label) !==
+          normalizeExpectedLabel(CHOOSE_AGENT_SLOT_LABEL)
+      ),
+      chooseSlot,
+    ];
+    return after;
+  });
+  if (after.length > 0) {
+    // A headless run handed the person a question — tell them.
+    await notifySessionNeedsYou({
+      sessionId: p.session.id,
+      byAgent: true,
+      recipientUserId: p.session.userId,
+      reason: { kind: "slots", before, after },
+    });
+  }
+}
+
+async function playbookNameOf(playbookId: string | undefined): Promise<string> {
+  if (!playbookId) return "This run";
+  const [row] = await db
+    .select({ name: playbooks.name })
+    .from(playbooks)
+    .where(eq(playbooks.id, playbookId))
+    .limit(1);
+  return row?.name?.trim() || "This run";
+}
+
+/** The repos/branch a run carries, when its params name them. */
+function repoInputs(params: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const repos = Array.isArray(params.repos)
+    ? params.repos.filter((r): r is string => typeof r === "string")
+    : asOptionalString(params.repo)
+      ? [asOptionalString(params.repo)!]
+      : [];
+  if (repos.length) out.repos = repos;
+  const branch = asOptionalString(params.branch);
+  if (branch) out.branch = branch;
+  return out;
+}
+
+/** The run param `agentUserId`, then the same param answered onto the session. */
+function paramAgent(
+  input: Record<string, unknown>,
+  session: SessionRow
+): string | undefined {
+  return (
+    asOptionalString(input[AGENT_USER_ID_PARAM]) ??
+    asOptionalString(
+      asRecord(session.metadata[RUN_PARAMS_METADATA_KEY])[AGENT_USER_ID_PARAM]
+    )
+  );
 }
 
 export class ExternalAgentExecutor implements Executor {
   readonly ref = "external-agent" as const;
 
   async run(ctx: RunContext): Promise<RunResult> {
-    // The runner threads the BYOA target config onto the input as `webhookUrl`
-    // (+ optional `callbackUrl`). When present, the webhook path is the
-    // verifiable BYOA dispatch.
-    const input = (ctx.input ?? {}) as {
-      webhookUrl?: string;
-      callbackUrl?: string;
-      runId?: string;
+    const input = asRecord(ctx.input);
+    const runId = asOptionalString(input.runId) ?? null;
+    const session = await loadSession(ctx.sessionId);
+    if (!session) {
+      return {
+        status: "failed",
+        error: `external-agent run: session ${ctx.sessionId} not found`,
+      };
+    }
+    const ownerId = session.userId;
+    const fail = async (error: string, key: string): Promise<RunResult> => {
+      await postDispatchNotice({
+        channelId: ctx.channelId,
+        ownerId,
+        content: `Could not hand this run to an agent: ${error}`,
+        idempotencyKey: `external-agent:${runId ?? ctx.sessionId}:${key}`,
+      });
+      return { status: "failed", error };
     };
 
-    if (input.webhookUrl) {
-      // SSRF guard — the canonical server-side outbound-fetch validator (same
-      // one channels.ts uses before relaying to an external channel). Blocks
-      // loopback / private / metadata (169.254.169.254) targets. Fail the run
-      // rather than POST the envelope to an internal address.
-      const check = validateExternalUrl(input.webhookUrl);
-      if (!check.valid) {
-        return {
-          status: "failed",
-          error: `external-agent webhook URL rejected: ${check.reason}`,
-        };
-      }
-
-      // Fire-and-forget — the external agent works async and captures back via
-      // POST {pod}/api/hub/runs/{runId}/capture. We await only the delivery.
-      void postWebhook(input.webhookUrl, {
-        runId: input.runId ?? null,
-        sessionId: ctx.sessionId,
-        channelId: ctx.channelId ?? null,
-        goal: ctx.goal,
-        // The bound subject — the external agent scopes its work to this entity.
-        subject: ctx.subjectId
-          ? {
-              id: ctx.subjectId,
-              name: ctx.subjectName ?? null,
-              profile: ctx.subjectProfile ?? null,
-            }
-          : null,
-        capturePath: input.runId
-          ? `/api/hub/runs/${input.runId}/capture`
-          : null,
-        capabilities: ctx.capabilities,
-        // Stage context so the external agent can scope to the active stage.
-        // ADVISORY only — stage-scoped-grant ENFORCEMENT is a deliberate
-        // follow-up (stage.grants are not yet intersected into `capabilities`).
-        stages: ctx.stages ?? [],
-        currentStage: ctx.currentStage ?? null,
+    // 1. Which agent.
+    const choice = await chooseRunAgent({
+      paramAgentUserId: paramAgent(input, session),
+      rosterAgentIds: session.agentIds,
+    });
+    if (choice.kind === "invalid_param") {
+      return fail(
+        `agent ${choice.agentUserId} is not bound for dispatch — bind it to its provider, or choose another agent`,
+        "invalid-agent"
+      );
+    }
+    if (choice.kind === "choose") {
+      await oweChooseAgentSlot({
+        session,
+        candidates: choice.candidates,
+        playbookName: await playbookNameOf(ctx.playbookId),
       });
-      return {
-        status: "running",
-        summary: "dispatched to external agent via webhook",
-      };
+      return fail(
+        choice.candidates.length === 0
+          ? "no agent is bound for dispatch — bind one, then run this again"
+          : "several agents can take this work — choose one in the session, then run this again",
+        "choose-agent"
+      );
     }
+    const agentUserId = choice.agentUserId;
 
-    // No webhookUrl ⇒ LOCAL SPAWN. The pod starts the workspace's coding CLI
-    // itself, in the session's own checkout (dev-cwd.ts keys the working
-    // directory on the SESSION, so two concurrent dev runs in one workspace
-    // never share a tree). Fire-and-forget like the webhook branch: the agent
-    // reports back via POST /api/hub/runs/:id/capture.
-    const spawner = getDevAgentSpawner();
-    if (!spawner) {
-      // An unfilled slot is a severance. Fail loudly rather than record a
-      // `running` run nothing will ever close — which is exactly what this
-      // branch did before it was wired.
-      return {
-        status: "failed",
-        error:
-          "external-agent run has no webhookUrl and no local dev-agent spawner is registered — apps/api must call registerDevAgentSpawner() at boot",
-      };
-    }
-
+    // 2. Its binding (a broken one is a visible failure, never a skip).
+    let binding: AgentBinding | null;
     try {
-      const spawned = await spawner({
-        workspaceId: ctx.workspaceId,
-        userId: ctx.userId,
-        sessionId: ctx.sessionId,
-        runId: input.runId ?? null,
-        channelId: ctx.channelId ?? null,
-        goal: ctx.goal,
-        subject: ctx.subjectId
+      binding = await resolveAgentBinding(agentUserId);
+    } catch (err) {
+      if (err instanceof AgentBindingError) return fail(err.message, "binding");
+      throw err;
+    }
+    if (!binding) {
+      return fail(`agent ${agentUserId} has no dispatch binding`, "binding");
+    }
+
+    // 3. Start the task, as the agent.
+    const origin = podPublicOrigin() ?? null;
+    const params = {
+      task: {
+        goal: fenceUntrustedData(ctx.goal, "synap session goal"),
+        ...(typeof input.feedback === "string" && input.feedback.trim()
           ? {
-              id: ctx.subjectId,
-              name: ctx.subjectName ?? null,
-              profile: ctx.subjectProfile ?? null,
+              feedback: fenceUntrustedData(
+                input.feedback,
+                "synap reviewer feedback"
+              ),
             }
-          : null,
+          : {}),
+        ...(ctx.subjectId
+          ? {
+              subject: {
+                id: ctx.subjectId,
+                name: ctx.subjectName ?? null,
+                profile: ctx.subjectProfile ?? null,
+              },
+            }
+          : {}),
+        currentStage: ctx.currentStage ?? null,
+      },
+      ...repoInputs(input),
+      sessionId: ctx.sessionId,
+      channelId: ctx.channelId ?? null,
+      runId,
+      capturePath: runId ? `/api/hub/runs/${runId}/capture` : null,
+      pod: {
+        url: origin,
+        mcpUrl: origin ? `${origin}/mcp` : null,
+      },
+      agent: {
+        agentUserId,
+        keyRef: await agentKeyRef(agentUserId),
+      },
+    };
+    const started = await callBindingVerb({
+      binding,
+      verb: "start",
+      agentUserId,
+      ownerId,
+      parameters: params,
+      sessionId: ctx.sessionId,
+      channelId: ctx.channelId ?? null,
+      ...(runId ? { idempotencyKey: `agent-start:${runId}` } : {}),
+    });
+
+    if (started.status === "proposed") {
+      await postDispatchNotice({
+        channelId: ctx.channelId,
+        ownerId,
+        content: `Starting the ${binding.provider} agent needs your approval: ${started.reviewUrl}`,
+        idempotencyKey: `external-agent:${runId ?? ctx.sessionId}:proposed`,
       });
       return {
-        status: "running",
-        summary: `dispatched to local dev agent (pid ${spawned.pid}) in ${spawned.cwd}`,
-      };
-    } catch (err) {
-      return {
-        status: "failed",
-        error: `local dev-agent spawn failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        status: "proposed",
+        summary: `Waiting on approval to start the ${binding.provider} agent`,
       };
     }
+    if (started.status !== "ok") {
+      logger.warn(
+        { runId, agentUserId, toolId: binding.toolId, error: started.message },
+        "external-agent start failed"
+      );
+      return fail(
+        `the ${binding.provider} agent did not accept the task: ${started.message}`,
+        "start"
+      );
+    }
+
+    const result = asRecord(started.result);
+    const externalId =
+      asOptionalString(result.externalId) ??
+      asOptionalString(result.taskId) ??
+      asOptionalString(result.id) ??
+      null;
+    const url = asOptionalString(result.url) ?? null;
+    await postDispatchNotice({
+      channelId: ctx.channelId,
+      ownerId,
+      content: `Handed to the ${binding.provider} agent${url ? ` — ${url}` : ""}.`,
+      idempotencyKey: `external-agent:${runId ?? ctx.sessionId}:started`,
+    });
+    return {
+      status: "running",
+      summary: `dispatched to ${binding.provider}${externalId ? ` (${externalId})` : ""}`,
+      externalAgent: {
+        agentUserId,
+        toolId: binding.toolId,
+        provider: binding.provider,
+        externalId,
+        url,
+        status: "running",
+        startedAt: new Date().toISOString(),
+      },
+    };
   }
 }

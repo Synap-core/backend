@@ -452,17 +452,6 @@ export {
   type ScheduleSessionInput,
   type ScheduleSessionResult,
 } from "./services/focus-sessions/schedule-session.js";
-// BYOA local-spawn slot: the `external-agent` executor's no-webhook branch
-// starts the coding CLI on the pod. The spawn needs node-pty + the DevPlane
-// workspace gate, both of which live in apps/api, so apps/api fills this slot at
-// boot — the same inversion registerAgentWaker/registerPlaybookRunner use.
-export {
-  registerDevAgentSpawner,
-  getDevAgentSpawner,
-  type DevAgentSpawner,
-  type DevAgentDispatchRequest,
-  type DevAgentDispatchResult,
-} from "./services/playbooks/executors/dev-agent-spawner.js";
 export type { ConnectionSelector } from "./connectors/external-dispatch.js";
 // Nango's API shape (connection_id ≠ end_user.id) belongs in the connector, not
 // in routes — apps/api's Nango webhook needs it to attribute a sync correctly.

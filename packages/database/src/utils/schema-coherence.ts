@@ -1589,6 +1589,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0198_workflow_attribution_spine.sql",
   },
   {
+    table: "playbook_runs",
+    column: "external_agent",
+    addedBy: "0315_playbook_runs_external_agent.sql",
+  },
+  {
     table: "automation_runs",
     column: "definition_snapshot",
     addedBy: "0198_workflow_attribution_spine.sql",

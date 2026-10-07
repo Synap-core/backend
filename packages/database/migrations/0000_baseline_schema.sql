@@ -4201,6 +4201,10 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_workspace_status"
 -- Per-run executed definition snapshot + replay lineage (0198).
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "definition_snapshot" jsonb;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "external_agent" jsonb;
+CREATE INDEX IF NOT EXISTS "idx_playbook_runs_external_agent_active"
+  ON "playbook_runs" ((("external_agent"->>'status')))
+  WHERE "external_agent" IS NOT NULL;
 
 -- ── Playbook Automations (0179_playbook_automations.sql catch-up) ─────────────
 -- First-class, editable composition of a playbook's automations (promotes the

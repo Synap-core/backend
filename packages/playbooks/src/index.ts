@@ -1348,6 +1348,24 @@ export interface RunResult {
   /** Ids of artifacts/entities produced (used to write `produced` links). */
   producedIds?: string[];
   error?: string;
+  /**
+   * The EXTERNAL agent reference when the external-agent executor handed the
+   * run to an agent binding — persisted by the runner on
+   * `playbook_runs.external_agent` (structural mirror of the database's
+   * `PlaybookRunExternalAgent`; this package stays dependency-free).
+   */
+  externalAgent?: RunExternalAgentRef;
+}
+
+/** See `RunResult.externalAgent`. */
+export interface RunExternalAgentRef {
+  agentUserId: string;
+  toolId: string;
+  provider: string;
+  externalId: string | null;
+  url: string | null;
+  status: "running" | "needs_input" | "done" | "failed" | "cancelled";
+  startedAt: string;
 }
 
 /**

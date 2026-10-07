@@ -31,9 +31,8 @@ import { createLogger } from "@synap-core/core";
 import { resolveVaultSecret } from "@synap/api";
 import { resolveDevCwd } from "./dev-cwd.js";
 import { sanitizePresetCommand, spawnPodPty, type PodPty } from "./pod-pty.js";
-// Shared cookie-free WS resolver; re-exported for claude-code.ts.
+// Shared cookie-free WS resolver.
 import { resolveUserId } from "./ws-auth.js";
-export { resolveUserId };
 
 const logger = createLogger({ module: "local-terminal" });
 
