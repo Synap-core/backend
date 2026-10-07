@@ -37,7 +37,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { runWithGrant } from "@synap/database";
+import { grantOfScope, runWithGrant } from "@synap/database";
 import type { GrantScope } from "@synap/governance-policy/grants";
 import { createPendingProposal } from "./permission-check.js";
 
@@ -93,7 +93,7 @@ async function write(
         },
         tx as Parameters<typeof createPendingProposal>[1]
       );
-    row = (await (grant ? runWithGrant(grant, run) : run())) as {
+    row = (await (grant ? runWithGrant(grantOfScope(grant, grant.clientId ?? null), run) : run())) as {
       appId: string | null;
     };
   });

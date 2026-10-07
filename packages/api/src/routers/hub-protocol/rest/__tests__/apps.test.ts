@@ -168,7 +168,7 @@ vi.mock("../../../../utils/permission-check.js", () => ({
 }));
 
 vi.mock("../../../../services/key-grant.js", () => ({
-  attachGrantOrRevoke: async (args: Record<string, unknown>) => {
+  attachGrantsOrRevoke: async (args: Record<string, unknown>) => {
     state.grantArgs = args;
   },
 }));
@@ -321,10 +321,12 @@ describe("POST /apps/:id/key — mint after approval", () => {
       clientId: PUBLIC_ID,
       onBehalfOf: OWNER,
       principalUserId: OWNER,
-      grant: {
-        permissions: ["entity.person.create"],
-        workspaceIds: [WORKSPACE_ID],
-      },
+      grants: [
+        {
+          permissions: ["entity.person.create"],
+          workspaceIds: [WORKSPACE_ID],
+        },
+      ],
     });
   });
 

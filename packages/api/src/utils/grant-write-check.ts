@@ -18,13 +18,9 @@
  *               project-restricted grant fails closed)
  */
 
-import { db, eq, getRequestGrant } from "@synap/database";
+import { db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
 import { entities, profiles } from "@synap/database/schema";
-import {
-  permits,
-  type GrantRequest,
-  type GrantScope,
-} from "@synap/governance-policy/grants";
+import { permits, type GrantRequest } from "@synap/governance-policy/grants";
 
 export interface GrantWriteInput {
   subjectType: string;
@@ -79,11 +75,13 @@ export async function grantRequestForWrite(
  */
 export async function grantWriteDenial(
   input: GrantWriteInput,
-  grant: GrantScope | undefined = getRequestGrant()
+  grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<string | null> {
   if (!grant) return null;
   const req = await grantRequestForWrite(input);
-  if (permits(grant, req)) return null;
+  // ANY one scope must permit the WHOLE request on its own — scopes never
+  // combine (one scope's kind with another's workspace is the cross product).
+  if (grant.scopes.some((scope) => permits(scope, req))) return null;
   const key = [req.subject, req.qualifier, req.action]
     .filter(Boolean)
     .join(".");

@@ -35,7 +35,7 @@ export interface RequestWriteContext {
   /** C1 — which CLIENT is calling (the key it authenticated with). */
   readonly clientKey?: string;
   /** W1 — what the calling key may touch (absent = a key with no grant). */
-  readonly grant?: GrantScope;
+  readonly grant?: KeyGrant;
 }
 
 const storage = new AsyncLocalStorage<RequestWriteContext>();
@@ -142,16 +142,53 @@ export function getActingAgentUserId(): string | undefined {
 // (`checkPermissionOrPropose`) and the read floor (`scopedDb`). A key with no
 // grant enters no scope; a revoked/expired grant arrives as deny-all.
 
+/**
+ * What ONE key may touch: the UNION of its active grant scopes. A request is
+ * permitted when ANY scope permits it on its own — scopes never combine, so an
+ * app approved for "create People in Sales" and "read Notes in Finance" holds
+ * two scopes and can NOT create People in Finance (one flattened scope would
+ * have been the cross product). Never empty: a revoked/expired grant arrives as
+ * one deny-all scope (`permissions: []`).
+ */
+export interface KeyGrant {
+  readonly scopes: readonly GrantScope[];
+  /**
+   * The APPLICATION this credential acts as (`grants.client_id` = the app's
+   * `public_id`), or null for a bare key. Attribution only — never an
+   * enforcement input.
+   */
+  readonly clientId: string | null;
+}
+
+/** A key grant of exactly one scope. */
+export function grantOfScope(
+  scope: GrantScope,
+  clientId: string | null = null
+): KeyGrant {
+  return { scopes: [scope], clientId };
+}
+
+/**
+ * True only when EVERY scope is the explicit full-access `*` — one narrower
+ * scope keeps the key fenced (fail closed).
+ */
+export function isFullAccessGrant(grant: KeyGrant): boolean {
+  return (
+    grant.scopes.length > 0 &&
+    grant.scopes.every((s) => s.permissions.includes("*"))
+  );
+}
+
 /** Run `fn` with the calling key's grant recorded; no grant enters no scope. */
 export function runWithGrant<T>(
-  grant: GrantScope | null | undefined,
+  grant: KeyGrant | null | undefined,
   fn: () => T
 ): T {
   return grant ? runWithPatch({ grant }, fn) : fn();
 }
 
 /** The grant bounding the calling key, if any. */
-export function getRequestGrant(): GrantScope | undefined {
+export function getRequestGrant(): KeyGrant | undefined {
   return storage.getStore()?.grant;
 }
 

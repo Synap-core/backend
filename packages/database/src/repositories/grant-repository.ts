@@ -6,8 +6,10 @@
  * the shared grammar (`@synap/governance-policy/grants`), so a malformed
  * pattern can never be stored and silently match nothing (or everything).
  *
- * One ACTIVE grant per key: `attach` revokes any previous active grant of the
- * same key in the same transaction.
+ * One ACTIVE grant SET per key: `attach` / `attachMany` revoke every previous
+ * active grant of the same key in the same transaction. A key with several
+ * active grants may act where ANY one permits (`KeyGrant`): each grant is its
+ * own (permissions × resources) scope, never merged with the others.
  */
 
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
@@ -15,6 +17,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { assertPermissions } from "@synap/governance-policy/grants";
 import { db } from "../client-pg.js";
 import { grants, type GrantRecord } from "../schema/grants.js";
+import type { KeyGrant } from "../utils/request-write-context.js";
 
 export interface AttachGrantInput {
   apiKeyId: string;
@@ -33,23 +36,6 @@ export interface AttachGrantInput {
   createdBy: string;
 }
 
-/** The fields an enforcement point needs — what `resolveKeyIdentity` carries. */
-export interface ActiveGrant {
-  id: string;
-  permissions: string[];
-  workspaceIds: string[] | null;
-  projectIds: string[] | null;
-  entityIds: string[] | null;
-  expiresAt: Date | null;
-  /**
-   * The APPLICATION this credential acts as (`grants.client_id` = the app's
-   * `public_id`), or null for a bare key. Attribution only — it rides onto the
-   * identity's grant so `getRequestGrant()?.clientId` is readable at write time
-   * and a write can be stamped "via <app>". Never an enforcement input.
-   */
-  clientId: string | null;
-}
-
 const emptyToNull = (v?: string[] | null) =>
   v && v.length > 0 ? [...new Set(v)] : null;
 
@@ -60,49 +46,65 @@ export class GrantRepository {
     this.db = dbInstance;
   }
 
-  /** Attach a grant to a key (replacing its previous active grant). */
+  /** Attach a grant to a key (replacing its previous active grants). */
   async attach(input: AttachGrantInput): Promise<GrantRecord> {
-    assertPermissions(input.permissions);
+    const [row] = await this.attachMany([input]);
+    return row;
+  }
+
+  /**
+   * Attach SEVERAL grants to ONE key, replacing its previous active grants, in
+   * one transaction. Each input is a separate scope: the key may act where any
+   * one of them permits — this is how a request set that is not a cross
+   * product (People in Sales + Notes in Finance) is held without widening.
+   */
+  async attachMany(inputs: AttachGrantInput[]): Promise<GrantRecord[]> {
+    if (inputs.length === 0) {
+      throw new Error("attachMany needs at least one grant");
+    }
+    const apiKeyId = inputs[0].apiKeyId;
+    if (inputs.some((i) => i.apiKeyId !== apiKeyId)) {
+      throw new Error("attachMany attaches grants to ONE key");
+    }
+    for (const input of inputs) assertPermissions(input.permissions);
     return this.db.transaction(async (tx) => {
       await tx
         .update(grants)
-        .set({ revokedAt: new Date(), revokedBy: input.createdBy })
-        .where(
-          and(eq(grants.apiKeyId, input.apiKeyId), isNull(grants.revokedAt))
-        );
-      const [row] = await tx
+        .set({ revokedAt: new Date(), revokedBy: inputs[0].createdBy })
+        .where(and(eq(grants.apiKeyId, apiKeyId), isNull(grants.revokedAt)));
+      return tx
         .insert(grants)
-        .values({
-          apiKeyId: input.apiKeyId,
-          principalUserId: input.principalUserId,
-          onBehalfOf: input.onBehalfOf,
-          permissions: [...new Set(input.permissions.map((p) => p.trim()))],
-          workspaceIds: emptyToNull(input.workspaceIds),
-          projectIds: emptyToNull(input.projectIds),
-          entityIds: emptyToNull(input.entityIds),
-          expiresAt: input.expiresAt,
-          label: input.label ?? null,
-          clientId: input.clientId ?? null,
-          roleId: input.roleId ?? null,
-          createdBy: input.createdBy,
-        })
+        .values(
+          inputs.map((input) => ({
+            apiKeyId: input.apiKeyId,
+            principalUserId: input.principalUserId,
+            onBehalfOf: input.onBehalfOf,
+            permissions: [...new Set(input.permissions.map((p) => p.trim()))],
+            workspaceIds: emptyToNull(input.workspaceIds),
+            projectIds: emptyToNull(input.projectIds),
+            entityIds: emptyToNull(input.entityIds),
+            expiresAt: input.expiresAt,
+            label: input.label ?? null,
+            clientId: input.clientId ?? null,
+            roleId: input.roleId ?? null,
+            createdBy: input.createdBy,
+          }))
+        )
         .returning();
-      return row;
     });
   }
 
   /**
-   * The grant that bounds this key:
+   * What bounds this key:
    *   - `null`  — the key never had a grant (legacy key: scopes + human floor);
-   *   - the active, unexpired grant;
-   *   - a DENY-ALL grant (no permissions) when the key's grant was revoked or
-   *     expired. Falling back to the ungranted behaviour there would turn a
-   *     revocation into a widening.
+   *   - every active, unexpired grant, one scope each;
+   *   - ONE DENY-ALL scope (no permissions) when none is active any more.
+   *     Falling back to the ungranted behaviour there would turn a revocation
+   *     into a widening.
    */
-  async resolveForKey(apiKeyId: string): Promise<ActiveGrant | null> {
-    const [row] = await this.db
+  async resolveForKey(apiKeyId: string): Promise<KeyGrant | null> {
+    const rows = await this.db
       .select({
-        id: grants.id,
         permissions: grants.permissions,
         workspaceIds: grants.workspaceIds,
         projectIds: grants.projectIds,
@@ -114,14 +116,23 @@ export class GrantRepository {
       })
       .from(grants)
       .where(eq(grants.apiKeyId, apiKeyId))
-      .orderBy(desc(grants.createdAt))
-      .limit(1);
-    if (!row) return null;
-    const { revokedAt, ...grant } = row;
-    const lapsed =
-      revokedAt !== null ||
-      (grant.expiresAt !== null && grant.expiresAt <= new Date());
-    return lapsed ? { ...grant, permissions: [] } : grant;
+      .orderBy(desc(grants.createdAt));
+    if (rows.length === 0) return null;
+    const now = new Date();
+    const live = rows.filter(
+      (r) => r.revokedAt === null && (r.expiresAt === null || r.expiresAt > now)
+    );
+    const clientId = (live[0] ?? rows[0]).clientId;
+    if (live.length === 0) return { scopes: [{ permissions: [] }], clientId };
+    return {
+      scopes: live.map((r) => ({
+        permissions: r.permissions,
+        workspaceIds: r.workspaceIds,
+        projectIds: r.projectIds,
+        entityIds: r.entityIds,
+      })),
+      clientId,
+    };
   }
 
   /** Every grant made on a human's behalf (for /my-connections). */

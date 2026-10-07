@@ -58,7 +58,8 @@ import {
 } from "./_shared.js";
 import { createPendingProposal } from "../../../utils/permission-check.js";
 import { openLink } from "../../../utils/deep-links.js";
-import { attachGrantOrRevoke } from "../../../services/key-grant.js";
+import { attachGrantsOrRevoke } from "../../../services/key-grant.js";
+import { grantsForApprovedRequests } from "../../../services/app-connect.js";
 
 type Ctx = Context<{ Variables: HubVariables }, any, any>;
 
@@ -373,14 +374,11 @@ export function registerAppsRoutes(app: HubHono): void {
         userId
       );
 
-      await attachGrantOrRevoke({
+      await attachGrantsOrRevoke({
         apiKeyId: keyRow.id,
         principalUserId: userId,
         onBehalfOf: userId,
-        grant: {
-          permissions: approved.map((r) => r.permission),
-          workspaceIds: approved.map((r) => r.workspaceId),
-        },
+        grants: grantsForApprovedRequests(approved),
         expiresAt: null,
         createdBy: userId,
         clientId: appRow.publicId,

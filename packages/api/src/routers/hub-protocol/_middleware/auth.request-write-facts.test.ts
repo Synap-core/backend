@@ -29,7 +29,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       // W1: these keys carry no grant (GrantRepository.resolveForKey → null).
       select: () => ({
         from: () => ({
-          where: () => ({ orderBy: () => ({ limit: async () => grantRows }) }),
+          where: () => ({ orderBy: async () => grantRows }),
         }),
       }),
     },
@@ -99,7 +99,7 @@ async function factsSeenDownstream() {
   return (await res.json()) as {
     actingAgent: string | null;
     probe: boolean;
-    grant: { permissions: string[] } | null;
+    grant: { scopes: Array<{ permissions: string[] }> } | null;
   };
 }
 
@@ -169,7 +169,7 @@ describe("hub auth door enters the request write facts", () => {
       },
     ];
     expect((await factsSeenDownstream()).grant).toMatchObject({
-      permissions: ["entity.knowledge.read"],
+      scopes: [{ permissions: ["entity.knowledge.read"] }],
     });
   });
 
@@ -187,9 +187,9 @@ describe("hub auth door enters the request write facts", () => {
         revokedAt: new Date(),
       },
     ];
-    expect((await factsSeenDownstream()).grant).toMatchObject({
-      permissions: [],
-    });
+    expect((await factsSeenDownstream()).grant?.scopes).toEqual([
+      { permissions: [] },
+    ]);
   });
 
   it("the fence refuses a scoped key on an unseamed read, admits a seamed one (W1)", async () => {

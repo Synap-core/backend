@@ -44,7 +44,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { runWithGrant } from "@synap/database";
+import { grantOfScope, runWithGrant } from "@synap/database";
 import { SynapEventSchema } from "@synap-core/core";
 import { auditLog } from "./audit-log.js";
 
@@ -89,7 +89,7 @@ async function emit(
       userId: "human-1",
       workspaceId: null,
     });
-  await (grant ? runWithGrant(grant, run) : run());
+  await (grant ? runWithGrant(grantOfScope(grant, grant.clientId ?? null), run) : run());
   const { rows } = await h.client!.query<{ app_id: string | null }>(
     "SELECT app_id FROM events WHERE subject_id = $1",
     [subjectId]

@@ -79,10 +79,15 @@ describe("GET /setup/agent/pending/:keyId/details", () => {
   it("returns the key's real scopes and grant to its linked human", async () => {
     findKey.mockReturnValue(row(HUMAN));
     resolveForKey.mockResolvedValue({
-      permissions: ["entity.note.create"],
-      workspaceIds: null,
-      projectIds: null,
-      entityIds: null,
+      scopes: [
+        {
+          permissions: ["entity.note.create"],
+          workspaceIds: null,
+          projectIds: null,
+          entityIds: null,
+        },
+      ],
+      clientId: null,
     });
     const res = await get();
     expect(res.status).toBe(200);

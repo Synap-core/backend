@@ -34,7 +34,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       // W1: these keys carry no grant (GrantRepository.resolveForKey → null).
       select: () => ({
         from: () => ({
-          where: () => ({ orderBy: () => ({ limit: async () => [] }) }),
+          where: () => ({ orderBy: async () => [] }),
         }),
       }),
     },

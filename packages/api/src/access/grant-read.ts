@@ -18,7 +18,13 @@
  * no project path) also fails closed.
  */
 
-import { db, getRequestGrant, inArray, or } from "@synap/database";
+import {
+  db,
+  getRequestGrant,
+  inArray,
+  or,
+  type KeyGrant,
+} from "@synap/database";
 // Its own subpath: a test that mocks the `@synap/database` barrel must still
 // load the real hook (a module-load call into a mock export broke 6 suites).
 import { registerGrantReadProvider } from "@synap/database/grant-read-hook";
@@ -202,10 +208,29 @@ export function grantReadClause(
   return defined.length === 1 ? defined[0] : and(...defined);
 }
 
+/**
+ * The clause for a whole key grant: a row is visible when ANY scope makes it
+ * visible on its own (OR of the per-scope clauses). A scope with no
+ * restriction on this table lifts the clause entirely.
+ */
+export function keyGrantReadClause(
+  table: object,
+  grant: KeyGrant
+): SQL | undefined {
+  const clauses: SQL[] = [];
+  for (const scope of grant.scopes) {
+    const clause = grantReadClause(table, scope);
+    if (clause === undefined) return undefined;
+    clauses.push(clause);
+  }
+  if (clauses.length === 0) return NONE;
+  return clauses.length === 1 ? clauses[0] : or(...clauses);
+}
+
 /** The ambient request's grant clause for `table` (undefined = no grant). */
 export function grantReadPredicate(table: object): SQL | undefined {
   const grant = getRequestGrant();
-  return grant ? grantReadClause(table, grant) : undefined;
+  return grant ? keyGrantReadClause(table, grant) : undefined;
 }
 
 // Database-level visibility helpers (e.g. ownerPrivateVisibleWhere) cannot

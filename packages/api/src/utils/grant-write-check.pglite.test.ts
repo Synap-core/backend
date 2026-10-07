@@ -41,7 +41,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { runWithGrant } from "@synap/database";
+import { grantOfScope, runWithGrant } from "@synap/database";
 import type { GrantScope } from "@synap/governance-policy/grants";
 import { checkPermissionOrPropose } from "./permission-check.js";
 import { grantRequestForWrite } from "./grant-write-check.js";
@@ -86,7 +86,7 @@ const write = (
   grant: GrantScope,
   over: Partial<Parameters<typeof checkPermissionOrPropose>[0]>
 ) =>
-  runWithGrant(grant, () =>
+  runWithGrant(grantOfScope(grant), () =>
     checkPermissionOrPropose({
       userId: "human-1",
       workspaceId: WS,

@@ -68,32 +68,53 @@ export async function attachGrantOrRevoke(args: {
   createdBy: string;
   clientId?: string | null;
 }): Promise<void> {
+  const { grant, ...rest } = args;
+  await attachGrantsOrRevoke({ ...rest, grants: [grant] });
+}
+
+/**
+ * Several grants on ONE key — the key may act where ANY one permits, each on
+ * its own (never their cross product). Same revoke-on-failure contract.
+ */
+export async function attachGrantsOrRevoke(args: {
+  apiKeyId: string;
+  principalUserId: string;
+  onBehalfOf: string;
+  grants: GrantInput[];
+  expiresAt: Date | null;
+  createdBy: string;
+  clientId?: string | null;
+}): Promise<void> {
   try {
-    if (
-      args.grant.roleId &&
-      !(await new GrantRoleRepository(db).findOwned(
-        args.onBehalfOf,
-        args.grant.roleId
-      ))
-    )
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "That role is not one of yours.",
-      });
-    await new GrantRepository(db).attach({
-      apiKeyId: args.apiKeyId,
-      principalUserId: args.principalUserId,
-      onBehalfOf: args.onBehalfOf,
-      permissions: args.grant.permissions,
-      workspaceIds: args.grant.workspaceIds ?? null,
-      projectIds: args.grant.projectIds ?? null,
-      entityIds: args.grant.entityIds ?? null,
-      expiresAt: args.expiresAt,
-      label: args.grant.label ?? null,
-      clientId: args.clientId ?? null,
-      roleId: args.grant.roleId ?? null,
-      createdBy: args.createdBy,
-    });
+    for (const grant of args.grants) {
+      if (
+        grant.roleId &&
+        !(await new GrantRoleRepository(db).findOwned(
+          args.onBehalfOf,
+          grant.roleId
+        ))
+      )
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "That role is not one of yours.",
+        });
+    }
+    await new GrantRepository(db).attachMany(
+      args.grants.map((grant) => ({
+        apiKeyId: args.apiKeyId,
+        principalUserId: args.principalUserId,
+        onBehalfOf: args.onBehalfOf,
+        permissions: grant.permissions,
+        workspaceIds: grant.workspaceIds ?? null,
+        projectIds: grant.projectIds ?? null,
+        entityIds: grant.entityIds ?? null,
+        expiresAt: args.expiresAt,
+        label: grant.label ?? null,
+        clientId: args.clientId ?? null,
+        roleId: grant.roleId ?? null,
+        createdBy: args.createdBy,
+      }))
+    );
   } catch (err) {
     await revokeApiKeys(db, {
       where: eq(apiKeys.id, args.apiKeyId),

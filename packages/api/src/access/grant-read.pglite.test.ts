@@ -37,7 +37,7 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { documents, entities } from "@synap/database/schema";
-import { runWithGrant } from "@synap/database";
+import { grantOfScope, runWithGrant } from "@synap/database";
 import type { GrantScope } from "@synap/governance-policy/grants";
 import { AccessContext, scopedDb } from "./index.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
@@ -140,7 +140,7 @@ const read = async (table: object, grant?: GrantScope) => {
     scopedDb(AccessContext.operator({ userId: ALICE })).findMany<{
       id: string;
     }>(table);
-  const rows = grant ? await runWithGrant(grant, run) : await run();
+  const rows = grant ? await runWithGrant(grantOfScope(grant), run) : await run();
   return rows.map((r) => r.id).sort();
 };
 
@@ -213,7 +213,7 @@ describe("the DATA-table seam (accessScopeWhere) honours the grant too", () => {
             userId: ALICE,
           })
         );
-    const rows = grant ? await runWithGrant(grant, run) : await run();
+    const rows = grant ? await runWithGrant(grantOfScope(grant), run) : await run();
     return rows.map((r) => r.id).sort();
   };
 
@@ -245,7 +245,7 @@ describe("the shared channel and session helpers honour the grant", () => {
         .select({ id: idCol as never })
         .from(table)
         .where(where());
-    const rows = grant ? await runWithGrant(grant, run) : await run();
+    const rows = grant ? await runWithGrant(grantOfScope(grant), run) : await run();
     return rows.map((r) => r.id);
   };
 
@@ -298,7 +298,7 @@ describe("the shared channel and session helpers honour the grant", () => {
       } as never);
       const run = () => caller.listViews({ userId: ALICE });
       const rows = (
-        grant ? await runWithGrant(grant, run) : await run()
+        grant ? await runWithGrant(grantOfScope(grant), run) : await run()
       ) as Array<{
         id: string;
       }>;

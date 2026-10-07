@@ -13,9 +13,15 @@ import {
 
 describe("isFencedGrant", () => {
   it("fences a narrow grant, never a legacy key or the explicit '*'", () => {
-    expect(isFencedGrant({ permissions: ["entity.read"] })).toBe(true);
-    expect(isFencedGrant({ permissions: [] })).toBe(true); // deny-all
-    expect(isFencedGrant({ permissions: ["*"] })).toBe(false);
+    const g = (...scopes: string[][]) => ({
+      scopes: scopes.map((permissions) => ({ permissions })),
+      clientId: null,
+    });
+    expect(isFencedGrant(g(["entity.read"]))).toBe(true);
+    expect(isFencedGrant(g([]))).toBe(true); // deny-all
+    expect(isFencedGrant(g(["*"]))).toBe(false);
+    // A key is unfenced only when EVERY scope is full access.
+    expect(isFencedGrant(g(["*"], ["entity.read"]))).toBe(true);
     expect(isFencedGrant(null)).toBe(false);
   });
 });

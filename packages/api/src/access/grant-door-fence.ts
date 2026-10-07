@@ -15,11 +15,11 @@
  * Inventory + migration order: CONNECT-RESEARCH/13-w1-grants-design-2026-10-06.md.
  */
 
-import type { GrantScope } from "@synap/governance-policy/grants";
+import { isFullAccessGrant, type KeyGrant } from "@synap/database";
 
 /** A grant that bounds nothing beyond the human floor needs no fence. */
-export function isFencedGrant(grant: GrantScope | null | undefined): boolean {
-  return Boolean(grant) && !grant!.permissions.includes("*");
+export function isFencedGrant(grant: KeyGrant | null | undefined): boolean {
+  return Boolean(grant) && !isFullAccessGrant(grant!);
 }
 
 /** Hub REST GET routes that read only through a seam (relative to /api/hub). */

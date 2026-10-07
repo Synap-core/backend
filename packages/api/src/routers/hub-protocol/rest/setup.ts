@@ -2398,7 +2398,17 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
     if (!(await canDecidePendingConnection(approverId, key.linkedUserId)))
       return c.json({ error: "Not authorized to decide this connection" }, 403);
 
-    const grant = await new GrantRepository(db).resolveForKey(keyId);
+    const keyGrant = await new GrantRepository(db).resolveForKey(keyId);
+    // A pending agent key is minted with exactly ONE grant (`/setup/agent`).
+    // Several would not fit this one-grant wire shape — refuse loudly rather
+    // than show the approver a part of what the key could do.
+    if (keyGrant && keyGrant.scopes.length !== 1) {
+      return c.json(
+        { error: "This pending key carries several grants — review it in Pod admin." },
+        409
+      );
+    }
+    const grant = keyGrant?.scopes[0];
     return c.json({
       keyName: key.keyName,
       scopes: key.scope,
@@ -2406,9 +2416,9 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
       grant: grant
         ? {
             permissions: grant.permissions,
-            workspaceIds: grant.workspaceIds,
-            projectIds: grant.projectIds,
-            entityIds: grant.entityIds,
+            workspaceIds: grant.workspaceIds ?? null,
+            projectIds: grant.projectIds ?? null,
+            entityIds: grant.entityIds ?? null,
           }
         : null,
     });

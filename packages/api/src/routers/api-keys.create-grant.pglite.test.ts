@@ -117,9 +117,9 @@ describe("apiKeys.create with a grant (W1f)", () => {
     const grant = await new GrantRepository(h.db as never).resolveForKey(
       res.id
     );
-    expect(grant).toMatchObject({
-      permissions: ["entity.portfolio.read", "document.read"],
-    });
+    expect(grant?.scopes).toMatchObject([
+      { permissions: ["entity.portfolio.read", "document.read"] },
+    ]);
   });
 
   it("refuses a malformed pattern and mints nothing", async () => {
@@ -140,7 +140,7 @@ describe("apiKeys.create with a grant (W1f)", () => {
 
   it("revokes the key when the grant cannot be attached", async () => {
     const spy = vi
-      .spyOn(GrantRepository.prototype, "attach")
+      .spyOn(GrantRepository.prototype, "attachMany")
       .mockRejectedValueOnce(new Error("db down"));
     const ids = (
       await h.client!.query<{ id: string }>(`select id from api_keys`)
@@ -244,10 +244,9 @@ describe("apiKeys.createForWorkspace with a grant (W1f)", () => {
     const grant = await new GrantRepository(h.db as never).resolveForKey(
       res.id
     );
-    expect(grant).toMatchObject({
-      permissions: ["entity.read"],
-      workspaceIds: [WS],
-    });
+    expect(grant?.scopes).toMatchObject([
+      { permissions: ["entity.read"], workspaceIds: [WS] },
+    ]);
     const exp = new Date((await keyRow(res.id)).expires_at!).getTime();
     expect(Math.abs(exp - (Date.now() + 90 * DAY))).toBeLessThan(60_000);
   });

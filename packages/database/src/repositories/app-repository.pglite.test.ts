@@ -284,7 +284,7 @@ describe("GrantRepository.resolveForKey — carries the app identity (Attributio
     await grants.revokeForKeys([KEY_A], OWNER);
 
     const grant = await grants.resolveForKey(KEY_A);
-    expect(grant?.permissions).toEqual([]); // deny-all
+    expect(grant?.scopes).toEqual([{ permissions: [] }]); // deny-all
     expect(grant?.clientId).toBe(app.publicId);
   });
 });

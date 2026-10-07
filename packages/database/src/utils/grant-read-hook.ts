@@ -13,7 +13,7 @@
  * so a test that mocks the `@synap/database` barrel still loads the real hook.
  */
 import { sql, type SQL } from "drizzle-orm";
-import { getRequestGrant } from "./request-write-context.js";
+import { getRequestGrant, isFullAccessGrant } from "./request-write-context.js";
 
 type Provider = (table: object) => SQL | undefined;
 let provider: Provider | null = null;
@@ -27,7 +27,7 @@ export function registerGrantReadProvider(fn: Provider): void {
 export function grantReadClauseFor(column: unknown): SQL | undefined {
   if (!provider) {
     const grant = getRequestGrant();
-    return grant && !grant.permissions.includes("*") ? sql`false` : undefined;
+    return grant && !isFullAccessGrant(grant) ? sql`false` : undefined;
   }
   const table = (column as { table?: object } | null)?.table;
   return table ? provider(table) : undefined;

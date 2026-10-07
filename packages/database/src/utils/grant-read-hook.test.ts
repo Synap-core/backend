@@ -11,7 +11,7 @@ import {
   grantReadClauseFor,
   registerGrantReadProvider,
 } from "./grant-read-hook.js";
-import { runWithGrant } from "./request-write-context.js";
+import { grantOfScope, runWithGrant } from "./request-write-context.js";
 
 const t = pgTable("t", { owner: text("owner") });
 const render = (s: unknown) => new PgDialect().sqlToQuery(s as never).sql;
@@ -22,13 +22,13 @@ describe("grantReadClauseFor — no provider registered", () => {
   });
 
   it("a full-access grant → no clause", () => {
-    runWithGrant({ permissions: ["*"] }, () => {
+    runWithGrant(grantOfScope({ permissions: ["*"] }), () => {
       expect(grantReadClauseFor(t.owner)).toBeUndefined();
     });
   });
 
   it("a scoped grant → deny-all", () => {
-    runWithGrant({ permissions: ["entity.note.read"] }, () => {
+    runWithGrant(grantOfScope({ permissions: ["entity.note.read"] }), () => {
       expect(render(grantReadClauseFor(t.owner))).toBe("false");
     });
   });
@@ -41,7 +41,7 @@ describe("grantReadClauseFor — provider registered", () => {
       seen.push(table);
       return undefined;
     });
-    runWithGrant({ permissions: ["entity.note.read"] }, () => {
+    runWithGrant(grantOfScope({ permissions: ["entity.note.read"] }), () => {
       expect(grantReadClauseFor(t.owner)).toBeUndefined();
     });
     expect(seen).toEqual([t]);

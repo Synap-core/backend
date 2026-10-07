@@ -24,8 +24,7 @@
  */
 
 import { db, users, eq, GrantRepository } from "@synap/database";
-import type { ApiKeyRecord } from "@synap/database";
-import type { GrantScope } from "@synap/governance-policy/grants";
+import type { ApiKeyRecord, KeyGrant } from "@synap/database";
 
 export interface ResolvedKeyIdentity {
   /** The identity that OWNS/SEES the data: the linked human, else the key owner. */
@@ -43,14 +42,14 @@ export interface ResolvedKeyIdentity {
    * (legacy: scopes + the human floor). A revoked/expired grant is DENY-ALL,
    * never null. A failed grant read THROWS: guessing "no grant" would widen.
    *
-   * APP ATTRIBUTION: this is also the carrier of the app identity — `ActiveGrant
+   * APP ATTRIBUTION: this is also the carrier of the app identity — `KeyGrant
    * .clientId` (the app's `public_id`, i.e. `grants.client_id`) rides WITH the
    * grant. Every key-auth door enters it via `runWithGrant(grant, …)`, so
    * `getRequestGrant()?.clientId` is readable at write time and a governed write
    * can be stamped "via <app>" next to the connecting human. Attribution only —
    * it never widens what the grant permits.
    */
-  grant: GrantScope | null;
+  grant: KeyGrant | null;
 }
 
 /**

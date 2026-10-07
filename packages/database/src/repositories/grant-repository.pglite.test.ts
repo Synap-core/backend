@@ -80,35 +80,74 @@ describe("GrantRepository (0305, PGlite)", () => {
 
   it("resolves the active grant with its sets", async () => {
     await attach({ workspaceIds: ["33333333-3333-4333-8333-333333333333"] });
-    expect(await repo.resolveForKey(KEY)).toMatchObject({
-      permissions: ["entity.knowledge.read"],
-      workspaceIds: ["33333333-3333-4333-8333-333333333333"],
-      projectIds: null,
-      entityIds: null,
-    });
+    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([
+      {
+        permissions: ["entity.knowledge.read"],
+        workspaceIds: ["33333333-3333-4333-8333-333333333333"],
+        projectIds: null,
+        entityIds: null,
+      },
+    ]);
   });
 
   it("keeps ONE active grant per key: attach replaces", async () => {
     await attach();
     await attach({ permissions: ["document.read"] });
-    expect((await repo.resolveForKey(KEY))?.permissions).toEqual([
-      "document.read",
-    ]);
+    expect(
+      (await repo.resolveForKey(KEY))?.scopes.map((s) => s.permissions)
+    ).toEqual([["document.read"]]);
     const { rows } = await pg.query(
       "SELECT count(*)::int AS n FROM grants WHERE revoked_at IS NULL"
     );
     expect(rows).toEqual([{ n: 1 }]);
   });
 
+  it("attachMany holds several scopes on ONE key and replaces the previous set", async () => {
+    await attach({ permissions: ["document.read"] });
+    await repo.attachMany([
+      {
+        apiKeyId: KEY,
+        principalUserId: "human-1",
+        onBehalfOf: "human-1",
+        permissions: ["entity.person.create"],
+        workspaceIds: ["33333333-3333-4333-8333-333333333333"],
+        expiresAt: null,
+        createdBy: "human-1",
+      },
+      {
+        apiKeyId: KEY,
+        principalUserId: "human-1",
+        onBehalfOf: "human-1",
+        permissions: ["entity.note.read"],
+        workspaceIds: ["44444444-4444-4444-8444-444444444444"],
+        expiresAt: null,
+        createdBy: "human-1",
+      },
+    ]);
+    const grant = await repo.resolveForKey(KEY);
+    expect(
+      grant?.scopes
+        .map((s) => `${s.permissions.join()}@${s.workspaceIds?.join()}`)
+        .sort()
+    ).toEqual([
+      "entity.note.read@44444444-4444-4444-8444-444444444444",
+      "entity.person.create@33333333-3333-4333-8333-333333333333",
+    ]);
+    const { rows } = await pg.query(
+      "SELECT count(*)::int AS n FROM grants WHERE revoked_at IS NULL"
+    );
+    expect(rows).toEqual([{ n: 2 }]);
+  });
+
   it("an expired grant resolves to deny-all, never to 'no grant'", async () => {
     await attach({ expiresAt: new Date(Date.now() - 1000) });
-    expect(await repo.resolveForKey(KEY)).toMatchObject({ permissions: [] });
+    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([{ permissions: [] }]);
   });
 
   it("a revoked grant resolves to deny-all", async () => {
     await attach();
     await pg.exec(`UPDATE grants SET revoked_at = now()`);
-    expect(await repo.resolveForKey(KEY)).toMatchObject({ permissions: [] });
+    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([{ permissions: [] }]);
   });
 
   it("revokeForKeys revokes the given keys' grants and leaves others active", async () => {
@@ -119,10 +158,10 @@ describe("GrantRepository (0305, PGlite)", () => {
 
     expect(n).toBe(1);
     // KEY's grant is now deny-all; OTHER_KEY's grant is untouched.
-    expect(await repo.resolveForKey(KEY)).toMatchObject({ permissions: [] });
-    expect((await repo.resolveForKey(OTHER_KEY))?.permissions).toEqual([
-      "entity.knowledge.read",
-    ]);
+    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([{ permissions: [] }]);
+    expect(
+      (await repo.resolveForKey(OTHER_KEY))?.scopes.map((s) => s.permissions)
+    ).toEqual([["entity.knowledge.read"]]);
     // The revocation is attributed.
     const { rows } = await pg.query<{ revoked_by: string | null }>(
       "SELECT revoked_by FROM grants WHERE api_key_id = $1",
