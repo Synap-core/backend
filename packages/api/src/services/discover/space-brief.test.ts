@@ -453,7 +453,11 @@ describe("buildSpaceBrief", () => {
     // in exactly the spaces that needed it.
     const prose = (n: number) => "z".repeat(n);
     h.ranked = Array.from({ length: 10 }, (_, i) =>
-      row(`kind-${i}`, { workspaceId: WS, entityCount: 1, description: prose(90) })
+      row(`kind-${i}`, {
+        workspaceId: WS,
+        entityCount: 1,
+        description: prose(90),
+      })
     );
     h.playbooks = Array.from({ length: 8 }, (_, i) => ({
       id: `00000000-0000-4000-8000-00000000000${i}`,
@@ -495,10 +499,53 @@ describe("buildSpaceBrief", () => {
     ]);
   });
 
+  it("a space's SKILLS outlive the kind-prose drop too — the LIVE Brand shape reaches the tail", async () => {
+    // The test above stops at the `rules` rung. The live Brand brief (2026-10-07,
+    // pod build 30f89657) went FURTHER: persona shed, then `fitBrief`'s tail
+    // dropped every kind description — `trimmed` ended in "keyKinds.description",
+    // a label only the tail pushes. A `skills` rung inside the LADDER fires
+    // before that tail, so the skill was shed on the one space that declares it.
+    const prose = (n: number) => "z".repeat(n);
+    h.ranked = Array.from({ length: 14 }, (_, i) =>
+      row(`brand-kind-slug-${i}-${prose(14)}`, {
+        workspaceId: WS,
+        entityCount: 3,
+        description: prose(120),
+      })
+    );
+    const brief = await build({
+      ...brandLibrary,
+      settings: {
+        onboarding: {
+          ...brandLibrary.settings.onboarding,
+          purpose: prose(240),
+          framing: prose(240),
+          rules: Array.from({ length: 3 }, (_, i) => ({ key: `rule-${i}` })),
+          skills: [{ slug: "creative-director", mode: "on-demand" }],
+        },
+      },
+    });
+
+    expect(briefBytes(brief)).toBeLessThanOrEqual(BRIEF_BUDGET_BYTES);
+    // The defect first: the declared skill must not be what got shed…
+    expect(brief.trimmed).not.toContain("skills");
+    expect(brief.skills).toEqual([
+      { slug: "creative-director", mode: "on-demand" },
+    ]);
+    // …and non-vacuity: this DID reach the tail (the label only the tail pushes).
+    expect(brief.trimmed).toContain("keyKinds.description");
+    // Kind NAMES are the brief's reason to exist: they outlive the skill.
+    expect((brief.keyKinds as unknown[]).length).toBeGreaterThan(1);
+  });
+
   it("the playbook LIST is shed before purpose, persona, the root anchor and the kinds", async () => {
     const prose = (n: number) => "z".repeat(n);
     h.ranked = Array.from({ length: 8 }, (_, i) =>
-      row(`kind-${i}`, { workspaceId: WS, entityCount: 1, description: prose(90) })
+      row(`kind-${i}`, {
+        workspaceId: WS,
+        entityCount: 1,
+        description: prose(90),
+      })
     );
     h.playbooks = Array.from({ length: 8 }, (_, i) => ({
       id: `00000000-0000-4000-8000-00000000000${i}`,
@@ -577,16 +624,12 @@ describe("resolveSpacePurpose — one rule for orient, the brief and diagnose", 
   it("prefers an authored description, skips a `Domain: x` placeholder, falls back to the goal", () => {
     expect(
       resolveSpacePurpose("  Real purpose. ", { onboarding: { goal: "g" } })
-    ).toBe(
-      "Real purpose."
-    );
+    ).toBe("Real purpose.");
     expect(
       resolveSpacePurpose("Domain: personal", {
         onboarding: { goal: "The goal." },
       })
-    ).toBe(
-      "The goal."
-    );
+    ).toBe("The goal.");
     expect(resolveSpacePurpose(null, undefined)).toBeNull();
     // The brief's steady-state purpose precedes the interview goal.
     expect(

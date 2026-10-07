@@ -299,10 +299,7 @@ export const briefBytes = (b: unknown): number =>
  * brief's reason to exist (the agent that filed brand assets as `file` lacked
  * exactly them), so they go LAST, and only their prose before their names.
  */
-const shortenKindDescriptions = (
-  b: BuiltSpaceBrief,
-  cap: number
-): boolean => {
+const shortenKindDescriptions = (b: BuiltSpaceBrief, cap: number): boolean => {
   const k = b.keyKinds;
   if (!Array.isArray(k)) return false;
   let changed = false;
@@ -364,18 +361,8 @@ const TRIM_LADDER: Array<[string, (b: BuiltSpaceBrief) => boolean]> = [
   ],
   ["keyKinds.description:60", (b) => shortenKindDescriptions(b, 60)],
   ["persona", (b) => !!b.persona && (delete b.persona, true)],
-  // ── LAST to go, deliberately ─────────────────────────────────────────────
-  // A space's DECLARED SKILLS are not a re-readable convenience like `rules`
-  // (whose rows the pod applies anyway): they are what makes the space work,
-  // and BOTH readers of this brief — the CLI's `orient` and the IS turn, which
-  // prepends the `always` ones — read THIS object. Shedding them here does not
-  // drop a reminder, it drops the feature: the skill is linked, and nothing
-  // shows it. So they outlive prose, lists and persona in the budget fight.
-  //
-  // (Measured 2026-10-06: Brand's brief TRIMS — it reaches the `rules` rung at
-  // 1895 B. With `skills` immediately after `rules`, a linked skill was shed in
-  // exactly the spaces that needed it.)
-  ["skills", (b) => !!b.skills && (delete b.skills, true)],
+  // `skills` is deliberately NOT a rung: see `fitBrief`'s tail, where it is shed
+  // after every kind description and before any kind name.
 ];
 
 /** Shed sections until the brief fits; the last resort drops list tails. */
@@ -390,8 +377,8 @@ export function fitBrief(
     if (size() <= budget) break;
     if (shed(b)) trimmed.push(name);
   }
-  // Last resort, one item at a time from the tail: kind prose, then list
-  // tails (keeping their true totals).
+  // Last resort, one item at a time from the tail: kind prose, then the
+  // declared skills, then list tails (keeping their true totals).
   while (size() > budget) {
     const described = Array.isArray(b.keyKinds)
       ? b.keyKinds.filter((k) => k.description)
@@ -400,6 +387,22 @@ export function fitBrief(
       delete described[described.length - 1]!.description;
       if (!trimmed.includes("keyKinds.description"))
         trimmed.push("keyKinds.description");
+      continue;
+    }
+    // A space's DECLARED SKILLS are not a re-readable convenience like `rules`
+    // (whose rows the pod applies anyway): they are what makes the space work,
+    // and BOTH readers of this brief — the CLI's `orient` and the IS turn, which
+    // prepends the `always` ones — read THIS object. Shedding them drops the
+    // feature, not a reminder: the skill is linked and nothing shows it. So they
+    // outlive every ladder rung AND the kind prose, and go only when keeping
+    // them would cost a kind NAME (the brief's reason to exist).
+    //
+    // They used to be the LAST LADDER rung. That was not last: this tail runs
+    // after the ladder, and the live Brand brief (2026-10-07, 15 kinds) reached
+    // it — so the ladder shed the skill on the one space that declares it.
+    if (b.skills) {
+      delete b.skills;
+      trimmed.push("skills");
       continue;
     }
     const k = b.keyKinds;
