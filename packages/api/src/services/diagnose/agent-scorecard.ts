@@ -25,6 +25,7 @@ import {
   proposals,
   users,
   ProposalStatus,
+  notAnAppAgent,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { isPartiallyApprovedData } from "@synap-core/types/proposals";
@@ -479,7 +480,9 @@ export async function allAgentsScorecard(params: {
       and(
         inArray(users.id, ids),
         eq(users.userType, "agent"),
-        eq(users.createdByUserId, userId)
+        eq(users.createdByUserId, userId),
+        // An app's agent is governed on its app's page, not ranked here.
+        notAnAppAgent(users.id)
       )
     );
 

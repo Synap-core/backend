@@ -99,13 +99,13 @@ describe("tripwire: API-key identity has one door (resolveKeyIdentity)", () => {
 });
 
 // ── CONTRACT: the derivation itself ────────────────────────────────────────────
-// Mock the ONE users lookup the resolver performs. `db.query.users.findFirst`
+// Stub the ONE users lookup the resolver performs. `db.query.users.findFirst`
 // returns the principal's userType (or undefined for the "system" sentinel).
+// The fixtures carry no key `id`, so no grant is read (`grant: null`).
 const { findFirstMock } = vi.hoisted(() => ({ findFirstMock: vi.fn() }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: { query: { users: { findFirst: findFirstMock } } },
-  users: { id: "users.id", userType: "users.user_type" },
-  eq: (a: unknown, b: unknown) => ({ a, b }),
 }));
 
 // Imported AFTER the mock (vi.mock is hoisted above imports by vitest).
@@ -122,6 +122,7 @@ describe("contract: resolveKeyIdentity derivation", () => {
       effectiveUserId: "human-1",
       agentUserId: "agent-1",
       isAgent: true,
+      grant: null,
     });
   });
 
@@ -133,6 +134,7 @@ describe("contract: resolveKeyIdentity derivation", () => {
       effectiveUserId: "agent-1",
       agentUserId: "agent-1",
       isAgent: true,
+      grant: null,
     });
   });
 
@@ -144,6 +146,7 @@ describe("contract: resolveKeyIdentity derivation", () => {
       effectiveUserId: "human-1",
       agentUserId: undefined,
       isAgent: false,
+      grant: null,
     });
   });
 
@@ -155,6 +158,7 @@ describe("contract: resolveKeyIdentity derivation", () => {
       effectiveUserId: "system",
       agentUserId: undefined,
       isAgent: false,
+      grant: null,
     });
   });
 });

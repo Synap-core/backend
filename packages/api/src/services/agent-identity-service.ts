@@ -133,6 +133,9 @@ export function ownAdjunctFilter(userId: string) {
  * `createdByUserId = userId` keeps it to THIS human's agents — it can never
  * admit a teammate's agents, which is the boundary a workspace-membership floor
  * would have crossed.
+ *
+ * App agents stay IN (no `notAnAppAgent`): an app's proposals are this human's
+ * review queue like any of their agents'.
  */
 function ownAgentUserIds(userId: string) {
   return db

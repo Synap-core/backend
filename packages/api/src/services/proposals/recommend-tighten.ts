@@ -82,6 +82,7 @@ import {
   proposalClusterMutes,
   insertPendingProposal,
   ProposalStatus,
+  notAnAppAgent,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { computeProposalFingerprint } from "./fingerprint.js";
@@ -235,7 +236,8 @@ async function listAgentUsers(): Promise<AgentRow[]> {
   return db
     .select({ id: users.id, createdByUserId: users.createdByUserId })
     .from(users)
-    .where(eq(users.userType, "agent"));
+    // An app's agent is governed on its app's page, never recommended here.
+    .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)));
 }
 
 /** The subject agent's recent proposals (all statuses) — mirror loadAgentProposals. */

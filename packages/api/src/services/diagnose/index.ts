@@ -36,6 +36,7 @@ import {
   tools,
   events,
   ProposalStatus,
+  notAnAppAgent,
 } from "@synap/database";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { authoredByUser } from "../agent-identity-service.js";
@@ -820,7 +821,12 @@ async function diagnoseClass(
         })
         .from(users)
         .where(
-          and(eq(users.userType, "agent"), eq(users.createdByUserId, userId))
+          and(
+            eq(users.userType, "agent"),
+            eq(users.createdByUserId, userId),
+            // An app's agent is shown as its app (Connected), never here.
+            notAnAppAgent(users.id)
+          )
         );
       const cards = await Promise.all(
         roster.map(async (a) => {

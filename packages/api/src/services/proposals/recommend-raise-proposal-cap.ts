@@ -39,6 +39,7 @@ import {
   governanceCeilings,
   insertPendingProposal,
   ProposalStatus,
+  notAnAppAgent,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -72,7 +73,8 @@ async function listAgentUsers(): Promise<AgentRow[]> {
       agentType: users.agentType,
     })
     .from(users)
-    .where(eq(users.userType, "agent"));
+    // An app's agent is governed on its app's page, never recommended here.
+    .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)));
 }
 
 /**

@@ -28,6 +28,7 @@ import {
   drizzleSql,
   and,
   eq,
+  notAnAppAgent,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
@@ -211,7 +212,7 @@ async function run() {
       })
       .from(users)
       .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
-      .where(eq(users.userType, "agent"));
+      .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)));
 
     if (allAgents.length === 0) {
       console.log("No agent services provisioned.");

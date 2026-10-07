@@ -85,6 +85,7 @@ vi.mock("@synap/database", () => {
   return {
     db: { select },
     and: vi.fn((...conds: unknown[]) => ({ and: conds })),
+    notAnAppAgent: vi.fn((col: unknown) => ({ notAnAppAgent: col })),
     eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
     desc: vi.fn((a: unknown) => ({ desc: a })),
     isNull: vi.fn((a: unknown) => ({ isNull: a })),
