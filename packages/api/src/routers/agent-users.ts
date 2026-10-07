@@ -727,7 +727,7 @@ export const agentUsersRouter = router({
       // for a bulk revoke, subject = the agent.
       await auditLog({
         subjectType: "apiKey",
-        action: "delete",
+        action: "revoke",
         phase: "completed",
         subjectId: agent.id,
         userId: callerId,

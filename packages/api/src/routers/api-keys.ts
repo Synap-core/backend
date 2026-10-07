@@ -423,7 +423,7 @@ export const apiKeysRouter = router({
       // 3. Audit log
       auditLog({
         subjectType: "apiKey",
-        action: "delete",
+        action: "revoke",
         phase: "completed",
         subjectId: input.keyId,
         userId: ctx.userId,
@@ -434,7 +434,7 @@ export const apiKeysRouter = router({
       // 4. Side-effects
       emitSideEffects({
         subjectType: "apiKey",
-        action: "delete",
+        action: "revoke",
         subjectId: input.keyId,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
@@ -507,7 +507,7 @@ export const apiKeysRouter = router({
       // 3. Audit log
       auditLog({
         subjectType: "apiKey",
-        action: "update",
+        action: "rotate",
         phase: "completed",
         subjectId: newApiKey.id,
         userId: ctx.userId,
@@ -518,7 +518,7 @@ export const apiKeysRouter = router({
       // 4. Side-effects
       emitSideEffects({
         subjectType: "apiKey",
-        action: "update",
+        action: "rotate",
         subjectId: newApiKey.id,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
@@ -568,7 +568,7 @@ export const apiKeysRouter = router({
 
       auditLog({
         subjectType: "apiKey",
-        action: "delete",
+        action: "revoke",
         phase: "completed",
         subjectId: input.userId,
         userId: ctx.userId,
@@ -1362,7 +1362,7 @@ export const apiKeysRouter = router({
 
       auditLog({
         subjectType: "apiKey",
-        action: "delete",
+        action: "revoke",
         phase: "completed",
         subjectId: input.keyId,
         userId: ctx.userId,
@@ -1372,7 +1372,7 @@ export const apiKeysRouter = router({
 
       emitSideEffects({
         subjectType: "apiKey",
-        action: "delete",
+        action: "revoke",
         subjectId: input.keyId,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
