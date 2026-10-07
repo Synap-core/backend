@@ -1,20 +1,9 @@
--- 0313: each Application acts as its OWN agent principal (founder decision 2,
--- Connected North Star: "a grant permits, never auto-approves").
+-- 0313: apps.agent_user_id — the agent user an Application acts as.
 --
--- An app's key is minted TO this agent user and linked to the owner
--- (`api_keys.linked_user_id` = owner), exactly like an agent key, so key
--- identity resolves `isAgent: true` and the ONE agent governance ladder
--- (`resolveAgentGovernanceDecision`) decides its writes. The agent is created
--- with the `ask-first` posture (every change to the person's data proposes);
--- the owner widens it per app through ordinary governance rules.
---
--- This column is ALSO the one predicate that keeps app agents out of every
--- agent roster (`notAnAppAgent`, @synap/database): an app agent is shown only
--- as its app.
---
--- Nullable, no default: an app gets its agent when its key is first issued.
--- Keys minted before 0313 (owned by the human) are adopted onto the app's
--- agent the first time they authenticate (`adoptLegacyAppKey`). Idempotent.
+-- An app's key is held by this agent and linked to the owner, so its writes
+-- run the agent governance ladder. `notAnAppAgent` (@synap/database) reads
+-- this column to keep app agents out of agent rosters. Nullable: set when the
+-- app's first key is issued. One agent per app (unique, partial). Idempotent.
 
 ALTER TABLE "apps" ADD COLUMN IF NOT EXISTS "agent_user_id" text
   REFERENCES "users"("id") ON DELETE SET NULL;

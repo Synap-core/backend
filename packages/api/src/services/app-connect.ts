@@ -1,32 +1,20 @@
 /**
  * App Connect — the ONE service behind every door that asks for, issues,
- * renames, revokes or removes an Application's access:
- *   - Hub REST `/api/hub/apps*` — the CLI (`synap app connect`);
- *   - tRPC `apps.*` — a signed-in person (Connected page, Pod admin).
- * Both doors call these functions, so they can never disagree about what a
- * request, a key or a revoke is. Errors are `TRPCError`s; the Hub door maps
- * their codes to HTTP statuses (`httpStatusForTrpcError`).
+ * renames, revokes or removes an Application's access: Hub REST
+ * `/api/hub/apps*` (the CLI) and tRPC `apps.*` (a signed-in person). Errors
+ * are `TRPCError`s; the Hub door maps their codes (`httpStatusForTrpcError`).
  *
- * Every lifecycle act is recorded on the app's own timeline as an event with
- * `subjectType: "app"` and `app_id = public_id` (`events.read({ appId })`):
- *   app.request.completed          access asked for (a proposal was filed)
- *   app.approve.completed          the owner approved it (executors/app.ts)
- *   app.issue_key.completed        a key was issued (plaintext never logged)
- *   app.revoke.completed           access removed, its keys revoked
- *   app.rename.completed           { from, to }
- *   app.remove_for_good.completed  a revoked app hidden for good
- * The action segment is the vocabulary verb (`@synap-core/types/vocabulary`).
+ * Every lifecycle act is an event on the app's timeline (`subjectType: "app"`,
+ * `app_id` = public_id): `app.{request|approve|issue_key|revoke|rename|
+ * remove_for_good}.completed` (`APP_EVENT_ACTIONS`, vocabulary verbs). A key's
+ * plaintext is never logged.
  *
- * GOVERNED LIKE AN AGENT (founder decision 2 — "a grant permits, never
- * auto-approves"): each app acts as its OWN agent user (`apps.agent_user_id`,
- * 0313), created when its key is first issued with the `ask-first` posture.
- * The key is minted TO that agent and linked to the owner, exactly like an
- * agent key, so `resolveKeyIdentity` reads `isAgent: true` and the ONE agent
- * ladder (`resolveAgentGovernanceDecision`) decides every write — no second
- * store. The grant still carries `client_id = public_id`, so the write is
- * attributed "via <app>". The owner widens an app through ordinary governance
- * rules on that agent (rung 2.8). The agent never appears as an agent
- * (`notAnAppAgent`); it is shown only as its app.
+ * An app acts as its OWN agent user (`apps.agent_user_id`) with the
+ * `ask-first` posture: its key is held by that agent and linked to the owner,
+ * so every write runs the ONE agent ladder (`resolveAgentGovernanceDecision`)
+ * — a grant permits, it never auto-approves. The grant carries
+ * `client_id = public_id` ("via <app>"). The agent is shown only as its app
+ * (`notAnAppAgent`).
  */
 
 import { randomBytes } from "crypto";
