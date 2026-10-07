@@ -7,9 +7,16 @@
  * same `agentUsers.list` rows and must never disagree, so the rule lives here
  * and neither surface re-derives it.
  *
- * Zero imports on purpose: this leaf is loaded by Electron, React Native and
- * Node alike.
+ * Its only import is the vocabulary leaf, which is itself pure and
+ * dependency-free: this leaf is loaded by Electron, React Native and Node alike.
  */
+
+import {
+  AGENT_BINDING_ERROR_LABELS,
+  AGENT_REACH_LABELS,
+  resolveAgentBindingErrorLabel,
+  resolveAgentReachLabel,
+} from "../vocabulary/index.js";
 
 /**
  * The one command that connects a person's own agents (Claude Code, Codex,
@@ -427,3 +434,119 @@ export const AGENT_WRITE_MODE_LINE: Record<AgentWriteMode, string> = {
     "Creates apply directly with Undo; edits, deletions and structural changes ask you.",
   "ask-first": "Every change asks you first.",
 };
+
+// ---------------------------------------------------------------------------
+// Agent REACH — how the pod reaches an agent, as a mark (tone + glyph + words).
+// The pod computes the reach (`resolveAgentReach`) and serves it with the
+// binding on `agentUsers.list` / Hub `GET /agent-users`; every surface draws
+// this ONE mark from those two fields and never re-derives it.
+// ---------------------------------------------------------------------------
+
+/** Every reach the pod serves (`services/agent-dispatch/agent-binding.ts`). */
+export const AGENT_REACHES = ["pod", "dispatch", "pull"] as const;
+export type AgentReach = (typeof AGENT_REACHES)[number];
+
+/** Every reason the pod gives for a binding it cannot use. */
+export const AGENT_BINDING_ERROR_CODES = [
+  "ambiguous",
+  "tool_missing",
+  "tool_inactive",
+  "not_an_agent_tool",
+  "malformed",
+] as const;
+export type AgentBindingErrorCode = (typeof AGENT_BINDING_ERROR_CODES)[number];
+
+// Coverage floors: a reach or an error code without its words fails the build,
+// and so does a word for a value this union does not have.
+type _ReachWords =
+  Exclude<AgentReach, keyof typeof AGENT_REACH_LABELS> extends never
+    ? Exclude<keyof typeof AGENT_REACH_LABELS, AgentReach> extends never
+      ? true
+      : never
+    : never;
+const _reachWords: _ReachWords = true;
+type _BindingWords =
+  Exclude<
+    AgentBindingErrorCode,
+    keyof typeof AGENT_BINDING_ERROR_LABELS
+  > extends never
+    ? Exclude<
+        keyof typeof AGENT_BINDING_ERROR_LABELS,
+        AgentBindingErrorCode
+      > extends never
+      ? true
+      : never
+    : never;
+const _bindingWords: _BindingWords = true;
+void _reachWords;
+void _bindingWords;
+
+/** The slice of an `agentUsers.list` row the reach mark reads. */
+export interface AgentReachRowLike {
+  /** Absent on a pod older than the dispatch binding ⇒ no mark, never a guess. */
+  reach?: string | null;
+  binding?: {
+    toolId: string | null;
+    provider: string | null;
+    /** Set when the edge exists but the binding cannot be used. */
+    error?: { code: string; message: string } | null;
+  } | null;
+}
+
+/** A glyph TOKEN — each surface maps it to its own icon. */
+export type AgentReachGlyph = "pod" | "dispatch" | "pull" | "failed";
+
+export interface AgentReachMark {
+  reach: AgentReach;
+  tone: AgentMarkTone;
+  glyph: AgentReachGlyph;
+  /** A few words, never a sentence. */
+  label: string;
+  /** The bound connector's tool id, or `null` (not bound / not served). */
+  toolId: string | null;
+  /** The provider token the binding names (`resolveServiceName` it), or `null`. */
+  provider: string | null;
+  /** The binding is broken: the pod's code + diagnostic. `null` = healthy / unbound. */
+  error: { code: string; message: string } | null;
+}
+
+/**
+ * The ONE reach mark:
+ *  1. no `reach` served, or one this build does not know ⇒ `null` (no mark):
+ *     an older pod cannot tell, and "Connects in" would be a guess;
+ *  2. `dispatch` with a binding error ⇒ the FAILED mark, worded by the error
+ *     (`danger`) — a broken binding is never shown as a calm "sends it work";
+ *  3. `dispatch` ⇒ `success` — the pod can hand it work;
+ *  4. `pod` / `pull` ⇒ `neutral`: a fact about the agent, nothing to fix.
+ */
+export function resolveAgentReachMark(
+  row: AgentReachRowLike | null | undefined
+): AgentReachMark | null {
+  const reach = row?.reach;
+  if (!reach || !(AGENT_REACHES as readonly string[]).includes(reach)) {
+    return null;
+  }
+  const r = reach as AgentReach;
+  const binding = r === "dispatch" ? (row?.binding ?? null) : null;
+  const base = {
+    reach: r,
+    toolId: binding?.toolId ?? null,
+    provider: binding?.provider ?? null,
+  };
+  if (binding?.error) {
+    return {
+      ...base,
+      tone: "danger",
+      glyph: "failed",
+      label: resolveAgentBindingErrorLabel(binding.error.code),
+      error: { code: binding.error.code, message: binding.error.message },
+    };
+  }
+  return {
+    ...base,
+    tone: r === "dispatch" ? "success" : "neutral",
+    glyph: r,
+    label: resolveAgentReachLabel(r),
+    error: null,
+  };
+}

@@ -1636,3 +1636,54 @@ export function resolveFilterOperatorLabel(
     humanizeToken(operator)
   );
 }
+
+/**
+ * How the pod REACHES an agent, as a mark's words (ui-composition §1) — the
+ * same on every surface (browser Connected + Settings › Agents, relay).
+ *   - `pod`      — an agent the pod runs itself;
+ *   - `dispatch` — an external agent bound to a connector: the pod sends it work;
+ *   - `pull`     — an external agent with no binding: it connects in and picks
+ *                  its work up through its own key.
+ * Keyed by `AgentReach`; `agents/index.ts` holds the compile-time floor that a
+ * new reach cannot ship without its words.
+ */
+export const AGENT_REACH_LABELS = {
+  pod: "Runs in Synap",
+  dispatch: "Synap sends it work",
+  pull: "Connects in",
+} as const;
+
+/** A reach's words; an unknown reach humanizes rather than leaks. */
+export function resolveAgentReachLabel(
+  reach: string | null | undefined
+): string {
+  if (!reach) return "";
+  return (
+    (AGENT_REACH_LABELS as Readonly<Record<string, string>>)[reach] ??
+    humanizeToken(reach)
+  );
+}
+
+/**
+ * Why an agent's binding cannot be used — the FAILED reach mark's words, keyed
+ * by the pod's `AgentBindingErrorCode` (`services/agent-dispatch/agent-binding.ts`).
+ * A mark, never the pod's diagnostic sentence (that rides in the detail fold).
+ */
+export const AGENT_BINDING_ERROR_LABELS = {
+  ambiguous: "Several connectors",
+  tool_missing: "Connector removed",
+  tool_inactive: "Connector off",
+  not_an_agent_tool: "Not an agent connector",
+  malformed: "Connector misconfigured",
+} as const;
+
+/** A binding error's words; an unknown code reads as a broken connector, never leaks. */
+export function resolveAgentBindingErrorLabel(
+  code: string | null | undefined
+): string {
+  if (!code) return "Connector broken";
+  return (
+    (AGENT_BINDING_ERROR_LABELS as Readonly<Record<string, string>>)[code] ??
+    "Connector broken"
+  );
+}
