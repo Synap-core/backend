@@ -143,8 +143,11 @@ describe("executeCapability — agent deny on a draft capability proposes enabli
     });
     // The whole pack's draft verbs, not just the refused one.
     expect(inserted[0].data.skillIds).toEqual(["skill-a", "skill-b"]);
+    // "Tool", not "Capability": the glossary gives a capability/skill/tool ONE
+    // word. Pinned literal on purpose — deriving it from the vocabulary door
+    // here would compare the door with itself and pass through any rename.
     expect(inserted[0].notificationDescription).toBe(
-      'Enable Capability "Research Methods"'
+      'Enable Tool "Research Methods"'
     );
   });
 

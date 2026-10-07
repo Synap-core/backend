@@ -17,17 +17,22 @@ import { describeCapabilityRun } from "./execute-capability.js";
  */
 describe("describeCapabilityRun", () => {
   it("names the package AND its kind for a marketplace install", () => {
+    // "Tool", not "Capability": the glossary gives a capability/skill/tool ONE
+    // word, and this test still asserted the retired one. The expected strings
+    // are pinned LITERALS on purpose — deriving them from `resolveObjectNoun`
+    // here would compare the door with itself and pass through any rename.
     expect(
       describeCapabilityRun("market.install", {
         slug: "arch-client-intelligence",
         kind: "capability",
       })
-    ).toBe('Install Capability "arch-client-intelligence"');
+    ).toBe('Install Tool "arch-client-intelligence"');
   });
 
   it("uses the vocabulary SSOT, not the raw token", () => {
-    // `cell` is **Card** and `workflow` is **Automation** in the registry; a
-    // hand-written label map here would fork the product's nouns.
+    // `cell` is **Card** and `workflow` is **Rule** in the registry; a
+    // hand-written label map here would fork the product's nouns. Pinned
+    // literals: a rename must come through this file deliberately.
     expect(
       describeCapabilityRun("market.install", { slug: "probe", kind: "cell" })
     ).toBe('Install Card "probe"');
@@ -36,7 +41,7 @@ describe("describeCapabilityRun", () => {
         slug: "nudges",
         kind: "workflow",
       })
-    ).toBe('Install Automation "nudges"');
+    ).toBe('Install Rule "nudges"');
   });
 
   it("degrades honestly when the payload is thin", () => {
