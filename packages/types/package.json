@@ -56,6 +56,10 @@
       "types": "./dist/apps/app-view.d.ts",
       "import": "./dist/apps/app-view.js"
     },
+    "./membrane": {
+      "types": "./dist/membrane/index.d.ts",
+      "import": "./dist/membrane/index.js"
+    },
     "./surfaces": {
       "types": "./dist/surfaces/index.d.ts",
       "import": "./dist/surfaces/index.js"

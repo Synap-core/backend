@@ -2389,6 +2389,7 @@ const captureBaseRouter = router({
             userId,
             workspaceId: workspaceId ?? null,
             proposals: structureResult.entities,
+            relations: structureResult.relations,
             dedupCandidates,
             dedupSkipped,
           });

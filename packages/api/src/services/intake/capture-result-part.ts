@@ -39,6 +39,7 @@ import {
   CaptureResultPartSchema,
   readCapturePart,
   type CaptureResultPart,
+  type CaptureResultRelation,
   type CaptureResultRow,
 } from "@synap-core/types/capture";
 import { createLogger } from "@synap-core/core";
@@ -62,6 +63,69 @@ export interface CaptureResultProposal {
   tempId: string;
   profileSlug?: string | null;
   title?: string | null;
+  /** The proposed entity's fields — projected, bounded and redacted below. */
+  properties?: Record<string, unknown> | null;
+  /** The proposed entity's long-form body. */
+  content?: string | null;
+}
+
+/** Property KEYS never persisted into a room part (message metadata). */
+export const SECRET_PROPERTY_KEY = /secret|token|password|api[_-]?key/i;
+
+/**
+ * Bound + redact one proposal's properties/content for the part. PURE.
+ * `cut` is true when anything was truncated or dropped for SIZE (secret-keyed
+ * entries are withheld by policy, not by bound, and do not set it).
+ */
+export function boundResultFields(p: CaptureResultProposal): {
+  properties?: Record<string, unknown>;
+  content?: string;
+  cut: boolean;
+} {
+  const L = CAPTURE_RESULT_LIMITS;
+  let cut = false;
+  let properties: Record<string, unknown> | undefined;
+  if (p.properties && typeof p.properties === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(p.properties)) {
+      if (SECRET_PROPERTY_KEY.test(k) || v === undefined) continue;
+      if (k.length > 200) {
+        cut = true;
+        continue;
+      }
+      if (Object.keys(out).length >= L.propertiesMaxKeys) {
+        cut = true;
+        break;
+      }
+      if (typeof v === "string") {
+        if (v.length > L.propertyValueMaxChars) cut = true;
+        out[k] = v.slice(0, L.propertyValueMaxChars);
+      } else if (v === null || typeof v === "boolean") {
+        out[k] = v;
+      } else if (typeof v === "number") {
+        if (Number.isFinite(v)) out[k] = v;
+      } else if (typeof v === "object") {
+        let json: string | undefined;
+        try {
+          json = JSON.stringify(v);
+        } catch {
+          json = undefined;
+        }
+        if (json !== undefined && json.length <= L.propertyValueMaxChars) {
+          out[k] = JSON.parse(json);
+        } else {
+          cut = true; // dropped whole, never cut mid-JSON
+        }
+      }
+    }
+    if (Object.keys(out).length > 0) properties = out;
+  }
+  let content: string | undefined;
+  if (typeof p.content === "string" && p.content.length > 0) {
+    if (p.content.length > L.contentMaxChars) cut = true;
+    content = p.content.slice(0, L.contentMaxChars);
+  }
+  return { properties, content, cut };
 }
 
 /**
@@ -84,22 +148,71 @@ export function projectCaptureResultRows(input: {
   matchedTempIds: ReadonlySet<string>;
   /** tempIds the user had already dismissed on an earlier part (carried over). */
   dismissedTempIds: ReadonlySet<string>;
-}): { rows: CaptureResultRow[]; truncated: boolean } {
+  /** Structure relations; pruned to rows that exist and capped. */
+  relations?: ReadonlyArray<CaptureResultRelation> | null;
+}): {
+  rows: CaptureResultRow[];
+  truncated: boolean;
+  relations?: CaptureResultRelation[];
+} {
   const usable = input.proposals.filter(
     (p) => typeof p.tempId === "string" && p.tempId.length > 0
   );
-  const rows = usable.slice(0, CAPTURE_RESULT_LIMITS.rowsMax).map((p) => ({
-    tempId: p.tempId.slice(0, 200),
-    profileSlug: (p.profileSlug || "item").slice(0, 200),
-    title: (p.title || "Untitled").slice(
-      0,
-      CAPTURE_RESULT_LIMITS.titleMaxChars
-    ),
-    why: null,
-    updatesExisting: input.matchedTempIds.has(p.tempId),
-    dismissed: input.dismissedTempIds.has(p.tempId),
-  }));
-  return { rows, truncated: usable.length > CAPTURE_RESULT_LIMITS.rowsMax };
+  let fieldsCut = false;
+  const rows = usable.slice(0, CAPTURE_RESULT_LIMITS.rowsMax).map((p) => {
+    const bounded = boundResultFields(p);
+    if (bounded.cut) fieldsCut = true;
+    const row: CaptureResultRow = {
+      tempId: p.tempId.slice(0, 200),
+      profileSlug: (p.profileSlug || "item").slice(0, 200),
+      title: (p.title || "Untitled").slice(
+        0,
+        CAPTURE_RESULT_LIMITS.titleMaxChars
+      ),
+      why: null,
+      updatesExisting: input.matchedTempIds.has(p.tempId),
+      dismissed: input.dismissedTempIds.has(p.tempId),
+    };
+    if (bounded.properties) row.properties = bounded.properties;
+    if (bounded.content !== undefined) row.content = bounded.content;
+    // Whole-row cap: the optional fields go first, the row itself stays.
+    if (
+      Buffer.byteLength(JSON.stringify(row), "utf8") >
+      CAPTURE_RESULT_LIMITS.rowMaxBytes
+    ) {
+      delete row.properties;
+      delete row.content;
+      fieldsCut = true;
+    }
+    return row;
+  });
+  const present = new Set(rows.map((r) => r.tempId));
+  const edges = (input.relations ?? [])
+    .filter(
+      (r) =>
+        typeof r.relationType === "string" &&
+        r.relationType.length > 0 &&
+        present.has(r.sourceTempId) &&
+        present.has(r.targetTempId)
+    )
+    .map((r) => ({
+      sourceTempId: r.sourceTempId,
+      targetTempId: r.targetTempId,
+      relationType: r.relationType.slice(
+        0,
+        CAPTURE_RESULT_LIMITS.relationTypeMaxChars
+      ),
+    }));
+  const relationsCut = edges.length > CAPTURE_RESULT_LIMITS.relationsMax;
+  const relations = edges.slice(0, CAPTURE_RESULT_LIMITS.relationsMax);
+  return {
+    rows,
+    truncated:
+      usable.length > CAPTURE_RESULT_LIMITS.rowsMax ||
+      fieldsCut ||
+      relationsCut,
+    ...(relations.length > 0 ? { relations } : {}),
+  };
 }
 
 /** The readable line the result message carries in the room. */
@@ -130,7 +243,12 @@ async function askedRound(channelId: string): Promise<number> {
 
 /** A part's VERDICT — everything except which round produced it. */
 function sansRound(part: CaptureResultPart) {
-  return { rows: part.rows, truncated: part.truncated, notice: part.notice };
+  return {
+    rows: part.rows,
+    ...(part.relations ? { relations: part.relations } : {}),
+    truncated: part.truncated,
+    notice: part.notice,
+  };
 }
 
 /**
@@ -169,6 +287,8 @@ export interface PersistCaptureResultInput {
   userId: string;
   workspaceId?: string | null;
   proposals: ReadonlyArray<CaptureResultProposal>;
+  /** The structure's relations (tempId-addressed). */
+  relations?: ReadonlyArray<CaptureResultRelation> | null;
   /** Pod dedup output, keyed by tempId — the ONLY matched-ness signal here. */
   dedupCandidates: Record<string, ReadonlyArray<unknown>>;
   /** True when a dedup search threw: "not checked", never "no duplicates". */
@@ -213,14 +333,16 @@ export async function persistCaptureResult(
           .map(([tempId]) => tempId)
   );
 
-  const { rows, truncated } = projectCaptureResultRows({
+  const { rows, truncated, relations } = projectCaptureResultRows({
     proposals: input.proposals,
+    relations: input.relations,
     matchedTempIds,
     dismissedTempIds,
   });
 
   const verdict = {
     rows,
+    ...(relations ? { relations } : {}),
     truncated,
     notice: input.dedupSkipped ? DEDUP_SKIPPED_NOTICE : null,
   };

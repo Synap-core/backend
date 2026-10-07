@@ -135,8 +135,8 @@ describe("resolveActionProgressive — the in-flight verb", () => {
     expect(resolveActionProgressive("proposal.reject")).toBe("Rejecting");
   });
   it("keeps the imperative where no progressive is curated, never a guessed tense", () => {
-    expect(resolveActionProgressive("approve")).toBe(
-      resolveActionLabel("approve")
+    expect(resolveActionProgressive("archive")).toBe(
+      resolveActionLabel("archive")
     );
     expect(resolveActionProgressive("frobnicate_thing")).toBe(
       "Frobnicate thing"

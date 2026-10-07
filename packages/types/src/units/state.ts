@@ -42,6 +42,11 @@ export type UnitState = (typeof UNIT_STATES)[number];
  * A palette token NAME. Every one of these already exists in Relay's theme
  * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
  * grow without a token existing on BOTH surfaces first.
+ *
+ * `warning` is a heads-up — "you need to act, nothing broke yet" (a sign-in
+ * that expired, a connection asking for access). It joined once both palettes
+ * carried it (`--synap-tone-warning-fill|ink`, relay `warning` / `warningInk`);
+ * no unit-of-work state wears it, `resolveUnitState` never returns it.
  */
 export type UnitTone =
   | "primary"
@@ -49,6 +54,7 @@ export type UnitTone =
   | "info"
   | "error"
   | "success"
+  | "warning"
   | "textSecondary"
   | "textMuted";
 

@@ -162,7 +162,10 @@
           "type": "form",
           "values": {
             "dueDate": "2026-09-20",
-            "tags": ["q3", "sales"],
+            "tags": [
+              "q3",
+              "sales"
+            ],
             "empty": ""
           }
         }
@@ -269,6 +272,179 @@
         "rows": [],
         "truncated": false,
         "notice": "The structuring pass ran degraded; some fields were skipped."
+      }
+    },
+    {
+      "name": "valid result row carrying properties (scalars, null, small structure) and content",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "properties": {
+              "priority": "high",
+              "points": 3,
+              "done": false,
+              "due": null,
+              "tags": [
+                "a",
+                "b"
+              ]
+            },
+            "content": "Long-form body of the proposed entity."
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "valid result row at the bounds — 16 properties, 2048-char content",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "properties": {
+              "k00": 0,
+              "k01": 1,
+              "k02": 2,
+              "k03": 3,
+              "k04": 4,
+              "k05": 5,
+              "k06": 6,
+              "k07": 7,
+              "k08": 8,
+              "k09": 9,
+              "k10": 10,
+              "k11": 11,
+              "k12": 12,
+              "k13": 13,
+              "k14": 14,
+              "k15": 15
+            },
+            "content": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "valid result rows carrying action + existingEntityId (update and link) and a create",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": true,
+            "dismissed": false,
+            "action": "update",
+            "existingEntityId": "7d9c1f00-1111-4c22-8a33-445566778899"
+          },
+          {
+            "tempId": "t2",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "action": "link",
+            "existingEntityId": "7d9c1f00-1111-4c22-8a33-445566778899"
+          },
+          {
+            "tempId": "t3",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "action": "create"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "valid result carrying relations between its rows",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          },
+          {
+            "tempId": "t2",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "relations": [
+          {
+            "sourceTempId": "t1",
+            "targetTempId": "t2",
+            "relationType": "related_to"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "valid result with an EMPTY relations array and empty properties — present-but-empty stays present",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "properties": {}
+          }
+        ],
+        "relations": [],
+        "truncated": false,
+        "notice": null
       }
     }
   ],
@@ -830,6 +1006,292 @@
         "truncated": false,
         "notice": null
       }
+    },
+    {
+      "name": "result row properties with 17 keys",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "properties": {
+              "k00": 0,
+              "k01": 1,
+              "k02": 2,
+              "k03": 3,
+              "k04": 4,
+              "k05": 5,
+              "k06": 6,
+              "k07": 7,
+              "k08": 8,
+              "k09": 9,
+              "k10": 10,
+              "k11": 11,
+              "k12": 12,
+              "k13": 13,
+              "k14": 14,
+              "k15": 15,
+              "k16": 16
+            }
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row property value over 500 chars",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "properties": {
+              "a": "@@V501@@"
+            }
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row properties null — optional is not nullable",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "properties": null
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row properties an array, not a record",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "properties": [
+              "a"
+            ]
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row content over 2048 chars",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "content": "@@C2049@@"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row content null — optional is not nullable",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "content": null
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row action 'bogus'",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "action": "bogus"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row existingEntityId not a uuid",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "action": "update",
+            "existingEntityId": "not-a-uuid"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result with 41 relations — over the relation bound",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          },
+          {
+            "tempId": "t2",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "relations": "@@REL41@@",
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result relation missing relationType",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          },
+          {
+            "tempId": "t2",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "relations": [
+          {
+            "sourceTempId": "t1",
+            "targetTempId": "t2"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result relations null — optional is not nullable",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "relations": null,
+        "truncated": false,
+        "notice": null
+      }
     }
   ],
   "placeholders": {
@@ -850,6 +1312,8 @@
     "@@B8193@@": "8193 × 'b' (serialized form values then exceed 8192 bytes)",
     "@@TI301@@": "301 × 't'",
     "@@N501@@": "501 × 'n'",
-    "@@ROWS41@@": "41 × a minimal valid result row"
+    "@@ROWS41@@": "41 × a minimal valid result row",
+    "@@C2049@@": "2049 × 'c'",
+    "@@REL41@@": "41 × { sourceTempId: 's', targetTempId: 't', relationType: 'r' }"
   }
 }

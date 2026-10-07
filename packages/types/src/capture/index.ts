@@ -182,7 +182,43 @@ export const CAPTURE_RESULT_LIMITS = {
   /** The one-line WHY under a row — same budget as a question's. */
   whyMaxChars: 200,
   noticeMaxChars: 500,
+  /** Entity properties a row may carry (bounded: parts live in message metadata). */
+  propertiesMaxKeys: 16,
+  /** A string property value, or the JSON.stringify length of a non-string one. */
+  propertyValueMaxChars: 500,
+  /** The long-form body a row may carry. */
+  contentMaxChars: 2048,
+  /** Whole serialised row; past it the writer drops properties/content first. */
+  rowMaxBytes: 6144,
+  /** Relations one part may carry (same budget as rows). */
+  relationsMax: 40,
+  relationTypeMaxChars: 200,
 } as const;
+
+/**
+ * A property value on a result row: a scalar, or an array/object whose JSON
+ * form fits `propertyValueMaxChars`. A too-big structure is DROPPED by the
+ * writer, never cut mid-JSON.
+ */
+const ResultPropertyValueSchema = z.unknown().refine(
+  (v) => {
+    if (v === null || typeof v === "boolean" || typeof v === "number") {
+      return true;
+    }
+    if (typeof v === "string") {
+      return v.length <= CAPTURE_RESULT_LIMITS.propertyValueMaxChars;
+    }
+    if (typeof v !== "object") return false;
+    try {
+      return (
+        JSON.stringify(v).length <= CAPTURE_RESULT_LIMITS.propertyValueMaxChars
+      );
+    } catch {
+      return false;
+    }
+  },
+  { message: "property value out of bounds" }
+);
 
 export const CaptureResultRowSchema = z.object({
   /**
@@ -207,6 +243,31 @@ export const CaptureResultRowSchema = z.object({
    * report sees it. One fact, one home.
    */
   dismissed: z.boolean(),
+  /**
+   * The proposed entity's fields, so a client rebuilding the report from the
+   * room can show/edit them. OPTIONAL: parts written before this field existed
+   * still parse. Bounded + secret-keyed entries skipped by the writer.
+   */
+  properties: z
+    .record(z.string().max(200), ResultPropertyValueSchema)
+    .refine(
+      (o) => Object.keys(o).length <= CAPTURE_RESULT_LIMITS.propertiesMaxKeys,
+      { message: "too many properties" }
+    )
+    .optional(),
+  /** The proposed entity's long-form body. OPTIONAL, same reason. */
+  content: z.string().max(CAPTURE_RESULT_LIMITS.contentMaxChars).optional(),
+  /**
+   * The enriched decision for this row — the SAME vocabulary as the capture
+   * pipeline's `autoDecideAction` (`CaptureProposal.action`). OPTIONAL and, as
+   * of this change, WRITTEN BY NOBODY on the pod: the decision lives in the
+   * client (`synap-app/packages/core/capture-pipeline/src/state.ts`), and a
+   * pod-side copy would be a second rule. The field exists so a client that
+   * owns the decision can persist it; readers must treat absence as "decide".
+   */
+  action: z.enum(["create", "update", "link"]).optional(),
+  /** Dedup target when `action` is update/link. Same status as `action`. */
+  existingEntityId: z.string().uuid().optional(),
 });
 export type CaptureResultRow = z.infer<typeof CaptureResultRowSchema>;
 
@@ -225,6 +286,10 @@ export const PROJECTED_RESULT_ROW_FIELDS = [
   "why",
   "updatesExisting",
   "dismissed",
+  "properties",
+  "content",
+  "action",
+  "existingEntityId",
 ] as const satisfies ReadonlyArray<keyof CaptureResultRow>;
 
 /** Withheld from the part, each with its reason — never merely forgotten. */
@@ -242,6 +307,17 @@ type _RowClassified =
 const _rowClassified: _RowClassified = true;
 void _rowClassified;
 
+/** An edge between two rows of the part, by tempId (what `execute` takes). */
+export const CaptureResultRelationSchema = z.object({
+  sourceTempId: z.string().min(1).max(200),
+  targetTempId: z.string().min(1).max(200),
+  relationType: z
+    .string()
+    .min(1)
+    .max(CAPTURE_RESULT_LIMITS.relationTypeMaxChars),
+});
+export type CaptureResultRelation = z.infer<typeof CaptureResultRelationSchema>;
+
 export const CaptureResultPartSchema = z.object({
   kind: z.literal("capture_result"),
   v: z.literal(1),
@@ -249,6 +325,11 @@ export const CaptureResultPartSchema = z.object({
   /** Which structuring round produced these rows. Matches the question's. */
   round: z.number().int().min(1),
   rows: z.array(CaptureResultRowSchema).max(CAPTURE_RESULT_LIMITS.rowsMax),
+  /** Optional: parts written before this field existed still parse. */
+  relations: z
+    .array(CaptureResultRelationSchema)
+    .max(CAPTURE_RESULT_LIMITS.relationsMax)
+    .optional(),
   /**
    * The pod produced MORE rows than the part may carry.
    *

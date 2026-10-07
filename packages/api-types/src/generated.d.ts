@@ -7517,8 +7517,13 @@ export type UnitState = (typeof UNIT_STATES)[number];
  * A palette token NAME. Every one of these already exists in Relay's theme
  * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
  * grow without a token existing on BOTH surfaces first.
+ *
+ * `warning` is a heads-up — "you need to act, nothing broke yet" (a sign-in
+ * that expired, a connection asking for access). It joined once both palettes
+ * carried it (`--synap-tone-warning-fill|ink`, relay `warning` / `warningInk`);
+ * no unit-of-work state wears it, `resolveUnitState` never returns it.
  */
-export type UnitTone = "primary" | "ai" | "info" | "error" | "success" | "textSecondary" | "textMuted";
+export type UnitTone = "primary" | "ai" | "info" | "error" | "success" | "warning" | "textSecondary" | "textMuted";
 /** Which mark the state wears. Surfaces map these to their own icon set. */
 export type UnitGlyph = "person" | "scales" | "spark" | "clock" | "pause" | "link" | "check" | "question" | "alert" | "dashed-circle" | "lock" | "globe" | "users";
 /**
@@ -21398,6 +21403,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revokedAt: Date | null;
 				revokedReason: string | null;
 				workspaceId: string | null;
+				grant: {
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					expiresAt: Date | null;
+				} | null;
 			}[];
 			meta: object;
 		}>;

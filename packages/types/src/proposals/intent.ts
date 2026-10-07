@@ -40,16 +40,15 @@
  * as a bug; they are the same row answering two questions. Pinned by the
  * disagreement fixtures in `intent.test.ts` so neither can drift into the other.
  *
- * ── The ochre gap, stated rather than invented ─────────────────────────────
- * `UnitTone` has no ochre/warning token, but the blast-radius bucket
- * vocabulary does (`Scope & access`). So `governance` and `access` are toned
- * `error` here — the strongest token that exists — and the admin-vs-removal
- * distinction is carried by `glyph` (`shield` / `key` vs `trash`) and by
- * `resolveProposalSeverity`, which keeps the four-value floor vocabulary
- * intact. Do NOT add an eighth tone token to satisfy this file; a token must
- * exist on every surface's palette before it exists here.
+ * ── Governance and access tones ────────────────────────────────────────────
+ * `governance` and `access` are toned `error` — the strongest token — and the
+ * admin-vs-removal distinction is carried by `glyph` (`shield` / `key` vs
+ * `trash`) and by `resolveProposalSeverity`. `UnitTone` now carries `warning`
+ * (the Connected "asking" ochre); moving these two onto it is a product call,
+ * not made here.
  */
 
+import { summarizeGrant } from "../grants/index.js";
 import type { UnitTone } from "../units/state.js";
 import { isNonWidenableGovernanceReason } from "./governance-grant-options.js";
 
@@ -522,4 +521,148 @@ export function rollupComposite(
     highestImpact,
     highestImpactMemberIndex,
   };
+}
+
+// ---------------------------------------------------------------------------
+// APP CONNECT — an app asking for access (`targetType "app"`, `proposalType
+// "connect"`, filed by Hub `POST /apps/:id/connect`). One wording for every
+// door the request shows at (phone, Connected app page, the CLI's review
+// link): "synap.live asks for access: Create People · Sales, Read Notes ·
+// Finance".
+// ---------------------------------------------------------------------------
+
+/** One request as the proposal stores it (`data.requests[]`). */
+export interface AppConnectRequestLike {
+  permission: string;
+  workspaceId: string;
+  /** The space's name, when the filer stored it. Preferred over `workspaceNames`. */
+  workspaceName?: string | null;
+}
+
+/** The proposal fields this reads — any proposal row satisfies it. */
+export interface AppConnectProposalLike {
+  targetType?: string | null;
+  proposalType?: string | null;
+  data?: unknown;
+}
+
+export interface AppConnectLine {
+  workspaceId: string;
+  /** "Create People" — `summarizeGrant(...).what` for this space's permissions. */
+  what: string;
+  /** The space's name, or `summarizeGrant`'s "1 Space" when no name is known. */
+  where: string;
+  /** "Create People · Sales". */
+  text: string;
+}
+
+export interface AppConnectSummary {
+  appName: string;
+  /** "synap.live asks for access". */
+  title: string;
+  /** One line PER SPACE — never a cross product of permissions × spaces. */
+  lines: AppConnectLine[];
+  /** "synap.live asks for access: Create People · Sales, Read Notes · Finance". */
+  sentence: string;
+}
+
+/** Is this an app's request for access? */
+export function isAppConnectProposal(p: AppConnectProposalLike): boolean {
+  return p.targetType === "app" && p.proposalType === "connect";
+}
+
+function rec(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * The request in grant words, grouped BY SPACE. Each space's permissions are
+ * summarized on their own (`summarizeGrant` with that one space), because the
+ * approval grants each space only what was asked in it — "Create People in
+ * Sales" + "Read Notes in Finance" must never read (or become) "Create People,
+ * Read Notes in Sales and Finance".
+ *
+ * `workspaceNames` (id → name) fills a name the stored request lacks; a space
+ * with no known name reads "1 Space" rather than a raw id.
+ */
+export function summarizeAppConnectRequest(input: {
+  appName: string;
+  requests: ReadonlyArray<AppConnectRequestLike>;
+  workspaceNames?: Readonly<Record<string, string>>;
+}): AppConnectSummary {
+  const order: string[] = [];
+  const bySpace = new Map<
+    string,
+    { permissions: string[]; name: string | null }
+  >();
+  for (const r of input.requests) {
+    let entry = bySpace.get(r.workspaceId);
+    if (!entry) {
+      entry = { permissions: [], name: null };
+      bySpace.set(r.workspaceId, entry);
+      order.push(r.workspaceId);
+    }
+    if (!entry.permissions.includes(r.permission))
+      entry.permissions.push(r.permission);
+    entry.name =
+      entry.name ??
+      r.workspaceName ??
+      input.workspaceNames?.[r.workspaceId] ??
+      null;
+  }
+  const lines = order.map((workspaceId) => {
+    const entry = bySpace.get(workspaceId)!;
+    const s = summarizeGrant({
+      permissions: entry.permissions,
+      workspaceIds: [workspaceId],
+      projectIds: null,
+      entityIds: null,
+    });
+    const where = entry.name ?? s.where.join(" · ");
+    return { workspaceId, what: s.what, where, text: `${s.what} · ${where}` };
+  });
+  const title = `${input.appName} asks for access`;
+  return {
+    appName: input.appName,
+    title,
+    lines,
+    sentence: lines.length
+      ? `${title}: ${lines.map((l) => l.text).join(", ")}`
+      : title,
+  };
+}
+
+/**
+ * {@link summarizeAppConnectRequest} straight off a proposal row, or `null`
+ * when the row is not an app/connect request or its data is unreadable (a
+ * caller then falls back to its generic title — never a half-read sentence).
+ */
+export function describeAppConnectProposal(
+  p: AppConnectProposalLike,
+  workspaceNames?: Readonly<Record<string, string>>
+): AppConnectSummary | null {
+  if (!isAppConnectProposal(p)) return null;
+  const data = rec(p.data);
+  const appName = typeof data?.name === "string" ? data.name : null;
+  const raw = Array.isArray(data?.requests) ? data.requests : null;
+  if (!appName || !raw) return null;
+  const requests: AppConnectRequestLike[] = [];
+  for (const item of raw) {
+    const r = rec(item);
+    if (
+      !r ||
+      typeof r.permission !== "string" ||
+      typeof r.workspaceId !== "string"
+    )
+      return null;
+    requests.push({
+      permission: r.permission,
+      workspaceId: r.workspaceId,
+      workspaceName:
+        typeof r.workspaceName === "string" ? r.workspaceName : null,
+    });
+  }
+  return summarizeAppConnectRequest({ appName, requests, workspaceNames });
 }

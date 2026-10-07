@@ -208,6 +208,39 @@ describe("persistCaptureResult — the rows reach the room and read back", () =>
     expect((await resultPartOf(messageId)).round).toBe(1);
   });
 
+  it("rows carry the proposal's properties + content, secrets withheld, read back through the contract", async () => {
+    const sessionId = await seedSession();
+    const { messageId } = await persistCaptureResult({
+      sessionId,
+      userId: USER,
+      proposals: [
+        {
+          tempId: "p1",
+          profileSlug: "task",
+          title: "Ship it",
+          content: "Long body",
+          properties: { priority: "high", tags: ["a", "b"], apiKey: "sk-x" },
+        },
+      ],
+      relations: [
+        { sourceTempId: "p1", targetTempId: "p1", relationType: "self" },
+        { sourceTempId: "p1", targetTempId: "gone", relationType: "x" },
+      ],
+      dedupCandidates: {},
+      dedupSkipped: false,
+    });
+    const part = await resultPartOf(messageId);
+    expect(part.relations).toEqual([
+      { sourceTempId: "p1", targetTempId: "p1", relationType: "self" },
+    ]);
+    expect(part.rows[0].properties).toEqual({
+      priority: "high",
+      tags: ["a", "b"],
+    });
+    expect(part.rows[0].content).toBe("Long body");
+    expect(part.truncated).toBe(false);
+  });
+
   it("past the row bound it REPORTS truncation instead of dropping rows in silence", async () => {
     const sessionId = await seedSession();
     const many = Array.from(

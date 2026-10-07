@@ -168,7 +168,11 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // (`ConnectedApp`'s FIX_LABEL map, `ToolPage`'s reconnect ternary) the moment
   // a label was needed; a third would have been inevitable.
   connect: { imperative: "Connect", past: "Connected" },
-  reconnect: { imperative: "Reconnect", past: "Reconnected" },
+  reconnect: {
+    imperative: "Reconnect",
+    past: "Reconnected",
+    progressive: "Reconnecting",
+  },
   // Pause/resume is the register for something that RUNS (an automation with a
   // live trigger, a session): it was running and will run again. Enable/disable
   // is the register for a config FLAG. They are not synonyms — using the flag
@@ -184,7 +188,11 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   "capture.graph": { imperative: "Capture", past: "Captured" },
   "import.graph": { imperative: "Import", past: "Imported" },
   send: { imperative: "Send", past: "Sent" },
-  approve: { imperative: "Approve", past: "Approved" },
+  approve: {
+    imperative: "Approve",
+    past: "Approved",
+    progressive: "Approving",
+  },
   // The decision verb for OBJECT-WORK proposals — a proposed entity that
   // renders as the entity, editable, in a draft state. Approving that is not
   // reviewing a diff, it is finishing a draft, and the verb should say so.
@@ -245,7 +253,7 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // long-waiting proposal out of the queue without applying it.
   retire: { imperative: "Retire", past: "Retired" },
   close: { imperative: "Close", past: "Closed" },
-  expire: { imperative: "Expire", past: "Expired" },
+  expire: { imperative: "Expire", past: "Expired", progressive: "Expiring" },
   // Sharing (Sites W2–W5, `services/sharing/share-service.ts`). `publish`
   // above is reused for putting a record on the public web — one word for one
   // act, whether it finishes a draft or opens a record to strangers. `unshare`
@@ -256,7 +264,7 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   share: { imperative: "Share", past: "Shared" },
   unshare: { imperative: "Unshare", past: "Unshared" },
   unpublish: { imperative: "Unpublish", past: "Unpublished" },
-  revoke: { imperative: "Revoke", past: "Revoked" },
+  revoke: { imperative: "Revoke", past: "Revoked", progressive: "Revoking" },
   redeem: { imperative: "Redeem", past: "Redeemed" },
   // Governed space operations (R8a/P1). `move` is emitted by
   // `entities.moveToWorkspace` (audit `entity.move`) and titles a move
@@ -318,6 +326,61 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   answer: { imperative: "Answer", past: "Answered" },
   review: { imperative: "Review", past: "Reviewed" },
   dismiss: { imperative: "Dismiss", past: "Dismissed" },
+  // CONNECTION lifecycle (`@synap-core/types/membrane`, the Connected page).
+  // `revoke` / `expire` / `reconnect` / `approve` live above; these are the
+  // verbs the connection action rules and lifecycle events add.
+  //
+  // `rotate` is what the key door does (`api_keys` revoke-and-reissue) — a
+  // person reads it as REPLACING the key, so an `apiKey.rotate` event reads
+  // "Replaced API key". "Rotated" is operator jargon.
+  rotate: { imperative: "Replace", past: "Replaced", progressive: "Replacing" },
+  sync: { imperative: "Sync", past: "Synced", progressive: "Syncing" },
+  issue: { imperative: "Issue", past: "Issued", progressive: "Issuing" },
+  // A verb that names the part it acts on carries the noun (like
+  // `section_update`): the button on an app's page says WHAT it issues.
+  issue_key: {
+    imperative: "Issue key",
+    past: "Issued key",
+    progressive: "Issuing key",
+  },
+  // The NEGATIVE answer to a connection asking for access. Not `reject`: the
+  // review card of an `app/connect` request is a request for reach, and the
+  // founder's card reads "Approve · Decline".
+  decline: {
+    imperative: "Decline",
+    past: "Declined",
+    progressive: "Declining",
+  },
+  // Cutting a connection's sign-in (an account, a channel, an agent's keys).
+  // Reversible by connecting again — never "Deleted".
+  disconnect: {
+    imperative: "Disconnect",
+    past: "Disconnected",
+    progressive: "Disconnecting",
+  },
+  // The revoked connection's last act (founder decision 4): it hides the row
+  // for good; its history is kept.
+  remove_for_good: {
+    imperative: "Remove for good",
+    past: "Removed for good",
+    progressive: "Removing",
+  },
+  see_failure: { imperative: "See what failed", past: "Saw what failed" },
+  turn_on: {
+    imperative: "Turn on",
+    past: "Turned on",
+    progressive: "Turning on",
+  },
+  add_again: { imperative: "Add again", past: "Added again" },
+  cancel: {
+    imperative: "Cancel",
+    past: "Cancelled",
+    progressive: "Cancelling",
+  },
+  set_notifications: {
+    imperative: "Set notifications",
+    past: "Set notifications",
+  },
 };
 
 /**
@@ -883,6 +946,63 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
 export function resolveStatusLabel(status: string | null | undefined): string {
   if (!status) return "";
   return STATUS_LABELS[status.toLowerCase()] ?? humanizeToken(status);
+}
+
+/**
+ * CONNECTION STATE marks (`@synap-core/types/membrane` `ConnectionState`) —
+ * the words on the Connected page's state chip. Their own table, not rows in
+ * {@link STATUS_LABELS}, because three of the tokens already mean something
+ * else there: `failing` is a session VERDICT ("Not yet met"), `ready` is a
+ * session lens ("Ready"), `revoked` is a share link killed for good
+ * ("Revoked"). A connection that is `ready` reads "Connected"; one that is
+ * `revoked` reads "Access removed" (its keys reach nothing, its history stays).
+ *
+ * Keyed by every `ConnectionState`; `membrane/index.ts` holds the compile-time
+ * floor that a new state cannot ship without its word.
+ */
+export const CONNECTION_STATE_LABELS = {
+  asking: "Asks for access",
+  needs_signin: "Sign-in expired",
+  failing: "Failing",
+  setting_up: "Setting up",
+  ready: "Connected",
+  quiet: "Not seen in 30 days",
+  off: "Off",
+  revoked: "Access removed",
+  available: "Not connected",
+} as const;
+
+/**
+ * Per-kind words for a state, where the state's general word is false for the
+ * kind. An APP signs in with a key, not an account: its lapsed credential is
+ * "Key expired", never "Sign-in expired". Narrow on purpose — a row here must
+ * name a kind whose credential is genuinely different, not a style preference.
+ */
+export const CONNECTION_KIND_STATE_LABELS: Readonly<
+  Record<
+    string,
+    Readonly<Partial<Record<keyof typeof CONNECTION_STATE_LABELS, string>>>
+  >
+> = {
+  app: { needs_signin: "Key expired" },
+};
+
+/** The chip word of a connection state, for this kind. Unknown states humanize. */
+export function resolveConnectionStateLabel(
+  state: string | null | undefined,
+  kind?: string | null
+): string {
+  if (!state) return "";
+  const key = state.toLowerCase();
+  const byKind = kind
+    ? (CONNECTION_KIND_STATE_LABELS[kind.toLowerCase()] as
+        Readonly<Record<string, string>> | undefined)
+    : undefined;
+  return (
+    byKind?.[key] ??
+    (CONNECTION_STATE_LABELS as Readonly<Record<string, string>>)[key] ??
+    humanizeToken(state)
+  );
 }
 
 /**

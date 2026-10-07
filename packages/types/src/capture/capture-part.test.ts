@@ -48,6 +48,11 @@ const PLACEHOLDERS: Record<string, unknown> = {
   // ── capture_result bounds ────────────────────────────────────────────────
   "@@TI301@@": "t".repeat(CAPTURE_RESULT_LIMITS.titleMaxChars + 1),
   "@@N501@@": "n".repeat(CAPTURE_RESULT_LIMITS.noticeMaxChars + 1),
+  "@@C2049@@": "c".repeat(CAPTURE_RESULT_LIMITS.contentMaxChars + 1),
+  "@@REL41@@": Array.from(
+    { length: CAPTURE_RESULT_LIMITS.relationsMax + 1 },
+    () => ({ sourceTempId: "s", targetTempId: "t", relationType: "r" })
+  ),
   "@@ROWS41@@": Array.from(
     { length: CAPTURE_RESULT_LIMITS.rowsMax + 1 },
     (_, i) => ({

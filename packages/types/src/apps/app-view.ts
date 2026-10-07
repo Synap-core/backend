@@ -23,6 +23,7 @@
  */
 
 import { summarizeGrant } from "../grants/index.js";
+import { resolveAppConnectionState } from "../membrane/index.js";
 import { humanizeToken, resolveStatusLabel } from "../vocabulary/index.js";
 
 /** One grant row as the pod's `apps.*` procedures serialize it. */
@@ -116,17 +117,29 @@ export interface AppStateFacts {
 }
 
 /**
- * The ONE state derivation: revoked outranks everything (a revoked app reaches
- * nothing, whatever its grants still say), then whether it has any reach at all.
+ * A REACH-shaped projection of the ONE app state rule
+ * (`resolveAppConnectionState`, `@synap-core/types/membrane`): revoked
+ * outranks everything, then whether the app holds any reach. It no longer
+ * decides anything itself — it narrows the membrane state to the three words
+ * the current app surfaces render.
+ *
+ * Retiring: Connected's rows and pages move onto `resolveAppConnection`
+ * (state chip + one action); this stays only until its three callers do.
  *
  * `revoked`'s WORD comes from the vocabulary door (`resolveStatusLabel`), never
  * a literal, so an app's Revoked badge can never drift from every other one.
  */
 export function appStateFacts(app: AppStateLike): AppStateFacts {
-  const revoked = Boolean(app.revoked_at);
-  const hasReach = (app.grants ?? []).length > 0;
+  const state = resolveAppConnectionState(app);
+  const revoked = state === "revoked";
+  const hasReach = !revoked && (app.grants ?? []).length > 0;
   if (revoked)
-    return { revoked, hasReach, label: resolveStatusLabel("revoked"), tone: "none" };
+    return {
+      revoked,
+      hasReach,
+      label: resolveStatusLabel("revoked"),
+      tone: "none",
+    };
   if (hasReach) return { revoked, hasReach, label: "Has access", tone: "ok" };
   return { revoked, hasReach, label: "No access yet", tone: "none" };
 }
