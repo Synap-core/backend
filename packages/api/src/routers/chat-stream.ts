@@ -52,10 +52,7 @@ import {
   ChannelStatus,
   MessageRole,
 } from "@synap/database/schema";
-import {
-  resolveIntelligenceService,
-  resolveIntelligenceServiceByAgentId,
-} from "../utils/intelligence-routing.js";
+import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import {
   ensureAgentThread,
   getAgentIdBySlug,
@@ -450,16 +447,14 @@ chatStreamApp.post("/stream", async (c) => {
   let isUrl: string;
   let isApiKey: string;
   try {
-    const resolved = channelAgentId
-      ? await resolveIntelligenceServiceByAgentId(channelAgentId, {
-          userId,
-          workspaceId: resolvedWorkspaceId,
-          capability: "chat",
-        })
-      : await resolveIntelligenceService({
-          userId,
-          workspaceId: resolvedWorkspaceId,
-        });
+    // ONE door, the same one triggerAutoRespond uses: capability-first
+    // resolution. The channel's assigned agent drives `agentType` below, never
+    // WHICH intelligence service serves the turn (agentType ⟂ IS).
+    const resolved = await resolveIntelligenceService({
+      userId,
+      workspaceId: resolvedWorkspaceId,
+      capability: "chat",
+    });
     isUrl = resolved.endpoint;
     isApiKey = resolved.serviceApiKey;
   } catch (err) {

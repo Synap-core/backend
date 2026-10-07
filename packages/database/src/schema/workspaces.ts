@@ -416,9 +416,14 @@ export interface AgentRoutingRule {
 /**
  * Workspace-level agent routing: "this kind of task/event → this registered agent".
  * The canonical replacement for runtime-specific hardwiring (e.g. single-agent
- * dispatch). Resolution: first matching rule → defaultAgentSlug → plain IS fallback.
- * Resolved by resolveAgentForTask() in @synap/intelligence-client. Any workspace
- * can use this for automation, not just DevPlane.
+ * dispatch).
+ *
+ * @deprecated NO RESOLVER READS THIS. Its only resolver (`resolveAgentForTask`,
+ * which also routed per-agent to an intelligence service via the legacy
+ * `agents` table) had zero call sites and was removed (W7, 2026-10-08) — it broke
+ * "agentType ⟂ intelligenceServiceId". The DevPlane providers page still writes
+ * it. Which agent a run uses is now decided by the dispatch contract
+ * (`resolveAgentBinding` / run param `agentUserId`), not by this setting.
  */
 export interface AgentRoutingPolicy {
   /** Agent slug used when no rule matches */
@@ -790,8 +795,8 @@ export interface WorkspaceSettings {
 
   /**
    * Workspace-level agent routing: "this kind of task/event → this agent".
-   * Resolved by resolveAgentForTask() in @synap/intelligence-client. Decouples
-   * automation from any single runtime (each becomes one registered target).
+   * @deprecated Written by the DevPlane providers page, read by nothing — see
+   * {@link AgentRoutingPolicy}.
    */
   agentRouting?: AgentRoutingPolicy;
 

@@ -10,7 +10,7 @@
  *   2. Records the inbound message (role=user, authorType=external) — same shape
  *      the Unipile webhook uses, so the inbox/automation pipeline sees it.
  *   3. Runs ONE orchestrator turn by calling the SAME Intelligence Service the
- *      channel chat path uses (resolveIntelligenceServiceByAgentId +
+ *      channel chat path uses (resolveIntelligenceService({capability:"chat"}) +
  *      client.sendMessageStream). Stream frames are accumulated in-process so
  *      a bridge timeout can still return tool steps + partial text (Phase 1
  *      agent-turn observability). The orchestrator (and its proposal-gating
@@ -63,7 +63,7 @@ import {
   type DurableChatTurn,
 } from "../../../services/chat-turns/chat-turn-store.js";
 
-import { resolveIntelligenceServiceByAgentId } from "../../../utils/intelligence-routing.js";
+import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { resolveExistingExternalUser } from "../../../services/external-user-mapping.js";
 import { loadTeamRosterForCapture } from "../../../services/team-roster-context.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -739,12 +739,15 @@ export function registerDiscordRoutes(app: HubHono): void {
       }
       const agentId = orchestrator.id;
 
-      const resolvedService = await resolveIntelligenceServiceByAgentId(
-        agentId,
+      // ONE door (the one triggerAutoRespond uses): capability-first. The agent
+      // never picks the intelligence service (agentType ⟂ IS).
+      const resolvedService = await resolveIntelligenceService({
+        userId,
         // Service routing is a workspace HINT only; a pod-wide (null) turn has no
         // specific lens, so pass undefined → env/default resolution, unchanged.
-        { userId, workspaceId: workspaceId ?? undefined, capability: "chat" }
-      );
+        workspaceId: workspaceId ?? undefined,
+        capability: "chat",
+      });
 
       // `reply` is what we return to the bot; `assistantContent` is the genuine
       // IS turn output that we persist to channel history. They diverge only when

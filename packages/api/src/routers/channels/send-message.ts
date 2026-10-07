@@ -77,7 +77,7 @@ import {
 } from "../../utils/anchored-comment-turn.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { withTurnSessionTitle } from "../../services/focus-sessions/turn-context-session-title.js";
-import { resolveIntelligenceServiceByAgentId } from "../../utils/intelligence-routing.js";
+import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import {
   makeRoutedTeammateContext,
   type RoutedTeammateContext,
@@ -631,16 +631,13 @@ export const sendMessageProcedure = protectedProcedure
       }
     }
 
-    // Resolve intelligence service: prefer agentId → intelligenceServiceId lookup,
-    // fall back to workspace/user preference routing.
-    const resolvedService = await resolveIntelligenceServiceByAgentId(
-      resolvedAgentId,
-      {
-        userId: userId,
-        workspaceId: ctx.workspaceId || undefined,
-        capability: "chat",
-      }
-    );
+    // Resolve intelligence service through the ONE capability-first door (the
+    // one triggerAutoRespond uses). The agent never picks the IS (agentType ⟂ IS).
+    const resolvedService = await resolveIntelligenceService({
+      userId: userId,
+      workspaceId: ctx.workspaceId || undefined,
+      capability: "chat",
+    });
 
     // TODO(hydration-onboarding, Phase 3): route the first N user messages
     // on a brand-new personal channel through OnboardingAgent instead of

@@ -100,7 +100,7 @@ vi.mock("../../utils/intelligence-routing.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../utils/intelligence-routing.js")
   >()),
-  resolveIntelligenceServiceByAgentId: vi.fn(async () => ({
+  resolveIntelligenceService: vi.fn(async () => ({
     client: {},
     agentUserId: "service-agent",
   })),

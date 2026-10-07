@@ -31,7 +31,6 @@ export type {
 
 export {
   resolveIntelligenceService,
-  resolveIntelligenceServiceByAgentId,
   resolveAgent,
   getDefaultActiveService,
   setDefaultIntelligenceService,
@@ -49,10 +48,6 @@ export type {
   IntelligenceSelectionVia,
   ServingIntelligence,
 } from "./intelligence-routing.js";
-
-export { resolveAgentForTask } from "./agent-routing.js";
-
-export type { AgentResolutionContext, ResolvedAgent } from "./agent-routing.js";
 
 export {
   iterateISChatStream,
