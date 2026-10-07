@@ -60,7 +60,8 @@ beforeAll(async () => {
     key_hash      text NOT NULL DEFAULT 'hash',
     usage_count   bigint NOT NULL DEFAULT 0,
     created_at    timestamptz NOT NULL DEFAULT now(),
-    revoked_at    timestamptz
+    revoked_at    timestamptz,
+    expires_at    timestamptz
   );`);
   await pg.exec(GRANTS);
   await pg.exec(ROLES);
@@ -75,7 +76,11 @@ beforeAll(async () => {
     proposal_type text NOT NULL,
     status       text NOT NULL DEFAULT 'pending',
     data         jsonb NOT NULL,
-    created_at   timestamptz NOT NULL DEFAULT now()
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    -- withdrawPendingRequests writes these
+    reviewed_by  text,
+    reviewed_at  timestamptz,
+    updated_at   timestamptz
   );`);
   const db = drizzle(pg, { schema });
   repo = new AppRepository(db as never);
@@ -462,6 +467,7 @@ describe("AppRepository.keysFor — the app's keys, and never the secret", () =>
       usageCount: 42,
       isActive: true,
       revokedAt: null,
+      expiresAt: null,
     });
     expect(key!.lastUsedAt?.toISOString()).toBe("2026-10-05T09:30:00.000Z");
   });
@@ -496,6 +502,30 @@ describe("AppRepository.keysFor — the app's keys, and never the secret", () =>
       KEY_B,
       KEY_A,
     ]);
+  });
+});
+
+describe("AppRepository.keysByApp — the list's keys, batched", () => {
+  it("maps each app to ITS keys (with expiry), and a keyless app to []", async () => {
+    const a = await repo.register({ ownerUserId: OWNER, name: "a" });
+    const b = await repo.register({ ownerUserId: OWNER, name: "b" });
+    const none = await repo.register({ ownerUserId: OWNER, name: "none" });
+    await pg.query(
+      "INSERT INTO api_keys (id, expires_at) VALUES ($1, '2026-10-01T00:00:00Z'), ($2, NULL)",
+      [KEY_A, KEY_B]
+    );
+    await attachGrant(KEY_A, a.publicId);
+    await attachGrant(KEY_B, b.publicId);
+
+    const keys = await repo.keysByApp([a.publicId, b.publicId, none.publicId]);
+    expect(keys.get(a.publicId)!.map((k) => k.id)).toEqual([KEY_A]);
+    expect(keys.get(a.publicId)![0]!.expiresAt?.toISOString()).toBe(
+      "2026-10-01T00:00:00.000Z"
+    );
+    expect(keys.get(b.publicId)!.map((k) => [k.id, k.expiresAt])).toEqual([
+      [KEY_B, null],
+    ]);
+    expect(keys.get(none.publicId)).toEqual([]);
   });
 });
 
@@ -569,6 +599,36 @@ describe("AppRepository — the pending request projection", () => {
     expect(byName.get("asking")?.proposalId).toBe(pid);
     expect(byName.get("quiet")).toBeNull();
     expect(quiet.id).not.toBe(asking.id);
+  });
+});
+
+describe("AppRepository.withdrawPendingRequests", () => {
+  it("withdraws only THIS app's still-pending requests, with a reason", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "asking" });
+    const other = await repo.register({ ownerUserId: OWNER, name: "other" });
+    const req = [{ permission: "entity.person.create", workspaceId: WS_SALES }];
+    const pending = await fileConnect(app.id, req);
+    const decided = await fileConnect(app.id, req, { status: "approved" });
+    const theirs = await fileConnect(other.id, req);
+
+    expect(
+      await repo.withdrawPendingRequests(app.id, OWNER, "The app was revoked.")
+    ).toEqual([pending]);
+    const { rows } = await pg.query<{
+      id: string;
+      status: string;
+      reason: string | null;
+    }>(
+      "SELECT id, status, data->>'withdrawReason' AS reason FROM proposals"
+    );
+    const by = new Map(rows.map((r) => [r.id, r]));
+    expect(by.get(pending)).toMatchObject({
+      status: "withdrawn",
+      reason: "The app was revoked.",
+    });
+    expect(by.get(decided)!.status).toBe("approved");
+    expect(by.get(theirs)!.status).toBe("pending");
+    expect((await repo.getByPublicId(app.publicId))!.pendingRequest).toBeNull();
   });
 });
 

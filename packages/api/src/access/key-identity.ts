@@ -23,14 +23,17 @@
  * does not carry the owner's `userType`.
  *
  * APP KEYS are agent keys: an Application acts as its own agent user, linked
- * to its owner (`apps.agent_user_id`, 0313), so its writes run the agent
- * ladder. A key minted before 0313 is still held by the human; when one
- * authenticates (its grant names an app, `isAppPublicId`, and its holder is
- * not an agent) it is adopted onto the app's agent here, once, and resolves
- * as that agent from this request on. A failed adoption THROWS: answering
- * "human" would let the key write ungoverned.
+ * to its owner (`apps.agent_user_id`), so its writes run the agent ladder. A
+ * key whose grant names an app (`isAppPublicId`) but whose holder is not an
+ * agent was minted before that: it is adopted onto the app's agent here, once
+ * (`adoptLegacyAppKey`, which also re-derives its grants), and resolves as
+ * that agent with the re-read grant. When it cannot be adopted (app revoked
+ * or gone, not the holder's app, nothing approved) the request is REFUSED
+ * (`UnauthorizedError`) — never answered as the human, which would let an
+ * app key write ungoverned.
  */
 
+import { UnauthorizedError } from "@synap-core/types";
 import { db, users, eq, GrantRepository, isAppPublicId } from "@synap/database";
 import type { ApiKeyRecord, KeyGrant } from "@synap/database";
 
@@ -87,14 +90,17 @@ export async function resolveKeyIdentity(
       keyOwnerUserId: keyRecord.userId,
       publicId: grant!.clientId!,
     });
-    if (appAgentUserId) {
-      return {
-        effectiveUserId: keyRecord.userId,
-        agentUserId: appAgentUserId,
-        isAgent: true,
-        grant,
-      };
+    if (!appAgentUserId) {
+      throw new UnauthorizedError(
+        "This app key can no longer be used — reconnect the app."
+      );
     }
+    return {
+      effectiveUserId: keyRecord.userId,
+      agentUserId: appAgentUserId,
+      isAgent: true,
+      grant: await new GrantRepository(db).resolveForKey(keyRecord.id),
+    };
   }
   return {
     effectiveUserId: keyRecord.linkedUserId ?? keyRecord.userId,

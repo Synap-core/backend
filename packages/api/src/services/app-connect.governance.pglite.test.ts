@@ -19,7 +19,10 @@
  *  - the owner's own write ⇒ granted, untouched by any of this;
  *  - a plain agent (no posture) ⇒ executes — proves the seeded default bites;
  *  - a key minted BEFORE 0313 (held by the human) is adopted onto the app's
- *    agent the first time it authenticates, with the SAME key id.
+ *    agent the first time it authenticates, with the SAME key id, and its
+ *    cross-product grant is replaced by one scope per approved workspace;
+ *  - an app key that cannot be adopted (revoked app) is REFUSED, never
+ *    resolved as the human.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -82,7 +85,12 @@ import {
 } from "../utils/permission-check.js";
 import { resolveKeyIdentity } from "../access/key-identity.js";
 import { attachGrantsOrRevoke } from "./key-grant.js";
-import { grantsForApprovedRequests, issueKey } from "./app-connect.js";
+import { appsRouter } from "../routers/apps.js";
+import {
+  grantsForApprovedRequests,
+  issueKey,
+  revokeApp,
+} from "./app-connect.js";
 
 const OWNER = "human-owner";
 const PLAIN_AGENT = randomUUID();
@@ -329,7 +337,7 @@ describe("an app is governed like an agent (founder decision 2)", () => {
     expect(key).toEqual({ user_id: appAgent, linked_user_id: OWNER });
     const principals = (
       await q<{ principal_user_id: string }>(
-        `select principal_user_id from grants where api_key_id = $1`,
+        `select principal_user_id from grants where api_key_id = $1 and revoked_at is null`,
         [keyId]
       )
     ).rows.map((r) => r.principal_user_id);
@@ -350,5 +358,114 @@ describe("an app is governed like an agent (founder decision 2)", () => {
     expect(
       await resolveKeyIdentity({ id: keyId, userId: OWNER, linkedUserId: null })
     ).toMatchObject({ isAgent: false, agentUserId: undefined });
+  });
+  it("a legacy key's cross-product grant is re-derived per approved workspace on adoption", async () => {
+    const repo = new AppRepository(h.db as never);
+    const app = await repo.register({ ownerUserId: OWNER, name: "legacy" });
+    const approved = [
+      { permission: "entity.person.create", workspaceId: SALES },
+      { permission: "entity.note.read", workspaceId: FINANCE },
+    ];
+    await repo.setApprovedRequests(app.id, approved);
+    const keyId = await mintAppKey(OWNER, null);
+    // The pre-0313 mint: ONE grant of (all permissions × all workspaces).
+    await attachGrantsOrRevoke({
+      apiKeyId: keyId,
+      principalUserId: OWNER,
+      onBehalfOf: OWNER,
+      grants: [
+        {
+          permissions: ["entity.person.create", "entity.note.read"],
+          workspaceIds: [SALES, FINANCE],
+        },
+      ],
+      expiresAt: null,
+      createdBy: OWNER,
+      clientId: app.publicId,
+    });
+    const id = await resolveKeyIdentity({
+      id: keyId,
+      userId: OWNER,
+      linkedUserId: null,
+    });
+    expect(id.isAgent).toBe(true);
+    const scopes = id.grant!.scopes.map((s) => ({
+      permissions: [...s.permissions],
+      workspaceIds: s.workspaceIds,
+    }));
+    expect(scopes).toHaveLength(2);
+    expect(scopes).toEqual(
+      expect.arrayContaining([
+        { permissions: ["entity.person.create"], workspaceIds: [SALES] },
+        { permissions: ["entity.note.read"], workspaceIds: [FINANCE] },
+      ])
+    );
+    expect(id.grant!.clientId).toBe(app.publicId);
+    // Creating People in Finance was never approved — the old grant allowed it.
+    const finance = await createPerson(
+      FINANCE,
+      { userId: id.effectiveUserId, agentUserId: id.agentUserId },
+      id.grant
+    );
+    expect(finance).toMatchObject({ denied: true });
+  });
+
+  it("an app key that can no longer be adopted (app revoked) is refused, never read as the human", async () => {
+    const repo = new AppRepository(h.db as never);
+    const app = await repo.register({ ownerUserId: OWNER, name: "gone" });
+    await repo.setApprovedRequests(app.id, APPROVED);
+    const keyId = await mintAppKey(OWNER, null);
+    await attachGrantsOrRevoke({
+      apiKeyId: keyId,
+      principalUserId: OWNER,
+      onBehalfOf: OWNER,
+      grants: grantsForApprovedRequests(APPROVED),
+      expiresAt: null,
+      createdBy: OWNER,
+      clientId: app.publicId,
+    });
+    await repo.revoke(app.id);
+    await expect(
+      resolveKeyIdentity({ id: keyId, userId: OWNER, linkedUserId: null })
+    ).rejects.toMatchObject({ statusCode: 401 });
+  });
+  it("revoking an app withdraws its request still waiting for review", async () => {
+    const repo = new AppRepository(h.db as never);
+    const app = await repo.register({ ownerUserId: OWNER, name: "asking" });
+    const pending = randomUUID();
+    const decided = randomUUID();
+    for (const [id, status] of [
+      [pending, "pending"],
+      [decided, "rejected"],
+    ]) {
+      await q(
+        `insert into proposals (id, target_type, target_id, proposal_type, status, data, created_by)
+         values ($1, 'app', $2, 'connect', $3, '{}'::jsonb, $4)`,
+        [id, app.id, status, OWNER]
+      );
+    }
+    await revokeApp({ publicId: app.publicId, ownerUserId: OWNER });
+    const rows = (
+      await q<{ id: string; status: string; reason: string | null }>(
+        `select id, status, data->>'withdrawReason' as reason from proposals where id = any($1)`,
+        [[pending, decided]]
+      )
+    ).rows;
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.status]))).toEqual({
+      [pending]: "withdrawn",
+      [decided]: "rejected",
+    });
+    expect(rows.find((r) => r.id === pending)!.reason).toBeTruthy();
+    expect((await repo.getByPublicId(app.publicId))!.pendingRequest).toBeNull();
+  });
+  it("apps.list carries the app's agent and its keys (what 'Key expired' reads)", async () => {
+    const caller = appsRouter.createCaller({
+      authenticated: true,
+      userId: OWNER,
+    } as never);
+    const listed = (await caller.list()).find((a) => a.public_id === publicId)!;
+    expect(listed.agent_user_id).toBe(appAgent);
+    const key = listed.keys.find((k) => k.id === issued.keyId);
+    expect(key).toMatchObject({ isActive: true, expiresAt: null });
   });
 });

@@ -98,6 +98,12 @@ export function serializeApp(row: AppWithGrants) {
     created_at: app.createdAt,
     revoked_at: app.revokedAt,
     removed_at: app.removedAt,
+    /**
+     * The app's own agent user (null until its first key is issued). Its
+     * writes are governed by rules on THIS agent (`governanceRules.create`,
+     * target agent) — the app page's "ask first / apply automatically".
+     */
+    agent_user_id: app.agentUserId,
     last_used_at: row.lastUsedAt,
     grants: row.grants,
   };
@@ -352,11 +358,15 @@ async function syncAppAgentMemberships(
 }
 
 /**
- * A key minted before 0313 is owned by the HUMAN (no agent, ungoverned). The
- * first time it authenticates, move it onto the app's agent — same plaintext,
- * so the app keeps working — and return that agent; `null` when the key is
- * not an adoptable app key (not this owner's, app gone, or revoked).
- * Idempotent: a re-run (e.g. from a cached key record) only returns the agent.
+ * A key minted before 0313 is held by the HUMAN (no agent, ungoverned). The
+ * first time it authenticates it moves onto the app's agent — same plaintext,
+ * so the app keeps working — and its grants are RE-DERIVED from what the owner
+ * approved (`grantsForApprovedRequests`, one scope per workspace), replacing
+ * the single (all permissions × all workspaces) grant it was minted with.
+ * Returns the agent; `null` when the key is not an adoptable app key (not this
+ * owner's, app gone or revoked, nothing approved) — the caller refuses it.
+ * Idempotent: once the key is held by the agent a re-run (a cached key record)
+ * only returns the agent.
  */
 export async function adoptLegacyAppKey(args: {
   apiKeyId: string;
@@ -365,21 +375,37 @@ export async function adoptLegacyAppKey(args: {
 }): Promise<string | null> {
   const repo = new AppRepository(db);
   const found = await repo.getByPublicId(args.publicId);
+  const approved = found?.app.approvedRequests ?? [];
   if (
     !found ||
     found.app.ownerUserId !== args.keyOwnerUserId ||
-    found.app.revokedAt
+    found.app.revokedAt ||
+    approved.length === 0
   ) {
     return null;
   }
   const keyIds = await repo.keyIdsFor(found.app.publicId);
   if (!keyIds.includes(args.apiKeyId)) return null;
   const agentUserId = await ensureAppAgent(found, "cli");
-  await syncAppAgentMemberships(
-    agentUserId,
-    found.app.ownerUserId,
-    found.app.approvedRequests ?? []
-  );
+  const [key] = await db
+    .select({ userId: apiKeys.userId })
+    .from(apiKeys)
+    .where(eq(apiKeys.id, args.apiKeyId))
+    .limit(1);
+  if (key?.userId === agentUserId) return agentUserId;
+  if (key?.userId !== found.app.ownerUserId) return null;
+  await syncAppAgentMemberships(agentUserId, found.app.ownerUserId, approved);
+  // Grants first, then the key: a crash in between leaves a human-held key
+  // that the next request adopts again.
+  await attachGrantsOrRevoke({
+    apiKeyId: args.apiKeyId,
+    principalUserId: agentUserId,
+    onBehalfOf: found.app.ownerUserId,
+    grants: grantsForApprovedRequests(approved),
+    expiresAt: null,
+    createdBy: found.app.ownerUserId,
+    clientId: found.app.publicId,
+  });
   await repo.adoptKey({
     apiKeyId: args.apiKeyId,
     ownerUserId: found.app.ownerUserId,
@@ -493,12 +519,29 @@ export async function issueKey(args: {
   return { apiKey: plaintext, keyId: keyRow.id };
 }
 
-/** Revoke an app: its keys and grants stop at once; the app is soft-revoked. */
+/**
+ * Revoke an app: its keys and grants stop at once, a request still waiting
+ * for review is withdrawn (it leaves the bell and every queue), and the app is
+ * soft-revoked.
+ */
 export async function revokeApp(args: {
   publicId: string;
   ownerUserId: string;
 }): Promise<{ publicId: string }> {
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  const repo = new AppRepository(db);
+  const withdrawn = await repo.withdrawPendingRequests(
+    found.app.id,
+    args.ownerUserId,
+    "The app was revoked."
+  );
+  if (withdrawn.length > 0) {
+    const { emitProposalReviewed } =
+      await import("../routers/proposals/apply-approval.js");
+    for (const id of withdrawn) {
+      emitProposalReviewed(id, null, "withdrawn", args.ownerUserId);
+    }
+  }
   const revokedKeys = await revokeAppKeys(
     found,
     args.ownerUserId,
@@ -508,9 +551,10 @@ export async function revokeApp(args: {
   if (found.app.agentUserId) {
     await syncAppAgentMemberships(found.app.agentUserId, args.ownerUserId, []);
   }
-  await new AppRepository(db).revoke(found.app.id);
+  await repo.revoke(found.app.id);
   await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.revoked, {
     revokedKeys,
+    withdrawnRequests: withdrawn.length,
   });
   return { publicId: found.app.publicId };
 }

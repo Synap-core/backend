@@ -50,6 +50,8 @@ export interface AppKeySummary {
   usageCount: number;
   isActive: boolean;
   revokedAt: Date | null;
+  /** `null` = never expires. What "Key expired" is read from. */
+  expiresAt: Date | null;
 }
 
 /**
@@ -419,51 +421,88 @@ export class AppRepository {
    * however it was minted. Used by the revoke door and the key listing.
    */
   async keyIdsFor(publicId: string): Promise<string[]> {
-    const rows = await this.db
-      .select({ apiKeyId: grants.apiKeyId })
+    return (await this.keyIdsByApp([publicId])).get(publicId) ?? [];
+  }
+
+  /** `keyIdsFor` for several apps in two queries, keyed by `public_id`. */
+  private async keyIdsByApp(
+    publicIds: readonly string[]
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, Set<string>>();
+    if (publicIds.length === 0) return new Map();
+    const ids = [...new Set(publicIds)];
+    const granted = await this.db
+      .select({ publicId: grants.clientId, apiKeyId: grants.apiKeyId })
       .from(grants)
-      .where(eq(grants.clientId, publicId));
+      .where(inArray(grants.clientId, ids));
     const held = await this.db
-      .select({ apiKeyId: apiKeys.id })
+      .select({ publicId: apps.publicId, apiKeyId: apiKeys.id })
       .from(apiKeys)
       .innerJoin(apps, eq(apps.agentUserId, apiKeys.userId))
-      .where(eq(apps.publicId, publicId));
-    return [...new Set([...rows, ...held].map((r) => r.apiKeyId))];
+      .where(inArray(apps.publicId, ids));
+    for (const r of [...granted, ...held]) {
+      if (!r.publicId) continue;
+      const set = out.get(r.publicId) ?? new Set<string>();
+      set.add(r.apiKeyId);
+      out.set(r.publicId, set);
+    }
+    return new Map([...out].map(([k, v]) => [k, [...v]]));
   }
 
   /**
    * An app's keys, as a PERSON reads them: what each key is called, its scheme,
-   * when it was made, when it was last used and how often.
+   * when it was made, when it expires, when it was last used and how often.
    *
    * Never the secret — `api_keys` stores only a bcrypt hash, so there is
    * nothing else to give. That is why an app's key can be listed here and still
    * be unmintable-again from the UI: minting returns the plaintext ONCE, and
    * losing it means minting a new one.
    *
-   * The link is the grant: a key minted for an app carries
-   * `grants.client_id = apps.public_id` (`keyIdsFor`), which is also what makes
-   * its grant resolve. A key whose grants were all revoked is STILL listed —
-   * "this app has a revoked key" is a fact about the app, and hiding it would
-   * make a revoked app look like one that never had a key.
+   * A key whose grants were all revoked is STILL listed — "this app has a
+   * revoked key" is a fact about the app, and hiding it would make a revoked
+   * app look like one that never had a key.
    */
   async keysFor(publicId: string): Promise<AppKeySummary[]> {
-    const keyIds = await this.keyIdsFor(publicId);
-    if (keyIds.length === 0) return [];
-    const rows = await this.db
-      .select({
-        id: apiKeys.id,
-        keyName: apiKeys.keyName,
-        keyPrefix: apiKeys.keyPrefix,
-        createdAt: apiKeys.createdAt,
-        lastUsedAt: apiKeys.lastUsedAt,
-        usageCount: apiKeys.usageCount,
-        isActive: apiKeys.isActive,
-        revokedAt: apiKeys.revokedAt,
-      })
-      .from(apiKeys)
-      .where(inArray(apiKeys.id, keyIds));
-    // Newest first: the key you just minted is the one you are looking for.
-    return rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return (await this.keysByApp([publicId])).get(publicId) ?? [];
+  }
+
+  /**
+   * `keysFor` for several apps at once (three queries, not one set per app),
+   * keyed by `public_id`; an app with no key maps to `[]`. Newest first: the
+   * key you just minted is the one you are looking for.
+   */
+  async keysByApp(
+    publicIds: readonly string[]
+  ): Promise<Map<string, AppKeySummary[]>> {
+    const idsByApp = await this.keyIdsByApp(publicIds);
+    const allIds = [...new Set([...idsByApp.values()].flat())];
+    const rows =
+      allIds.length === 0
+        ? []
+        : await this.db
+            .select({
+              id: apiKeys.id,
+              keyName: apiKeys.keyName,
+              keyPrefix: apiKeys.keyPrefix,
+              createdAt: apiKeys.createdAt,
+              lastUsedAt: apiKeys.lastUsedAt,
+              usageCount: apiKeys.usageCount,
+              isActive: apiKeys.isActive,
+              revokedAt: apiKeys.revokedAt,
+              expiresAt: apiKeys.expiresAt,
+            })
+            .from(apiKeys)
+            .where(inArray(apiKeys.id, allIds));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return new Map(
+      publicIds.map((publicId) => [
+        publicId,
+        (idsByApp.get(publicId) ?? [])
+          .map((id) => byId.get(id))
+          .filter((k): k is AppKeySummary => k !== undefined)
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+      ])
+    );
   }
 
   /**
@@ -510,6 +549,38 @@ export class AppRepository {
       from: args.ownerUserId,
       to: args.agentUserId,
     });
+  }
+
+  /**
+   * Withdraw the app's still-PENDING `app/connect` requests — a revoked app
+   * asks for nothing, so its request must leave every review surface. Returns
+   * the withdrawn proposal ids (the caller clears their notifications).
+   */
+  async withdrawPendingRequests(
+    appId: string,
+    by: string,
+    reason: string
+  ): Promise<string[]> {
+    const now = new Date();
+    const rows = await this.db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.WITHDRAWN,
+        reviewedBy: by,
+        reviewedAt: now,
+        updatedAt: now,
+        data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${reason}::text)`,
+      })
+      .where(
+        and(
+          eq(proposals.targetType, APP_CONNECT_TARGET_TYPE),
+          eq(proposals.proposalType, APP_CONNECT_PROPOSAL_TYPE),
+          eq(proposals.targetId, appId),
+          eq(proposals.status, ProposalStatus.PENDING)
+        )
+      )
+      .returning({ id: proposals.id });
+    return rows.map((r) => r.id);
   }
 
   /** Soft-revoke the app (the route revokes its keys first). */

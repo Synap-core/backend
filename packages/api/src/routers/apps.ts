@@ -33,19 +33,25 @@ const PublicId = z.string().min(1).max(200);
 
 export const appsRouter = router({
   /**
-   * The caller's own apps, each with the reach it may touch and any request
-   * still waiting (`pending_request`). `includeRevoked` (default false) is the
-   * human self-service opt-in: revoked apps render in their "Removed" group
-   * instead of vanishing. An app removed for good is never listed. The
-   * agent-facing `/api/hub/apps` list never opts in.
+   * The caller's own apps, each with the reach it may touch, any request
+   * still waiting (`pending_request`) and its `keys` (what "Key expired" is
+   * read from — batched, not one query per app). `includeRevoked` (default
+   * false) is the human self-service opt-in: revoked apps render in their
+   * "Removed" group instead of vanishing. An app removed for good is never
+   * listed. The agent-facing `/api/hub/apps` list never opts in.
    */
   list: protectedProcedure
     .input(z.object({ includeRevoked: z.boolean().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      const rows = await new AppRepository(db).listForOwner(ctx.userId, {
+      const repo = new AppRepository(db);
+      const rows = await repo.listForOwner(ctx.userId, {
         includeRevoked: input?.includeRevoked ?? false,
       });
-      return rows.map(serializeApp);
+      const keys = await repo.keysByApp(rows.map((r) => r.app.publicId));
+      return rows.map((row) => ({
+        ...serializeApp(row),
+        keys: keys.get(row.app.publicId) ?? [],
+      }));
     }),
 
   /**
@@ -84,11 +90,7 @@ export const appsRouter = router({
       return serializeApp(await loadOwnedApp(registered.publicId, ctx.userId));
     }),
 
-  /**
-   * One of the caller's own apps, by public id — floored on the owner. The
-   * DETAIL read is the only one that carries `keys` (a per-app key query in
-   * `list` would be an N+1 for data the list does not show).
-   */
+  /** One of the caller's own apps, by public id, with its keys — floored on the owner. */
   get: protectedProcedure
     .input(z.object({ publicId: PublicId }))
     .query(async ({ ctx, input }) => {

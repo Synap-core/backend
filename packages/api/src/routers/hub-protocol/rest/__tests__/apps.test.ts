@@ -69,6 +69,10 @@ const state = {
   removed: false,
   /** Order of the app-agent steps: create → posture → link. */
   agentSteps: [] as string[],
+  /** Pending `app/connect` proposal ids a revoke withdraws. */
+  pendingIds: [] as string[],
+  withdrawCalls: [] as string[],
+  reviewedEmits: [] as string[],
 };
 
 function chain(result: unknown): any {
@@ -128,6 +132,10 @@ class FakeAppRepository {
   }
   async revoke(_id: string) {
     return state.app;
+  }
+  async withdrawPendingRequests(appId: string, _by: string, _reason: string) {
+    state.withdrawCalls.push(appId);
+    return state.pendingIds;
   }
   async linkAgentUser(_appId: string, agentUserId: string) {
     state.agentSteps.push(`link:${agentUserId}`);
@@ -199,6 +207,12 @@ vi.mock("@synap/database/api-key-revocation", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("../../../proposals/apply-approval.js", () => ({
+  emitProposalReviewed: (id: string, _ws: unknown, status: string) => {
+    state.reviewedEmits.push(`${id}:${status}`);
+  },
+}));
 
 vi.mock("../../../../utils/permission-check.js", () => ({
   createPendingProposal: async (input: Record<string, unknown>) => {
@@ -286,6 +300,9 @@ beforeEach(() => {
   state.renamedTo = null;
   state.removed = false;
   state.agentSteps = [];
+  state.pendingIds = [];
+  state.withdrawCalls = [];
+  state.reviewedEmits = [];
 });
 
 /** The app lifecycle events recorded, as `<subject>.<action>` + app id. */
@@ -504,6 +521,19 @@ describe("DELETE /apps/:id — revoke cascades the keys' grants", () => {
     expect(recorded()).toEqual([`app.revoke@${PUBLIC_ID}`]);
   });
 
+  it("withdraws a request still waiting for review — it leaves every queue", async () => {
+    state.app = makeApp();
+    state.pendingIds = [PROPOSAL_ID];
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+
+    const res = await app.request(`/apps/${PUBLIC_ID}`, { method: "DELETE" });
+
+    expect(res.status).toBe(200);
+    expect(state.withdrawCalls).toEqual([APP_UUID]);
+    // The bell + every review surface drop it (realtime + notification clear).
+    expect(state.reviewedEmits).toEqual([`${PROPOSAL_ID}:withdrawn`]);
+  });
+
   it("NEGATIVE CONTROL: a non-owner revokes nothing — no grant, no key", async () => {
     state.app = makeApp();
     state.existingKeyIds = ["old-key-1"];
@@ -606,6 +636,47 @@ describe("approve executor — app/connect writes approved_requests", () => {
         } as never,
       })
     ).rejects.toThrow(/owner/i);
+    expect(state.approvedWrites).toHaveLength(0);
+    expect(state.events).toHaveLength(0);
+  });
+
+  it("refuses approving a request for a REVOKED app — no reach handed back", async () => {
+    registerAppExecutors();
+    const executor = proposalExecRegistry.resolveExact("app/connect")!;
+    state.selectResult = [];
+    state.app = makeApp({ revokedAt: new Date("2026-10-07T00:00:00Z") });
+
+    await expect(
+      executor.execute({
+        proposal: {
+          id: PROPOSAL_ID,
+          targetType: "app",
+          targetId: APP_UUID,
+          proposalType: "connect",
+          workspaceId: null,
+          sessionId: null,
+          projectId: null,
+          agentUserId: null,
+          sourceMessageId: null,
+          data: {
+            appId: APP_UUID,
+            publicId: PUBLIC_ID,
+            name: "synap.live",
+            requests: [
+              { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+            ],
+          },
+        },
+        payload: null,
+        userId: OWNER,
+        input: { proposalId: PROPOSAL_ID },
+        ctx: {} as never,
+        deps: {
+          emitProposalReviewed: () => {},
+          reportProposalOutcome: () => {},
+        } as never,
+      })
+    ).rejects.toThrow(/revoked/i);
     expect(state.approvedWrites).toHaveLength(0);
     expect(state.events).toHaveLength(0);
   });

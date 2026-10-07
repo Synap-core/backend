@@ -9,7 +9,8 @@
  * IDENTITY: only the app's OWNER may approve. `app/connect` is filed by the
  * owner's CLI, but the default `owner_and_admins` policy could let a workspace
  * admin approve — and this write grants the app reach, so a non-owner approver
- * gets a loud FORBIDDEN, never a silent no-op.
+ * gets a loud FORBIDDEN, never a silent no-op. A REVOKED app is refused
+ * (CONFLICT): approving cannot hand reach back to it.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -68,6 +69,15 @@ export function registerAppExecutors(): void {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "Only the app's owner can approve what it may touch",
+        });
+      }
+      // A revoked app's request is withdrawn on revoke; one approved anyway
+      // (a stale link) must not hand reach back to an app that has none.
+      if (app.revokedAt) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This app was revoked — register it again to ask for access.",
         });
       }
 
