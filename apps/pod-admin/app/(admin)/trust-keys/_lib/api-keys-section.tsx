@@ -61,6 +61,12 @@ import { SectionCard } from "../../components/section-card";
 import type { StatusKind } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative, shortId } from "./format";
+import {
+  GrantRolePicker,
+  grantFromRole,
+  useGrantRoleOptions,
+} from "./grant-role-picker";
+import { GRANT_PRESETS } from "@synap-core/types/grants";
 
 export interface UnifiedKey {
   id: string;
@@ -452,6 +458,7 @@ export function ApiKeysSection() {
                 keyName: input.keyName,
                 scope: input.scope,
                 expiresInDays: input.expiresInDays,
+                ...(input.grant ? { grant: input.grant } : {}),
               });
               if (
                 res &&
@@ -639,6 +646,8 @@ type CreateKeyInput = {
   scope: string[];
   /** null = never; a personal key omitted = 90 days. */
   expiresInDays?: number | null;
+  /** Personal keys only: what it may touch; absent = no grant. */
+  grant?: { permissions: string[]; roleId?: string };
 };
 
 function CreateKeyModal({
@@ -658,6 +667,8 @@ function CreateKeyModal({
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["data.read"]);
   const [expiry, setExpiry] = useState<string>("90");
+  const { roles, isError: rolesFailed } = useGrantRoleOptions();
+  const [roleId, setRoleId] = useState<string>(GRANT_PRESETS[0].id);
 
   function toggle(s: string) {
     setScopes((prev) =>
@@ -760,6 +771,15 @@ function CreateKeyModal({
               })}
             </div>
           </div>
+          {kind === "personal" ? (
+            <GrantRolePicker
+              value={roleId}
+              onChange={setRoleId}
+              roles={roles}
+              rolesFailed={rolesFailed}
+              isDisabled={isPending}
+            />
+          ) : null}
           <Select
             label="Expires in"
             size="sm"
@@ -797,6 +817,9 @@ function CreateKeyModal({
                 keyName: name.trim(),
                 scope: scopes,
                 expiresInDays: expiry === "never" ? null : Number(expiry),
+                ...(kind === "personal"
+                  ? { grant: grantFromRole(roleId, roles) }
+                  : {}),
               })
             }
           >

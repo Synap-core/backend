@@ -29,6 +29,12 @@ import {
   ResourceRowSkeleton,
 } from "../../../components/resource-row";
 import { StatusPill } from "../../../components/status-pill";
+import {
+  GrantRolePicker,
+  grantFromRole,
+  useGrantRoleOptions,
+} from "../../../trust-keys/_lib/grant-role-picker";
+import { GRANT_PRESETS } from "@synap-core/types/grants";
 
 interface ApiKey {
   id: string;
@@ -198,6 +204,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
               scope: input.scope,
               workspaceId,
               expiresInDays: input.expiresInDays,
+              ...(input.grant ? { grant: input.grant } : {}),
             });
             if (res && "key" in res && typeof res.key === "string" && res.key) {
               setRevealedKey({ keyName: input.keyName, plaintext: res.key });
@@ -313,6 +320,8 @@ type CreateInput = {
   scope: string[];
   /** null = never (omitted = the 90-day default). */
   expiresInDays?: number | null;
+  /** What it may touch; absent = no grant (bounded only by scopes). */
+  grant?: { permissions: string[]; roleId?: string };
 };
 
 function CreateKeyModal({
@@ -333,6 +342,8 @@ function CreateKeyModal({
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["data.read"]);
   const [expiry, setExpiry] = useState("90");
+  const { roles, isError: rolesFailed } = useGrantRoleOptions();
+  const [roleId, setRoleId] = useState<string>(GRANT_PRESETS[0].id);
 
   function toggle(s: string) {
     setScopes((prev) =>
@@ -391,6 +402,13 @@ function CreateKeyModal({
               })}
             </div>
           </div>
+          <GrantRolePicker
+            value={roleId}
+            onChange={setRoleId}
+            roles={roles}
+            rolesFailed={rolesFailed}
+            isDisabled={isPending}
+          />
           <Select
             label="Expires in"
             size="sm"
@@ -428,6 +446,7 @@ function CreateKeyModal({
                 keyName: name.trim(),
                 scope: scopes,
                 expiresInDays: expiry === "never" ? null : Number(expiry),
+                grant: grantFromRole(roleId, roles),
               })
             }
           >
