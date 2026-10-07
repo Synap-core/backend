@@ -923,7 +923,25 @@ export interface PlaybookStage {
  *             required passing ⇒ the run continues, otherwise it pauses with the
  *             failing criteria visible, and re-running the evaluation resumes it.
  */
-export interface PlaybookStageGate {
+export type PlaybookStageGate =
+  PlaybookStageFilingGate | PlaybookStageAwaitedGate;
+
+/**
+ * A stage that WAITS FOR A NAMED PROPOSAL another actor files (the dev loop's
+ * `dev.plan_approval` / `dev.deploy_approval`). Entering it neither pauses the
+ * run nor files a `playbook.stage_gate`: the agent files the named proposal,
+ * and approving it advances the session to the stage AFTER this one
+ * (`stageAfterDevGate`, the dev-approval executor). Rejecting it does what a
+ * rejection does for that type. Stored as `{ proposalType: <awaited type> }`
+ * (`kind` optional); `resolveStageGate` normalizes it to `kind: "awaits"`.
+ */
+export interface PlaybookStageAwaitedGate {
+  kind?: "awaits";
+  proposalType: AwaitedGateProposalType;
+}
+
+/** A gate that pauses the run itself (`human` files, `check` evaluates). */
+export interface PlaybookStageFilingGate {
   kind: "human" | "check";
   /**
    * Proposal type filed when the gate opens. Defaults to
@@ -947,6 +965,20 @@ export interface PlaybookStageGate {
  */
 export const STAGE_GATE_PROPOSAL_TYPES = ["playbook.stage_gate"] as const;
 export type StageGateProposalType = (typeof STAGE_GATE_PROPOSAL_TYPES)[number];
+
+/**
+ * Proposal types a stage may WAIT FOR (`PlaybookStageAwaitedGate`) — each has
+ * an approve executor that advances the session to the stage after the one
+ * naming it (`focus_session/dev.*`, `stageAfterDevGate`). Mirrors
+ * `DEV_PLAN_APPROVAL_TYPE` / `DEV_DEPLOY_APPROVAL_TYPE` in @synap/api (this
+ * package cannot import it); `awaited-gate-types.parity.test.ts` there pins it.
+ */
+export const AWAITED_GATE_PROPOSAL_TYPES = [
+  "dev.plan_approval",
+  "dev.deploy_approval",
+] as const;
+export type AwaitedGateProposalType =
+  (typeof AWAITED_GATE_PROPOSAL_TYPES)[number];
 
 /** The proposal type a gated stage files when no `gate.proposalType` is set. */
 export const DEFAULT_STAGE_GATE_PROPOSAL_TYPE: StageGateProposalType =
@@ -991,7 +1023,9 @@ export function resolveStageRef(
   if (!want) return null;
   const list = stages.filter(
     (s): s is { key: string; name?: unknown } =>
-      !!s && typeof s === "object" && typeof (s as { key?: unknown }).key === "string"
+      !!s &&
+      typeof s === "object" &&
+      typeof (s as { key?: unknown }).key === "string"
   );
   const byKey = list.find((s) => s.key === want);
   if (byKey) return byKey.key;
@@ -1042,9 +1076,32 @@ export function resolveStageGate(
 ): PlaybookStageGate | undefined {
   const raw = (stage as { gate?: unknown } | null | undefined)?.gate;
   if (!raw || typeof raw !== "object") return undefined;
-  const gate = raw as { kind?: unknown; proposalType?: unknown };
+  const gate = raw as {
+    kind?: unknown;
+    proposalType?: unknown;
+    capability?: unknown;
+  };
   // A check gate files no proposal, so it carries no proposalType.
   if (gate.kind === "check") return { kind: "check" };
+  // A gate that NAMES an awaited proposal type (as `proposalType`, or as the
+  // legacy authoring spelling `capability`) waits for that proposal — with or
+  // without `kind: "human"`. It must never ALSO pause and file a
+  // `playbook.stage_gate`: that was two approvals for one decision.
+  const named =
+    typeof gate.proposalType === "string"
+      ? gate.proposalType
+      : typeof gate.capability === "string"
+        ? gate.capability
+        : undefined;
+  if (
+    named &&
+    (gate.kind === undefined ||
+      gate.kind === "human" ||
+      gate.kind === "awaits") &&
+    (AWAITED_GATE_PROPOSAL_TYPES as readonly string[]).includes(named)
+  ) {
+    return { kind: "awaits", proposalType: named as AwaitedGateProposalType };
+  }
   if (gate.kind !== "human") return undefined;
   const known =
     typeof gate.proposalType === "string" &&
@@ -1061,7 +1118,7 @@ export function resolveStageGate(
   };
 }
 
-/** The proposal type a given stage's gate files (default applied). */
+/** The proposal type a given stage's gate files or waits for (default applied). */
 export function stageGateProposalType(gate: PlaybookStageGate): string {
   return gate.proposalType ?? DEFAULT_STAGE_GATE_PROPOSAL_TYPE;
 }

@@ -33,6 +33,7 @@
  */
 
 import { z } from "zod";
+import { resolveStageGate } from "@synap/playbooks";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 
 /** Proposal type filed before the agent writes any code. */
@@ -43,14 +44,16 @@ export const DEV_DEPLOY_APPROVAL_TYPE = "dev.deploy_approval";
 /**
  * THE ONE RULE for where a session stands once a dev gate is approved.
  *
- * A session that FOLLOWS A STAGED PLAYBOOK whose stage names this gate
- * (`stage.gate.capability` or `stage.gate.proposalType` === the proposal type)
- * advances to the stage declared AFTER that one — e.g. plan → build,
- * ship → done. The playbook's own keys decide; nothing here knows them.
+ * A session that FOLLOWS A STAGED PLAYBOOK whose stage WAITS FOR this gate —
+ * `resolveStageGate(stage)` is `{ kind: "awaits", proposalType: <type> }`, the
+ * same reader the stage-gate door uses, so the stage that does not hold on
+ * entry and the stage approval advances past are the same stage — advances to
+ * the stage declared AFTER it (plan → build, ship → done). The playbook's own
+ * keys decide; nothing here knows them.
  *
- * Returns `null` when no stage names the gate (a stageless session, a playbook
- * that does not declare it, or the gate stage is the last one) — the caller
- * then keeps the legacy stamp (`plan_approved` / `deploy_approved`) the
+ * Returns `null` when no stage waits for the gate (a stageless session, a
+ * playbook that does not declare it, or the gate stage is the last one) — the
+ * caller then keeps the legacy stamp (`plan_approved` / `deploy_approved`) the
  * CLI dev loop polls for.
  */
 export function stageAfterDevGate(
@@ -59,13 +62,8 @@ export function stageAfterDevGate(
 ): string | null {
   if (!Array.isArray(stages)) return null;
   const at = stages.findIndex((stage) => {
-    const gate = (stage as { gate?: unknown } | null)?.gate as
-      { capability?: unknown; proposalType?: unknown } | undefined;
-    return (
-      !!gate &&
-      typeof gate === "object" &&
-      (gate.capability === gateType || gate.proposalType === gateType)
-    );
+    const gate = resolveStageGate(stage);
+    return gate?.kind === "awaits" && gate.proposalType === gateType;
   });
   if (at === -1) return null;
   const next = stages[at + 1] as { key?: unknown } | undefined;

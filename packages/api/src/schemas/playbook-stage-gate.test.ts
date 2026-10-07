@@ -76,3 +76,34 @@ describe("playbookStageSchema — gate", () => {
     expect((parsed as Record<string, unknown>).someFutureField).toBe(7);
   });
 });
+
+describe("playbookStageSchema — a gate that WAITS FOR a named proposal", () => {
+  it("accepts { proposalType: <awaited type> } with no kind, and with kind 'awaits'", () => {
+    for (const gate of [
+      { proposalType: "dev.plan_approval" },
+      { kind: "awaits", proposalType: "dev.deploy_approval" },
+    ]) {
+      expect(playbookStageSchema.safeParse({ ...base, gate }).success).toBe(
+        true
+      );
+    }
+  });
+
+  it("rejects an awaited gate naming a type outside the closed set", () => {
+    expect(
+      playbookStageSchema.safeParse({
+        ...base,
+        gate: { proposalType: "made.up" },
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects the `capability` spelling at the write door (the reader tolerates stored data only)", () => {
+    expect(
+      playbookStageSchema.safeParse({
+        ...base,
+        gate: { kind: "human", capability: "dev.plan_approval" },
+      }).success
+    ).toBe(false);
+  });
+});

@@ -227,6 +227,25 @@ describe("applyStageGateOnAdvance", () => {
   });
 });
 
+describe("a stage that WAITS FOR a named proposal (dev approvals)", () => {
+  const AWAITING = {
+    key: "plan",
+    name: "Plan",
+    category: "planned",
+    gate: { kind: "human", capability: "dev.plan_approval" },
+  };
+
+  it("entering it neither pauses the session nor files a stage-gate proposal", async () => {
+    runRow = {
+      id: RUN_ID,
+      definitionSnapshot: { stages: [UNGATED, AWAITING] },
+    };
+    expect(await advance("plan")).toBeNull();
+    expect(updates).toHaveLength(0);
+    expect(proposalCalls).toHaveLength(0);
+  });
+});
+
 describe("check gate", () => {
   const CHECKED = {
     key: "ship",

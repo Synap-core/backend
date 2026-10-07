@@ -22,6 +22,8 @@ import { z } from "zod";
 import {
   PLAYBOOK_STAGE_CATEGORIES,
   STAGE_GATE_PROPOSAL_TYPES,
+  AWAITED_GATE_PROPOSAL_TYPES,
+  type AwaitedGateProposalType,
   MAX_STAGE_LESSONS,
   STAGE_LESSON_MAX_CHARS,
   type PlaybookStage,
@@ -117,22 +119,36 @@ export const playbookStageSchema = z.looseObject({
    * unknown key here is a parse error, not a preserved passenger.
    */
   gate: z
-    .strictObject({
-      // "check" evaluates the criteria of the stage being LEFT before the run
-      // may continue (services/playbooks/stage-gate.ts).
-      kind: z.enum(["human", "check"]),
-      // Closed set, derived from the contract package — see the comment on
-      // `PlaybookStageGate.proposalType` for why a free string here would file
-      // gates that approve without ever resuming the run.
-      proposalType: z
-        .enum(
-          STAGE_GATE_PROPOSAL_TYPES as readonly [
-            StageGateProposalType,
-            ...StageGateProposalType[],
+    .union([
+      z.strictObject({
+        // "check" evaluates the criteria of the stage being LEFT before the run
+        // may continue (services/playbooks/stage-gate.ts).
+        kind: z.enum(["human", "check"]),
+        // Closed set, derived from the contract package — see the comment on
+        // `PlaybookStageGate.proposalType` for why a free string here would file
+        // gates that approve without ever resuming the run.
+        proposalType: z
+          .enum(
+            STAGE_GATE_PROPOSAL_TYPES as readonly [
+              StageGateProposalType,
+              ...StageGateProposalType[],
+            ]
+          )
+          .optional(),
+      }),
+      // A stage that WAITS FOR A NAMED PROPOSAL (`PlaybookStageAwaitedGate`):
+      // no pause, no stage-gate proposal — the named proposal's approval
+      // advances the stage. Closed set, same reason as above.
+      z.strictObject({
+        kind: z.literal("awaits").optional(),
+        proposalType: z.enum(
+          AWAITED_GATE_PROPOSAL_TYPES as readonly [
+            AwaitedGateProposalType,
+            ...AwaitedGateProposalType[],
           ]
-        )
-        .optional(),
-    })
+        ),
+      }),
+    ])
     .optional(),
   /** Binary acceptance criteria belonging to this stage (stageKey stamped at instantiate). */
   criteria: sessionCriteriaSchema.optional(),

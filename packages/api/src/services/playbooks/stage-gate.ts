@@ -394,6 +394,11 @@ export async function applyStageGate(
   if (gate.kind === "check") {
     return applyCheckGate(subject, advance.toStage, advance.fromStage ?? null);
   }
+  // A stage that waits for a NAMED proposal (`dev.plan_approval`, …) does not
+  // hold here: the agent files that proposal, and its approval advances the
+  // stage (`stageAfterDevGate`). Pausing + filing a stage gate as well would
+  // ask the person twice for one decision.
+  if (gate.kind === "awaits") return null;
   const opened = await openStageGate(
     subject,
     advance,

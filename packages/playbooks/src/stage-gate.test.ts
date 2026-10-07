@@ -16,6 +16,7 @@ import {
   stageGateProposalType,
   DEFAULT_STAGE_GATE_PROPOSAL_TYPE,
   STAGE_GATE_PROPOSAL_TYPES,
+  AWAITED_GATE_PROPOSAL_TYPES,
 } from "./index.js";
 
 describe("resolveStageGate", () => {
@@ -69,5 +70,45 @@ describe("stageGateProposalType", () => {
     for (const t of STAGE_GATE_PROPOSAL_TYPES) {
       expect(stageGateProposalType({ kind: "human", proposalType: t })).toBe(t);
     }
+  });
+});
+
+describe("resolveStageGate — a stage that WAITS FOR a named proposal", () => {
+  it("non-vacuity: the awaited set holds the two dev approvals", () => {
+    expect([...AWAITED_GATE_PROPOSAL_TYPES].sort()).toEqual([
+      "dev.deploy_approval",
+      "dev.plan_approval",
+    ]);
+  });
+
+  it.each([
+    [{ proposalType: "dev.plan_approval" }],
+    [{ kind: "awaits", proposalType: "dev.plan_approval" }],
+    // `kind: "human"` naming an awaited type must NOT become a second, human gate.
+    [{ kind: "human", proposalType: "dev.plan_approval" }],
+    // The legacy authoring spelling.
+    [{ kind: "human", capability: "dev.plan_approval" }],
+  ])("%j waits for dev.plan_approval — never a human gate", (gate) => {
+    expect(resolveStageGate({ gate })).toEqual({
+      kind: "awaits",
+      proposalType: "dev.plan_approval",
+    });
+  });
+
+  it("an unknown named type is NOT awaited (closed set): human stays human, bare stays ungated", () => {
+    expect(
+      resolveStageGate({ gate: { kind: "human", proposalType: "made.up" } })
+    ).toEqual({ kind: "human" });
+    expect(
+      resolveStageGate({ gate: { proposalType: "made.up" } })
+    ).toBeUndefined();
+  });
+
+  it("a check gate stays a check gate even when it names a type", () => {
+    expect(
+      resolveStageGate({
+        gate: { kind: "check", proposalType: "dev.plan_approval" },
+      })
+    ).toEqual({ kind: "check" });
   });
 });
