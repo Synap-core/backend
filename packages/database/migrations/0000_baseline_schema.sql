@@ -4915,7 +4915,9 @@ CREATE TABLE IF NOT EXISTS "apps" (
   "metadata"          jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "last_used_at"      timestamptz,
   "created_at"        timestamptz NOT NULL DEFAULT now(),
-  "revoked_at"        timestamptz
+  "revoked_at"        timestamptz,
+  -- 0312: "Remove for good" — a revoked app hidden from every listing.
+  "removed_at"        timestamptz
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_name_unique"
   ON "apps" ("owner_user_id", "name");

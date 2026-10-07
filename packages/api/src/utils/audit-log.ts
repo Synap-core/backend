@@ -52,6 +52,15 @@ export interface AuditLogOpts {
    * session; NEVER invent one.
    */
   sessionId?: string | null;
+  /**
+   * The application this event is ABOUT or was made BY (`events.app_id`, the
+   * app's `public_id`). Defaults to the request grant's `clientId` (a write
+   * made with an app's key); pass it explicitly for an app's own lifecycle
+   * events (requested, approved, key issued, revoked…), which a person makes
+   * from a session that carries no app key — so the app's timeline
+   * (`events.read({ appId })`) shows them.
+   */
+  appId?: string | null;
   data?: Record<string, unknown>;
   source?: string;
   correlationId?: string;
@@ -77,7 +86,7 @@ export async function auditLog(
     // event appended in this request's async context, ALONGSIDE `user_id` (the
     // connecting human). Read from the ONE request context here (not threaded
     // through callers): a flag passed to ~30 doors is a flag one door forgets.
-    const appId = getRequestGrant()?.clientId ?? undefined;
+    const appId = opts.appId ?? getRequestGrant()?.clientId ?? undefined;
     // `.validated` appends MUST go through the singleton `eventRepository`, which
     // carries the registered hooks — crucially the materialization hook that
     // enqueues the DB write when a `.validated` event lands. A fresh

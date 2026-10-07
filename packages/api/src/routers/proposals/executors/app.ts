@@ -13,27 +13,18 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, AppRepository } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  AppRepository,
+  readAppConnectRequests,
+  APP_EVENT_ACTIONS,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
-import type { AppApprovedRequest } from "@synap/database/schema";
-
-/** Read `[{ permission, workspaceId }]` off the proposal payload, defensively. */
-function readRequests(raw: Record<string, unknown>): AppApprovedRequest[] {
-  const list = raw.requests;
-  if (!Array.isArray(list)) return [];
-  const out: AppApprovedRequest[] = [];
-  for (const item of list) {
-    if (!item || typeof item !== "object") continue;
-    const permission = (item as Record<string, unknown>).permission;
-    const workspaceId = (item as Record<string, unknown>).workspaceId;
-    if (typeof permission !== "string" || !permission.trim()) continue;
-    if (typeof workspaceId !== "string" || !workspaceId.trim()) continue;
-    out.push({ permission, workspaceId });
-  }
-  return out;
-}
+import { auditLog } from "../../../utils/audit-log.js";
 
 export function registerAppExecutors(): void {
   registerProposalExecutor({
@@ -51,7 +42,7 @@ export function registerAppExecutors(): void {
         });
       }
 
-      const requests = readRequests(inner);
+      const requests = readAppConnectRequests(raw);
       if (requests.length === 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -97,6 +88,23 @@ export function registerAppExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // The app's own timeline: "Approved by you" (`events.read({ appId })`).
+      await auditLog({
+        subjectType: "app",
+        action: APP_EVENT_ACTIONS.approved,
+        phase: "completed",
+        subjectId: app.id,
+        userId,
+        workspaceId: null,
+        appId: app.publicId,
+        data: {
+          name: app.name,
+          publicId: app.publicId,
+          proposalId: input.proposalId,
+          requests,
+        },
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(

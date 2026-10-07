@@ -2904,6 +2904,29 @@ export interface CatalogSyncStamp {
 	lastCount: number;
 }
 /**
+ * Apps — a developer's application identity (App Connect v1, 2026-10-06).
+ *
+ * The object a developer registers is an APPLICATION; its `public_id`
+ * (`app_<uuid>`) is the app's stable id AND the `client_id` its grant carries
+ * (`grants.client_id`). The bearer is an API key (`api_keys`), unchanged — an
+ * app never holds a secret of its own beyond the key minted for it.
+ *
+ * `approved_requests` is what the app ASKED for and a human APPROVED
+ * (`[{ permission, workspaceId }]`); it is the exact list the key issue turns
+ * into grants — ONE per workspace, never their cross product
+ * (`grantsForApprovedRequests`, services/app-connect.ts; client_id = public_id).
+ * It is written ONLY by the `app/connect` approval executor — never at register
+ * time, so a proposal with no plaintext and a key minted only on demand means
+ * no secret ever rests in a proposal.
+ *
+ * ONE write door: `AppRepository` (repositories/app-repository.ts).
+ */
+/** One entry of `apps.approved_requests` — a permission bounded to a workspace. */
+export interface AppApprovedRequest {
+	permission: string;
+	workspaceId: string;
+}
+/**
  * Cell Instances Schema — The Universal Rendering Unit (persisted)
  *
  * A `cell_instance` is a concrete, addressable instance of a cell type living
@@ -21637,16 +21660,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				logo_url: string | null;
 				mode: string;
-				approved_requests: {} | null;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
 				created_at: Date;
 				revoked_at: Date | null;
+				removed_at: Date | null;
 				last_used_at: Date | null;
 				grants: {
+					id: string;
 					permissions: string[];
 					workspaceIds: string[] | null;
 					projectIds: string[] | null;
 					entityIds: string[] | null;
 					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
 				}[];
 			}[];
 			meta: object;
@@ -21665,16 +21698,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				logo_url: string | null;
 				mode: string;
-				approved_requests: {} | null;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
 				created_at: Date;
 				revoked_at: Date | null;
+				removed_at: Date | null;
 				last_used_at: Date | null;
 				grants: {
+					id: string;
 					permissions: string[];
 					workspaceIds: string[] | null;
 					projectIds: string[] | null;
 					entityIds: string[] | null;
 					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
 				}[];
 			};
 			meta: object;
@@ -21691,16 +21734,86 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				logo_url: string | null;
 				mode: string;
-				approved_requests: {} | null;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
 				created_at: Date;
 				revoked_at: Date | null;
+				removed_at: Date | null;
 				last_used_at: Date | null;
 				grants: {
+					id: string;
 					permissions: string[];
 					workspaceIds: string[] | null;
 					projectIds: string[] | null;
 					entityIds: string[] | null;
 					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		requestAccess: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+				requests: {
+					permission: string;
+					workspaceId: string;
+				}[];
+			};
+			output: {
+				proposalId: string;
+				reviewUrl: string;
+			};
+			meta: object;
+		}>;
+		issueKey: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				apiKey: string;
+				keyId: string;
+			};
+			meta: object;
+		}>;
+		rename: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+				name: string;
+			};
+			output: {
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				removed_at: Date | null;
+				last_used_at: Date | null;
+				grants: {
+					id: string;
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
 				}[];
 			};
 			meta: object;
@@ -21711,6 +21824,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				revoked: boolean;
+				publicId: string;
+			};
+			meta: object;
+		}>;
+		remove: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				removed: boolean;
 				publicId: string;
 			};
 			meta: object;

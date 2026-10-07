@@ -129,6 +129,9 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
   "apiKey/create",
   "apiKey/update",
   "apiKey/delete",
+  // An Application asking for reach (POST /apps/:id/connect): approving it
+  // records what the app may touch, and its key is minted from exactly that.
+  "app/connect",
   // What an agent principal is permitted to do.
   "agent/updateCapabilities",
   // A capability granted to a running session — the same question, narrower

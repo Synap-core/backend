@@ -7,8 +7,9 @@
  * app never holds a secret of its own beyond the key minted for it.
  *
  * `approved_requests` is what the app ASKED for and a human APPROVED
- * (`[{ permission, workspaceId }]`); it is the exact list the `/apps/:id/key`
- * mint turns into a grant (`attaches the grant with client_id = public_id`).
+ * (`[{ permission, workspaceId }]`); it is the exact list the key issue turns
+ * into grants — ONE per workspace, never their cross product
+ * (`grantsForApprovedRequests`, services/app-connect.ts; client_id = public_id).
  * It is written ONLY by the `app/connect` approval executor — never at register
  * time, so a proposal with no plaintext and a key minted only on demand means
  * no secret ever rests in a proposal.
@@ -59,6 +60,11 @@ export const apps = pgTable(
       .notNull()
       .defaultNow(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /**
+     * "Remove for good" (0312): a REVOKED app its owner hid permanently. The
+     * row and its events stay; every listing drops it.
+     */
+    removedAt: timestamp("removed_at", { withTimezone: true }),
   },
   (t) => ({
     // One app per (owner, name) — the register door is idempotent by owner+name.

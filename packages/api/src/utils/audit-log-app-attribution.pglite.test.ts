@@ -89,7 +89,9 @@ async function emit(
       userId: "human-1",
       workspaceId: null,
     });
-  await (grant ? runWithGrant(grantOfScope(grant, grant.clientId ?? null), run) : run());
+  await (grant
+    ? runWithGrant(grantOfScope(grant, grant.clientId ?? null), run)
+    : run());
   const { rows } = await h.client!.query<{ app_id: string | null }>(
     "SELECT app_id FROM events WHERE subject_id = $1",
     [subjectId]
@@ -108,6 +110,24 @@ describe("app attribution on the write event (App Connect v1)", () => {
 
   it("leaves events.app_id NULL when the write carries no grant", async () => {
     expect(await emit(null)).toBeNull();
+  });
+
+  it("an app LIFECYCLE event (no app key on the request) lands on the app's timeline via explicit appId", async () => {
+    const subjectId = randomUUID();
+    await auditLog({
+      subjectType: "app",
+      action: "issue_key",
+      phase: "completed",
+      subjectId,
+      userId: "human-1",
+      workspaceId: null,
+      appId: APP,
+    });
+    const { rows } = await h.client!.query<{
+      app_id: string | null;
+      type: string;
+    }>("SELECT app_id, type FROM events WHERE subject_id = $1", [subjectId]);
+    expect(rows).toEqual([{ app_id: APP, type: "app.issue_key.completed" }]);
   });
 
   it("SynapEventSchema does NOT strip appId (the silent-drop trap)", () => {

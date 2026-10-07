@@ -144,6 +144,14 @@ const ROUTE_PARAM_EXCLUDE = new Set<string>([
   "POST /ai-providers/:id/${suffix} [id]",
   "POST /ai-providers/:id/probe [id]",
   "DELETE /ai-providers/:id [id]",
+  // apps.ts: `:id` is the app's PUBLIC id (`app_<uuid>`, the CLI wire
+  // contract), compared only to the TEXT column `apps.public_id` through
+  // `loadOwnedApp` (services/app-connect.ts) — never to a uuid column. A
+  // `requireUuidParam` guard would 400 every real app id.
+  "GET /apps/:id [id]",
+  "POST /apps/:id/connect [id]",
+  "POST /apps/:id/key [id]",
+  "DELETE /apps/:id [id]",
 ]);
 
 /**

@@ -7,9 +7,10 @@
  * is refused BEFORE any key is minted or grant attached. Postgres is down in
  * CI-less sessions, and a self-skipping live suite proves nothing when it
  * skips. The seams that are mocked are exactly the side-effect doors the route
- * calls (`ApiKeyRepository.create`, `attachGrantOrRevoke`, `revokeApiKeys`,
- * `createPendingProposal`) and `AppRepository` (the one write door) — so the
- * assertions read the arguments those doors actually receive.
+ * calls through the ONE service `services/app-connect.ts`
+ * (`ApiKeyRepository.create`, `attachGrantsOrRevoke`, `revokeApiKeys`,
+ * `createPendingProposal`, `auditLog`) and `AppRepository` (the one write
+ * door) — so the assertions read the arguments those doors actually receive.
  *
  * WIRE CONTRACT (CLI c5d6cfa): `:id` is the PUBLIC id; register returns
  * `{ app: { public_id } }`; `/key` returns `{ apiKey, keyId }`.
@@ -42,7 +43,8 @@ function makeApp(overrides: Record<string, unknown> = {}) {
     metadata: {},
     lastUsedAt: null,
     createdAt: new Date("2026-10-06T00:00:00Z"),
-    revokedAt: null,
+    revokedAt: null as Date | null,
+    removedAt: null as Date | null,
     ...overrides,
   };
 }
@@ -59,6 +61,11 @@ const state = {
   existingKeyIds: [] as string[],
   workspaceIds: [WORKSPACE_ID],
   selectResult: [] as Array<Record<string, unknown>>,
+  events: [] as Array<Record<string, unknown>>,
+  ambientGrant: undefined as unknown,
+  takenName: null as string | null,
+  renamedTo: null as string | null,
+  removed: false,
 };
 
 function chain(result: unknown): any {
@@ -95,13 +102,17 @@ class FakeAppRepository {
   }
   async getByPublicId(publicId: string) {
     if (publicId !== state.app.publicId) return null;
-    return { app: state.app, lastUsedAt: null, grants: [] };
+    return {
+      app: state.app,
+      lastUsedAt: null,
+      grants: [],
+      pendingRequest: null,
+    };
   }
   async listForOwner(_owner: string) {
-    return [{ app: state.app, lastUsedAt: null, grants: [] }];
-  }
-  async getForOwner(_id: string, _owner: string) {
-    return { app: state.app, lastUsedAt: null, grants: [] };
+    return [
+      { app: state.app, lastUsedAt: null, grants: [], pendingRequest: null },
+    ];
   }
   async keyIdsFor(_publicId: string) {
     return state.existingKeyIds;
@@ -111,6 +122,18 @@ class FakeAppRepository {
     return state.app;
   }
   async revoke(_id: string) {
+    return state.app;
+  }
+  async rename(_id: string, name: string) {
+    if (name === state.takenName) {
+      const { AppNameTakenError } = await import("@synap/database");
+      throw new AppNameTakenError(name);
+    }
+    state.renamedTo = name;
+    return state.app;
+  }
+  async remove(_id: string) {
+    state.removed = true;
     return state.app;
   }
 }
@@ -145,8 +168,16 @@ vi.mock("@synap/database", async (importOriginal) => {
     ApiKeyRepository: FakeApiKeyRepository,
     GrantRepository: FakeGrantRepository,
     EventRepository: FakeEventRepository,
+    getRequestGrant: () => state.ambientGrant,
   };
 });
+
+vi.mock("../../../../utils/audit-log.js", () => ({
+  auditLog: async (opts: Record<string, unknown>) => {
+    state.events.push(opts);
+    return null;
+  },
+}));
 
 vi.mock("@synap/database/api-key-revocation", async (importOriginal) => {
   const actual =
@@ -173,16 +204,17 @@ vi.mock("../../../../services/key-grant.js", () => ({
   },
 }));
 
-vi.mock("../_shared.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../_shared.js")>();
-  return {
-    ...actual,
-    getUserAccessibleWorkspaceIds: async (_userId: string) =>
-      state.workspaceIds,
-  };
-});
+vi.mock(
+  "../../../../utils/workspace-membership.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    getUserWorkspaceIds: async (_userId: string) => state.workspaceIds,
+  })
+);
 
 const { registerAppsRoutes } = await import("../apps.js");
+const { renameApp, removeApp } =
+  await import("../../../../services/app-connect.js");
 const { registerAppExecutors } =
   await import("../../../proposals/executors/app.js");
 const { proposalExecRegistry } =
@@ -221,7 +253,16 @@ beforeEach(() => {
   state.existingKeyIds = [];
   state.workspaceIds = [WORKSPACE_ID];
   state.selectResult = [{ id: WORKSPACE_ID, name: "Operations" }];
+  state.events = [];
+  state.ambientGrant = undefined;
+  state.takenName = null;
+  state.renamedTo = null;
+  state.removed = false;
 });
+
+/** The app lifecycle events recorded, as `<subject>.<action>` + app id. */
+const recorded = () =>
+  state.events.map((e) => `${e.subjectType}.${e.action}@${e.appId}`);
 
 describe("POST /apps — register", () => {
   it("returns the app with a snake_case public_id (the CLI reads it)", async () => {
@@ -263,8 +304,14 @@ describe("POST /apps/:id/connect — always files one proposal", () => {
       workspaceId: null,
     });
     expect((state.proposalInput!.data as any).requests).toEqual([
-      { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+      {
+        permission: "entity.person.create",
+        workspaceId: WORKSPACE_ID,
+        workspaceName: "Operations",
+      },
     ]);
+    // On the app's own timeline.
+    expect(recorded()).toEqual([`app.request@${PUBLIC_ID}`]);
   });
 
   it("fails loud on an unknown workspace name", async () => {
@@ -330,6 +377,49 @@ describe("POST /apps/:id/key — mint after approval", () => {
     });
   });
 
+  it("splits a two-workspace approval into one grant per workspace (no cross product)", async () => {
+    const FINANCE = "4b4b4b4b-0000-4000-8000-0000000000dd";
+    state.app = makeApp({
+      approvedRequests: [
+        { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+        { permission: "entity.note.read", workspaceId: FINANCE },
+      ],
+    });
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+
+    const res = await post(app, `/apps/${PUBLIC_ID}/key`, {});
+
+    expect(res.status).toBe(200);
+    expect((state.grantArgs as { grants: unknown }).grants).toEqual([
+      { permissions: ["entity.person.create"], workspaceIds: [WORKSPACE_ID] },
+      { permissions: ["entity.note.read"], workspaceIds: [FINANCE] },
+    ]);
+    // "Key issued" on the app's timeline — never the plaintext.
+    expect(recorded()).toEqual([`app.issue_key@${PUBLIC_ID}`]);
+    expect(JSON.stringify(state.events)).not.toContain(
+      ((await res.json()) as { apiKey: string }).apiKey
+    );
+  });
+
+  it("refuses a SCOPED key (an app key must never mint app keys)", async () => {
+    state.app = makeApp({
+      approvedRequests: [
+        { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+      ],
+    });
+    state.ambientGrant = {
+      scopes: [{ permissions: ["entity.person.create"] }],
+      clientId: PUBLIC_ID,
+    };
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+
+    const res = await post(app, `/apps/${PUBLIC_ID}/key`, {});
+
+    expect(res.status).toBe(403);
+    expect(state.keyInput).toBeNull();
+    expect(state.revokedKeyCalls).toHaveLength(0);
+  });
+
   it("refuses when nothing is approved yet — no key, no grant", async () => {
     state.app = makeApp({ approvedRequests: null });
     const app = makeApp_({ scopes: WRITE, userId: OWNER });
@@ -368,11 +458,10 @@ describe("DELETE /apps/:id — revoke cascades the keys' grants", () => {
     const json = (await res.json()) as { revoked: boolean; public_id: string };
     expect(json).toMatchObject({ revoked: true, public_id: PUBLIC_ID });
     // The app's grants are revoked at the ONE grant write door…
-    expect(state.revokedGrantKeyIdCalls).toEqual([
-      ["old-key-1", "old-key-2"],
-    ]);
+    expect(state.revokedGrantKeyIdCalls).toEqual([["old-key-1", "old-key-2"]]);
     // …and the keys themselves.
     expect(state.revokedKeyCalls).toHaveLength(1);
+    expect(recorded()).toEqual([`app.revoke@${PUBLIC_ID}`]);
   });
 
   it("NEGATIVE CONTROL: a non-owner revokes nothing — no grant, no key", async () => {
@@ -437,6 +526,8 @@ describe("approve executor — app/connect writes approved_requests", () => {
     // The executor mints NOTHING — the key is a separate, human-driven door.
     expect(state.keyInput).toBeNull();
     expect(state.grantArgs).toBeNull();
+    // "Approved by you" on the app's timeline.
+    expect(recorded()).toEqual([`app.approve@${PUBLIC_ID}`]);
   });
 
   it("refuses approval from someone who is not the app's owner", async () => {
@@ -476,5 +567,56 @@ describe("approve executor — app/connect writes approved_requests", () => {
       })
     ).rejects.toThrow(/owner/i);
     expect(state.approvedWrites).toHaveLength(0);
+    expect(state.events).toHaveLength(0);
+  });
+});
+
+describe("app-connect service — rename and remove for good (tRPC doors)", () => {
+  it("rename records { from, to } on the app's timeline", async () => {
+    await renameApp({
+      publicId: PUBLIC_ID,
+      ownerUserId: OWNER,
+      name: "Landing",
+    });
+    expect(state.renamedTo).toBe("Landing");
+    expect(recorded()).toEqual([`app.rename@${PUBLIC_ID}`]);
+    expect(state.events[0]!.data).toMatchObject({
+      from: "synap.live",
+      to: "Landing",
+    });
+  });
+
+  it("a taken name is a clean CONFLICT, not a 500, and records nothing", async () => {
+    state.takenName = "intake";
+    await expect(
+      renameApp({ publicId: PUBLIC_ID, ownerUserId: OWNER, name: "intake" })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(state.events).toHaveLength(0);
+  });
+
+  it("remove refuses a LIVE app (revoke it first) and hides nothing", async () => {
+    await expect(
+      removeApp({ publicId: PUBLIC_ID, ownerUserId: OWNER })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(state.removed).toBe(false);
+  });
+
+  it("remove hides a REVOKED app and records it", async () => {
+    state.app = makeApp({ revokedAt: new Date("2026-10-07T09:14:00Z") });
+    await removeApp({ publicId: PUBLIC_ID, ownerUserId: OWNER });
+    expect(state.removed).toBe(true);
+    expect(recorded()).toEqual([`app.remove_for_good@${PUBLIC_ID}`]);
+  });
+
+  it("NEGATIVE CONTROL: a non-owner can neither rename nor remove", async () => {
+    state.app = makeApp({ revokedAt: new Date() });
+    await expect(
+      renameApp({ publicId: PUBLIC_ID, ownerUserId: OTHER, name: "x" })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      removeApp({ publicId: PUBLIC_ID, ownerUserId: OTHER })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(state.removed).toBe(false);
+    expect(state.renamedTo).toBeNull();
   });
 });

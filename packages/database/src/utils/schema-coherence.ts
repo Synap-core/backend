@@ -939,6 +939,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
+  // apps.removed_at — "Remove for good" (0312). Missing means every app read
+  // (`listForOwner` filters on it) would 42703.
+  {
+    table: "apps",
+    column: "removed_at",
+    addedBy: "0312_apps_removed_at.sql",
+  },
 
   // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
   // is on a pre-0206 schema where apiKeys.beginMcpConnect / POST /api/hub/mcp/redeem

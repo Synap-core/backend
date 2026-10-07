@@ -20,7 +20,7 @@ import { dirname, resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import * as schema from "../schema/index.js";
-import { AppRepository } from "./app-repository.js";
+import { AppNameTakenError, AppRepository } from "./app-repository.js";
 import { GrantRepository } from "./grant-repository.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -29,6 +29,7 @@ const read = (name: string) =>
 const GRANTS = read("0305_grants.sql");
 const ROLES = read("0307_grant_roles.sql"); // grants.role_id — written by attach
 const APPS = read("0309_apps.sql");
+const APPS_REMOVED = read("0312_apps_removed_at.sql");
 
 const OWNER = "owner-1";
 const OTHER_OWNER = "owner-2";
@@ -58,6 +59,17 @@ beforeAll(async () => {
   await pg.exec(GRANTS);
   await pg.exec(ROLES);
   await pg.exec(APPS);
+  await pg.exec(APPS_REMOVED);
+  // The pending projection reads only these `proposals` columns.
+  await pg.exec(`CREATE TABLE proposals (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    target_type  text NOT NULL,
+    target_id    text NOT NULL,
+    proposal_type text NOT NULL,
+    status       text NOT NULL DEFAULT 'pending',
+    data         jsonb NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now()
+  );`);
   const db = drizzle(pg, { schema });
   repo = new AppRepository(db as never);
   grants = new GrantRepository(db as never);
@@ -68,7 +80,9 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pg.exec("DELETE FROM grants; DELETE FROM apps; DELETE FROM api_keys;");
+  await pg.exec(
+    "DELETE FROM grants; DELETE FROM apps; DELETE FROM api_keys; DELETE FROM proposals;"
+  );
 });
 
 async function seedKey(id: string, active = true): Promise<void> {
@@ -128,7 +142,10 @@ describe("AppRepository.register — idempotent by owner+name", () => {
       description: "the landing page",
       metadata: { source: "cli" },
     });
-    const second = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+    const second = await repo.register({
+      ownerUserId: OWNER,
+      name: "synap.live",
+    });
 
     expect(second.id).toBe(first.id);
     expect(second.description).toBe("the landing page");
@@ -303,7 +320,14 @@ describe("AppRepository.keysFor — the app's keys, and never the secret", () =>
 
   async function seedNamedKey(
     id: string,
-    over: Partial<{ name: string; prefix: string; revoked: boolean; madeAt: string; usedAt: string | null; uses: number }> = {}
+    over: Partial<{
+      name: string;
+      prefix: string;
+      revoked: boolean;
+      madeAt: string;
+      usedAt: string | null;
+      uses: number;
+    }> = {}
   ): Promise<void> {
     await pg.query(
       `INSERT INTO api_keys
@@ -383,7 +407,9 @@ describe("AppRepository.keysFor — the app's keys, and never the secret", () =>
   it("is empty for an app with no key, and for an unknown id", async () => {
     const app = await repo.register({ ownerUserId: OWNER, name: "intake" });
     expect(await repo.keysFor(app.publicId)).toEqual([]);
-    expect(await repo.keysFor("app_00000000-0000-4000-8000-000000000000")).toEqual([]);
+    expect(
+      await repo.keysFor("app_00000000-0000-4000-8000-000000000000")
+    ).toEqual([]);
   });
 
   it("orders newest first — the key you just minted is the one you are looking for", async () => {
@@ -393,6 +419,129 @@ describe("AppRepository.keysFor — the app's keys, and never the secret", () =>
     await attachGrant(KEY_A, app.publicId);
     await attachGrant(KEY_B, app.publicId);
 
-    expect((await repo.keysFor(app.publicId)).map((k) => k.id)).toEqual([KEY_B, KEY_A]);
+    expect((await repo.keysFor(app.publicId)).map((k) => k.id)).toEqual([
+      KEY_B,
+      KEY_A,
+    ]);
+  });
+});
+
+/** File an `app/connect` proposal row the way `createPendingProposal` stores it. */
+async function fileConnect(
+  appId: string,
+  requests: Array<{ permission: string; workspaceId: string }>,
+  opts: { status?: string; at?: string } = {}
+): Promise<string> {
+  const { rows } = await pg.query<{ id: string }>(
+    `INSERT INTO proposals (target_type, target_id, proposal_type, status, data, created_at)
+     VALUES ('app', $1, 'connect', $2, $3, $4) RETURNING id`,
+    [
+      appId,
+      opts.status ?? "pending",
+      JSON.stringify({ appId, requests }),
+      opts.at ?? new Date().toISOString(),
+    ]
+  );
+  return rows[0]!.id;
+}
+
+const WS_SALES = "55555555-0000-4000-8000-000000000005";
+const WS_FIN = "66666666-0000-4000-8000-000000000006";
+
+describe("AppRepository — the pending request projection", () => {
+  it("carries the LATEST still-pending app/connect request, never a decided one", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+    await fileConnect(
+      app.id,
+      [{ permission: "entity.note.read", workspaceId: WS_FIN }],
+      {
+        status: "approved",
+        at: "2026-10-07T12:00:00Z",
+      }
+    );
+    await fileConnect(
+      app.id,
+      [{ permission: "entity.person.read", workspaceId: WS_SALES }],
+      {
+        at: "2026-10-06T09:00:00Z",
+      }
+    );
+    const newest = await fileConnect(
+      app.id,
+      [{ permission: "entity.person.create", workspaceId: WS_SALES }],
+      { at: "2026-10-06T10:00:00Z" }
+    );
+
+    const found = await repo.getByPublicId(app.publicId);
+    expect(found!.pendingRequest).toEqual({
+      proposalId: newest,
+      requests: [{ permission: "entity.person.create", workspaceId: WS_SALES }],
+      requestedAt: new Date("2026-10-06T10:00:00Z"),
+    });
+  });
+
+  it("is null when nothing is waiting, and is projected per app in the list", async () => {
+    const asking = await repo.register({ ownerUserId: OWNER, name: "asking" });
+    const quiet = await repo.register({ ownerUserId: OWNER, name: "quiet" });
+    const pid = await fileConnect(asking.id, [
+      { permission: "entity.person.create", workspaceId: WS_SALES },
+    ]);
+
+    const byName = new Map(
+      (await repo.listForOwner(OWNER)).map((r) => [
+        r.app.name,
+        r.pendingRequest,
+      ])
+    );
+    expect(byName.get("asking")?.proposalId).toBe(pid);
+    expect(byName.get("quiet")).toBeNull();
+    expect(quiet.id).not.toBe(asking.id);
+  });
+});
+
+describe("AppRepository.rename", () => {
+  it("renames, and refuses a name the owner already uses with a typed conflict", async () => {
+    const a = await repo.register({ ownerUserId: OWNER, name: "landing" });
+    await repo.register({ ownerUserId: OWNER, name: "intake" });
+
+    expect((await repo.rename(a.id, "  synap.live "))!.name).toBe("synap.live");
+    await expect(repo.rename(a.id, "intake")).rejects.toBeInstanceOf(
+      AppNameTakenError
+    );
+    // Another owner's name is not a conflict.
+    await repo.register({ ownerUserId: OTHER_OWNER, name: "theirs" });
+    expect((await repo.rename(a.id, "theirs"))!.name).toBe("theirs");
+  });
+});
+
+describe("AppRepository.remove — 'Remove for good'", () => {
+  it("hides the app from every listing but keeps it readable by id", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "old" });
+    await repo.revoke(app.id);
+    expect(
+      (await repo.listForOwner(OWNER, { includeRevoked: true })).map(
+        (r) => r.app.id
+      )
+    ).toEqual([app.id]);
+
+    await repo.remove(app.id);
+
+    expect(await repo.listForOwner(OWNER, { includeRevoked: true })).toEqual(
+      []
+    );
+    expect(
+      (await repo.getByPublicId(app.publicId))!.app.removedAt
+    ).not.toBeNull();
+  });
+
+  it("re-registering the name revives the removed app (same public_id)", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "old" });
+    await repo.revoke(app.id);
+    await repo.remove(app.id);
+
+    const again = await repo.register({ ownerUserId: OWNER, name: "old" });
+    expect(again.publicId).toBe(app.publicId);
+    expect(again.removedAt).toBeNull();
+    expect(again.revokedAt).toBeNull();
   });
 });

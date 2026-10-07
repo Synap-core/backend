@@ -71,6 +71,10 @@ function scanCapabilityProposalSites(): {
  * decision a human still owed. Every test here is about that direction.
  */
 describe("classifyProposal", () => {
+  it("an app asking for reach is an ACCESS decision (app/connect)", () => {
+    expect(classifyProposal("connect", "app")).toBe("access");
+  });
+
   it("classifies the four shapes present in the live queue", () => {
     // Counts measured on the team pod 2026-09-02 (660 pending).
     expect(classifyProposal("capability.run", "capability")).toBe("ephemeral"); // 441
