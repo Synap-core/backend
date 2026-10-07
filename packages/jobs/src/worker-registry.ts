@@ -93,6 +93,15 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "external-agent-poll",
+    name: "External Agent Poll",
+    description:
+      "Every 2min (in-process): for each live playbook run handed to an external agent (playbook_runs.external_agent), calls the agent binding's status verb and posts what changed in the session room — a question card on needs_input, the run capture on done/failed. One post per state change (claimed fingerprint).",
+    triggers: ["cron:*/2 * * * *"],
+    outputs: ["message.create.completed", "playbook_run.update.completed"],
+    category: "ai",
+  },
+  {
     id: "event-end-cron",
     name: "Event End",
     description:

@@ -97,7 +97,7 @@ const ACKNOWLEDGED: Record<string, string> = {
   "api:routers/proposals/executors/focus-session.ts":
     "focus_session/update executor re-applies an APPROVED patch",
   "api:routers/proposals/executors/dev-approval.ts":
-    "dev-loop gate approval stamps STAGE_AFTER[type] — the approval IS the gate",
+    "dev-loop gate approval advances to the stage AFTER the gate stage (stageAfterDevGate; legacy STAGE_AFTER[type]) — the approval IS the gate",
 
   // DELEGATION — passes `currentStage` to the service door rather than writing the
   // column. The heuristic below cannot distinguish an argument from a column write.

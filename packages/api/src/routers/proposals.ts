@@ -162,6 +162,7 @@ import {
   isScrubbedGuestPayload,
   scrubGuestPayloads,
 } from "../services/forms/guest-retention.js";
+import { wakeAgentOnDevDecision } from "../services/agent-dispatch/wake-external-agent.js";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -1721,6 +1722,13 @@ export const proposalsRouter = router({
         // claim through the ONE reader (`readProposalExpectedLabel`) so the
         // approve and reject halves can never disagree about where it lives.
         await returnRejectedSlot(proposal, input.reason);
+        // A dispatched external agent that filed a dev gate hears the "no".
+        await wakeAgentOnDevDecision({
+          proposal,
+          proposalId: input.proposalId,
+          decision: "rejected",
+          note: input.reason,
+        });
       }
 
       return { success: true };
@@ -3328,6 +3336,12 @@ export const proposalsRouter = router({
           // `updated` guard so a row this batch did not actually reject never
           // hands anything back.
           await returnRejectedSlot(target, input.reason);
+          await wakeAgentOnDevDecision({
+            proposal: target,
+            proposalId,
+            decision: "rejected",
+            note: input.reason,
+          });
         }
       }
 

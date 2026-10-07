@@ -71,6 +71,12 @@ export interface PlaybookRunExternalAgent {
   /** Fingerprint of `lastState` — the poll posts once per change. */
   lastStateKey?: string;
   polledAt?: string;
+  /**
+   * Set when the `status` verb came back PROPOSED (governance wants a person
+   * to approve the read): polling pauses until that proposal is decided,
+   * instead of filing one proposal per tick.
+   */
+  pollBlockedBy?: string;
   startedAt: string;
 }
 

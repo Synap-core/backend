@@ -396,6 +396,9 @@ export {
   runEventEnd,
   type RunEventEndResult,
 } from "./services/event-end/run-event-end.js";
+// The external-agent status poll (services/agent-dispatch) — apps/api fills
+// the @synap/jobs `registerExternalAgentPoller` slot with it at boot.
+export { pollExternalAgentRuns } from "./services/agent-dispatch/poll-external-agents.js";
 export {
   runSessionRecap,
   type RunSessionRecapInput,

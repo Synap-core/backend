@@ -93,6 +93,7 @@ import {
 import { findNewestSlotThreadSeed } from "./slot-thread.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { resolveAgentReach } from "../agent-dispatch/agent-binding.js";
+import { wakeExternalAgent } from "../agent-dispatch/wake-external-agent.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import {
   attestExpectedOutput,
@@ -312,12 +313,16 @@ async function wake(p: {
 }): Promise<boolean> {
   if (!p.target) return false;
   if (p.target.reach === "dispatch") {
-    // W1: reach is decided; the binding's `send` (wakeExternalAgent) lands in W3.
-    logger.info(
-      { sessionId: p.sessionId, agentUserId: p.target.agentUserId },
-      "answer: dispatch agent not woken yet (no send door)"
-    );
-    return false;
+    // An external agent the pod dispatches to: its binding's `send` verb, the
+    // ONE loop-back door. Never an IS turn under its name.
+    const sent = await wakeExternalAgent({
+      sessionId: p.sessionId,
+      agentUserId: p.target.agentUserId,
+      kind: "answer",
+      text: p.content,
+      ...(p.slotLabel ? { slotKey: p.slotLabel } : {}),
+    });
+    return sent.status === "sent";
   }
   return triggerAutoRespond({
     channelId: p.channelId,

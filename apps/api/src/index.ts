@@ -1929,6 +1929,8 @@ try {
               await import("@synap/jobs/utils/notification-creator.js");
             const { registerEventEndRunner } =
               await import("@synap/jobs/workers/event-end-cron.js");
+            const { registerExternalAgentPoller } =
+              await import("@synap/jobs/workers/external-agent-poll.js");
             const { registerTightenRecommender } =
               await import("@synap/jobs/workers/governance-tighten-cron.js");
             const { registerPromptVersionRegressionScanner } =
@@ -2010,6 +2012,7 @@ try {
                 : api.runScheduledConnectionSyncs(data.reason ?? "cron")
             );
             registerEventEndRunner(() => api.runEventEnd());
+            registerExternalAgentPoller(() => api.pollExternalAgentRuns());
             // Learning loop: the tighten recommender (was verb-only) and the
             // prompt-version regression scan run on daily crons. Both slots
             // are fail-closed — unregistered, the job throws.

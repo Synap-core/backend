@@ -1,11 +1,23 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, focusSessions } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  and,
+  desc,
+  focusSessions,
+  playbooks,
+  playbookRuns,
+  liveRunStatusWhere,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { mergeSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
   DEV_DEPLOY_APPROVAL_TYPE,
   DEV_PLAN_APPROVAL_TYPE,
+  stageAfterDevGate,
 } from "../../../services/proposals/dev-approval.js";
+import { wakeAgentOnDevDecision } from "../../../services/agent-dispatch/wake-external-agent.js";
 import {
   registerProposalExecutor,
   type ProposalEffect,
@@ -65,9 +77,9 @@ interface DevLoopStamp {
 }
 
 /**
- * The stage a session sits at once a gate clears. Read by the polling agent as
- * "you may proceed"; `current_stage` is the column the session surfaces already
- * render, so the gate is visible without a bespoke field.
+ * The LEGACY stage a session sits at once a gate clears — used only when the
+ * session follows no staged playbook that names the gate (`stageAfterDevGate`
+ * decides otherwise). Read by the polling CLI agent as "you may proceed".
  */
 const STAGE_AFTER = {
   [DEV_PLAN_APPROVAL_TYPE]: "plan_approved",
@@ -82,6 +94,43 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+/**
+ * Where the session stands after this gate: the stage after the gate stage of
+ * the playbook it follows (the run's frozen definition first, the playbook row
+ * second — the same precedence the stage gates use), else the legacy stamp.
+ */
+async function stageAfterApproval(
+  session: { id: string; playbookId: string | null },
+  type: keyof typeof STAGE_AFTER
+): Promise<string> {
+  const [run] = await db
+    .select({ definitionSnapshot: playbookRuns.definitionSnapshot })
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, session.id),
+        liveRunStatusWhere(playbookRuns.status)
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt))
+    .limit(1);
+  const fromRun = stageAfterDevGate(
+    (run?.definitionSnapshot as { stages?: unknown } | null)?.stages,
+    type
+  );
+  if (fromRun) return fromRun;
+  if (session.playbookId) {
+    const [row] = await db
+      .select({ stages: playbooks.stages })
+      .from(playbooks)
+      .where(eq(playbooks.id, session.playbookId))
+      .limit(1);
+    const fromPlaybook = stageAfterDevGate(row?.stages, type);
+    if (fromPlaybook) return fromPlaybook;
+  }
+  return STAGE_AFTER[type];
 }
 
 /**
@@ -127,7 +176,13 @@ async function applyDevApproval(
   const sessionId = proposal.targetId;
   const session = await db.query.focusSessions.findFirst({
     where: eq(focusSessions.id, sessionId),
-    columns: { id: true, metadata: true, workspaceId: true, goal: true },
+    columns: {
+      id: true,
+      metadata: true,
+      workspaceId: true,
+      goal: true,
+      playbookId: true,
+    },
   });
   if (!session) {
     throw new TRPCError({
@@ -153,7 +208,7 @@ async function applyDevApproval(
     .update(focusSessions)
     .set({
       metadata: mergeSessionMetadata({ devLoop: mergedDevLoop }),
-      currentStage: STAGE_AFTER[type],
+      currentStage: await stageAfterApproval(session, type),
       updatedAt: approvedAt,
     })
     .where(eq(focusSessions.id, sessionId))
@@ -193,6 +248,16 @@ async function applyDevApproval(
     "approved",
     userId
   );
+
+  // The loop back: a dispatched external agent that filed this gate is told
+  // through its binding (no-op for a pod-run or pull agent). After the stamp,
+  // never able to undo it.
+  await wakeAgentOnDevDecision({
+    proposal,
+    proposalId: input.proposalId,
+    decision: "approved",
+    note: input.comment ?? null,
+  });
 
   return { success: true, effect };
 }

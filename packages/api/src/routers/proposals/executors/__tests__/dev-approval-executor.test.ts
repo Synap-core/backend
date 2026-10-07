@@ -41,6 +41,12 @@ let sessionRow: Record<string, unknown> | null = null;
 let proposalStatus: string | undefined = "pending";
 /** Rows the focus-session UPDATE's `.returning()` reports. */
 let updateReturns: Array<Record<string, unknown>> = [];
+/** The live run's frozen definition the stage rule reads (null = no live run). */
+let runSnapshot: Record<string, unknown> | null = null;
+/** The followed playbook row's stages (null = no playbook row). */
+let playbookStages: unknown[] | null = null;
+/** Every dev decision handed to the external-agent loop back. */
+const wakes: Array<Record<string, unknown>> = [];
 
 vi.mock("@synap/database", async (importOriginal) => {
   // PARTIAL mock ON PURPOSE — a total replacement silently kills every other
@@ -53,9 +59,30 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: {
       select: () => ({
-        from: () => ({
-          where: async () =>
-            proposalStatus === undefined ? [] : [{ status: proposalStatus }],
+        from: (table: unknown) => ({
+          where: () => {
+            // The stage rule reads the live run (orderBy + limit) and then
+            // the playbook row (limit); the idempotency guard awaits the
+            // proposal-status read directly.
+            const rows =
+              table === actual.playbookRuns
+                ? runSnapshot
+                  ? [{ definitionSnapshot: runSnapshot }]
+                  : []
+                : table === actual.playbooks
+                  ? playbookStages
+                    ? [{ stages: playbookStages }]
+                    : []
+                  : proposalStatus === undefined
+                    ? []
+                    : [{ status: proposalStatus }];
+            const chain = {
+              orderBy: () => chain,
+              limit: async () => rows,
+              then: (resolve: (v: unknown) => unknown) => resolve(rows),
+            };
+            return chain;
+          },
         }),
       }),
       query: {
@@ -82,6 +109,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 vi.mock("../../../../utils/domain-event-bridge.js", () => ({
   emitHubRealtimeEvent: () => {},
+}));
+vi.mock("../../../../services/agent-dispatch/wake-external-agent.js", () => ({
+  wakeAgentOnDevDecision: async (p: Record<string, unknown>) => {
+    wakes.push(p);
+    return null;
+  },
 }));
 
 import { proposalExecRegistry } from "../../execution-registry.js";
@@ -191,6 +224,9 @@ function metadataSqlText(values: Record<string, unknown>): string {
 
 beforeEach(() => {
   updates.length = 0;
+  wakes.length = 0;
+  runSnapshot = null;
+  playbookStages = null;
   proposalStatus = "pending";
   updateReturns = [{ id: SESSION_ID, currentStage: "plan_approved" }];
   sessionRow = {
@@ -198,6 +234,7 @@ beforeEach(() => {
     metadata: {},
     workspaceId: "ws-1",
     goal: "Ship the dev loop",
+    playbookId: null,
   };
   proposalExecRegistry._reset();
   registerDevApprovalExecutors();
@@ -369,5 +406,65 @@ describe("SOURCE SCAN — the executor can never run a command", () => {
     // the stamp. If either ever appears next to a call, the test above fires.
     expect(source).toContain("gateCommand: asString(payload.gateCommand)");
     expect(source).toContain("deployCommand: asString(payload.deployCommand)");
+  });
+});
+
+// ── The ONE stage rule: a session that follows a staged playbook advances to
+// the stage AFTER the gate stage; otherwise the legacy stamp. ────────────────
+
+const DEV_METHOD_STAGES = [
+  { key: "intake", name: "Intake" },
+  {
+    key: "plan",
+    name: "Plan",
+    gate: { kind: "human", capability: DEV_PLAN_APPROVAL_TYPE },
+  },
+  { key: "build", name: "Build" },
+  { key: "verify", name: "Verify" },
+  { key: "review", name: "Review" },
+  {
+    key: "ship",
+    name: "Ship",
+    gate: { kind: "human", capability: DEV_DEPLOY_APPROVAL_TYPE },
+  },
+  { key: "done", name: "Done" },
+];
+
+describe("approval advances a staged session to the stage after the gate", () => {
+  it("plan approval: the run's frozen stages → build (never plan_approved)", async () => {
+    runSnapshot = { stages: DEV_METHOD_STAGES };
+    await executor(`focus_session/${DEV_PLAN_APPROVAL_TYPE}`).execute(
+      args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
+    );
+    expect(sessionUpdate().currentStage).toBe("build");
+  });
+
+  it("deploy approval: the playbook row's stages when no live run → done", async () => {
+    sessionRow = { ...sessionRow!, playbookId: "pb-1" };
+    playbookStages = DEV_METHOD_STAGES;
+    await executor(`focus_session/${DEV_DEPLOY_APPROVAL_TYPE}`).execute(
+      args(DEV_DEPLOY_APPROVAL_TYPE, DEPLOY_PAYLOAD)
+    );
+    expect(sessionUpdate().currentStage).toBe("done");
+  });
+
+  it("a playbook that does not name the gate keeps the legacy stamp", async () => {
+    runSnapshot = { stages: [{ key: "a" }, { key: "b" }] };
+    await executor(`focus_session/${DEV_PLAN_APPROVAL_TYPE}`).execute(
+      args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
+    );
+    expect(sessionUpdate().currentStage).toBe("plan_approved");
+  });
+
+  it("approval hands the decision to the external-agent loop back, once", async () => {
+    await executor(`focus_session/${DEV_PLAN_APPROVAL_TYPE}`).execute(
+      args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
+    );
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]).toMatchObject({
+      proposalId: "p-1",
+      decision: "approved",
+      proposal: { agentUserId: "agent-1", targetId: SESSION_ID },
+    });
   });
 });

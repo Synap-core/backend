@@ -77,6 +77,10 @@ import {
   CHAT_TURN_REAPER_CRON,
 } from "./workers/chat-turn-reaper.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
+import {
+  EXTERNAL_AGENT_POLL_QUEUE,
+  EXTERNAL_AGENT_POLL_CRON,
+} from "./workers/external-agent-poll.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
 import {
   CONTEXT_CARD_REFRESH_QUEUE,
@@ -419,6 +423,17 @@ export async function registerCronSchedules(): Promise<void> {
   // Idempotent via a systemData.eventEndFired stamp on the event entity.
   await scheduleSafe(boss, EVENT_END_CRON_QUEUE, "*/5 * * * *", {});
   logger.info("Registered cron: event-end-cron (every 5min)");
+
+  // External agent status poll (every 2 min) — the api-side poller reads each
+  // live dispatched run's binding `status` verb; one post per state change.
+  await scheduleSafe(
+    boss,
+    EXTERNAL_AGENT_POLL_QUEUE,
+    EXTERNAL_AGENT_POLL_CRON,
+    {},
+    { singletonKey: "external-agent-poll", singletonSeconds: 120 }
+  );
+  logger.info("Registered cron: external-agent-poll (every 2min)");
 
   // Memory decay (daily at 03:30 UTC — applies Ebbinghaus decay to knowledge_facts)
   await scheduleSafe(boss, "memory-decay", "30 3 * * *", {});

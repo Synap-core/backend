@@ -48,6 +48,9 @@ const h = vi.hoisted(() => ({
   events: [] as Array<{ type: string; data: Record<string, unknown> }>,
   effects: [] as Array<Record<string, unknown>>,
   triggers: [] as Array<Record<string, unknown>>,
+  /** Binding verbs the loop-back door ran (`executeCapability`, captured). */
+  sends: [] as Array<Record<string, unknown>>,
+  sendResult: null as null | Record<string, unknown>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -70,6 +73,9 @@ vi.mock("@synap/database", async (importOriginal) => {
         apiKeys: actual.apiKeys as never,
         // The reach rule reads `dispatched_via` binding edges.
         links: actual.links as never,
+        // The binding door + the loop back's run lookup.
+        tools: actual.tools as never,
+        playbookRuns: actual.playbookRuns as never,
       },
     }),
     eventRepository: { append: async () => undefined },
@@ -108,6 +114,12 @@ vi.mock("../../../lib/event-helpers.js", () => ({
     return "evt";
   },
 }));
+vi.mock("../../capabilities/execute-capability.js", () => ({
+  executeCapability: async (p: Record<string, unknown>) => {
+    h.sends.push(p);
+    return h.sendResult ?? { kind: "run", skillId: "s", result: { ok: true } };
+  },
+}));
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
   triggerAutoRespond: async (p: Record<string, unknown>) => {
     h.triggers.push(p);
@@ -127,6 +139,8 @@ import {
   messages,
   apiKeys,
   links,
+  tools,
+  playbookRuns,
 } from "@synap/database";
 import { postChannelMessage } from "../../messaging/post-message.js";
 import { FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE } from "../lifecycle-events.js";
@@ -138,6 +152,8 @@ const OWNER = "11111111-1111-4111-8111-111111111111";
 const OTHER = "33333333-3333-4333-8333-333333333333";
 const IS_AGENT = "22222222-2222-4222-8222-222222222222";
 const EXT_AGENT = "44444444-4444-4444-8444-444444444444";
+const DISPATCH_AGENT = "55555555-5555-4555-8555-555555555555";
+const DISPATCH_TOOL = "66666666-6666-4666-8666-666666666666";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -303,6 +319,8 @@ describe("the answer loop", () => {
       messages,
       apiKeys,
       links,
+      tools,
+      playbookRuns,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -313,6 +331,34 @@ describe("the answer loop", () => {
         ($3, 'r@example.test', 'Researcher', 'UTC', 'agent', 'researcher'),
         ($4, 'c@example.test', 'Claude Code', 'UTC', 'agent', 'claude-code')`,
       [OWNER, OTHER, IS_AGENT, EXT_AGENT]
+    );
+    // A DISPATCH agent: external (its own key) AND bound to a dispatch tool.
+    await q(
+      `insert into users (id, email, name, timezone, user_type, agent_type) values ($1, 'd@example.test', 'Cloud coder', 'UTC', 'agent', 'cloud-coder')`,
+      [DISPATCH_AGENT]
+    );
+    await q(
+      `insert into api_keys (id, user_id, key_type, linked_user_id) values ($1, $2, 'hub_inbound', $3)`,
+      [randomUUID(), DISPATCH_AGENT, OWNER]
+    );
+    await q(
+      `insert into tools (id, created_by, name, kind, executor, config, status) values ($1, $2, 'cloud', 'external', 'external-agent', $3::jsonb, 'active')`,
+      [
+        DISPATCH_TOOL,
+        OWNER,
+        JSON.stringify({
+          agentBinding: {
+            protocol: "a2a",
+            provider: "acme",
+            supports: { push: false, inputRequired: true, cancel: false },
+            verbs: { start: "acme_start", send: "acme_send" },
+          },
+        }),
+      ]
+    );
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata) values ($1, 'participant', $2, 'tool', $3, 'dispatched_via', '{}'::jsonb)`,
+      [randomUUID(), DISPATCH_AGENT, DISPATCH_TOOL]
     );
     // The external agent authenticates with its OWN door key.
     await q(
@@ -329,6 +375,8 @@ describe("the answer loop", () => {
     h.events.length = 0;
     h.effects.length = 0;
     h.triggers.length = 0;
+    h.sends.length = 0;
+    h.sendResult = null;
   });
 
   // ── persistence ────────────────────────────────────────────────────────────
@@ -456,6 +504,64 @@ describe("the answer loop", () => {
     expect((await slot(sessionId)).answer).toMatchObject({ text: "EU" });
     expect(answeredEvents()).toHaveLength(1);
     expect(h.triggers).toHaveLength(0);
+  });
+
+  it("a DISPATCH asker is woken through its binding's send verb — never an IS turn", async () => {
+    const { sessionId, channelId } = await seed({ agentIds: [DISPATCH_AGENT] });
+    await hubQuestion(channelId, DISPATCH_AGENT);
+    await hubReply(channelId, "EU");
+    expect((await slot(sessionId)).answer).toMatchObject({ text: "EU" });
+    expect(h.triggers).toHaveLength(0);
+    expect(h.sends).toHaveLength(1);
+    expect(h.sends[0]).toMatchObject({
+      verbId: "acme_send",
+      toolId: DISPATCH_TOOL,
+      agentUserId: DISPATCH_AGENT,
+      userId: OWNER,
+      sessionId,
+    });
+    const message = (
+      h.sends[0]!.parameters as { message: Record<string, string> }
+    ).message;
+    expect(message.kind).toBe("answer");
+    expect(message.slotKey).toBe(LABEL);
+    expect(message.text).toContain("EU");
+    expect(message.text).toMatch(/BEGIN UNTRUSTED CONTENT/);
+  });
+
+  it("the direct door wakes a staffed DISPATCH agent through send; a failed send is said in the room", async () => {
+    const { sessionId, channelId } = await seed({ agentIds: [DISPATCH_AGENT] });
+    const ok = await send(
+      app(),
+      "POST",
+      `/focus-sessions/${sessionId}/outputs/answer`,
+      { expectedLabel: LABEL, text: "EU" }
+    );
+    expect(await ok.json()).toMatchObject({
+      wokeAgentType: "cloud-coder",
+      triggered: true,
+    });
+    expect(h.sends).toHaveLength(1);
+    expect(h.triggers).toHaveLength(0);
+
+    h.sendResult = { kind: "error", message: "provider unreachable" };
+    const second = await seed({ agentIds: [DISPATCH_AGENT] });
+    const res = await send(
+      app(),
+      "POST",
+      `/focus-sessions/${second.sessionId}/outputs/answer`,
+      { expectedLabel: LABEL, text: "US" }
+    );
+    expect(await res.json()).toMatchObject({ triggered: false });
+    const notices = (
+      await q<{ content: string }>(
+        `select content from messages where channel_id = $1 and content like 'Could not pass%'`,
+        [second.channelId]
+      )
+    ).rows;
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.content).toContain("provider unreachable");
+    void channelId;
   });
 
   it("a slotless question: the reply is marked on the question and wakes the asker, no slot event", async () => {

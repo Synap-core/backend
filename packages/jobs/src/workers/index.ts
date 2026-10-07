@@ -129,6 +129,10 @@ import {
   BROKEN_AUTOMATION_CRON_QUEUE,
 } from "./broken-automation-cron.js";
 import { handleEventEndCron, EVENT_END_CRON_QUEUE } from "./event-end-cron.js";
+import {
+  handleExternalAgentPoll,
+  EXTERNAL_AGENT_POLL_QUEUE,
+} from "./external-agent-poll.js";
 import { handleSessionRecap, SESSION_RECAP_QUEUE } from "./session-recap.js";
 import {
   handleConnectionSyncApproval,
@@ -302,6 +306,7 @@ const ALL_QUEUES = [
   STALE_PROPOSAL_CRON_QUEUE,
   BROKEN_AUTOMATION_CRON_QUEUE,
   EVENT_END_CRON_QUEUE,
+  EXTERNAL_AGENT_POLL_QUEUE,
   SESSION_RECAP_QUEUE,
   CONNECTION_SYNC_APPROVAL_QUEUE,
   CONNECTION_SYNC_RUN_QUEUE,
@@ -821,6 +826,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleEventEndCron(job)
   );
   logger.info("Registered worker: event-end-cron");
+
+  // External agent status poll (cron: every 2min) — invokes the api-side
+  // poller in-process (IoC slot): each live run handed to an external agent
+  // gets its binding's `status` verb read, and what changed posted in its room.
+  await boss.work(EXTERNAL_AGENT_POLL_QUEUE, async ([job]: any[]) =>
+    handleExternalAgentPoll(job)
+  );
+  logger.info("Registered worker: external-agent-poll");
 
   // Session recap (on-demand) — enqueued by the session-recap reactor when a
   // focus session advances to the `post` stage. Delegates to the api-side runner
