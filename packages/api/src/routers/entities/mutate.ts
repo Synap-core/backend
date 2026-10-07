@@ -412,6 +412,11 @@ export const mutateProcs = {
 
       // Compute changed properties before emit so automation triggers can filter on them
       const changedProperties: Record<string, unknown> = {};
+      // The value each changed key held BEFORE this write — `null` when the
+      // key did not exist. Emitted as flat `previous.<k>` keys beside the
+      // `changed.<k>` flags, so a rule can say "status became X" exactly and
+      // "status left Y" at all (the matcher sees one payload, never the row).
+      const previousProperties: Record<string, unknown> = {};
       if ((input.properties || input.deleteProperties?.length) && oldEntity) {
         const oldProps =
           (oldEntity.properties as Record<string, unknown>) ?? {};
@@ -429,6 +434,7 @@ export const mutateProcs = {
             JSON.stringify(oldProps[key]) !== JSON.stringify(mergedProps[key])
           ) {
             changedProperties[key] = mergedProps[key];
+            previousProperties[key] = oldProps[key] ?? null;
           }
         }
       }
@@ -463,6 +469,12 @@ export const mutateProcs = {
                   Object.keys(changedProperties).map((k) => [
                     `changed.${k}`,
                     true,
+                  ])
+                ),
+                ...Object.fromEntries(
+                  Object.keys(changedProperties).map((k) => [
+                    `previous.${k}`,
+                    previousProperties[k],
                   ])
                 ),
                 ...changedProperties,
