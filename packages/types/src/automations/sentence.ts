@@ -787,21 +787,76 @@ export function proposePlaybookOnKindSentence(input: {
   playbookId: string;
   profileSlug: string;
 }): RuleSentenceValue {
+  return playbookActivatorSentence({
+    playbookId: input.playbookId,
+    profileSlug: input.profileSlug,
+    on: "created",
+    mode: "propose",
+  });
+}
+
+/**
+ * The WHEN of a playbook ACTIVATOR (`PlaybookActivator`, @synap/playbooks):
+ *
+ *   `created`       — WHEN an entity of `profileSlug` is created.
+ *   `enters_status` — WHEN an entity of `profileSlug` is UPDATED, its
+ *                     `statusProperty` CHANGED, and it now equals `status`.
+ *
+ * `enters_status` compiles to `entity.update.completed` with three filters —
+ * `profileSlug`, the `changed.<statusProperty>` flag and the new value under
+ * `<statusProperty>` — exactly the flat keys `entities.update` emits
+ * (`routers/entities/mutate.ts`). The `changed.` flag is what makes it ENTER
+ * rather than IS: an unrelated edit to a post already "published" carries no
+ * flag, so it does not re-fire. (`previous.<statusProperty>` is on the payload
+ * too, for a later "from X".)
+ */
+export type PlaybookActivatorTrigger =
+  | { on: "created" }
+  | { on: "enters_status"; statusProperty: string; status: string };
+
+export function playbookActivatorSentence(
+  input: {
+    playbookId: string;
+    profileSlug: string;
+    /** `run` starts the run; `propose` files one proposal per (rule, subject). */
+    mode: "run" | "propose";
+  } & PlaybookActivatorTrigger
+): RuleSentenceValue {
+  const entersStatus = input.on === "enters_status";
   return {
     trigger: {
       triggerType: "event",
       subjectCategory: "entity",
       profileSlug: input.profileSlug,
-      actionVerb: "created",
+      actionVerb: entersStatus ? "updated" : "created",
     },
-    conditions: [],
+    conditions: entersStatus
+      ? [
+          {
+            id: "activator-changed",
+            key: `changed.${input.statusProperty}`,
+            operator: "is_true",
+            value: "",
+          },
+          {
+            id: "activator-status",
+            key: input.statusProperty,
+            operator: "is",
+            value: input.status,
+          },
+        ]
+      : [],
     actions: [
       {
         type: null,
         config: {
           [CAPABILITY_NODE_TYPE_KEY]: "playbook_run",
           [PLAYBOOK_ID_KEY]: input.playbookId,
-          [PLAYBOOK_RUN_MODE_KEY]: "propose",
+          // `run` is the node default and is OMITTED, so a run-mode activator
+          // compiles to the byte-identical node any other run rule has.
+          ...(input.mode === "propose"
+            ? { [PLAYBOOK_RUN_MODE_KEY]: "propose" }
+            : {}),
           [CAPABILITY_ACTION_KEY]: `playbook:${input.playbookId}`,
         },
       },

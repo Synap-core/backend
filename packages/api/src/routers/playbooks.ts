@@ -351,6 +351,29 @@ function foldProcessDeclarationsOrRefuse(
   }
 }
 
+/**
+ * Converge a playbook's activator rules after its definition landed. NON-FATAL
+ * by contract — the playbook write already committed, and an activator that
+ * could not compile is reported (logged per outcome by the applier, and here
+ * when the applier itself threw), never allowed to fail the write that
+ * declared it. The next write or boot reconcile re-converges.
+ */
+async function convergeActivatorsAfterWrite(
+  playbookId: string,
+  actor: { userId: string; agentUserId?: string | null }
+): Promise<void> {
+  try {
+    const { applyPlaybookActivators } =
+      await import("../services/playbooks/playbook-activators.js");
+    await applyPlaybookActivators({ playbookId, ...actor });
+  } catch (err) {
+    logger.error(
+      { err, playbookId },
+      "playbook activators did not converge — the next write or boot reconcile retries"
+    );
+  }
+}
+
 export const updateInputSchema = z.object({
   id: z.string().uuid(),
   agentUserId: z.string().uuid().optional(),
@@ -1917,6 +1940,13 @@ export const playbooksRouter = router({
       if (!reused) {
         warnUnresolvedGoalReferences(created);
 
+        // Declared activators → governed rules (the ONE rule door), linked as
+        // `activator`. After the gate, like the cron automation below.
+        await convergeActivatorsAfterWrite(created.id, {
+          userId: ctx.userId,
+          agentUserId: input.agentUserId,
+        });
+
         // S1: a scheduled playbook maintains ONE backing cron automation (stamped
         // on flow_automation_id) that the existing automation-cron-scheduler fires.
         await materializePlaybookCronAutomation(created, {
@@ -2253,6 +2283,15 @@ export const playbooksRouter = router({
         userId: input.agentUserId ?? ctx.userId,
         preserveArming: !armingChanged,
       });
+
+      // Activators live in `subjectProfile`, and their rule prose names the
+      // playbook — converge when either moved (idempotent otherwise).
+      if (input.subjectProfile !== undefined || input.name !== undefined) {
+        await convergeActivatorsAfterWrite(updated.id, {
+          userId: ctx.userId,
+          agentUserId: input.agentUserId,
+        });
+      }
 
       return {
         playbook: updated,

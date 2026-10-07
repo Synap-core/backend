@@ -23,6 +23,7 @@ import {
   toBackendTrigger,
   toFlowDefinition,
   proposePlaybookOnKindSentence,
+  playbookActivatorSentence,
   triggerToSentence,
   type ActionVerb,
   type TriggerSubjectCategory,
@@ -1026,6 +1027,62 @@ describe("proposePlaybookOnKindSentence — the 'Always propose this' rule", () 
       mode: "propose",
       paramsMapping: {},
     });
+  });
+});
+
+describe("playbookActivatorSentence — a declared activator as a rule", () => {
+  const PB = "77777777-7777-4777-8777-777777777777";
+
+  it("enters_status compiles to an UPDATE with the changed flag AND the new value", () => {
+    const sentence = playbookActivatorSentence({
+      playbookId: PB,
+      profileSlug: "post",
+      on: "enters_status",
+      statusProperty: "post-status",
+      status: "published",
+      mode: "propose",
+    });
+    const trigger = toBackendTrigger(sentence.trigger!, sentence.conditions);
+    expect(trigger.triggerConfig.eventPattern).toBe("entity.update.completed");
+    // EXACTLY the flat keys entities.update emits: kind, change flag, value.
+    expect(trigger.triggerConfig.filters).toEqual({
+      profileSlug: "post",
+      "changed.post-status": true,
+      "post-status": "published",
+    });
+    const node = toFlowDefinition(sentence.actions).nodes.find(
+      (n) => n.type === "playbook_run"
+    )!;
+    expect(node.data).toMatchObject({ playbookId: PB, mode: "propose" });
+  });
+
+  it("run mode omits the mode key (the node default), created has no WHERE", () => {
+    const sentence = playbookActivatorSentence({
+      playbookId: PB,
+      profileSlug: "post",
+      on: "created",
+      mode: "run",
+    });
+    const trigger = toBackendTrigger(sentence.trigger!, sentence.conditions);
+    expect(trigger.triggerConfig.eventPattern).toBe("entity.create.completed");
+    expect(trigger.triggerConfig.filters).toEqual({ profileSlug: "post" });
+    const node = toFlowDefinition(sentence.actions).nodes.find(
+      (n) => n.type === "playbook_run"
+    )!;
+    expect(node.data).not.toHaveProperty("mode");
+  });
+
+  it("the 'Always propose this' sentence is the created/propose activator", () => {
+    expect(
+      proposePlaybookOnKindSentence({ playbookId: PB, profileSlug: "deal" })
+    ).toEqual(
+      playbookActivatorSentence({
+        playbookId: PB,
+        profileSlug: "deal",
+        on: "created",
+        mode: "propose",
+      })
+    );
   });
 });
 

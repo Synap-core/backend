@@ -192,6 +192,8 @@ export {
   PLAYBOOK_RUN_MODE_KEY,
   // The standing "propose this playbook for every new <kind>" sentence.
   proposePlaybookOnKindSentence,
+  playbookActivatorSentence,
+  type PlaybookActivatorTrigger,
   flowToConditions,
   // THEN constructors (moved from automation-intent's sentence-io, 2026-10-06).
   makeSentenceAction,

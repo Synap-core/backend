@@ -51,6 +51,12 @@ export async function reconcileInstalledPlaybook(args: {
   };
   const needsWrite = Object.keys(plan.patch).length > 0 || !!plan.metadata;
   if (plan.kind === "foreign" || !needsWrite || args.dryRun) {
+    // Nothing to write — but the declared activators may still owe a rule (a
+    // denied/failed compile on an earlier pass, a rule its owner deleted).
+    // Converge them; the write path below does it inside `playbooks.update`.
+    if (plan.kind !== "foreign" && !args.dryRun) {
+      await convergeActivators(base.playbookId, args.ctx);
+    }
     return { ...base, kind: plan.kind };
   }
   const { playbooksRouter } = await import("../../routers/playbooks.js");
@@ -65,6 +71,23 @@ export async function reconcileInstalledPlaybook(args: {
     ...base,
     kind: res?.status === "proposed" ? "proposed" : plan.kind,
   };
+}
+
+/** Non-fatal: a failed activator pass never fails the playbook reconcile. */
+async function convergeActivators(playbookId: string, ctx: Context) {
+  try {
+    const { applyPlaybookActivators } = await import("./playbook-activators.js");
+    await applyPlaybookActivators({
+      playbookId,
+      userId: (ctx as { userId: string }).userId,
+    });
+  } catch (err) {
+    const { createLogger } = await import("@synap-core/core");
+    createLogger({ module: "reconcile-installed-playbooks" }).error(
+      { err, playbookId },
+      "playbook activators did not converge on reconcile"
+    );
+  }
 }
 
 export interface WorkspacePlaybooksReconcileReport {
