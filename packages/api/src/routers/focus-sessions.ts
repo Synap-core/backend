@@ -1363,6 +1363,76 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * "Recall again" — re-run session recall now (the same runner the start
+   * doors and the sweep use): retrieves raw captures / notes that could help
+   * this session, REPLACES `metadata.recalled`, and posts one room message
+   * when the set is new. Owner-floored. A failed recall is returned as
+   * `{ status: "failed" }` (and recorded on the session), never thrown.
+   */
+  recallAgain: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { recallSessionAgain } =
+        await import("../services/focus-sessions/session-recall.js");
+      const result = await recallSessionAgain({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+      });
+      if (result.status === "skipped" && result.reason === "not_found") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return result;
+    }),
+
+  /**
+   * Confirm a "session" route suggestion: attach a captured entity to an OPEN
+   * session as an INPUT (`session --targets--> entity`, metadata role input),
+   * governed like `POST /links`, and say so in the session's room. Sibling of
+   * `playbooks.run({ subjectId })`, the confirm of a "playbook" suggestion.
+   */
+  attachInput: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        entityId: z.string().uuid(),
+        via: z.enum(["capture", "manual"]).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { attachSessionInput } =
+        await import("../services/focus-sessions/session-inputs.js");
+      const result = await attachSessionInput({
+        sessionId: input.sessionId,
+        entityId: input.entityId,
+        userId: requireUserId(ctx.userId),
+        agentUserId: ctx.agentUserId ?? null,
+        via: input.via ?? "capture",
+      });
+      switch (result.status) {
+        case "not_found":
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message:
+              result.what === "session"
+                ? `Focus session ${input.sessionId} not found`
+                : `No entity ${input.entityId} you can access`,
+          });
+        case "closed":
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `This session is ${result.sessionStatus}; it no longer takes inputs.`,
+          });
+        case "denied":
+          throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+        default:
+          return result;
+      }
+    }),
+
+  /**
    * A run's stored sources ("What came in") — the rows the rerun plan counts,
    * so a room can select some and pass their ids to `rerun({ scope })`.
    * Owner-floored; a failed read throws (never an empty list).

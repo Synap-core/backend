@@ -72,6 +72,7 @@ import {
 } from "./find-open-session-twin.js";
 import { paramOwedSlots } from "./param-slots.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
+import { enqueueSessionRecall } from "./session-recall.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -1044,6 +1045,11 @@ export async function createFocusSession(
       typeof droppedAskWarnings
     >[1]
   );
+
+  // Recall (founder precision 2026-10-08): look for raw captures/notes that
+  // could help this session, in the background. Never awaited on the job,
+  // never fails the start; the 2-min sweep is the floor if this enqueue drops.
+  if (!outcome.adopted) void enqueueSessionRecall(sessionOut.id, "start");
 
   return {
     status: "created",

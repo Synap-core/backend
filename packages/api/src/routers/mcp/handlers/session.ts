@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { projectSessionRecall } from "../../../services/focus-sessions/session-recall.js";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
 import { proposedMessageFor } from "../../../utils/permission-check.js";
@@ -401,7 +402,20 @@ export const sessionHandlers: McpHandlerMap = {
         await import("../../../services/focus-sessions/session-nudges.js");
       await claimPlaybookOffer(result.session.id, userId).catch(() => false);
     }
-    return ok(result);
+    // Recall runs in the background right after a start; this says so, and
+    // where to read it, instead of the agent concluding nothing exists.
+    return ok({
+      ...result,
+      ...(result.status === "created"
+        ? {
+            recall: {
+              ...projectSessionRecall(result.session.metadata),
+              howToRead:
+                "Related captures and notes are looked up in the background and posted in the session room; read them with synap_get_session (field `recall`).",
+            },
+          }
+        : {}),
+    });
   },
   synap_complete_session: async (
     ctx: McpToolContext
@@ -634,6 +648,9 @@ export const sessionHandlers: McpHandlerMap = {
       // (`projectSessionOutcomes` via `listSessionOutputsWithOutcomes`). A
       // failed read says `unavailable`, never an empty list.
       outcomes: await readSessionOutcomesSection(session.id, userId),
+      // RECALL — captures / notes the pod found that may help this session
+      // (`session-recall.ts`): pending · ok · empty · failed, never folded.
+      recall: projectSessionRecall(session.metadata),
       ...(ambient?.sessionId
         ? {
             inferred: true,

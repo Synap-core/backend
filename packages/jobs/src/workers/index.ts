@@ -52,6 +52,12 @@ import {
 } from "./focus-session-reaper.js";
 import { handleSessionTitler, SESSION_TITLER_QUEUE } from "./session-titler.js";
 import {
+  handleSessionRecall,
+  handleSessionRecallSweep,
+  SESSION_RECALL_QUEUE,
+  SESSION_RECALL_SWEEP_QUEUE,
+} from "./session-recall-worker.js";
+import {
   handlePlaybookRunReaper,
   PLAYBOOK_RUN_REAPER_QUEUE,
 } from "./playbook-run-reaper.js";
@@ -284,6 +290,10 @@ const ALL_QUEUES = [
   AUTOMATION_RUN_REAPER_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
   SESSION_TITLER_QUEUE,
+  // Session recall: on-demand per session + the 2-min sweep floor that
+  // reaches every start door by derivation (session-recall-worker.ts).
+  SESSION_RECALL_QUEUE,
+  SESSION_RECALL_SWEEP_QUEUE,
   PLAYBOOK_RUN_REAPER_QUEUE,
   CHAT_TURN_REAPER_QUEUE,
   "relation-backfill",
@@ -654,6 +664,17 @@ export async function registerAllWorkers(): Promise<void> {
     handleFocusSessionReaper()
   );
   logger.info("Registered worker: focus-session-reaper");
+
+  // Session recall (on start / "recall again" / the 2-min sweep floor):
+  // retrieves raw captures + notes that could help a just-started session,
+  // stores them on metadata.recalled and posts ONE message in its room.
+  await boss.work(SESSION_RECALL_QUEUE, async ([job]: any[]) =>
+    handleSessionRecall(job)
+  );
+  await boss.work(SESSION_RECALL_SWEEP_QUEUE, async () => {
+    await handleSessionRecallSweep();
+  });
+  logger.info("Registered workers: session-recall, session-recall-sweep");
 
   // Session titler (cron: every 10min — names sessions nobody named)
   await boss.work(SESSION_TITLER_QUEUE, async () => {

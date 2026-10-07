@@ -57,7 +57,16 @@
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { rarityWeight } from "../../utils/term-match.js";
 
-export type RouteCandidateKind = "playbook" | "automation";
+/**
+ * - playbook     — start this process for the entity (`playbooks.run`)
+ * - automation   — a propose-mode rule this capture fires
+ * - session      — an OPEN session the entity belongs in: confirm attaches it
+ *                  as an input (`focusSessions.attachInput`)
+ * - draft_process — no process exists for this kind yet, and the kind has a
+ *                  lifecycle: confirm drafts one (`create_playbook`, draft)
+ */
+export type RouteCandidateKind =
+  "playbook" | "automation" | "session" | "draft_process";
 
 export interface RouteCandidate {
   kind: RouteCandidateKind;
@@ -77,6 +86,16 @@ export interface RouteCandidate {
    * offer "Always propose this", creating one through `skills.createRule`.
    */
   alwaysProposeOffer?: true;
+  /**
+   * A SESSION candidate that is ABOUT this very entity (its subject). The
+   * ranker reports it as a `subject` signal — the strongest structural one.
+   */
+  subjectEntityId?: string;
+  /**
+   * A DRAFT_PROCESS candidate: the kind's lifecycle property (a select whose
+   * slug names a status/stage) the draft would advance.
+   */
+  statusProperty?: string;
 }
 
 export interface RouteEntity {
@@ -89,6 +108,7 @@ export interface RouteEntity {
 
 export type RouteSignal =
   | { type: "intent"; terms: string[] }
+  | { type: "subject"; profileSlug: string }
   | { type: "kind"; profileSlug: string }
   | { type: "facet"; profileSlug: string }
   | { type: "anyKind" };
@@ -101,7 +121,13 @@ export interface RankedRoute<C extends RouteCandidate = RouteCandidate> {
   signals: RouteSignal[];
 }
 
-const WEIGHT = { intentTerm: 3, kind: 2, facet: 1.5, anyKind: 0.5 } as const;
+const WEIGHT = {
+  intentTerm: 3,
+  subject: 4,
+  kind: 2,
+  facet: 1.5,
+  anyKind: 0.5,
+} as const;
 
 /** Words too common to be evidence of intent. */
 const STOPWORDS: ReadonlySet<string> = new Set(
@@ -136,6 +162,8 @@ function describe(signal: RouteSignal): string {
   switch (signal.type) {
     case "intent":
       return `You mentioned ${signal.terms.map((t) => `“${t}”`).join(", ")}`;
+    case "subject":
+      return `Already open on this ${nounFor(signal.profileSlug)}`;
     case "kind":
       return `Made for ${nounFor(signal.profileSlug)} items`;
     case "facet":
@@ -145,8 +173,9 @@ function describe(signal: RouteSignal): string {
   }
 }
 
-/** Structural tie-break strength: kind beats facet beats none. */
+/** Structural tie-break strength: subject beats kind beats facet beats none. */
 function structuralRank(signals: readonly RouteSignal[]): number {
+  if (signals.some((s) => s.type === "subject")) return 3;
   if (signals.some((s) => s.type === "kind")) return 2;
   if (signals.some((s) => s.type === "facet")) return 1;
   return 0;
@@ -200,7 +229,18 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
     }
 
     const slug = candidate.subjectProfileSlug;
-    if (slug === null) {
+    if (
+      candidate.subjectEntityId !== undefined &&
+      input.entity.entityId !== undefined &&
+      candidate.subjectEntityId === input.entity.entityId
+    ) {
+      // A session ABOUT this very entity — the strongest structural evidence.
+      signals.push({
+        type: "subject",
+        profileSlug: input.entity.profileSlug ?? "entity",
+      });
+      score += WEIGHT.subject;
+    } else if (slug === null) {
       // A modifier, never evidence on its own (header, WHAT IS RETURNED).
       if (termCount > 0) {
         signals.push({ type: "anyKind" });

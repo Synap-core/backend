@@ -73,6 +73,10 @@ import {
   SESSION_TITLER_CRON,
 } from "./workers/session-titler.js";
 import {
+  SESSION_RECALL_SWEEP_QUEUE,
+  SESSION_RECALL_SWEEP_CRON,
+} from "./workers/session-recall-worker.js";
+import {
   CHAT_TURN_REAPER_QUEUE,
   CHAT_TURN_REAPER_CRON,
 } from "./workers/chat-turn-reaper.js";
@@ -203,6 +207,17 @@ export async function registerCronSchedules(): Promise<void> {
   // at close; never touches a human- or agent-chosen title)
   await scheduleSafe(boss, SESSION_TITLER_QUEUE, SESSION_TITLER_CRON, {});
   logger.info("Registered cron: session-titler (every 10min)");
+
+  // Session recall sweep (every 2min — recalls captures/notes for any open
+  // session started in the last 6h that has no recall marker yet, whichever
+  // door started it; retries a FAILED recall, never an empty one)
+  await scheduleSafe(
+    boss,
+    SESSION_RECALL_SWEEP_QUEUE,
+    SESSION_RECALL_SWEEP_CRON,
+    {}
+  );
+  logger.info("Registered cron: session-recall-sweep (every 2min)");
 
   // Playbook run reaper (every ~30min — force-fails playbook_runs stuck
   // 'running' past PLAYBOOK_RUN_REAPER_STALE_HOURS whose session went quiet;

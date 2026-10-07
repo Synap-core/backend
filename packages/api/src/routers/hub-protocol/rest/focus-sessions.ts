@@ -2280,6 +2280,114 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
+   * POST /focus-sessions/:id/recall — "recall again": re-run session recall
+   * now (same runner as the start doors and the sweep). Mirrors tRPC
+   * `focusSessions.recallAgain`. Owner-floored; 404 for a foreign/unknown
+   * session. 200 with `{ status: "ok" | "empty" | "failed" | "skipped" }` —
+   * a failed recall is a reported outcome, not a 5xx.
+   */
+  app.post("/focus-sessions/:id/recall", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    try {
+      const { recallSessionAgain } =
+        await import("../../../services/focus-sessions/session-recall.js");
+      const result = await recallSessionAgain({
+        sessionId: id,
+        userId: c.get("userId") as string,
+      });
+      if (result.status === "skipped" && result.reason === "not_found") {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.recall failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/inputs — attach an entity to an OPEN session as
+   * an INPUT (`session --targets--> entity`, metadata role input): the confirm
+   * of a "session" route suggestion. Mirrors tRPC `focusSessions.attachInput`.
+   * Governed like `POST /links` — an agent caller may get `proposed`.
+   * 404 unknown session / entity · 409 session no longer open · 403 denied.
+   */
+  app.post("/focus-sessions/:id/inputs", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    const parsed = z
+      .object({
+        entityId: z.string().uuid(),
+        via: z.enum(["capture", "manual"]).optional(),
+        reasoning: z.string().max(2000).optional(),
+      })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    try {
+      const { attachSessionInput } =
+        await import("../../../services/focus-sessions/session-inputs.js");
+      const result = await attachSessionInput({
+        sessionId: id,
+        entityId: parsed.data.entityId,
+        userId: c.get("userId") as string,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+        via: parsed.data.via ?? "capture",
+        ...(parsed.data.reasoning ? { reasoning: parsed.data.reasoning } : {}),
+      });
+      switch (result.status) {
+        case "not_found":
+          return c.json(
+            {
+              error:
+                result.what === "session"
+                  ? `Focus session ${id} not found`
+                  : `No entity ${parsed.data.entityId} you can access`,
+            },
+            404
+          );
+        case "closed":
+          return c.json(
+            {
+              error: `This session is ${result.sessionStatus}; it no longer takes inputs.`,
+            },
+            409
+          );
+        case "denied":
+          return c.json({ error: result.reason }, 403);
+        case "proposed":
+          return jsonGoverned(c, result);
+        default:
+          return c.json(result, 200);
+      }
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.inputs failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
    * POST /focus-sessions/:id/used — record a capability invocation as
    * `session --used--> {tool|skill|command}`. This is PROVENANCE, written at the
    * moment the agent USES a capability (the IS tool-wrapper fires it), so it is

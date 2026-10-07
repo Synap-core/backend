@@ -91,6 +91,7 @@ import {
   getLinksFor,
 } from "../links/links-service.js";
 import { emitSideEffects } from "@synap/events";
+import { enqueueSessionRecall } from "../focus-sessions/session-recall.js";
 import { logEvent } from "../../lib/event-helpers.js";
 import {
   recordConversion,
@@ -690,6 +691,10 @@ export async function instantiateSessionRow(
   }
 
   await createLinks(edges);
+
+  // Recall for the run that just started (the ONE funnel behind every run
+  // door). Background, never fails the run; the sweep is the floor.
+  void enqueueSessionRecall(session.id, "start");
 
   return session as FocusSession;
 }

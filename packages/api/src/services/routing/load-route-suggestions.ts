@@ -8,9 +8,19 @@
  *     capture's own `entity.create.completed` fires, decided by the trigger
  *     matcher's pure `automationTriggerMatches` (one predicate, shared with the
  *     live loop). Auto rules are not suggested — they already ran.
+ *   - SESSIONS through `match-sessions-for-entity.ts`: OPEN sessions the
+ *     person owns that are about this entity, or run a playbook built for its
+ *     kind / roles — confirm attaches the entity as an INPUT
+ *     (`focusSessions.attachInput`). Only for an entity that exists (has an
+ *     id): a proposed one cannot be attached yet.
  * A playbook built for the entity's kind with no standing propose rule yet
  * carries `alwaysProposeOffer`, so a host may offer "Always propose this"
  * (which creates a propose rule through `skills.createRule`, governed).
+ * When NO playbook is built for the entity's kind or roles and the kind has a
+ * lifecycle (`kind-lifecycle.ts`), one `draft_process` suggestion is appended
+ * LAST: "Draft a process for this" — confirm files a governed
+ * `create_playbook` (status draft). It is an offer, not evidence, so it is
+ * never ranked above a real candidate.
  *
  * SUGGEST ONLY. Nothing here runs a playbook or triggers an automation; the
  * suggestion carries its `reason` so the surface can show why, and the user
@@ -32,8 +42,10 @@ import {
 import {
   suggestRoutesForEntities,
   type EntityRouteSuggestions,
+  type RankedRoute,
   type RouteCandidate,
 } from "./suggest-routes.js";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "routing/load-route-suggestions" });
 
@@ -63,6 +75,16 @@ export interface RouteMatchers {
   playbooks: (args: MatchArgs) => Promise<PlaybookMatch[]>;
   /** The propose-mode rules this entity's capture event fires. */
   rules: (args: MatchArgs) => Promise<ProposeRuleMatches>;
+  /** OPEN sessions this (existing) entity could be an input of. */
+  sessions?: (args: {
+    entityId: string;
+    profileSlug: string;
+    facetSlugs: readonly string[];
+  }) => Promise<RouteCandidate[]>;
+  /** Live facet-role slugs of an existing entity (visibility-lensed). */
+  facets?: (entityId: string) => Promise<string[]>;
+  /** The kind's lifecycle property slug, or null when it has none. */
+  lifecycle?: (profileSlug: string) => Promise<string | null>;
 }
 
 /** The real matchers, called under the caller's own ctx + workspace lens. */
@@ -79,14 +101,62 @@ async function defaultMatchers(
   );
   // The rule rows are the same for every entity of one capture: read ONCE.
   let rows: ReturnType<typeof loadRuleCandidates> | undefined;
+  const userId = String(ctx.userId ?? "");
+  const lifecycleBySlug = new Map<string, Promise<string | null>>();
   return {
     playbooks: (args) => pb.matchForEntity(args),
+    sessions: async (args) => {
+      const { loadSessionCandidates } =
+        await import("./match-sessions-for-entity.js");
+      return loadSessionCandidates({ userId, ...args });
+    },
+    facets: async (entityId) => {
+      const { getDb, loadFacetSlugsBatch } = await import("@synap/database");
+      const byEntity = await loadFacetSlugsBatch(await getDb(), [entityId], {
+        userId,
+        workspaceId,
+      });
+      return [...(byEntity.get(entityId) ?? [])];
+    },
+    lifecycle: (profileSlug) => {
+      // One read per kind per capture.
+      let hit = lifecycleBySlug.get(profileSlug);
+      if (!hit) {
+        hit = import("./kind-lifecycle.js").then(
+          ({ loadKindLifecycleProperty }) =>
+            loadKindLifecycleProperty({ profileSlug, userId, workspaceId })
+        );
+        lifecycleBySlug.set(profileSlug, hit);
+      }
+      return hit;
+    },
     rules: async (args) =>
       matchProposeRulesForEntity({
         rows: await (rows ??= loadRuleCandidates(lensCtx, workspaceId)),
         ...(args.entityId ? { entityId: args.entityId } : {}),
         profileSlug: args.profileSlug,
       }),
+  };
+}
+
+/** The one "Draft a process for this" suggestion for a lifecycle kind. */
+export function draftProcessRoute(
+  profileSlug: string,
+  statusProperty: string
+): RankedRoute {
+  const noun = resolveObjectNoun(profileSlug).toLowerCase();
+  return {
+    candidate: {
+      kind: "draft_process",
+      id: `draft:${profileSlug}`,
+      name: `Draft a process for ${noun} items`,
+      subjectProfileSlug: profileSlug,
+      statusProperty,
+    },
+    // An offer, not evidence: it carries no signal and never outranks one.
+    score: 0,
+    reason: `No process is set up for ${noun} items yet`,
+    signals: [],
   };
 }
 
@@ -117,10 +187,21 @@ export async function loadRouteSuggestions(input: {
           workspaceId,
           ...(intentText ? { intentText } : {}),
         };
-        const [pbs, rules] = await Promise.all([
+        const [pbs, rules, entityFacets] = await Promise.all([
           matchers.playbooks(args),
           matchers.rules(args),
+          e.entityId && matchers.facets
+            ? matchers.facets(e.entityId)
+            : Promise.resolve([] as string[]),
         ]);
+        const sessions =
+          e.entityId && matchers.sessions
+            ? await matchers.sessions({
+                entityId: e.entityId,
+                profileSlug: e.profileSlug,
+                facetSlugs: entityFacets,
+              })
+            : [];
         const candidates: RouteCandidate[] = [
           ...pbs.map((p) => ({
             kind: "playbook" as const,
@@ -143,27 +224,51 @@ export async function loadRouteSuggestions(input: {
             subjectProfileSlug: r.filterProfileSlug,
             proposes: true as const,
           })),
+          ...sessions,
         ];
         const facetSlugs = [
-          ...new Set(
-            pbs.flatMap((p) =>
+          ...new Set([
+            ...entityFacets,
+            ...pbs.flatMap((p) =>
               (p.signals ?? [])
                 .filter((s) => s.type === "facet" && s.profileSlug)
                 .map((s) => s.profileSlug as string)
-            )
-          ),
+            ),
+          ]),
         ];
+        // "Draft a process for this": no playbook is BUILT for this kind or
+        // its roles (an intent-only match on a kind-less playbook does not
+        // count — it was not made for this), and the kind has a lifecycle.
+        const kindSlugs = new Set([e.profileSlug, ...facetSlugs]);
+        const builtFor = pbs.some(
+          (p) => p.subjectProfileSlug && kindSlugs.has(p.subjectProfileSlug)
+        );
+        const statusProperty =
+          !builtFor && matchers.lifecycle
+            ? await matchers.lifecycle(e.profileSlug)
+            : null;
         return {
           ...(e.entityId ? { entityId: e.entityId } : {}),
           profileSlug: e.profileSlug,
           ...(facetSlugs.length > 0 ? { facetSlugs } : {}),
           candidates,
+          ...(statusProperty
+            ? { draft: draftProcessRoute(e.profileSlug, statusProperty) }
+            : {}),
         };
       })
     );
+    const suggested = suggestRoutesForEntities({
+      entities: ranked,
+      intentText,
+    });
+    // The draft offer rides LAST, after the ranked (capped) list.
+    ranked.forEach((r, i) => {
+      if (r.draft) suggested[i]!.suggestions.push(r.draft);
+    });
     return {
       status: "ok",
-      entities: suggestRoutesForEntities({ entities: ranked, intentText }),
+      entities: suggested,
       ...(input.entities.length > routed.length
         ? { truncated: true as const }
         : {}),
