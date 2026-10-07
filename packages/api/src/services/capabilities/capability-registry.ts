@@ -766,6 +766,67 @@ export interface ListCapabilitiesOptions {
 }
 
 /** Default result cap when a query narrows the list (keeps agent responses compact). */
+/**
+ * Does this tool's credential live in the VAULT (a secret the person pasted)
+ * rather than at the BROKER (an OAuth account Nango holds)?
+ *
+ * The two are not interchangeable and the difference decides two things, both
+ * of which were wrong when they were treated as one:
+ *
+ *  - what "connected" MEANS. A brokered provider is connected iff a live secret
+ *    row carries an `accountHint` (the broker's connection id). A vault-backed
+ *    provider has no broker account — `accountHint` is NULL by construction — so
+ *    requiring it made every pasted-key provider read "not connected" while its
+ *    key sat in the vault.
+ *  - what its provider id IS. Apply-time remapping rewrites `vault://stripe`
+ *    into `vault://<uuid>`, which names no service a connector could match; the
+ *    tool's own name is the provider. A `nango://` ref survives intact, so its
+ *    scheme-stripped remainder is the provider.
+ *
+ * Exported (and pure) so the rule is testable without a database — the two bugs
+ * above both lived in this derivation, not in the query around it.
+ */
+export function isVaultCredentialRef(ref: string | null | undefined): boolean {
+  return (ref ?? "").trim().toLowerCase().startsWith("vault://");
+}
+
+/**
+ * Split PROVIDER tool ids by how their credential is held, because the two
+ * halves need DIFFERENT proof of "connected" (see `markConnected`): a brokered
+ * connection must point at an account (`accountHint`), a stored vault secret IS
+ * the connection. One query over both sets with one predicate is precisely the
+ * defect this split fixes — a vault tool can never satisfy `accountHint`.
+ *
+ * Pure, so the branch that sends each half to the right query is testable
+ * without a database.
+ */
+export function partitionProvidersByCredential(
+  toolRows: ReadonlyArray<{
+    id: string;
+    kind: string;
+    credentialRef: string | null;
+  }>
+): { brokered: string[]; vault: string[] } {
+  const brokered: string[] = [];
+  const vault: string[] = [];
+  for (const row of toolRows) {
+    if (row.kind !== "provider") continue;
+    (isVaultCredentialRef(row.credentialRef) ? vault : brokered).push(row.id);
+  }
+  return { brokered, vault };
+}
+
+/** The provider id a connector could match, for a provider-kind tool. */
+export function providerIdForTool(tool: {
+  credentialRef: string | null;
+  name: string;
+}): string {
+  if (isVaultCredentialRef(tool.credentialRef)) return tool.name;
+  // `||`, not `??`: stripping the scheme off a bare `nango://` yields "", and an
+  // empty provider is not a provider.
+  return tool.credentialRef?.replace(/^nango:\/\//, "").trim() || tool.name;
+}
+
 export const DEFAULT_QUERY_LIMIT = 20;
 
 /**
@@ -940,16 +1001,32 @@ export async function listCapabilities(
   }
 
   // Last-known connection state for PROVIDER tools, so an agent can tell
-  // "connected" from "needs connection". One batched query, no live Nango probe:
-  // a provider tool is connected iff a non-deleted connection-registry pointer
-  // row (secrets.accountHint) exists for THIS caller on a capability that has the
-  // tool as a member. Freshness is owned by Wave-5's disconnect self-heal + lazy
-  // reconciler; authoritative live state is behind the connectors door.
-  const providerToolIds = toolRows
-    .filter((r) => r.kind === "provider")
-    .map((r) => r.id);
+  // "connected" from "needs connection". Batched, no live probe — freshness is
+  // owned by Wave-5's disconnect self-heal + lazy reconciler; authoritative live
+  // state is behind the connectors door.
+  //
+  // A provider authenticates one of TWO ways, and the difference decides both
+  // what its `provider` id is and what "connected" MEANS:
+  //
+  //   BROKER  `credentialRef` is `nango://<provider>` — an OAuth account the
+  //           broker holds. Connected iff a live secret row carries an
+  //           `accountHint`, which selects 1-of-N Nango connections
+  //           (schema/secrets-vault.ts:169).
+  //   VAULT   `credentialRef` was rewritten to `vault://<id>` at apply time — a
+  //           key the person pasted, stored server-side (Stripe). There is no
+  //           broker account, so `accountHint` is NULL BY CONSTRUCTION; requiring
+  //           it made every vault-backed provider read "not connected" while its
+  //           key sat in the vault. Connected iff a live secret row exists.
+  //
+  // The scheme is also the only surviving clue to the SERVICE: the remap
+  // rewrites `vault://stripe` to `vault://<uuid>`, so the id names nothing a
+  // connector could match — the tool's own name is the provider.
   const connectedProviderToolIds = new Set<string>();
-  if (providerToolIds.length > 0) {
+  const markConnected = async (
+    ids: string[],
+    requireBrokerAccount: boolean
+  ): Promise<void> => {
+    if (ids.length === 0) return;
     const rows = await db
       .selectDistinct({ toolId: links.fromId })
       .from(links)
@@ -968,14 +1045,19 @@ export async function listCapabilities(
           eq(links.fromType, "tool"),
           eq(links.toType, "capability"),
           eq(links.linkType, "member_of"),
-          inArray(links.fromId, providerToolIds),
+          inArray(links.fromId, ids),
           eq(secrets.userId, ctx.userId),
-          isNotNull(secrets.accountHint),
-          isNull(secrets.deletedAt)
+          isNull(secrets.deletedAt),
+          // A brokered connection must name the account it points at; a stored
+          // vault secret IS the connection, so its row alone is the proof.
+          requireBrokerAccount ? isNotNull(secrets.accountHint) : undefined
         )
       );
     for (const r of rows) connectedProviderToolIds.add(r.toolId);
-  }
+  };
+  const { brokered, vault } = partitionProvidersByCredential(toolRows);
+  await markConnected(brokered, true);
+  await markConnected(vault, false);
 
   // Which capability container each brick belongs to — ONE batched `links`
   // fan-out over the ids already loaded above. Derived per read, never stored:
@@ -1025,7 +1107,7 @@ export async function listCapabilities(
           connection: {
             required: true,
             connected: connectedProviderToolIds.has(row.id),
-            provider: row.credentialRef?.replace(/^nango:\/\//, "") ?? row.name,
+            provider: providerIdForTool(row),
           },
         }
       : {}),
