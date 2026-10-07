@@ -707,14 +707,19 @@ export class EventRepository {
       /** Filter by the action verb (middle segment of type, e.g. "create", "update"). */
       actions?: string[];
       /**
-       * Filter by the PHASE — the third AND LAST segment of the type (e.g.
-       * "completed"): a type with a fourth segment never matches. With
-       * `actions` set to the CRUD verbs this is `parseRecordChange`
-       * (`@synap-core/types/events`) in SQL, so a caller paging RECORD CHANGES
-       * spends its LIMIT on rows it can render, not on governance phases or
-       * connector families it then drops.
+       * Only rows that can become a Happened DATA line, in SQL before the
+       * limit, so a caller paging data lines spends its LIMIT on rows it can
+       * render, not on governance phases it then drops:
+       *   - a RECORD CHANGE — `{subject}.{one of recordActions}.completed`,
+       *     exactly three segments (`parseRecordChange`);
+       *   - a LIFECYCLE event — `{one of lifecycleSubjects}.{action}` with an
+       *     optional third segment and never a fourth (`parseConnectionEvent`).
+       * A coarse SUPERSET: the caller's parser stays the authority.
        */
-      phase?: string;
+      dataLines?: {
+        recordActions: readonly string[];
+        lifecycleSubjects: readonly string[];
+      };
       /**
        * Filter to the events one SESSION produced (`events.session_id`).
        *
@@ -917,10 +922,17 @@ export class EventRepository {
       params.push(...filters.actions);
     }
 
-    if (filters.phase) {
-      query += ` AND split_part(type, '.', 3) = $${paramIndex} AND split_part(type, '.', 4) = ''`;
-      params.push(filters.phase);
-      paramIndex++;
+    if (filters.dataLines) {
+      const list = (values: readonly string[]) => {
+        params.push(...values);
+        return values.map(() => `$${paramIndex++}`).join(", ") || "NULL";
+      };
+      const actions = list(filters.dataLines.recordActions);
+      const subjects = list(filters.dataLines.lifecycleSubjects);
+      query +=
+        ` AND split_part(type, '.', 4) = '' AND (` +
+        `(split_part(type, '.', 2) IN (${actions}) AND split_part(type, '.', 3) = 'completed')` +
+        ` OR split_part(type, '.', 1) IN (${subjects}))`;
     }
 
     if (filters.ungoverned) {

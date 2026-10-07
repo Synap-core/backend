@@ -31,6 +31,7 @@
  * proposal card can never render the same change with two different verbs.
  */
 
+import type { ConnectionEventLine } from "@synap-core/types/events";
 import type { RuleRunFacts } from "./rule-runs.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
@@ -255,13 +256,20 @@ export interface Signal {
   /** `activity` only: the ledger row, as `activity.list` returns it. */
   activity?: ActivityRow;
   /**
-   * `event` only, and only when the event is a RECORD CHANGE
-   * (`parseRecordChange`: `{subject}.{crud}.completed`): the act, the record's
-   * kind (its profile slug when the event named one) and the writer when it is
-   * not the default API path. The lens page draws it as a data line
-   * (`happenedItems`, `@synap-core/types/lens`).
+   * `event` only, and only when the event is a Happened data line
+   * (`happenedItemOfEvent`, `@synap-core/types/lens`): a RECORD CHANGE
+   * (`{subject}.{crud}.completed`) or a connection LIFECYCLE event (an app
+   * approved, a key revoked, a sync, a sign-in expiring), which carries its
+   * own `line`. The act, the record's kind (its profile slug when the event
+   * named one) and the writer when it is not the default API path. The lens
+   * page draws it as a data line (`happenedItems`).
    */
-  event?: { action: string; objectKind: string; origin: string | null };
+  event?: {
+    action: string;
+    objectKind: string;
+    origin: string | null;
+    line?: ConnectionEventLine | null;
+  };
   /**
    * `notification` only: the registry type (`notifications.type`) — what the
    * lens model classifies a row by (a work-broke failure is Blocking with an

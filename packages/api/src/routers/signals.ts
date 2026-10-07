@@ -88,9 +88,12 @@ import {
   isSessionWorkingNow,
   SESSION_WORKING_WINDOW_MS,
 } from "@synap-core/types/run-activity";
-import { LENS_CAPS, type LensPagePicks } from "@synap-core/types/lens";
+import {
+  happenedItemOfEvent,
+  LENS_CAPS,
+  type LensPagePicks,
+} from "@synap-core/types/lens";
 import { needsYouRows } from "@synap-core/types/needs-you";
-import { parseRecordChange } from "@synap-core/types/events";
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalsRouter } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
@@ -766,34 +769,41 @@ function signalFromActivity(row: ActivityRow, now: Date): Signal {
 }
 
 /**
- * The event as a DATA line (`Signal.event`), when it is a record change
- * (`parseRecordChange` — the ONE rule; the governance phases of the same
- * change and connector families are not). The record's kind is its profile
- * slug when the event payload named one, else the normalised subject. The
- * writer is named only when it is not the column default (`api`, a direct
- * write) — "Sync created 101 contacts", never "Api created…".
+ * The event as a DATA line (`Signal.event`), through THE door
+ * `happenedItemOfEvent` (`@synap-core/types/lens`): a record change, or a
+ * connection lifecycle event carrying its own `line` ("Revoked API key",
+ * "Synced Gmail · 42 new"). Null for anything else (a governance phase, an
+ * in-flight tick, an unknown family) — never drawn as a raw token.
+ *
+ * A lifecycle line's door is the door's own (an app opens by its public id,
+ * a message by its channel); a record change keeps the event's subject.
  */
 export function dataEventOf(e: {
+  id: string;
+  timestamp: Date | string;
   type: string;
   subjectType: string | null;
+  subjectId: string | null;
   source?: string | null;
   data?: unknown;
-}): { event: NonNullable<Signal["event"]> } | Record<string, never> {
-  const change = parseRecordChange(e.type);
-  if (!change) return {};
-  const data = (e.data ?? null) as { profileSlug?: unknown } | null;
-  const profileSlug =
-    data && typeof data.profileSlug === "string" && data.profileSlug
-      ? data.profileSlug
-      : null;
-  const source = e.source?.trim() || null;
+}): {
+  event: NonNullable<Signal["event"]>;
+  title: string;
+  target: Signal["target"];
+} | null {
+  const item = happenedItemOfEvent(e);
+  if (!item || item.kind !== "data") return null;
+  const { action, objectKind, origin, line, door } = item.event;
   return {
-    event: {
-      action: change.action,
-      objectKind:
-        profileSlug ?? normalizeObjectKind(e.subjectType ?? change.subject),
-      origin: source && source !== "api" ? source : null,
-    },
+    event: { action, objectKind, origin, ...(line ? { line } : {}) },
+    // `humanizeToken` is the vocabulary SSOT's fallback for a raw token — an
+    // event type is in no label table and must never leak verbatim.
+    title: line?.text ?? humanizeToken(e.type),
+    target: line
+      ? door && { kind: door.kind, id: door.id }
+      : e.subjectType && e.subjectId
+        ? { kind: e.subjectType, id: e.subjectId }
+        : null,
   };
 }
 
@@ -849,10 +859,10 @@ async function readHappened(
         eventsNarrow
           ? await eventsRouter.createCaller(ctx).read({
               limit: opts.limit,
-              // Only RECORD CHANGES, in SQL before the limit: a governance
-              // phase or a connector family renders no line, so it must
-              // never use up the page (it used to, then the client dropped it).
-              recordChanges: true,
+              // Only rows that become a data line (record changes + the
+              // lifecycle families), in SQL before the limit: a governance
+              // phase renders no line, so it must never use up the page.
+              dataLines: true,
               // Full rows: a data line names the record's kind (`data.profileSlug`)
               // and its writer (`source`) — both absent from the lean shape.
               lean: false,
@@ -875,8 +885,6 @@ async function readHappened(
     )
   );
   const eventSignals: Signal[] = events.value
-    // `parseRecordChange` stays the authority over the SQL prefilter.
-    .filter((e) => "event" in dataEventOf(e))
     .filter(
       (e) =>
         !(
@@ -885,24 +893,26 @@ async function readHappened(
           named.has(`${normalizeObjectKind(e.subjectType)}:${e.subjectId}`)
         )
     )
-    .map((e) => ({
-      id: `event:${e.id}`,
-      kind: "event" as const,
-      // `humanizeToken` is the vocabulary SSOT's fallback for any raw token —
-      // an event type is not in any label table, and must never leak verbatim.
-      title: humanizeToken(e.type),
-      count: 1,
-      occurredAt: e.timestamp,
-      target:
-        e.subjectType && e.subjectId
-          ? { kind: e.subjectType, id: e.subjectId }
-          : null,
-      category: "data",
-      ...dataEventOf(e),
-      groupKey: null,
-      ageBucket: ageBucketOf(e.timestamp, now),
-      repeatCount: 1,
-    }));
+    .flatMap((e) => {
+      // `happenedItemOfEvent` stays the authority over the SQL prefilter.
+      const line = dataEventOf(e);
+      if (!line) return [];
+      return [
+        {
+          id: `event:${e.id}`,
+          kind: "event" as const,
+          title: line.title,
+          count: 1,
+          occurredAt: e.timestamp,
+          target: line.target,
+          category: "data",
+          event: line.event,
+          groupKey: null,
+          ageBucket: ageBucketOf(e.timestamp, now),
+          repeatCount: 1,
+        },
+      ];
+    });
   const merged = [
     ...ledger.value.items.map((r) => signalFromActivity(r, now)),
     ...eventSignals,

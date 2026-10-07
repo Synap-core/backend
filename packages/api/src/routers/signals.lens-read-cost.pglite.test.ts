@@ -6,9 +6,11 @@
  *  F1  Blocking is capped by drawn ROW, server-side. Project PF1: a session
  *      owing 3 things + 4 sessions owing one → 5 rows with NO caps sent (the
  *      old signal slice drew 3 rows, or cut the card's items).
- *  F2  Happened spends its page on RECORD CHANGES only. 15 governance-phase /
- *      connector events newer than 3 record changes: the old read filled the
- *      default cap (10) with lines the client then dropped.
+ *  F2  Happened spends its page on DATA LINES only — record changes and the
+ *      connection lifecycle families (an app approved, a key revoked). 15
+ *      governance-phase / per-message events newer than them: the old read
+ *      filled the default cap (10) with lines the client then dropped, and
+ *      dropped every lifecycle event in SQL.
  *  F5  Happening measures liveness inside the working window — same answer.
  *  F6  Notifications narrow by container IN SQL, before the scan limit. 120
  *      pod-level unread rows newer than project PN's own: the old pod-floor
@@ -188,6 +190,27 @@ async function notify(
   );
 }
 
+async function lifecycle(
+  type: string,
+  subjectType: string,
+  minutesAgo: number,
+  data: Record<string, unknown>
+) {
+  await q(
+    `insert into events (id, user_id, type, subject_type, subject_id, data, source, timestamp)
+     values ($1, $2, $3, $4, $5, $6::jsonb, 'api', now() - ($7 || ' minutes')::interval)`,
+    [
+      randomUUID(),
+      USER,
+      type,
+      subjectType,
+      randomUUID(),
+      JSON.stringify(data),
+      String(minutesAgo),
+    ]
+  );
+}
+
 async function event(type: string, minutesAgo: number) {
   await q(
     `insert into events (id, user_id, type, subject_type, subject_id, data, source, timestamp)
@@ -285,8 +308,16 @@ beforeAll(async () => {
     );
   }
 
-  // F2 — 3 record changes, then 15 newer events that render no line.
+  // F2 — 3 record changes and 2 lifecycle lines, then 15 newer events that
+  // render no line here.
   for (const m of [60, 61, 62]) await event("entities.create.completed", m);
+  await lifecycle("app.approve.completed", "app", 63, {
+    name: "synap.live",
+    publicId: "app_f2",
+  });
+  await lifecycle("apiKey.revoke.completed", "apiKey", 64, {
+    keyName: "Vercel production",
+  });
   for (let i = 0; i < 5; i++) {
     await event("entities.create.requested", i + 1);
     await event("entities.create.validated", i + 1);
@@ -348,24 +379,33 @@ describe("F1 — Blocking is capped by drawn ROW on the server", () => {
 });
 
 describe("F2 — Happened spends its page on lines that render", () => {
-  it("the page's Happened holds the 3 record changes, not 10 governance / connector events", async () => {
+  it("the page's Happened holds the 3 record changes and the 2 lifecycle lines, not 10 governance / message events", async () => {
     const p = await page({});
     const kinds = p.happened.rows.map((r) => r.kind);
-    expect(kinds).toEqual(["event", "event", "event"]);
-    for (const r of p.happened.rows) {
+    expect(kinds).toEqual(["event", "event", "event", "event", "event"]);
+    for (const r of p.happened.rows.slice(0, 3)) {
       expect(r.event).toMatchObject({
         action: "create",
         objectKind: "contact",
         origin: "sync",
       });
     }
+    // The lifecycle lines carry their own words and door (the app by its
+    // public id — never the internal uuid).
+    const [approved, revoked] = p.happened.rows.slice(3);
+    expect(approved!.event).toMatchObject({ action: "approve", objectKind: "app" });
+    expect(approved!.event?.line?.text).toBeTruthy();
+    expect(approved!.title).toBe(approved!.event?.line?.text);
+    expect(approved!.target).toEqual({ kind: "app", id: "app_f2" });
+    expect(revoked!.event).toMatchObject({ action: "revoke", objectKind: "apiKey" });
+    expect(revoked!.event?.line?.text).toMatch(/Vercel production/);
     expect(p.happened.hasMore).toBe(false);
   });
 
   it("the history lens filters in SQL BEFORE its limit", async () => {
     const r = await caller().list({ lens: "history", limit: 5 });
-    expect(r.signals).toHaveLength(3);
-    expect(r.signals.every((s) => s.event?.action === "create")).toBe(true);
+    expect(r.signals).toHaveLength(5);
+    expect(r.signals.every((s) => s.event != null)).toBe(true);
   });
 });
 

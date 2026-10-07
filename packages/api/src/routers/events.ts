@@ -28,6 +28,45 @@ import { eventVisibleWhereFor } from "../access/event-visibility.js";
 import type { EventType } from "@synap/events";
 import { randomUUID } from "crypto";
 
+/**
+ * The lifecycle families a lens page's Happened reads as data lines — the
+ * subjects `parseConnectionEvent` (`@synap-core/types/events`) turns into a
+ * line, as the SQL prefilter sees them (the parser stays the authority).
+ * Every `case` of that parser is CLASSIFIED here or in
+ * `LIFECYCLE_SUBJECTS_LEFT_TO_THEIR_OWN_READ`, and a tripwire
+ * (`events.lifecycle-subjects.tripwire.test.ts`) fails on one that is in
+ * neither — a family the parser learns can never be silently dropped.
+ */
+export const LIFECYCLE_LINE_SUBJECTS = [
+  "app",
+  "apiKey",
+  "api_key",
+  "apikey",
+  "messaging_account",
+  "connector",
+  "connector_sync",
+  "webhooks",
+  "webhook",
+] as const;
+
+/**
+ * Parser families deliberately NOT prefiltered in, each with why. They are
+ * not lost: each is read through its own door.
+ */
+export const LIFECYCLE_SUBJECTS_LEFT_TO_THEIR_OWN_READ = {
+  // One row per message — it would spend the page on chatter; a room is its door.
+  channel_message: "per-message volume; the room is the door",
+  external_message: "per-message volume; the room is the door",
+  external_channel: "created alongside its messaging account line",
+  // Its progress ticks share one type; only `data.phase` tells a terminal row
+  // from a tick, which SQL here cannot see — `connector_sync.complete` is the
+  // run's fact.
+  connection_sync: "ticks share the type; connector_sync.complete is the fact",
+  // Session/track lifecycles are the ledger's (`activity.list`) rows already.
+  focus_session: "the activity ledger carries session lifecycles",
+  track: "the activity ledger carries track lifecycles",
+} as const;
+
 // Temporary schemas until we refactor
 /**
  * A session's events ARE its story (decision D1: a session's goal, status and
@@ -315,12 +354,14 @@ export const eventsRouter = router({
         offset: z.number().int().min(0).optional(),
         lean: z.boolean().default(false),
         /**
-         * Only RECORD CHANGES — `{subject}.{create|update|delete|archive|
-         * restore}.completed` (`parseRecordChange`), filtered in SQL BEFORE
-         * the limit. The lens page's Happened reads data lines this way, so
-         * governance phases and connector families never use up its page.
+         * Only rows that become a Happened DATA line (`happenedItemOfEvent`):
+         * record changes — `{subject}.{create|update|delete|archive|restore}
+         * .completed` — and the connection LIFECYCLE families
+         * (`LIFECYCLE_LINE_SUBJECTS`), filtered in SQL BEFORE the limit. The
+         * lens page's Happened reads this way, so governance phases never use
+         * up its page.
          */
-        recordChanges: z.boolean().optional(),
+        dataLines: z.boolean().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -342,8 +383,13 @@ export const eventsRouter = router({
         toDate: input.until,
         limit: input.limit,
         offset: input.offset,
-        ...(input.recordChanges
-          ? { actions: [...EVENT_ACTIONS], phase: "completed" }
+        ...(input.dataLines
+          ? {
+              dataLines: {
+                recordActions: EVENT_ACTIONS,
+                lifecycleSubjects: LIFECYCLE_LINE_SUBJECTS,
+              },
+            }
           : {}),
       });
 

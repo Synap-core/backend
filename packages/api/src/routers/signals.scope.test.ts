@@ -465,11 +465,11 @@ describe("signals.list — a data change is a DATA line (work + data)", () => {
       row({ id: "c" }),
     ]);
     const r = await caller().list({ lens: "history" });
-    // Asked of the door in SQL (record changes only)…
+    // Asked of the door in SQL (data lines only)…
     expect(eventsReadSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ recordChanges: true })
+      expect.objectContaining({ dataLines: true })
     );
-    // …and `parseRecordChange` stays the authority over what came back.
+    // …and `happenedItemOfEvent` stays the authority over what came back.
     expect(r.signals.map((s) => s.id)).toEqual(["event:c"]);
   });
 });
