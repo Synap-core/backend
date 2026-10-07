@@ -35,6 +35,7 @@ import {
   EventRepository,
   eventRepository,
   ApiKeyRepository,
+  GrantRepository,
   TrustedIssuerService,
   type ApiKeyScope,
 } from "@synap/database";
@@ -2364,6 +2365,53 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
       .where(and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)));
     logger.info({ keyId, approverId }, "setup/agent/pending: approved");
     return c.json({ ok: true });
+  });
+
+  /**
+   * What a pending key would be allowed to do — for the approval page, so the
+   * person approves the key's REAL scopes and grant, not a hard-coded list.
+   * Same caller rule as approve/reject: the connection's linked human, or a
+   * pod admin (a Kratos session on the pod).
+   */
+  app.get("/setup/agent/pending/:keyId/details", async (c) => {
+    const keyId = requireUuidParam(c, "keyId");
+    if (keyId instanceof Response) return keyId;
+    const approverId = await resolveKratosPodUserId(c);
+    if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
+
+    const key = await db.query.apiKeys.findFirst({
+      where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
+      columns: {
+        id: true,
+        keyName: true,
+        scope: true,
+        expiresAt: true,
+        revokedAt: true,
+        linkedUserId: true,
+      },
+    });
+    if (!key || key.revokedAt)
+      return c.json(
+        { error: "Pending key not found or already processed" },
+        404
+      );
+    if (!(await canDecidePendingConnection(approverId, key.linkedUserId)))
+      return c.json({ error: "Not authorized to decide this connection" }, 403);
+
+    const grant = await new GrantRepository(db).resolveForKey(keyId);
+    return c.json({
+      keyName: key.keyName,
+      scopes: key.scope,
+      expiresAt: key.expiresAt,
+      grant: grant
+        ? {
+            permissions: grant.permissions,
+            workspaceIds: grant.workspaceIds,
+            projectIds: grant.projectIds,
+            entityIds: grant.entityIds,
+          }
+        : null,
+    });
   });
 
   /** Reject a pending key — only the connection's linked human, or a pod admin. */
