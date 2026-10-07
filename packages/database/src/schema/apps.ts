@@ -15,7 +15,7 @@
  * no secret ever rests in a proposal.
  *
  * The app acts as its own agent user (`agent_user_id`, 0313) — see
- * `AppRepository.ensureAgentUser`.
+ * `ensureAppAgent` (api services/app-connect.ts).
  *
  * ONE write door: `AppRepository` (repositories/app-repository.ts).
  */

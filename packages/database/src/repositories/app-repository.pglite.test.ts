@@ -30,6 +30,7 @@ const GRANTS = read("0305_grants.sql");
 const ROLES = read("0307_grant_roles.sql"); // grants.role_id — written by attach
 const APPS = read("0309_apps.sql");
 const APPS_REMOVED = read("0312_apps_removed_at.sql");
+const APPS_AGENT = read("0313_apps_agent_user.sql");
 
 const OWNER = "owner-1";
 const OTHER_OWNER = "owner-2";
@@ -44,8 +45,13 @@ beforeAll(async () => {
   pg = new PGlite();
   // The AppRepository reads only these three api_keys columns (is_active gate,
   // last_used_at fallback); the real table is far wider and not needed here.
+  // 0313's FK target; only the id is read.
+  await pg.exec(`CREATE TABLE users (id text PRIMARY KEY);`);
   await pg.exec(`CREATE TABLE api_keys (
     id            uuid PRIMARY KEY,
+    -- the holder + the human it acts for (keyIdsFor / adoptKey)
+    user_id       text NOT NULL DEFAULT 'owner-1',
+    linked_user_id text,
     is_active     boolean NOT NULL DEFAULT true,
     last_used_at  timestamptz,
     -- keysFor reads these; the real table is far wider and not needed here.
@@ -60,6 +66,7 @@ beforeAll(async () => {
   await pg.exec(ROLES);
   await pg.exec(APPS);
   await pg.exec(APPS_REMOVED);
+  await pg.exec(APPS_AGENT);
   // The pending projection reads only these `proposals` columns.
   await pg.exec(`CREATE TABLE proposals (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -274,6 +281,72 @@ describe("AppRepository.keyIdsFor", () => {
   it("is empty for an app with no grants", async () => {
     const app = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
     expect(await repo.keyIdsFor(app.publicId)).toEqual([]);
+  });
+});
+
+describe("AppRepository — the app's own agent (0313)", () => {
+  const AGENT = "app-agent-1";
+  const RIVAL = "app-agent-2";
+  beforeAll(async () => {
+    await pg.exec(
+      `INSERT INTO users (id) VALUES ('${AGENT}'), ('${RIVAL}') ON CONFLICT DO NOTHING`
+    );
+  });
+
+  it("links once — a second, concurrent agent never replaces the first", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+    expect(await repo.linkAgentUser(app.id, AGENT)).toBe(AGENT);
+    expect(await repo.linkAgentUser(app.id, RIVAL)).toBe(AGENT);
+  });
+
+  it("keyIdsFor also counts a key HELD by the app's agent (revoke stops it)", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+    await repo.linkAgentUser(app.id, AGENT);
+    await pg.query(
+      "INSERT INTO api_keys (id, is_active, user_id) VALUES ($1, true, $2)",
+      [KEY_B, AGENT]
+    );
+    expect(await repo.keyIdsFor(app.publicId)).toEqual([KEY_B]);
+  });
+
+  it("adoptKey moves a human-held key and its grant onto the agent; re-running is a no-op", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+    await seedKey(KEY_A);
+    await attachGrant(KEY_A, app.publicId);
+    for (let i = 0; i < 2; i++) {
+      await repo.adoptKey({
+        apiKeyId: KEY_A,
+        ownerUserId: OWNER,
+        agentUserId: AGENT,
+      });
+    }
+    const key = await pg.query<{ user_id: string; linked_user_id: string }>(
+      "SELECT user_id, linked_user_id FROM api_keys WHERE id = $1",
+      [KEY_A]
+    );
+    expect(key.rows).toEqual([{ user_id: AGENT, linked_user_id: OWNER }]);
+    const g = await pg.query<{ principal_user_id: string; on_behalf_of: string }>(
+      "SELECT principal_user_id, on_behalf_of FROM grants WHERE api_key_id = $1",
+      [KEY_A]
+    );
+    expect(g.rows).toEqual([
+      { principal_user_id: AGENT, on_behalf_of: OWNER },
+    ]);
+  });
+
+  it("adoptKey never takes a key someone else holds", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+    await pg.query(
+      "INSERT INTO api_keys (id, is_active, user_id) VALUES ($1, true, $2)",
+      [KEY_A, OTHER_OWNER]
+    );
+    await repo.adoptKey({ apiKeyId: KEY_A, ownerUserId: OWNER, agentUserId: AGENT });
+    const key = await pg.query<{ user_id: string }>(
+      "SELECT user_id FROM api_keys WHERE id = $1",
+      [KEY_A]
+    );
+    expect(key.rows[0].user_id).toBe(OTHER_OWNER);
+    void app;
   });
 });
 
