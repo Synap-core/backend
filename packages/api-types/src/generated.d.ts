@@ -15814,6 +15814,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId?: string | undefined;
 				appId?: string | undefined;
 				limit?: number | undefined;
+				offset?: number | undefined;
 				lean?: boolean | undefined;
 				recordChanges?: boolean | undefined;
 			};

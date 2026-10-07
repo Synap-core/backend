@@ -300,6 +300,19 @@ export const eventsRouter = router({
          */
         appId: z.string().min(1).max(200).optional(),
         limit: z.number().min(1).max(500).default(50),
+        /**
+         * Skip this many rows of the SAME ordered read — the "Load more" door
+         * for a full stream (an app's own activity page). The repository has
+         * always ordered `timestamp DESC`; this exposes its existing `offset`.
+         *
+         * Deliberately NOT timestamp paging via `until`: that bound is
+         * INCLUSIVE, so a client walking backwards would re-fetch its boundary
+         * row and stall, and retreating by a millisecond would SKIP rows a
+         * batch write landed in the same millisecond as. Offset is exact; a
+         * caller still dedupes by `id`, because a new event arriving between
+         * two pages shifts everything down by one.
+         */
+        offset: z.number().int().min(0).optional(),
         lean: z.boolean().default(false),
         /**
          * Only RECORD CHANGES — `{subject}.{create|update|delete|archive|
@@ -328,6 +341,7 @@ export const eventsRouter = router({
         fromDate: input.since,
         toDate: input.until,
         limit: input.limit,
+        offset: input.offset,
         ...(input.recordChanges
           ? { actions: [...EVENT_ACTIONS], phase: "completed" }
           : {}),
