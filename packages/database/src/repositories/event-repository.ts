@@ -956,7 +956,9 @@ export class EventRepository {
       paramIndex++;
     }
 
-    query += " ORDER BY timestamp DESC";
+    // `id` breaks timestamp ties: ms-precision timestamps collide on batch writes,
+    // and without a total order LIMIT/OFFSET pages can repeat or skip a row.
+    query += " ORDER BY timestamp DESC, id DESC";
 
     if (filters.limit) {
       query += ` LIMIT $${paramIndex}`;
