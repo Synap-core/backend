@@ -712,9 +712,10 @@ export class EventRepository {
        * render, not on governance phases it then drops:
        *   - a RECORD CHANGE — `{subject}.{one of recordActions}.completed`,
        *     exactly three segments (`parseRecordChange`);
-       *   - a LIFECYCLE event — `{one of lifecycleSubjects}.{action}` with an
-       *     optional third segment and never a fourth (`parseConnectionEvent`).
-       * A coarse SUPERSET: the caller's parser stays the authority.
+       *   - a LIFECYCLE event — `{one of lifecycleSubjects}.{action}.completed`
+       *     (`parseConnectionEvent`).
+       * Both only at `.completed`, never a fourth segment. A coarse SUPERSET:
+       * the caller's parser stays the authority.
        */
       dataLines?: {
         recordActions: readonly string[];
@@ -929,9 +930,11 @@ export class EventRepository {
       };
       const actions = list(filters.dataLines.recordActions);
       const subjects = list(filters.dataLines.lifecycleSubjects);
+      // Only the terminal fact: `requested`/`validated`/`failed` phases are
+      // governance and delivery traffic, never a line.
       query +=
-        ` AND split_part(type, '.', 4) = '' AND (` +
-        `(split_part(type, '.', 2) IN (${actions}) AND split_part(type, '.', 3) = 'completed')` +
+        ` AND split_part(type, '.', 4) = '' AND split_part(type, '.', 3) = 'completed'` +
+        ` AND (split_part(type, '.', 2) IN (${actions})` +
         ` OR split_part(type, '.', 1) IN (${subjects}))`;
     }
 

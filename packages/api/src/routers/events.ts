@@ -31,7 +31,8 @@ import { randomUUID } from "crypto";
 /**
  * The lifecycle families a lens page's Happened reads as data lines — the
  * subjects `parseConnectionEvent` (`@synap-core/types/events`) turns into a
- * line, as the SQL prefilter sees them (the parser stays the authority).
+ * line, admitted by the SQL prefilter at their `.completed` phase only (the
+ * parser stays the authority).
  * Every `case` of that parser is CLASSIFIED here or in
  * `LIFECYCLE_SUBJECTS_LEFT_TO_THEIR_OWN_READ`, and a tripwire
  * (`events.lifecycle-subjects.tripwire.test.ts`) fails on one that is in
@@ -45,8 +46,6 @@ export const LIFECYCLE_LINE_SUBJECTS = [
   "messaging_account",
   "connector",
   "connector_sync",
-  "webhooks",
-  "webhook",
 ] as const;
 
 /**
@@ -58,6 +57,11 @@ export const LIFECYCLE_SUBJECTS_LEFT_TO_THEIR_OWN_READ = {
   channel_message: "per-message volume; the room is the door",
   external_message: "per-message volume; the room is the door",
   external_channel: "created alongside its messaging account line",
+  // One `webhooks.deliver.requested` row per delivery attempt and no
+  // `.completed` fact — it would flood the page; a webhook's deliveries are
+  // its own read (`webhooks.deliveries`).
+  webhooks: "one row per delivery attempt; the webhook's deliveries are its read",
+  webhook: "one row per delivery attempt; the webhook's deliveries are its read",
   // Its progress ticks share one type; only `data.phase` tells a terminal row
   // from a tick, which SQL here cannot see — `connector_sync.complete` is the
   // run's fact.
@@ -357,7 +361,8 @@ export const eventsRouter = router({
          * Only rows that become a Happened DATA line (`happenedItemOfEvent`):
          * record changes — `{subject}.{create|update|delete|archive|restore}
          * .completed` — and the connection LIFECYCLE families
-         * (`LIFECYCLE_LINE_SUBJECTS`), filtered in SQL BEFORE the limit. The
+         * (`LIFECYCLE_LINE_SUBJECTS`) at `.completed`, filtered in SQL BEFORE
+         * the limit. The
          * lens page's Happened reads this way, so governance phases never use
          * up its page.
          */
