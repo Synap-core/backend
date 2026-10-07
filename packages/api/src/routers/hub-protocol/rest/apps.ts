@@ -72,7 +72,9 @@ const RegisterBody = z.object({
   name: z.string().min(1).max(120),
   description: z.string().max(2000).optional().nullable(),
   logoUrl: z.string().max(2048).optional().nullable(),
-  mode: z.string().max(40).optional().nullable(),
+  // One mode is implemented (`AppMode = "specific"`); a bounded free string
+  // stored whatever a caller sent into a column nothing renders.
+  mode: z.literal("specific").optional().nullable(),
 });
 
 const ConnectBody = z.object({
@@ -179,12 +181,14 @@ export function registerAppsRoutes(app: HubHono): void {
       );
     }
     try {
+      // Unset fields stay `undefined` so `register` leaves them alone — an agent
+      // re-registering a name it already uses must not blank the description.
       const record = await new AppRepository(db).register({
         ownerUserId: userId,
         name: body.data.name,
-        description: body.data.description ?? null,
-        logoUrl: body.data.logoUrl ?? null,
-        mode: body.data.mode ?? "specific",
+        description: body.data.description ?? undefined,
+        logoUrl: body.data.logoUrl ?? undefined,
+        mode: body.data.mode ?? undefined,
       });
       return c.json({ app: serializeApp(record) }, 201);
     } catch (err) {

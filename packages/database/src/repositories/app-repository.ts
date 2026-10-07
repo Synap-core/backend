@@ -129,16 +129,27 @@ export class AppRepository {
       .limit(1);
 
     if (existing) {
+      // An upsert by NAME must not CLEAR what it was not told about. Registering
+      // is idempotent by owner+name (that is the point — re-adding a name you
+      // already use opens THAT app), so a caller that supplies only a name would
+      // otherwise wipe the description written the first time and reset
+      // `mode`/`metadata`. That is silent data loss from a no-op-looking action.
+      //
+      // `description`/`logo_url` are nullable: `undefined` leaves them, an
+      // explicit `null` clears them. `mode`/`metadata` are NOT NULL with
+      // defaults, so only a provided non-null value sets them.
+      const patch: Partial<typeof apps.$inferInsert> = {
+        // A re-register revives a revoked app rather than minting a twin.
+        revokedAt: null,
+      };
+      if (input.description !== undefined) patch.description = input.description;
+      if (input.logoUrl !== undefined) patch.logoUrl = input.logoUrl;
+      if (input.mode != null) patch.mode = input.mode;
+      if (input.metadata != null) patch.metadata = input.metadata;
+
       const [row] = await this.db
         .update(apps)
-        .set({
-          description: input.description ?? null,
-          logoUrl: input.logoUrl ?? null,
-          mode: input.mode ?? "specific",
-          metadata: input.metadata ?? {},
-          // A re-register revives a revoked app rather than minting a twin.
-          revokedAt: null,
-        })
+        .set(patch)
         .where(eq(apps.id, existing.id))
         .returning();
       return row;

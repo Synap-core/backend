@@ -100,18 +100,25 @@ export const appsRouter = router({
         name: z.string().trim().min(1).max(200),
         description: z.string().max(2000).nullish(),
         logoUrl: z.string().url().max(2000).nullish(),
-        mode: z.string().max(40).nullish(),
+        // The column is text, but the SYSTEM implements exactly one mode
+        // (`AppMode = "specific"` in the CLI; the schema comment puts global and
+        // runtime OAuth out of scope for v1). A bounded free string let a caller
+        // store any token the detail read never renders — bound it to what runs.
+        mode: z.literal("specific").nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const repo = new AppRepository(db);
+      // Fields the caller did NOT send stay `undefined` — `register` reads that
+      // as "leave it alone", so re-adding an existing name cannot wipe the
+      // description it already had. Coercing to `null` here would have made the
+      // no-op-looking re-add destructive.
       const registered = await repo.register({
         ownerUserId: ctx.userId,
         name: input.name,
-        description: input.description ?? null,
-        logoUrl: input.logoUrl ?? null,
-        mode: input.mode ?? null,
-        metadata: null,
+        description: input.description ?? undefined,
+        logoUrl: input.logoUrl ?? undefined,
+        mode: input.mode ?? undefined,
       });
       // Re-read through the ONE projection so a create returns exactly what
       // `get` returns — a caller never sees two shapes for one app.

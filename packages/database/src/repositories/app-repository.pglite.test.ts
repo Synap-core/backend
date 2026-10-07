@@ -117,6 +117,47 @@ describe("AppRepository.register — idempotent by owner+name", () => {
     expect(first.publicId).toMatch(/^app_[0-9a-f-]{36}$/);
   });
 
+  it("does NOT clear what a re-register did not mention — the silent-wipe guard", async () => {
+    // Registering is idempotent by name and the add form re-adds a name the
+    // person already has ("Adding a name you already use opens that app"). If
+    // the upsert wrote `description ?? null`, that harmless-looking action would
+    // BLANK the description written the first time, and reset mode/metadata.
+    const first = await repo.register({
+      ownerUserId: OWNER,
+      name: "synap.live",
+      description: "the landing page",
+      metadata: { source: "cli" },
+    });
+    const second = await repo.register({ ownerUserId: OWNER, name: "synap.live" });
+
+    expect(second.id).toBe(first.id);
+    expect(second.description).toBe("the landing page");
+    expect(second.metadata).toEqual({ source: "cli" });
+  });
+
+  it("still writes a field the caller DID send, including an explicit null", async () => {
+    // The other half of the rule. Without this, "preserve on omission" is
+    // indistinguishable from a repository that ignores every later update.
+    await repo.register({
+      ownerUserId: OWNER,
+      name: "synap.live",
+      description: "the landing page",
+    });
+    const changed = await repo.register({
+      ownerUserId: OWNER,
+      name: "synap.live",
+      description: "rewritten",
+    });
+    expect(changed.description).toBe("rewritten");
+
+    const cleared = await repo.register({
+      ownerUserId: OWNER,
+      name: "synap.live",
+      description: null,
+    });
+    expect(cleared.description).toBeNull();
+  });
+
   it("scopes idempotency to the owner — another owner gets its own app", async () => {
     const mine = await repo.register({
       ownerUserId: OWNER,
