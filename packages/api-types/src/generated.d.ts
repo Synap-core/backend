@@ -5188,6 +5188,8 @@ export interface AppKeySummary {
 	usageCount: number;
 	isActive: boolean;
 	revokedAt: Date | null;
+	/** `null` = never expires. What "Key expired" is read from. */
+	expiresAt: Date | null;
 }
 /**
  * A user's own explicit choice for one kind's content, read from their
@@ -7650,6 +7652,45 @@ export interface TrackKpi {
 	updatedAt?: string;
 	/** The user (or agent) id that stated `current`. */
 	updatedBy?: string;
+}
+/**
+ * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
+ * event into a human line.
+ *
+ * `parseRecordChange` reads the CRUD half of the events log ("Created person").
+ * Everything a connection does that is NOT a record change — a key revoked or
+ * replaced, an app asking for access, a sync, a sign-in that expired, a
+ * messaging account connected, a message arriving, a webhook delivery, a
+ * session or track moving — is read HERE, so no surface hand-writes those
+ * words. Every word goes through the vocabulary (`resolveActionLabel` past
+ * mood, `resolveObjectNoun`, `resolveConnectionStateLabel`) and the service
+ * names through `resolveServiceName`; this module only arranges them.
+ *
+ * Input is the event's `type` (`${subjectType}.${action}.completed`, or the
+ * two-segment connector form) and, when the reader has it, its `data`. Every
+ * line reads without `data` too (a surface that only holds the type still
+ * gets words); `data` adds the name and the detail.
+ *
+ * Null = not a connection lifecycle event (a record change, an unknown
+ * family, a governance phase, or an in-flight sync tick that is not a fact).
+ */
+/** One lifecycle event, as a line. */
+export interface ConnectionEventLine {
+	/** Vocabulary action token (`revoke`, `sync`, `receive`, …). */
+	action: string;
+	/** Vocabulary object kind (`apiKey`, `app`, `messaging_account`, …). */
+	objectKind: string;
+	/**
+	 * The thing's own name when the event carries one — a key's name, the
+	 * service ("WhatsApp"), the sender, the stage. Already words.
+	 */
+	name: string | null;
+	/** A short trailing fact ("42 new"), or a message preview. Already words. */
+	detail: string | null;
+	/** The act failed (a failed sync or delivery, an expired sign-in). */
+	failed: boolean;
+	/** The whole line, composed: "Synced Gmail · 42 new". */
+	text: string;
 }
 /** One counted day. `date` is the viewer's calendar day, `YYYY-MM-DD`. */
 export interface ActivityDay {
@@ -12689,22 +12730,22 @@ export interface EffectivePushCategory extends PushCategoryPolicy {
 	/** `true` when the person set it; `false` when it is the default. */
 	explicit: boolean;
 }
+declare const CONNECTION_NOTIFY_LEVELS: readonly [
+	"everything",
+	"problems",
+	"nothing"
+];
+export type ConnectionNotifyLevel = (typeof CONNECTION_NOTIFY_LEVELS)[number];
+export interface ConnectionPref {
+	pinned: boolean;
+	notify: ConnectionNotifyLevel;
+}
 /**
- * Notification Type Registry
- *
- * Maps notification type keys to their definition.
- * Adding a new notification type = add one entry here. Zero code.
- *
- * Templates support simple {{variable}} interpolation.
- * Variables come from the `data` object passed to NotificationService.create().
- * Interpolation covers `titleTemplate` and `bodyTemplate` ONLY — `actions` are
- * persisted and emitted verbatim.
- *
- * NOT unified here (deliberately, and still open): `notifications.workspaceUrl`
- * and `navigation/deep-links.ts` are two further address vocabularies for the
- * same destinations. Only the inline ACTION vocabulary is folded into the ONE
- * route table by `navigate-object` below.
+ * Which notices a connection produces. `problem` = it stopped working or needs
+ * the person (kept under `problems`); `info` = it worked (only `everything`).
+ * Declared per type on the registry (`NotificationDef.connectionNotice`).
  */
+export type ConnectionNoticeClass = "problem" | "info";
 export type DeliveryChannel = "in_app" | "os" | "telegram" | "email_digest";
 export interface NotificationActionDef {
 	id: string;
@@ -12845,6 +12886,16 @@ export interface NotificationDef {
 	 * carries the NEWEST instance, so its door is the latest failure.
 	 */
 	foldBy?: "groupKey";
+	/**
+	 * This type is news ABOUT ONE CONNECTION, and which kind: `"problem"` (it
+	 * stopped working / needs the person) or `"info"` (it worked). The producer
+	 * names the connection (`CreateNotificationInput.connection`) and
+	 * `NotificationService.create` gates the row on that connection's notify
+	 * level (`connection-prefs.ts`): `nothing` drops both, `problems` (default)
+	 * keeps `"problem"`, `everything` keeps both. Omit ⇒ not a connection notice,
+	 * never gated.
+	 */
+	connectionNotice?: ConnectionNoticeClass;
 }
 export type NotificationNeedsYouRole = "item" | "informational" | "session-pointer" | "suggestion" | "status";
 /**
@@ -15539,16 +15590,19 @@ export interface Signal {
 	/** `activity` only: the ledger row, as `activity.list` returns it. */
 	activity?: ActivityRow;
 	/**
-	 * `event` only, and only when the event is a RECORD CHANGE
-	 * (`parseRecordChange`: `{subject}.{crud}.completed`): the act, the record's
-	 * kind (its profile slug when the event named one) and the writer when it is
-	 * not the default API path. The lens page draws it as a data line
-	 * (`happenedItems`, `@synap-core/types/lens`).
+	 * `event` only, and only when the event is a Happened data line
+	 * (`happenedItemOfEvent`, `@synap-core/types/lens`): a RECORD CHANGE
+	 * (`{subject}.{crud}.completed`) or a connection LIFECYCLE event (an app
+	 * approved, a key revoked, a sync, a sign-in expiring), which carries its
+	 * own `line`. The act, the record's kind (its profile slug when the event
+	 * named one) and the writer when it is not the default API path. The lens
+	 * page draws it as a data line (`happenedItems`).
 	 */
 	event?: {
 		action: string;
 		objectKind: string;
 		origin: string | null;
+		line?: ConnectionEventLine | null;
 	};
 	/**
 	 * `notification` only: the registry type (`notifications.type`) — what the
@@ -15847,7 +15901,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				lean?: boolean | undefined;
-				recordChanges?: boolean | undefined;
+				dataLines?: boolean | undefined;
 			};
 			output: ({
 				id: string;
@@ -21657,6 +21711,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				includeRevoked?: boolean | undefined;
 			} | undefined;
 			output: {
+				keys: AppKeySummary[];
 				id: string;
 				public_id: string;
 				name: string;
@@ -21672,6 +21727,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				created_at: Date;
 				revoked_at: Date | null;
 				removed_at: Date | null;
+				agent_user_id: string | null;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -21710,6 +21766,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				created_at: Date;
 				revoked_at: Date | null;
 				removed_at: Date | null;
+				agent_user_id: string | null;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -21746,6 +21803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				created_at: Date;
 				revoked_at: Date | null;
 				removed_at: Date | null;
+				agent_user_id: string | null;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -21806,6 +21864,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				created_at: Date;
 				revoked_at: Date | null;
 				removed_at: Date | null;
+				agent_user_id: string | null;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -33191,6 +33250,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				routingRules: unknown;
 				soundEnabled: boolean | null;
 				pushPrefs: unknown;
+				connectionPrefs: unknown;
 			} | null;
 			meta: object;
 		}>;
