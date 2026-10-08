@@ -61,6 +61,10 @@ import {
   resolveNotEnabledRefusal,
   type CapabilityEnableOffer,
 } from "../services/capabilities/propose-capability-enable.js";
+import {
+  carriesRedactedSecret,
+  redactSecretKeys,
+} from "../utils/redact-secrets.js";
 import { recordDomainMutation } from "../utils/domain-mutation.js";
 import { isConnectionAuthError } from "../services/connection-health/notify-connector-unhealthy.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
@@ -2293,6 +2297,17 @@ export async function triggerProviderAction(
     !!input.verbAct &&
     tool.approved === true &&
     input.verbAct.toolIds.includes(tool.id);
+  if (input.alreadyApproved && carriesRedactedSecret(input.body)) {
+    // An approved replay of a call whose credential was redacted from the
+    // proposal: sending the marker would be a broken call, never a leak.
+    return {
+      success: false,
+      status: 409,
+      errorCode: "bad_request",
+      error:
+        "This call carried a credential, which is never stored in a proposal — so it cannot be replayed. Grant the agent the verb and run it again.",
+    };
+  }
   if (!input.alreadyApproved && !coveredByVerb) {
     // SAFE-BY-DEFAULT actor resolution: the gate's owner-bypass keys off the
     // EFFECTIVE actor vs the tool's owner (`createdBy`). When an `agentUserId` is
@@ -2391,7 +2406,10 @@ export async function triggerProviderAction(
           provider,
           method: input.method,
           path: input.path,
-          body: input.body ?? null,
+          // A proposal row is READ by reviewers and agents — a credential in
+          // the call (e.g. a repo mount's `authorization_token`) is never
+          // stored with it. The replay refuses such a body (below).
+          body: input.body ? redactSecretKeys(input.body) : null,
           accountHint: input.accountHint ?? null,
           baseUrlOverride: input.baseUrlOverride ?? null,
           // Persist the run-time connection pick so the approve replay resolves

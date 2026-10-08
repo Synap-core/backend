@@ -117,3 +117,64 @@ export function redactDeepForStorage<T>(
   }
   return out as T;
 }
+
+// ── Secret-bearing KEYS in a structured payload ─────────────────────────────
+
+/**
+ * A payload key whose VALUE is a credential: `authorization_token`,
+ * `access_token`, `client_secret`, `apiKey`, `password`, `Authorization`…
+ * Narrower than the install-param rule (`isSecretParamName`, which matches
+ * any `key`): a stored provider body keeps `keyRef`, `idempotencyKey`,
+ * `keyword` — redacting those would corrupt a legitimate replay.
+ */
+const SECRET_PAYLOAD_KEY =
+  /token|secret|password|passwd|api[_-]?key|authorization|credential/i;
+
+/** What a redacted credential value reads as in a stored payload. */
+export const REDACTED_SECRET_VALUE = "***REDACTED***";
+
+/**
+ * The ONE redactor for a structured payload about to be STORED where people
+ * and agents read it (a proposal's `data.body`): every value under a
+ * secret-bearing key is replaced, at any depth. A `vault://` reference is
+ * kept — a pointer, not a credential. Numbers / booleans / null and every
+ * other key pass through, so the payload stays reviewable.
+ */
+export function redactSecretKeys<T>(value: T, depth = 0): T {
+  if (depth >= REDACT_DEPTH_LIMIT || !value || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => redactSecretKeys(v, depth + 1)) as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] =
+      SECRET_PAYLOAD_KEY.test(k) &&
+      typeof v === "string" &&
+      v.trim() &&
+      !/^vault:\/\//.test(v.trim())
+        ? REDACTED_SECRET_VALUE
+        : redactSecretKeys(v, depth + 1);
+  }
+  return out as T;
+}
+
+/**
+ * Does a payload still carry a value `redactSecretKeys` replaced? A replay of
+ * such a payload would send the marker as the credential — the caller refuses
+ * it instead (the secret was never stored, so it cannot be replayed).
+ */
+export function carriesRedactedSecret(value: unknown, depth = 0): boolean {
+  if (depth >= REDACT_DEPTH_LIMIT || !value || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((v) => carriesRedactedSecret(v, depth + 1));
+  }
+  return Object.entries(value as Record<string, unknown>).some(
+    ([k, v]) =>
+      (SECRET_PAYLOAD_KEY.test(k) && v === REDACTED_SECRET_VALUE) ||
+      carriesRedactedSecret(v, depth + 1)
+  );
+}
