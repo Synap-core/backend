@@ -617,12 +617,18 @@ export interface ExpectedOutput {
 
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
-  status: "linked" | "skipped";
+  /**
+   * `linked` — the edge exists; `proposed` — the relation door filed it for
+   * review (`proposalId`); `skipped` — no edge, `reason` says why.
+   */
+  status: "linked" | "proposed" | "skipped";
   relationType: string;
   /** The entity that served the slot (the edge's source). */
   outputEntityId?: string;
   /** The relation row (present when `linked`). */
   relationId?: string;
+  /** The relation proposal (present when `proposed`). */
+  proposalId?: string;
   /** Why no edge (present when `skipped`). */
   reason?: string;
   /** ISO timestamp of the attempt. */

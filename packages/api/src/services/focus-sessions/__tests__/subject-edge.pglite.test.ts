@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   db: undefined as unknown,
   client: undefined as unknown,
   creates: [] as Array<Record<string, unknown>>,
+  propose: false,
 }));
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -29,6 +30,7 @@ vi.mock("../../../routers/relations.js", () => ({
     createCaller: () => ({
       create: async (input: Record<string, unknown>) => {
         h.creates.push(input);
+        if (h.propose) return { status: "proposed", proposalId: "rel-prop-1" };
         const id = randomUUID();
         await (h.client as PGlite).query(
           `insert into relations (id, user_id, source_entity_id, target_entity_id, type) values ($1,'u',$2,$3,$4)`,
@@ -83,10 +85,15 @@ function ddlFor(table: PgTable): string {
   return `create table "${cfg.name}" (${columns.join(", ")});`;
 }
 
-
 async function fresh(slots: unknown[]) {
   const client = new PGlite();
-  for (const t of [entities, focusSessions, proposals, relations, relationDefs]) {
+  for (const t of [
+    entities,
+    focusSessions,
+    proposals,
+    relations,
+    relationDefs,
+  ]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
   h.client = client;
@@ -119,56 +126,115 @@ async function fresh(slots: unknown[]) {
 }
 
 async function slotsOf(client: PGlite, id: string) {
-  const r = await client.query<{ expected_outputs: Array<Record<string, any>> }>(
-    `select expected_outputs from focus_sessions where id = $1`,
-    [id]
-  );
+  const r = await client.query<{
+    expected_outputs: Array<Record<string, any>>;
+  }>(`select expected_outputs from focus_sessions where id = $1`, [id]);
   return r.rows[0]!.expected_outputs;
 }
 
 beforeEach(() => {
   h.creates = [];
+  h.propose = false;
 });
 
 describe("linkSatisfiedOutputsToSubject", () => {
   it("writes output --made_for--> subject for an approved slot, once, and stamps the receipt", async () => {
     const { client, SESSION } = await fresh([
-      { kind: "post", label: "Post", status: "done", satisfiedByProposalId: PROPOSAL, relationToSubject: "made_for" },
+      {
+        kind: "post",
+        label: "Post",
+        status: "done",
+        satisfiedByProposalId: PROPOSAL,
+        relationToSubject: "made_for",
+      },
     ]);
     const out = await linkSatisfiedOutputsToSubject({ sessionId: SESSION });
     expect(h.creates).toEqual([
-      expect.objectContaining({ sourceEntityId: OUTPUT, targetEntityId: SUBJECT, type: "made_for" }),
+      expect.objectContaining({
+        sourceEntityId: OUTPUT,
+        targetEntityId: SUBJECT,
+        type: "made_for",
+      }),
     ]);
-    expect(out[0]!.edge).toMatchObject({ status: "linked", relationType: "made_for", outputEntityId: OUTPUT });
+    expect(out[0]!.edge).toMatchObject({
+      status: "linked",
+      relationType: "made_for",
+      outputEntityId: OUTPUT,
+    });
     const [slot] = await slotsOf(client, SESSION);
-    expect(slot!.subjectEdge).toMatchObject({ status: "linked", outputEntityId: OUTPUT });
+    expect(slot!.subjectEdge).toMatchObject({
+      status: "linked",
+      outputEntityId: OUTPUT,
+    });
     expect(slot!.subjectEdge.relationId).toBeTruthy();
     // Idempotent: the receipt makes a second pass a no-op.
     await linkSatisfiedOutputsToSubject({ sessionId: SESSION });
     expect(h.creates).toHaveLength(1);
   });
 
+  it("an edge the relation door PROPOSES is stamped `proposed` with its proposal, not a skip", async () => {
+    h.propose = true;
+    const { client, SESSION } = await fresh([
+      {
+        kind: "post",
+        label: "Post",
+        status: "done",
+        satisfiedByProposalId: PROPOSAL,
+        relationToSubject: "made_for",
+      },
+    ]);
+    await linkSatisfiedOutputsToSubject({ sessionId: SESSION });
+    const [slot] = await slotsOf(client, SESSION);
+    expect(slot!.subjectEdge).toMatchObject({
+      status: "proposed",
+      proposalId: "rel-prop-1",
+      outputEntityId: OUTPUT,
+    });
+    expect(slot!.subjectEdge.reason).toBeUndefined();
+  });
+
   it("an undefined relation type is RECORDED on the slot, never thrown", async () => {
     const { client, SESSION } = await fresh([
-      { kind: "post", label: "Post", status: "done", satisfiedByProposalId: PROPOSAL, relationToSubject: "derived_from" },
+      {
+        kind: "post",
+        label: "Post",
+        status: "done",
+        satisfiedByProposalId: PROPOSAL,
+        relationToSubject: "derived_from",
+      },
     ]);
-    await expect(linkSatisfiedOutputsToSubject({ sessionId: SESSION })).resolves.toBeDefined();
+    await expect(
+      linkSatisfiedOutputsToSubject({ sessionId: SESSION })
+    ).resolves.toBeDefined();
     expect(h.creates).toEqual([]);
     const [slot] = await slotsOf(client, SESSION);
-    expect(slot!.subjectEdge).toMatchObject({ status: "skipped", reason: "relation_type_not_defined" });
+    expect(slot!.subjectEdge).toMatchObject({
+      status: "skipped",
+      reason: "relation_type_not_defined",
+    });
     expect(slot!.status).toBe("done");
   });
 
   it("'none', a pending slot, and an evidence ref all behave", async () => {
     const { client, SESSION } = await fresh([
-      { kind: "post", label: "A", status: "done", relationToSubject: "none", satisfiedByProposalId: PROPOSAL },
+      {
+        kind: "post",
+        label: "A",
+        status: "done",
+        relationToSubject: "none",
+        satisfiedByProposalId: PROPOSAL,
+      },
       { kind: "post", label: "B", relationToSubject: "made_for" },
       {
         kind: "post",
         label: "C",
         status: "done",
         relationToSubject: "made_for",
-        satisfiedByEvidence: { kind: "ref", id: `entity:${OUTPUT}`, at: "2026-10-08T00:00:00.000Z" },
+        satisfiedByEvidence: {
+          kind: "ref",
+          id: `entity:${OUTPUT}`,
+          at: "2026-10-08T00:00:00.000Z",
+        },
       },
     ]);
     await linkSatisfiedOutputsToSubject({ sessionId: SESSION });
@@ -181,7 +247,13 @@ describe("linkSatisfiedOutputsToSubject", () => {
 
   it("an edge that already exists is reused, not duplicated", async () => {
     const { client, SESSION } = await fresh([
-      { kind: "post", label: "Post", status: "done", satisfiedByProposalId: PROPOSAL, relationToSubject: "made_for" },
+      {
+        kind: "post",
+        label: "Post",
+        status: "done",
+        satisfiedByProposalId: PROPOSAL,
+        relationToSubject: "made_for",
+      },
     ]);
     const existing = randomUUID();
     await client.query(
@@ -191,7 +263,10 @@ describe("linkSatisfiedOutputsToSubject", () => {
     await linkSatisfiedOutputsToSubject({ sessionId: SESSION });
     expect(h.creates).toEqual([]);
     const [slot] = await slotsOf(client, SESSION);
-    expect(slot!.subjectEdge).toMatchObject({ status: "linked", relationId: existing });
+    expect(slot!.subjectEdge).toMatchObject({
+      status: "linked",
+      relationId: existing,
+    });
   });
 
   it("SEAM: the approval satisfy door itself writes the edge after stamping done", async () => {
@@ -207,7 +282,10 @@ describe("linkSatisfiedOutputsToSubject", () => {
     expect(r.satisfied).toEqual(["Post"]);
     const [slot] = await slotsOf(client, SESSION);
     expect(slot!.status).toBe("done");
-    expect(slot!.subjectEdge).toMatchObject({ status: "linked", outputEntityId: OUTPUT });
+    expect(slot!.subjectEdge).toMatchObject({
+      status: "linked",
+      outputEntityId: OUTPUT,
+    });
     expect(h.creates).toHaveLength(1);
   });
 });

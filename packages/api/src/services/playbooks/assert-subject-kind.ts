@@ -6,10 +6,11 @@
  * whether it named that kind, so "Produce content" could be bound to a person
  * and every stage write (`subjectStatus`) would then land on the wrong entity.
  *
- * The rule (the matcher's own — `playbooks.matchForEntity`): the entity's KIND
- * slug — or one of its profile's ANCESTORS (`parent_profile_id`, "webinar"
- * extends "event") — or one of its LIVE FACET slugs (a `person` wearing the
- * `lead` role) equals `profileSlug`. Facets are read through the ONE facet
+ * The rule: the entity's KIND slug — or one of its profile's ANCESTORS
+ * (`parent_profile_id`, "webinar" extends "event") — or one of its LIVE FACET
+ * slugs (a `person` wearing the `lead` role) equals `profileSlug`. WIDER than
+ * the matcher (`playbooks.matchForEntity` reads kind + facets, not ancestors):
+ * the matcher decides what to OFFER, this decides what a run may be bound to. Facets are read through the ONE facet
  * reader, under the canonical visibility lens, so a caller can only satisfy the
  * check with facets it can see.
  *
@@ -33,6 +34,7 @@ import {
   eq,
   loadFacetSlugsBatch,
 } from "@synap/database";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { subjectProfileSlug } from "./pinned-subject.js";
 
 /** Profile inheritance is shallow in practice; the walk is bounded anyway. */
@@ -40,21 +42,35 @@ const MAX_ANCESTOR_DEPTH = 8;
 
 export const SUBJECT_KIND_MISMATCH = "SUBJECT_KIND_MISMATCH" as const;
 
+/** The refusal in the person's words: object nouns, never raw slugs. PURE. */
+export function subjectKindMismatchMessage(
+  expected: string,
+  actual: string[]
+): string {
+  const template = resolveObjectNoun("playbook");
+  const want = resolveObjectNoun(expected).toLowerCase();
+  const got = actual.map((a) => resolveObjectNoun(a).toLowerCase());
+  const is =
+    got.length > 0
+      ? `a ${got[0]}${got.length > 1 ? ` (also: ${got.slice(1).join(", ")})` : ""}`
+      : "of no known kind";
+  return `This ${template.toLowerCase()} runs on a ${want}, but the subject you chose is ${is}. Pick a ${want}, or run a ${template.toLowerCase()} made for this kind.`;
+}
+
 /** Typed refusal: the subject is not of the playbook's kind. A BAD_REQUEST. */
 export class SubjectKindMismatchError extends TRPCError {
   readonly reasonCode = SUBJECT_KIND_MISMATCH;
   readonly expected: string;
   readonly actual: string[];
   readonly subjectId: string;
-  constructor(input: { expected: string; actual: string[]; subjectId: string }) {
+  constructor(input: {
+    expected: string;
+    actual: string[];
+    subjectId: string;
+  }) {
     super({
       code: "BAD_REQUEST",
-      message:
-        `This playbook runs on a "${input.expected}", but the subject you chose is ` +
-        (input.actual.length > 0
-          ? `a "${input.actual[0]}"${input.actual.length > 1 ? ` (also: ${input.actual.slice(1).join(", ")})` : ""}`
-          : "of no known kind") +
-        `. Pick a ${input.expected}, or run a playbook made for this kind.`,
+      message: subjectKindMismatchMessage(input.expected, input.actual),
     });
     this.name = "SubjectKindMismatchError";
     this.expected = input.expected;
@@ -91,7 +107,10 @@ export async function subjectKindSlugs(input: {
   let profileId = entity.profileId ?? null;
   for (let depth = 0; profileId && depth < MAX_ANCESTOR_DEPTH; depth++) {
     const [p] = await db
-      .select({ slug: profiles.slug, parentProfileId: profiles.parentProfileId })
+      .select({
+        slug: profiles.slug,
+        parentProfileId: profiles.parentProfileId,
+      })
       .from(profiles)
       .where(eq(profiles.id, profileId))
       .limit(1);

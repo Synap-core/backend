@@ -404,10 +404,11 @@ export const expectedOutputWireSchema = z.object({
   // The satisfy door's receipt for that edge. Round-trip only, like `answer`.
   subjectEdge: z
     .object({
-      status: z.enum(["linked", "skipped"]),
+      status: z.enum(["linked", "proposed", "skipped"]),
       relationType: z.string(),
       outputEntityId: z.string().optional(),
       relationId: z.string().optional(),
+      proposalId: z.string().optional(),
       reason: z.string().optional(),
       at: z.string(),
     })

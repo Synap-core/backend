@@ -41,14 +41,12 @@ import type { ExpectedOutput, SlotSubjectEdge } from "@synap/playbooks";
 import { isBuiltinRelationType } from "../../utils/relation-types.js";
 import type { Context } from "../../types/context.js";
 import { deriveSlotKeys } from "./slot-keys.js";
+import { UUID_RE } from "./session-metadata.js";
 
 const logger = createLogger({ module: "focus-sessions/subject-edge" });
 
-/** The authored "explicitly no edge" value (lane A's templates use it). */
+/** The authored "explicitly no edge": a template declares it to opt a slot out. */
 export const NO_SUBJECT_RELATION = "none";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Slots owed an edge: done, declaring a real relation, never attempted. PURE. */
 export function slotsOwedSubjectEdge(
@@ -57,7 +55,9 @@ export function slotsOwedSubjectEdge(
   const out: number[] = [];
   outputs.forEach((s, i) => {
     const rel =
-      typeof s?.relationToSubject === "string" ? s.relationToSubject.trim() : "";
+      typeof s?.relationToSubject === "string"
+        ? s.relationToSubject.trim()
+        : "";
     if (
       s &&
       s.status === "done" &&
@@ -242,7 +242,17 @@ async function linkInner(
           ...(lens ? { workspaceId: lens } : {}),
         })) as { status?: string; proposalId?: string; id?: string };
       if (res?.status === "proposed") {
-        skip(`proposed:${res.proposalId ?? ""}`, outputEntityId);
+        // Filed for review: a state of its own, never a skip reason string.
+        decided.push({
+          key: keys[index]!,
+          edge: {
+            status: "proposed",
+            relationType,
+            outputEntityId,
+            ...(res.proposalId ? { proposalId: res.proposalId } : {}),
+            at,
+          },
+        });
         continue;
       }
       relationId = res?.id ?? null;

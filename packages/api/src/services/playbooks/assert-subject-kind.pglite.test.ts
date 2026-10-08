@@ -66,7 +66,6 @@ function ddlFor(table: PgTable): string {
   return `create table "${cfg.name}" (${columns.join(", ")});`;
 }
 
-
 beforeAll(async () => {
   const client = new PGlite();
   for (const t of [
@@ -134,6 +133,10 @@ describe("assertRunSubjectMatchesPlaybook", () => {
     expect(e.reasonCode).toBe("SUBJECT_KIND_MISMATCH");
     expect(e.expected).toBe("post");
     expect(e.actual).toEqual(["person"]);
+    // In the person's words: the vocabulary nouns, no quoted slugs.
+    expect(e.message).toBe(
+      "This template runs on a post, but the subject you chose is a person. Pick a post, or run a template made for this kind."
+    );
     // A plain person is NOT a lead (the facet is per entity).
     await expect(check(PERSON, "lead")).rejects.toBeInstanceOf(
       SubjectKindMismatchError
