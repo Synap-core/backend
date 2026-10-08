@@ -69,6 +69,7 @@ import {
   type PlaybookStageCategory,
 } from "@synap/playbooks";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
+import { evaluateSubjectFilter } from "../services/playbooks/subject-filter.js";
 import {
   carryProcessOver,
   foldProcessIntoSubjectProfile,
@@ -1561,6 +1562,17 @@ export const playbooksRouter = router({
          * the same.
          */
         projectId: z.string().uuid().optional(),
+        /**
+         * `entity-actions` — the entity page's action strip. The pod applies
+         * the strip's rules BEFORE the cap, so the client needs no per-row
+         * `playbooks.get` and never filters a truncated list: only playbooks in
+         * THIS workspace or pod-wide (the lens), with a subject, not a track
+         * method (`scope: project`), not pinned (`inputStrategy.kind: pinned`
+         * — the pin control is their door), and whose `subjectProfile.filter`
+         * PASSES on the entity (an unreadable filter is skipped). Without it
+         * (capture ranking), only a filter that FAILS on the entity drops a row.
+         */
+        purpose: z.enum(["entity-actions"]).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1618,6 +1630,49 @@ export const playbooksRouter = router({
       // Ranked with a human-readable `reason` (suggest-and-confirm): intent
       // words (rarity-weighted over this pool) first, then kind, then facet.
       // Ties break by relevance, never by updatedAt (suggest-routes.ts).
+      // The subject filter is the pod's to judge (`evaluateSubjectFilter`):
+      // read the entity's properties once, only when a candidate has a filter.
+      const subjectFilterOf = (row: Playbook): unknown =>
+        (row.subjectProfile as { filter?: unknown } | null)?.filter;
+      let entityProperties: Record<string, unknown> | null = null;
+      if (
+        input.entityId &&
+        rows.some((r) => subjectFilterOf(r as Playbook) != null)
+      ) {
+        const [ent] = await database
+          .select({ properties: entities.properties })
+          .from(entities)
+          .where(
+            and(
+              eq(entities.id, input.entityId),
+              scopedDb(AccessContext.from(ctx)).predicate(entities)
+            )
+          )
+          .limit(1);
+        entityProperties =
+          (ent?.properties as Record<string, unknown> | null) ?? {};
+      }
+      const forStrip = input.purpose === "entity-actions";
+      const applicable = rows.filter((r) => {
+        const row = r as Playbook;
+        if (entityProperties) {
+          const verdict = evaluateSubjectFilter(
+            subjectFilterOf(row),
+            entityProperties
+          );
+          if (verdict === "fail") return false;
+          if (forStrip && verdict === "unreadable") return false;
+        }
+        if (!forStrip) return true;
+        const sp = row.subjectProfile as { profileSlug?: unknown } | null;
+        return (
+          (row.workspaceId == null || row.workspaceId === input.workspaceId) &&
+          typeof sp?.profileSlug === "string" &&
+          row.scope !== "project" &&
+          (row.inputStrategy as { kind?: unknown } | null)?.kind !== "pinned"
+        );
+      });
+
       const ranked = rankRouteCandidates({
         entity: {
           entityId: input.entityId,
@@ -1625,7 +1680,7 @@ export const playbooksRouter = router({
           facetSlugs,
         },
         intentText: input.intentText,
-        candidates: rows.map((p) => ({
+        candidates: applicable.map((p) => ({
           kind: "playbook" as const,
           id: p.id,
           name: p.name,
@@ -1661,6 +1716,20 @@ export const playbooksRouter = router({
           // the match→confirm→run path's whole intake contract.
           params: candidate.row.params,
           executor: candidate.row.executor,
+          // What a surface needs to judge and disclose a row without a
+          // per-candidate `playbooks.get`.
+          workspaceId: candidate.row.workspaceId ?? null,
+          inputStrategyKind:
+            ((candidate.row.inputStrategy as { kind?: unknown } | null)
+              ?.kind as string | undefined) ?? null,
+          subjectFilter:
+            (candidate.row.subjectProfile as { filter?: unknown } | null)
+              ?.filter ?? null,
+          forceProposeWrites:
+            (
+              (candidate.row.metadata as Record<string, unknown> | null)
+                ?.governance as { forceProposeWrites?: unknown } | undefined
+            )?.forceProposeWrites === true,
           score,
           reason,
           signals,

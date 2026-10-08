@@ -141,6 +141,10 @@ describe("playbooks.matchForEntity", () => {
         subjectProfileSlug: "post",
         params: [{ key: "platform", type: "string" }],
         executor: "is-agent",
+        workspaceId: null,
+        inputStrategyKind: null,
+        subjectFilter: null,
+        forceProposeWrites: false,
         score: 2,
         reason: "Made for post items",
         signals: [{ type: "kind", profileSlug: "post" }],
@@ -214,6 +218,10 @@ describe("playbooks.matchForEntity", () => {
         subjectProfileSlug: "lead",
         params: [],
         executor: "is-agent",
+        workspaceId: null,
+        inputStrategyKind: null,
+        subjectFilter: null,
+        forceProposeWrites: false,
         score: 1.5,
         reason: "Matches its lead role",
         signals: [{ type: "facet", profileSlug: "lead" }],
@@ -486,5 +494,104 @@ describe("playbooks.matchForEntity", () => {
       ["pb-track", "project", "Track template"],
       ["pb-twin", "session", "Work template"],
     ]);
+  });
+
+  describe("purpose: entity-actions — the strip's rules, applied by the pod BEFORE the cap", () => {
+    const ENTITY = "00000000-0000-4000-8000-0000000000bb";
+    const OTHER_WS = "00000000-0000-4000-8000-000000000099";
+    const row = (id: string, over: Record<string, unknown> = {}) => ({
+      id,
+      name: id,
+      goalTemplate: "Do {{subject}}",
+      params: [],
+      executor: "is-agent",
+      workspaceId: WORKSPACE,
+      scope: "session",
+      inputStrategy: { kind: "subject" },
+      metadata: {},
+      subjectProfile: { profileSlug: "post" },
+      ...over,
+    });
+    const ROWS = [
+      row("here"),
+      row("pod-wide", { workspaceId: null }),
+      row("other-space", { workspaceId: OTHER_WS }),
+      row("track-method", { scope: "project" }),
+      row("pinned", { inputStrategy: { kind: "pinned" } }),
+      row("no-subject", { subjectProfile: null }),
+      row("filter-pass", {
+        subjectProfile: {
+          profileSlug: "post",
+          filter: { "post-status": "Idea" },
+        },
+      }),
+      row("filter-fail", {
+        subjectProfile: {
+          profileSlug: "post",
+          filter: { "post-status": "Draft" },
+        },
+      }),
+      row("filter-unreadable", {
+        subjectProfile: { profileSlug: "post", filter: "status = idea" },
+      }),
+      row("propose-only", {
+        metadata: { governance: { forceProposeWrites: true } },
+      }),
+    ];
+    function dbWith(rows: unknown[], entityProps: Record<string, unknown>) {
+      const pbChain = selectChain(rows);
+      const entChain = {
+        from: () => entChain,
+        where: () => entChain,
+        limit: async () => [{ properties: entityProps }],
+      };
+      let n = 0;
+      mockGetDb.mockResolvedValue({
+        select: vi.fn(() => (n++ === 0 ? pbChain : entChain)),
+      });
+    }
+    const ids = (r: Array<{ id: string }>) => r.map((x) => x.id).sort();
+
+    it("returns only what the strip may show, with the fields it needs", async () => {
+      dbWith(ROWS, { "post-status": "Idea" });
+      const res = await playbooksRouter
+        .createCaller(callerCtx())
+        .matchForEntity({
+          profileSlug: "post",
+          entityId: ENTITY,
+          workspaceId: WORKSPACE,
+          purpose: "entity-actions",
+        });
+      expect(ids(res)).toEqual(
+        ["filter-pass", "here", "pod-wide", "propose-only"].sort()
+      );
+      const po = res.find((r) => r.id === "propose-only")!;
+      expect(po).toMatchObject({
+        workspaceId: WORKSPACE,
+        inputStrategyKind: "subject",
+        forceProposeWrites: true,
+        scope: "session",
+        executor: "is-agent",
+      });
+      expect(res.find((r) => r.id === "filter-pass")!.subjectFilter).toEqual({
+        "post-status": "Idea",
+      });
+    });
+
+    it("without a purpose (capture ranking) only a filter that FAILS on the entity drops a row", async () => {
+      dbWith(ROWS, { "post-status": "Idea" });
+      const res = await playbooksRouter
+        .createCaller(callerCtx())
+        .matchForEntity({
+          profileSlug: "post",
+          entityId: ENTITY,
+          workspaceId: WORKSPACE,
+        });
+      const got = ids(res);
+      expect(got).not.toContain("filter-fail");
+      expect(got).toContain("filter-unreadable");
+      expect(got).toContain("other-space");
+      expect(got).toContain("pinned");
+    });
   });
 });
