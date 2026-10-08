@@ -17,6 +17,9 @@ import {
   resolveAgentBindingErrorLabel,
   resolveAgentReachLabel,
 } from "../vocabulary/index.js";
+import { resolveObjectNoun, resolveStatusLabel } from "../vocabulary/index.js";
+import { resolveServiceName } from "../service-marks/index.js";
+import { resolveUnitState, type UnitStateView } from "../units/state.js";
 
 /**
  * The one command that connects a person's own agents (Claude Code, Codex,
@@ -548,5 +551,177 @@ export function resolveAgentReachMark(
     glyph: r,
     label: resolveAgentReachLabel(r),
     error: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// EXTERNAL AGENT — a session's run handed to an agent Synap dispatches work to
+// (`focusSessions.get` → `continuation.externalAgent.agent`). Browser's room
+// and relay's room draw this ONE view: the state as the shared unit mark, the
+// ONE door to the provider, what the agent reported as outputs (PR, branch,
+// preview), its summary, and whether Cancel may be offered.
+// ---------------------------------------------------------------------------
+
+/** Every task state the pod normalizes a provider's status to. */
+export const EXTERNAL_AGENT_STATUSES = [
+  "running",
+  "needs_input",
+  "done",
+  "failed",
+  "cancelled",
+] as const;
+export type ExternalAgentStatus = (typeof EXTERNAL_AGENT_STATUSES)[number];
+
+/**
+ * Run statuses a cancel can act on — a MIRROR of `LIVE_RUN_STATUSES`
+ * (`@synap/database` utils/live-run-status.ts), which this leaf cannot import.
+ * `services/agent-dispatch/__tests__/external-agent-live-mirror.test.ts` (packages/api) fails
+ * when the two disagree.
+ */
+export const EXTERNAL_AGENT_LIVE_RUN_STATUSES = [
+  "running",
+  "waiting_on_you",
+] as const;
+
+/** The slice of `SessionExternalAgent` the view reads. */
+export interface ExternalAgentLike {
+  runStatus: string;
+  provider: string;
+  status: string;
+  url?: string | null;
+  prUrl?: string | null;
+  branch?: string | null;
+  previewUrl?: string | null;
+  summary?: string | null;
+}
+
+export type ExternalAgentOutputKey = "pull_request" | "branch" | "preview";
+
+/** One thing the agent reported, as an output card reads it. */
+export interface ExternalAgentOutput {
+  key: ExternalAgentOutputKey;
+  /** `resolveObjectNoun(key)` — "Pull request", "Branch", "Preview". */
+  noun: string;
+  /** Empty ⇒ the card is led by its noun. */
+  title: string;
+  /** An https address to open, or `null` (a branch has none: a plain card). */
+  url: string | null;
+}
+
+export interface ExternalAgentView {
+  /** The shared unit mark (`resolveUnitState`) — tone + glyph, never a sentence. */
+  mark: UnitStateView;
+  /** The mark's accessible words (a cancelled task reads "Cancelled", not "Done"). */
+  label: string;
+  /** The provider as a person reads it (`resolveServiceName`). */
+  providerName: string;
+  /** The ONE door to the provider's page — https only, else `null` (no door). */
+  url: string | null;
+  /** "Open in <provider>". */
+  openLabel: string;
+  outputs: ExternalAgentOutput[];
+  /** The agent's own summary, trimmed; `null` = none reported. */
+  summary: string | null;
+  /** The RUN is still live, so Cancel may be offered. */
+  cancellable: boolean;
+}
+
+/**
+ * Only an https address becomes a door: the provider reports these links and
+ * the pod passes them through, so a `javascript:` / `file:` value must never
+ * reach an open call on either surface.
+ */
+export function safeExternalUrl(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (!/^https:\/\//i.test(value)) return null;
+  try {
+    return new URL(value).toString();
+  } catch {
+    return null;
+  }
+}
+
+function pullRequestTitle(url: string): string {
+  const n = /\/(?:pull|merge_requests|pulls)\/(\d+)/.exec(url);
+  return n ? `#${n[1]}` : "";
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The ONE external-agent view. The status → unit-state arms, and why:
+ *  - `running` ⇒ working (an agent is at it);
+ *  - `needs_input` ⇒ needs you (the answer wakes the agent);
+ *  - `done` ⇒ done; `cancelled` ⇒ done, worded "Cancelled";
+ *  - `failed` ⇒ failed;
+ *  - a status this build does not know ⇒ unmeasured — never a guess.
+ */
+export function resolveExternalAgentView(
+  agent: ExternalAgentLike
+): ExternalAgentView {
+  const status = agent.status;
+  const known = (EXTERNAL_AGENT_STATUSES as readonly string[]).includes(status);
+  const mark = !known
+    ? resolveUnitState({ unreadable: true })
+    : resolveUnitState({
+        failed: status === "failed",
+        terminal: status === "done" || status === "cancelled",
+        waitingOnYou: status === "needs_input",
+        running: status === "running",
+        everStarted: true,
+      });
+  const label =
+    status === "cancelled"
+      ? resolveStatusLabel("cancelled")
+      : resolveStatusLabel(mark.state);
+  const providerName = resolveServiceName(agent.provider);
+
+  const outputs: ExternalAgentOutput[] = [];
+  const prUrl = safeExternalUrl(agent.prUrl);
+  if (prUrl) {
+    outputs.push({
+      key: "pull_request",
+      noun: resolveObjectNoun("pull_request"),
+      title: pullRequestTitle(prUrl),
+      url: prUrl,
+    });
+  }
+  const branch = agent.branch?.trim();
+  if (branch) {
+    outputs.push({
+      key: "branch",
+      noun: resolveObjectNoun("branch"),
+      title: branch,
+      url: null,
+    });
+  }
+  const previewUrl = safeExternalUrl(agent.previewUrl);
+  if (previewUrl) {
+    outputs.push({
+      key: "preview",
+      noun: resolveObjectNoun("preview"),
+      title: hostOf(previewUrl),
+      url: previewUrl,
+    });
+  }
+
+  return {
+    mark,
+    label,
+    providerName,
+    url: safeExternalUrl(agent.url),
+    openLabel: `Open in ${providerName}`,
+    outputs,
+    summary: agent.summary?.trim() || null,
+    cancellable: (
+      EXTERNAL_AGENT_LIVE_RUN_STATUSES as readonly string[]
+    ).includes(agent.runStatus),
   };
 }
