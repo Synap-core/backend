@@ -88,6 +88,7 @@ import {
   playbooks,
   messages,
   projects,
+  playbookRuns,
 } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
 import { sessionHandlers } from "./mcp/handlers/session.js";
@@ -186,6 +187,8 @@ describe("focusSessions.get returns the continuation packet", () => {
       channelMembers,
       podMembers,
       projectMembers,
+      // The externalAgent section reads the session's dispatched runs.
+      playbookRuns,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -381,6 +384,64 @@ describe("focusSessions.get returns the continuation packet", () => {
     } finally {
       h.failRerun = false;
     }
+  });
+
+  it("externalAgent: the newest dispatched run, with the agent's reported links — the same on both doors", async () => {
+    const id = await seed({ owed: false });
+    expect((await get(id)).continuation.externalAgent).toEqual({
+      status: "ok",
+      agent: null,
+    });
+    const runId = randomUUID();
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, external_agent, started_at)
+       values ($1, $2, $3, 'external-agent', 'running', '{}'::jsonb, $4, $5::jsonb, now())`,
+      [
+        runId,
+        randomUUID(),
+        id,
+        USER,
+        JSON.stringify({
+          agentUserId: "agent-9",
+          toolId: "tool-9",
+          provider: "acme",
+          externalId: "t-1",
+          url: "https://acme/t/1",
+          status: "needs_input",
+          startedAt: "2026-10-08T00:00:00.000Z",
+          polledAt: "2026-10-08T00:02:00.000Z",
+          lastState: {
+            state: "needs_input",
+            prUrl: "https://gh/pr/4",
+            branch: "feat/x",
+            previewUrl: "https://preview/x",
+            summary: "Which DB?",
+          },
+        }),
+      ]
+    );
+    const expected = {
+      status: "ok",
+      agent: {
+        runId,
+        runStatus: "running",
+        agentUserId: "agent-9",
+        provider: "acme",
+        status: "needs_input",
+        url: "https://acme/t/1",
+        prUrl: "https://gh/pr/4",
+        branch: "feat/x",
+        previewUrl: "https://preview/x",
+        summary: "Which DB?",
+        polledAt: "2026-10-08T00:02:00.000Z",
+        startedAt: "2026-10-08T00:00:00.000Z",
+      },
+    };
+    expect((await get(id)).continuation.externalAgent).toEqual(expected);
+    expect(
+      ((await mcpGet(id)).continuation as Record<string, unknown>).externalAgent
+    ).toEqual(expected);
+    await h.client!.exec("delete from playbook_runs;");
   });
 
   it("MCP synap_get_session carries the same packet as tRPC get", async () => {

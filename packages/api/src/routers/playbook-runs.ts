@@ -28,6 +28,7 @@ import {
   rosterReadFor,
   sessionReadableWhere,
 } from "../access/session-visibility.js";
+import { cancelRun } from "../services/agent-dispatch/cancel-run.js";
 
 export const playbookRunsRouter = router({
   /**
@@ -67,5 +68,62 @@ export const playbookRunsRouter = router({
         .from(playbookRuns)
         .where(eq(playbookRuns.sessionId, input.sessionId))
         .orderBy(desc(playbookRuns.startedAt));
+    }),
+
+  /**
+   * Cancel a live run — and its external agent's task when the binding can
+   * cancel. The SAME logic as Hub `POST /runs/:runId/cancel` (`cancelRun`,
+   * services/agent-dispatch/cancel-run.ts): one function, two transports.
+   *
+   * HUMAN-ONLY, and the session OWNER only: stopping work is the person's call
+   * (a roster member reads, never writes — decision C). An agent key is refused.
+   */
+  cancelRun: protectedProcedure
+    .input(z.object({ runId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only a person can cancel a run — an agent key cannot.",
+        });
+      }
+      const db = await getDb();
+      const [run] = await db
+        .select({ id: playbookRuns.id, sessionId: playbookRuns.sessionId })
+        .from(playbookRuns)
+        .where(eq(playbookRuns.id, input.runId))
+        .limit(1);
+      const session = run?.sessionId
+        ? await db.query.focusSessions.findFirst({
+            where: eq(focusSessions.id, run.sessionId),
+            columns: { userId: true },
+          })
+        : null;
+      // A run that is not yours reads exactly like a missing one (no oracle).
+      if (!run || !session || session.userId !== ctx.userId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found" });
+      }
+      const out = await cancelRun({ runId: run.id, userId: ctx.userId });
+      if (out.status === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found" });
+      }
+      if (out.status === "not_live") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Run is ${out.runStatus}, not running — nothing to cancel`,
+        });
+      }
+      if (out.status === "cancel_failed") {
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message: `The agent's task could not be cancelled: ${out.message}`,
+        });
+      }
+      return {
+        runId: run.id,
+        status: "cancelled" as const,
+        externalCancelled: out.externalCancelled,
+        note: out.note ?? null,
+      };
     }),
 });

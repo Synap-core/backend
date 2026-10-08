@@ -88,6 +88,10 @@ import {
   sessionReadableWhere,
   type SessionReader,
 } from "../../access/session-visibility.js";
+import {
+  readSessionExternalAgent,
+  type SessionExternalAgent,
+} from "../agent-dispatch/session-external-agent.js";
 
 const logger = createLogger({ module: "continuation-packet" });
 
@@ -281,6 +285,14 @@ export interface ContinuationPacket {
   };
   aiCanDo: PacketSection<PacketSlotItem>;
   blockers: PacketSection<PacketSlotItem>;
+  /**
+   * The EXTERNAL agent this session's work was handed to — its newest
+   * dispatched run (`readSessionExternalAgent`). `agent: null` = never handed
+   * to one; a failed read is `unavailable`.
+   */
+  externalAgent:
+    | { status: "ok"; agent: SessionExternalAgent | null }
+    | { status: "unavailable"; reason: string };
   outputs: PacketSection<PacketOutputItem>;
   /**
    * Child sessions (detours and planned sub-sessions), oldest first. A parent
@@ -384,6 +396,8 @@ export interface ContinuationPacket {
       }
     | { status: "unavailable"; reason: string };
 }
+
+export type { SessionExternalAgent } from "../agent-dispatch/session-external-agent.js";
 
 export interface PacketEvaluationItem {
   criterionKey: string;
@@ -1388,6 +1402,7 @@ export async function projectContinuationPacket(
     alreadyDone,
     lastDecision,
     evaluation,
+    externalAgent,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -1505,6 +1520,18 @@ export async function projectContinuationPacket(
           "This session's criteria evaluations could not be read."
         )
       ),
+    readSessionExternalAgent(row.id, database)
+      .then((agent): ContinuationPacket["externalAgent"] => ({
+        status: "ok",
+        agent,
+      }))
+      .catch(
+        unavailable(
+          row.id,
+          "externalAgent",
+          "The agent this session was handed to could not be read."
+        )
+      ),
   ]);
 
   // ONE lineage read, TWO projections: `parent` (identity) and `resume`
@@ -1554,6 +1581,7 @@ export async function projectContinuationPacket(
     userMustDecide: { owedSlots, pendingProposals },
     aiCanDo,
     blockers,
+    externalAgent,
     outputs,
     children,
     parent,
