@@ -624,6 +624,13 @@ export interface ExternalAgentView {
   summary: string | null;
   /** The RUN is still live, so Cancel may be offered. */
   cancellable: boolean;
+  /**
+   * The agent is waiting on the person (`needs_you`): the provider door is
+   * where they answer it, so both surfaces draw it as the primary action.
+   */
+  openProminent: boolean;
+  /** The task failed: the agent's summary is the why, so it starts unfolded. */
+  summaryOpen: boolean;
 }
 
 /**
@@ -723,5 +730,7 @@ export function resolveExternalAgentView(
     cancellable: (
       EXTERNAL_AGENT_LIVE_RUN_STATUSES as readonly string[]
     ).includes(agent.runStatus),
+    openProminent: mark.state === "needs_you",
+    summaryOpen: mark.state === "failed",
   };
 }

@@ -112,6 +112,35 @@ describe("resolveExternalAgentView", () => {
     );
   });
 
+  it("the provider door is prominent only when the agent waits on the person", () => {
+    // Rows where "prominent when live" and "prominent when needs you" disagree.
+    expect(
+      resolveExternalAgentView({ ...base, status: "needs_input" }).openProminent
+    ).toBe(true);
+    expect(resolveExternalAgentView(base).openProminent).toBe(false);
+    expect(
+      resolveExternalAgentView({ ...base, status: "failed" }).openProminent
+    ).toBe(false);
+    expect(
+      resolveExternalAgentView({ ...base, status: "teleporting" }).openProminent
+    ).toBe(false);
+  });
+
+  it("the summary starts open only when the task failed", () => {
+    expect(
+      resolveExternalAgentView({ ...base, status: "failed" }).summaryOpen
+    ).toBe(true);
+    expect(
+      resolveExternalAgentView({ ...base, status: "done" }).summaryOpen
+    ).toBe(false);
+    expect(
+      resolveExternalAgentView({ ...base, status: "cancelled" }).summaryOpen
+    ).toBe(false);
+    expect(
+      resolveExternalAgentView({ ...base, status: "needs_input" }).summaryOpen
+    ).toBe(false);
+  });
+
   it("summary is trimmed; blank is none", () => {
     expect(
       resolveExternalAgentView({ ...base, summary: "  Fixed it.  " }).summary
