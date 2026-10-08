@@ -87,13 +87,21 @@ describe("resolveExternalAgentView", () => {
         noun: "Pull request",
         title: "#42",
         url: "https://github.com/acme/app/pull/42",
+        producedAt: null,
       },
-      { key: "branch", noun: "Branch", title: "fix/pick", url: null },
+      {
+        key: "branch",
+        noun: "Branch",
+        title: "fix/pick",
+        url: null,
+        producedAt: null,
+      },
       {
         key: "preview",
         noun: "Preview",
         title: "pr-42.preview.acme.dev",
         url: "https://pr-42.preview.acme.dev/x",
+        producedAt: null,
       },
     ]);
   });
@@ -148,5 +156,104 @@ describe("resolveExternalAgentView", () => {
     expect(
       resolveExternalAgentView({ ...base, summary: "   " }).summary
     ).toBeNull();
+  });
+
+  it("the section is titled by the AGENT's name, with a door to its page; the provider is the fallback", () => {
+    const v = resolveExternalAgentView({
+      ...base,
+      agentUserId: "agent-1",
+      agentName: "  Builder  ",
+    });
+    expect(v.title).toBe("Builder");
+    expect(v.agentDoor).toEqual({ kind: "agent", id: "agent-1" });
+    const bare = resolveExternalAgentView({ ...base, agentName: "  " });
+    expect(bare.title).toBe("GitHub");
+    expect(bare.agentDoor).toBeNull();
+  });
+
+  it("3+ failed reads in a row on a LIVE task ⇒ the unreadable mark, worded by the service; fewer, or a settled task, keep their state", () => {
+    const at = { firstSeenAt: "2026-10-08T00:00:00.000Z" };
+    const down = resolveExternalAgentView({
+      ...base,
+      pollError: { ...at, count: 3 },
+    });
+    expect(down.mark.state).toBe("unmeasured");
+    expect(down.label).toBe("Can't reach GitHub");
+    expect(down.unreachable).toBe(true);
+    // The open door is kept.
+    expect(down.url).toBe("https://github.com/acme/app/issues/7");
+    expect(
+      resolveExternalAgentView({ ...base, pollError: { ...at, count: 2 } }).mark
+        .state
+    ).toBe("working");
+    expect(
+      resolveExternalAgentView({
+        ...base,
+        status: "needs_input",
+        pollError: { ...at, count: 5 },
+      }).mark.state
+    ).toBe("unmeasured");
+    const done = resolveExternalAgentView({
+      ...base,
+      status: "done",
+      pollError: { ...at, count: 9 },
+    });
+    expect(done.mark.state).toBe("done");
+    expect(done.unreachable).toBe(false);
+  });
+
+  it("pending_start is the person's turn with the PROPOSAL as the door; no cancel, the provider door stays secondary", () => {
+    const v = resolveExternalAgentView({
+      ...base,
+      runStatus: "proposed",
+      status: "pending_start",
+      proposalId: "prop-1",
+      url: null,
+    });
+    expect(v.mark.state).toBe("needs_you");
+    expect(v.label).toBe("Needs you");
+    expect(v.proposalDoor).toEqual({ kind: "proposal", id: "prop-1" });
+    expect(v.cancellable).toBe(false);
+    expect(v.openProminent).toBe(false);
+    // Even if the run row were live, a pending start offers no cancel.
+    expect(
+      resolveExternalAgentView({
+        ...base,
+        status: "pending_start",
+        proposalId: "prop-1",
+      }).cancellable
+    ).toBe(false);
+    // A proposal id on any other state is not a door.
+    expect(
+      resolveExternalAgentView({ ...base, proposalId: "prop-1" }).proposalDoor
+    ).toBeNull();
+  });
+
+  it("cancel wording is honest: a binding that cannot stop the agent says the run ends in Synap and the agent may keep going", () => {
+    const stops = resolveExternalAgentView({ ...base, cancelStopsAgent: true });
+    expect(stops.cancelStopsAgent).toBe(true);
+    expect(stops.cancelConfirm.description).toBe(
+      "GitHub stops working on it, and this run ends."
+    );
+    for (const cancelStopsAgent of [false, null, undefined]) {
+      const v = resolveExternalAgentView({ ...base, cancelStopsAgent });
+      expect(v.cancelStopsAgent).toBe(false);
+      expect(v.cancelConfirm.description).toMatch(/ends the run in Synap/);
+      expect(v.cancelConfirm.description).toMatch(/may keep going/);
+      expect(v.cancelConfirm.description).not.toMatch(/stops working/);
+    }
+  });
+
+  it("an output's producedAt is when the agent first reported it, per output", () => {
+    const v = resolveExternalAgentView({
+      ...base,
+      prUrl: "https://github.com/acme/app/pull/42",
+      branch: "fix/pick",
+      reportedAt: { pull_request: "2026-10-08T01:00:00.000Z" },
+    });
+    expect(v.outputs.map((o) => [o.key, o.producedAt])).toEqual([
+      ["pull_request", "2026-10-08T01:00:00.000Z"],
+      ["branch", null],
+    ]);
   });
 });

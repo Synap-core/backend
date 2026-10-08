@@ -17,7 +17,11 @@ import {
   resolveAgentBindingErrorLabel,
   resolveAgentReachLabel,
 } from "../vocabulary/index.js";
-import { resolveObjectNoun, resolveStatusLabel } from "../vocabulary/index.js";
+import {
+  resolveActionLabel,
+  resolveObjectNoun,
+  resolveStatusLabel,
+} from "../vocabulary/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
 import { resolveUnitState, type UnitStateView } from "../units/state.js";
 
@@ -562,8 +566,13 @@ export function resolveAgentReachMark(
 // preview), its summary, and whether Cancel may be offered.
 // ---------------------------------------------------------------------------
 
-/** Every task state the pod normalizes a provider's status to. */
+/**
+ * Every task state the pod normalizes a provider's status to, plus
+ * `pending_start`: the `start` verb was PROPOSED and waits on a person's
+ * approval — nothing has reached the provider yet.
+ */
 export const EXTERNAL_AGENT_STATUSES = [
+  "pending_start",
   "running",
   "needs_input",
   "done",
@@ -583,19 +592,46 @@ export const EXTERNAL_AGENT_LIVE_RUN_STATUSES = [
   "waiting_on_you",
 ] as const;
 
+/**
+ * Consecutive failed status reads after which the task reads "Can't reach
+ * <service>" instead of its last known state. One or two misses are a blip the
+ * next tick usually heals; three in a row (minutes, at the poll's cadence) is
+ * a provider the pod genuinely cannot read.
+ */
+export const EXTERNAL_AGENT_UNREACHABLE_AFTER = 3;
+
+export type ExternalAgentOutputKey = "pull_request" | "branch" | "preview";
+
 /** The slice of `SessionExternalAgent` the view reads. */
 export interface ExternalAgentLike {
   runStatus: string;
   provider: string;
   status: string;
+  /** The agent user the work was handed to — the door to its own page. */
+  agentUserId?: string | null;
+  /** The agent's name. Absent/blank ⇒ the section is titled by the provider. */
+  agentName?: string | null;
   url?: string | null;
   prUrl?: string | null;
   branch?: string | null;
   previewUrl?: string | null;
   summary?: string | null;
+  /**
+   * The status reads that failed IN A ROW (cleared on the next good read).
+   * `count >= EXTERNAL_AGENT_UNREACHABLE_AFTER` ⇒ the unreadable mark.
+   */
+  pollError?: { firstSeenAt: string; count: number } | null;
+  /** `pending_start` only: the proposal the start waits on. */
+  proposalId?: string | null;
+  /**
+   * The binding can stop the agent (`supports.cancel`). `false` ⇒ cancelling
+   * ends the run in Synap while the agent may keep going. Absent ⇒ unknown
+   * (an older pod): the honest, weaker wording.
+   */
+  cancelStopsAgent?: boolean | null;
+  /** When the agent FIRST reported each output (ISO), by output key. */
+  reportedAt?: Partial<Record<ExternalAgentOutputKey, string | null>> | null;
 }
-
-export type ExternalAgentOutputKey = "pull_request" | "branch" | "preview";
 
 /** One thing the agent reported, as an output card reads it. */
 export interface ExternalAgentOutput {
@@ -606,15 +642,35 @@ export interface ExternalAgentOutput {
   title: string;
   /** An https address to open, or `null` (a branch has none: a plain card). */
   url: string | null;
+  /** When the agent first reported it (ISO), or `null` (not recorded). */
+  producedAt: string | null;
 }
 
 export interface ExternalAgentView {
   /** The shared unit mark (`resolveUnitState`) — tone + glyph, never a sentence. */
   mark: UnitStateView;
-  /** The mark's accessible words (a cancelled task reads "Cancelled", not "Done"). */
+  /**
+   * The mark's accessible words (a cancelled task reads "Cancelled", not
+   * "Done"; an unreachable provider reads "Can't reach <service>").
+   */
   label: string;
+  /** The section title: the AGENT's name, else the provider's. */
+  title: string;
+  /** The door to the agent's own page, or `null` (no agent id served). */
+  agentDoor: { kind: "agent"; id: string } | null;
+  /**
+   * `pending_start`: the start proposal to decide — the section's primary door
+   * ("Needs you"). `null` in every other state.
+   */
+  proposalDoor: { kind: "proposal"; id: string } | null;
   /** The provider as a person reads it (`resolveServiceName`). */
   providerName: string;
+  /** The last status reads failed {@link EXTERNAL_AGENT_UNREACHABLE_AFTER}+ times in a row. */
+  unreachable: boolean;
+  /** Cancel stops the agent itself (the binding's `supports.cancel`). */
+  cancelStopsAgent: boolean;
+  /** The cancel confirm's words — both surfaces show exactly these. */
+  cancelConfirm: { title: string; description: string };
   /** The ONE door to the provider's page — https only, else `null` (no door). */
   url: string | null;
   /** "Open in <provider>". */
@@ -664,10 +720,15 @@ function hostOf(url: string): string {
 
 /**
  * The ONE external-agent view. The status → unit-state arms, and why:
+ *  - `pending_start` ⇒ needs you, the start PROPOSAL as the door (nothing
+ *    reached the provider; rejecting the proposal is how it is called off);
  *  - `running` ⇒ working (an agent is at it);
  *  - `needs_input` ⇒ needs you (the answer wakes the agent);
  *  - `done` ⇒ done; `cancelled` ⇒ done, worded "Cancelled";
  *  - `failed` ⇒ failed;
+ *  - a LIVE task (running / needs_input) whose status reads failed
+ *    {@link EXTERNAL_AGENT_UNREACHABLE_AFTER}+ times in a row ⇒ unmeasured,
+ *    worded "Can't reach <service>": its last known state is no longer known;
  *  - a status this build does not know ⇒ unmeasured — never a guess.
  */
 export function resolveExternalAgentView(
@@ -675,20 +736,32 @@ export function resolveExternalAgentView(
 ): ExternalAgentView {
   const status = agent.status;
   const known = (EXTERNAL_AGENT_STATUSES as readonly string[]).includes(status);
-  const mark = !known
-    ? resolveUnitState({ unreadable: true })
-    : resolveUnitState({
-        failed: status === "failed",
-        terminal: status === "done" || status === "cancelled",
-        waitingOnYou: status === "needs_input",
-        running: status === "running",
-        everStarted: true,
-      });
-  const label =
-    status === "cancelled"
+  const providerName = resolveServiceName(agent.provider);
+  const live = status === "running" || status === "needs_input";
+  const unreachable =
+    live && (agent.pollError?.count ?? 0) >= EXTERNAL_AGENT_UNREACHABLE_AFTER;
+  const pendingStart = status === "pending_start";
+  const mark =
+    !known || unreachable
+      ? resolveUnitState({ unreadable: true })
+      : resolveUnitState({
+          failed: status === "failed",
+          terminal: status === "done" || status === "cancelled",
+          waitingOnYou: status === "needs_input" || pendingStart,
+          running: status === "running",
+          everStarted: true,
+        });
+  const label = unreachable
+    ? `Can't reach ${providerName}`
+    : status === "cancelled"
       ? resolveStatusLabel("cancelled")
       : resolveStatusLabel(mark.state);
-  const providerName = resolveServiceName(agent.provider);
+  const agentName = agent.agentName?.trim() || null;
+  const agentUserId = agent.agentUserId?.trim() || null;
+  const proposalId = pendingStart ? agent.proposalId?.trim() || null : null;
+  const cancelStopsAgent = agent.cancelStopsAgent === true;
+  const seen = agent.reportedAt ?? {};
+  const cancelLabel = resolveActionLabel("cancel", "imperative");
 
   const outputs: ExternalAgentOutput[] = [];
   const prUrl = safeExternalUrl(agent.prUrl);
@@ -698,6 +771,7 @@ export function resolveExternalAgentView(
       noun: resolveObjectNoun("pull_request"),
       title: pullRequestTitle(prUrl),
       url: prUrl,
+      producedAt: seen.pull_request ?? null,
     });
   }
   const branch = agent.branch?.trim();
@@ -707,6 +781,7 @@ export function resolveExternalAgentView(
       noun: resolveObjectNoun("branch"),
       title: branch,
       url: null,
+      producedAt: seen.branch ?? null,
     });
   }
   const previewUrl = safeExternalUrl(agent.previewUrl);
@@ -716,21 +791,40 @@ export function resolveExternalAgentView(
       noun: resolveObjectNoun("preview"),
       title: hostOf(previewUrl),
       url: previewUrl,
+      producedAt: seen.preview ?? null,
     });
   }
 
+  const subject = agentName ?? providerName;
   return {
     mark,
     label,
+    title: subject,
+    agentDoor: agentUserId ? { kind: "agent", id: agentUserId } : null,
+    proposalDoor: proposalId ? { kind: "proposal", id: proposalId } : null,
     providerName,
+    unreachable,
+    cancelStopsAgent,
+    cancelConfirm: {
+      title: `${cancelLabel} the agent's task?`,
+      description: cancelStopsAgent
+        ? `${subject} stops working on it, and this run ends.`
+        : `This ends the run in Synap. ${subject} cannot be stopped from here and may keep going — open it in ${providerName} to stop it there.`,
+    },
     url: safeExternalUrl(agent.url),
     openLabel: `Open in ${providerName}`,
     outputs,
     summary: agent.summary?.trim() || null,
-    cancellable: (
-      EXTERNAL_AGENT_LIVE_RUN_STATUSES as readonly string[]
-    ).includes(agent.runStatus),
-    openProminent: mark.state === "needs_you",
+    // A start waiting on approval has no task to cancel: rejecting the
+    // proposal is the way (its run is `proposed`, never live, either way).
+    cancellable:
+      !pendingStart &&
+      (EXTERNAL_AGENT_LIVE_RUN_STATUSES as readonly string[]).includes(
+        agent.runStatus
+      ),
+    // The provider door is primary when the agent waits on the person — but a
+    // pending start's move is the PROPOSAL, so the provider stays secondary.
+    openProminent: mark.state === "needs_you" && !pendingStart,
     summaryOpen: mark.state === "failed",
   };
 }
