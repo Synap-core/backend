@@ -13,13 +13,16 @@
  * Skips, each reported (never thrown — the stage already stands, and a status
  * write that could not happen must not un-advance the run):
  *  - no subject, no `statusProperty`, or the stage declares no `subjectStatus`;
- *  - the subject ALREADY holds the value — this is also the LOOP GUARD: the
- *    reverse half (a subject entering a status advances the run,
- *    `jobs/src/utils/subject-stage-sync.ts`) advances through the ONE advance
- *    door, which calls back here; the subject already holds the value it just
- *    entered, so nothing is written and nothing re-fires;
- *  - the stage is held by its gate (`paused`) — entering a gated stage is not
- *    agreed yet; the stage-gate approval writes it (`applyApprovedStageStatus`).
+ *  - the subject ALREADY holds the value (`already_set`).
+ *
+ * NOT called (by the advance door) when:
+ *  - the advance FOLLOWS the subject (`skipSubjectWrite`, `@synap/jobs`
+ *    `utils/process-sync.ts`): the subject is the source of truth there, and a
+ *    follow that wrote back ping-ponged on stale events;
+ *  - the stage is held by its gate — entering a gated stage is not agreed yet.
+ *    A gate's PASS writes it: the stage-gate approval executor
+ *    (`routers/proposals/executors/playbook-stage-gate.ts`) for a human gate,
+ *    `resumeCheckGateIfMet` (`evaluations/evaluate.ts`) for a held check.
  *
  * A value listed in `subjectProfile.humanOnlyStatuses` is written with
  * `forcePropose`: whoever drove the advance, a person decides it.
@@ -29,12 +32,7 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import {
-  db,
-  entities,
-  eq,
-  getWorkspaceMembership,
-} from "@synap/database";
+import { db, entities, eq, getWorkspaceMembership } from "@synap/database";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
@@ -53,6 +51,7 @@ export type StageSubjectStatusOutcome =
         | "stage_has_no_subject_status"
         | "already_set"
         | "subject_not_found"
+        | "no_process"
         | "stage_not_found";
     }
   | { status: "failed"; reason: string };
@@ -75,13 +74,14 @@ export async function writeStageSubjectStatus(input: {
   agentUserId?: string | null;
 }): Promise<StageSubjectStatusOutcome> {
   const { session } = input;
-  if (!session.subjectEntityId) return { status: "skipped", reason: "no_subject" };
+  if (!session.subjectEntityId)
+    return { status: "skipped", reason: "no_subject" };
   try {
     const proc = await loadSessionProcess({
       sessionId: session.id,
       playbookId: session.playbookId,
     });
-    if (!proc) return { status: "skipped", reason: "stage_not_found" };
+    if (!proc) return { status: "skipped", reason: "no_process" };
     if (!proc.statusProperty)
       return { status: "skipped", reason: "no_status_property" };
     const stage = proc.stages.find((s) => s?.key === input.toStage);
@@ -94,7 +94,10 @@ export async function writeStageSubjectStatus(input: {
       return { status: "skipped", reason: "stage_has_no_subject_status" };
 
     const [subject] = await db
-      .select({ properties: entities.properties, workspaceId: entities.workspaceId })
+      .select({
+        properties: entities.properties,
+        workspaceId: entities.workspaceId,
+      })
       .from(entities)
       .where(eq(entities.id, session.subjectEntityId))
       .limit(1);

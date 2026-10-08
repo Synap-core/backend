@@ -58,6 +58,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
+const subjectWrites = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock("../../../../services/focus-sessions/stage-subject-status.js", () => ({
+  writeStageSubjectStatus: async (input: Record<string, unknown>) => {
+    subjectWrites.push(input);
+    return { status: "written", property: "post-status", value: "x" };
+  },
+}));
+
 import { proposalExecRegistry } from "../../execution-registry.js";
 import type { ProposalExecutorArgs } from "../../execution-registry.js";
 import { registerPlaybookStageGateExecutors } from "../playbook-stage-gate.js";
@@ -109,6 +117,7 @@ function sessionUpdate(): Record<string, unknown> {
 beforeEach(() => {
   registerPlaybookStageGateExecutors();
   updates.length = 0;
+  subjectWrites.length = 0;
   updateReturns = [{ id: SESSION_ID, status: "active" }];
   sessionRow = {
     id: SESSION_ID,
@@ -169,6 +178,22 @@ describe("focus_session/playbook.stage_gate — approval resumes the run", () =>
     sessionRow = null;
     const executor = proposalExecRegistry.resolveExact(KEY)!;
     await expect(executor.execute(args())).rejects.toThrow(/no longer exists/);
+  });
+});
+
+describe("approval writes the GATED stage's subject status", () => {
+  it("writes it while the run still stands on the gated stage", async () => {
+    sessionRow = { ...sessionRow, currentStage: "review" };
+    await proposalExecRegistry.resolveExact(KEY)!.execute(args());
+    expect(subjectWrites).toEqual([
+      expect.objectContaining({ toStage: "review" }),
+    ]);
+  });
+
+  it("writes NOTHING once the run moved on (a stale gate never stamps another stage's value)", async () => {
+    sessionRow = { ...sessionRow, currentStage: "schedule" };
+    await proposalExecRegistry.resolveExact(KEY)!.execute(args());
+    expect(subjectWrites).toEqual([]);
   });
 });
 

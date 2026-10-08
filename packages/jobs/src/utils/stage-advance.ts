@@ -47,6 +47,11 @@ export interface StageAdvanceRequest {
   agentUserId?: string | null;
   /** "door" — nobody wrote the column yet, the door issues the UPDATE. */
   stageWrite: "caller" | "door";
+  /**
+   * The subject already holds the stage's status (the advance FOLLOWS it), so
+   * the door must not write it back. Mirrors api's `AdvanceSessionStageInput`.
+   */
+  skipSubjectWrite?: boolean;
 }
 
 export interface StageAdvanceOutcome {

@@ -97,6 +97,12 @@ export interface AdvanceSessionStageInput {
    * own check also fails holds there, it does not ping-pong).
    */
   viaOnFail?: boolean;
+  /**
+   * The advance FOLLOWS the subject (process-sync: the subject entered the
+   * stage's status), so the subject already holds it — never write it back.
+   * A follow that wrote back re-fired on every stale event and ping-ponged.
+   */
+  skipSubjectWrite?: boolean;
 }
 
 export interface AdvanceSessionStageResult {
@@ -121,7 +127,8 @@ export interface AdvanceSessionStageResult {
   /**
    * The forward half of stage ↔ subject status: what happened to the entered
    * stage's `subjectStatus` (written / proposed / skipped + why / failed).
-   * Absent when the stage was held by its gate (the approval writes it).
+   * Absent when the stage was held by its gate (the gate's pass writes it) and
+   * when the advance followed the subject (`skipSubjectWrite`).
    */
   subjectStatus?: StageSubjectStatusOutcome;
   /** Set when a failed check gate returned the run to its `onFail` stage. */
@@ -200,17 +207,26 @@ export async function advanceSessionStage(
     fromStage,
   });
 
+  // An UNGATED stage writes its `subjectStatus` on entry; a GATED stage writes
+  // it when its gate passes (a check that passes now, a check resumed later by
+  // `resumeCheckGateIfMet`, a human gate on approval) — never while it holds.
+  const writeSubject = (): Promise<StageSubjectStatusOutcome> | undefined =>
+    input.skipSubjectWrite
+      ? undefined
+      : writeStageSubjectStatus({
+          session,
+          toStage,
+          userId,
+          agentUserId: input.agentUserId ?? null,
+        });
+
   if (!gate) {
+    const subjectStatus = await writeSubject();
     return {
       changed: true,
       gated: false,
       paused: false,
-      subjectStatus: await writeStageSubjectStatus({
-        session,
-        toStage,
-        userId,
-        agentUserId: input.agentUserId ?? null,
-      }),
+      ...(subjectStatus ? { subjectStatus } : {}),
     };
   }
 
@@ -222,12 +238,8 @@ export async function advanceSessionStage(
       check: { passed: gate.passed, failing: gate.failing },
     };
     if (!gate.paused) {
-      result.subjectStatus = await writeStageSubjectStatus({
-        session,
-        toStage,
-        userId,
-        agentUserId: input.agentUserId ?? null,
-      });
+      const subjectStatus = await writeSubject();
+      if (subjectStatus) result.subjectStatus = subjectStatus;
       return result;
     }
     // A HOLDING check gate whose stage declares `onFail` returns the run there

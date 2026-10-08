@@ -70,7 +70,12 @@ beforeEach(() => {
   h.proc = {
     stages: [
       { key: "draft", name: "Draft", subjectStatus: "drafting" },
-      { key: "review", name: "Review", subjectStatus: "in-review", onFail: { toStage: "Draft" } },
+      {
+        key: "review",
+        name: "Review",
+        subjectStatus: "in-review",
+        onFail: { toStage: "Draft" },
+      },
     ],
     statusProperty: "post-status",
     humanOnlyStatuses: [],
@@ -87,19 +92,40 @@ describe("advanceSessionStage — process hooks", () => {
       stageWrite: "door",
     });
     expect(h.writes).toEqual([
-      expect.objectContaining({ toStage: "review", userId: "owner-1", agentUserId: "agent-1" }),
+      expect.objectContaining({
+        toStage: "review",
+        userId: "owner-1",
+        agentUserId: "agent-1",
+      }),
     ]);
     expect(r.subjectStatus).toMatchObject({ status: "written" });
   });
 
   it("a held HUMAN gate does not write the status (the approval will)", async () => {
-    h.gates.push({ kind: "human", paused: true, proposalId: "p", proposalType: "playbook.stage_gate", stageKey: "review" });
-    await advanceSessionStage({ session: SESSION, toStage: "review", userId: "u", stageWrite: "door" });
+    h.gates.push({
+      kind: "human",
+      paused: true,
+      proposalId: "p",
+      proposalType: "playbook.stage_gate",
+      stageKey: "review",
+    });
+    await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "u",
+      stageWrite: "door",
+    });
     expect(h.writes).toEqual([]);
   });
 
   it("a HOLDING check gate with onFail returns the run there, un-paused, once", async () => {
-    h.gates.push({ kind: "check", stageKey: "review", passed: false, failing: ["k"], paused: true });
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: false,
+      failing: ["k"],
+      paused: true,
+    });
     const r = await advanceSessionStage({
       session: SESSION,
       toStage: "review",
@@ -109,17 +135,66 @@ describe("advanceSessionStage — process hooks", () => {
     // onFail.toStage "Draft" resolved by NAME to the key "draft".
     expect(r.onFail).toEqual({ toStage: "draft" });
     // un-pause, then the door's own column write to the onFail stage.
-    expect(h.updates).toContainEqual(expect.objectContaining({ status: "active" }));
-    expect(h.updates).toContainEqual(expect.objectContaining({ currentStage: "draft" }));
+    expect(h.updates).toContainEqual(
+      expect.objectContaining({ status: "active" })
+    );
+    expect(h.updates).toContainEqual(
+      expect.objectContaining({ currentStage: "draft" })
+    );
     // The return advance wrote draft's status (ungated); review's never was.
     expect(h.writes.map((w) => w.toStage)).toEqual(["draft"]);
   });
 
   it("a holding check gate WITHOUT onFail just holds (today's behaviour)", async () => {
-    (h.proc as { stages: Array<Record<string, unknown>> }).stages[1]!.onFail = undefined;
-    h.gates.push({ kind: "check", stageKey: "review", passed: false, failing: ["k"], paused: true });
-    const r = await advanceSessionStage({ session: SESSION, toStage: "review", userId: "u", stageWrite: "door" });
+    (h.proc as { stages: Array<Record<string, unknown>> }).stages[1]!.onFail =
+      undefined;
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: false,
+      failing: ["k"],
+      paused: true,
+    });
+    const r = await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "u",
+      stageWrite: "door",
+    });
     expect(r.onFail).toBeUndefined();
     expect(h.updates.some((u) => u.status === "active")).toBe(false);
+  });
+
+  it("a FOLLOW (skipSubjectWrite) moves the run and never writes the status back", async () => {
+    const r = await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "owner-1",
+      stageWrite: "door",
+      skipSubjectWrite: true,
+    });
+    expect(h.writes).toEqual([]);
+    expect(r.subjectStatus).toBeUndefined();
+    expect(h.updates).toContainEqual(
+      expect.objectContaining({ currentStage: "review" })
+    );
+  });
+
+  it("a FOLLOW into a PASSING check gate writes nothing either", async () => {
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: true,
+      failing: [],
+      paused: false,
+    });
+    await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "u",
+      stageWrite: "door",
+      skipSubjectWrite: true,
+    });
+    expect(h.writes).toEqual([]);
   });
 });

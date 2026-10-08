@@ -106,6 +106,15 @@ vi.mock("../../../lib/event-helpers.js", () => ({
 vi.mock("../../proposals/expire-lapsed-proposals.js", () => ({
   expireSessionEphemerals: async () => 0,
 }));
+// The gated stage's subject-status write (its own suite covers the governed
+// door): recorded, so a check gate's RESUME can be asserted to perform it.
+const subjectWrites = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock("../stage-subject-status.js", () => ({
+  writeStageSubjectStatus: async (input: Record<string, unknown>) => {
+    subjectWrites.push(input);
+    return { status: "written", property: "post-status", value: "x" };
+  },
+}));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
@@ -581,6 +590,43 @@ describe("session evaluations", () => {
     const row = await sessionRow(id);
     expect(row.status).toBe("active");
     expect(row.metadata).toEqual({ keep: 1 });
+  });
+
+  it("check gate: the RESUME writes the gated stage's subject status (the gate passed) — only while the run stands on it", async () => {
+    const staged = [{ ...CRITERIA[0], stageKey: "build" }];
+    const gate = {
+      stageKey: "ship",
+      fromStage: "build",
+      failing: ["typecheck"],
+    };
+    const onShip = await seed({
+      criteria: staged,
+      status: "paused",
+      metadata: { checkGate: gate },
+    });
+    await q(`update focus_sessions set current_stage = 'ship' where id = $1`, [
+      onShip,
+    ]);
+    const movedOn = await seed({
+      criteria: staged,
+      status: "paused",
+      metadata: { checkGate: gate },
+    });
+    await q(`update focus_sessions set current_stage = 'later' where id = $1`, [
+      movedOn,
+    ]);
+    subjectWrites.length = 0;
+    for (const sessionId of [onShip, movedOn]) {
+      await evaluateSession({
+        sessionId,
+        userId: USER,
+        evidence: { tsc: { passed: true } },
+      });
+    }
+    expect(subjectWrites).toEqual([
+      expect.objectContaining({ toStage: "ship", userId: USER }),
+    ]);
+    expect((subjectWrites[0]!.session as { id: string }).id).toBe(onShip);
   });
 
   it("a session paused WITHOUT a check-gate record is never resumed by an evaluation", async () => {

@@ -330,7 +330,8 @@ export async function gradeCriterionAsOwner(params: {
  * criterion of the stage it left passes. Called after every evaluation and every
  * human grade — re-running the check IS the resume, no proposal involved.
  * Guarded on `status = 'paused'` so a session a person paused for another reason
- * (no `checkGate` record) is never resumed by it.
+ * (no `checkGate` record) is never resumed by it. Resuming writes the gated
+ * stage's `subjectStatus` (the pass the advance door was waiting for).
  */
 export async function resumeCheckGateIfMet(params: {
   sessionId: string;
@@ -345,7 +346,7 @@ export async function resumeCheckGateIfMet(params: {
   });
   const gate = (session?.metadata as Record<string, unknown> | null)?.[
     CHECK_GATE_METADATA_KEY
-  ] as { fromStage?: unknown } | undefined;
+  ] as { fromStage?: unknown; stageKey?: unknown } | undefined;
   if (
     !session ||
     session.status !== "paused" ||
@@ -374,5 +375,21 @@ export async function resumeCheckGateIfMet(params: {
       and(eq(focusSessions.id, session.id), eq(focusSessions.status, "paused"))
     )
     .returning({ id: focusSessions.id });
-  return resumed.length > 0;
+  if (resumed.length === 0) return false;
+  // The gate PASSED: the gated stage's `subjectStatus` is written now — the
+  // advance door held it while the check failed. Only while the run still
+  // stands on that stage; a skip/failure never un-resumes.
+  if (
+    typeof gate.stageKey === "string" &&
+    session.currentStage === gate.stageKey
+  ) {
+    const { writeStageSubjectStatus } =
+      await import("../stage-subject-status.js");
+    await writeStageSubjectStatus({
+      session,
+      toStage: gate.stageKey,
+      userId: params.userId,
+    });
+  }
+  return true;
 }

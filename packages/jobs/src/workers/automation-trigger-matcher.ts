@@ -1181,8 +1181,10 @@ export async function handleAutomationTriggerMatch(job: {
   // ── Process engine (no automation row involved) ────────────────────────
   // A subject entering a status moves its open runs to the matching stage; a
   // rejected stage gate returns its run to `onFail`. Both advance through the
-  // ONE advance door. Inside the depth floor above, so a status↔stage chain is
-  // bounded like any other. Non-fatal: never blocks the matching below.
+  // ONE advance door. A follow never writes the status back and ignores stale
+  // events (process-sync.ts LOOP GUARD) — that, not the depth floor, is what
+  // bounds a status↔stage chain: a user-started run has no chain context.
+  // Non-fatal: never blocks the matching below.
   try {
     await syncProcessOnEvent({
       eventType,
@@ -1190,9 +1192,13 @@ export async function handleAutomationTriggerMatch(job: {
       userId,
       workspaceId,
       data: data as Record<string, unknown> | undefined,
+      producerAgentUserId: producerAgentUserId ?? null,
     });
   } catch (err) {
-    logger.warn({ err, eventType, subjectId }, "process sync failed (non-fatal)");
+    logger.warn(
+      { err, eventType, subjectId },
+      "process sync failed (non-fatal)"
+    );
   }
 
   // ── Find matching automations ──────────────────────────────────────────

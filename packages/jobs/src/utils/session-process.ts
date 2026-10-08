@@ -9,9 +9,10 @@
  *
  * Source precedence: the RUN's frozen `definitionSnapshot` first (a run
  * executes the definition it started with), the live playbook second — the
- * precedence `resolveStageGateForSession` uses. The snapshot carries no
- * `subjectProfile` today (`buildDefinitionSnapshot`), so the lifecycle contract
- * is read off the live playbook until it does.
+ * precedence `resolveStageGateForSession` uses. The lifecycle contract
+ * (`subjectProfile`) is read the same way: the snapshot's when the run froze
+ * one (`buildDefinitionSnapshot`), the live playbook's for an older run that
+ * did not.
  */
 
 import {

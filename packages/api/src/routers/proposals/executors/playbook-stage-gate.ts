@@ -97,10 +97,17 @@ export function registerPlaybookStageGateExecutors(): void {
       // The person agreed to the stage: its `subjectStatus` (if any) is written
       // NOW — the advance door skipped it while the gate held. As the approver,
       // through the governed entity door; a skip/failure never un-approves.
-      if (resumed.length > 0 && session.currentStage) {
-        const { writeStageSubjectStatus } = await import(
-          "../../../services/focus-sessions/stage-subject-status.js"
-        );
+      // Only while the run still stands on the GATED stage: a run that moved on
+      // since (a follow, a manual advance) must not get the old stage's value.
+      const gatedStage = (proposal.data as { stageKey?: unknown } | null)
+        ?.stageKey;
+      if (
+        resumed.length > 0 &&
+        session.currentStage &&
+        (typeof gatedStage !== "string" || gatedStage === session.currentStage)
+      ) {
+        const { writeStageSubjectStatus } =
+          await import("../../../services/focus-sessions/stage-subject-status.js");
         await writeStageSubjectStatus({
           session,
           toStage: session.currentStage,
