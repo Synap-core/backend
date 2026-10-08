@@ -380,46 +380,67 @@ async function pollOne(
     .returning({ id: playbookRuns.id });
   if (claimed.length === 0) return "skipped";
 
-  // A tool call waiting for approval is an APPROVAL CARD: an owed confirm
-  // slot, and the question filed on it carries the call's id. Only a typed
-  // approve / reject of that card settles the call (the answer door wakes the
-  // agent with a decision naming it) — a reply in words never does.
-  const approval =
-    status.state === "needs_input" && status.confirmationId && run.sessionId
-      ? await oweAgentApprovalSlot({
-          sessionId: run.sessionId,
-          provider: binding.provider,
-          status,
-        })
-      : null;
-  await postDispatchNotice({
-    channelId,
-    ownerId,
-    content: statusLine(binding.provider, status),
-    idempotencyKey: `agent-poll:${run.id}:${key}`,
-    asAgentUserId: ext.agentUserId,
-    kind: status.state === "needs_input" ? "question" : "update",
-    ...(approval
-      ? {
-          slotLabel: approval.label,
-          ask: approval.ask,
-          confirmationId: status.confirmationId,
-        }
-      : {}),
-  });
-
-  if (terminal) {
-    await applyRunCapture({
-      run,
-      status: status.state === "done" ? "completed" : "failed",
-      ...(status.state === "done" && status.summary
-        ? { summary: status.summary }
-        : {}),
-      ...(status.state === "failed"
-        ? { error: status.summary ?? `${binding.provider} reported a failure` }
+  // Everything below must land for the claim to be true. If it throws (a DB
+  // error mid-capture), RELEASE the claim — back to the copy this tick read —
+  // so the next tick retries: the selection only re-reads a `running` /
+  // `needs_input` run whose key differs, so a kept claim would strand a
+  // terminal run live forever. The notice and capture are idempotent, so the
+  // retry repeats nothing.
+  try {
+    // A tool call waiting for approval is an APPROVAL CARD: an owed confirm
+    // slot, and the question filed on it carries the call's id. Only a typed
+    // approve / reject of that card settles the call (the answer door wakes the
+    // agent with a decision naming it) — a reply in words never does.
+    const approval =
+      status.state === "needs_input" && status.confirmationId && run.sessionId
+        ? await oweAgentApprovalSlot({
+            sessionId: run.sessionId,
+            provider: binding.provider,
+            status,
+          })
+        : null;
+    await postDispatchNotice({
+      channelId,
+      ownerId,
+      content: statusLine(binding.provider, status),
+      idempotencyKey: `agent-poll:${run.id}:${key}`,
+      asAgentUserId: ext.agentUserId,
+      kind: status.state === "needs_input" ? "question" : "update",
+      ...(approval
+        ? {
+            slotLabel: approval.label,
+            ask: approval.ask,
+            confirmationId: status.confirmationId,
+          }
         : {}),
     });
-    return "terminal";
+
+    if (terminal) {
+      await applyRunCapture({
+        run,
+        status: status.state === "done" ? "completed" : "failed",
+        ...(status.state === "done" && status.summary
+          ? { summary: status.summary }
+          : {}),
+        ...(status.state === "failed"
+          ? {
+              error: status.summary ?? `${binding.provider} reported a failure`,
+            }
+          : {}),
+      });
+      return "terminal";
+    }
+    return "changed";
+  } catch (err) {
+    await db
+      .update(playbookRuns)
+      .set({ externalAgent: ext })
+      .where(
+        and(
+          eq(playbookRuns.id, run.id),
+          drizzleSql`(${playbookRuns.externalAgent}->>'lastStateKey') = ${key}`
+        )
+      );
+    throw err;
   }
-  return "changed";
 }

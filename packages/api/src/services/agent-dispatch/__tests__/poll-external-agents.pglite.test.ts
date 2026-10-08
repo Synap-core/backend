@@ -32,6 +32,8 @@ const h = vi.hoisted(() => ({
   next: null as null | Record<string, unknown>,
   /** Runs INSIDE the status call — a concurrent write racing the tick. */
   during: null as null | (() => Promise<void>),
+  /** Makes the NEXT run capture throw (a DB error mid-capture). */
+  captureThrowsOnce: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -67,6 +69,22 @@ vi.mock("../../capabilities/execute-capability.js", () => ({
     );
   },
 }));
+vi.mock("../../runs/apply-run-capture.js", async (importOriginal) => {
+  const real =
+    await importOriginal<typeof import("../../runs/apply-run-capture.js")>();
+  return {
+    ...real,
+    applyRunCapture: async (
+      ...args: Parameters<typeof real.applyRunCapture>
+    ) => {
+      if (h.captureThrowsOnce) {
+        h.captureThrowsOnce = false;
+        throw new Error("db down mid-capture");
+      }
+      return real.applyRunCapture(...args);
+    },
+  };
+});
 vi.mock("../../messaging/post-message.js", () => ({
   postChannelMessage: async (p: Record<string, unknown>) => {
     h.posts.push(p);
@@ -214,6 +232,7 @@ describe("external agent status poll", () => {
     h.posts.length = 0;
     h.next = null;
     h.during = null;
+    h.captureThrowsOnce = false;
     // Each test starts with no live dispatched run left over.
     await q(`update playbook_runs set status = 'completed'`);
   });
@@ -360,6 +379,23 @@ describe("external agent status poll", () => {
     expect(h.calls).toHaveLength(0);
   });
 
+  it("a capture that THROWS releases the claim — the next tick retries and the run completes", async () => {
+    const runId = await dispatchedRun(POLLED);
+    ran({ state: "done", summary: "Shipped" });
+    h.captureThrowsOnce = true;
+    const first = await pollExternalAgentRuns();
+    expect(first.failed).toBe(1);
+    const stuck = await runRow(runId);
+    expect(stuck.status).toBe("running");
+    // The claim was released: the row is still selectable by the next tick.
+    expect(stuck.external_agent.status).not.toBe("done");
+
+    await pollExternalAgentRuns();
+    const row = await runRow(runId);
+    expect(row.status).toBe("completed");
+    expect(row.summary).toBe("Shipped");
+  });
+
   it("a CANCEL that lands while a tick is reading status is never overwritten (done / running)", async () => {
     for (const state of ["done", "running"] as const) {
       const runId = await dispatchedRun(POLLED);
@@ -401,6 +437,31 @@ describe("external agent status poll", () => {
     const row = await runRow(runId);
     expect(row.status).toBe("cancelled");
     expect(row.summary).not.toBe("overwrite?");
+  });
+
+  it("applyRunCapture: a late NON-terminal (running) capture never revives a cancelled or failed run", async () => {
+    for (const verdict of ["cancelled", "failed", "completed"] as const) {
+      const runId = await dispatchedRun(POLLED);
+      const [stale] = (
+        await q<Record<string, unknown>>(
+          `select id, status, summary, error, completed_at as "completedAt", session_id as "sessionId", workspace_id as "workspaceId" from playbook_runs where id = $1`,
+          [runId]
+        )
+      ).rows;
+      await q(`update playbook_runs set status = $2 where id = $1`, [
+        runId,
+        verdict,
+      ]);
+      const out = await applyRunCapture({
+        run: stale as never,
+        status: "running",
+        summary: "still at it",
+      });
+      expect(out, verdict).toBeNull();
+      const row = await runRow(runId);
+      expect(row.status, verdict).toBe(verdict);
+      expect(row.summary, verdict).not.toBe("still at it");
+    }
   });
 
   it("a run whose binding has NO status verb never starves the others (least-recently polled first)", async () => {
