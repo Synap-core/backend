@@ -34,11 +34,22 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: async () => false,
 }));
-vi.mock("../services/agent-dispatch/cancel-run.js", () => ({
-  cancelRun: async (p: Record<string, unknown>) => {
-    h.calls.push(p);
-    return h.next ?? { status: "cancelled", externalCancelled: true };
-  },
+// The REAL cancelRun (its session-owner floor is what this router relies on),
+// unless a test pins an outcome to check the mapping.
+vi.mock("../services/agent-dispatch/cancel-run.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../services/agent-dispatch/cancel-run.js")
+    >();
+  return {
+    cancelRun: async (p: { runId: string; userId: string }) => {
+      h.calls.push(p);
+      return h.next ?? actual.cancelRun(p);
+    },
+  };
+});
+vi.mock("@synap/jobs", () => ({
+  settleParentAutomationRunFromChild: async () => undefined,
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
@@ -96,16 +107,23 @@ describe("playbookRuns.cancelRun", () => {
     expect(h.calls).toHaveLength(0);
   });
 
-  it("another person's run reads as NOT_FOUND", async () => {
+  it("another person's run reads as NOT_FOUND, and stays running", async () => {
     const runId = await run();
     await expect(
       caller({ userId: "someone-else" }).cancelRun({ runId })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    expect(h.calls).toHaveLength(0);
+    const [row] = (
+      await q<{ status: string }>(
+        `select status from playbook_runs where id = $1`,
+        [runId]
+      )
+    ).rows;
+    expect(row!.status).toBe("running");
   });
 
   it("the owner's cancel reaches the ONE cancelRun and maps its outcomes", async () => {
     const runId = await run();
+    h.next = { status: "cancelled", externalCancelled: true };
     expect(await caller({ userId: OWNER }).cancelRun({ runId })).toEqual({
       runId,
       status: "cancelled",

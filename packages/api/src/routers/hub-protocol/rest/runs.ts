@@ -252,7 +252,14 @@ export function registerRunsRoutes(app: HubHono): void {
     // HUMAN-ONLY (v1): stopping work is the person's call. A governed agent
     // cancel would file a `playbook_run/update` proposal whose approval
     // replays a CAPTURE — it could never reach the binding's cancel verb.
-    if (c.get("agentUserId")) {
+    // An internal / pod-wide key (the IS's `is_internal`, a `system` key) can
+    // act as any user — it is never "the person" either.
+    const keyType = c.get("keyType") as string | undefined;
+    if (
+      c.get("agentUserId") ||
+      keyType === "is_internal" ||
+      keyType === "system"
+    ) {
       return c.json(
         { error: "Only a person can cancel a run — an agent key cannot." },
         403

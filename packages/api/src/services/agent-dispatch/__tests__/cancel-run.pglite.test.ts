@@ -208,6 +208,28 @@ describe("cancelRun", () => {
     expect((await runRow(runId)).status).toBe("running");
   });
 
+  it("ONE floor for every transport: a stranger's cancel reads as not_found and stops nothing", async () => {
+    const runId = await dispatchedRun(CANCELLABLE, "acme");
+    expect(await cancelRun({ runId, userId: randomUUID() })).toEqual({
+      status: "not_found",
+    });
+    expect(h.calls).toHaveLength(0);
+    expect((await runRow(runId)).status).toBe("running");
+  });
+
+  it("a run with NO session (no owner to check) is never cancellable", async () => {
+    const runId = randomUUID();
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, started_at)
+       values ($1, $2, null, 'external-agent', 'running', '{}'::jsonb, $3, now())`,
+      [runId, randomUUID(), OWNER]
+    );
+    expect(await cancelRun({ runId, userId: OWNER })).toEqual({
+      status: "not_found",
+    });
+    expect((await runRow(runId)).status).toBe("running");
+  });
+
   it("a run that is not live is refused", async () => {
     const runId = await dispatchedRun(NO_CANCEL, "plain");
     await cancelRun({ runId, userId: OWNER });

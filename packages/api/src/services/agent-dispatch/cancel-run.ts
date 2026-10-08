@@ -10,7 +10,11 @@
  *                      SAY the agent could not be stopped from Synap.
  *   not dispatched   ⇒ the run is simply marked cancelled.
  *
- * Caller-gated (the Hub route governs the caller first).
+ * WHO may cancel is decided HERE, for both transports (tRPC
+ * `playbookRuns.cancelRun`, Hub `POST /runs/:runId/cancel`): the person who
+ * owns the run's session — nobody else, and never a run with no session. A run
+ * that is not yours reads exactly like a missing one (`not_found`, no oracle).
+ * The transports refuse agent / internal principals before calling.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -20,6 +24,7 @@ import {
   focusSessions,
   playbookRuns,
   liveRunStatusWhere,
+  isLiveRunStatus,
   and,
 } from "@synap/database";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
@@ -43,24 +48,27 @@ export type CancelRunResult =
 
 export async function cancelRun(p: {
   runId: string;
-  /** The human the cancel is for (verb attribution's owner). */
+  /** The person cancelling — must own the run's session. */
   userId: string;
 }): Promise<CancelRunResult> {
   const run = await db.query.playbookRuns.findFirst({
     where: eq(playbookRuns.id, p.runId),
   });
-  if (!run) return { status: "not_found" };
-  if (run.status !== "running" && run.status !== "waiting_on_you") {
-    return { status: "not_live", runStatus: run.status };
-  }
-  const session = run.sessionId
+  const session = run?.sessionId
     ? await db.query.focusSessions.findFirst({
         where: eq(focusSessions.id, run.sessionId),
         columns: { userId: true, channelId: true },
       })
     : null;
-  const ownerId = session?.userId ?? p.userId;
-  const channelId = session?.channelId ?? null;
+  // THE cancel floor: the session owner only.
+  if (!run || !session || session.userId !== p.userId) {
+    return { status: "not_found" };
+  }
+  if (!isLiveRunStatus(run.status)) {
+    return { status: "not_live", runStatus: run.status };
+  }
+  const ownerId = session.userId;
+  const channelId = session.channelId ?? null;
   const ext = run.externalAgent as PlaybookRunExternalAgent | null;
 
   let externalCancelled: boolean | null = null;

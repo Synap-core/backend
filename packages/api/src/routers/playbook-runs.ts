@@ -87,23 +87,9 @@ export const playbookRunsRouter = router({
           message: "Only a person can cancel a run — an agent key cannot.",
         });
       }
-      const db = await getDb();
-      const [run] = await db
-        .select({ id: playbookRuns.id, sessionId: playbookRuns.sessionId })
-        .from(playbookRuns)
-        .where(eq(playbookRuns.id, input.runId))
-        .limit(1);
-      const session = run?.sessionId
-        ? await db.query.focusSessions.findFirst({
-            where: eq(focusSessions.id, run.sessionId),
-            columns: { userId: true },
-          })
-        : null;
-      // A run that is not yours reads exactly like a missing one (no oracle).
-      if (!run || !session || session.userId !== ctx.userId) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found" });
-      }
-      const out = await cancelRun({ runId: run.id, userId: ctx.userId });
+      // The session-owner floor lives in `cancelRun` (one check, both
+      // transports): a run that is not yours reads like a missing one.
+      const out = await cancelRun({ runId: input.runId, userId: ctx.userId });
       if (out.status === "not_found") {
         throw new TRPCError({ code: "NOT_FOUND", message: "Run not found" });
       }
@@ -120,7 +106,7 @@ export const playbookRunsRouter = router({
         });
       }
       return {
-        runId: run.id,
+        runId: input.runId,
         status: "cancelled" as const,
         externalCancelled: out.externalCancelled,
         note: out.note ?? null,
