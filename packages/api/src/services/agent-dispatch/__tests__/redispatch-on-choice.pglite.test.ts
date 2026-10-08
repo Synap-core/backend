@@ -166,7 +166,7 @@ describe("re-dispatch after 'Choose an agent'", () => {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
     await q(
-      `insert into users (id, email, name, timezone, user_type, agent_type) values ($1, 'o@x', 'O', 'UTC', 'human', null), ($2, 'a@x', 'Cloud', 'UTC', 'agent', 'cloud')`,
+      `insert into users (id, email, name, timezone, user_type, agent_type, created_by_user_id) values ($1, 'o@x', 'O', 'UTC', 'human', null, null), ($2, 'a@x', 'Cloud', 'UTC', 'agent', 'cloud', $1)`,
       [OWNER, AGENT]
     );
     await q(
