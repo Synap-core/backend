@@ -27,6 +27,10 @@
  */
 
 import { z } from "zod";
+import type {
+  AgentBindingErrorCode,
+  AgentReach,
+} from "@synap-core/types/agents";
 import {
   db,
   links,
@@ -92,12 +96,12 @@ export interface AgentBinding {
   verbs: AgentBindingConfig["verbs"];
 }
 
-export type AgentBindingErrorCode =
-  | "ambiguous"
-  | "tool_missing"
-  | "tool_inactive"
-  | "not_an_agent_tool"
-  | "malformed";
+/**
+ * Why a binding cannot be used — the ONE code list lives in
+ * `@synap-core/types/agents` (`AGENT_BINDING_ERROR_CODES`), beside the words
+ * every surface shows for it; a code without words fails that package's build.
+ */
+export type { AgentBindingErrorCode };
 
 /** A binding edge exists and cannot be used — said, never folded into `null`. */
 export class AgentBindingError extends Error {
@@ -245,7 +249,7 @@ export async function resolveAgentBinding(
  * with a broken binding is still external, and the dispatch path surfaces the
  * `AgentBindingError` where a person can see it.
  */
-export type AgentReach = "pod" | "dispatch" | "pull";
+export type { AgentReach };
 
 export async function resolveAgentReach(
   agentUserId: string

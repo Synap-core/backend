@@ -235,7 +235,7 @@ describe("re-dispatch after 'Choose an agent'", () => {
       subjectId: "s",
     };
     expect(
-      agentChoiceRedispatchReactor.match({
+      agentChoiceRedispatchReactor.match!({
         ...base,
         data: {
           kind: "playbook_param",
@@ -244,13 +244,13 @@ describe("re-dispatch after 'Choose an agent'", () => {
       } as never)
     ).toBe(true);
     expect(
-      agentChoiceRedispatchReactor.match({
+      agentChoiceRedispatchReactor.match!({
         ...base,
         data: { kind: "playbook_param", expectedLabel: "Answer: Repo" },
       } as never)
     ).toBe(false);
     expect(
-      agentChoiceRedispatchReactor.match({
+      agentChoiceRedispatchReactor.match!({
         ...base,
         action: "updated",
         data: {
