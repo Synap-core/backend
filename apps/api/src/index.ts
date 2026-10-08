@@ -56,6 +56,7 @@ import {
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
   registerDecisionAskReactor,
+  registerAgentChoiceRedispatchReactor,
   registerSessionCriteriaUnmetReactor,
   registerClosingReportReactor,
   registerDocumentDiagnosticsReactor,
@@ -1805,6 +1806,9 @@ try {
       // Same seam, entity writes: a `proposed` decision opens ONE owed ask
       // slot for the person; a decision resolved elsewhere retires it.
       registerDecisionAskReactor();
+      // "Choose an agent" answered ⇒ the run that owed it is re-dispatched
+      // through the same executor path, idempotently.
+      registerAgentChoiceRedispatchReactor();
       // Same close event again: a session that ENDED with required criteria
       // still unmet is news the founder is told once, on the phone — it is the
       // one moment a course correction is cheap. Re-derives the verdict from
@@ -1913,6 +1917,8 @@ try {
               registerFirefliesIngestRunner,
               registerFirefliesBackfillRunner,
             } = await import("@synap/jobs/workers/fireflies-worker.js");
+            const { registerSessionRecallRunner } =
+              await import("@synap/jobs/workers/session-recall-worker.js");
             const { registerInboundAttachmentIngestRunner } =
               await import("@synap/jobs/workers/inbound-attachment-worker.js");
             const { registerEventSyncRunner } =
@@ -1989,6 +1995,9 @@ try {
               api.runFirefliesIngest(input)
             );
             registerFirefliesBackfillRunner(() => api.runFirefliesBackfill());
+            // Session recall (on start / the sweep floor) delegates to the
+            // api-side runner — requested by session synap-68.
+            registerSessionRecallRunner((d) => api.runSessionRecall(d));
             // Inbound attachments: fetch bytes off the sensor path → GOVERNED
             // file door → link to channel + message (IoC across the api↔jobs dep).
             registerInboundAttachmentIngestRunner((input) =>

@@ -1129,32 +1129,9 @@ async function executeSingleRun(
     };
   }
 
-  // 6. Record the result on the run row. Terminal statuses stamp completed_at.
-  const terminal =
-    result.status === "completed" ||
-    result.status === "failed" ||
-    result.status === "proposed";
-  const externalAgentPatch = result.externalAgent
-    ? { externalAgent: result.externalAgent }
-    : {};
-  const [updated] = await db
-    .update(playbookRuns)
-    .set({
-      status: result.status,
-      summary: result.summary ?? null,
-      error: result.error ?? null,
-      completedAt: terminal ? new Date() : null,
-      // The hand-off receipt of an external-agent dispatch (0315) — what the
-      // status poll and the cancel door read. Absent for every other executor.
-      // (Built outside this literal: the terminal-settles tripwire parses a
-      // brace-free `.set({...})`, and a nested object would blind it.)
-      ...externalAgentPatch,
-    })
-    .where(eq(playbookRuns.id, run.id))
-    .returning();
-  // A failed child of an automation run settles its parent (never throws).
-  if (terminal)
-    await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+  // 6. Record the result on the run row (the ONE writer, shared with the
+  //    re-dispatch after "Choose an agent" is answered).
+  const updated = await recordExecutorResult(run.id, result);
 
   // Re-load the session so the returned row reflects the wired channelId.
   const refreshed = (await db.query.focusSessions.findFirst({
@@ -1162,7 +1139,7 @@ async function executeSingleRun(
   })) as FocusSession;
 
   return {
-    run: updated as PlaybookRun,
+    run: updated,
     session: refreshed,
     ...(parentLink ? { parentLink } : {}),
   };
@@ -1198,4 +1175,44 @@ async function latestRunFailedWithinCooldown(
   return latest && latest.status === "failed" && latest.recent
     ? { runId: latest.id }
     : null;
+}
+
+/**
+ * Record an executor's result on its run row — terminal statuses stamp
+ * `completed_at`, a terminal child settles its parent automation run, and an
+ * external-agent hand-off stores its `externalAgent` receipt. The ONE write
+ * after `Executor.run`, for `runPlaybook` and for a re-dispatch of the same
+ * run (`services/agent-dispatch/redispatch-on-choice.ts`).
+ */
+export async function recordExecutorResult(
+  runId: string,
+  result: RunResult
+): Promise<PlaybookRun> {
+  const db = await getDb();
+  const terminal =
+    result.status === "completed" ||
+    result.status === "failed" ||
+    result.status === "proposed";
+  const externalAgentPatch = result.externalAgent
+    ? { externalAgent: result.externalAgent }
+    : {};
+  const [updated] = await db
+    .update(playbookRuns)
+    .set({
+      status: result.status,
+      summary: result.summary ?? null,
+      error: result.error ?? null,
+      completedAt: terminal ? new Date() : null,
+      // The hand-off receipt of an external-agent dispatch (0315) — what the
+      // status poll and the cancel door read. Absent for every other executor.
+      // (Built outside this literal: the terminal-settles tripwire parses a
+      // brace-free `.set({...})`, and a nested object would blind it.)
+      ...externalAgentPatch,
+    })
+    .where(eq(playbookRuns.id, runId))
+    .returning();
+  // A failed child of an automation run settles its parent (never throws).
+  if (terminal)
+    await settleParentAutomationRunFromChild({ playbookRunId: runId });
+  return updated as PlaybookRun;
 }
