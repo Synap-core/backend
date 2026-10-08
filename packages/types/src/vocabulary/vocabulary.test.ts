@@ -1244,3 +1244,10 @@ describe("backup health statuses", () => {
     expect(resolveStatusLabel("stale")).toBe("Stale");
   });
 });
+
+describe("the `add` verb", () => {
+  it("has its own row: imperative Add, past Added (not the humanized token)", () => {
+    expect(resolveActionLabel("add", "imperative")).toBe("Add");
+    expect(resolveActionLabel("add", "past")).toBe("Added");
+  });
+});

@@ -62,3 +62,19 @@ export const PROPERTY_DISPLAY_AS = [
   "markdown",
 ] as const;
 export type PropertyDisplayAs = (typeof PROPERTY_DISPLAY_AS)[number];
+
+/**
+ * Does a property's SLUG name a kind's lifecycle (`status`, `post-status`,
+ * `dealStage`, `stage`)? The ONE predicate — the pod's "Draft a template"
+ * offer (`kind-lifecycle.ts`) and the template corpus guard read the same
+ * rule. RUNTIME bookkeeping fields (`agent_status`, `run-status`,
+ * `last_run_status`, `job_status`) describe a machine's run, not where the
+ * record stands, and are never a lifecycle. Callers still require a closed
+ * value set (a select) — a free-text "status" cannot be advanced.
+ */
+const LIFECYCLE_SLUG = /status|stage/i;
+const RUNTIME_STATUS_SLUG = /^(agent|run|last_?run|job)[-_]?status$/i;
+
+export function isLifecyclePropertySlug(slug: string): boolean {
+  return LIFECYCLE_SLUG.test(slug) && !RUNTIME_STATUS_SLUG.test(slug);
+}

@@ -157,6 +157,9 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   link: { imperative: "Link", past: "Linked" },
   unlink: { imperative: "Unlink", past: "Unlinked" },
   attach: { imperative: "Attach", past: "Attached" },
+  // "Add to <session>" (a capture offered to a running session) — `add`
+  // humanized to "Add" in BOTH moods, so the receipt read "Add to X".
+  add: { imperative: "Add", past: "Added" },
   detach: { imperative: "Detach", past: "Detached" },
   install: { imperative: "Install", past: "Installed" },
   enable: { imperative: "Enable", past: "Enabled" },
