@@ -104,12 +104,20 @@ describe("tripwire: mirrored composite ops mirror each other exactly", () => {
     "SELF-GUARD: the derived set covers the mirrored ops, and every exemption is still mirrored",
     () => {
       const browser = opFieldSignatures(BROWSER_TYPES);
-      const checked = [...browser.keys()].filter((op) => !DELIBERATELY_ASYMMETRIC.has(op));
-      for (const op of ["create_skill", "create_automation", "create_rule", "create_playbook"]) {
+      const checked = [...browser.keys()].filter(
+        (op) => !DELIBERATELY_ASYMMETRIC.has(op)
+      );
+      for (const op of [
+        "create_skill",
+        "create_automation",
+        "create_rule",
+        "create_playbook",
+      ]) {
         expect(checked, `${op} is no longer in the checked set`).toContain(op);
       }
       // A stale exemption silently widens what this test lets through.
-      for (const op of DELIBERATELY_ASYMMETRIC) expect(browser.has(op)).toBe(true);
+      for (const op of DELIBERATELY_ASYMMETRIC)
+        expect(browser.has(op)).toBe(true);
     }
   );
 
