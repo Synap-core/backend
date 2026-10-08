@@ -37,7 +37,8 @@
  */
 
 import type PgBoss from "pg-boss";
-import { randomUUID, createHmac } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { deterministicUuidV5 } from "../utils/deterministic-uuid.js";
 import {
   db,
   webhookSubscriptions,
@@ -184,22 +185,46 @@ function maxRetriesOf(retryConfig: unknown): number {
 }
 
 /**
+ * THE delivery id of one subscription's copy of one fan-out — derived, never
+ * minted per attempt: a retried fan-out re-derives the SAME id for the same
+ * subscription, so the subscriber sees one `X-Synap-Delivery-Id`.
+ */
+export function webhookDeliveryId(
+  fanoutKey: string,
+  subscriptionId: string
+): string {
+  return deterministicUuidV5(`webhook-delivery:${fanoutKey}:${subscriptionId}`);
+}
+
+/**
  * Enqueue one DELIVER job per subscription. The caller has already decided
  * the audience; this never widens it.
+ *
+ * `fanoutKey` names the fan-out ONCE (the fan-out job's own id, which a
+ * pg-boss retry keeps). The deliver job's id IS the delivery id, so a retried
+ * fan-out's re-send conflicts on the job's primary key (pg-boss inserts with
+ * `ON CONFLICT DO NOTHING`) instead of queueing a duplicate; the same value is
+ * the job's `singletonKey`. (On this `standard` queue a singletonKey alone
+ * does not dedupe — pg-boss only indexes it for singleton/stately/short
+ * policies or with `singletonSeconds` — the derived job id is what does.)
  */
 export async function enqueueWebhookDeliveries(
   boss: JobSender,
   subscriptions: ReadonlyArray<{ id: string; retryConfig?: unknown }>,
-  delivery: Omit<WebhookDeliverJob, "stage" | "subscriptionId" | "deliveryId">
+  delivery: Omit<WebhookDeliverJob, "stage" | "subscriptionId" | "deliveryId">,
+  fanoutKey: string
 ): Promise<void> {
   for (const sub of subscriptions) {
+    const deliveryId = webhookDeliveryId(fanoutKey, sub.id);
     const job: WebhookDeliverJob = {
       stage: "deliver",
       subscriptionId: sub.id,
-      deliveryId: randomUUID(),
+      deliveryId,
       ...delivery,
     };
     await boss.send(WEBHOOK_DELIVERY_QUEUE, job, {
+      id: deliveryId,
+      singletonKey: deliveryId,
       retryLimit: maxRetriesOf(sub.retryConfig),
       retryDelay: 10,
       retryBackoff: true,
@@ -210,7 +235,9 @@ export async function enqueueWebhookDeliveries(
 /** Producer 1: a domain event reaches its own user's matching subscriptions. */
 async function fanOutDomainEvent(
   boss: JobSender,
-  job: WebhookEventFanoutJob
+  job: WebhookEventFanoutJob,
+  /** The fan-out job's own id — stable across its pg-boss retries. */
+  fanoutKey: string
 ): Promise<void> {
   const { eventType, userId, subjectId, data, eventId } = job;
   const subs = await db
@@ -231,13 +258,23 @@ async function fanOutDomainEvent(
   );
   if (matching.length === 0) return;
 
-  await enqueueWebhookDeliveries(boss, matching, {
-    eventType,
-    format: "event.v1",
-    body: buildWebhookBody("event.v1", { eventType, subjectId, userId, data }),
-    subjectId,
-    eventRowId: eventId ?? null,
-  });
+  await enqueueWebhookDeliveries(
+    boss,
+    matching,
+    {
+      eventType,
+      format: "event.v1",
+      body: buildWebhookBody("event.v1", {
+        eventType,
+        subjectId,
+        userId,
+        data,
+      }),
+      subjectId,
+      eventRowId: eventId ?? null,
+    },
+    fanoutKey
+  );
 }
 
 /**
@@ -328,5 +365,5 @@ export async function handleWebhookDelivery(
     await deliverWebhook(job.data);
     return;
   }
-  await fanOutDomainEvent(boss ?? getBoss(), job.data);
+  await fanOutDomainEvent(boss ?? getBoss(), job.data, job.id);
 }

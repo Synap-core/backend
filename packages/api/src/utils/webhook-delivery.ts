@@ -31,6 +31,7 @@
  * Failures are console.warn'd, never thrown — this must never block the API.
  */
 
+import { randomUUID } from "node:crypto";
 import { db, webhookSubscriptions, eq } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { getBoss } from "@synap/events";
@@ -127,11 +128,18 @@ export async function deliverWebhooksForEvent(
     const subscribers = candidates.filter((s) => readers.has(s.userId));
     if (subscribers.length === 0) return;
 
-    await enqueueWebhookDeliveries(getBoss(), subscribers, {
-      eventType,
-      format: "chat.v1",
-      body: buildWebhookBody("chat.v1", { eventType, data }),
-    });
+    // ONE fan-out id for this call (not one per subscription / attempt), so
+    // each subscriber's delivery id is derived from it.
+    await enqueueWebhookDeliveries(
+      getBoss(),
+      subscribers,
+      {
+        eventType,
+        format: "chat.v1",
+        body: buildWebhookBody("chat.v1", { eventType, data }),
+      },
+      randomUUID()
+    );
   } catch (err) {
     console.warn("[webhook] fanout failed:", err);
   }

@@ -81,7 +81,7 @@ vi.mock("@synap/database", () => {
 vi.mock("@synap/shared-utils", () => ({ safeExternalFetch: h.fetch }));
 
 import { getReactors } from "@synap/events";
-import { handleWebhookDelivery } from "./webhook-worker.js";
+import { handleWebhookDelivery, webhookDeliveryId } from "./webhook-worker.js";
 
 const A_URL = "https://a.example/hook";
 const B_URL = "https://b.example/hook";
@@ -226,6 +226,47 @@ describe("domain events through the one webhook door", () => {
     await emitAndDrain({ ...EVENT, eventId: undefined });
     expect(calls()).toHaveLength(1);
     expect(h.inserted).toEqual([]);
+  });
+
+  it("a RETRIED fan-out re-derives the same delivery ids — pg-boss dedupes the re-send on the job id", async () => {
+    // What pg-boss does: the insert is `ON CONFLICT DO NOTHING` on the job id.
+    const queued = new Map<string, { data: unknown; options: any }>();
+    const boss = {
+      send: async (_q: unknown, data: unknown, options?: any) => {
+        if (options?.id && queued.has(options.id)) return null;
+        queued.set(options?.id ?? String(queued.size), { data, options });
+        return options?.id ?? "x";
+      },
+    };
+    h.subs[1]!.userId = "user-a"; // both subscriptions are the event's user's
+    const fanout = {
+      id: "fanout-job-7",
+      name: "webhook-delivery",
+      data: { eventType: "entity.update.completed", ...EVENT },
+      expireInSeconds: 60,
+    };
+    await handleWebhookDelivery(fanout as never, boss as never);
+    // pg-boss retries the fan-out job — SAME job id.
+    await handleWebhookDelivery(fanout as never, boss as never);
+    expect(queued.size).toBe(2); // one per subscription, not four
+    const ids = [...queued.values()].map(
+      (j) => (j.data as { deliveryId: string }).deliveryId
+    );
+    expect(new Set(ids).size).toBe(2);
+    for (const j of queued.values()) {
+      const d = j.data as { deliveryId: string; subscriptionId: string };
+      expect(d.deliveryId).toBe(
+        webhookDeliveryId("fanout-job-7", d.subscriptionId)
+      );
+      expect(j.options).toMatchObject({
+        id: d.deliveryId,
+        singletonKey: d.deliveryId,
+      });
+    }
+    // A DIFFERENT fan-out of the same event is a different delivery.
+    expect(webhookDeliveryId("fanout-job-8", "sub-a")).not.toBe(
+      webhookDeliveryId("fanout-job-7", "sub-a")
+    );
   });
 
   it("a subscription that did not list the type gets nothing", async () => {
