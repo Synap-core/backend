@@ -70,6 +70,7 @@ import {
 } from "@synap/playbooks";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
 import {
+  carryProcessOver,
   foldProcessIntoSubjectProfile,
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
@@ -352,26 +353,16 @@ function foldProcessDeclarationsOrRefuse(
 }
 
 /**
- * Converge a playbook's activator rules after its definition landed. NON-FATAL
- * by contract — the playbook write already committed, and an activator that
- * could not compile is reported (logged per outcome by the applier, and here
- * when the applier itself threw), never allowed to fail the write that
- * declared it. The next write or boot reconcile re-converges.
+ * Converge a playbook's activator rules after its definition or status landed
+ * — through the ONE non-fatal wrapper (`convergePlaybookActivatorsSafely`).
  */
 async function convergeActivatorsAfterWrite(
   playbookId: string,
   actor: { userId: string; agentUserId?: string | null }
 ): Promise<void> {
-  try {
-    const { applyPlaybookActivators } =
-      await import("../services/playbooks/playbook-activators.js");
-    await applyPlaybookActivators({ playbookId, ...actor });
-  } catch (err) {
-    logger.error(
-      { err, playbookId },
-      "playbook activators did not converge — the next write or boot reconcile retries"
-    );
-  }
+  const { convergePlaybookActivatorsSafely } =
+    await import("../services/playbooks/playbook-activators.js");
+  await convergePlaybookActivatorsSafely({ playbookId, ...actor });
 }
 
 export const updateInputSchema = z.object({
@@ -2044,7 +2035,15 @@ export const playbooksRouter = router({
         workspaceId: existing.workspaceId,
       });
 
-      // 2a. Fold the process declarations into `subjectProfile` (their storage)
+      // 2a. A `subjectProfile` patch keeps the stored process keys it does not
+      // name (`carryProcessOver`) — the patch REPLACES the jsonb they live in.
+      if (input.subjectProfile !== undefined) {
+        input.subjectProfile = carryProcessOver(
+          input.subjectProfile as Record<string, unknown> | null,
+          existing.subjectProfile
+        ) as typeof input.subjectProfile;
+      }
+      // 2b. Fold the process declarations into `subjectProfile` (their storage)
       // over the row's CURRENT subject when the patch does not restate it.
       if (
         input.activators !== undefined ||
@@ -2284,9 +2283,14 @@ export const playbooksRouter = router({
         preserveArming: !armingChanged,
       });
 
-      // Activators live in `subjectProfile`, and their rule prose names the
-      // playbook — converge when either moved (idempotent otherwise).
-      if (input.subjectProfile !== undefined || input.name !== undefined) {
+      // Activators live in `subjectProfile`, their rule prose names the
+      // playbook, and only an ACTIVE playbook declares them — converge when
+      // any of the three moved (idempotent otherwise).
+      if (
+        input.subjectProfile !== undefined ||
+        input.name !== undefined ||
+        (input.status !== undefined && input.status !== existing.status)
+      ) {
         await convergeActivatorsAfterWrite(updated.id, {
           userId: ctx.userId,
           agentUserId: input.agentUserId,
@@ -2379,6 +2383,12 @@ export const playbooksRouter = router({
       // and kept firing a playbook nothing else would surface.
       await materializePlaybookCronAutomation(archived as Playbook, {
         userId: input.agentUserId ?? ctx.userId,
+      });
+      // Same rule for what STARTS it: an archived playbook declares no live
+      // activator, so this pass retires its activator rules.
+      await convergeActivatorsAfterWrite(archived!.id, {
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
       });
 
       return {

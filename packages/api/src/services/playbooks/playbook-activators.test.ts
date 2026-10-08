@@ -23,7 +23,11 @@ const store = vi.hoisted(() => ({
   playbook: null as Row | null,
   rules: [] as Array<{ id: string; metadata: Row; automationId: string }>,
   offers: [] as Array<{ id: string; status: string }>,
-  links: [] as Array<{ playbookId: string; automationId: string; role: string }>,
+  links: [] as Array<{
+    playbookId: string;
+    automationId: string;
+    role: string;
+  }>,
   agentProposes: false,
   seq: 0,
 }));
@@ -55,12 +59,34 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: {
       select,
+      // The per-playbook memory write: `jsonb_set(metadata, '{activatorRules}',
+      // <json>)` — the fake applies the JSON value it carries.
+      update: () => ({
+        set: (v: { metadata?: { vals?: unknown[] } }) => ({
+          where: async () => {
+            const json = v.metadata?.vals?.find(
+              (x) => typeof x === "string" && x.startsWith('{"template"')
+            ) as string | undefined;
+            if (json && store.playbook) {
+              store.playbook.metadata = {
+                ...((store.playbook.metadata as Row) ?? {}),
+                activatorRules: JSON.parse(json),
+              };
+            }
+          },
+        }),
+      }),
       insert: () => ({
-        values: (v: { playbookId: string; automationId: string; role: string }) => ({
+        values: (v: {
+          playbookId: string;
+          automationId: string;
+          role: string;
+        }) => ({
           onConflictDoUpdate: async () => {
             const hit = store.links.find(
               (l) =>
-                l.playbookId === v.playbookId && l.automationId === v.automationId
+                l.playbookId === v.playbookId &&
+                l.automationId === v.automationId
             );
             if (hit) hit.role = v.role;
             else store.links.push({ ...v });
@@ -78,17 +104,26 @@ vi.mock("@synap/database", async (importOriginal) => {
     playbooks: T.playbooks,
     skills: T.skills,
     proposals: T.proposals,
-    playbookAutomations: { playbookId: "pid", automationId: "aid", role: "role" },
+    playbookAutomations: {
+      playbookId: "pid",
+      automationId: "aid",
+      role: "role",
+    },
     // The delete predicate: carry the kept automation ids to the fake.
     and: (...parts: unknown[]) => ({
-      keep: (parts.find((p) => (p as { keep?: string[] })?.keep) as {
-        keep: string[];
-      } | undefined)?.keep ?? [],
+      keep:
+        (
+          parts.find((p) => (p as { keep?: string[] })?.keep) as
+            | {
+                keep: string[];
+              }
+            | undefined
+        )?.keep ?? [],
     }),
     notInArray: (_c: unknown, ids: string[]) => ({ keep: ids }),
     eq: () => ({}),
     inArray: () => ({}),
-    drizzleSql: () => ({}),
+    drizzleSql: (_s: TemplateStringsArray, ...vals: unknown[]) => ({ vals }),
   };
 });
 
@@ -167,11 +202,14 @@ import { createRuleGoverned } from "../rules/create.js";
 import { updateRuleGoverned } from "../rules/update.js";
 
 const PB = "pb-repurpose";
-function setPlaybook(activators: unknown) {
+/** Re-declare the playbook; its stored metadata (the memory) is kept. */
+function setPlaybook(activators: unknown, status = "active") {
   store.playbook = {
     id: PB,
     name: "Repurpose",
+    status,
     workspaceId: "ws-1",
+    metadata: (store.playbook?.metadata as Row | undefined) ?? {},
     subjectProfile: {
       profileSlug: "post",
       statusProperty: "post-status",
@@ -183,6 +221,7 @@ const run = (agentUserId?: string) =>
   applyPlaybookActivators({ playbookId: PB, userId: "user-1", agentUserId });
 
 beforeEach(() => {
+  store.playbook = null;
   store.rules = [];
   store.offers = [];
   store.links = [];
@@ -316,11 +355,116 @@ describe("applyPlaybookActivators", () => {
     store.playbook = {
       id: PB,
       name: "Repurpose",
+      status: "active",
       workspaceId: "ws-1",
+      metadata: {},
       subjectProfile: { profileSlug: "post", activators: [TWO[1]] },
     };
     const res = await run();
     expect(createRuleGoverned).not.toHaveBeenCalled();
     expect(res.outcomes[0]).toMatchObject({ status: "denied" });
+  });
+});
+
+const ruleRow = (id: string) => store.rules.find((r) => r.id === id)!;
+const isDraft = (id: string) =>
+  (ruleRow(id).metadata.rule as Row).draft === true;
+
+describe("only a LIVE playbook declares", () => {
+  it("a DRAFT playbook (a duplicated copy, an agent's draft) creates no rule", async () => {
+    setPlaybook(TWO, "draft");
+    const res = await run();
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+    expect(res.outcomes).toEqual([]);
+    expect(store.links).toEqual([]);
+  });
+
+  it("ARCHIVING retires every activator rule; re-activating brings them back (no duplicates)", async () => {
+    setPlaybook(TWO);
+    await run();
+    setPlaybook(TWO, "archived");
+    const res = await run();
+    expect(res.outcomes.map((o) => o.status)).toEqual(["retired", "retired"]);
+    expect(isDraft("rule-1") && isDraft("rule-2")).toBe(true);
+    expect(store.links).toEqual([]);
+
+    setPlaybook(TWO, "active");
+    const back = await run();
+    expect(back.outcomes.map((o) => o.status)).toEqual([
+      "reactivated",
+      "reactivated",
+    ]);
+    expect(store.rules).toHaveLength(2);
+  });
+
+  it("a duplicate copy carrying its SOURCE's memory still creates its own rules", async () => {
+    setPlaybook(TWO);
+    store.playbook!.metadata = {
+      activatorRules: {
+        template: "playbook-activator:pb-source",
+        rules: { created: { ruleId: "rule-of-source" } },
+      },
+    };
+    const res = await run();
+    expect(res.outcomes.map((o) => o.status)).toEqual(["created", "created"]);
+  });
+});
+
+describe("the OWNER wins, on every later pass (boot included)", () => {
+  it("a rule the owner PAUSED is never re-activated", async () => {
+    setPlaybook(TWO);
+    await run();
+    (ruleRow("rule-2").metadata.rule as Row).draft = true; // skills.updateRule({draft:true})
+    vi.mocked(updateRuleGoverned).mockClear();
+    const res = await run();
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    expect(isDraft("rule-2")).toBe(true);
+    expect(res.outcomes).toContainEqual(
+      expect.objectContaining({
+        key: "enters_status:published",
+        status: "owner_choice",
+      })
+    );
+  });
+
+  it("a rule the owner DELETED is never recreated", async () => {
+    setPlaybook(TWO);
+    await run();
+    store.rules = store.rules.filter((r) => r.id !== "rule-2");
+    vi.mocked(createRuleGoverned).mockClear();
+    const res = await run();
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+    expect(res.outcomes).toContainEqual(
+      expect.objectContaining({
+        key: "enters_status:published",
+        status: "owner_choice",
+      })
+    );
+  });
+});
+
+describe("concurrency", () => {
+  it("two concurrent passes in one process create each rule ONCE", async () => {
+    setPlaybook(TWO);
+    await Promise.all([run(), run()]);
+    expect(createRuleGoverned).toHaveBeenCalledTimes(2);
+    expect(store.rules).toHaveLength(2);
+  });
+
+  it("a duplicate row of one key (a cross-process race) is retired, one is kept", async () => {
+    setPlaybook([TWO[0]]);
+    await run();
+    // A second live row with the same seed, as a racing process would write.
+    store.rules.push({
+      id: "rule-dup",
+      automationId: "auto-rule-dup",
+      metadata: JSON.parse(JSON.stringify(ruleRow("rule-1").metadata)),
+    });
+    const res = await run();
+    expect(isDraft("rule-dup")).toBe(true);
+    expect(isDraft("rule-1")).toBe(false);
+    expect(res.outcomes).toContainEqual(
+      expect.objectContaining({ ruleId: "rule-dup", status: "retired" })
+    );
   });
 });

@@ -7,8 +7,8 @@
  *
  * ── WHERE IT IS STORED, AND WHY ONE FOLD ────────────────────────────────────
  * `activators` and `humanOnlyStatuses` are TOP-LEVEL on the wire (the process
- * contract), but the `playbooks` row has no column for them and this wave adds
- * no migration. Both describe the SUBJECT's lifecycle (an activator fires on the
+ * contract), but the `playbooks` row has no column for them, so they are
+ * stored inside `subject_profile`. Both describe the SUBJECT's lifecycle (an activator fires on the
  * subject kind's events; a human-only status is a value of the subject's status
  * property), so they are STORED inside the existing `subject_profile` jsonb,
  * beside `statusProperty`. {@link foldProcessIntoSubjectProfile} is the ONE
@@ -20,10 +20,7 @@
  */
 
 import { z } from "zod";
-import {
-  readSubjectLifecycle,
-  type PlaybookActivator,
-} from "@synap/playbooks";
+import { readSubjectLifecycle, type PlaybookActivator } from "@synap/playbooks";
 
 const statusValueSchema = z.string().trim().min(1).max(200);
 
@@ -123,6 +120,41 @@ export function foldProcessIntoSubjectProfile(def: {
     );
   }
   return base;
+}
+
+/** The keys of the stored process that live inside `subject_profile`. */
+export const SUBJECT_PROFILE_PROCESS_KEYS = [
+  "statusProperty",
+  "activators",
+  "humanOnlyStatuses",
+] as const;
+
+/**
+ * A `subjectProfile` PATCH replaces the stored object, and the process keys
+ * ride inside it — so a patch that restates only `{ profileSlug, filter }`
+ * (the Hub PATCH, an MCP edit, an older editor) silently erased the lifecycle
+ * and retired every activator. This carries each stored process key the patch
+ * does not name; only an explicit value (including `[]` / `null`) changes one.
+ * A patch that binds a DIFFERENT kind carries nothing: the old kind's
+ * lifecycle does not describe the new one.
+ */
+export function carryProcessOver(
+  patch: Record<string, unknown> | null,
+  stored: unknown
+): Record<string, unknown> | null {
+  if (!patch || !stored || typeof stored !== "object") return patch;
+  const prev = stored as Record<string, unknown>;
+  if (
+    patch.profileSlug !== undefined &&
+    patch.profileSlug !== prev.profileSlug
+  ) {
+    return patch;
+  }
+  const out = { ...patch };
+  for (const k of SUBJECT_PROFILE_PROCESS_KEYS) {
+    if (!(k in out) && prev[k] !== undefined) out[k] = prev[k];
+  }
+  return out;
 }
 
 export class ProcessDeclarationError extends Error {

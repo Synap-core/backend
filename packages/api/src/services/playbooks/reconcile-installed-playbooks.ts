@@ -73,21 +73,13 @@ export async function reconcileInstalledPlaybook(args: {
   };
 }
 
-/** Non-fatal: a failed activator pass never fails the playbook reconcile. */
+/** Non-fatal (the ONE wrapper): an activator pass never fails the reconcile. */
 async function convergeActivators(playbookId: string, ctx: Context) {
-  try {
-    const { applyPlaybookActivators } = await import("./playbook-activators.js");
-    await applyPlaybookActivators({
-      playbookId,
-      userId: (ctx as { userId: string }).userId,
-    });
-  } catch (err) {
-    const { createLogger } = await import("@synap-core/core");
-    createLogger({ module: "reconcile-installed-playbooks" }).error(
-      { err, playbookId },
-      "playbook activators did not converge on reconcile"
-    );
-  }
+  const userId = ctx.userId;
+  if (!userId) return; // no actor to attribute a rule to — the next write converges
+  const { convergePlaybookActivatorsSafely } =
+    await import("./playbook-activators.js");
+  await convergePlaybookActivatorsSafely({ playbookId, userId });
 }
 
 export interface WorkspacePlaybooksReconcileReport {

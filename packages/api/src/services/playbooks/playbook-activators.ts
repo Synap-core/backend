@@ -23,23 +23,47 @@
  *   found, untouched, unchanged    → nothing
  *   found, untouched, decl moved   → update (restamped)
  *   found, owner-edited            → kept (the owner wins), reported
- *   found but RETIRED (draft)      → re-activated (draft: false), restamped
  *   not found, an earlier offer    → not re-offered (a pending OR declined
  *     (pending/rejected proposal     `rule/create` proposal carrying this seed —
- *     with this seed)                the memory template-rules keeps in the
- *                                    brief, kept here on the proposal itself)
+ *     with this seed)                kept on the proposal itself)
  *   not found                      → create
  * A rule whose key is no longer declared is RETIRED through the same door
  * (`updateRuleGoverned({ draft: true })` — its automation is archived, the rule
  * stays visible and cannot fire) and its activator link is removed. A STORED
  * activator list that fails to parse retires nothing: corrupt is not empty.
  *
- * NON-FATAL by contract: every outcome is returned; nothing here throws past a
- * caller that is creating or updating the playbook itself.
+ * ── ONLY A LIVE PLAYBOOK DECLARES ───────────────────────────────────────────
+ * A playbook that is not `active` (draft, paused, archived) declares no live
+ * activator: its rules are retired by this same pass. So a draft copy (browser
+ * Duplicate, an agent's draft) starts nothing, and archiving retires what the
+ * playbook started — the router re-runs this pass on archive and on every
+ * status change, as it already does for the cron schedule.
+ *
+ * ── THE OWNER WINS (memory) ─────────────────────────────────────────────────
+ * Per playbook, `playbooks.metadata.activatorRules = { template, rules: { key →
+ * { ruleId, retired? } } }` remembers which rule each declared key produced and
+ * whether THIS module retired it. That is what tells the owner's choice apart
+ * from ours on every later pass (boot included):
+ *   found, draft, retired by us    → re-activated when declared again
+ *   found, draft, NOT retired by us→ kept: the owner paused it
+ *   not found, had a ruleId        → kept: the owner deleted it, never recreated
+ * The memory is ignored when its `template` is another playbook's (a copied
+ * metadata bag), so a duplicate never inherits its source's choices. A row with
+ * no memory (written before it existed) is judged conservatively: a draft is
+ * the owner's pause.
+ *
+ * ── CONCURRENCY ─────────────────────────────────────────────────────────────
+ * Passes over ONE playbook are serialized in-process (boot reconcile racing a
+ * playbooks.update, two re-installs). Across processes nothing locks, so a race
+ * can still create a key twice: every pass therefore RETIRES duplicate rows of
+ * one key, keeping one — the extra rule cannot keep firing.
+ *
+ * Non-fatal per activator: each outcome is returned. The top-level reads and
+ * the link sync CAN throw; callers go through `convergePlaybookActivatorsSafely`.
  */
 
 import { createLogger } from "@synap-core/core";
-import { humanizeToken } from "@synap-core/types/vocabulary";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { playbookActivatorSentence } from "@synap-core/types/automations";
 import {
   db,
@@ -92,6 +116,8 @@ export type ActivatorOutcomeStatus =
   | "reactivated"
   | "offered"
   | "retired"
+  /** The owner paused or deleted this rule; it is left as they left it. */
+  | "owner_choice"
   | "denied"
   | "failed";
 
@@ -124,7 +150,7 @@ export function activatorRuleDecl(input: {
 }): TemplateRuleDecl | { key: string; error: string } {
   const { activator: a, playbookId, profileSlug } = input;
   const key = activatorKey(a);
-  const kind = humanizeToken(profileSlug).toLowerCase();
+  const kind = resolveObjectNoun(profileSlug).toLowerCase();
   const verb = a.mode === "propose" ? "propose running" : "run";
   if (a.on === "enters_status") {
     if (!input.statusProperty || !a.status) {
@@ -159,6 +185,43 @@ export function activatorRuleDecl(input: {
   };
 }
 
+/** One playbook's memory of the rules its activators produced (see header). */
+interface ActivatorMemory {
+  template: string;
+  rules: Record<string, { ruleId: string; retired?: true }>;
+}
+
+/** The `playbooks.metadata` key that holds {@link ActivatorMemory}. */
+export const ACTIVATOR_MEMORY_KEY = "activatorRules" as const;
+
+function readActivatorMemory(
+  metadata: unknown,
+  template: string
+): ActivatorMemory {
+  const raw = (metadata as Record<string, unknown> | null)?.[
+    ACTIVATOR_MEMORY_KEY
+  ] as { template?: unknown; rules?: unknown } | undefined;
+  const rules: ActivatorMemory["rules"] = {};
+  if (
+    raw?.template === template &&
+    raw.rules &&
+    typeof raw.rules === "object"
+  ) {
+    for (const [k, v] of Object.entries(raw.rules as Record<string, unknown>)) {
+      const r = v as { ruleId?: unknown; retired?: unknown } | null;
+      if (typeof r?.ruleId === "string")
+        rules[k] = {
+          ruleId: r.ruleId,
+          ...(r.retired === true ? { retired: true as const } : {}),
+        };
+    }
+  }
+  return { template, rules };
+}
+
+/** Passes over one playbook, serialized in-process (see CONCURRENCY). */
+const inFlight = new Map<string, Promise<unknown>>();
+
 /**
  * Converge ONE playbook's activator rules to its declared `activators[]`.
  * Attribution: `userId` (+ `agentUserId` for an agent caller) — the caller of
@@ -169,18 +232,40 @@ export async function applyPlaybookActivators(input: {
   userId: string;
   agentUserId?: string | null;
 }): Promise<ApplyPlaybookActivatorsResult> {
+  const prev = inFlight.get(input.playbookId) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(() => applyOnce(input));
+  inFlight.set(input.playbookId, run);
+  try {
+    return await run;
+  } finally {
+    if (inFlight.get(input.playbookId) === run)
+      inFlight.delete(input.playbookId);
+  }
+}
+
+async function applyOnce(input: {
+  playbookId: string;
+  userId: string;
+  agentUserId?: string | null;
+}): Promise<ApplyPlaybookActivatorsResult> {
   const [pb] = await db
     .select({
       id: playbooks.id,
       name: playbooks.name,
+      status: playbooks.status,
       workspaceId: playbooks.workspaceId,
       subjectProfile: playbooks.subjectProfile,
+      metadata: playbooks.metadata,
     })
     .from(playbooks)
     .where(eq(playbooks.id, input.playbookId))
     .limit(1);
   if (!pb) {
-    return { playbookId: input.playbookId, status: "no_playbook", outcomes: [] };
+    return {
+      playbookId: input.playbookId,
+      status: "no_playbook",
+      outcomes: [],
+    };
   }
   const process = readPlaybookProcess(pb.subjectProfile);
   if (process.activatorsInvalid) {
@@ -190,8 +275,12 @@ export async function applyPlaybookActivators(input: {
     );
     return { playbookId: pb.id, status: "invalid", outcomes: [] };
   }
+  // ONLY A LIVE PLAYBOOK DECLARES (header).
+  const declared = pb.status === "active" ? process.activators : [];
 
   const template = activatorSeedTemplate(pb.id);
+  const memory = readActivatorMemory(pb.metadata, template);
+  const memoryBefore = JSON.stringify(memory.rules);
   const agent = input.agentUserId ? { agentUserId: input.agentUserId } : {};
   const scope = pb.workspaceId
     ? { kind: "workspace" as const, workspaceId: pb.workspaceId }
@@ -207,11 +296,27 @@ export async function applyPlaybookActivators(input: {
         drizzleSql`${skills.metadata}->'rule'->'seed'->>'template' = ${template}`
       )
     );
-  const byKey = new Map<string, { id: string; meta: RuleMetadata }>();
+  const grouped = new Map<string, Array<{ id: string; meta: RuleMetadata }>>();
   for (const row of rows) {
     const meta = readRuleMetadata(row.metadata as Record<string, unknown>);
-    if (meta?.seed && !byKey.has(meta.seed.key))
-      byKey.set(meta.seed.key, { id: row.id, meta });
+    if (!meta?.seed) continue;
+    const list = grouped.get(meta.seed.key) ?? [];
+    list.push({ id: row.id, meta });
+    grouped.set(meta.seed.key, list);
+  }
+  // One row per key: the remembered one, else a live one, else the first.
+  // Every OTHER live row of that key is a duplicate a race created — retired.
+  const byKey = new Map<string, { id: string; meta: RuleMetadata }>();
+  const duplicates: Array<{ key: string; id: string; meta: RuleMetadata }> = [];
+  for (const [key, list] of grouped) {
+    const primary =
+      list.find((r) => r.id === memory.rules[key]?.ruleId) ??
+      list.find((r) => !r.meta.draft) ??
+      list[0]!;
+    byKey.set(key, primary);
+    for (const r of list) {
+      if (r !== primary && !r.meta.draft) duplicates.push({ key, ...r });
+    }
   }
 
   const outcomes: ActivatorOutcome[] = [];
@@ -219,7 +324,7 @@ export async function applyPlaybookActivators(input: {
   /** Rules that should be LIVE after this pass — their automations get linked. */
   const liveRuleIds = new Set<string>();
 
-  for (const activator of process.activators) {
+  for (const activator of declared) {
     const built = process.profileSlug
       ? activatorRuleDecl({
           activator,
@@ -243,17 +348,23 @@ export async function applyPlaybookActivators(input: {
       key: decl.key,
       hash: templateRuleHash(decl),
     };
+    const remembered = memory.rules[decl.key];
     try {
       const found = byKey.get(decl.key) ?? null;
       if (found) {
-        const d = decideTemplateRule({
-          decl,
-          stored: found.meta,
-          ref: null,
-          refRowExists: false,
-        });
         if (found.meta.draft) {
-          // Retired earlier, declared again → re-activate (recompiles).
+          if (!(remembered?.ruleId === found.id && remembered.retired)) {
+            // A draft this module did not retire: the owner paused it.
+            memory.rules[decl.key] = { ruleId: found.id };
+            outcomes.push({
+              key: decl.key,
+              status: "owner_choice",
+              ruleId: found.id,
+              reason: "paused by its owner — left paused",
+            });
+            continue;
+          }
+          // Retired by this module, declared again → re-activate (recompiles).
           const r = await updateRuleGoverned({
             userId: input.userId,
             ...agent,
@@ -267,9 +378,19 @@ export async function applyPlaybookActivators(input: {
             auditSource: "playbook-activator",
           });
           outcomes.push(updateOutcome(decl.key, found.id, r, "reactivated"));
-          if (r.status === "updated") liveRuleIds.add(found.id);
+          if (r.status === "updated") {
+            liveRuleIds.add(found.id);
+            memory.rules[decl.key] = { ruleId: found.id };
+          }
           continue;
         }
+        memory.rules[decl.key] = { ruleId: found.id };
+        const d = decideTemplateRule({
+          decl,
+          stored: found.meta,
+          ref: null,
+          refRowExists: false,
+        });
         if (d.action === "update") {
           const r = await updateRuleGoverned({
             userId: input.userId,
@@ -286,11 +407,23 @@ export async function applyPlaybookActivators(input: {
         } else {
           outcomes.push({
             key: decl.key,
-            status: d.action === "none" ? toOutcomeStatus(d.status) : "unchanged",
+            status:
+              d.action === "none" ? toOutcomeStatus(d.status) : "unchanged",
             ruleId: found.id,
           });
         }
         liveRuleIds.add(found.id);
+        continue;
+      }
+
+      if (remembered) {
+        // This key produced a rule that is gone: its owner deleted it.
+        outcomes.push({
+          key: decl.key,
+          status: "owner_choice",
+          ruleId: remembered.ruleId,
+          reason: "deleted by its owner — not recreated",
+        });
         continue;
       }
 
@@ -321,6 +454,7 @@ export async function applyPlaybookActivators(input: {
       if (r.status === "created") {
         outcomes.push({ key: decl.key, status: "created", ruleId: r.ruleId });
         liveRuleIds.add(r.ruleId);
+        memory.rules[decl.key] = { ruleId: r.ruleId };
       } else if (r.status === "proposed") {
         outcomes.push({
           key: decl.key,
@@ -339,10 +473,15 @@ export async function applyPlaybookActivators(input: {
     }
   }
 
-  // ── Retire what is no longer declared ─────────────────────────────────────
-  for (const [key, found] of byKey) {
-    if (declaredKeys.has(key)) continue;
-    if (found.meta.draft) continue; // already retired
+  // ── Retire what is no longer declared (and duplicate rows of one key) ─────
+  const toRetire = [
+    ...[...byKey]
+      .filter(([key, found]) => !declaredKeys.has(key) && !found.meta.draft)
+      .map(([key, found]) => ({ key, ...found, duplicate: false })),
+    ...duplicates.map((d) => ({ ...d, duplicate: true })),
+  ];
+  for (const found of toRetire) {
+    const key = found.key;
     try {
       const r = await updateRuleGoverned({
         userId: input.userId,
@@ -355,6 +494,9 @@ export async function applyPlaybookActivators(input: {
         auditSource: "playbook-activator",
       });
       outcomes.push(updateOutcome(key, found.id, r, "retired"));
+      if (r.status === "updated" && !found.duplicate) {
+        memory.rules[key] = { ruleId: found.id, retired: true };
+      }
     } catch (err) {
       outcomes.push({
         key,
@@ -364,8 +506,24 @@ export async function applyPlaybookActivators(input: {
       });
     }
   }
+  // A key neither declared nor backed by a rule is forgotten (re-declaring it
+  // later creates afresh); an undeclared key whose rule the OWNER paused keeps
+  // no claim either.
+  for (const key of Object.keys(memory.rules)) {
+    if (declaredKeys.has(key)) continue;
+    const row = byKey.get(key);
+    if (!row || memory.rules[key]!.retired !== true) delete memory.rules[key];
+  }
 
   await syncActivatorLinks(pb.id, [...liveRuleIds]);
+  if (JSON.stringify(memory.rules) !== memoryBefore) {
+    await db
+      .update(playbooks)
+      .set({
+        metadata: drizzleSql`jsonb_set(COALESCE(${playbooks.metadata}, '{}'::jsonb), ${`{${ACTIVATOR_MEMORY_KEY}}`}::text[], ${JSON.stringify(memory)}::jsonb, true)`,
+      })
+      .where(eq(playbooks.id, pb.id));
+  }
 
   const bad = outcomes.filter(
     (o) => o.status === "failed" || o.status === "denied"
@@ -377,6 +535,27 @@ export async function applyPlaybookActivators(input: {
     );
   }
   return { playbookId: pb.id, status: "applied", outcomes };
+}
+
+/**
+ * The ONE non-fatal wrapper every caller uses (playbooks create / update /
+ * archive, the installed-playbook reconcile): the playbook write already
+ * committed, so a pass that throws is logged and retried by the next write or
+ * boot — never allowed to fail the write that declared the activators.
+ */
+export async function convergePlaybookActivatorsSafely(input: {
+  playbookId: string;
+  userId: string;
+  agentUserId?: string | null;
+}): Promise<void> {
+  try {
+    await applyPlaybookActivators(input);
+  } catch (err) {
+    logger.error(
+      { err, playbookId: input.playbookId },
+      "playbook activators did not converge — the next write or boot reconcile retries"
+    );
+  }
 }
 
 function toOutcomeStatus(s: string): ActivatorOutcomeStatus {
@@ -443,7 +622,10 @@ async function syncActivatorLinks(
       .insert(playbookAutomations)
       .values({ playbookId, automationId, role: ACTIVATOR_ROLE })
       .onConflictDoUpdate({
-        target: [playbookAutomations.playbookId, playbookAutomations.automationId],
+        target: [
+          playbookAutomations.playbookId,
+          playbookAutomations.automationId,
+        ],
         set: { role: ACTIVATOR_ROLE, updatedAt: new Date() },
       });
   }
