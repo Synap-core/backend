@@ -70,6 +70,10 @@ vi.mock("@synap/database/agent-governance", async (importOriginal) => {
 
 import { CapabilityDefinitionSchema } from "../../routers/hub-protocol/rest/capabilities.js";
 import { interpolateDeep } from "../_shared/interpolate.js";
+import {
+  assertVaultPlaceholdersDeclared,
+  resolveVaultPlaceholders,
+} from "./create-from-definition.js";
 import { projectSkillMetadata } from "./capability-drift.js";
 import { verbDeclaresReadOnly } from "./execute-capability.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
@@ -126,9 +130,25 @@ const PARAMS = {
   defaultRepos: "synap/synap-backend",
   consoleWorkspace: "wrkspc_011CZkZaBF1tNoB5wlCeusgy",
 };
-/** The applier's own interpolation, with its implicit `name` / `key` params. */
-const applied = () =>
-  interpolateDeep(tpl(), { name: tpl().name, key: tpl().key, ...PARAMS });
+/** The `vault://<id>` the applier would mint for each of the template's own
+ *  `vault[]` entries (ids are the pod's; any uuid stands in). */
+const VAULT_IDS = new Map([
+  ["anthropicApiKeySecret", "vault://0f3c5a1e-7b2d-4c9e-8a61-5d2e9b7c4a10"],
+  ["githubTokenSecret", "vault://1a4d6b2f-8c3e-4daf-9b72-6e3fac8d5b21"],
+]);
+/** The applier's own two passes: param interpolation (with its implicit
+ *  `name` / `key` params), then the template's `{{vault:<ref>}}` → its OWN
+ *  secret's `vault://<id>` (the same exported doors the applier calls). */
+const applied = () => {
+  const def = interpolateDeep(tpl(), {
+    name: tpl().name,
+    key: tpl().key,
+    ...PARAMS,
+  });
+  assertVaultPlaceholdersDeclared(def as never);
+  resolveVaultPlaceholders(def as never, VAULT_IDS);
+  return def;
+};
 const bindingTool = () => applied().tools.find((t) => t.kind === "external")!;
 const verbSkill = (verb: "start" | "send" | "cancel" | "status") => {
   const binding = AgentBindingConfigSchema.parse(
@@ -193,12 +213,17 @@ describe("claude-managed-agents template — appliable binding", () => {
     for (const s of def.skills) {
       expect(s.code).not.toContain(PARAMS.anthropicApiKey);
       expect(s.code).not.toContain(PARAMS.githubToken);
+      expect(s.code).not.toContain("{{vault:");
     }
+    // The start verb is handed the GitHub token's OWN vault ref — a reference,
+    // never the token.
+    expect(start).toContain(`'${VAULT_IDS.get("githubTokenSecret")}'`);
   });
 
   it("skill names carry an install-time placeholder, so a paramless reconcile never re-projects code that bakes params", () => {
     // reconcile-capabilities-to-templates skips (manual re-apply) any template
-    // whose skill NAME holds `{{` — a `{}` re-apply would blank the agent id.
+    // carrying an install-time `{{param}}` on a projected field — here both the
+    // names and the code do — so a `{}` re-apply never blanks the agent id.
     for (const s of tpl().skills) expect(s.name).toContain("{{");
   });
 });
@@ -424,13 +449,53 @@ describe("claude-managed-agents template — verb code against a fake Managed Ag
     expect(text).toContain(MCP_URL);
     expect(text).toContain("SYNAP_STATUS: done");
     expect(text).toContain("synap/synap-backend");
-    // No redeemable GitHub token today ⇒ no mount (and no token anywhere in the body).
+    // No `secrets` (no grant on the GitHub-token secret) ⇒ no mount, and no
+    // token anywhere in the body.
     expect(body.resources).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain(PARAMS.githubToken);
     // The executor reads exactly these two keys.
     expect(r.externalId).toBe(SID);
     expect(r.url).toBe(
       `https://platform.claude.com/workspaces/${PARAMS.consoleWorkspace}/sessions/${SID}`
+    );
+  });
+
+  it("start: mounts the repos as github_repository with the token redeemed from the template's OWN vault ref", async () => {
+    const redeemed: string[] = [];
+    await runVerb(
+      "start",
+      { ...startArgs(), repos: ["synap/synap-app"], branch: "feat/dark" },
+      {
+        get: async (ref: string) => {
+          redeemed.push(ref);
+          return PARAMS.githubToken;
+        },
+      }
+    );
+    expect(redeemed).toEqual([VAULT_IDS.get("githubTokenSecret")]);
+    const body = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/sessions"
+    )!.body as Record<string, any>;
+    expect(body.resources).toEqual([
+      {
+        type: "github_repository",
+        url: "https://github.com/synap/synap-app",
+        authorization_token: PARAMS.githubToken,
+        checkout: { type: "branch", name: "feat/dark" },
+      },
+    ]);
+    const text = body.initial_events[0].content[0].text as string;
+    expect(text).toContain("mounted at /workspace/<name>): synap/synap-app");
+  });
+
+  it("start: an ungranted GitHub-token secret (secrets.get → null) names the repos instead of mounting", async () => {
+    await runVerb("start", startArgs(), { get: async () => null });
+    const body = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/sessions"
+    )!.body as Record<string, any>;
+    expect(body.resources).toBeUndefined();
+    expect(body.initial_events[0].content[0].text).toContain(
+      "NOT mounted; use your GitHub access"
     );
   });
 
