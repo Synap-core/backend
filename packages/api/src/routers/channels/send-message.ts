@@ -631,8 +631,6 @@ export const sendMessageProcedure = protectedProcedure
       }
     }
 
-    // Resolve intelligence service through the ONE capability-first door (the
-    // one triggerAutoRespond uses). The agent never picks the IS (agentType ⟂ IS).
     const resolvedService = await resolveIntelligenceService({
       userId: userId,
       workspaceId: ctx.workspaceId || undefined,

@@ -40,7 +40,6 @@ import {
   eq,
   inArray,
   drizzleSql,
-  focusSessions,
   playbookRuns,
   proposals,
   liveRunStatusWhere,
@@ -56,6 +55,7 @@ import {
   asOptionalString,
   asRecord,
   callBindingVerb,
+  loadSessionRoom,
   postDispatchNotice,
 } from "./binding-call.js";
 import { applyRunCapture } from "../runs/apply-run-capture.js";
@@ -271,12 +271,7 @@ async function pollOne(
     .where(
       and(eq(playbookRuns.id, run.id), liveRunStatusWhere(playbookRuns.status))
     );
-  const session = run.sessionId
-    ? await db.query.focusSessions.findFirst({
-        where: eq(focusSessions.id, run.sessionId),
-        columns: { userId: true, channelId: true },
-      })
-    : null;
+  const session = await loadSessionRoom(run.sessionId);
   const ownerId = session?.userId ?? run.createdBy;
   const channelId = session?.channelId ?? null;
 

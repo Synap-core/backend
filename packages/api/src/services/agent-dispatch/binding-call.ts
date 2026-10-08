@@ -14,6 +14,7 @@
 
 import { createLogger } from "@synap-core/core";
 import { randomBytes } from "node:crypto";
+import { db, eq, focusSessions } from "@synap/database";
 import { executeCapability } from "../capabilities/execute-capability.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import type { SlotAsk } from "@synap/playbooks";
@@ -205,4 +206,36 @@ export async function postDispatchNotice(p: {
     );
     return false;
   }
+}
+
+/**
+ * The session a dispatch path works for: its owner (the human the verbs run
+ * on behalf of) and its room. ONE read for every dispatch path. `null` ⇒ no
+ * such session.
+ */
+export async function loadSessionRoom(
+  sessionId: string | null | undefined
+): Promise<{ userId: string; channelId: string | null } | null> {
+  if (!sessionId) return null;
+  const row = await db.query.focusSessions.findFirst({
+    where: eq(focusSessions.id, sessionId),
+    columns: { userId: true, channelId: true },
+  });
+  return row ? { userId: row.userId, channelId: row.channelId ?? null } : null;
+}
+
+/** Say something in a session's room as the pod (`postDispatchNotice`). */
+export async function postSessionNotice(
+  sessionId: string | null | undefined,
+  content: string,
+  idempotencyKey: string
+): Promise<boolean> {
+  const session = await loadSessionRoom(sessionId);
+  if (!session) return false;
+  return postDispatchNotice({
+    channelId: session.channelId,
+    ownerId: session.userId,
+    content,
+    idempotencyKey,
+  });
 }

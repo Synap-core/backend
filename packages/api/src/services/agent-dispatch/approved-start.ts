@@ -16,21 +16,14 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import {
-  db,
-  and,
-  eq,
-  drizzleSql,
-  focusSessions,
-  playbookRuns,
-} from "@synap/database";
+import { db, and, eq, drizzleSql, playbookRuns } from "@synap/database";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { AgentBindingError, resolveAgentBinding } from "./agent-binding.js";
 import {
   asOptionalString,
   asRecord,
   externalRefFromStartResult,
-  postDispatchNotice,
+  postSessionNotice,
 } from "./binding-call.js";
 
 const logger = createLogger({ module: "agent-dispatch/approved-start" });
@@ -100,21 +93,11 @@ export async function recordApprovedAgentStart(p: {
         reason: "run is not a proposed external-agent start",
       };
     }
-    const sessionId = claimed[0]!.sessionId;
-    if (sessionId) {
-      const session = await db.query.focusSessions.findFirst({
-        where: eq(focusSessions.id, sessionId),
-        columns: { userId: true, channelId: true },
-      });
-      if (session) {
-        await postDispatchNotice({
-          channelId: session.channelId,
-          ownerId: session.userId,
-          content: `Approved — handed to the ${binding.provider} agent${url ? ` — ${url}` : ""}.`,
-          idempotencyKey: `external-agent:${runId}:started`,
-        });
-      }
-    }
+    await postSessionNotice(
+      claimed[0]!.sessionId,
+      `Approved — handed to the ${binding.provider} agent${url ? ` — ${url}` : ""}.`,
+      `external-agent:${runId}:started`
+    );
     return { status: "recorded", runId };
   } catch (err) {
     logger.error(

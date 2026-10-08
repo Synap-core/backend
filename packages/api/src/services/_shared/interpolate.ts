@@ -31,10 +31,15 @@ export function interpolateString(
  * vault, never from params.
  */
 export function paramPlaceholderTokens(value: unknown): string[] {
-  const tokens = new Set<string>();
+  return collectMatches(value, PARAM_PLACEHOLDER_RE, 1);
+}
+
+/** Every distinct `re` capture `group` in any string inside `value`. */
+function collectMatches(value: unknown, re: RegExp, group: number): string[] {
+  const found = new Set<string>();
   const walk = (v: unknown): void => {
     if (typeof v === "string") {
-      for (const m of v.matchAll(PARAM_PLACEHOLDER_RE)) tokens.add(m[1]!);
+      for (const m of v.matchAll(re)) found.add(m[group]!);
     } else if (Array.isArray(v)) {
       v.forEach(walk);
     } else if (v && typeof v === "object") {
@@ -42,7 +47,7 @@ export function paramPlaceholderTokens(value: unknown): string[] {
     }
   };
   walk(value);
-  return [...tokens];
+  return [...found];
 }
 
 /** Deep-interpolate every string inside an arbitrary JSON value. */
@@ -80,18 +85,7 @@ const VAULT_PLACEHOLDER_RE = /\{\{vault:([A-Za-z0-9_.-]+)\}\}/g;
 
 /** Every template-local vault ref a value names through `{{vault:<ref>}}`. */
 export function vaultPlaceholderRefs(value: unknown): string[] {
-  const refs = new Set<string>();
-  const walk = (v: unknown): void => {
-    if (typeof v === "string") {
-      for (const m of v.matchAll(VAULT_PLACEHOLDER_RE)) refs.add(m[1]!);
-    } else if (Array.isArray(v)) {
-      v.forEach(walk);
-    } else if (v && typeof v === "object") {
-      Object.values(v as Record<string, unknown>).forEach(walk);
-    }
-  };
-  walk(value);
-  return [...refs];
+  return collectMatches(value, VAULT_PLACEHOLDER_RE, 1);
 }
 
 /**

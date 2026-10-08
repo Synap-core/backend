@@ -25,8 +25,6 @@
  *     `entities` (the registered access-layer floor), per subscription owner.
  *   - user    → that user's subscriptions only.
  * A failed audience read delivers to NOBODY: a failed read is not "everyone".
- * (Before this, every active matching subscription on the pod was hit, so one
- * user's webhook received every other user's chat and entity events.)
  *
  * Failures are console.warn'd, never thrown — this must never block the API.
  */

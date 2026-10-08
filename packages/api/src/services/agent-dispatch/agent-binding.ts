@@ -1,7 +1,7 @@
 /**
  * THE AGENT BINDING — how the pod hands work to an EXTERNAL agent.
  *
- * ── The model (validated 2026-10-08, plan "Agents Synap can dispatch work to") ──
+ * ── The model ──
  *   IDENTITY  the existing agent user (`users.userType='agent'`). Its agentType,
  *             governance rules, scorecard and its OWN door key (for write-back
  *             through `/mcp`) are unchanged by a binding.
@@ -43,17 +43,6 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
-
-/** The intent every verb an agent binding lists carries (migration 0314). */
-export const DELEGATE_AGENT_TASK_INTENT = "delegate_agent_task";
-
-/**
- * The link type that binds an agent to its dispatch tool. Producers and readers
- * spell the LITERAL (`linkType: "dispatched_via"`), not this constant: the
- * links-type SSOT tripwire derives which members are live by scanning for the
- * literal, and a constant would hide this edge from it.
- */
-export const DISPATCHED_VIA_LINK_TYPE = "dispatched_via" as const;
 
 const verbId = z.string().trim().min(1).max(200);
 

@@ -24,7 +24,6 @@ import {
   and,
   desc,
   drizzleSql,
-  focusSessions,
   playbookRuns,
   liveRunStatusWhere,
 } from "@synap/database";
@@ -37,6 +36,7 @@ import {
 import {
   callBindingVerb,
   fenceUntrustedData,
+  loadSessionRoom,
   postDispatchNotice,
 } from "./binding-call.js";
 import {
@@ -111,10 +111,7 @@ async function dispatchedRunFor(
 export async function wakeExternalAgent(
   p: WakeExternalAgentInput
 ): Promise<WakeExternalAgentResult> {
-  const session = await db.query.focusSessions.findFirst({
-    where: eq(focusSessions.id, p.sessionId),
-    columns: { userId: true, channelId: true },
-  });
+  const session = await loadSessionRoom(p.sessionId);
   const channelId = session?.channelId ?? null;
   const ownerId = session?.userId;
   const failed = async (message: string): Promise<WakeExternalAgentResult> => {

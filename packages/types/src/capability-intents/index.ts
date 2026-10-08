@@ -94,6 +94,14 @@ export const REGISTERED_EXTRAS = [
 ] as const;
 
 /**
+ * The intent every verb an agent binding lists carries (migration 0314) —
+ * `tools.config.agentBinding.verbs.*`. ONE spelling for the pod and the
+ * browser.
+ */
+export const DELEGATE_AGENT_TASK_INTENT =
+  "delegate_agent_task" satisfies (typeof REGISTERED_EXTRAS)[number];
+
+/**
  * Every intent slug a capability or a workspace template may declare — the
  * closed vocabulary as the wire sees it.
  */

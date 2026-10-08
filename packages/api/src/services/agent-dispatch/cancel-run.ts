@@ -21,7 +21,6 @@ import { createLogger } from "@synap-core/core";
 import {
   db,
   eq,
-  focusSessions,
   playbookRuns,
   liveRunStatusWhere,
   isLiveRunStatus,
@@ -30,7 +29,11 @@ import {
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { AgentBindingError, resolveAgentBinding } from "./agent-binding.js";
-import { callBindingVerb, postDispatchNotice } from "./binding-call.js";
+import {
+  callBindingVerb,
+  loadSessionRoom,
+  postDispatchNotice,
+} from "./binding-call.js";
 
 const logger = createLogger({ module: "agent-dispatch/cancel" });
 
@@ -54,12 +57,7 @@ export async function cancelRun(p: {
   const run = await db.query.playbookRuns.findFirst({
     where: eq(playbookRuns.id, p.runId),
   });
-  const session = run?.sessionId
-    ? await db.query.focusSessions.findFirst({
-        where: eq(focusSessions.id, run.sessionId),
-        columns: { userId: true, channelId: true },
-      })
-    : null;
+  const session = await loadSessionRoom(run?.sessionId);
   // THE cancel floor: the session owner only.
   if (!run || !session || session.userId !== p.userId) {
     return { status: "not_found" };
@@ -68,17 +66,15 @@ export async function cancelRun(p: {
     return { status: "not_live", runStatus: run.status };
   }
   const ownerId = session.userId;
-  const channelId = session.channelId ?? null;
+  const channelId = session.channelId;
   const ext = run.externalAgent as PlaybookRunExternalAgent | null;
 
   let externalCancelled: boolean | null = null;
   let note: string | undefined;
   if (ext) {
-    let canCancel = false;
     try {
       const binding = await resolveAgentBinding(ext.agentUserId);
       if (binding?.supports.cancel && binding.verbs.cancel) {
-        canCancel = true;
         const res = await callBindingVerb({
           binding,
           verb: "cancel",
@@ -97,15 +93,14 @@ export async function cancelRun(p: {
           const message =
             res.status === "proposed"
               ? `cancelling the ${ext.provider} task needs approval: ${res.reviewUrl}`
-              : res.status === "unsupported" || res.status === "failed"
-                ? res.message
-                : "unknown";
+              : res.message;
           logger.warn({ runId: run.id, message }, "external cancel failed");
           await postDispatchNotice({
             channelId,
             ownerId,
             content: `Could not cancel the ${ext.provider} task: ${message}`,
-            idempotencyKey: `external-agent:${run.id}:cancel-failed:${Date.now()}`,
+            // Once per distinct failure — a repeated identical one is not news.
+            idempotencyKey: `external-agent:${run.id}:cancel-failed:${message}`,
           });
           return { status: "cancel_failed", message };
         }
@@ -115,7 +110,7 @@ export async function cancelRun(p: {
       if (!(err instanceof AgentBindingError)) throw err;
       note = `The agent's binding is broken (${err.message}), so its task could not be cancelled from Synap.`;
     }
-    if (!canCancel && externalCancelled === null) {
+    if (externalCancelled === null) {
       externalCancelled = false;
       note ??= `The ${ext.provider} agent cannot be cancelled from Synap — its task may keep running until it finishes on its side.`;
     }

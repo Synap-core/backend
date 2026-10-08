@@ -739,8 +739,6 @@ export function registerDiscordRoutes(app: HubHono): void {
       }
       const agentId = orchestrator.id;
 
-      // ONE door (the one triggerAutoRespond uses): capability-first. The agent
-      // never picks the intelligence service (agentType ⟂ IS).
       const resolvedService = await resolveIntelligenceService({
         userId,
         // Service routing is a workspace HINT only; a pod-wide (null) turn has no

@@ -115,12 +115,8 @@ function escapeHtml(value: string): string {
  *     desktop companion runs, not an agent type at all).
  * Do not merge those lists into this one.
  *
- * KNOWN DRIFT (same concept, three lists — reported W7 2026-10-08, not merged
- * because widening this allowlist is a governance decision): synap-cli
- * `SURFACE_NAMES` (`src/lib/pod.ts`) also names chatgpt, chatgpt-oauth,
- * opencode, aider, windsurf, goose, zed, vscode, grok, and omits openwebui;
- * `synap mcp` (`src/commands/mcp.ts`) keeps a third, shorter list. An agent key
- * provisioning one of the CLI-only names is refused here with
+ * See synap-cli `SURFACE_NAMES`; drift is known (widening this allowlist is a
+ * governance decision) — a CLI-only name is refused with
  * SURFACE_AGENT_TYPE_REQUIRED.
  */
 const SURFACE_AGENT_TYPES = [
