@@ -71,6 +71,7 @@ import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
+import { linkSatisfiedOutputsToSubject } from "./subject-edge.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_SLOT_ATTEST_ACTION,
@@ -136,7 +137,7 @@ export async function satisfyExpectedOutputs(
     entityProfileSlug,
   } = params;
 
-  return await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select({
         expectedOutputs: focusSessions.expectedOutputs,
@@ -181,6 +182,12 @@ export async function satisfyExpectedOutputs(
 
     return { satisfied: [current[index]!.label] };
   });
+  // After commit: a slot declaring `relationToSubject` gets its output →
+  // subject edge (subject-edge.ts — best-effort, never fails the satisfy).
+  if (result.satisfied.length > 0) {
+    await linkSatisfiedOutputsToSubject({ sessionId });
+  }
+  return result;
 }
 
 /**
@@ -539,6 +546,9 @@ export async function attestExpectedOutput(
     // "I did this" on an undecided agent draft takes the draft on — the ONE
     // acceptance door, after commit, idempotent (accept-on-engagement.ts).
     await acceptDraftOnEngagement({ sessionId: result.session.id, userId });
+    // The attested slot's declared output → subject edge, when its `ref`
+    // names the entity (subject-edge.ts; best-effort).
+    await linkSatisfiedOutputsToSubject({ sessionId: result.session.id });
   }
   return result;
 }
@@ -833,5 +843,11 @@ export async function satisfyClaimsByEvidence(params: {
       })),
       outputs: next,
     };
+  }).then(async (r) => {
+    // After commit — the evidenced slots' declared output → subject edges.
+    if (r.satisfied.length > 0) {
+      await linkSatisfiedOutputsToSubject({ sessionId, now });
+    }
+    return r;
   });
 }
