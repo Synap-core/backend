@@ -5058,34 +5058,16 @@ const captureBaseRouter = router({
         ...(relationsFailed.length ? { relationsFailed } : {}),
       };
     }),
-});
-
-/**
- * `answerFollowUp` re-runs `structure`, so it lives in its own router merged
- * onto the base one: calling `captureBaseRouter.createCaller` from inside the
- * base router's own initializer would make its type circular (TS7022).
- */
-const captureAnswerRouter = router({
-  // ── answerFollowUp (answer a persisted capture question) ────────────────
 
   /**
-   * Answer (or skip) the follow-up question `capture.structure` persisted in
-   * the session's room, then re-run structure through the SAME procedure and
-   * return its response unchanged — so the review/receipt flow is untouched and
-   * a further question persists as the next round.
-   *
-   * NOT_FOUND on any authorization miss (no existence oracle); CONFLICT when the
-   * question was already resolved differently or superseded. A retry of the
-   * same answer continues. Never an agent turn, never a proposal: the answer is
-   * recorded by `recordCapturePartMessage` inside `claimCaptureQuestion`.
-   */
-  /**
-   * Confirm a `draft_process` route suggestion — "Draft a process for this".
+   * Confirm a `draft_process` route suggestion — "Draft a template for this kind".
    * Files ONE capture graph with a single `create_playbook` op through the
    * ONE capture-graph door (`submitCaptureGraph`), governed op by op: a human
    * caller gets a pending proposal to approve, an agent caller follows its
    * governance lane. On apply the playbook is created through
-   * `playbooks.create`, always `status: "draft"`.
+   * `playbooks.create`, always `status: "draft"`. Idempotent per
+   * (workspace, kind): a repeat confirm returns the open draft or the pending
+   * proposal (`draftProcessForKind`).
    */
   draftProcess: podProcedure
     .input(
@@ -5114,7 +5096,27 @@ const captureAnswerRouter = router({
         name: input.name ?? null,
       });
     }),
+});
 
+/**
+ * `answerFollowUp` re-runs `structure`, so it lives in its own router merged
+ * onto the base one: calling `captureBaseRouter.createCaller` from inside the
+ * base router's own initializer would make its type circular (TS7022).
+ */
+const captureAnswerRouter = router({
+  // ── answerFollowUp (answer a persisted capture question) ────────────────
+
+  /**
+   * Answer (or skip) the follow-up question `capture.structure` persisted in
+   * the session's room, then re-run structure through the SAME procedure and
+   * return its response unchanged — so the review/receipt flow is untouched and
+   * a further question persists as the next round.
+   *
+   * NOT_FOUND on any authorization miss (no existence oracle); CONFLICT when the
+   * question was already resolved differently or superseded. A retry of the
+   * same answer continues. Never an agent turn, never a proposal: the answer is
+   * recorded by `recordCapturePartMessage` inside `claimCaptureQuestion`.
+   */
   answerFollowUp: podProcedure
     .use(aiRateLimitMiddleware)
     .input(

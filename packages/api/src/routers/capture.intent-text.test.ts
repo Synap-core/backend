@@ -5,7 +5,7 @@
  * intent words of the capture (`rankRouteCandidates`). The Hub REST structure
  * door has always passed `body.text`; the tRPC `capture.execute` door — the one
  * Relay and the MCP capture handler reach — passed NOTHING, so a capture's
- * suggestions there were ranked by kind alone (research-3 §2.4).
+ * suggestions there were ranked by kind alone.
  *
  * Driving `capture.execute` end to end needs Postgres, so — like
  * `capture.session-parity.test.ts` — the wiring is asserted against the source,

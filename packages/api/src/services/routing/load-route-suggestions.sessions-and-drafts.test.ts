@@ -123,6 +123,8 @@ describe("draft-process offer", () => {
     });
     expect(draft.signals).toEqual([]);
     expect(draft.reason).toMatch(/No template is set up for/);
+    // The same words as the web/relay offer: the plural kind noun.
+    expect(draft.candidate.name).toBe("Draft a template for tracks");
   });
 
   it("is NOT offered when a playbook is built for the kind", async () => {
@@ -169,6 +171,14 @@ describe("findLifecycleProperty", () => {
     ).toBe("dealStage");
     expect(
       findLifecycleProperty([{ slug: "status", constraints: { enum: [] } }])
+    ).toBeNull();
+  });
+
+  it("a runtime bookkeeping select (agent_status) is never a lifecycle — the agent kind gets no draft offer", () => {
+    expect(
+      findLifecycleProperty([
+        { slug: "agent_status", constraints: { enum: ["idle", "running"] } },
+      ])
     ).toBeNull();
   });
 });

@@ -18,7 +18,7 @@
  * (which creates a propose rule through `skills.createRule`, governed).
  * When NO playbook is built for the entity's kind or roles and the kind has a
  * lifecycle (`kind-lifecycle.ts`), one `draft_process` suggestion is appended
- * LAST: "Draft a process for this" — confirm files a governed
+ * LAST: "Draft a template for <kinds>" — confirm files a governed
  * `create_playbook` (status draft). It is an offer, not evidence, so it is
  * never ranked above a real candidate.
  *
@@ -45,7 +45,10 @@ import {
   type RankedRoute,
   type RouteCandidate,
 } from "./suggest-routes.js";
-import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import {
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "routing/load-route-suggestions" });
 
@@ -139,25 +142,25 @@ async function defaultMatchers(
   };
 }
 
-/** The one "Draft a process for this" suggestion for a lifecycle kind. */
+/** The one "Draft a template for <kinds>" suggestion for a lifecycle kind. */
 export function draftProcessRoute(
   profileSlug: string,
   statusProperty: string
 ): RankedRoute {
-  const noun = resolveObjectNoun(profileSlug).toLowerCase();
+  const noun = resolveObjectNounPlural(profileSlug).toLowerCase();
   // The thing drafted is a playbook: its noun comes from the one door.
   const template = resolveObjectNoun("playbook").toLowerCase();
   return {
     candidate: {
       kind: "draft_process",
       id: `draft:${profileSlug}`,
-      name: `Draft a ${template} for ${noun} items`,
+      name: `Draft a ${template} for ${noun}`,
       subjectProfileSlug: profileSlug,
       statusProperty,
     },
     // An offer, not evidence: it carries no signal and never outranks one.
     score: 0,
-    reason: `No ${template} is set up for ${noun} items yet`,
+    reason: `No ${template} is set up for ${noun} yet`,
     signals: [],
   };
 }
@@ -238,7 +241,7 @@ export async function loadRouteSuggestions(input: {
             ),
           ]),
         ];
-        // "Draft a process for this": no playbook is BUILT for this kind or
+        // "Draft a template for <kinds>": no playbook is BUILT for this kind or
         // its roles (an intent-only match on a kind-less playbook does not
         // count — it was not made for this), and the kind has a lifecycle.
         const kindSlugs = new Set([e.profileSlug, ...facetSlugs]);

@@ -1,9 +1,11 @@
 /**
- * Does a kind HAVE a lifecycle? — the gate on "Draft a process for this".
+ * Does a kind HAVE a lifecycle? — the gate on "Draft a template for <kinds>".
  *
- * A process is worth drafting for a kind only when the kind already moves
+ * A template is worth drafting for a kind only when the kind already moves
  * through states: it carries a SELECT property whose slug names a status or a
- * stage (case-insensitive: `status`, `post-status`, `dealStage`, `stage`).
+ * stage — the ONE predicate `isLifecyclePropertySlug`
+ * (`@synap-core/types/property-hints`), which the template corpus guard shares
+ * and which excludes runtime bookkeeping (`agent_status`, `run-status`, …).
  * That property becomes the draft's `subjectProfile.statusProperty`.
  *
  * "Select" = a closed value set: a string property with a non-empty
@@ -15,8 +17,7 @@
  */
 
 import { getDb, ProfileResolutionService } from "@synap/database";
-
-const LIFECYCLE_SLUG = /status|stage/i;
+import { isLifecyclePropertySlug } from "@synap-core/types/property-hints";
 
 export interface LifecycleCandidateProperty {
   slug: string;
@@ -39,7 +40,7 @@ export function findLifecycleProperty(
 ): string | null {
   const hit = [...props]
     .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
-    .find((p) => LIFECYCLE_SLUG.test(p.slug) && isSelect(p));
+    .find((p) => isLifecyclePropertySlug(p.slug) && isSelect(p));
   return hit?.slug ?? null;
 }
 
