@@ -146,6 +146,66 @@ const ROWS: Row[] = [
   },
   {
     kind: "agent",
+    state: "failing",
+    rulesOut: "a recently seen agent with a BROKEN binding reads ready",
+    resolve: () =>
+      resolveAgentConnectionState(
+        {
+          id: "a",
+          name: "C",
+          lastSeenAt: daysAgo(1),
+          activeKeys: 1,
+          reach: "dispatch",
+          binding: {
+            toolId: "t1",
+            provider: "github",
+            error: { code: "tool_inactive", message: "The connector is off" },
+          },
+        },
+        NOW
+      ),
+  },
+  {
+    kind: "agent",
+    state: "ready",
+    rulesOut: "any dispatch binding reads failing (a healthy one is calm)",
+    resolve: () =>
+      resolveAgentConnectionState(
+        {
+          id: "a",
+          name: "C",
+          lastSeenAt: daysAgo(1),
+          activeKeys: 1,
+          reach: "dispatch",
+          binding: { toolId: "t1", provider: "github", error: null },
+        },
+        NOW
+      ),
+  },
+  {
+    kind: "agent",
+    state: "asking",
+    rulesOut: "a broken binding outranks the person's pending key approval",
+    resolve: () =>
+      resolveAgentConnectionState(
+        {
+          id: "a",
+          name: "C",
+          lastSeenAt: null,
+          activeKeys: 0,
+          pendingKeys: 1,
+          reach: "dispatch",
+          binding: {
+            toolId: null,
+            provider: null,
+            error: { code: "tool_missing", message: "gone" },
+          },
+        },
+        NOW
+      ),
+  },
+  {
+    kind: "agent",
     state: "ready",
     rulesOut: "the 7-day roster staleness decides quiet on Connected",
     resolve: () =>

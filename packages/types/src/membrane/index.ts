@@ -18,7 +18,9 @@
 
 import {
   resolveAgentMark,
+  resolveAgentReachMark,
   type AgentMarkRowLike,
+  type AgentReachRowLike,
 } from "../agents/index.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
 import {
@@ -454,17 +456,21 @@ export function resolveAppConnection(
  * window; builtIn ⇒ ready. `unmeasured` (an older pod that reports no
  * presence) ⇒ ready: there is no evidence of a problem, and inventing one
  * would put a healthy agent in "Needs you".
+ *
+ * A BROKEN dispatch binding (`resolveAgentReachMark` → `error`) ⇒ failing,
+ * below asking and revoked: Synap cannot send this agent work until the person
+ * fixes its connector, so it belongs in "Needs you" however recently the agent
+ * itself was seen. A healthy, absent or unserved binding changes nothing.
  */
 export function resolveAgentConnectionState(
-  row: AgentMarkRowLike,
+  row: AgentMarkRowLike & AgentReachRowLike,
   now: number = Date.now()
 ): ConnectionState {
   const mark = resolveAgentMark(row, now);
+  if (mark.kind === "approve") return "asking";
+  if (mark.kind === "disconnected") return "revoked";
+  if (resolveAgentReachMark(row)?.error) return "failing";
   switch (mark.kind) {
-    case "approve":
-      return "asking";
-    case "disconnected":
-      return "revoked";
     case "waiting":
       return "setting_up";
     case "noKey":
@@ -480,7 +486,7 @@ export function resolveAgentConnectionState(
 }
 
 export function resolveAgentConnectionView(
-  row: AgentMarkRowLike,
+  row: AgentMarkRowLike & AgentReachRowLike,
   opts: ConnectionViewOptions & { now?: number } = {}
 ): ConnectionView {
   return connectionView(
