@@ -82,6 +82,8 @@ import {
   entities,
 } from "@synap/database";
 import {
+  AGENT_APPROVAL_SLOT_KIND,
+  agentApprovalSlotLabel,
   normalizeExternalAgentStatus,
   pollExternalAgentRuns,
   statusKey,
@@ -268,6 +270,72 @@ describe("external agent status poll", () => {
       content: "Postgres or SQLite?",
     });
     expect((await runRow(runId)).external_agent.status).toBe("needs_input");
+  });
+
+  it("needs_input on a waiting tool call ⇒ an APPROVAL card: an owed confirm slot, and the card carries the call's id", async () => {
+    const runId = await dispatchedRun(POLLED);
+    ran({
+      state: "needs_input",
+      summary: "Approve running github.push_files?",
+      confirmationId: "sevt_push",
+    });
+    await pollExternalAgentRuns();
+    expect(h.posts).toHaveLength(1);
+    expect(h.posts[0]).toMatchObject({
+      agentUserId: POLLED,
+      kind: "question",
+      slotLabel: agentApprovalSlotLabel("acme"),
+      ask: { mode: "confirm" },
+      providerConfirmationId: "sevt_push",
+    });
+    const sessionId = (
+      await q<{ session_id: string }>(
+        `select session_id from playbook_runs where id = $1`,
+        [runId]
+      )
+    ).rows[0]!.session_id;
+    const slots = (
+      await q<{ expected_outputs: Array<Record<string, unknown>> }>(
+        `select expected_outputs from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows[0]!.expected_outputs;
+    expect(slots).toEqual([
+      expect.objectContaining({
+        kind: AGENT_APPROVAL_SLOT_KIND,
+        label: agentApprovalSlotLabel("acme"),
+        owner: "human",
+        ask: expect.objectContaining({ mode: "confirm" }),
+      }),
+    ]);
+    expect((await runRow(runId)).external_agent.lastState).toMatchObject({
+      confirmationId: "sevt_push",
+    });
+
+    // The NEXT waiting call re-owes the card (one slot, not two) and names it.
+    ran({
+      state: "needs_input",
+      summary: "Approve running github.merge_pull_request?",
+      confirmationId: "sevt_merge",
+    });
+    await pollExternalAgentRuns();
+    expect(h.posts).toHaveLength(2);
+    expect(h.posts[1]).toMatchObject({ providerConfirmationId: "sevt_merge" });
+    const after = (
+      await q<{ expected_outputs: unknown[] }>(
+        `select expected_outputs from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows[0]!.expected_outputs;
+    expect(after).toHaveLength(1);
+  });
+
+  it("a plain needs_input (no waiting call) is a free question — no slot, no confirmation id", async () => {
+    await dispatchedRun(POLLED);
+    ran({ state: "needs_input", summary: "Which DB?" });
+    await pollExternalAgentRuns();
+    expect(h.posts[0]).not.toHaveProperty("providerConfirmationId");
+    expect(h.posts[0]).not.toHaveProperty("slotLabel");
   });
 
   it("done ⇒ the run capture lands (completed) and polling stops", async () => {

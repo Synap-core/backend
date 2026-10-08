@@ -26,6 +26,7 @@ import {
   drizzleSql,
   focusSessions,
   playbookRuns,
+  liveRunStatusWhere,
 } from "@synap/database";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import {
@@ -55,17 +56,36 @@ export interface WakeExternalAgentInput {
   slotKey?: string;
   proposalId?: string;
   decision?: "approved" | "rejected";
+  /**
+   * The provider tool call this decision settles — ONLY from a typed approve /
+   * reject of the approval card that named it (`OpenQuestion.confirmationId`).
+   * Without it the binding sends the words as a message: a plan / deploy
+   * decision or an answer in words NEVER approves a pending push or merge.
+   */
+  confirmationId?: string;
+  /**
+   * What makes this send ONE operation — the answer's message id or the
+   * decided proposal's id. Keyed through `executeCapability`'s explicit-key
+   * idempotency, so a repeated decision / replayed answer sends once.
+   */
+  idempotencyKey: string;
 }
 
 export type WakeExternalAgentResult =
-  | { status: "sent"; runId: string | null }
+  | { status: "sent"; runId: string }
   /** Governance deferred the send to a person. */
   | { status: "proposed"; reviewUrl: string }
-  /** Not an agent the pod dispatches to — nothing was sent (by design). */
+  /**
+   * Nothing was sent, by design: not an agent the pod dispatches to, or no
+   * LIVE run in this session was handed to it (nothing to send to).
+   */
   | { status: "not_dispatch" }
   | { status: "failed"; message: string };
 
-/** The session's newest run handed to this agent (its task id, if any). */
+/**
+ * The session's newest LIVE run handed to this agent, with the provider task
+ * id it was started as. `null` ⇒ nothing to send to.
+ */
 async function dispatchedRunFor(
   sessionId: string,
   agentUserId: string
@@ -76,7 +96,9 @@ async function dispatchedRunFor(
     .where(
       and(
         eq(playbookRuns.sessionId, sessionId),
-        drizzleSql`${playbookRuns.externalAgent}->>'agentUserId' = ${agentUserId}`
+        liveRunStatusWhere(playbookRuns.status),
+        drizzleSql`${playbookRuns.externalAgent}->>'agentUserId' = ${agentUserId}`,
+        drizzleSql`${playbookRuns.externalAgent}->>'externalId' IS NOT NULL`
       )
     )
     .orderBy(desc(playbookRuns.startedAt))
@@ -130,14 +152,15 @@ export async function wakeExternalAgent(
   if (!binding) return { status: "not_dispatch" };
 
   const run = await dispatchedRunFor(p.sessionId, p.agentUserId);
+  if (!run) return { status: "not_dispatch" };
   const res = await callBindingVerb({
     binding,
     verb: "send",
     agentUserId: p.agentUserId,
     ownerId,
     parameters: {
-      externalId: run?.ext.externalId ?? null,
-      runId: run?.id ?? null,
+      externalId: run.ext.externalId,
+      runId: run.id,
       sessionId: p.sessionId,
       channelId,
       message: {
@@ -146,12 +169,16 @@ export async function wakeExternalAgent(
         ...(p.slotKey ? { slotKey: p.slotKey } : {}),
         ...(p.proposalId ? { proposalId: p.proposalId } : {}),
         ...(p.decision ? { decision: p.decision } : {}),
+        ...(p.kind === "decision" && p.decision && p.confirmationId
+          ? { confirmationId: p.confirmationId }
+          : {}),
       },
     },
     sessionId: p.sessionId,
     channelId,
+    idempotencyKey: `agent-send:${run.id}:${p.idempotencyKey}`,
   });
-  if (res.status === "ok") return { status: "sent", runId: run?.id ?? null };
+  if (res.status === "ok") return { status: "sent", runId: run.id };
   if (res.status === "proposed") {
     await postDispatchNotice({
       channelId,
@@ -196,6 +223,10 @@ export async function wakeAgentOnDevDecision(p: {
       kind: "decision",
       decision: p.decision,
       proposalId: p.proposalId,
+      // NO confirmationId, ever: approving a plan or a deploy is not approving
+      // the push / merge the agent may be blocked on — those settle only from
+      // their own approval card. The decision reaches the agent as a message.
+      idempotencyKey: `decision:${p.proposalId}`,
       text:
         `Your ${gate} approval was ${p.decision}.` +
         (p.note?.trim() ? ` Reviewer note: ${p.note.trim()}` : ""),

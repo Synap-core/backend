@@ -16,6 +16,7 @@ import { createLogger } from "@synap-core/core";
 import { randomBytes } from "node:crypto";
 import { executeCapability } from "../capabilities/execute-capability.js";
 import { postChannelMessage } from "../messaging/post-message.js";
+import type { SlotAsk } from "@synap/playbooks";
 import type { AgentBinding } from "./agent-binding.js";
 
 const logger = createLogger({ module: "agent-dispatch" });
@@ -175,6 +176,11 @@ export async function postDispatchNotice(p: {
   /** Post AS the agent (its update/question card) instead of as the pod. */
   asAgentUserId?: string;
   kind?: "update" | "question";
+  /** A question card filed ON this owed slot, answered through its typed ask. */
+  slotLabel?: string;
+  ask?: SlotAsk;
+  /** The provider tool call the card asks to approve (`RoomPostMeta`). */
+  confirmationId?: string;
 }): Promise<boolean> {
   if (!p.channelId) return false;
   try {
@@ -187,6 +193,9 @@ export async function postDispatchNotice(p: {
       ...(p.asAgentUserId
         ? { agentUserId: p.asAgentUserId, kind: p.kind ?? "update" }
         : {}),
+      ...(p.slotLabel ? { slotLabel: p.slotLabel } : {}),
+      ...(p.ask ? { ask: p.ask } : {}),
+      ...(p.confirmationId ? { providerConfirmationId: p.confirmationId } : {}),
     });
     return true;
   } catch (err) {

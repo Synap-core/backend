@@ -551,8 +551,21 @@ describe("claude-managed-agents template — verb code against a fake Managed Ag
       askMcp("sevt_push", "push_files"),
     ];
     const s = await statusOf();
-    expect(s).toMatchObject({ state: "needs_input" });
+    // The waiting call's event id survives the poller's normalizer — it is
+    // what the approval card carries and the only thing that can settle it.
+    expect(s).toMatchObject({
+      state: "needs_input",
+      confirmationId: "sevt_push",
+    });
     expect(s!.summary).toContain("github.push_files");
+  });
+
+  it("an idle with no pending call reports needs_input WITHOUT a confirmation id", async () => {
+    sessionStatus = "idle";
+    eventsDesc = [idle({ type: "end_turn" }), agentMessage("Which branch?")];
+    const s = await statusOf();
+    expect(s).toMatchObject({ state: "needs_input" });
+    expect(s!.confirmationId).toBeUndefined();
   });
 
   it("idle end_turn with the agent's SYNAP_STATUS: done line → done, with the PR link and summary", async () => {
@@ -677,40 +690,54 @@ describe("claude-managed-agents template — verb code against a fake Managed Ag
     },
   });
 
-  it("send: a pending always_ask call + 'approve' → user.tool_confirmation allow on that event id", async () => {
+  const pendingPush = () => {
     sessionStatus = "idle";
     eventsDesc = [
       idle({ type: "requires_action", event_ids: ["sevt_push"] }),
       askMcp("sevt_push", "push_files"),
     ];
-    await runVerb("send", answer("approve"));
-    const post = calls.find((c) => c.method === "POST")!;
-    expect(post.body).toEqual({
-      events: [
-        {
-          type: "user.tool_confirmation",
-          tool_use_id: "sevt_push",
-          result: "allow",
-        },
-      ],
-    });
+  };
+  const decision = (
+    verdict: "approved" | "rejected",
+    extra: Record<string, unknown> = {}
+  ) => ({
+    ...answer("x"),
+    message: {
+      kind: "decision",
+      decision: verdict,
+      text: fenceUntrustedData("not yet", "x"),
+      ...extra,
+    },
+  });
+  const posted = () =>
+    (calls.find((c) => c.method === "POST")?.body as any)?.events;
+
+  it("send: an approved decision NAMING the pending call → user.tool_confirmation allow on that event id", async () => {
+    pendingPush();
+    await runVerb(
+      "send",
+      decision("approved", { confirmationId: "sevt_push" })
+    );
+    expect(posted()).toEqual([
+      {
+        type: "user.tool_confirmation",
+        tool_use_id: "sevt_push",
+        result: "allow",
+      },
+    ]);
   });
 
-  it("send: a rejected dev decision on a pending call → deny with a message", async () => {
+  it("send: a rejected decision naming the call → deny with the person's words", async () => {
     sessionStatus = "idle";
     eventsDesc = [
       idle({ type: "requires_action", event_ids: ["sevt_merge"] }),
       askMcp("sevt_merge", "merge_pull_request"),
     ];
-    await runVerb("send", {
-      ...answer("not yet"),
-      message: {
-        kind: "decision",
-        decision: "rejected",
-        text: fenceUntrustedData("not yet", "x"),
-      },
-    });
-    const ev = (calls.find((c) => c.method === "POST")!.body as any).events[0];
+    await runVerb(
+      "send",
+      decision("rejected", { confirmationId: "sevt_merge" })
+    );
+    const ev = posted()[0];
     expect(ev).toMatchObject({
       type: "user.tool_confirmation",
       tool_use_id: "sevt_merge",
@@ -719,15 +746,39 @@ describe("claude-managed-agents template — verb code against a fake Managed Ag
     expect(ev.deny_message).toContain("not yet");
   });
 
-  it("send: an unclear answer while a call waits for approval is refused, nothing is sent", async () => {
-    sessionStatus = "idle";
-    eventsDesc = [
-      idle({ type: "requires_action", event_ids: ["sevt_push"] }),
-      askMcp("sevt_push", "push_files"),
-    ];
-    await expect(runVerb("send", answer("hmm, maybe later?"))).rejects.toThrow(
-      /approve.*reject/
-    );
+  it("send: an approved PLAN decision (no confirmation named) never allows the pending push — it goes in as user.message", async () => {
+    pendingPush();
+    await runVerb("send", decision("approved", { proposalId: "p-plan" }));
+    const ev = posted();
+    expect(ev).toHaveLength(1);
+    expect(ev[0].type).toBe("user.message");
+    expect(ev[0].content[0].text).toContain("on proposal p-plan: approved");
+  });
+
+  it.each(["approve", "yes", "ok", "lgtm", "go ahead"])(
+    "send: a casual answer %j while a call waits never approves it — user.message",
+    async (words) => {
+      pendingPush();
+      await runVerb("send", answer(words));
+      const ev = posted();
+      expect(ev).toHaveLength(1);
+      expect(ev[0].type).toBe("user.message");
+    }
+  );
+
+  it("send: a decision naming a call that is no longer pending is refused, nothing is sent", async () => {
+    pendingPush();
+    await expect(
+      runVerb("send", decision("approved", { confirmationId: "sevt_other" }))
+    ).rejects.toThrow(/no longer waiting for approval/);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("send: a confirmation id on an ANSWER (not a decision) is refused", async () => {
+    pendingPush();
+    await expect(
+      runVerb("send", answer("approve", { confirmationId: "sevt_push" }))
+    ).rejects.toThrow(/settled only by an approved \/ rejected decision/);
     expect(calls.some((c) => c.method === "POST")).toBe(false);
   });
 

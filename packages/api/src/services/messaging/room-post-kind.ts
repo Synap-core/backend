@@ -31,6 +31,14 @@ export interface RoomPostMeta {
   /** The owed slot a `question` is about — its declared label. */
   slotLabel?: string;
   /**
+   * The provider tool call a dispatched agent is blocked on (e.g. a Managed
+   * Agents `always_ask` push) — the event id its binding's `status` verb
+   * reported. Set ONLY by the pod's status poll on the approval card it posts;
+   * a typed approve / reject of THAT card is the only answer that settles the
+   * call (`wakeExternalAgent` → the binding's `send`). Free words never do.
+   */
+  confirmationId?: string;
+  /**
    * Stamped once, atomically, when the session OWNER's reply answered this
    * question. Its presence is what makes a question no longer open.
    */
@@ -45,13 +53,19 @@ export interface RoomPostMeta {
 /** The persisted marker for an agent post. Pure. */
 export function roomPostMeta(
   kind: RoomPostKind | undefined,
-  slotLabel?: string | null
+  slotLabel?: string | null,
+  confirmationId?: string | null
 ): RoomPostMeta {
   const label = typeof slotLabel === "string" ? slotLabel.trim() : "";
+  const confirmation =
+    typeof confirmationId === "string" ? confirmationId.trim() : "";
   return {
     kind: kind ?? "update",
     ...(kind === "question" && label
       ? { slotLabel: label.slice(0, ROOM_POST_SLOT_LABEL_MAX) }
+      : {}),
+    ...(kind === "question" && label && confirmation
+      ? { confirmationId: confirmation.slice(0, 200) }
       : {}),
   };
 }

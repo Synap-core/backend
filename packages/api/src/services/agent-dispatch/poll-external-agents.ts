@@ -59,6 +59,9 @@ import {
   postDispatchNotice,
 } from "./binding-call.js";
 import { applyRunCapture } from "../runs/apply-run-capture.js";
+import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
+import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
+import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 
 const logger = createLogger({ module: "agent-dispatch/poll" });
 
@@ -77,7 +80,16 @@ export interface ExternalAgentStatus {
   branch?: string;
   previewUrl?: string;
   summary?: string;
+  /**
+   * `needs_input` only: the ONE provider tool call waiting for a person's
+   * approval (e.g. a Managed Agents `always_ask` push). It rides on the
+   * approval card; only a typed approve / reject of that card settles it.
+   */
+  confirmationId?: string;
 }
+
+/** A provider event id — an opaque token, never free text. */
+const CONFIRMATION_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
 
 /**
  * Normalize a provider's `status` result. `null` = unreadable (no recognized
@@ -105,6 +117,14 @@ export function normalizeExternalAgentStatus(
     const v = asOptionalString(r[key]);
     if (v) out[key] = key === "summary" ? v.slice(0, 4000) : v.slice(0, 2000);
   }
+  const confirmationId = asOptionalString(r.confirmationId);
+  if (
+    out.state === "needs_input" &&
+    confirmationId &&
+    CONFIRMATION_ID_RE.test(confirmationId)
+  ) {
+    out.confirmationId = confirmationId;
+  }
   return out;
 }
 
@@ -117,6 +137,8 @@ export function statusKey(s: ExternalAgentStatus): string {
     s.branch ?? null,
     s.previewUrl ?? null,
     s.summary ?? null,
+    // Appended only when present, so a state without one keeps its old key.
+    ...(s.confirmationId ? [s.confirmationId] : []),
   ]);
   return createHash("sha256").update(canonical).digest("hex").slice(0, 24);
 }
@@ -141,6 +163,46 @@ export function statusLine(provider: string, s: ExternalAgentStatus): string {
 }
 
 const ACTIVE = ["running", "needs_input"] as const;
+
+/** The owed slot kind of an approval card for a provider tool call. */
+export const AGENT_APPROVAL_SLOT_KIND = "agent_approval";
+
+/** The approval card's slot label — one per provider, re-owed per call. */
+export function agentApprovalSlotLabel(provider: string): string {
+  return `Approve: ${provider} agent action`;
+}
+
+/**
+ * Owe the person the approval card's confirm slot. Re-owed FRESH for each
+ * call (any earlier card of this provider — answered or stale — is replaced),
+ * so the ask the person answers is always the call the agent is waiting on.
+ */
+async function oweAgentApprovalSlot(p: {
+  sessionId: string;
+  provider: string;
+  status: ExternalAgentStatus;
+}): Promise<{ label: string; ask: SlotAsk } | null> {
+  const label = agentApprovalSlotLabel(p.provider);
+  const why = (
+    p.status.summary ?? `The ${p.provider} agent is waiting for your approval.`
+  ).slice(0, 500);
+  const ask: SlotAsk = { mode: "confirm", prompt: why };
+  const slot: ExpectedOutput = {
+    kind: AGENT_APPROVAL_SLOT_KIND,
+    label,
+    owner: "human",
+    blockedReason: "decision",
+    why,
+    owedSince: new Date().toISOString(),
+    ask,
+  };
+  const wanted = normalizeExpectedLabel(label);
+  const written = await updateExpectedOutputsLocked(p.sessionId, (current) => [
+    ...current.filter((o) => normalizeExpectedLabel(o?.label) !== wanted),
+    slot,
+  ]);
+  return written ? { label, ask } : null;
+}
 
 export interface PollSummary {
   scanned: number;
@@ -305,6 +367,18 @@ async function pollOne(
     return "skipped";
   }
 
+  // A tool call waiting for approval is an APPROVAL CARD: an owed confirm
+  // slot, and the question filed on it carries the call's id. Only a typed
+  // approve / reject of that card settles the call (the answer door wakes the
+  // agent with a decision naming it) — a reply in words never does.
+  const approval =
+    status.state === "needs_input" && status.confirmationId && run.sessionId
+      ? await oweAgentApprovalSlot({
+          sessionId: run.sessionId,
+          provider: binding.provider,
+          status,
+        })
+      : null;
   await postDispatchNotice({
     channelId,
     ownerId,
@@ -312,6 +386,13 @@ async function pollOne(
     idempotencyKey: `agent-poll:${run.id}:${key}`,
     asAgentUserId: ext.agentUserId,
     kind: status.state === "needs_input" ? "question" : "update",
+    ...(approval
+      ? {
+          slotLabel: approval.label,
+          ask: approval.ask,
+          confirmationId: status.confirmationId,
+        }
+      : {}),
   });
 
   if (terminal) {

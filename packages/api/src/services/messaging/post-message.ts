@@ -116,6 +116,12 @@ export interface PostChannelMessageParams {
    */
   ask?: SlotAsk;
   /**
+   * With a `question` + `slotLabel`: the provider tool call this card asks the
+   * person to approve (`RoomPostMeta.confirmationId`). SERVER-INTERNAL — set
+   * only by the external-agent status poll, never passed from a wire.
+   */
+  providerConfirmationId?: string;
+  /**
    * A COMMENT in an object room (Documents v2): the thread root it replies to
    * (`messages.parent_id`), and/or the object anchor a root carries
    * (`messages.metadata.anchor`, the D19 contract). Written ONLY by the
@@ -392,7 +398,8 @@ export async function postChannelMessage(
                 ? {
                     [ROOM_POST_META_KEY]: roomPostMeta(
                       params.kind,
-                      params.slotLabel
+                      params.slotLabel,
+                      params.providerConfirmationId
                     ),
                   }
                 : {}),

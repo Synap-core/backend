@@ -67,6 +67,8 @@ export interface PlaybookRunExternalAgent {
     branch?: string;
     previewUrl?: string;
     summary?: string;
+    /** The provider tool call waiting for a person's approval (`needs_input`). */
+    confirmationId?: string;
   };
   /** Fingerprint of `lastState` — the poll posts once per change. */
   lastStateKey?: string;

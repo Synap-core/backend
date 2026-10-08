@@ -212,6 +212,31 @@ async function seed(
   return { sessionId, channelId };
 }
 
+/** A LIVE run of this session handed to the dispatch agent (the send target). */
+async function dispatchedRun(sessionId: string): Promise<string> {
+  const runId = randomUUID();
+  await q(
+    `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, external_agent, started_at)
+     values ($1, $2, $3, 'external-agent', 'running', '{}'::jsonb, $4, $5::jsonb, now())`,
+    [
+      runId,
+      randomUUID(),
+      sessionId,
+      OWNER,
+      JSON.stringify({
+        agentUserId: DISPATCH_AGENT,
+        toolId: DISPATCH_TOOL,
+        provider: "acme",
+        externalId: "task-1",
+        url: null,
+        status: "needs_input",
+        startedAt: new Date().toISOString(),
+      }),
+    ]
+  );
+  return runId;
+}
+
 type Slot = Record<string, unknown> & {
   label: string;
   answer?: Record<string, unknown>;
@@ -508,8 +533,9 @@ describe("the answer loop", () => {
 
   it("a DISPATCH asker is woken through its binding's send verb — never an IS turn", async () => {
     const { sessionId, channelId } = await seed({ agentIds: [DISPATCH_AGENT] });
+    const runId = await dispatchedRun(sessionId);
     await hubQuestion(channelId, DISPATCH_AGENT);
-    await hubReply(channelId, "EU");
+    const replyId = await hubReply(channelId, "EU");
     expect((await slot(sessionId)).answer).toMatchObject({ text: "EU" });
     expect(h.triggers).toHaveLength(0);
     expect(h.sends).toHaveLength(1);
@@ -527,10 +553,129 @@ describe("the answer loop", () => {
     expect(message.slotKey).toBe(LABEL);
     expect(message.text).toContain("EU");
     expect(message.text).toMatch(/BEGIN UNTRUSTED CONTENT/);
+    // Keyed on the answer's own message, through the execution door's
+    // explicit-key idempotency — a replayed answer sends once.
+    expect(h.sends[0]!.idempotencyKey).toBe(
+      `agent-send:${runId}:answer:${replyId}`
+    );
+  });
+
+  it("a DISPATCH asker with NO live dispatched run is not sent to (nothing to send to)", async () => {
+    const { sessionId, channelId } = await seed({ agentIds: [DISPATCH_AGENT] });
+    const runId = await dispatchedRun(sessionId);
+    await q(`update playbook_runs set status = 'cancelled' where id = $1`, [
+      runId,
+    ]);
+    await hubQuestion(channelId, DISPATCH_AGENT);
+    await hubReply(channelId, "EU");
+    expect((await slot(sessionId)).answer).toMatchObject({ text: "EU" });
+    expect(h.sends).toHaveLength(0);
+    expect(h.triggers).toHaveLength(0);
+  });
+
+  // ── the approval card (a provider tool call waiting for a person) ─────────
+
+  const APPROVAL = "Approve: acme agent action";
+  async function approvalCard(): Promise<{
+    sessionId: string;
+    channelId: string;
+    cardId: string;
+  }> {
+    const { sessionId, channelId } = await seed({ agentIds: [DISPATCH_AGENT] });
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify([
+          {
+            kind: "agent_approval",
+            label: APPROVAL,
+            owner: "human",
+            blockedReason: "decision",
+            why: "Approve running github.push_files?",
+            owedSince: "2026-10-08T09:00:00.000Z",
+            ask: {
+              mode: "confirm",
+              prompt: "Approve running github.push_files?",
+            },
+          },
+        ]),
+      ]
+    );
+    await dispatchedRun(sessionId);
+    // Exactly what the status poll posts (`postDispatchNotice` → this door).
+    const posted = await postChannelMessage({
+      channelId,
+      content: "Approve running github.push_files?",
+      userId: OWNER,
+      role: "assistant",
+      agentUserId: DISPATCH_AGENT,
+      kind: "question",
+      slotLabel: APPROVAL,
+      ask: { mode: "confirm", prompt: "Approve running github.push_files?" },
+      providerConfirmationId: "sevt_push",
+      idempotencyKey: `card:${randomUUID()}`,
+    });
+    return { sessionId, channelId, cardId: posted.messageId };
+  }
+
+  it("the approval card persists the call's id on the question, server-side", async () => {
+    const { cardId } = await approvalCard();
+    expect((await metaOf(cardId))?.roomPost).toMatchObject({
+      kind: "question",
+      slotLabel: APPROVAL,
+      confirmationId: "sevt_push",
+    });
+  });
+
+  it("a typed APPROVE of the card wakes the agent with a decision NAMING the call", async () => {
+    const { sessionId } = await approvalCard();
+    const res = await send(
+      app(),
+      "POST",
+      `/focus-sessions/${sessionId}/outputs/answer`,
+      { expectedLabel: APPROVAL, value: { type: "confirm", confirmed: true } }
+    );
+    expect(await res.json()).toMatchObject({ triggered: true });
+    expect(h.sends).toHaveLength(1);
+    expect(
+      (h.sends[0]!.parameters as { message: Record<string, unknown> }).message
+    ).toMatchObject({
+      kind: "decision",
+      decision: "approved",
+      confirmationId: "sevt_push",
+    });
+  });
+
+  it("a typed REJECT names the call with decision rejected", async () => {
+    const { sessionId } = await approvalCard();
+    await send(app(), "POST", `/focus-sessions/${sessionId}/outputs/answer`, {
+      expectedLabel: APPROVAL,
+      value: { type: "confirm", confirmed: false },
+    });
+    expect(
+      (h.sends[0]!.parameters as { message: Record<string, unknown> }).message
+    ).toMatchObject({ decision: "rejected", confirmationId: "sevt_push" });
+  });
+
+  it("WORDS on the card ('approve') never approve: sent as an answer, the card stays open and its slot owed", async () => {
+    const { sessionId, channelId, cardId } = await approvalCard();
+    await hubReply(channelId, "approve");
+    expect(h.sends).toHaveLength(1);
+    const message = (
+      h.sends[0]!.parameters as { message: Record<string, unknown> }
+    ).message;
+    expect(message.kind).toBe("answer");
+    expect(message).not.toHaveProperty("confirmationId");
+    expect(message).not.toHaveProperty("decision");
+    // Still answerable from the card — the words claimed nothing.
+    expect((await metaOf(cardId))?.roomPost).not.toHaveProperty("answer");
+    expect((await slot(sessionId, APPROVAL)).answer).toBeUndefined();
   });
 
   it("the direct door wakes a staffed DISPATCH agent through send; a failed send is said in the room", async () => {
     const { sessionId, channelId } = await seed({ agentIds: [DISPATCH_AGENT] });
+    await dispatchedRun(sessionId);
     const ok = await send(
       app(),
       "POST",
@@ -546,6 +691,7 @@ describe("the answer loop", () => {
 
     h.sendResult = { kind: "error", message: "provider unreachable" };
     const second = await seed({ agentIds: [DISPATCH_AGENT] });
+    await dispatchedRun(second.sessionId);
     const res = await send(
       app(),
       "POST",

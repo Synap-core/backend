@@ -121,6 +121,12 @@ export interface OpenQuestion {
   /** The agent that asked (`messages.routed_teammate_id`). */
   agentUserId: string | null;
   slotLabel: string | null;
+  /**
+   * The provider tool call this question is the approval card for (set only
+   * by the external-agent status poll). Only a typed confirm of the card's
+   * slot settles it — never a reply in words.
+   */
+  confirmationId: string | null;
   timestamp: Date;
 }
 
@@ -174,6 +180,7 @@ export async function findOpenQuestion(
       content: row.content,
       agentUserId: row.routedTeammateId ?? null,
       slotLabel: meta.slotLabel ?? null,
+      confirmationId: meta.confirmationId ?? null,
       timestamp: row.timestamp,
     };
   }
@@ -310,6 +317,12 @@ async function wake(p: {
   target: WakeTarget | null;
   /** What the answer was about, for the external agent's `send`. */
   slotLabel?: string | null;
+  /**
+   * A typed approve / reject of an APPROVAL CARD (`OpenQuestion.confirmationId`):
+   * the external agent gets a decision naming that provider tool call. Absent
+   * ⇒ the words go to the agent as an answer, which never settles a call.
+   */
+  confirmation?: { confirmationId: string; decision: "approved" | "rejected" };
 }): Promise<boolean> {
   if (!p.target) return false;
   if (p.target.reach === "dispatch") {
@@ -318,9 +331,16 @@ async function wake(p: {
     const sent = await wakeExternalAgent({
       sessionId: p.sessionId,
       agentUserId: p.target.agentUserId,
-      kind: "answer",
+      ...(p.confirmation
+        ? {
+            kind: "decision" as const,
+            decision: p.confirmation.decision,
+            confirmationId: p.confirmation.confirmationId,
+          }
+        : { kind: "answer" as const }),
       text: p.content,
       ...(p.slotLabel ? { slotKey: p.slotLabel } : {}),
+      idempotencyKey: `answer:${p.messageId}`,
     });
     return sent.status === "sent";
   }
@@ -458,6 +478,31 @@ export async function recordOwnerRoomReply(p: {
 
     const question = await findOpenQuestion(p.channelId);
     if (!question) return { status: "no_open_question" };
+
+    if (question.confirmationId) {
+      // An APPROVAL CARD is answered from the card (a typed approve / reject),
+      // never by words: the card stays open and its slot owed. The words still
+      // reach the agent — as an answer, which settles nothing.
+      const woke = p.wake
+        ? await wake({
+            channelId: p.channelId,
+            messageId: p.messageId,
+            content: p.content,
+            ownerId: p.userId,
+            sessionId: session.id,
+            target: await resolveWakeTarget({
+              askingAgentUserId: question.agentUserId,
+            }),
+            slotLabel: question.slotLabel,
+          })
+        : false;
+      return {
+        status: "answered",
+        questionId: question.id,
+        slot: "kept_owed",
+        woke,
+      };
+    }
 
     const answeredAt = new Date();
     const text = p.content.trim().slice(0, SLOT_ANSWER_TEXT_MAX);
@@ -799,6 +844,15 @@ export async function answerSessionSlot(p: {
         sessionId: session.id,
         target,
         slotLabel: answered.expectedLabel,
+        // Only the claimed approval card's OWN typed confirm names the call.
+        ...(questionId && question?.confirmationId && value?.type === "confirm"
+          ? {
+              confirmation: {
+                confirmationId: question.confirmationId,
+                decision: value.confirmed ? "approved" : "rejected",
+              },
+            }
+          : {}),
       });
     } catch (err) {
       logger.warn(
