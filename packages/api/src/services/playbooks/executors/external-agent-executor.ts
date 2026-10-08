@@ -20,7 +20,9 @@
  * ── What the agent receives ─────────────────────────────────────────────────
  * The task (goal fenced as UNTRUSTED data — it is the person's words and the
  * answers fed back, not instructions from Synap), repos when the run params
- * carry them, the branch (the params', else `synap/<session short id>`), the session and room ids, the run's capture path, the
+ * carry them, the branch the params name (`branch`, a checkout) or else the
+ * per-session work branch to create (`workBranch`, `synap/<session short id>`),
+ * the session and room ids, the run's capture path, the
  * pod's MCP URL, and a REFERENCE to the agent's own key (`api_keys.id` +
  * prefix — never the secret). How the key reaches the agent is the provider
  * template's business; no secret is ever put in a prompt.
@@ -271,7 +273,17 @@ export function defaultRunBranch(sessionId: string): string {
   return `synap/${sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}`;
 }
 
-/** The repos/branch a run carries (the branch defaulted per session). */
+/**
+ * The repos and branch a run carries. Two DIFFERENT fields, because they mean
+ * different things to the provider:
+ *   - `branch`     — a branch the run params NAME. It exists, so the provider
+ *                    may check it out (mount the repo on it).
+ *   - `workBranch` — the DEFAULTED per-session branch (`defaultRunBranch`). It
+ *                    does not exist yet, so it is never a checkout: the repo
+ *                    mounts at its default branch and the agent is told to
+ *                    create this branch and push its work to it.
+ * Exactly one of the two is set.
+ */
 function repoInputs(
   params: Record<string, unknown>,
   sessionId: string
@@ -283,7 +295,9 @@ function repoInputs(
       ? [asOptionalString(params.repo)!]
       : [];
   if (repos.length) out.repos = repos;
-  out.branch = asOptionalString(params.branch) ?? defaultRunBranch(sessionId);
+  const named = asOptionalString(params.branch);
+  if (named) out.branch = named;
+  else out.workBranch = defaultRunBranch(sessionId);
   return out;
 }
 

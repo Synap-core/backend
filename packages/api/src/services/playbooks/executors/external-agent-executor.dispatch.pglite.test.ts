@@ -260,17 +260,19 @@ describe("external-agent executor — dispatch through the stored binding", () =
     });
   });
 
-  it("the branch defaults to synap/<session short id>; a branch the params name wins", async () => {
+  it("a DEFAULTED branch is a work branch to create (workBranch, never a checkout); a branch the params name is the checkout", async () => {
     const sid = await session();
     await exec.run(ctx(sid, { agentUserId: AGENT_A, repo: "synap/app" }));
     const p0 = h.calls[0]!.parameters as Record<string, unknown>;
-    expect(p0.branch).toBe(`synap/${sid.replace(/-/g, "").slice(0, 8)}`);
-    expect(p0.branch).toBe(defaultRunBranch(sid));
+    expect(p0.workBranch).toBe(`synap/${sid.replace(/-/g, "").slice(0, 8)}`);
+    expect(p0.workBranch).toBe(defaultRunBranch(sid));
+    // Not a checkout: the defaulted branch does not exist on the remote yet.
+    expect(p0).not.toHaveProperty("branch");
     expect(p0.repos).toEqual(["synap/app"]);
     await exec.run(ctx(sid, { agentUserId: AGENT_A, branch: "feat/billing" }));
-    expect((h.calls[1]!.parameters as Record<string, unknown>).branch).toBe(
-      "feat/billing"
-    );
+    const p1 = h.calls[1]!.parameters as Record<string, unknown>;
+    expect(p1.branch).toBe("feat/billing");
+    expect(p1).not.toHaveProperty("workBranch");
   });
 
   it("IGNORES a webhookUrl param: nothing is fetched, nothing forwarded", async () => {

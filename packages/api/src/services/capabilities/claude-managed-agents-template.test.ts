@@ -516,6 +516,63 @@ describe("claude-managed-agents template — verb code against a fake Managed Ag
     expect(text).toContain("mounted at /workspace/<name>): synap/synap-app");
   });
 
+  it("start: a DEFAULTED work branch is never a checkout — the repo mounts at its default branch and the kickoff says to create it", async () => {
+    await runVerb(
+      "start",
+      {
+        ...startArgs(),
+        repos: ["synap/synap-app"],
+        workBranch: "synap/ab12cd34",
+      },
+      { get: async () => PARAMS.githubToken }
+    );
+    const body = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/sessions"
+    )!.body as Record<string, any>;
+    expect(body.resources).toEqual([
+      {
+        type: "github_repository",
+        url: "https://github.com/synap/synap-app",
+        authorization_token: PARAMS.githubToken,
+      },
+    ]);
+    const text = body.initial_events[0].content[0].text as string;
+    expect(text).toContain(
+      "Work branch: create synap/ab12cd34 from the default branch"
+    );
+    expect(text).not.toContain("on branch synap/ab12cd34");
+  });
+
+  it("start: a named branch wins over a work branch (the checkout), and an unsafe work branch is refused", async () => {
+    await runVerb(
+      "start",
+      {
+        ...startArgs(),
+        repos: ["synap/synap-app"],
+        branch: "feat/dark",
+        workBranch: "synap/ab12cd34",
+      },
+      { get: async () => PARAMS.githubToken }
+    );
+    const body = calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/sessions"
+    )!.body as Record<string, any>;
+    expect(body.resources[0].checkout).toEqual({
+      type: "branch",
+      name: "feat/dark",
+    });
+    expect(body.initial_events[0].content[0].text).not.toContain(
+      "Work branch:"
+    );
+    await expect(
+      runVerb("start", {
+        ...startArgs(),
+        repos: ["synap/synap-app"],
+        workBranch: "x; rm -rf /",
+      })
+    ).rejects.toThrow(/not a branch name/);
+  });
+
   it("start: an ungranted GitHub-token secret (secrets.get → null) names the repos instead of mounting", async () => {
     await runVerb("start", startArgs(), { get: async () => null });
     const body = calls.find(
