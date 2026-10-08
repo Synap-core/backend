@@ -30,6 +30,8 @@ const h = vi.hoisted(() => ({
   calls: [] as Array<Record<string, unknown>>,
   posts: [] as Array<Record<string, unknown>>,
   next: null as null | Record<string, unknown>,
+  /** Runs INSIDE the status call — a concurrent write racing the tick. */
+  during: null as null | (() => Promise<void>),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -59,6 +61,7 @@ vi.mock("@synap/jobs", () => ({
 vi.mock("../../capabilities/execute-capability.js", () => ({
   executeCapability: async (input: Record<string, unknown>) => {
     h.calls.push(input);
+    if (h.during) await h.during();
     return (
       h.next ?? { kind: "run", skillId: "s", result: { state: "running" } }
     );
@@ -88,6 +91,7 @@ import {
   pollExternalAgentRuns,
   statusKey,
 } from "../poll-external-agents.js";
+import { applyRunCapture } from "../../runs/apply-run-capture.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -209,6 +213,7 @@ describe("external agent status poll", () => {
     h.calls.length = 0;
     h.posts.length = 0;
     h.next = null;
+    h.during = null;
     // Each test starts with no live dispatched run left over.
     await q(`update playbook_runs set status = 'completed'`);
   });
@@ -353,6 +358,49 @@ describe("external agent status poll", () => {
     h.calls.length = 0;
     await pollExternalAgentRuns();
     expect(h.calls).toHaveLength(0);
+  });
+
+  it("a CANCEL that lands while a tick is reading status is never overwritten (done / running)", async () => {
+    for (const state of ["done", "running"] as const) {
+      const runId = await dispatchedRun(POLLED);
+      ran({ state, summary: "late news" });
+      h.during = async () => {
+        // What cancelRun writes: the run AND its external ref, cancelled.
+        await q(
+          `update playbook_runs set status = 'cancelled', external_agent = jsonb_set(external_agent, '{status}', '"cancelled"') where id = $1`,
+          [runId]
+        );
+      };
+      h.posts.length = 0;
+      await pollExternalAgentRuns();
+      const row = await runRow(runId);
+      expect(row.status, state).toBe("cancelled");
+      expect(row.external_agent.status, state).toBe("cancelled");
+      expect(row.summary, state).not.toBe("late news");
+      expect(h.posts, state).toHaveLength(0);
+    }
+  });
+
+  it("applyRunCapture: a terminal capture from a STALE copy never overwrites a cancelled run", async () => {
+    const runId = await dispatchedRun(POLLED);
+    const [stale] = (
+      await q<Record<string, unknown>>(
+        `select id, status, summary, error, completed_at as "completedAt", session_id as "sessionId", workspace_id as "workspaceId" from playbook_runs where id = $1`,
+        [runId]
+      )
+    ).rows;
+    await q(`update playbook_runs set status = 'cancelled' where id = $1`, [
+      runId,
+    ]);
+    const out = await applyRunCapture({
+      run: stale as never,
+      status: "completed",
+      summary: "overwrite?",
+    });
+    expect(out).toBeNull();
+    const row = await runRow(runId);
+    expect(row.status).toBe("cancelled");
+    expect(row.summary).not.toBe("overwrite?");
   });
 
   it("a binding without a status verb is never polled", async () => {

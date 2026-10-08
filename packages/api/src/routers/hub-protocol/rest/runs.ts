@@ -316,6 +316,11 @@ export function registerRunsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Run not found", schema: ErrorSchema },
+      409: {
+        description:
+          "The run already reached a verdict (terminal capture refused)",
+        schema: ErrorSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -413,6 +418,20 @@ export function registerRunsRoutes(app: HubHono): void {
         producedEntityIds: body.producedEntityIds,
         usedCapabilities: body.usedCapabilities,
       });
+      if (!updated) {
+        // The run reached a verdict in between (cancelled / finished): a
+        // terminal capture never overwrites it.
+        const [now] = await db
+          .select({ status: playbookRuns.status })
+          .from(playbookRuns)
+          .where(eq(playbookRuns.id, runId));
+        return c.json(
+          {
+            error: `Run is ${now?.status ?? "gone"} — a finished run's outcome is not overwritten`,
+          },
+          409
+        );
+      }
 
       return c.json({
         id: updated.id,

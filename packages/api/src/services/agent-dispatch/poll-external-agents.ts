@@ -308,7 +308,12 @@ async function pollOne(
       .set({
         externalAgent: { ...ext, pollBlockedBy: res.proposalId },
       })
-      .where(eq(playbookRuns.id, run.id));
+      .where(
+        and(
+          eq(playbookRuns.id, run.id),
+          liveRunStatusWhere(playbookRuns.status)
+        )
+      );
     await postDispatchNotice({
       channelId,
       ownerId,
@@ -346,13 +351,17 @@ async function pollOne(
   };
   delete next.pollBlockedBy;
 
-  // CLAIM the state change atomically — only the claimer posts.
+  // CLAIM the state change atomically — only the claimer posts. `next` is
+  // built from the copy this tick READ, so the claim also requires the run to
+  // be still LIVE: a cancel that landed in between keeps its `cancelled`
+  // (the read copy would otherwise write `running`/`done` back over it).
   const claimed = await db
     .update(playbookRuns)
     .set({ externalAgent: next })
     .where(
       and(
         eq(playbookRuns.id, run.id),
+        liveRunStatusWhere(playbookRuns.status),
         drizzleSql`(${playbookRuns.externalAgent}->>'lastStateKey') IS DISTINCT FROM ${key}`
       )
     )

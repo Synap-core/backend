@@ -10,7 +10,14 @@
  * run it dispatched (see `poll-external-agents.ts`).
  */
 
-import { db, eq, inArray, playbookRuns } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  inArray,
+  playbookRuns,
+  liveRunStatusWhere,
+} from "@synap/database";
 import { entities } from "@synap/database/schema";
 import type { PlaybookRun } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
@@ -34,7 +41,7 @@ export async function applyRunCapture(p: {
   error?: string;
   producedEntityIds?: string[];
   usedCapabilities?: Array<{ kind: "tool" | "skill" | "command"; id: string }>;
-}): Promise<PlaybookRun> {
+}): Promise<PlaybookRun | null> {
   const { run } = p;
   // Terminal statuses stamp completed_at.
   const nextStatus = p.status ?? run.status;
@@ -42,6 +49,10 @@ export async function applyRunCapture(p: {
     nextStatus === "completed" ||
     nextStatus === "failed" ||
     nextStatus === "proposed";
+  // A TERMINAL capture lands only on a run that is still LIVE: a run that was
+  // cancelled (or already finished) in between keeps its verdict — the
+  // caller's copy of the row is stale, never authoritative. `null` ⇒ nothing
+  // was written (and nothing settled or linked).
   const [updated] = await db
     .update(playbookRuns)
     .set({
@@ -50,8 +61,16 @@ export async function applyRunCapture(p: {
       error: p.error ?? run.error,
       completedAt: terminal ? new Date() : run.completedAt,
     })
-    .where(eq(playbookRuns.id, run.id))
+    .where(
+      terminal
+        ? and(
+            eq(playbookRuns.id, run.id),
+            liveRunStatusWhere(playbookRuns.status)
+          )
+        : eq(playbookRuns.id, run.id)
+    )
     .returning();
+  if (!updated) return null;
   // A failed child of an automation run settles its parent (never throws).
   if (terminal)
     await settleParentAutomationRunFromChild({ playbookRunId: run.id });
