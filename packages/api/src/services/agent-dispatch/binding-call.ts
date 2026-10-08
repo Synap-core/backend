@@ -119,6 +119,25 @@ export function asOptionalString(value: unknown): string | undefined {
 }
 
 /**
+ * The provider's task reference out of a `start` verb's result — ONE reader for
+ * the direct start (the executor) and an approved proposed start.
+ */
+export function externalRefFromStartResult(result: unknown): {
+  externalId: string | null;
+  url: string | null;
+} {
+  const r = asRecord(result);
+  return {
+    externalId:
+      asOptionalString(r.externalId) ??
+      asOptionalString(r.taskId) ??
+      asOptionalString(r.id) ??
+      null,
+    url: asOptionalString(r.url) ?? null,
+  };
+}
+
+/**
  * Fence text that came from people or outside systems so the receiving agent
  * reads it as DATA, never as instructions from Synap. Same shape as the IS's
  * `fenceUntrusted` (synap-intelligence-service `utils/untrusted-content.ts` —

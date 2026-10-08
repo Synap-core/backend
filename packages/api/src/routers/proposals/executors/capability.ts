@@ -34,6 +34,7 @@ import {
   dispatchExternalOnce,
 } from "./shared.js";
 import type { ProposalExecutorArgs } from "../execution-registry.js";
+import { recordApprovedAgentStart } from "../../../services/agent-dispatch/approved-start.js";
 
 const logger = createLogger({
   module: "proposal-approve-executors-capability",
@@ -410,6 +411,18 @@ export function registerCapabilityExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // An approved PROPOSED start of an external agent's binding: record the
+      // hand-off on its run from THIS execution's result, so the run is
+      // tracked like a direct start (no-op for any other verb).
+      if (runResult !== undefined) {
+        await recordApprovedAgentStart({
+          proposal,
+          verbId: (data.verbId as string | null) ?? skillRow.name,
+          parameters,
+          result: runResult,
+        });
+      }
 
       // Emit the run's ONE timeline entry — correlationId-keyed, exactly like a
       // capture's ai_decision — so `diagnose(runId)`/getRun renders a timeline

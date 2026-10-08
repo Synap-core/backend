@@ -68,6 +68,7 @@ import {
   asOptionalString,
   asRecord,
   callBindingVerb,
+  externalRefFromStartResult,
   fenceUntrustedData,
   postDispatchNotice,
 } from "../../agent-dispatch/binding-call.js";
@@ -405,13 +406,7 @@ export class ExternalAgentExecutor implements Executor {
       );
     }
 
-    const result = asRecord(started.result);
-    const externalId =
-      asOptionalString(result.externalId) ??
-      asOptionalString(result.taskId) ??
-      asOptionalString(result.id) ??
-      null;
-    const url = asOptionalString(result.url) ?? null;
+    const { externalId, url } = externalRefFromStartResult(started.result);
     await postDispatchNotice({
       channelId: ctx.channelId,
       ownerId,
