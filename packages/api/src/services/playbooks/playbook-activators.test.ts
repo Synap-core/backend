@@ -28,7 +28,9 @@ const store = vi.hoisted(() => ({
   seq: 0,
 }));
 
-vi.mock("@synap/database", () => {
+// PARTIAL (importOriginal + spread), never total — the total-mock ratchet.
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
   const select = () => ({
     from: (table: symbol) => {
       const rows = (): Row[] =>
@@ -50,6 +52,7 @@ vi.mock("@synap/database", () => {
     },
   });
   return {
+    ...actual,
     db: {
       select,
       insert: () => ({
@@ -154,7 +157,8 @@ vi.mock("../rules/lineage.js", () => ({
     return r && !(r.metadata.rule as Row).draft ? [r.automationId] : [];
   },
 }));
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
