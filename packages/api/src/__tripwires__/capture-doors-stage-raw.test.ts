@@ -44,6 +44,8 @@ const EXEMPT: Record<string, string> = {
     "the propose helper: it RECEIVES `sourceDocumentIds` from capture.execute, which stages",
   "services/focus-sessions/rerun-session.ts":
     "replays a raw that is ALREADY staged, and forwards its id (`sourceDocumentIds: [source.sourceDocumentId]`)",
+  "services/capture-agent/draft-process.ts":
+    "drafts a template from a KIND (profile slug + its lifecycle property): there is no raw text to keep — the capture that prompted it already staged its own",
   "services/connector-import-bridge.ts":
     "connection sync — wave 2 (founder: keep a COPY of each provider record); out of wave 1 scope",
 };

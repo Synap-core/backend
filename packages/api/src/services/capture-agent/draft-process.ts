@@ -80,7 +80,7 @@ export async function draftProcessForKind(input: {
   statusProperty?: string | null;
   name?: string | null;
 }): Promise<SubmitCaptureGraphResult> {
-  const summary = `Draft a ${resolveObjectNoun("playbook").toLowerCase()} for ${resolveObjectNounPlural(input.profileSlug).toLowerCase()}`;
+  const draftSummary = `Draft a ${resolveObjectNoun("playbook").toLowerCase()} for ${resolveObjectNounPlural(input.profileSlug).toLowerCase()}`;
 
   const [open] = await db
     .select({ id: playbooks.id, name: playbooks.name })
@@ -101,7 +101,7 @@ export async function draftProcessForKind(input: {
       relationCount: 0,
       bindingCount: 0,
       reviewUrl: undefined,
-      summary,
+      summary: draftSummary,
       applied: true,
       deduped: true,
       plan: {
@@ -137,7 +137,7 @@ export async function draftProcessForKind(input: {
     workspaceId: input.workspaceId,
     entities: [],
     plan: { playbooks: [op] },
-    summary,
+    summary: draftSummary,
     rawSource: { idempotencyKey: draftProcessIdempotencyKey(input) },
   });
 }
