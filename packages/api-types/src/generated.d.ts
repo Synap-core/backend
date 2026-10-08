@@ -3095,7 +3095,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "playbook" | "automation" | "human";
+			data: "playbook" | "automation" | "agent" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3110,7 +3110,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "playbook" | "automation" | "human";
+			$type: "playbook" | "automation" | "agent" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3216,7 +3216,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
+			data: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3678,7 +3678,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "capability" | "human" | "evidence" | "judge";
+			data: "human" | "evidence" | "capability" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4475,7 +4475,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "archived" | "draft" | "paused";
+			data: "active" | "paused" | "archived" | "draft";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4497,7 +4497,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "project" | "session";
+			data: "session" | "project";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4512,7 +4512,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "project" | "session";
+			$type: "session" | "project";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -4949,6 +4949,8 @@ export interface PlaybookRunExternalAgent {
 		branch?: string;
 		previewUrl?: string;
 		summary?: string;
+		/** The provider tool call waiting for a person's approval (`needs_input`). */
+		confirmationId?: string;
 	};
 	/** Fingerprint of `lastState` — the poll posts once per change. */
 	lastStateKey?: string;
@@ -5941,23 +5943,237 @@ export interface Context {
 	 */
 	revertPass?: RevertPass;
 }
+declare const SECRET_TYPES: readonly [
+	"password",
+	"api_key",
+	"credential",
+	"note",
+	"card",
+	"identity",
+	"ssh_key",
+	"certificate",
+	"env_variable",
+	"database",
+	"oauth"
+];
+export type SecretType = (typeof SECRET_TYPES)[number];
+/** Kind of thing that consumes/uses a secret. */
+export type SecretConsumerType = "capability" | "tool" | "connection" | "entity" | "automation" | "url";
 /**
- * The capture receipt's honesty words — PURE, and deliberately in their own
- * module rather than inside `submit-capture-graph.ts`.
- *
- * Every caller of `submitCaptureGraph` reaches it through a dynamic import, and
- * the ones under test replace that whole module with a `vi.mock`. A pure helper
- * living in there would be mocked away with it — the derivation would vanish at
- * exactly the moment a test believed it was exercising the door. Kept here, it
- * is imported statically and can never be stubbed out.
- *
- * `partial` is NOT a new word: it is the Hub Protocol receipt state defined on
- * `CreateWriteReceipt` (routers/hub-protocol/write-receipt.ts) and already
- * carried by `HubWriteReceipt` in @synap-core/hub-rest-client — "storage changed for
- * SOME sub-writes and failed for others; never a claim of rollback".
+ * One "this secret is used by X" record — surfaced in the Connections face.
+ * Backed by the `secret_usages` join (falls back to `capability_id`/context).
  */
-/** The three states a capture graph's write receipt can carry. */
-export type CaptureReceiptState = "pending" | "applied" | "partial";
+export interface SecretUsage {
+	id: string;
+	secretId: string;
+	consumerType: SecretConsumerType;
+	consumerId: string;
+	consumerLabel: string;
+	contextType?: string | null;
+	contextId?: string | null;
+	workspaceId?: string | null;
+}
+/**
+ * A single grant of access to a secret (which agent/workspace can use it) —
+ * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
+ * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
+ * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
+ * only populated by `listAllGrants` (which spans multiple secrets and resolves
+ * grantee identity); they are `null` from the per-secret endpoints.
+ */
+export interface SecretGrantView {
+	grantId: string;
+	grantedTo: string;
+	scope: string;
+	expiresAt?: string | null;
+	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
+	usesRemaining?: number | null;
+	workspaceId?: string | null;
+	revokedAt?: string | null;
+	/** True when not revoked, not expired, and uses remain. */
+	active: boolean;
+	/** Populated by `listAllGrants` only; null elsewhere. */
+	secretName?: string | null;
+	secretType?: SecretType | null;
+	granteeLabel?: string | null;
+	granteeType?: "user" | "agent" | "workspace" | null;
+}
+/**
+ * A single audit event for a secret (created/revealed/copied/updated/shared) —
+ * surfaced in the Activity face. Backed by `secret_audit_log`.
+ */
+export interface SecretActivityEvent {
+	id: string;
+	action: string;
+	actorType: "user" | "agent";
+	actorLabel?: string | null;
+	createdAt: string;
+}
+/**
+ * The full four-faces bundle for a secret detail view — identity metadata plus
+ * where it is used, who can access it, and its recent activity. Fetched in one
+ * call to reduce detail round-trips.
+ */
+export interface SecretDetailBundle {
+	id: string;
+	name: string;
+	type: SecretType;
+	category?: string | null;
+	url?: string | null;
+	description?: string | null;
+	isFavorite: boolean;
+	createdAt: string;
+	updatedAt: string;
+	usages: SecretUsage[];
+	grants: SecretGrantView[];
+	recentActivity: SecretActivityEvent[];
+}
+export interface PersistedCaptureResult {
+	messageId: string;
+	channelId: string;
+	round: number;
+}
+export interface DismissCaptureResultRowResult {
+	messageId: string;
+	round: number;
+	tempId: string;
+	dismissed: boolean;
+	/** False when the row was already in the requested state (idempotent no-op). */
+	changed: boolean;
+}
+declare const PROMOTE_TO_BODY_REFUSALS: readonly [
+	"not_body_property",
+	"empty_value",
+	"body_exists",
+	"agent_caller"
+];
+export type PromoteToBodyRefusal = (typeof PROMOTE_TO_BODY_REFUSALS)[number];
+declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
+	"edited_since",
+	"not_promoted"
+];
+export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
+declare const VIEW_FILTER_OPERATORS: readonly [
+	"equals",
+	"not_equals",
+	"contains",
+	"not_contains",
+	"in",
+	"not_in",
+	"greater_than",
+	"greater_than_or_equal",
+	"less_than",
+	"less_than_or_equal",
+	"is_empty",
+	"is_not_empty"
+];
+/** A view filter operator. Derived from {@link VIEW_FILTER_OPERATORS}. */
+export type FilterOperator = (typeof VIEW_FILTER_OPERATORS)[number];
+/** A stored filter that could not be repaired into the grammar, and why. */
+export interface DroppedViewFilter {
+	filter: unknown;
+	reason: string;
+}
+/**
+ * Filter definition for entity queries
+ */
+export interface EntityFilter {
+	field: string;
+	operator: FilterOperator;
+	value?: unknown;
+}
+/**
+ * Sort rule for entity queries
+ */
+export interface SortRule {
+	field: string;
+	direction: "asc" | "desc";
+}
+/**
+ * Query definition for structured views
+ * Defines which entities to show and how to filter them
+ *
+ * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
+ * This query structure only contains filters, sorts, search, pagination, and groupBy
+ */
+export interface EntityQuery {
+	/** @deprecated - Profile IDs now stored in views.scopeProfileIds */
+	profileIds?: string[];
+	/** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
+	profileSlugs?: string[];
+	/** @deprecated - Use profileSlugs instead, which is also deprecated */
+	entityTypes?: string[];
+	/** Specific entity IDs (for fixed sets) */
+	entityIds?: string[];
+	/** Filter conditions */
+	filters?: EntityFilter[];
+	/** Sort rules (multiple sorts supported) */
+	sorts?: SortRule[];
+	/** Full-text search query */
+	search?: string;
+	/** Maximum number of entities to return */
+	limit?: number;
+	/** Offset for pagination */
+	offset?: number;
+	/** Group by field (for kanban, timeline) */
+	groupBy?: string;
+}
+declare enum AgentType {
+	DEFAULT = "default",
+	META = "meta",
+	PROMPTING = "prompting",
+	KNOWLEDGE_SEARCH = "knowledge-search",
+	CODE = "code",
+	WRITING = "writing",
+	ACTION = "action",
+	ONBOARDING = "onboarding",
+	WORKSPACE_CREATION = "workspace-creation"
+}
+/**
+ * Agent type as string literal union (for flexibility)
+ */
+export type AgentTypeString = `${AgentType}` | (string & {});
+declare enum AIStepType {
+	THINKING = "thinking",
+	TOOL_CALL = "tool_call",
+	TOOL_RESULT = "tool_result",
+	DECISION = "decision",
+	ERROR = "error"
+}
+/**
+ * AI step - shows what the AI is doing
+ *
+ * Represents any step in the AI's reasoning/execution process:
+ * - thinking: General analysis and reasoning
+ * - tool_call: When AI calls a tool
+ * - tool_result: Result from tool execution
+ * - decision: AI making a decision
+ * - error: Error during processing
+ */
+export interface AIStep {
+	id: string;
+	type: AIStepType | string;
+	content: string;
+	toolName?: string;
+	toolInput?: unknown;
+	toolOutput?: unknown;
+	timestamp: string;
+	duration?: number;
+	error?: string;
+	title?: string;
+	description?: string;
+	status?: "pending" | "running" | "complete" | "error";
+}
+/**
+ * Branch decision from meta-agent
+ */
+export interface BranchDecision {
+	shouldBranch: boolean;
+	reason: string;
+	suggestedAgentType?: AgentTypeString;
+	suggestedTitle?: string;
+	suggestedPurpose?: string;
+}
 declare const EVENT_ACTIONS: readonly [
 	"create",
 	"update",
@@ -6787,448 +7003,6 @@ export interface ProposalMaterializedRecord {
 		deletedRelationIds?: string[];
 	};
 }
-/** A reviewer/agent-facing line for one plan step. */
-export interface PlanStepSummary {
-	ref: string | null;
-	opIndex: number;
-	kind: "entity" | "relation" | "session" | "document" | "project" | "link" | "skill" | "automation" | "rule" | "playbook";
-	label: string;
-}
-declare const identityResolutionInput: z.ZodObject<{
-	verb: z.ZodEnum<{
-		fill_empty: "fill_empty";
-		keep_existing: "keep_existing";
-		use_capture: "use_capture";
-		separate: "separate";
-	}>;
-	existingEntityId: z.ZodOptional<z.ZodString>;
-}, z.core.$strip>;
-export type IdentityResolutionInput = z.infer<typeof identityResolutionInput>;
-export interface IdentityConflict {
-	key: string;
-	kept: unknown;
-	incoming: unknown;
-}
-export interface IdentityReceipt {
-	verb: IdentityResolutionInput["verb"];
-	entityId: string;
-	filled?: string[];
-	conflicts?: IdentityConflict[];
-}
-/** One relation op that was submitted but never created — the honest detail
- * behind a `created < submitted` gap on a materialize receipt. */
-export interface MaterializeRelationFailure {
-	sourceRef: string;
-	targetRef: string;
-	type: string;
-	reason: string;
-}
-/** A create_entity op inside a pending proposal that collided on a strong signal. */
-export interface PendingSignalMatch {
-	proposalId: string;
-	proposalType: string;
-	summary?: string;
-	/** The pending op's stable ref, if it had one. */
-	entityRef?: string;
-	/** The pending op's title (what the reviewer sees). */
-	entityTitle?: string;
-	profileSlug?: string;
-	/** The normalized strong signal(s) that matched (email/phone/url/handle/…). */
-	matchedSignals: Array<{
-		type: string;
-		value: string;
-	}>;
-}
-/** A pending capture op whose text matched a recall query. NOT a fact — pending. */
-export interface PendingTextMatch {
-	proposalId: string;
-	proposalType: string;
-	/** The proposal's human summary (what the reviewer sees), when present. */
-	summary?: string;
-	/** The best-matching create_entity op's title (the representative entity). */
-	entityTitle?: string;
-	profileSlug?: string;
-	/** Clickable review link — approve/reject to make it real. `${PUBLIC_URL}/open/<id>`. */
-	reviewUrl: string;
-	/** Distinct query terms matched — the rank score (higher = closer). */
-	score: number;
-}
-export interface StoredCaptureScope {
-	workspaceId: string | null;
-	projectId: string | null;
-	sessionId: string | null;
-}
-/**
- * A create_entity op carrying property keys its profile does not model. They
- * are still STORED verbatim (the validator's flexible-schema tolerance), so
- * this is advisory, never a rejection. A capture used to accept them in
- * silence — that is how `knowledgeform` (for `knowledgeForm`) reached a pod as
- * a key nothing reads. Same entries the entity doors put on their receipt.
- */
-export interface CaptureGraphUnmodeledEntity {
-	label: string;
-	profileSlug: string;
-	unmodeled: Array<{
-		key: string;
-		didYouMean?: string;
-	}>;
-}
-/** One plan step on a submit receipt — self-describing for the reviewer/agent. */
-export interface CapturePlanStepReceipt extends PlanStepSummary {
-	/**
-	 * `pending`: nothing exists yet, `id` is null — ids are assigned when the
-	 * plan applies, and are then read off the proposal's
-	 * `data.materialized.byOp[ref]`. `applied`: `id` is the live row.
-	 */
-	state: "pending" | "applied";
-	id: string | null;
-	/** `create_project` only: the pod's evidence verdict. */
-	evidence?: PlanProjectEvidence;
-}
-export interface SubmitCaptureGraphResult {
-	proposalId: string | undefined;
-	entityCount: number;
-	relationCount: number;
-	bindingCount: number;
-	reviewUrl: string | undefined;
-	summary: string;
-	/** True when the graph was materialized immediately (agent-mode auto-apply). */
-	applied: boolean;
-	/**
-	 * Connected plan only: every step (entities and relations included), with
-	 * its ref, kind and label. Pending steps carry `id: null` — ids exist only
-	 * once the plan applies. Omitted for a graph with no plan step.
-	 */
-	plan?: {
-		steps: CapturePlanStepReceipt[];
-	};
-	/** The session this proposal was filed in (its room is where it is discussed). */
-	sessionId?: string | null;
-	/**
-	 * Where the write was STORED — read off the proposal row the insert returned
-	 * (or, on a re-submit, the PRIOR row), never the call's inputs: the insert
-	 * runs the project ladder (incl. declared focus) and may mint an agent
-	 * receipt session. Only when an auto-apply's receipt row failed to insert
-	 * (no row exists) does it fall back to the values the entities were
-	 * materialized with.
-	 */
-	scope: StoredCaptureScope;
-	/** True when this call returned a PRIOR proposal instead of filing one. */
-	deduped?: true;
-	/**
-	 * ADVISORY: entities whose properties carry keys their profile does not
-	 * model (stored verbatim, not queryable), with a `didYouMean` when a real
-	 * property is close. Omitted when every key is modelled.
-	 */
-	unmodeledProperties?: CaptureGraphUnmodeledEntity[];
-	/**
-	 * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
-	 * signal (email/phone/url/handle) collides with a create_entity op in the
-	 * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
-	 * proposal can still be rejected, so linking to it would stale-suppress a real
-	 * write. Surfaced so the caller/agent can wait for review instead of filing a
-	 * second copy. Omitted when nothing collides.
-	 */
-	pendingDuplicateCandidates?: Array<{
-		/** The incoming graph entity ref that collided. */
-		ref: string;
-		title: string;
-		matches: PendingSignalMatch[];
-	}>;
-	/**
-	 * A `projectName` that matched no project of the caller (piece D). Advisory
-	 * only — surfaced so the caller can confirm/create it; NEVER auto-linked.
-	 */
-	projectCandidate?: {
-		name: string;
-	};
-	/**
-	 * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-	 * membership, `not_linked` (+reason: `project-not-found` for a dead UUID pin,
-	 * `project-name-unmatched` for a name-ref that matched nothing) so a requested
-	 * project that did NOT link is NAMED, never a silent success. Omitted when no
-	 * project was requested.
-	 */
-	project?: {
-		status: "linked";
-		projectId: string;
-	} | {
-		status: "not_linked";
-		reason: string;
-	};
-	/**
-	 * Relation ops that were SUBMITTED (via `relations`/`operations`) but never
-	 * created (bad ref, DB failure). Only ever populated on the `applied: true`
-	 * path — a `pending` proposal hasn't materialized anything yet, so nothing
-	 * can have failed. Omitted when nothing failed.
-	 */
-	relationsFailed?: MaterializeRelationFailure[];
-	writeReceipt: {
-		/**
-		 * `partial` is the Hub Protocol receipt word for exactly this shape (see
-		 * `CreateWriteReceipt` in routers/hub-protocol/write-receipt.ts): "storage
-		 * changed for SOME sub-writes and failed for others — the primary write
-		 * landed and a non-atomic follow-up errored. Never a claim of rollback."
-		 *
-		 * A capture graph's relations ARE that non-atomic follow-up: pass 1 creates
-		 * the entities, pass 2 creates each edge independently, and a relation whose
-		 * TYPE does not resolve fails alone. Before this, such a graph returned
-		 * `applied` with `relationCount: 0` and the failures buried in
-		 * `relationsFailed[]` — a caller that did not read that array believed the
-		 * whole graph landed. Same class as `status ?? "installed"`: a partial
-		 * success reported as a clean success, and the reader has to opt IN to the
-		 * bad news. The word is reused, not invented — no new enum, no label map.
-		 */
-		state: CaptureReceiptState;
-		proposalId?: string;
-		reviewUrl?: string;
-		effectiveWorkspaceId: string | null;
-		projectId?: string;
-		project?: {
-			status: "linked";
-			projectId: string;
-		} | {
-			status: "not_linked";
-			reason: string;
-		};
-		source: string;
-		/** applied path only: fresh-created vs linked-existing counts + ids. */
-		created?: number;
-		linked?: number;
-		entityIds?: string[];
-	};
-}
-declare const SECRET_TYPES: readonly [
-	"password",
-	"api_key",
-	"credential",
-	"note",
-	"card",
-	"identity",
-	"ssh_key",
-	"certificate",
-	"env_variable",
-	"database",
-	"oauth"
-];
-export type SecretType = (typeof SECRET_TYPES)[number];
-/** Kind of thing that consumes/uses a secret. */
-export type SecretConsumerType = "capability" | "tool" | "connection" | "entity" | "automation" | "url";
-/**
- * One "this secret is used by X" record — surfaced in the Connections face.
- * Backed by the `secret_usages` join (falls back to `capability_id`/context).
- */
-export interface SecretUsage {
-	id: string;
-	secretId: string;
-	consumerType: SecretConsumerType;
-	consumerId: string;
-	consumerLabel: string;
-	contextType?: string | null;
-	contextId?: string | null;
-	workspaceId?: string | null;
-}
-/**
- * A single grant of access to a secret (which agent/workspace can use it) —
- * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
- * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
- * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
- * only populated by `listAllGrants` (which spans multiple secrets and resolves
- * grantee identity); they are `null` from the per-secret endpoints.
- */
-export interface SecretGrantView {
-	grantId: string;
-	grantedTo: string;
-	scope: string;
-	expiresAt?: string | null;
-	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
-	usesRemaining?: number | null;
-	workspaceId?: string | null;
-	revokedAt?: string | null;
-	/** True when not revoked, not expired, and uses remain. */
-	active: boolean;
-	/** Populated by `listAllGrants` only; null elsewhere. */
-	secretName?: string | null;
-	secretType?: SecretType | null;
-	granteeLabel?: string | null;
-	granteeType?: "user" | "agent" | "workspace" | null;
-}
-/**
- * A single audit event for a secret (created/revealed/copied/updated/shared) —
- * surfaced in the Activity face. Backed by `secret_audit_log`.
- */
-export interface SecretActivityEvent {
-	id: string;
-	action: string;
-	actorType: "user" | "agent";
-	actorLabel?: string | null;
-	createdAt: string;
-}
-/**
- * The full four-faces bundle for a secret detail view — identity metadata plus
- * where it is used, who can access it, and its recent activity. Fetched in one
- * call to reduce detail round-trips.
- */
-export interface SecretDetailBundle {
-	id: string;
-	name: string;
-	type: SecretType;
-	category?: string | null;
-	url?: string | null;
-	description?: string | null;
-	isFavorite: boolean;
-	createdAt: string;
-	updatedAt: string;
-	usages: SecretUsage[];
-	grants: SecretGrantView[];
-	recentActivity: SecretActivityEvent[];
-}
-export interface PersistedCaptureResult {
-	messageId: string;
-	channelId: string;
-	round: number;
-}
-export interface DismissCaptureResultRowResult {
-	messageId: string;
-	round: number;
-	tempId: string;
-	dismissed: boolean;
-	/** False when the row was already in the requested state (idempotent no-op). */
-	changed: boolean;
-}
-declare const PROMOTE_TO_BODY_REFUSALS: readonly [
-	"not_body_property",
-	"empty_value",
-	"body_exists",
-	"agent_caller"
-];
-export type PromoteToBodyRefusal = (typeof PROMOTE_TO_BODY_REFUSALS)[number];
-declare const UNDO_PROMOTE_TO_BODY_REFUSALS: readonly [
-	"edited_since",
-	"not_promoted"
-];
-export type UndoPromoteToBodyRefusal = (typeof UNDO_PROMOTE_TO_BODY_REFUSALS)[number];
-declare const VIEW_FILTER_OPERATORS: readonly [
-	"equals",
-	"not_equals",
-	"contains",
-	"not_contains",
-	"in",
-	"not_in",
-	"greater_than",
-	"greater_than_or_equal",
-	"less_than",
-	"less_than_or_equal",
-	"is_empty",
-	"is_not_empty"
-];
-/** A view filter operator. Derived from {@link VIEW_FILTER_OPERATORS}. */
-export type FilterOperator = (typeof VIEW_FILTER_OPERATORS)[number];
-/** A stored filter that could not be repaired into the grammar, and why. */
-export interface DroppedViewFilter {
-	filter: unknown;
-	reason: string;
-}
-/**
- * Filter definition for entity queries
- */
-export interface EntityFilter {
-	field: string;
-	operator: FilterOperator;
-	value?: unknown;
-}
-/**
- * Sort rule for entity queries
- */
-export interface SortRule {
-	field: string;
-	direction: "asc" | "desc";
-}
-/**
- * Query definition for structured views
- * Defines which entities to show and how to filter them
- *
- * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
- * This query structure only contains filters, sorts, search, pagination, and groupBy
- */
-export interface EntityQuery {
-	/** @deprecated - Profile IDs now stored in views.scopeProfileIds */
-	profileIds?: string[];
-	/** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
-	profileSlugs?: string[];
-	/** @deprecated - Use profileSlugs instead, which is also deprecated */
-	entityTypes?: string[];
-	/** Specific entity IDs (for fixed sets) */
-	entityIds?: string[];
-	/** Filter conditions */
-	filters?: EntityFilter[];
-	/** Sort rules (multiple sorts supported) */
-	sorts?: SortRule[];
-	/** Full-text search query */
-	search?: string;
-	/** Maximum number of entities to return */
-	limit?: number;
-	/** Offset for pagination */
-	offset?: number;
-	/** Group by field (for kanban, timeline) */
-	groupBy?: string;
-}
-declare enum AgentType {
-	DEFAULT = "default",
-	META = "meta",
-	PROMPTING = "prompting",
-	KNOWLEDGE_SEARCH = "knowledge-search",
-	CODE = "code",
-	WRITING = "writing",
-	ACTION = "action",
-	ONBOARDING = "onboarding",
-	WORKSPACE_CREATION = "workspace-creation"
-}
-/**
- * Agent type as string literal union (for flexibility)
- */
-export type AgentTypeString = `${AgentType}` | (string & {});
-declare enum AIStepType {
-	THINKING = "thinking",
-	TOOL_CALL = "tool_call",
-	TOOL_RESULT = "tool_result",
-	DECISION = "decision",
-	ERROR = "error"
-}
-/**
- * AI step - shows what the AI is doing
- *
- * Represents any step in the AI's reasoning/execution process:
- * - thinking: General analysis and reasoning
- * - tool_call: When AI calls a tool
- * - tool_result: Result from tool execution
- * - decision: AI making a decision
- * - error: Error during processing
- */
-export interface AIStep {
-	id: string;
-	type: AIStepType | string;
-	content: string;
-	toolName?: string;
-	toolInput?: unknown;
-	toolOutput?: unknown;
-	timestamp: string;
-	duration?: number;
-	error?: string;
-	title?: string;
-	description?: string;
-	status?: "pending" | "running" | "complete" | "error";
-}
-/**
- * Branch decision from meta-agent
- */
-export interface BranchDecision {
-	shouldBranch: boolean;
-	reason: string;
-	suggestedAgentType?: AgentTypeString;
-	suggestedTitle?: string;
-	suggestedPurpose?: string;
-}
 declare enum MessageLinkTargetType {
 	ENTITY = "entity",
 	DOCUMENT = "document",
@@ -7403,6 +7177,64 @@ export interface SessionVerdict {
 	 */
 	state: "none" | "passing" | "failing" | "incomplete";
 }
+/**
+ * SESSION RECALL — the ONE reader of what recall left on a session.
+ *
+ * When a session starts, the pod looks for raw captures and notes that could
+ * help it (api `services/focus-sessions/session-recall.ts`, the runner) and
+ * writes its result onto `focus_sessions.metadata`:
+ *   `recalled: RecalledItem[]`, `recalledAt`, `recallError?`, `recallSkipped?`.
+ * Every surface (pod MCP + Hub + tRPC `focusSessions.get` `recall`, web, relay,
+ * the intelligence service) reads it through {@link projectSessionRecall}, so
+ * the five states can never fold into one another — above all, a FAILED recall
+ * never reads as "nothing found".
+ *
+ *   pending   recall has not run yet (no `recalledAt`)
+ *   ok        it found items (`recalled` non-empty)
+ *   empty     it ran and found nothing
+ *   skipped   it deliberately did not run (`recallSkipped`): a session an
+ *             automation started (cost), or a shared session with no
+ *             workspace to recall from (privacy)
+ *   failed    it errored (`recallError`); what an EARLIER run found is kept
+ *
+ * Pure and dependency-free (web, relay, Electron, Node, IS).
+ */
+export interface RecalledItem {
+	entityId: string;
+	title: string;
+	kind: string;
+	/** 0..1, two decimals — the candidate's own evidence. */
+	score: number;
+	/** One human line: why this was recalled. */
+	reason: string;
+	recalledAt: string;
+}
+/** Why recall deliberately did not run on a session. */
+export type RecallSkipReason = 
+/** Started by an automation with no person (cost); a manual recall still runs. */
+"automation"
+/** Others can read the session and it has no workspace to recall from. */
+ | "shared_without_workspace";
+export type SessionRecallView = {
+	status: "pending";
+} | {
+	status: "ok";
+	recalled: RecalledItem[];
+	recalledAt: string;
+} | {
+	status: "empty";
+	recalledAt: string;
+} | {
+	status: "skipped";
+	reason: RecallSkipReason;
+	recalledAt: string;
+} | {
+	status: "failed";
+	error: string;
+	recalledAt: string;
+	/** What an EARLIER run found, kept across the failure. */
+	recalled: RecalledItem[];
+};
 /**
  * Capture routing — the ONE mapping from a `capture.structure` result to the
  * routing hints `capture.execute` takes.
@@ -7609,6 +7441,35 @@ export interface WorkspaceRuleOffer {
 	/** Why it cannot be installed yet, in the pod's own words. */
 	reason: string;
 }
+declare const identityResolutionInput: z.ZodObject<{
+	verb: z.ZodEnum<{
+		fill_empty: "fill_empty";
+		keep_existing: "keep_existing";
+		use_capture: "use_capture";
+		separate: "separate";
+	}>;
+	existingEntityId: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type IdentityResolutionInput = z.infer<typeof identityResolutionInput>;
+export interface IdentityConflict {
+	key: string;
+	kept: unknown;
+	incoming: unknown;
+}
+export interface IdentityReceipt {
+	verb: IdentityResolutionInput["verb"];
+	entityId: string;
+	filled?: string[];
+	conflicts?: IdentityConflict[];
+}
+/** One relation op that was submitted but never created — the honest detail
+ * behind a `created < submitted` gap on a materialize receipt. */
+export interface MaterializeRelationFailure {
+	sourceRef: string;
+	targetRef: string;
+	type: string;
+	reason: string;
+}
 /** Per-op outcome, mirrored into `capture.execute`'s response as `updated[]`. */
 export interface CaptureUpdateResult {
 	tempId: string;
@@ -7791,6 +7652,205 @@ export type RouteSuggestionsEcho = {
 	status: "failed";
 	error: string;
 };
+/**
+ * The capture receipt's honesty words — PURE, and deliberately in their own
+ * module rather than inside `submit-capture-graph.ts`.
+ *
+ * Every caller of `submitCaptureGraph` reaches it through a dynamic import, and
+ * the ones under test replace that whole module with a `vi.mock`. A pure helper
+ * living in there would be mocked away with it — the derivation would vanish at
+ * exactly the moment a test believed it was exercising the door. Kept here, it
+ * is imported statically and can never be stubbed out.
+ *
+ * `partial` is NOT a new word: it is the Hub Protocol receipt state defined on
+ * `CreateWriteReceipt` (routers/hub-protocol/write-receipt.ts) and already
+ * carried by `HubWriteReceipt` in @synap-core/hub-rest-client — "storage changed for
+ * SOME sub-writes and failed for others; never a claim of rollback".
+ */
+/** The three states a capture graph's write receipt can carry. */
+export type CaptureReceiptState = "pending" | "applied" | "partial";
+/** A reviewer/agent-facing line for one plan step. */
+export interface PlanStepSummary {
+	ref: string | null;
+	opIndex: number;
+	kind: "entity" | "relation" | "session" | "document" | "project" | "link" | "skill" | "automation" | "rule" | "playbook";
+	label: string;
+}
+/** A create_entity op inside a pending proposal that collided on a strong signal. */
+export interface PendingSignalMatch {
+	proposalId: string;
+	proposalType: string;
+	summary?: string;
+	/** The pending op's stable ref, if it had one. */
+	entityRef?: string;
+	/** The pending op's title (what the reviewer sees). */
+	entityTitle?: string;
+	profileSlug?: string;
+	/** The normalized strong signal(s) that matched (email/phone/url/handle/…). */
+	matchedSignals: Array<{
+		type: string;
+		value: string;
+	}>;
+}
+/** A pending capture op whose text matched a recall query. NOT a fact — pending. */
+export interface PendingTextMatch {
+	proposalId: string;
+	proposalType: string;
+	/** The proposal's human summary (what the reviewer sees), when present. */
+	summary?: string;
+	/** The best-matching create_entity op's title (the representative entity). */
+	entityTitle?: string;
+	profileSlug?: string;
+	/** Clickable review link — approve/reject to make it real. `${PUBLIC_URL}/open/<id>`. */
+	reviewUrl: string;
+	/** Distinct query terms matched — the rank score (higher = closer). */
+	score: number;
+}
+export interface StoredCaptureScope {
+	workspaceId: string | null;
+	projectId: string | null;
+	sessionId: string | null;
+}
+/**
+ * A create_entity op carrying property keys its profile does not model. They
+ * are still STORED verbatim (the validator's flexible-schema tolerance), so
+ * this is advisory, never a rejection. A capture used to accept them in
+ * silence — that is how `knowledgeform` (for `knowledgeForm`) reached a pod as
+ * a key nothing reads. Same entries the entity doors put on their receipt.
+ */
+export interface CaptureGraphUnmodeledEntity {
+	label: string;
+	profileSlug: string;
+	unmodeled: Array<{
+		key: string;
+		didYouMean?: string;
+	}>;
+}
+/** One plan step on a submit receipt — self-describing for the reviewer/agent. */
+export interface CapturePlanStepReceipt extends PlanStepSummary {
+	/**
+	 * `pending`: nothing exists yet, `id` is null — ids are assigned when the
+	 * plan applies, and are then read off the proposal's
+	 * `data.materialized.byOp[ref]`. `applied`: `id` is the live row.
+	 */
+	state: "pending" | "applied";
+	id: string | null;
+	/** `create_project` only: the pod's evidence verdict. */
+	evidence?: PlanProjectEvidence;
+}
+export interface SubmitCaptureGraphResult {
+	proposalId: string | undefined;
+	entityCount: number;
+	relationCount: number;
+	bindingCount: number;
+	reviewUrl: string | undefined;
+	summary: string;
+	/** True when the graph was materialized immediately (agent-mode auto-apply). */
+	applied: boolean;
+	/**
+	 * Connected plan only: every step (entities and relations included), with
+	 * its ref, kind and label. Pending steps carry `id: null` — ids exist only
+	 * once the plan applies. Omitted for a graph with no plan step.
+	 */
+	plan?: {
+		steps: CapturePlanStepReceipt[];
+	};
+	/** The session this proposal was filed in (its room is where it is discussed). */
+	sessionId?: string | null;
+	/**
+	 * Where the write was STORED — read off the proposal row the insert returned
+	 * (or, on a re-submit, the PRIOR row), never the call's inputs: the insert
+	 * runs the project ladder (incl. declared focus) and may mint an agent
+	 * receipt session. Only when an auto-apply's receipt row failed to insert
+	 * (no row exists) does it fall back to the values the entities were
+	 * materialized with.
+	 */
+	scope: StoredCaptureScope;
+	/** True when this call returned a PRIOR proposal instead of filing one. */
+	deduped?: true;
+	/**
+	 * ADVISORY: entities whose properties carry keys their profile does not
+	 * model (stored verbatim, not queryable), with a `didYouMean` when a real
+	 * property is close. Omitted when every key is modelled.
+	 */
+	unmodeledProperties?: CaptureGraphUnmodeledEntity[];
+	/**
+	 * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
+	 * signal (email/phone/url/handle) collides with a create_entity op in the
+	 * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
+	 * proposal can still be rejected, so linking to it would stale-suppress a real
+	 * write. Surfaced so the caller/agent can wait for review instead of filing a
+	 * second copy. Omitted when nothing collides.
+	 */
+	pendingDuplicateCandidates?: Array<{
+		/** The incoming graph entity ref that collided. */
+		ref: string;
+		title: string;
+		matches: PendingSignalMatch[];
+	}>;
+	/**
+	 * A `projectName` that matched no project of the caller (piece D). Advisory
+	 * only — surfaced so the caller can confirm/create it; NEVER auto-linked.
+	 */
+	projectCandidate?: {
+		name: string;
+	};
+	/**
+	 * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
+	 * membership, `not_linked` (+reason: `project-not-found` for a dead UUID pin,
+	 * `project-name-unmatched` for a name-ref that matched nothing) so a requested
+	 * project that did NOT link is NAMED, never a silent success. Omitted when no
+	 * project was requested.
+	 */
+	project?: {
+		status: "linked";
+		projectId: string;
+	} | {
+		status: "not_linked";
+		reason: string;
+	};
+	/**
+	 * Relation ops that were SUBMITTED (via `relations`/`operations`) but never
+	 * created (bad ref, DB failure). Only ever populated on the `applied: true`
+	 * path — a `pending` proposal hasn't materialized anything yet, so nothing
+	 * can have failed. Omitted when nothing failed.
+	 */
+	relationsFailed?: MaterializeRelationFailure[];
+	writeReceipt: {
+		/**
+		 * `partial` is the Hub Protocol receipt word for exactly this shape (see
+		 * `CreateWriteReceipt` in routers/hub-protocol/write-receipt.ts): "storage
+		 * changed for SOME sub-writes and failed for others — the primary write
+		 * landed and a non-atomic follow-up errored. Never a claim of rollback."
+		 *
+		 * A capture graph's relations ARE that non-atomic follow-up: pass 1 creates
+		 * the entities, pass 2 creates each edge independently, and a relation whose
+		 * TYPE does not resolve fails alone. Before this, such a graph returned
+		 * `applied` with `relationCount: 0` and the failures buried in
+		 * `relationsFailed[]` — a caller that did not read that array believed the
+		 * whole graph landed. Same class as `status ?? "installed"`: a partial
+		 * success reported as a clean success, and the reader has to opt IN to the
+		 * bad news. The word is reused, not invented — no new enum, no label map.
+		 */
+		state: CaptureReceiptState;
+		proposalId?: string;
+		reviewUrl?: string;
+		effectiveWorkspaceId: string | null;
+		projectId?: string;
+		project?: {
+			status: "linked";
+			projectId: string;
+		} | {
+			status: "not_linked";
+			reason: string;
+		};
+		source: string;
+		/** applied path only: fresh-created vs linked-existing counts + ids. */
+		created?: number;
+		linked?: number;
+		entityIds?: string[];
+	};
+}
 export type DedupCandidate = {
 	entityId: string;
 	title: string;
@@ -8595,12 +8655,18 @@ export interface ExpectedOutput {
 }
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
-	status: "linked" | "skipped";
+	/**
+	 * `linked` — the edge exists; `proposed` — the relation door filed it for
+	 * review (`proposalId`); `skipped` — no edge, `reason` says why.
+	 */
+	status: "linked" | "proposed" | "skipped";
 	relationType: string;
 	/** The entity that served the slot (the edge's source). */
 	outputEntityId?: string;
 	/** The relation row (present when `linked`). */
 	relationId?: string;
+	/** The relation proposal (present when `proposed`). */
+	proposalId?: string;
 	/** Why no edge (present when `skipped`). */
 	reason?: string;
 	/** ISO timestamp of the attempt. */
@@ -14389,22 +14455,15 @@ export interface SessionCancelRecord extends SessionCancelOutcome {
 	/** `stopping`: committed with the cancel, stop not yet run. `done`: outcome recorded. */
 	state: "stopping" | "done";
 }
-export interface RecalledItem {
-	entityId: string;
-	title: string;
-	kind: string;
-	/** 0..1, two decimals — the candidate's own evidence (see header §3). */
-	score: number;
-	/** One human line: why this was recalled. */
-	reason: string;
-	recalledAt: string;
-}
 export type SessionRecallOutcome = {
 	status: "ok";
 	recalled: RecalledItem[];
 	posted: boolean;
 } | {
 	status: "empty";
+} | {
+	status: "skipped";
+	reason: RecallSkipReason;
 } | {
 	status: "failed";
 	error: string;
@@ -16487,16 +16546,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
-		draftProcess: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				workspaceId: string;
-				profileSlug: string;
-				statusProperty?: string | undefined;
-				name?: string | undefined;
-			};
-			output: SubmitCaptureGraphResult;
-			meta: object;
-		}>;
 		answerFollowUp: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
@@ -17697,6 +17746,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 			};
+			meta: object;
+		}>;
+		draftProcess: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				profileSlug: string;
+				statusProperty?: string | undefined;
+				name?: string | undefined;
+			};
+			output: SubmitCaptureGraphResult;
 			meta: object;
 		}>;
 	}>>;
@@ -19000,7 +19059,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -19752,7 +19811,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -19854,7 +19913,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -19970,7 +20029,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -33655,7 +33714,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "normal" | "low" | "high" | "urgent";
+					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -36748,6 +36807,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: "run" | "receipt" | "work";
 				rerun: RerunAvailability;
 				continuation: ContinuationPacket;
+				recall: SessionRecallView;
 				title: string | null;
 				id: string;
 				userId: string;
@@ -37124,11 +37184,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					subjectEdge?: {
-						status: "linked" | "skipped";
+						status: "linked" | "skipped" | "proposed";
 						relationType: string;
 						at: string;
 						outputEntityId?: string | undefined;
 						relationId?: string | undefined;
+						proposalId?: string | undefined;
 						reason?: string | undefined;
 					} | undefined;
 				}[] | undefined;
@@ -37445,11 +37506,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					subjectEdge?: {
-						status: "linked" | "skipped";
+						status: "linked" | "skipped" | "proposed";
 						relationType: string;
 						at: string;
 						outputEntityId?: string | undefined;
 						relationId?: string | undefined;
+						proposalId?: string | undefined;
 						reason?: string | undefined;
 					} | undefined;
 				}[] | undefined;
@@ -38374,6 +38436,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entityId?: string | undefined;
 				intentText?: string | undefined;
 				projectId?: string | undefined;
+				purpose?: "entity-actions" | undefined;
 			};
 			output: {
 				id: string;
@@ -38384,6 +38447,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectProfileSlug: string | null;
 				params: unknown;
 				executor: PlaybookExecutorRef;
+				workspaceId: string | null;
+				inputStrategyKind: string | null;
+				subjectFilter: {} | null;
+				forceProposeWrites: boolean;
 				score: number;
 				reason: string;
 				signals: RouteSignal[];
