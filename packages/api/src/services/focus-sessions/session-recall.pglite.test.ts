@@ -40,7 +40,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: pg, getDb: async () => pg };
 });
 
-// The jobs-side IoC slot: captured so the test can prove the module fills it.
+// The jobs-side IoC slot is filled at boot by apps/api (guarded by the
+// jobs-ioc-slots-are-filled-at-boot tripwire); stubbed here so nothing real loads.
 vi.mock("@synap/jobs/workers/session-recall-worker.js", () => ({
   SESSION_RECALL_QUEUE: "session-recall",
   registerSessionRecallRunner: (fn: typeof h.registered) => {
@@ -190,10 +191,6 @@ describe("runSessionRecall — the DJ example", () => {
       `update focus_sessions set metadata = '{"titleSource":"derived"}'::jsonb where id = $1`,
       [SESSION]
     );
-  });
-
-  it("fills the jobs-side slot on import (boot registration is reachable)", () => {
-    expect(typeof h.registered).toBe("function");
   });
 
   it("recalls the two tracks — not the subject, not the linked note, not the unrelated capture", async () => {

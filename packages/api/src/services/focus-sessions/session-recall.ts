@@ -556,20 +556,3 @@ export async function enqueueSessionRecall(
     return false;
   }
 }
-
-/** Fill the jobs-side IoC slot. Idempotent. */
-export async function registerSessionRecall(): Promise<void> {
-  const { registerSessionRecallRunner } =
-    await import("@synap/jobs/workers/session-recall-worker.js");
-  registerSessionRecallRunner((data) => runSessionRecall(data));
-}
-
-// BOOT REGISTRATION. The other api-side runners are registered from
-// `apps/api/src/index.ts`; that file is held by another session tonight, so
-// this module fills its own slot on import instead. It is imported by the
-// focus-sessions router (root router ⇒ loaded at boot) and by the session
-// creation door, so the slot is filled before pg-boss delivers a job.
-// Follow-up: move this call beside `registerFirefliesIngestRunner` there.
-void registerSessionRecall().catch((err: unknown) =>
-  logger.error({ err }, "session recall runner NOT registered")
-);

@@ -1061,6 +1061,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         await import("../../../services/focus-sessions/continuation-packet.js");
       const { readSessionOutcomesSection } =
         await import("../../../services/focus-sessions/session-outputs.js");
+      const { projectSessionRecall } =
+        await import("../../../services/focus-sessions/session-recall.js");
       const [continuation, outcomes] = await Promise.all([
         projectContinuationPacket(row, {
           database: db,
@@ -1080,6 +1082,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         rerun: continuation.rerun,
         continuation,
         outcomes,
+        // Same projection as MCP `synap_get_session`: what the pod recalled
+        // from the owner's captures when the session started (or why not).
+        recall: projectSessionRecall(row.metadata),
         // Same lift as tRPC `focusSessions.get`: normalized criteria, verdict,
         // current evaluation per criterion. Absent when the read failed.
         ...(continuation.evaluation.status === "ok"
