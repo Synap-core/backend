@@ -68,6 +68,7 @@ import {
   getLinksFor,
 } from "../links/links-service.js";
 import { resolveExecutor } from "./executors/registry.js";
+import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
 import { proposeCapabilityEnable } from "../capabilities/propose-capability-enable.js";
 import { createLogger } from "@synap-core/core";
@@ -370,6 +371,7 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
   expectedOutputs: unknown;
   criteria: unknown;
   requiredIntents: unknown;
+  subjectProfile: unknown;
 } {
   return {
     version: playbook.version,
@@ -383,6 +385,8 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     // only the template it was launched from — a run whose playbook has since
     // been re-declared must still read as what it actually needed.
     requiredIntents: playbook.requiredIntents,
+    // The kind the run's subject must be (synap-68's subject-kind floor).
+    subjectProfile: playbook.subjectProfile,
   };
 }
 
@@ -754,6 +758,15 @@ export async function runPlaybook(
       ),
     };
   }
+
+  // The subject must be the kind the playbook runs on (helper by synap-68):
+  // after the subject is resolved, before any session is minted.
+  await assertRunSubjectMatchesPlaybook({
+    subjectId: runInput.subjectId,
+    subjectProfile: playbook.subjectProfile,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+  });
 
   // S9: resolve the input strategy into per-run param payloads. The first item
   // is the primary (returned) run; the rest fan out as side effects.
