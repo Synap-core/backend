@@ -426,8 +426,8 @@ export function registerRunsRoutes(app: HubHono): void {
         usedCapabilities: body.usedCapabilities,
       });
       if (!updated) {
-        // The run reached a verdict in between (cancelled / finished): a
-        // terminal capture never overwrites it.
+        // The run reached a verdict in between (cancelled / finished): no
+        // capture — terminal or `running` — overwrites or revives it.
         const [now] = await db
           .select({ status: playbookRuns.status })
           .from(playbookRuns)

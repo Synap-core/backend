@@ -49,10 +49,11 @@ export async function applyRunCapture(p: {
     nextStatus === "completed" ||
     nextStatus === "failed" ||
     nextStatus === "proposed";
-  // A TERMINAL capture lands only on a run that is still LIVE: a run that was
-  // cancelled (or already finished) in between keeps its verdict — the
-  // caller's copy of the row is stale, never authoritative. `null` ⇒ nothing
-  // was written (and nothing settled or linked).
+  // EVERY capture lands only on a run that is still LIVE — terminal or not: a
+  // run that was cancelled (or already finished) in between keeps its verdict,
+  // and a late `running` capture never revives it. The caller's copy of the
+  // row is stale, never authoritative. `null` ⇒ nothing was written (and
+  // nothing settled or linked).
   const [updated] = await db
     .update(playbookRuns)
     .set({
@@ -62,12 +63,7 @@ export async function applyRunCapture(p: {
       completedAt: terminal ? new Date() : run.completedAt,
     })
     .where(
-      terminal
-        ? and(
-            eq(playbookRuns.id, run.id),
-            liveRunStatusWhere(playbookRuns.status)
-          )
-        : eq(playbookRuns.id, run.id)
+      and(eq(playbookRuns.id, run.id), liveRunStatusWhere(playbookRuns.status))
     )
     .returning();
   if (!updated) return null;
