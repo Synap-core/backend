@@ -14,12 +14,20 @@
  * different INTERNAL shape, blank render, `as any` hiding it from tsc. So this
  * test compares FIELD SIGNATURES, not just op names.
  *
- * SCOPE — the three Rule Loop ops (`create_skill`, `create_automation`,
- * `create_rule`) only. `create_entity` / `create_relation` were already
- * DELIBERATELY asymmetric before this test existed (the server op carries
- * `facets`, `existingEntityId`, `targetWorkspaceId`, … that the browser mirror
- * has no use for). Pinning those would fail on day one and be silenced, which
- * is worse than not pinning them.
+ * SCOPE — DERIVED, not hand-listed: every op the BROWSER mirror declares must
+ * be declared by the server with identical fields, except the classified
+ * {@link DELIBERATELY_ASYMMETRIC} ops. A new mirrored op (as `create_playbook`
+ * was) joins the check by existing; an op mirrored on one side only fails.
+ * `create_entity` / `create_relation` were already DELIBERATELY asymmetric
+ * before this test existed (the server op carries `facets`,
+ * `existingEntityId`, `targetWorkspaceId`, … that the browser mirror has no use
+ * for). Pinning those would fail on day one and be silenced, which is worse
+ * than not pinning them.
+ *
+ * NOT covered: a server op the browser does not mirror at all (today the plan
+ * ops `create_session` / `create_document` / `create_project` / `create_link`)
+ * — the browser cannot narrow to a payload it never declared, so there is no
+ * seam to fork.
  *
  * Cross-repo, guarded like `cp-pod-package-schema-parity`: when `synap-app` is
  * not checked out beside `synap-backend`, the parity assertions are skipped
@@ -42,7 +50,11 @@ const BROWSER_TYPES = join(
   "synap-app/packages/core/proposal-types/src/types.ts"
 );
 
-const RULE_LOOP_OPS = ["create_skill", "create_automation", "create_rule"];
+/** Mirrored on both sides on purpose with DIFFERENT shapes (see the header). */
+const DELIBERATELY_ASYMMETRIC: ReadonlySet<string> = new Set([
+  "create_entity",
+  "create_relation",
+]);
 
 /** Strip comments so prose can never be read as a field signature. */
 function strip(src: string): string {
@@ -73,7 +85,7 @@ function opFieldSignatures(file: string): Map<string, string[]> {
 
 const bothCheckedOut = existsSync(SERVER_TYPES) && existsSync(BROWSER_TYPES);
 
-describe("tripwire: Rule Loop composite ops mirror each other exactly", () => {
+describe("tripwire: mirrored composite ops mirror each other exactly", () => {
   it("the server declaration exists at the path this test parses", () => {
     expect(
       existsSync(SERVER_TYPES),
@@ -89,11 +101,25 @@ describe("tripwire: Rule Loop composite ops mirror each other exactly", () => {
   });
 
   it.runIf(bothCheckedOut)(
-    "every Rule Loop op is declared in BOTH mirrors with identical fields",
+    "SELF-GUARD: the derived set covers the mirrored ops, and every exemption is still mirrored",
+    () => {
+      const browser = opFieldSignatures(BROWSER_TYPES);
+      const checked = [...browser.keys()].filter((op) => !DELIBERATELY_ASYMMETRIC.has(op));
+      for (const op of ["create_skill", "create_automation", "create_rule", "create_playbook"]) {
+        expect(checked, `${op} is no longer in the checked set`).toContain(op);
+      }
+      // A stale exemption silently widens what this test lets through.
+      for (const op of DELIBERATELY_ASYMMETRIC) expect(browser.has(op)).toBe(true);
+    }
+  );
+
+  it.runIf(bothCheckedOut)(
+    "every op the browser mirrors is declared by the server with identical fields",
     () => {
       const server = opFieldSignatures(SERVER_TYPES);
       const browser = opFieldSignatures(BROWSER_TYPES);
-      for (const op of RULE_LOOP_OPS) {
+      for (const op of browser.keys()) {
+        if (DELIBERATELY_ASYMMETRIC.has(op)) continue;
         expect(
           server.get(op),
           `${op} missing from the server union`
