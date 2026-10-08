@@ -10,6 +10,9 @@ import { describe, it, expect } from "vitest";
 import {
   canonicalJson,
   capabilityDefinitionDrift,
+  installTimePlaceholders,
+  PROJECTED_SKILL_FIELDS,
+  RUNTIME_PLACEHOLDER_SKILL_FIELDS,
   type InstalledSkillRow,
 } from "./capability-drift.js";
 
@@ -110,5 +113,90 @@ describe("capabilityDefinitionDrift", () => {
     };
     const { missing } = capabilityDefinitionDrift([], def);
     expect(missing).toEqual(["plain_verb"]); // only the plain one
+  });
+});
+
+/**
+ * The reconcile's "needs install params" gate. Each row is chosen where the OLD
+ * rule (skill NAMES only) and the derived rule DISAGREE — a row both agree on
+ * rules nothing out.
+ */
+describe("installTimePlaceholders", () => {
+  const skill = (over: Record<string, unknown>) => ({
+    name: "acct_sync",
+    kind: "code",
+    code: "return 1;",
+    ...over,
+  });
+
+  it("a param baked into skill CODE behind a plain name is install-time", () => {
+    expect(
+      installTimePlaceholders({
+        skills: [skill({ code: "const id = '{{accountId}}';" })],
+      })
+    ).toEqual([{ where: 'skill "acct_sync" code', tokens: ["accountId"] }]);
+  });
+
+  it("a param in a tool's CONFIG or DESCRIPTION is install-time", () => {
+    expect(
+      installTimePlaceholders({
+        tools: [
+          {
+            name: "posthog",
+            description: "PostHog for {{projectId}}",
+            config: { baseUrl: "https://{{analyticsHost}}" },
+          },
+        ],
+      })
+    ).toEqual([
+      { where: 'tool "posthog" description', tokens: ["projectId"] },
+      { where: 'tool "posthog" config', tokens: ["analyticsHost"] },
+    ]);
+  });
+
+  it("a param in a skill name is still install-time (the original rule holds)", () => {
+    expect(
+      installTimePlaceholders({ skills: [skill({ name: "{{key}}_dispatch" })] })
+    ).toEqual([{ where: 'skill "{{key}}_dispatch" name', tokens: ["key"] }]);
+  });
+
+  it("providerSpec placeholders are RUNTIME verb arguments, never install-time", () => {
+    expect(
+      installTimePlaceholders({
+        skills: [
+          skill({ kind: "declarative", providerSpec: { path: "/x/{{id}}" } }),
+        ],
+      })
+    ).toEqual([]);
+    for (const f of RUNTIME_PLACEHOLDER_SKILL_FIELDS) {
+      expect(Object.keys(PROJECTED_SKILL_FIELDS)).toContain(f);
+    }
+  });
+
+  it("{{vault:<ref>}} resolves from the template's own vault — not a param", () => {
+    expect(
+      installTimePlaceholders({
+        skills: [skill({ code: "secrets.get('{{vault:githubTokenSecret}}')" })],
+        tools: [{ name: "t", config: { ref: "{{vault:githubTokenSecret}}" } }],
+      })
+    ).toEqual([]);
+  });
+
+  it("scans EVERY projected skill field (derived, not hand-listed)", () => {
+    // One placeholder per projected field: every field must be reported, so a
+    // field dropped from the scan shrinks this list and fails here by name.
+    const fields = Object.keys(PROJECTED_SKILL_FIELDS).filter(
+      (k) =>
+        !(RUNTIME_PLACEHOLDER_SKILL_FIELDS as readonly string[]).includes(k)
+    );
+    expect(fields.length).toBeGreaterThanOrEqual(11);
+    const row: Record<string, unknown> = { name: "plain" };
+    for (const f of fields) row[f] = `{{p_${f}}}`;
+    const where = installTimePlaceholders({ skills: [row] }).map(
+      (p) => p.where
+    );
+    expect(where.sort()).toEqual(
+      fields.map((f) => `skill "plain" ${f}`).sort()
+    );
   });
 });

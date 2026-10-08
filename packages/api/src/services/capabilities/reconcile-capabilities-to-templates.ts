@@ -52,6 +52,7 @@ import {
   capabilityVerbCatalogDrift,
   capabilityToolMergeDrift,
   DRIFT_COMPARATOR_VERSION,
+  installTimePlaceholders,
   type InstalledSkillRow,
 } from "./capability-drift.js";
 import type { Context } from "../../types/context.js";
@@ -482,21 +483,26 @@ export async function reconcileCapabilitiesToTemplates(
       const updatePolicy = cachedDef.updatePolicy ?? "auto";
       const driftReason = `missing=[${drift.missing.join(",")}] drifted=[${drift.drifted.join(",")}]${missingTools.length > 0 ? ` missingToolMembership=[${missingTools.join(",")}]` : ""}${catalogDrift.drifted.length > 0 ? ` verbCatalogDrift=[${catalogDrift.drifted.join(",")}]` : ""}${toolMergeDrift.drifted.length > 0 ? ` toolMergeDrift=[${toolMergeDrift.drifted.join(",")}]` : ""}`;
 
-      // A template that carries `{{param}}` in a skill NAME needs install-time
-      // params the reconcile doesn't have — re-projecting it with `{}` would
-      // interpolate the placeholder to a blank and mint a junk skill. Never
-      // auto-apply these; surface them for a human to re-apply WITH params.
-      // Paramless declarative templates (nango-google etc.) are unaffected —
-      // the common reconcile case. (Surfaced by dogfooding: generic-apikey.)
-      const needsInstallParams = (cachedDef.skills ?? []).some(
-        (s) => typeof s.name === "string" && s.name.includes("{{")
+      // A template that carries an install-time `{{param}}` on ANY field a
+      // re-apply writes needs params this reconcile does not have — re-projecting
+      // it with `{}` would blank them: a junk skill named with a blank, an id
+      // baked into code wiped, a host in tool config emptied. Never auto-apply
+      // these; surface them for a human to re-apply WITH params. The field set
+      // is derived from the applier's projection (`installTimePlaceholders`), not
+      // skill names alone — names-only let unipile-linkedin's code be blanked.
+      // Paramless declarative templates (nango-google etc.) are unaffected.
+      // This branch never stamps, so it asserts nothing about convergence.
+      const installTime = installTimePlaceholders(
+        cachedDef as unknown as Parameters<typeof installTimePlaceholders>[0]
       );
-      if (needsInstallParams) {
+      if (installTime.length > 0) {
         report.updatesAvailable.push({
           containerId: container.id,
           name: container.name,
           templateKey,
-          reason: `${driftReason} — manual re-apply needed (template uses install-time params in skill names)`,
+          reason: `${driftReason} — manual re-apply needed (template uses install-time params: ${installTime
+            .map((p) => `${p.where} {{${p.tokens.join("}}, {{")}}}`)
+            .join("; ")})`,
         });
         continue;
       }

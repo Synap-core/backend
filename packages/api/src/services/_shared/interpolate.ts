@@ -10,15 +10,39 @@
  * identifiers without `{{}}`, so they survive interpolation unchanged.
  */
 
+/** The `{{param}}` grammar — ONE regex, read by the interpolator AND by every
+ * reader that must know whether a value still carries an install-time param. */
+const PARAM_PLACEHOLDER_RE = /\{\{(\w+)\}\}/g;
+
 /** Replace `{{name}}` tokens in a string with values from `params`. */
 export function interpolateString(
   template: string,
   params: Record<string, unknown>
 ): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+  return template.replace(PARAM_PLACEHOLDER_RE, (_, key: string) => {
     const value = params[key];
     return value !== undefined && value !== null ? String(value) : "";
   });
+}
+
+/**
+ * Every `{{param}}` token `interpolateDeep` would substitute inside `value`
+ * (deep). `{{vault:<ref>}}` is NOT one — it is resolved from the template's own
+ * vault, never from params.
+ */
+export function paramPlaceholderTokens(value: unknown): string[] {
+  const tokens = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (typeof v === "string") {
+      for (const m of v.matchAll(PARAM_PLACEHOLDER_RE)) tokens.add(m[1]!);
+    } else if (Array.isArray(v)) {
+      v.forEach(walk);
+    } else if (v && typeof v === "object") {
+      Object.values(v as Record<string, unknown>).forEach(walk);
+    }
+  };
+  walk(value);
+  return [...tokens];
 }
 
 /** Deep-interpolate every string inside an arbitrary JSON value. */

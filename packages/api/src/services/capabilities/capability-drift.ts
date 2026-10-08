@@ -27,6 +27,7 @@
  */
 
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
+import { paramPlaceholderTokens } from "../_shared/interpolate.js";
 
 /** Canonical (key-sorted) JSON — jsonb does not preserve key insertion order, so a
  * plain JSON.stringify would report false drift on key order alone. Normalizes
@@ -62,6 +63,16 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v8 = v7 + the reconcile's install-time-param gate reads EVERY projected field
+ *      (`installTimePlaceholders`: skill code/description/parameters/…, tool
+ *      config/metadata/description), not skill names alone. The comparator's
+ *      field set is unchanged; what changed is what a v7 stamp could rest on: a
+ *      template whose code (or tool config) baked a `{{param}}` behind plain
+ *      skill names was re-applied with `{}` — the code blanked — and then
+ *      STAMPED converged. That stamp asserted a convergence the comparator
+ *      never agreed with (raw `{{x}}` ≠ blank). Retiring v7 stamps makes each
+ *      container re-diff once, and such a container now surfaces as a manual
+ *      re-apply instead of hiding behind its stamp.
  * v7 = v6 + the skill-row `intent` COLUMN as its own `PROJECTED_SKILL_FIELDS`
  *      entry (migration 0292). v6 compared intent as a `skills.metadata` KEY;
  *      that was a second writer beside `deriveToolVerbs` and it is gone, so the
@@ -87,7 +98,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 7;
+export const DRIFT_COMPARATOR_VERSION = 8;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -596,6 +607,81 @@ export function capabilityToolMergeDrift(
     if (differs) drifted.push(tool.name);
   }
   return { drifted };
+}
+
+/**
+ * The ONE projected skill field whose `{{token}}`s are NOT install-time params:
+ * a `providerSpec` holds RUNTIME verb arguments, and the applier restores it RAW
+ * after interpolating the definition (`create-from-definition.ts`).
+ * `PROJECTED_SKILL_FIELDS` is a `Record<string, …>`, so the type system cannot
+ * tie this name to it — `capability-drift.test.ts` asserts it is a real key.
+ */
+export const RUNTIME_PLACEHOLDER_SKILL_FIELDS = ["providerSpec"] as const;
+
+/**
+ * Every tool field the applier writes from the INTERPOLATED definition: the
+ * match-key `name`, the overwritten `description` (`applyTemplateToExistingTool`)
+ * and the merged JSONB (`PROJECTED_TOOL_MERGE_FIELDS`, which a NEW tool row gets
+ * whole). `credentialRef` is not here: its tokens are the credential guard's
+ * (`requiredParamSecretsExist`), and `capabilities` is derived from the skills.
+ */
+export const PLACEHOLDER_CARRYING_TOOL_FIELDS = [
+  "name",
+  "description",
+  ...PROJECTED_TOOL_MERGE_FIELDS,
+] as const;
+
+/**
+ * WHERE a definition still carries an install-time `{{param}}` — on any field a
+ * paramless (`{}`) re-apply would re-interpolate and write.
+ *
+ * The reconcile re-applies a drifted template with NO params, so every such
+ * token becomes a blank (or a default) the installer never chose: an agent id
+ * baked into code, a host in a tool's config. It used to look at skill NAMES
+ * only, so a template whose names were plain but whose code baked a param
+ * (unipile-linkedin's account id) was re-applied with `{}` — the code blanked,
+ * an approved skill demoted, and the container stamped converged.
+ *
+ * The scanned set is DERIVED, never hand-listed: skill `name` + every
+ * `PROJECTED_SKILL_FIELDS` key (pinned to the applier's own `.set({...})` by the
+ * projection-parity tripwire) minus `RUNTIME_PLACEHOLDER_SKILL_FIELDS`; tools by
+ * `PLACEHOLDER_CARRYING_TOOL_FIELDS`. Whole declared values are scanned (not the
+ * update's narrowed projection), because a skill or tool MISSING from the pod is
+ * CREATED with the whole value. `{{vault:<ref>}}` is not a param — it resolves
+ * from the template's own vault on every apply.
+ *
+ * `vault[].value` / `credentialRef` tokens are deliberately out of scope: a
+ * re-apply never needs them once the secret exists (`requiredParamSecretsExist`).
+ */
+export function installTimePlaceholders(definition: {
+  skills?: ReadonlyArray<Record<string, unknown>>;
+  tools?: ReadonlyArray<Record<string, unknown>>;
+}): Array<{ where: string; tokens: string[] }> {
+  const runtime = new Set<string>(RUNTIME_PLACEHOLDER_SKILL_FIELDS);
+  const skillFields = [
+    "name",
+    ...Object.keys(PROJECTED_SKILL_FIELDS).filter((k) => !runtime.has(k)),
+  ];
+  const found: Array<{ where: string; tokens: string[] }> = [];
+  const scan = (
+    kind: "skill" | "tool",
+    row: Record<string, unknown>,
+    fields: readonly string[]
+  ) => {
+    for (const field of fields) {
+      const tokens = paramPlaceholderTokens(row[field]);
+      if (tokens.length > 0) {
+        found.push({
+          where: `${kind} "${String(row.name)}" ${field}`,
+          tokens,
+        });
+      }
+    }
+  };
+  for (const s of definition.skills ?? []) scan("skill", s, skillFields);
+  for (const t of definition.tools ?? [])
+    scan("tool", t, PLACEHOLDER_CARRYING_TOOL_FIELDS);
+  return found;
 }
 
 /**

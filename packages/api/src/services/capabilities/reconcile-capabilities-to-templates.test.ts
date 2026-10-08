@@ -479,3 +479,86 @@ describe("reconcileCapabilitiesToTemplates — earned contentHash stamp", () => 
     expect(createCapabilityFromDefinition).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A paramless reconcile must never re-apply a template that bakes an
+ * install-time `{{param}}` on ANY field the applier writes — not only in skill
+ * NAMES. unipile-linkedin's names are plain while its code bakes the account
+ * id: the names-only gate re-applied it with `{}`, blanking the code, and then
+ * STAMPED the container converged.
+ */
+describe("reconcileCapabilitiesToTemplates — install-time params beyond skill names", () => {
+  const container: Row = {
+    id: "container-1",
+    name: "Test Capability",
+    createdBy: "user-1",
+    workspaceId: null,
+    metadata: { templateKey: "tmpl-key", contentHash: "old-hash" },
+  };
+  const withSkillCode = (code: string) => ({
+    key: "tmpl-key",
+    name: "Test Capability",
+    updatePolicy: "auto" as const,
+    contentHash: "new-hash",
+    tools: [{ name: "toolA" }],
+    skills: [{ name: "acct_sync", kind: "code", code }],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.containersRows = [container];
+    state.memberSkillLinkRows = [];
+    state.installedSkillRows = [];
+    state.memberToolRows = [{ name: "toolA" }];
+    state.updateCalls.length = 0;
+    createCapabilityFromDefinition.mockResolvedValue(undefined);
+  });
+
+  it("a param in skill CODE behind a plain name → manual re-apply, never a {} re-apply, never a stamp", async () => {
+    loadCapabilityTemplate.mockResolvedValue(
+      withSkillCode("const id = '{{accountId}}';")
+    );
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(createCapabilityFromDefinition).not.toHaveBeenCalled();
+    expect(report.applied).toHaveLength(0);
+    expect(report.updatesAvailable).toHaveLength(1);
+    expect(report.updatesAvailable[0]!.reason).toContain(
+      'skill "acct_sync" code {{accountId}}'
+    );
+    expect(
+      state.updateCalls,
+      "a manual-re-apply verdict stamps nothing"
+    ).toEqual([]);
+  });
+
+  it("a param in a tool's CONFIG → manual re-apply", async () => {
+    loadCapabilityTemplate.mockResolvedValue({
+      ...withSkillCode("return 1;"),
+      tools: [{ name: "toolA", config: { baseUrl: "https://{{host}}" } }],
+    });
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(createCapabilityFromDefinition).not.toHaveBeenCalled();
+    expect(report.updatesAvailable[0]!.reason).toContain(
+      'tool "toolA" config {{host}}'
+    );
+  });
+
+  it("CONTROL: a {{vault:<ref>}} (resolvable on every apply) still auto-reconciles", async () => {
+    loadCapabilityTemplate.mockResolvedValue(
+      withSkillCode("secrets.get('{{vault:tokenSecret}}')")
+    );
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(createCapabilityFromDefinition).toHaveBeenCalledTimes(1);
+    expect(report.applied).toHaveLength(1);
+    expect(report.updatesAvailable).toHaveLength(0);
+  });
+});
