@@ -36,8 +36,14 @@ import { workspaceLensWhere } from "../../utils/user-visible-where.js";
  * both stores immediately. The `links` write is kept for the transition; this
  * is additive, not a cutover.
  */
+/**
+ * What a link write runs on: the pod db, or a caller's open TRANSACTION (so an
+ * edge replace — delete then create — commits or rolls back as one).
+ */
+export type LinkWriter = Pick<Awaited<ReturnType<typeof getDb>>, "insert">;
+
 async function dualWritePlaybookAutomation(
-  db: Awaited<ReturnType<typeof getDb>>,
+  db: LinkWriter,
   input: Pick<LinkInput, "fromType" | "fromId" | "toType" | "toId" | "linkType">
 ): Promise<void> {
   if (
@@ -67,8 +73,11 @@ async function dualWritePlaybookAutomation(
 // Single-edge writes: used by the project SUBJECT bind (`project --targets-->
 // entity`) and the project MEMBERSHIP enrol (`automation --member_of-->
 // project`) in `utils/project-subject.ts`, alongside the batch `createLinks`.
-export async function createLink(input: LinkInput): Promise<Link | undefined> {
-  const db = await getDb();
+export async function createLink(
+  input: LinkInput,
+  writer?: LinkWriter
+): Promise<Link | undefined> {
+  const db = writer ?? (await getDb());
   const [created] = await db
     .insert(links)
     .values({

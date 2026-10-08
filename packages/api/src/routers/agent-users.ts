@@ -841,30 +841,39 @@ export const agentUsersRouter = router({
         toolWorkspaceId = tool.workspaceId;
       }
 
-      // Replace: drop every existing binding edge of this agent, then write
-      // the new one through the links write door.
-      const removed = await db
-        .delete(links)
-        .where(
-          and(
-            eq(links.fromType, "participant"),
-            eq(links.fromId, agent.id),
-            eq(links.toType, "tool"),
-            eq(links.linkType, "dispatched_via")
+      // Replace, as ONE transaction: drop every existing binding edge of this
+      // agent, then write the new one through the links write door. A create
+      // that fails rolls the delete back — the agent keeps its old binding
+      // rather than silently losing it.
+      const toolId = input.toolId;
+      const removed = await db.transaction(async (tx) => {
+        const dropped = await tx
+          .delete(links)
+          .where(
+            and(
+              eq(links.fromType, "participant"),
+              eq(links.fromId, agent.id),
+              eq(links.toType, "tool"),
+              eq(links.linkType, "dispatched_via")
+            )
           )
-        )
-        .returning({ toId: links.toId });
-      if (input.toolId) {
-        await createLink({
-          workspaceId: toolWorkspaceId,
-          fromType: "participant",
-          fromId: agent.id,
-          toType: "tool",
-          toId: input.toolId,
-          linkType: "dispatched_via",
-          metadata: { boundBy: callerId },
-        });
-      }
+          .returning({ toId: links.toId });
+        if (toolId) {
+          await createLink(
+            {
+              workspaceId: toolWorkspaceId,
+              fromType: "participant",
+              fromId: agent.id,
+              toType: "tool",
+              toId: toolId,
+              linkType: "dispatched_via",
+              metadata: { boundBy: callerId },
+            },
+            tx
+          );
+        }
+        return dropped;
+      });
 
       await auditLog({
         subjectType: "link",
