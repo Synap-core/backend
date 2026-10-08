@@ -1462,6 +1462,25 @@ export async function runResolvedSkill(
   return outcome;
 }
 
+/**
+ * The tools a verb DECLARES (`skill → requires → tool` links, written by
+ * `skills.setRequiredTools`) — the scope its decision covers (`verbAct`).
+ */
+async function requiredToolIdsOf(skillId: string): Promise<string[]> {
+  const rows = await db
+    .select({ toolId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "skill"),
+        eq(links.fromId, skillId),
+        eq(links.toType, "tool"),
+        eq(links.linkType, "requires")
+      )
+    );
+  return rows.map((r) => r.toolId);
+}
+
 async function runResolvedSkillInner(
   skill: ResolvedSkillRow,
   parameters: Record<string, unknown> | undefined,
@@ -1591,6 +1610,13 @@ async function runResolvedSkillInner(
   // `{success, result?, error?}`. UNWRAP it here so a caller receives the skill's
   // DATA (not the envelope) on success and the ONE `kind:"error"` channel on
   // failure — a success:false must never ride through as a `kind:"run"` result.
+  //
+  // ONE GOVERNED ACT: every caller of this runner is POST-gate (a `run` verdict
+  // or an approved proposal), so the verb's decision rides into the sandbox as
+  // `verbAct`, scoped to the tools this verb `requires`. Its own provider calls
+  // are then part of the same act and never file a second proposal; a call to
+  // any OTHER tool is still gated. (The IS path forwards no agent identity, so
+  // its in-skill calls are decided as the operator — no second agent gate.)
   const envelope =
     process.env.SANDBOX_LOCAL === "1"
       ? await runSkillInSandbox({
@@ -1599,6 +1625,10 @@ async function runResolvedSkillInner(
           parameters,
           workspaceId: ctx.workspaceId,
           agentUserId: ctx.agentUserId ?? null,
+          verbAct: {
+            skillId: skill.id,
+            toolIds: await requiredToolIdsOf(skill.id),
+          },
         })
       : await executeSkillViaIS({
           skillId: skill.id,

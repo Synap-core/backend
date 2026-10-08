@@ -124,6 +124,12 @@ export async function runSkillInSandbox(args: {
   workspaceId?: string | null;
   /** The acting agent (null/absent = operator run). Gates in-skill WRITES. */
   agentUserId?: string | null;
+  /**
+   * The verb decision this run carries (see `TriggerProviderActionInput.verbAct`):
+   * set by the post-gate runner so this skill's provider calls to its OWN
+   * required tools ride the verb's approval instead of being gated again.
+   */
+  verbAct?: { skillId: string; toolIds: readonly string[] };
 }): Promise<SkillExecutionResult> {
   const startTime = Date.now();
   const operatorUserId = args.userId;
@@ -201,6 +207,7 @@ export async function runSkillInSandbox(args: {
       agentUserId,
       caller,
       failureSink: providerFailure,
+      verbAct: args.verbAct,
     });
 
     return {
@@ -282,6 +289,8 @@ async function runIsolate(params: {
   /** P1: written on a classified provider failure so the caller can attach the
    *  recovery classification to its failure envelope (see runSkillInSandbox). */
   failureSink: { errorClass?: FailureErrorClass; providerRef?: string };
+  /** This run's verb decision — scoped to THIS isolate's provider calls. */
+  verbAct?: { skillId: string; toolIds: readonly string[] };
 }): Promise<unknown> {
   const {
     code,
@@ -294,6 +303,7 @@ async function runIsolate(params: {
     agentUserId,
     caller,
     failureSink,
+    verbAct,
   } = params;
 
   const ivm = await loadIvm();
@@ -489,6 +499,8 @@ async function runIsolate(params: {
           // — with agentUserId set, the gate inside triggerProviderAction treats
           // the call as an agent run → an ungranted capability routes to a
           // PROPOSAL. Reads (GET) carry no agent identity, so they run inline.
+          // EXCEPT a call to one of the verb's own required tools while the verb
+          // itself was already decided (`verbAct`): that is the same act.
           const upper = method.toUpperCase();
           const isWrite =
             upper === "POST" || upper === "PUT" || upper === "DELETE";
@@ -506,6 +518,10 @@ async function runIsolate(params: {
             ...(isWrite && agentUserId
               ? { agentUserId, workspaceId: workspaceId ?? undefined }
               : {}),
+            // ONE governed act: this run's verb was already decided, so its
+            // calls to its OWN required tools are not gated again (scoped in
+            // triggerProviderAction — any other tool is still gated).
+            ...(verbAct ? { verbAct } : {}),
           });
           // Map triggerProviderAction's structured result onto the SAME shape the
           // IS `executeProviderCall` returns: { status, headers, body } OR

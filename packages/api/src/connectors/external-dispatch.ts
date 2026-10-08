@@ -1142,6 +1142,20 @@ export interface TriggerProviderActionInput {
   alreadyApproved?: boolean;
   /** Audit linkage to the proposal that authorized an `alreadyApproved` run. */
   sourceProposalId?: string;
+  /**
+   * ONE GOVERNED ACT. The code-skill verb THIS call runs inside, already decided
+   * by the gate (an auto/grant `run` verdict, or a human approving its
+   * proposal). A call to one of the verb's OWN required tools (`toolIds`, the
+   * skill's `requires` edges) is part of that act: it is not gated a second
+   * time, so an approved verb can never surface a second proposal for its own
+   * provider calls. Scoped, never a blanket bypass:
+   *   - only the tools the verb declares — any other tool is gated as usual;
+   *   - only an APPROVED tool — the tool's enable floor still applies;
+   *   - only this execution — the sandbox holds it in the run's closure.
+   * Set ONLY by the post-gate skill runner (`runResolvedSkill` →
+   * `runSkillInSandbox`); no request door forwards it.
+   */
+  verbAct?: { skillId: string; toolIds: readonly string[] };
 }
 
 export interface TriggerProviderActionResult {
@@ -1604,9 +1618,7 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
 function composeVaultUrl(
   baseUrl: string | undefined,
   path: string
-):
-  | { ok: true; url: URL }
-  | { ok: false; result: TriggerProviderActionResult } {
+): { ok: true; url: URL } | { ok: false; result: TriggerProviderActionResult } {
   let rawUrl: string;
   if (baseUrl) {
     // baseUrl wins: always compose host + path, ignoring any absolute scheme in
@@ -2274,7 +2286,14 @@ export async function triggerProviderAction(
   // dispatches directly (exactly once). Only that executor (and the auto `run`
   // decision) may set the flag; no external caller supplies it. This preserves
   // the Door-2 `provider.action` behavior byte-for-byte (it never re-checked).
-  if (!input.alreadyApproved) {
+  // A call inside an already-decided verb, to one of ITS OWN required tools, is
+  // that verb's act — see `verbAct`. The tool's approval floor still holds: an
+  // unapproved tool falls through to the gate, which refuses it.
+  const coveredByVerb =
+    !!input.verbAct &&
+    tool.approved === true &&
+    input.verbAct.toolIds.includes(tool.id);
+  if (!input.alreadyApproved && !coveredByVerb) {
     // SAFE-BY-DEFAULT actor resolution: the gate's owner-bypass keys off the
     // EFFECTIVE actor vs the tool's owner (`createdBy`). When an `agentUserId` is
     // present the effective actor is the AGENT (mirrors checkPermissionOrPropose's
@@ -2527,6 +2546,8 @@ export async function triggerProviderAction(
           path: input.path,
           status: result.status,
           sourceProposalId: input.sourceProposalId ?? null,
+          // The verb this call was part of (one governed act), when it was.
+          viaVerbSkillId: coveredByVerb ? input.verbAct!.skillId : null,
         },
       });
     } catch (err) {
