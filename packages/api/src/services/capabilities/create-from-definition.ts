@@ -95,7 +95,12 @@ import {
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
-import { interpolateDeep, interpolateString } from "../_shared/interpolate.js";
+import {
+  interpolateDeep,
+  interpolateString,
+  interpolateVaultRefs,
+  vaultPlaceholderRefs,
+} from "../_shared/interpolate.js";
 
 const logger = createLogger({ module: "create-capability-from-definition" });
 
@@ -587,6 +592,27 @@ export async function createCapabilityFromDefinition(
     });
   }
 
+  // `{{vault:<ref>}}` in a skill's CODE or a tool's CONFIG names one of THIS
+  // template's own `vault[]` entries (see `interpolateVaultRefs`). Checked
+  // BEFORE anything is written, so a typo'd ref refuses the install instead of
+  // leaving it half-applied with a credential that is silently never there.
+  // Only those two fields carry it: `credentialRef`/MCP `auth.credentialRef`
+  // already name a ref directly, and a `providerSpec` is restored raw above.
+  const declaredVaultRefs = new Set((def.vault ?? []).map((v) => v.ref));
+  for (const [where, value] of [
+    ...def.tools.map((t) => [`tool "${t.name}" config`, t.config] as const),
+    ...def.skills.map((s) => [`skill "${s.name}" code`, s.code] as const),
+  ]) {
+    const unknown = vaultPlaceholderRefs(value).filter(
+      (ref) => !declaredVaultRefs.has(ref)
+    );
+    if (unknown.length > 0) {
+      throw new Error(
+        `Capability "${def.key}" ${where}: {{vault:${unknown.join("}}, {{vault:")}}} matches no vault[] entry in this template.`
+      );
+    }
+  }
+
   const proposals: string[] = [];
 
   // 1. Vault secrets — reuse the SAME server-side encryption the
@@ -602,6 +628,24 @@ export async function createCapabilityFromDefinition(
     );
     vaultByRef.set(v.ref, vaultRef.vaultRef);
     createdVault.push({ ref: v.ref, ...vaultRef });
+  }
+
+  // 1a. Hand each skill / tool the `vault://<id>` of its template's OWN secret.
+  //     A code skill can only redeem through `secrets.get('vault://<id>')` and
+  //     the id is minted just above, so the template names the entry by its
+  //     ref and the applier writes the id in. `vaultByRef` holds only this
+  //     definition's entries — never another template's secret. This grants
+  //     NOTHING: `secrets.get` still redeems under the existing per-agent /
+  //     per-user grant rules. Idempotent: a re-apply reuses the same secret
+  //     row (`createVaultSecret`), so the rewritten code is byte-identical and
+  //     does not demote an approved skill (`skillExecFieldsChanged`).
+  for (const t of def.tools) {
+    if (t.config !== undefined)
+      t.config = interpolateVaultRefs(t.config, vaultByRef);
+  }
+  for (const s of def.skills) {
+    if (typeof s.code === "string")
+      s.code = interpolateVaultRefs(s.code, vaultByRef);
   }
 
   // An MCP server's `auth.credentialRef` names a template-local `vault[].ref`
