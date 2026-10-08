@@ -82,6 +82,9 @@ export const OperationalEventTypes = {
       "profileSlug",
       "changedKeys",
       "changed.<fieldName>",
+      // The value BEFORE the update (null when the key was absent) — lets a
+      // rule say "status changed FROM x". Emitted flat by entities/mutate.ts.
+      "previous.<fieldName>",
       "<fieldName>",
     ],
   },
