@@ -42,6 +42,7 @@ import {
   inArray,
   drizzleSql,
 } from "@synap/database";
+import { ownAgentUserFilter } from "../agent-identity-service.js";
 
 /** The intent every verb an agent binding lists carries (migration 0314). */
 export const DELEGATE_AGENT_TASK_INTENT = "delegate_agent_task";
@@ -308,11 +309,15 @@ export async function resolveAgentReachMany(
 }
 
 /**
- * The agent users bound for dispatch (a `dispatched_via` edge), oldest edge
+ * The agent users bound for dispatch (a `dispatched_via` edge) that THIS
+ * person owns (`ownAgentUserFilter` — the one lineage door), oldest edge
  * first. Health is NOT checked here — the caller resolves the binding and
- * surfaces its error. Used by the run's "which agent" rule.
+ * surfaces its error. Used by the run's "which agent" rule: a run never hands
+ * work to (or offers) a teammate's agent.
  */
-export async function listDispatchableAgentIds(): Promise<string[]> {
+export async function listDispatchableAgentIds(
+  ownerId: string
+): Promise<string[]> {
   const rows = await db
     .select({ fromId: links.fromId })
     .from(links)
@@ -322,11 +327,30 @@ export async function listDispatchableAgentIds(): Promise<string[]> {
         eq(links.fromType, "participant"),
         eq(links.toType, "tool"),
         eq(links.linkType, "dispatched_via"),
-        eq(users.userType, "agent")
+        eq(users.userType, "agent"),
+        ownAgentUserFilter(users.id, ownerId)
       )
     )
     .orderBy(links.createdAt);
   return [...new Set(rows.map((r) => r.fromId))];
+}
+
+/** Which of `agentUserIds` this person owns (the same lineage door). */
+export async function ownedAgentIds(
+  ownerId: string,
+  agentUserIds: readonly string[]
+): Promise<Set<string>> {
+  if (agentUserIds.length === 0) return new Set();
+  const rows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        inArray(users.id, [...new Set(agentUserIds)]),
+        ownAgentUserFilter(users.id, ownerId)
+      )
+    );
+  return new Set(rows.map((r) => r.id));
 }
 
 /** The UI's view of a binding: `{ toolId, provider, supports }`, or a broken one. */

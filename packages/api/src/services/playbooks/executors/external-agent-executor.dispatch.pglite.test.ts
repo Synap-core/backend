@@ -127,6 +127,8 @@ const OWNER = randomUUID();
 const AGENT_A = randomUUID();
 const AGENT_B = randomUUID();
 const IS_AGENT = randomUUID();
+const TEAMMATE = randomUUID();
+const FOREIGN = randomUUID();
 const TOOL_A = randomUUID();
 const TOOL_B = randomUUID();
 const PLAYBOOK = randomUUID();
@@ -182,9 +184,21 @@ describe("external-agent executor — dispatch through the stored binding", () =
       `insert into playbooks (id, name, created_by) values ($1, 'AI Dev Session', $2)`,
       [PLAYBOOK, OWNER]
     );
+    await q(
+      `update users set created_by_user_id = $1 where user_type = 'agent'`,
+      [OWNER]
+    );
+    // A TEAMMATE's agent, bound for dispatch to the same provider.
+    await q(
+      `insert into users (id, email, name, timezone, user_type, agent_type, created_by_user_id) values
+        ($1, 't@x.test', 'Teammate', 'UTC', 'human', null, null),
+        ($2, 'f@x.test', 'Their agent', 'UTC', 'agent', 'theirs', $1)`,
+      [TEAMMATE, FOREIGN]
+    );
     for (const [tool, agent] of [
       [TOOL_A, AGENT_A],
       [TOOL_B, AGENT_B],
+      [randomUUID(), FOREIGN],
     ] as const) {
       await q(
         `insert into tools (id, workspace_id, created_by, name, kind, executor, config, status, approved, metadata, input_schema, capabilities)
@@ -274,6 +288,21 @@ describe("external-agent executor — dispatch through the stored binding", () =
     const res = await exec.run(ctx(sid, { agentUserId: IS_AGENT }));
     expect(res.status).toBe("failed");
     expect(h.calls).toHaveLength(0);
+  });
+
+  it("a param naming a TEAMMATE's bound agent fails — the run never hands it work", async () => {
+    const sid = await session();
+    const res = await exec.run(ctx(sid, { agentUserId: FOREIGN }));
+    expect(res.status).toBe("failed");
+    expect(res.error).toContain("not one of your agents");
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it("a teammate's agent on the roster is skipped for the owner's own", async () => {
+    const sid = await session([FOREIGN, AGENT_B]);
+    const res = await exec.run(ctx(sid));
+    expect(res.status).toBe("running");
+    expect(h.calls[0]).toMatchObject({ agentUserId: AGENT_B });
   });
 
   it("the roster's dispatchable agent is used when no param names one", async () => {

@@ -60,6 +60,7 @@ import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import {
   AgentBindingError,
   listDispatchableAgentIds,
+  ownedAgentIds,
   resolveAgentBinding,
   resolveAgentReachMany,
   type AgentBinding,
@@ -98,23 +99,39 @@ export type RunAgentChoice =
   | { kind: "invalid_param"; agentUserId: string }
   | { kind: "choose"; candidates: string[] };
 
-/** THE "which agent does this run use" rule (pure over its reads). */
+/**
+ * THE "which agent does this run use" rule (pure over its reads). Every step
+ * is floored on the run OWNER's own agents (`ownedAgentIds` /
+ * `listDispatchableAgentIds`, the `ownAgentUserFilter` lineage door): a param,
+ * a roster entry or a pod-wide single naming a teammate's agent never hands
+ * that agent the work.
+ */
 export async function chooseRunAgent(p: {
+  ownerId: string;
   paramAgentUserId: string | undefined;
   rosterAgentIds: readonly string[];
 }): Promise<RunAgentChoice> {
   if (p.paramAgentUserId) {
-    const reach = await resolveAgentReachMany([p.paramAgentUserId]);
-    return reach.get(p.paramAgentUserId) === "dispatch"
+    const [reach, owned] = await Promise.all([
+      resolveAgentReachMany([p.paramAgentUserId]),
+      ownedAgentIds(p.ownerId, [p.paramAgentUserId]),
+    ]);
+    return reach.get(p.paramAgentUserId) === "dispatch" &&
+      owned.has(p.paramAgentUserId)
       ? { kind: "agent", agentUserId: p.paramAgentUserId, via: "param" }
       : { kind: "invalid_param", agentUserId: p.paramAgentUserId };
   }
   if (p.rosterAgentIds.length > 0) {
-    const reach = await resolveAgentReachMany(p.rosterAgentIds);
-    const staffed = p.rosterAgentIds.find((id) => reach.get(id) === "dispatch");
+    const [reach, owned] = await Promise.all([
+      resolveAgentReachMany(p.rosterAgentIds),
+      ownedAgentIds(p.ownerId, p.rosterAgentIds),
+    ]);
+    const staffed = p.rosterAgentIds.find(
+      (id) => reach.get(id) === "dispatch" && owned.has(id)
+    );
     if (staffed) return { kind: "agent", agentUserId: staffed, via: "roster" };
   }
-  const candidates = await listDispatchableAgentIds();
+  const candidates = await listDispatchableAgentIds(p.ownerId);
   if (candidates.length === 1) {
     return { kind: "agent", agentUserId: candidates[0]!, via: "single" };
   }
@@ -298,12 +315,13 @@ export class ExternalAgentExecutor implements Executor {
 
     // 1. Which agent.
     const choice = await chooseRunAgent({
+      ownerId,
       paramAgentUserId: paramAgent(input, session),
       rosterAgentIds: session.agentIds,
     });
     if (choice.kind === "invalid_param") {
       return fail(
-        `agent ${choice.agentUserId} is not bound for dispatch — bind it to its provider, or choose another agent`,
+        `agent ${choice.agentUserId} is not one of your agents bound for dispatch — bind it to its provider, or choose another agent`,
         "invalid-agent"
       );
     }

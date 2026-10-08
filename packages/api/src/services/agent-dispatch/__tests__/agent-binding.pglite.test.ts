@@ -93,6 +93,8 @@ const MALFORMED_AGENT = randomUUID();
 const GONE_AGENT = randomUUID();
 const WRONG_KIND_AGENT = randomUUID();
 const DOUBLE_AGENT = randomUUID();
+const TEAMMATE = randomUUID();
+const FOREIGN_AGENT = randomUUID();
 const GOOD_TOOL = randomUUID();
 const BAD_TOOL = randomUUID();
 const API_TOOL = randomUUID();
@@ -163,6 +165,18 @@ describe("agent binding + reach", () => {
     await bind(WRONG_KIND_AGENT, API_TOOL);
     await bind(DOUBLE_AGENT, GOOD_TOOL);
     await bind(DOUBLE_AGENT, BAD_TOOL);
+    // Every agent above is the OWNER's; a teammate's bound agent is not.
+    await q(
+      `update users set created_by_user_id = $1 where user_type = 'agent'`,
+      [OWNER]
+    );
+    await q(
+      `insert into users (id, email, name, timezone, user_type, agent_type, created_by_user_id) values
+        ($1, 't@x.test', 'Teammate', 'UTC', 'human', null, null),
+        ($2, 'f@x.test', 'Their agent', 'UTC', 'agent', 'theirs', $1)`,
+      [TEAMMATE, FOREIGN_AGENT]
+    );
+    await bind(FOREIGN_AGENT, GOOD_TOOL);
   }, 120_000);
 
   afterAll(async () => {
@@ -245,11 +259,14 @@ describe("agent binding + reach", () => {
     expect(s.get(IS_AGENT)).toEqual({ reach: "pod", binding: null });
   });
 
-  it("dispatchable agents = every agent with a binding edge", async () => {
-    const ids = await listDispatchableAgentIds();
+  it("dispatchable agents = the person's OWN agents with a binding edge", async () => {
+    const ids = await listDispatchableAgentIds(OWNER);
     expect(ids).toContain(BOUND_AGENT);
     expect(ids).not.toContain(IS_AGENT);
     expect(ids).not.toContain(PULL_AGENT);
+    // A teammate's bound agent is theirs to dispatch, never this person's.
+    expect(ids).not.toContain(FOREIGN_AGENT);
+    expect(await listDispatchableAgentIds(TEAMMATE)).toEqual([FOREIGN_AGENT]);
   });
 
   // ── session-answer is reach-aware ──────────────────────────────────────────
