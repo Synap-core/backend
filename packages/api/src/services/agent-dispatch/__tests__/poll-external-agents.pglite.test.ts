@@ -403,6 +403,37 @@ describe("external agent status poll", () => {
     expect(row.summary).not.toBe("overwrite?");
   });
 
+  it("a run whose binding has NO status verb never starves the others (least-recently polled first)", async () => {
+    await dispatchedRun(NO_STATUS); // inserted first — first in heap order
+    await dispatchedRun(POLLED);
+    ran({ state: "running" });
+    await pollExternalAgentRuns({ limit: 1 });
+    await pollExternalAgentRuns({ limit: 1 });
+    // Two one-run ticks visit BOTH runs: the status-verb run was read once.
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]).toMatchObject({ verbId: "x_status" });
+  });
+
+  it("the NEVER-polled run goes first, whatever the table's physical order", async () => {
+    const fresh = await dispatchedRun(POLLED);
+    const neverPolled = await dispatchedRun(NO_STATUS);
+    // Physical order after these writes: neverPolled, fresh — then fresh is
+    // rewritten as polled, then neverPolled is rewritten LAST (still unpolled).
+    await q(
+      `update playbook_runs set external_agent = jsonb_set(external_agent, '{polledAt}', '"2026-01-01T00:00:00.000Z"') where id = $1`,
+      [fresh]
+    );
+    await q(
+      `update playbook_runs set external_agent = external_agent - 'polledAt' where id = $1`,
+      [neverPolled]
+    );
+    ran({ state: "running" });
+    await pollExternalAgentRuns({ limit: 1 });
+    expect(h.calls).toHaveLength(0); // the unpolled (no-status) run was visited
+    await pollExternalAgentRuns({ limit: 1 });
+    expect(h.calls).toHaveLength(1);
+  });
+
   it("a binding without a status verb is never polled", async () => {
     await dispatchedRun(NO_STATUS);
     await pollExternalAgentRuns();

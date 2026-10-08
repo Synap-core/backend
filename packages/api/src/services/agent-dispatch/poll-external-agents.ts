@@ -24,7 +24,7 @@
  * nothing.
  *
  * A binding with no `status` verb is not polled (its agent reports through the
- * room). A status read that governance PROPOSES pauses polling for that run
+ * room) — its run is only stamped, so it sorts behind every other live run. A status read that governance PROPOSES pauses polling for that run
  * until the proposal is decided (`pollBlockedBy`) — never a proposal per tick.
  *
  * This is the pod's own bookkeeping of a run it dispatched, so it applies the
@@ -228,6 +228,13 @@ export async function pollExternalAgentRuns(
         ])
       )
     )
+    // Least-recently polled first: every selected run is stamped below, so a
+    // tick never re-reads the same 100 while newer runs wait (a run whose
+    // binding has no status verb, or whose read keeps failing, goes to the
+    // back like any other).
+    .orderBy(
+      drizzleSql`${playbookRuns.externalAgent}->>'polledAt' ASC NULLS FIRST`
+    )
     .limit(opts.limit ?? 100);
   const summary: PollSummary = {
     scanned: rows.length,
@@ -253,6 +260,17 @@ async function pollOne(
 ): Promise<"changed" | "terminal" | "skipped" | "failed"> {
   const ext = run.externalAgent as PlaybookRunExternalAgent | null;
   if (!ext) return "skipped";
+  // Stamp the visit FIRST, whatever happens below (no status verb, a pending
+  // proposal, a failed read): the selection orders on it.
+  const now = new Date().toISOString();
+  await db
+    .update(playbookRuns)
+    .set({
+      externalAgent: drizzleSql`jsonb_set(${playbookRuns.externalAgent}, '{polledAt}', to_jsonb(${now}::text))`,
+    })
+    .where(
+      and(eq(playbookRuns.id, run.id), liveRunStatusWhere(playbookRuns.status))
+    );
   const session = run.sessionId
     ? await db.query.focusSessions.findFirst({
         where: eq(focusSessions.id, run.sessionId),
@@ -339,7 +357,6 @@ async function pollOne(
   }
 
   const key = statusKey(status);
-  const now = new Date().toISOString();
   const terminal = status.state === "done" || status.state === "failed";
   const next: PlaybookRunExternalAgent = {
     ...ext,
@@ -366,15 +383,7 @@ async function pollOne(
       )
     )
     .returning({ id: playbookRuns.id });
-  if (claimed.length === 0) {
-    await db
-      .update(playbookRuns)
-      .set({
-        externalAgent: drizzleSql`jsonb_set(${playbookRuns.externalAgent}, '{polledAt}', to_jsonb(${now}::text))`,
-      })
-      .where(eq(playbookRuns.id, run.id));
-    return "skipped";
-  }
+  if (claimed.length === 0) return "skipped";
 
   // A tool call waiting for approval is an APPROVAL CARD: an owed confirm
   // slot, and the question filed on it carries the call's id. Only a typed
