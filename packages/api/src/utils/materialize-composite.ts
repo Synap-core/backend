@@ -322,6 +322,15 @@ export interface MaterializeRuleResult {
   automationIds: string[];
 }
 
+/** Per-op result for a `create_playbook` op (a DRAFT process). */
+export interface MaterializePlaybookResult {
+  ref: string;
+  opIndex: number;
+  playbookId: string;
+  /** Always "draft" — what the op asked for is never honoured over this. */
+  status: "draft";
+}
+
 /** Per-op result for a `create_project` op (connected plan). */
 export interface MaterializeProjectResult {
   ref: string;
@@ -441,6 +450,8 @@ export interface MaterializeResult {
   automations: MaterializeAutomationResult[];
   /** Rule Loop (NS1): rules created by `create_rule` ops. */
   rules: MaterializeRuleResult[];
+  /** Draft processes created by `create_playbook` ops. Empty by default. */
+  playbooks: MaterializePlaybookResult[];
   /** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
   projects: MaterializeProjectResult[];
   sessions: MaterializeSessionResult[];
@@ -500,6 +511,21 @@ export type RuleCreateCaller = {
     scope: { kind: "pod" | "workspace" | "user"; workspaceId?: string };
     factSkillId?: string;
     automationIds: string[];
+  }) => Promise<{ id: string }>;
+};
+
+/**
+ * A DRAFT process (`create_playbook`). Routes to the EXISTING `playbooks.create`
+ * door (wired by `buildRuleLoopCallers`), always with `status: "draft"`.
+ */
+export type PlaybookCreateCaller = {
+  create: (input: {
+    name: string;
+    description?: string;
+    goalTemplate: string;
+    subjectProfile: { profileSlug: string; statusProperty?: string };
+    /** Always "draft" — the materializer never asks for a live process. */
+    status: "draft";
   }) => Promise<{ id: string }>;
 };
 
@@ -657,6 +683,8 @@ export interface MaterializeOptions {
   skillCaller?: SkillCreateCaller;
   automationCaller?: AutomationCreateCaller;
   ruleCaller?: RuleCreateCaller;
+  /** Draft process (`create_playbook`) — wired with the Rule Loop callers. */
+  playbookCaller?: PlaybookCreateCaller;
   /**
    * Connected plan (sessions / documents / projects / session edges). Required
    * the moment a batch carries a plan op — absent ⇒ the batch is refused before
@@ -743,7 +771,8 @@ export async function materializeCompositeGraph(
     (op) =>
       (op.op === "create_skill" && !options?.skillCaller) ||
       (op.op === "create_automation" && !options?.automationCaller) ||
-      (op.op === "create_rule" && !options?.ruleCaller)
+      (op.op === "create_rule" && !options?.ruleCaller) ||
+      (op.op === "create_playbook" && !options?.playbookCaller)
   );
   if (missingConfigCaller) {
     throw new Error(
@@ -839,6 +868,7 @@ export async function materializeCompositeGraph(
   const skillResults: MaterializeSkillResult[] = [];
   const automationResults: MaterializeAutomationResult[] = [];
   const ruleResults: MaterializeRuleResult[] = [];
+  const playbookResults: MaterializePlaybookResult[] = [];
   const facetResults: MaterializeFacetResult[] = [];
   let relations: MaterializeRelationResult[] = [];
   const relationsFailed: MaterializeRelationFailure[] = [];
@@ -859,6 +889,7 @@ export async function materializeCompositeGraph(
     skills: skillResults,
     automations: automationResults,
     rules: ruleResults,
+    playbooks: playbookResults,
     projects: projectResults,
     sessions: sessionResults,
     links: linkResults,
@@ -1530,6 +1561,50 @@ export async function materializeCompositeGraph(
         logger.warn(
           { err, ref: op.ref },
           "Skipping create_rule op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
+    // ── Pass 4 — DRAFT PROCESS ops (capture → process) ────────────────────
+    // Through the EXISTING `playbooks.create` door, always `status: "draft"`
+    // (forced here, whatever the op says). Per-op resilient like the Rule
+    // Loop config ops: a failed draft never discards the capture beside it.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_playbook") continue;
+      currentOpIndex = i;
+      if (!options?.playbookCaller) {
+        // Unreachable — the fail-closed preflight above already refused this
+        // batch. Kept as a narrowing guard that THROWS (never skips).
+        throw new Error(
+          "materializeCompositeGraph: create_playbook op reached pass execution with no playbookCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const created = await options.playbookCaller.create({
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          goalTemplate: op.goalTemplate,
+          subjectProfile: {
+            profileSlug: op.subjectProfile.profileSlug,
+            ...(op.subjectProfile.statusProperty
+              ? { statusProperty: op.subjectProfile.statusProperty }
+              : {}),
+          },
+          status: "draft",
+        });
+        registerEntityRef(refToRealId, i, op.ref, created.id, false);
+        playbookResults.push({
+          ref: op.ref,
+          opIndex: i,
+          playbookId: created.id,
+          status: "draft",
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_playbook op (batch continues)"
         );
         failPlanStep(i, err);
       }

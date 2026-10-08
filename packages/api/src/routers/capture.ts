@@ -5079,6 +5079,42 @@ const captureAnswerRouter = router({
    * same answer continues. Never an agent turn, never a proposal: the answer is
    * recorded by `recordCapturePartMessage` inside `claimCaptureQuestion`.
    */
+  /**
+   * Confirm a `draft_process` route suggestion — "Draft a process for this".
+   * Files ONE capture graph with a single `create_playbook` op through the
+   * ONE capture-graph door (`submitCaptureGraph`), governed op by op: a human
+   * caller gets a pending proposal to approve, an agent caller follows its
+   * governance lane. On apply the playbook is created through
+   * `playbooks.create`, always `status: "draft"`.
+   */
+  draftProcess: podProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        profileSlug: z.string().min(1).max(200),
+        statusProperty: z.string().min(1).max(200).optional(),
+        name: z.string().min(1).max(200).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { assertWorkspaceWrite } =
+        await import("../utils/workspace-write-access.js");
+      await assertWorkspaceWrite(await getDb(), userId, {
+        workspaceId: input.workspaceId,
+      });
+      const { draftProcessForKind } =
+        await import("../services/capture-agent/draft-process.js");
+      return draftProcessForKind({
+        userId,
+        agentUserId: ctx.agentUserId ?? null,
+        workspaceId: input.workspaceId,
+        profileSlug: input.profileSlug,
+        statusProperty: input.statusProperty ?? null,
+        name: input.name ?? null,
+      });
+    }),
+
   answerFollowUp: podProcedure
     .use(aiRateLimitMiddleware)
     .input(

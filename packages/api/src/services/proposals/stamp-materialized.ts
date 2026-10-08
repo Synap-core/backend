@@ -96,6 +96,7 @@ export interface MaterializedOpRecord {
     | "create_skill"
     | "create_automation"
     | "create_rule"
+    | "create_playbook"
     | "create_session"
     | "create_document"
     | "create_project"
@@ -108,6 +109,8 @@ export interface MaterializedOpRecord {
   skillId?: string;
   automationId?: string;
   ruleId?: string;
+  /** `create_playbook`: the DRAFT playbook it created. */
+  playbookId?: string;
   sessionId?: string;
   projectId?: string;
   documentId?: string;
@@ -149,6 +152,7 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "skills"
       | "automations"
       | "rules"
+      | "playbooks"
       | "projects"
       | "sessions"
       | "links"
@@ -303,6 +307,9 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   }
   for (const r of result.rules ?? []) {
     byOp[r.ref] = { op: "create_rule", ruleId: r.ruleId };
+  }
+  for (const p of result.playbooks ?? []) {
+    byOp[p.ref] = { op: "create_playbook", playbookId: p.playbookId };
   }
   for (const p of result.projects ?? []) {
     byOp[p.ref] = {

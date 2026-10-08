@@ -547,6 +547,19 @@ export interface ProposalReviewGraph {
     /** Refs (or ids) of the BEHAVIOUR halves. */
     behaviourRefs?: string[];
   }>;
+  /**
+   * `create_playbook` — a DRAFT process for a kind. Always born `draft`
+   * (never runs until a person completes and activates it).
+   */
+  playbooks?: Array<{
+    ref: string;
+    name: string;
+    description?: string;
+    goalTemplate: string;
+    subjectProfileSlug: string;
+    statusProperty?: string;
+    bornStatus: "draft";
+  }>;
 }
 
 export interface ProposalReviewModel {
@@ -791,6 +804,37 @@ export interface CompositeCreateRuleOp {
 }
 
 /**
+ * ── Process draft op (capture → process, 2026-10-08) ────────────────────────
+ *
+ * "Draft a process for this": a capture of a kind that has a lifecycle (a
+ * select property whose slug names a status / stage) but no playbook built
+ * for it files ONE draft playbook for that kind. Materialized through the
+ * EXISTING `playbooks.create` door — never a raw insert — and ALWAYS as
+ * `status: "draft"`: a process drafted from a capture is a starting point a
+ * person (or agent) completes; it never arrives running. Goal and stages are
+ * deliberately minimal.
+ *
+ * Per-op RESILIENT (like the Rule Loop config ops): a draft that fails does
+ * not discard the entities captured beside it.
+ */
+export interface CompositeCreatePlaybookOp {
+  op: "create_playbook";
+  /** Stable handle for this playbook within the proposal (e.g. "pb1"). */
+  ref: string;
+  name: string;
+  description?: string;
+  /** Required by the playbook door; a one-line goal is enough for a draft. */
+  goalTemplate: string;
+  /** The kind the process runs on, and the property that holds its lifecycle. */
+  subjectProfile: { profileSlug: string; statusProperty?: string };
+  /**
+   * ALWAYS FORCED "draft" at materialization; present so an author can state
+   * it. Any other value is overridden, never honoured.
+   */
+  status?: "draft";
+}
+
+/**
  * ── Connected PLAN ops ──────────────────────────────────────────────────────
  *
  * A plan is the composite graph extended with the objects that are NOT
@@ -907,6 +951,7 @@ export type CompositeProposalOperation =
   | CompositeCreateSkillOp
   | CompositeCreateAutomationOp
   | CompositeCreateRuleOp
+  | CompositeCreatePlaybookOp
   | CompositeCreateSessionOp
   | CompositeCreateDocumentOp
   | CompositeCreateProjectOp
@@ -968,6 +1013,8 @@ const RESILIENT_OPERATION_KINDS = [
   "create_skill",
   "create_automation",
   "create_rule",
+  // A draft process: a failed draft must not discard the capture beside it.
+  "create_playbook",
 ] as const satisfies ReadonlyArray<CompositeProposalOperation["op"]>;
 
 type _EveryOpKindClassified =
@@ -1285,6 +1332,7 @@ export function isCompositeProposalData(
         o.op === "create_skill" ||
         o.op === "create_automation" ||
         o.op === "create_rule" ||
+        o.op === "create_playbook" ||
         isPlanOperation(o))
   );
 }

@@ -15,6 +15,7 @@
  *   - create_skill             → skill.create
  *   - create_automation        → automation.create
  *   - create_rule              → rule.create
+ *   - create_playbook          → playbook.create (a DRAFT process)
  * NONE of these keys is in the shipped `DEFAULT_AUTO_APPROVE` (which carries
  * only read/presentational keys: search.*, memory.recall, entity.read,
  * bento.arrange, document.read, context.*, filesystem.*, view.create). An
@@ -91,6 +92,11 @@ export function captureGraphEventKeys(
       add({ subjectType: "automation", action: "create" });
     } else if (op.op === "create_rule") {
       add({ subjectType: "rule", action: "create" });
+    } else if (op.op === "create_playbook") {
+      // The SAME key the direct door judges (`playbooks.create` gates
+      // `playbook.create`), so a graph carrying a draft process auto-applies
+      // only when that key would — the strictest member decides the graph.
+      add({ subjectType: "playbook", action: "create" });
     } else if (op.op === "create_session") {
       // The SAME keys the direct session door judges: `createFocusSession`
       // gates `focus_session.create`, and a create-time blocker is judged as

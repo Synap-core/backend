@@ -32,6 +32,7 @@ import type {
   SkillCreateCaller,
   AutomationCreateCaller,
   RuleCreateCaller,
+  PlaybookCreateCaller,
 } from "./materialize-composite.js";
 // Type-only: no runtime edge, so the lazy-import cycle guard above still holds.
 import type { materializeApprovedAutomation } from "../routers/automations.js";
@@ -60,6 +61,7 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   skillCaller: SkillCreateCaller;
   automationCaller: AutomationCreateCaller;
   ruleCaller: RuleCreateCaller;
+  playbookCaller: PlaybookCreateCaller;
 } {
   const { database, userId, workspaceId, auditSource } = ctx;
 
@@ -167,6 +169,59 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
           });
         }
         return { id: created.ruleId };
+      },
+    },
+
+    // A DRAFT process (`create_playbook`), through the EXISTING
+    // `playbooks.create` door — the same caller shape the playbook approval
+    // executor builds (`executors/playbook.ts`), membership-floored. No
+    // agentUserId: the governance decision was already made for the graph, so
+    // the re-entrant door grants instead of filing a second proposal.
+    playbookCaller: {
+      create: async (playbookOp) => {
+        if (!workspaceId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "create_playbook needs a workspace: a process lives in a space.",
+          });
+        }
+        const { getWorkspaceMembership } = await import("@synap/database");
+        const membership = await getWorkspaceMembership(
+          database as Parameters<typeof getWorkspaceMembership>[0],
+          workspaceId,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const { playbooksRouter } = await import("../routers/playbooks.js");
+        const caller = playbooksRouter.createCaller({
+          db: database,
+          authenticated: true as const,
+          userId,
+          workspaceId,
+          workspaceRole: membership.role,
+        } as unknown as Parameters<typeof playbooksRouter.createCaller>[0]);
+        const created = await caller.create({
+          name: playbookOp.name,
+          ...(playbookOp.description
+            ? { description: playbookOp.description }
+            : {}),
+          goalTemplate: playbookOp.goalTemplate,
+          subjectProfile: playbookOp.subjectProfile,
+          status: "draft",
+        });
+        if (created.status !== "created" || !created.playbook) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `create_playbook did not apply (${created.status})`,
+          });
+        }
+        return { id: created.playbook.id };
       },
     },
   };

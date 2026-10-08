@@ -2247,6 +2247,8 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   create_skill: { subjectType: "skill", action: "create" },
   create_automation: { subjectType: "automation", action: "create" },
   create_rule: { subjectType: "rule", action: "create" },
+  // A DRAFT process from a capture — the `playbooks.create` door.
+  create_playbook: { subjectType: "playbook", action: "create" },
 } as const satisfies Record<string, GovernedWritePair>;
 
 /** The composite operation arms this module knows how to gate. */
@@ -2268,6 +2270,10 @@ export type CompositeOpName = keyof typeof COMPOSITE_OP_GATE_PAIRS;
 const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   create_rule: 4,
   create_skill: 3,
+  // A process is configuration like an automation, and is likewise born
+  // inert (always `draft`); it outranks the automation because a process,
+  // once completed, ORCHESTRATES runs, sessions and their outputs.
+  create_playbook: 2.5,
   create_automation: 2,
   create_entity: 1,
   create_relation: 0,

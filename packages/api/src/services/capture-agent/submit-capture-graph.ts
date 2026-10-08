@@ -58,6 +58,7 @@ import {
   type CompositeCreateLinkOp,
   type CompositeCreateProjectOp,
   type CompositeCreateRuleOp,
+  type CompositeCreatePlaybookOp,
   type CompositeCreateSessionOp,
   type CompositeCreateSkillOp,
   type PlanProjectEvidence,
@@ -207,6 +208,11 @@ export interface CapturePlanInput {
   skills?: Array<Omit<CompositeCreateSkillOp, "op">>;
   automations?: Array<Omit<CompositeCreateAutomationOp, "op">>;
   rules?: Array<Omit<CompositeCreateRuleOp, "op">>;
+  /**
+   * DRAFT processes for a kind ("Draft a process for this"). Always born
+   * `draft`; materialized through `playbooks.create`.
+   */
+  playbooks?: Array<Omit<CompositeCreatePlaybookOp, "op">>;
 }
 
 /** One plan step on a submit receipt — self-describing for the reviewer/agent. */
@@ -231,7 +237,8 @@ export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
       (plan?.links?.length ?? 0) +
       (plan?.skills?.length ?? 0) +
       (plan?.automations?.length ?? 0) +
-      (plan?.rules?.length ?? 0) >
+      (plan?.rules?.length ?? 0) +
+      (plan?.playbooks?.length ?? 0) >
     0
   );
 }
@@ -562,6 +569,10 @@ export async function buildCaptureGraphOperations(
       ...a,
     })),
     ...(plan?.rules ?? []).map((r) => ({ op: "create_rule" as const, ...r })),
+    ...(plan?.playbooks ?? []).map((p) => ({
+      op: "create_playbook" as const,
+      ...p,
+    })),
   ];
 
   // Scope-aware homes (shared with import): stamp process kinds into the graph

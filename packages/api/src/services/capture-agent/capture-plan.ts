@@ -85,7 +85,8 @@ export type PlanRefKind =
   | "project"
   | "skill"
   | "automation"
-  | "rule";
+  | "rule"
+  | "playbook";
 
 export interface CapturePlanProblem {
   /** Index in `operations[]`. */
@@ -115,6 +116,7 @@ const OP_REF_KIND: Partial<
   create_skill: "skill",
   create_automation: "automation",
   create_rule: "rule",
+  create_playbook: "playbook",
 };
 
 /** ref → kind for every op that registers a ref (first declaration wins). */
@@ -163,7 +165,8 @@ export function hasComposedSteps(
       isPlanOperation(op) ||
       op.op === "create_skill" ||
       op.op === "create_automation" ||
-      op.op === "create_rule"
+      op.op === "create_rule" ||
+      op.op === "create_playbook"
   );
 }
 
@@ -620,6 +623,38 @@ export function validatePlanOperations(
           );
         }
         return;
+      // ── Process draft (capture → process) ─────────────────────────────
+      // Shape only: the kind's existence and the playbook's full contract
+      // are the playbook door's to judge at apply time (`playbooks.create`
+      // refuses a dangling subjectProfile slug).
+      case "create_playbook":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a process draft needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a process draft needs a `name`");
+        if (typeof op.goalTemplate !== "string" || !op.goalTemplate.trim())
+          push(
+            i,
+            "a process draft needs a `goalTemplate` (one line is enough)"
+          );
+        if (
+          !op.subjectProfile ||
+          typeof op.subjectProfile !== "object" ||
+          typeof op.subjectProfile.profileSlug !== "string" ||
+          !op.subjectProfile.profileSlug.trim()
+        ) {
+          push(
+            i,
+            "a process draft needs `subjectProfile.profileSlug` — the kind it runs on"
+          );
+        }
+        if (op.status !== undefined && op.status !== "draft") {
+          push(
+            i,
+            'a process drafted from a capture is always `status: "draft"`'
+          );
+        }
+        return;
       default:
         return;
     }
@@ -710,7 +745,8 @@ export interface PlanStepSummary {
     | "link"
     | "skill"
     | "automation"
-    | "rule";
+    | "rule"
+    | "playbook";
   label: string;
 }
 
@@ -752,6 +788,8 @@ export function planStepSummaries(
         return { ...base, kind: "automation", label: op.name };
       case "create_rule":
         return { ...base, kind: "rule", label: op.intent };
+      case "create_playbook":
+        return { ...base, kind: "playbook", label: op.name };
     }
   });
 }

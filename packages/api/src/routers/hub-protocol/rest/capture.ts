@@ -903,6 +903,57 @@ export function registerCaptureRoutes(app: HubHono): void {
   });
 
   /**
+   * POST /capture/draft-process — confirm a `draft_process` route suggestion:
+   * file ONE governed capture graph carrying a `create_playbook` op (always a
+   * DRAFT). Mirrors tRPC `capture.draftProcess`. A human caller gets a pending
+   * proposal (202 with its review link); an agent follows its lane.
+   */
+  app.post("/capture/draft-process", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const parsed = z
+      .object({
+        workspaceId: z.string().uuid(),
+        profileSlug: z.string().min(1).max(200),
+        statusProperty: z.string().min(1).max(200).optional(),
+        name: z.string().min(1).max(200).optional(),
+      })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    const userId = c.get("userId") as string;
+    try {
+      const { assertWorkspaceWrite } =
+        await import("../../../utils/workspace-write-access.js");
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: parsed.data.workspaceId,
+      });
+      const { draftProcessForKind } =
+        await import("../../../services/capture-agent/draft-process.js");
+      const result = await draftProcessForKind({
+        userId,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+        workspaceId: parsed.data.workspaceId,
+        profileSlug: parsed.data.profileSlug,
+        statusProperty: parsed.data.statusProperty ?? null,
+        name: parsed.data.name ?? null,
+      });
+      return c.json(result, result.applied ? 200 : 202);
+    } catch (err) {
+      logger.error({ err, userId }, "POST /capture/draft-process failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
    * POST /capture/execute
    */
   app.post("/capture/execute", async (c) => {

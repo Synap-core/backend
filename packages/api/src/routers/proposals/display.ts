@@ -1956,6 +1956,7 @@ function buildConfigReviewItems(
   const skills: NonNullable<ProposalReviewGraph["skills"]> = [];
   const automations: NonNullable<ProposalReviewGraph["automations"]> = [];
   const rules: NonNullable<ProposalReviewGraph["rules"]> = [];
+  const playbooks: NonNullable<ProposalReviewGraph["playbooks"]> = [];
 
   data.operations.forEach((op, index) => {
     switch (op.op) {
@@ -1993,6 +1994,21 @@ function buildConfigReviewItems(
           ...(op.behaviourRefs ? { behaviourRefs: op.behaviourRefs } : {}),
         });
         return;
+      case "create_playbook":
+        renderedOpIndexes.add(index);
+        playbooks.push({
+          ref: op.ref,
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          goalTemplate: op.goalTemplate,
+          subjectProfileSlug: op.subjectProfile.profileSlug,
+          ...(op.subjectProfile.statusProperty
+            ? { statusProperty: op.subjectProfile.statusProperty }
+            : {}),
+          // Forced at materialization — see CompositeCreatePlaybookOp.
+          bornStatus: "draft",
+        });
+        return;
       default:
         return;
     }
@@ -2002,6 +2018,7 @@ function buildConfigReviewItems(
     ...(skills.length ? { skills } : {}),
     ...(automations.length ? { automations } : {}),
     ...(rules.length ? { rules } : {}),
+    ...(playbooks.length ? { playbooks } : {}),
   };
 }
 
