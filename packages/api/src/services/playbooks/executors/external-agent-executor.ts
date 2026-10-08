@@ -19,8 +19,8 @@
  *
  * ── What the agent receives ─────────────────────────────────────────────────
  * The task (goal fenced as UNTRUSTED data — it is the person's words and the
- * answers fed back, not instructions from Synap), repos/branch when the run
- * params carry them, the session and room ids, the run's capture path, the
+ * answers fed back, not instructions from Synap), repos when the run params
+ * carry them, the branch (the params', else `synap/<session short id>`), the session and room ids, the run's capture path, the
  * pod's MCP URL, and a REFERENCE to the agent's own key (`api_keys.id` +
  * prefix — never the secret). How the key reaches the agent is the provider
  * template's business; no secret is ever put in a prompt.
@@ -262,8 +262,20 @@ async function playbookNameOf(playbookId: string | undefined): Promise<string> {
   return row?.name?.trim() || "This run";
 }
 
-/** The repos/branch a run carries, when its params name them. */
-function repoInputs(params: Record<string, unknown>): Record<string, unknown> {
+/**
+ * The branch a run's work lands on when its params name none: one per
+ * session, `synap/<first 8 of the session id>` — so the agent never works on
+ * the default branch, and two runs of one session share their branch.
+ */
+export function defaultRunBranch(sessionId: string): string {
+  return `synap/${sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}`;
+}
+
+/** The repos/branch a run carries (the branch defaulted per session). */
+function repoInputs(
+  params: Record<string, unknown>,
+  sessionId: string
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const repos = Array.isArray(params.repos)
     ? params.repos.filter((r): r is string => typeof r === "string")
@@ -271,8 +283,7 @@ function repoInputs(params: Record<string, unknown>): Record<string, unknown> {
       ? [asOptionalString(params.repo)!]
       : [];
   if (repos.length) out.repos = repos;
-  const branch = asOptionalString(params.branch);
-  if (branch) out.branch = branch;
+  out.branch = asOptionalString(params.branch) ?? defaultRunBranch(sessionId);
   return out;
 }
 
@@ -376,7 +387,7 @@ export class ExternalAgentExecutor implements Executor {
           : {}),
         currentStage: ctx.currentStage ?? null,
       },
-      ...repoInputs(input),
+      ...repoInputs(input, ctx.sessionId),
       sessionId: ctx.sessionId,
       channelId: ctx.channelId ?? null,
       runId,
