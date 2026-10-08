@@ -8,7 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import { projectSessionRecall } from "../../../services/focus-sessions/session-recall.js";
+import { projectSessionRecall } from "@synap-core/types/focus-sessions";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
 import { proposedMessageFor } from "../../../utils/permission-check.js";

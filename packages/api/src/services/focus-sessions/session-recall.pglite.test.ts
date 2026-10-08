@@ -50,7 +50,15 @@ vi.mock("@synap/jobs/workers/session-recall-worker.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, playbooks, entities, links } from "@synap/database";
+import {
+  focusSessions,
+  playbooks,
+  entities,
+  links,
+  channelMembers,
+  workspaceMembers,
+  users,
+} from "@synap/database";
 import {
   runSessionRecall,
   buildRecallQuery,
@@ -147,6 +155,8 @@ function deps(over: Partial<RecallDeps> = {}) {
       posts.push(p);
       return { success: true };
     },
+    // Owner-only by default; the PRIVACY suite drives the real reader.
+    sharedWithOthers: async () => false,
     now: () => new Date("2026-10-08T20:00:00Z"),
     ...over,
   };
@@ -163,7 +173,15 @@ async function meta(): Promise<Record<string, unknown>> {
 }
 
 beforeAll(async () => {
-  for (const t of [focusSessions, playbooks, entities, links]) {
+  for (const t of [
+    focusSessions,
+    playbooks,
+    entities,
+    links,
+    channelMembers,
+    workspaceMembers,
+    users,
+  ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
   await q(`insert into playbooks (id, name) values ($1, 'DJ set prep')`, [
@@ -280,6 +298,152 @@ describe("runSessionRecall — the DJ example", () => {
   });
 });
 
+describe("PRIVACY — recall never shows a room what a member could not open", () => {
+  const TEAM_TRACK = randomUUID(); // a capture IN the session's workspace
+  const OTHER = "user-bandmate";
+  const teamPool = [
+    ...pool,
+    {
+      id: TEAM_TRACK,
+      title: "Strobe (band copy)",
+      type: "track",
+      workspaceId: WS,
+      text: "Strobe — the band's copy, goes well after Midnight City",
+    },
+  ];
+  const teamDeps = (over: Partial<RecallDeps> = {}) => {
+    const base = deps({ retrieve: async () => teamPool, ...over });
+    const sim = base.d.similarity!;
+    base.d.similarity = async (qq, ids) => {
+      const m = await sim(qq, ids);
+      if (ids.includes(TEAM_TRACK)) m.set(TEAM_TRACK, 0.5);
+      return m;
+    };
+    // Drive the REAL member reader (no injected answer).
+    delete (base.d as Partial<RecallDeps>).sharedWithOthers;
+    return base;
+  };
+
+  beforeEach(async () => {
+    await h.client!.exec(
+      `delete from channel_members; delete from workspace_members; delete from users;`
+    );
+    await q(
+      `update focus_sessions set metadata = '{}'::jsonb, workspace_id = $2 where id = $1`,
+      [SESSION, WS]
+    );
+    await q(
+      `insert into users (id, email, user_type) values ($1,'o@x','human'), ($2,'b@x','human'), ('agent-1','a@x','agent')`,
+      [USER, OTHER]
+    );
+  });
+
+  it("owner-only session: the owner's private captures are recalled", async () => {
+    // The owner's own agent in the room does not make it shared.
+    await q(
+      `insert into channel_members (id, channel_id, member_id, member_kind) values ($1,$2,'agent-1','ai_agent')`,
+      [randomUUID(), CHANNEL]
+    );
+    const { d } = teamDeps();
+    await runSessionRecall({ sessionId: SESSION }, d);
+    const ids = ((await meta()).recalled as Array<{ entityId: string }>).map(
+      (r) => r.entityId
+    );
+    expect(ids).toContain(TRACK_A);
+  });
+
+  it("another PERSON in the room: only the workspace's items, never owner-private ones", async () => {
+    await q(
+      `insert into channel_members (id, channel_id, member_id, member_kind) values ($1,$2,$3,'human')`,
+      [randomUUID(), CHANNEL, OTHER]
+    );
+    const { d, posts } = teamDeps();
+    await runSessionRecall({ sessionId: SESSION }, d);
+    const ids = ((await meta()).recalled as Array<{ entityId: string }>).map(
+      (r) => r.entityId
+    );
+    expect(ids).toEqual([TEAM_TRACK]);
+    expect(posts[0]!.content).not.toContain("Midnight City");
+  });
+
+  it("another person in the WORKSPACE counts too", async () => {
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
+      [randomUUID(), WS, OTHER]
+    );
+    const { d } = teamDeps();
+    await runSessionRecall({ sessionId: SESSION }, d);
+    const ids = ((await meta()).recalled as Array<{ entityId: string }>).map(
+      (r) => r.entityId
+    );
+    expect(ids).toEqual([TEAM_TRACK]);
+  });
+
+  it("a shared session with no workspace recalls nothing, and says why (skipped, not empty)", async () => {
+    await q(`update focus_sessions set workspace_id = null where id = $1`, [
+      SESSION,
+    ]);
+    await q(
+      `insert into channel_members (id, channel_id, member_id, member_kind) values ($1,$2,$3,'human')`,
+      [randomUUID(), CHANNEL, OTHER]
+    );
+    const { d, posts } = teamDeps();
+    const out = await runSessionRecall({ sessionId: SESSION }, d);
+    expect(out).toEqual({
+      status: "skipped",
+      reason: "shared_without_workspace",
+    });
+    expect(await meta()).toMatchObject({
+      recalled: [],
+      recallSkipped: "shared_without_workspace",
+    });
+    expect(posts).toHaveLength(0);
+  });
+});
+
+describe("COST — an automation's session is not recalled on its own", () => {
+  beforeEach(async () => {
+    await q(
+      `update focus_sessions set workspace_id = $2, metadata = '{"automationId":"auto-1","automationRunId":"run-1"}'::jsonb where id = $1`,
+      [SESSION, WS]
+    );
+    await q(`update playbooks set metadata = '{}'::jsonb where id = $1`, [
+      PLAYBOOK,
+    ]);
+  });
+
+  it("start / sweep: skipped (automation), nothing retrieved, nothing posted", async () => {
+    const { d, posts, asked } = deps();
+    const out = await runSessionRecall(
+      { sessionId: SESSION, trigger: "sweep" },
+      d
+    );
+    expect(out).toEqual({ status: "skipped", reason: "automation" });
+    expect(asked).toEqual([]);
+    expect(posts).toEqual([]);
+    expect((await meta()).recallSkipped).toBe("automation");
+  });
+
+  it("a MANUAL recall runs, and clears the skip", async () => {
+    await runSessionRecall({ sessionId: SESSION }, deps().d);
+    const out = await runSessionRecall(
+      { sessionId: SESSION, trigger: "manual" },
+      deps().d
+    );
+    expect(out.status).toBe("ok");
+    expect((await meta()).recallSkipped).toBeUndefined();
+  });
+
+  it("a playbook that opts in (recallOnAutomatedRuns) is recalled on start", async () => {
+    await q(
+      `update playbooks set metadata = '{"recallOnAutomatedRuns":true}'::jsonb where id = $1`,
+      [PLAYBOOK]
+    );
+    const out = await runSessionRecall({ sessionId: SESSION }, deps().d);
+    expect(out.status).toBe("ok");
+  });
+});
+
 describe("buildRecallQuery", () => {
   it("joins title, goal, playbook and subject once each", () => {
     expect(
@@ -312,7 +476,8 @@ describe("recallSessionAgain — owner floor", () => {
 
 describe("projectSessionRecall — the agent's view never folds a failure into empty", () => {
   it("reads pending / ok / empty / failed from the stored metadata", async () => {
-    const { projectSessionRecall } = await import("./session-recall.js");
+    const { projectSessionRecall } =
+      await import("@synap-core/types/focus-sessions");
     expect(projectSessionRecall({})).toEqual({ status: "pending" });
     expect(projectSessionRecall({ recalledAt: "t", recalled: [] })).toEqual({
       status: "empty",

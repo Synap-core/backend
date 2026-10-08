@@ -82,14 +82,18 @@ vi.mock("../../../utils/split-brain-service.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, isPodReadOnly: async () => false };
 });
-// The list door's lineage + participants projections open their own
-// connection; stubbed so `focusSessions.list` can be driven for `verdict`.
+// The list/get doors' lineage + participants projections open their own
+// connection; stubbed so `focusSessions.list` / `.get` can be driven.
 vi.mock("../parent-lineage.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
     attachParentSessionIds: async (rows: Array<Record<string, unknown>>) =>
       rows.map((r) => ({ ...r, parentSessionId: null })),
+    withParentSessionId: async (row: Record<string, unknown>) => ({
+      ...row,
+      parentSessionId: null,
+    }),
   };
 });
 vi.mock("../participants.js", async (importOriginal) => {
@@ -774,6 +778,43 @@ describe("session evaluations", () => {
       ) as Array<{ id: string; verdict?: { passed: number } }>;
       const row = items.find((r) => r.id === id);
       expect(row?.verdict?.passed).toBe(1);
+    });
+
+    it("focusSessions.get carries `recall` — the stored item ARRIVES, and a failure reads as failed", async () => {
+      const item = {
+        entityId: "e-1",
+        title: "Strobe",
+        kind: "track",
+        score: 0.5,
+        reason: "r",
+        recalledAt: "2026-10-08T20:00:00.000Z",
+      };
+      const ok = await seed({
+        metadata: { recalled: [item], recalledAt: "2026-10-08T20:00:00.000Z" },
+      });
+      const failed = await seed({
+        metadata: {
+          recalled: [],
+          recalledAt: "2026-10-08T20:00:00.000Z",
+          recallError: { message: "down" },
+        },
+      });
+      const caller = focusSessionsRouter.createCaller({
+        authenticated: true,
+        userId: USER,
+      } as never);
+      const a = (await caller.get({ id: ok })) as unknown as {
+        recall: unknown;
+      };
+      expect(a.recall).toEqual({
+        status: "ok",
+        recalled: [item],
+        recalledAt: "2026-10-08T20:00:00.000Z",
+      });
+      const b = (await caller.get({ id: failed })) as unknown as {
+        recall: { status: string };
+      };
+      expect(b.recall.status).toBe("failed");
     });
 
     it("focusSessions.close returns the verdict AND the warnings (the door, not just the service)", async () => {

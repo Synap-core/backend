@@ -44,6 +44,7 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
   type SessionVerdict,
+  projectSessionRecall,
 } from "@synap-core/types/focus-sessions";
 import {
   isTerminalSessionStatus,
@@ -1582,6 +1583,10 @@ export const focusSessionsRouter = router({
         kind: projectSessionKind(row),
         rerun: continuation.rerun,
         continuation,
+        // What recall found for this session — the SAME projection MCP
+        // `synap_get_session` and Hub `GET /focus-sessions/:id` return, so a
+        // client never re-parses `metadata.recalled` by hand.
+        recall: projectSessionRecall(row.metadata),
         // The contract + grade, lifted from the packet so a detail page reads
         // them off the session: normalized criteria, the verdict, and the
         // CURRENT evaluation per criterion. Absent when the read failed —

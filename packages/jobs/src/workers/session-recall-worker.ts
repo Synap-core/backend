@@ -1,9 +1,8 @@
 /**
  * Session recall — when a focus session starts, look for raw captures and
  * notes the person already has that could help it, and put them in front of
- * both the person and the session's agent (founder precision, 2026-10-08:
- * "capture is not necessarily creating a process … they could be revived when
- * a session is started that could need them").
+ * both the person and the session's agent. A raw capture need not start a
+ * process: it can stay raw and come back when a session that needs it starts.
  *
  * TWO queues, ONE runner:
  *   • `session-recall` (on-demand) — `{ sessionId }`. Enqueued by the session

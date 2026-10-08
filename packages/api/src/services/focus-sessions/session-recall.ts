@@ -1,9 +1,7 @@
 /**
  * Session recall — a just-started session is shown the raw captures and notes
- * the person already has that could help it (founder precision 2026-10-08:
- * "I capture 2 music tracks saying 'they could match well together'; later I
- * start a DJ session, an underlying AI checks whether it can find things to
- * help me, retrieves them and shows them to me").
+ * the person already has that could help it (two tracks captured as "they
+ * could match well together" come back when a DJ session starts).
  *
  * Raw captures STAY raw: nothing here files, links or edits an entity. Recall
  * is read-only on the graph and writes exactly two things, both on the session:
@@ -12,11 +10,17 @@
  *   - ONE message in the session's room naming them — what the person reads,
  *     and what the session's agent reads in its history.
  *
+ * The READER of what this writes is ONE pure function in
+ * `@synap-core/types/focus-sessions` (`projectSessionRecall`), shared by the
+ * pod's doors (MCP, Hub, tRPC `focusSessions.get`), web, relay and the IS.
+ *
  * ── STATES, never folded into one another ──────────────────────────────────
  *   not run   no `metadata.recalledAt`
  *   ok        `recalled` non-empty, `recalledAt`, `recallError` absent
  *   empty     `recalled: []`, `recalledAt` — posts NOTHING (an empty recall is
  *             silent in the room; the marker only stops the sweep re-asking)
+ *   skipped   `recallSkipped: <reason>`, `recalled: []`, `recalledAt` — see
+ *             PRIVACY and COST below
  *   failed    `recallError: { message, at }`, `recalledAt`, `recallAttempts`;
  *             a previous `recalled` list is KEPT (a failed re-run must not
  *             erase what an earlier run found). Never thrown to the caller:
@@ -41,6 +45,24 @@
  *    (`session --targets|produced|…--> entity`): recall is for what the session
  *    does NOT already have. Notes get a small preference (`NOTE_BONUS`).
  *
+ * ── PRIVACY: never show a room what a member could not open ───────────────
+ * Recall runs as the session OWNER, pod-wide, and both the stored list and the
+ * room message are read by whoever can read the session. So when anyone else
+ * can — another person in the session's room, or another person in its
+ * workspace — only items IN the session's workspace (which its members can
+ * open) are recalled; the owner's private captures are not. A shared session
+ * with no workspace recalls nothing (`skipped: shared_without_workspace`).
+ * Owner-private items are recalled only for a session only its owner reads.
+ * (Agent-users in the room or workspace do not count as "anyone else": they act
+ * for a person who is counted on their own.)
+ *
+ * ── COST: a session an automation started gets no automatic recall ─────────
+ * Each recall costs embeddings and a retrieval and may post into a room nobody
+ * reads. A session stamped by an automation (`metadata.automationId` /
+ * `automationRunId`, `startedByAutomation`) is `skipped: automation` on start
+ * and on the sweep, unless its playbook opts in with
+ * `metadata.recallOnAutomatedRuns: true`. A MANUAL "recall again" always runs.
+ *
  * IDEMPOTENT per session: `recalled` is REPLACED, and the room message carries
  * an idempotency key derived from the recalled id set, so a re-run that finds
  * the same things posts nothing new.
@@ -53,16 +75,26 @@ import {
   db,
   and,
   eq,
+  ne,
   inArray,
   drizzleSql,
+  channelMembers,
   entities,
   entityVectors,
   focusSessions,
   links,
   playbooks,
+  users,
+  workspaceMembers,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import {
+  isTerminalSessionStatus,
+  type RecalledItem,
+  type RecallSkipReason,
+} from "@synap-core/types/focus-sessions";
+import { startedByAutomation } from "./session-kind.js";
 import { tokenize } from "../routing/suggest-routes.js";
 
 const logger = createLogger({ module: "focus-sessions/session-recall" });
@@ -78,20 +110,12 @@ const NOTE_BONUS = 0.05;
 const NOTE_KINDS: ReadonlySet<string> = new Set(["note", "idea"]);
 const QUERY_MAX = 600;
 
-export interface RecalledItem {
-  entityId: string;
-  title: string;
-  kind: string;
-  /** 0..1, two decimals — the candidate's own evidence (see header §3). */
-  score: number;
-  /** One human line: why this was recalled. */
-  reason: string;
-  recalledAt: string;
-}
+export type { RecalledItem } from "@synap-core/types/focus-sessions";
 
 export type SessionRecallOutcome =
   | { status: "ok"; recalled: RecalledItem[]; posted: boolean }
   | { status: "empty" }
+  | { status: "skipped"; reason: RecallSkipReason }
   | { status: "failed"; error: string }
   | { status: "skipped"; reason: "not_found" | "closed" };
 
@@ -225,44 +249,6 @@ export function recallMessageKey(
   return `session-recall:${sessionId}:${digest}`;
 }
 
-/**
- * What an agent reads about recall on a session (MCP `synap_get_session` /
- * `synap_start_session`). DERIVED from the metadata the runner writes — one
- * reader of the four states, so "failed" can never read as "nothing found".
- */
-export type SessionRecallView =
-  | { status: "pending" }
-  | { status: "ok"; recalled: RecalledItem[]; recalledAt: string }
-  | { status: "empty"; recalledAt: string }
-  | {
-      status: "failed";
-      error: string;
-      recalledAt: string;
-      /** What an EARLIER run found, kept across the failure. */
-      recalled: RecalledItem[];
-    };
-
-export function projectSessionRecall(metadata: unknown): SessionRecallView {
-  const m = (metadata ?? {}) as Record<string, unknown>;
-  const at = typeof m.recalledAt === "string" ? m.recalledAt : null;
-  if (!at) return { status: "pending" };
-  const recalled = Array.isArray(m.recalled)
-    ? (m.recalled as RecalledItem[])
-    : [];
-  const err = m.recallError as { message?: unknown } | undefined;
-  if (err && typeof err === "object") {
-    return {
-      status: "failed",
-      error: typeof err.message === "string" ? err.message : "unknown",
-      recalledAt: at,
-      recalled,
-    };
-  }
-  return recalled.length > 0
-    ? { status: "ok", recalled, recalledAt: at }
-    : { status: "empty", recalledAt: at };
-}
-
 // ── Effects (injectable) ─────────────────────────────────────────────────────
 
 export interface RecallDeps {
@@ -283,6 +269,12 @@ export interface RecallDeps {
     content: string;
     idempotencyKey: string;
   }) => Promise<unknown>;
+  /** Can a PERSON other than the owner read this session? See PRIVACY. */
+  sharedWithOthers: (session: {
+    userId: string;
+    channelId: string | null;
+    workspaceId: string | null;
+  }) => Promise<boolean>;
   now?: () => Date;
 }
 
@@ -359,10 +351,48 @@ async function defaultPost(args: {
   });
 }
 
+async function defaultSharedWithOthers(session: {
+  userId: string;
+  channelId: string | null;
+  workspaceId: string | null;
+}): Promise<boolean> {
+  if (session.channelId) {
+    const [other] = await db
+      .select({ id: channelMembers.id })
+      .from(channelMembers)
+      .where(
+        and(
+          eq(channelMembers.channelId, session.channelId),
+          ne(channelMembers.memberId, session.userId),
+          eq(channelMembers.memberKind, "human")
+        )
+      )
+      .limit(1);
+    if (other) return true;
+  }
+  if (session.workspaceId) {
+    const [other] = await db
+      .select({ id: workspaceMembers.id })
+      .from(workspaceMembers)
+      .innerJoin(users, eq(users.id, workspaceMembers.userId))
+      .where(
+        and(
+          eq(workspaceMembers.workspaceId, session.workspaceId),
+          ne(workspaceMembers.userId, session.userId),
+          ne(users.userType, "agent")
+        )
+      )
+      .limit(1);
+    if (other) return true;
+  }
+  return false;
+}
+
 const DEFAULT_DEPS: RecallDeps = {
   retrieve: defaultRetrieve,
   similarity: defaultSimilarity,
   post: defaultPost,
+  sharedWithOthers: defaultSharedWithOthers,
 };
 
 /** Shallow jsonb merge onto the session's metadata — never a read-modify-write. */
@@ -397,19 +427,53 @@ export async function runSessionRecall(
     .where(eq(focusSessions.id, input.sessionId))
     .limit(1);
   if (!session) return { status: "skipped", reason: "not_found" };
-  if (["closed", "failed", "cancelled"].includes(session.status)) {
+  if (isTerminalSessionStatus(session.status)) {
     return { status: "skipped", reason: "closed" };
   }
   const priorMeta = (session.metadata ?? {}) as Record<string, unknown>;
+  const skip = async (
+    reason: RecallSkipReason
+  ): Promise<SessionRecallOutcome> => {
+    await patchMetadata(
+      session.id,
+      {
+        recalled: [],
+        recalledAt: now.toISOString(),
+        recallSkipped: reason,
+        recallTrigger: input.trigger ?? "start",
+      },
+      ["recallError", "recallAttempts"]
+    );
+    return { status: "skipped", reason };
+  };
 
   try {
     const [playbook] = session.playbookId
       ? await db
-          .select({ name: playbooks.name })
+          .select({ name: playbooks.name, metadata: playbooks.metadata })
           .from(playbooks)
           .where(eq(playbooks.id, session.playbookId))
           .limit(1)
       : [];
+    // COST: an automation's session is not recalled unless its playbook opts
+    // in; a person asking ("recall again") always is.
+    if (
+      input.trigger !== "manual" &&
+      startedByAutomation(priorMeta) &&
+      (playbook?.metadata as Record<string, unknown> | null)
+        ?.recallOnAutomatedRuns !== true
+    ) {
+      return await skip("automation");
+    }
+    // PRIVACY: who else reads this session decides what may be recalled.
+    const shared = await d.sharedWithOthers({
+      userId: session.userId,
+      channelId: session.channelId ?? null,
+      workspaceId: session.workspaceId ?? null,
+    });
+    if (shared && !session.workspaceId) {
+      return await skip("shared_without_workspace");
+    }
     // Owner-floored: a subject the owner cannot see contributes nothing.
     const [subject] = session.subjectEntityId
       ? await db
@@ -446,7 +510,12 @@ export async function runSessionRecall(
     const pool = query
       ? await d.retrieve({ query, userId: session.userId, limit: RECALL_POOL })
       : [];
-    const open = pool.filter((c) => !excludeIds.has(c.id));
+    const open = pool.filter(
+      (c) =>
+        !excludeIds.has(c.id) &&
+        // Shared: only what the session's workspace members can open.
+        (!shared || c.workspaceId === session.workspaceId)
+    );
     const sims = await d.similarity(
       query,
       open.map((c) => c.id)
@@ -466,7 +535,7 @@ export async function runSessionRecall(
         recalledAt: now.toISOString(),
         recallTrigger: input.trigger ?? "start",
       },
-      ["recallError", "recallAttempts"]
+      ["recallError", "recallAttempts", "recallSkipped"]
     );
     if (recalled.length === 0) return { status: "empty" };
 

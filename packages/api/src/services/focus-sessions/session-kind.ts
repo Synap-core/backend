@@ -79,6 +79,11 @@ const AUTOMATION_KEYS = ["automationRunId", "automationId"] as const;
  */
 const RUN_METADATA_KEYS = [...AUTOMATION_KEYS, "intake"] as const;
 
+/** Was this session opened by an automation (either automation key present)? */
+export function startedByAutomation(metadata: unknown): boolean {
+  return AUTOMATION_KEYS.some((k) => metadataValue(metadata, k) != null);
+}
+
 /** The marker `resolveOrCreateAgentProposalSession` stamps on a receipt. */
 export const AGENT_PROPOSAL_PACKAGE_KIND = "agent-proposal-package";
 

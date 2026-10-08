@@ -1062,7 +1062,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const { readSessionOutcomesSection } =
         await import("../../../services/focus-sessions/session-outputs.js");
       const { projectSessionRecall } =
-        await import("../../../services/focus-sessions/session-recall.js");
+        await import("@synap-core/types/focus-sessions");
       const [continuation, outcomes] = await Promise.all([
         projectContinuationPacket(row, {
           database: db,
