@@ -59,6 +59,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import {
   AgentBindingError,
   listDispatchableAgentIds,
@@ -171,6 +172,16 @@ async function agentKeyRef(
     .orderBy(desc(apiKeys.createdAt))
     .limit(1);
   return key ? { apiKeyId: key.id, keyPrefix: key.keyPrefix } : null;
+}
+
+/** An agent as a person reads it — its name, never its id. */
+export async function agentDisplayName(agentUserId: string): Promise<string> {
+  const [row] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  return row?.name?.trim() || "This agent";
 }
 
 /**
@@ -346,7 +357,7 @@ export class ExternalAgentExecutor implements Executor {
     });
     if (choice.kind === "invalid_param") {
       return fail(
-        `agent ${choice.agentUserId} is not one of your agents bound for dispatch — bind it to its provider, or choose another agent`,
+        `${await agentDisplayName(choice.agentUserId)} is not one of your agents bound for dispatch — bind it to its provider, or choose another agent`,
         "invalid-agent"
       );
     }
@@ -374,8 +385,12 @@ export class ExternalAgentExecutor implements Executor {
       throw err;
     }
     if (!binding) {
-      return fail(`agent ${agentUserId} has no dispatch binding`, "binding");
+      return fail(
+        `${await agentDisplayName(agentUserId)} has no dispatch binding`,
+        "binding"
+      );
     }
+    const service = resolveServiceName(binding.provider);
 
     // 3. Start the task, as the agent.
     const origin = podPublicOrigin() ?? null;
@@ -430,12 +445,25 @@ export class ExternalAgentExecutor implements Executor {
       await postDispatchNotice({
         channelId: ctx.channelId,
         ownerId,
-        content: `Starting the ${binding.provider} agent needs your approval: ${started.reviewUrl}`,
+        content: `Starting the ${service} agent needs your approval: ${started.reviewUrl}`,
         idempotencyKey: `external-agent:${runId ?? ctx.sessionId}:proposed`,
       });
       return {
         status: "proposed",
-        summary: `Waiting on approval to start the ${binding.provider} agent`,
+        summary: `Waiting on approval to start the ${service} agent`,
+        // A PENDING start (nothing reached the provider): the session section
+        // shows it as "Needs you" with the proposal as its door. The approval
+        // (`approved-start.ts`) records the real hand-off over it.
+        externalAgent: {
+          agentUserId,
+          toolId: binding.toolId,
+          provider: binding.provider,
+          externalId: null,
+          url: null,
+          status: "pending_start",
+          proposalId: started.proposalId,
+          startedAt: new Date().toISOString(),
+        },
       };
     }
     if (started.status !== "ok") {
@@ -444,21 +472,22 @@ export class ExternalAgentExecutor implements Executor {
         "external-agent start failed"
       );
       return fail(
-        `the ${binding.provider} agent did not accept the task: ${started.message}`,
+        `the ${service} agent did not accept the task: ${started.message}`,
         "start"
       );
     }
 
     const { externalId, url } = externalRefFromStartResult(started.result);
+    // No link in prose: the session section carries "Open in <service>".
     await postDispatchNotice({
       channelId: ctx.channelId,
       ownerId,
-      content: `Handed to the ${binding.provider} agent${url ? ` — ${url}` : ""}.`,
+      content: `Handed to the ${service} agent.`,
       idempotencyKey: `external-agent:${runId ?? ctx.sessionId}:started`,
     });
     return {
       status: "running",
-      summary: `dispatched to ${binding.provider}${externalId ? ` (${externalId})` : ""}`,
+      summary: `dispatched to ${service}${externalId ? ` (${externalId})` : ""}`,
       externalAgent: {
         agentUserId,
         toolId: binding.toolId,

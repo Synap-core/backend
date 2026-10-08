@@ -48,7 +48,9 @@ export type ExternalAgentState = "running" | "needs_input" | "done" | "failed";
 /**
  * `playbook_runs.external_agent` — the run's external reference.
  * `status` is the dispatch lifecycle: `running` / `needs_input` keep the poll
- * going; `done` / `failed` / `cancelled` stop it.
+ * going; `done` / `failed` / `cancelled` stop it. `pending_start` = the
+ * `start` verb was PROPOSED (`proposalId`): nothing reached the provider yet,
+ * so nothing polls it; the approval records the real hand-off over it.
  */
 export interface PlaybookRunExternalAgent {
   agentUserId: string;
@@ -58,7 +60,9 @@ export interface PlaybookRunExternalAgent {
   externalId: string | null;
   /** The provider's page for the task, when it gave one. */
   url: string | null;
-  status: ExternalAgentState | "cancelled";
+  status: ExternalAgentState | "cancelled" | "pending_start";
+  /** `pending_start` only: the proposal the start waits on. */
+  proposalId?: string;
   /** The last normalized status read, as posted to the room (poll idempotency). */
   lastState?: {
     state: ExternalAgentState;
@@ -79,6 +83,16 @@ export interface PlaybookRunExternalAgent {
    * instead of filing one proposal per tick.
    */
   pollBlockedBy?: string;
+  /**
+   * The status reads that failed IN A ROW: when the first of them was seen,
+   * how many, and the last reason. Cleared on the next good read.
+   */
+  pollError?: { firstSeenAt: string; count: number; message: string };
+  /**
+   * When the agent FIRST reported each output it still reports (ISO) — an
+   * output card's `producedAt`, stable across polls.
+   */
+  reportedAt?: { prUrl?: string; branch?: string; previewUrl?: string };
   startedAt: string;
 }
 

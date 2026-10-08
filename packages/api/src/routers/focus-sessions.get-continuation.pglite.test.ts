@@ -89,6 +89,7 @@ import {
   messages,
   projects,
   playbookRuns,
+  tools,
 } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
 import { sessionHandlers } from "./mcp/handlers/session.js";
@@ -187,8 +188,10 @@ describe("focusSessions.get returns the continuation packet", () => {
       channelMembers,
       podMembers,
       projectMembers,
-      // The externalAgent section reads the session's dispatched runs.
+      // The externalAgent section reads the session's dispatched runs, and
+      // the agent's live binding (links → tools).
       playbookRuns,
+      tools,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -392,6 +395,11 @@ describe("focusSessions.get returns the continuation packet", () => {
       status: "ok",
       agent: null,
     });
+    const agentId = randomUUID();
+    await q(
+      `insert into users (id, email, name, timezone, user_type) values ($1, 'b@x', 'Builder', 'UTC', 'agent')`,
+      [agentId]
+    );
     const runId = randomUUID();
     await q(
       `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, external_agent, started_at)
@@ -402,7 +410,7 @@ describe("focusSessions.get returns the continuation packet", () => {
         id,
         USER,
         JSON.stringify({
-          agentUserId: "agent-9",
+          agentUserId: agentId,
           toolId: "tool-9",
           provider: "acme",
           externalId: "t-1",
@@ -410,6 +418,12 @@ describe("focusSessions.get returns the continuation packet", () => {
           status: "needs_input",
           startedAt: "2026-10-08T00:00:00.000Z",
           polledAt: "2026-10-08T00:02:00.000Z",
+          pollError: {
+            firstSeenAt: "2026-10-08T00:01:00.000Z",
+            count: 2,
+            message: "502",
+          },
+          reportedAt: { prUrl: "2026-10-08T00:01:30.000Z" },
           lastState: {
             state: "needs_input",
             prUrl: "https://gh/pr/4",
@@ -425,14 +439,22 @@ describe("focusSessions.get returns the continuation packet", () => {
       agent: {
         runId,
         runStatus: "running",
-        agentUserId: "agent-9",
+        agentUserId: agentId,
+        // Router-shape: the agent's NAME rides on the section (F6).
+        agentName: "Builder",
         provider: "acme",
         status: "needs_input",
+        proposalId: null,
         url: "https://acme/t/1",
         prUrl: "https://gh/pr/4",
         branch: "feat/x",
         previewUrl: "https://preview/x",
         summary: "Which DB?",
+        // The streak without its reason (the reason stays pod-side).
+        pollError: { firstSeenAt: "2026-10-08T00:01:00.000Z", count: 2 },
+        // Unbound agent (no dispatch edge) ⇒ unknown, never "it stops".
+        cancelStopsAgent: null,
+        reportedAt: { pull_request: "2026-10-08T00:01:30.000Z" },
         polledAt: "2026-10-08T00:02:00.000Z",
         startedAt: "2026-10-08T00:00:00.000Z",
       },
@@ -441,6 +463,54 @@ describe("focusSessions.get returns the continuation packet", () => {
     expect(
       ((await mcpGet(id)).continuation as Record<string, unknown>).externalAgent
     ).toEqual(expected);
+    await h.client!.exec("delete from playbook_runs;");
+  });
+
+  it("externalAgent: a start waiting on approval is pending_start with its proposal; a rejected one reads cancelled", async () => {
+    const id = await seed({ owed: false });
+    const proposalId = randomUUID();
+    await q(`insert into proposals (id, status) values ($1, 'pending')`, [
+      proposalId,
+    ]);
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, external_agent, started_at)
+       values ($1, $2, $3, 'external-agent', 'proposed', '{}'::jsonb, $4, $5::jsonb, now())`,
+      [
+        randomUUID(),
+        randomUUID(),
+        id,
+        USER,
+        JSON.stringify({
+          agentUserId: randomUUID(),
+          toolId: "tool-9",
+          provider: "acme",
+          externalId: null,
+          url: null,
+          status: "pending_start",
+          proposalId,
+          startedAt: "2026-10-08T00:00:00.000Z",
+        }),
+      ]
+    );
+    const agent = (
+      (await get(id)).continuation.externalAgent as unknown as {
+        agent: Record<string, unknown>;
+      }
+    ).agent;
+    expect(agent).toMatchObject({
+      runStatus: "proposed",
+      status: "pending_start",
+      proposalId,
+    });
+    await q(`update proposals set status = 'rejected' where id = $1`, [
+      proposalId,
+    ]);
+    const after = (
+      (await get(id)).continuation.externalAgent as unknown as {
+        agent: Record<string, unknown>;
+      }
+    ).agent;
+    expect(after).toMatchObject({ status: "cancelled", proposalId: null });
     await h.client!.exec("delete from playbook_runs;");
   });
 

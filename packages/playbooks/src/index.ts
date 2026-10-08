@@ -1567,7 +1567,15 @@ export interface RunExternalAgentRef {
   provider: string;
   externalId: string | null;
   url: string | null;
-  status: "running" | "needs_input" | "done" | "failed" | "cancelled";
+  status:
+    | "running"
+    | "needs_input"
+    | "done"
+    | "failed"
+    | "cancelled"
+    | "pending_start";
+  /** `pending_start` only: the proposal the start waits on. */
+  proposalId?: string;
   startedAt: string;
 }
 

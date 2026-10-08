@@ -10,8 +10,9 @@
  *
  * It only acts when the approved verb IS the start verb of the binding of the
  * agent that filed it, and the run named in its parameters is an
- * external-agent run still `proposed` with no `externalAgent` (claimed in the
- * WHERE clause, so a double approve records once). Never throws: the approval
+ * external-agent run still `proposed` with no `externalAgent` or the
+ * executor's `pending_start` one (claimed in the WHERE clause, so a double
+ * approve records once). Never throws: the approval
  * already ran the verb.
  */
 
@@ -19,6 +20,7 @@ import { createLogger } from "@synap-core/core";
 import { db, and, eq, drizzleSql, playbookRuns } from "@synap/database";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { AgentBindingError, resolveAgentBinding } from "./agent-binding.js";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import {
   asOptionalString,
   asRecord,
@@ -69,7 +71,8 @@ export async function recordApprovedAgentStart(p: {
       status: "running",
       startedAt: new Date().toISOString(),
     };
-    const summary = `dispatched to ${binding.provider}${externalId ? ` (${externalId})` : ""}`;
+    const service = resolveServiceName(binding.provider);
+    const summary = `dispatched to ${service}${externalId ? ` (${externalId})` : ""}`;
     const claimed = await db
       .update(playbookRuns)
       .set({
@@ -83,7 +86,9 @@ export async function recordApprovedAgentStart(p: {
           eq(playbookRuns.id, runId),
           eq(playbookRuns.executor, "external-agent"),
           eq(playbookRuns.status, "proposed"),
-          drizzleSql`${playbookRuns.externalAgent} IS NULL`
+          // Nothing recorded yet, or the PENDING start the executor recorded
+          // (`status: 'pending_start'`) — never a hand-off already recorded.
+          drizzleSql`(${playbookRuns.externalAgent} IS NULL OR ${playbookRuns.externalAgent}->>'status' = 'pending_start')`
         )
       )
       .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
@@ -95,7 +100,7 @@ export async function recordApprovedAgentStart(p: {
     }
     await postSessionNotice(
       claimed[0]!.sessionId,
-      `Approved — handed to the ${binding.provider} agent${url ? ` — ${url}` : ""}.`,
+      `Approved — handed to the ${service} agent.`,
       `external-agent:${runId}:started`
     );
     return { status: "recorded", runId };

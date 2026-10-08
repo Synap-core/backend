@@ -193,4 +193,45 @@ describe("recordApprovedAgentStart", () => {
     ).toBe("skipped");
     expect((await row(runId)).status).toBe("failed");
   });
+
+  it("the executor's PENDING start (pending_start + proposalId) is replaced by the real hand-off; a recorded one is not", async () => {
+    const runId = await proposedRun();
+    await q(
+      `update playbook_runs set external_agent = $2::jsonb where id = $1`,
+      [
+        runId,
+        JSON.stringify({
+          agentUserId: AGENT,
+          toolId: TOOL,
+          provider: "acme",
+          externalId: null,
+          url: null,
+          status: "pending_start",
+          proposalId: "p-1",
+          startedAt: new Date().toISOString(),
+        }),
+      ]
+    );
+    const call = (taskId: string) =>
+      recordApprovedAgentStart({
+        proposal: { agentUserId: AGENT },
+        verbId: "acme_start",
+        parameters: { runId },
+        result: { taskId },
+      });
+    expect(await call("t-9")).toEqual({ status: "recorded", runId });
+    const r = await row(runId);
+    expect(r.status).toBe("running");
+    expect(r.external_agent).toMatchObject({
+      status: "running",
+      externalId: "t-9",
+    });
+    expect(r.external_agent).not.toHaveProperty("proposalId");
+    // The room line names the service, never a raw link.
+    expect(String(h.posts.at(-1)?.content)).not.toMatch(/https?:/);
+    expect((await call("t-10")).status).toBe("skipped");
+    expect((await row(runId)).external_agent).toMatchObject({
+      externalId: "t-9",
+    });
+  });
 });

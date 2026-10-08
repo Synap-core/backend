@@ -270,7 +270,7 @@ describe("external agent status poll", () => {
     });
     expect(h.posts).toHaveLength(1);
     expect(h.posts[0]).toMatchObject({ agentUserId: POLLED, kind: "update" });
-    expect(String(h.posts[0]!.content)).toContain("feat/x");
+    expect(h.posts[0]!.content).toBe("Pushed a branch");
 
     await pollExternalAgentRuns(); // same state
     expect(h.calls).toHaveLength(2);
@@ -279,8 +279,103 @@ describe("external agent status poll", () => {
     ran({ state: "running", branch: "feat/x", prUrl: "https://gh/pr/9" });
     await pollExternalAgentRuns(); // changed
     expect(h.posts).toHaveLength(2);
-    expect(String(h.posts[1]!.content)).toContain("https://gh/pr/9");
+    // Short, and the link stays on the section — never in the prose.
+    expect(h.posts[1]!.content).toBe("Opened pull request");
     expect((await runRow(runId)).status).toBe("running");
+  });
+
+  it("a SUMMARY-only change updates the section but posts nothing; done/failed lines are short and link-free", async () => {
+    const runId = await dispatchedRun(POLLED);
+    ran({ state: "running", summary: "Reading the code" });
+    await pollExternalAgentRuns();
+    expect(h.posts.map((p) => p.content)).toEqual(["Working"]);
+    ran({ state: "running", summary: "Writing the tests" });
+    await pollExternalAgentRuns();
+    expect(h.posts).toHaveLength(1);
+    expect(
+      ((await runRow(runId)).external_agent.lastState as { summary: string })
+        .summary
+    ).toBe("Writing the tests");
+    ran({
+      state: "failed",
+      summary: "Tests failed: see https://ci.example/run/1\nlots more log",
+    });
+    await pollExternalAgentRuns();
+    expect(h.posts.at(-1)!.content).toBe("Failed: Tests failed: see");
+    const done = await dispatchedRun(POLLED);
+    ran({ state: "done", summary: "Shipped", prUrl: "https://gh/pr/3" });
+    await pollExternalAgentRuns();
+    expect(h.posts.at(-1)!.content).toBe("Finished");
+    expect((await runRow(done)).status).toBe("completed");
+  });
+
+  it("a failed status read counts a streak on the run (first seen + count); the next good read clears it", async () => {
+    const runId = await dispatchedRun(POLLED);
+    // A first good read, so the read after the streak is UNCHANGED (no claim).
+    ran({ state: "running" });
+    await pollExternalAgentRuns();
+    h.next = { kind: "error", message: "502 Bad Gateway" };
+    await pollExternalAgentRuns();
+    await pollExternalAgentRuns();
+    await pollExternalAgentRuns();
+    const err = (await runRow(runId)).external_agent.pollError as {
+      firstSeenAt: string;
+      count: number;
+      message: string;
+    };
+    expect(err.count).toBe(3);
+    expect(err.message).toBe("502 Bad Gateway");
+    expect(typeof err.firstSeenAt).toBe("string");
+    // An unchanged good read (no claim) still clears it.
+    ran({ state: "running" });
+    await pollExternalAgentRuns();
+    expect((await runRow(runId)).external_agent).not.toHaveProperty(
+      "pollError"
+    );
+    // A changed good read (the claim) clears it too.
+    h.next = { kind: "error", message: "502" };
+    await pollExternalAgentRuns();
+    ran({ state: "running", prUrl: "https://gh/pr/5" });
+    await pollExternalAgentRuns();
+    expect((await runRow(runId)).external_agent).not.toHaveProperty(
+      "pollError"
+    );
+    // A streak is never written over a verdict.
+    h.next = { kind: "error", message: "down" };
+    h.during = async () => {
+      await q(`update playbook_runs set status = 'cancelled' where id = $1`, [
+        runId,
+      ]);
+    };
+    await pollExternalAgentRuns();
+    expect((await runRow(runId)).external_agent).not.toHaveProperty(
+      "pollError"
+    );
+  });
+
+  it("an output's first-seen time is kept across polls; a changed output gets a new one", async () => {
+    const runId = await dispatchedRun(POLLED);
+    ran({ state: "running", prUrl: "https://gh/pr/1", branch: "b1" });
+    await pollExternalAgentRuns();
+    const first = (await runRow(runId)).external_agent.reportedAt as Record<
+      string,
+      string
+    >;
+    expect(Object.keys(first).sort()).toEqual(["branch", "prUrl"]);
+    await new Promise((r) => setTimeout(r, 5));
+    ran({
+      state: "running",
+      prUrl: "https://gh/pr/1",
+      branch: "b2",
+      summary: "x",
+    });
+    await pollExternalAgentRuns();
+    const second = (await runRow(runId)).external_agent.reportedAt as Record<
+      string,
+      string
+    >;
+    expect(second.prUrl).toBe(first.prUrl);
+    expect(second.branch).not.toBe(first.branch);
   });
 
   it("needs_input ⇒ a QUESTION card posted as the agent", async () => {

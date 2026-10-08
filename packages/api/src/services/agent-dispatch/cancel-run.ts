@@ -28,6 +28,7 @@ import {
 } from "@synap/database";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import { AgentBindingError, resolveAgentBinding } from "./agent-binding.js";
 import {
   callBindingVerb,
@@ -72,6 +73,7 @@ export async function cancelRun(p: {
   let externalCancelled: boolean | null = null;
   let note: string | undefined;
   if (ext) {
+    const service = resolveServiceName(ext.provider);
     try {
       const binding = await resolveAgentBinding(ext.agentUserId);
       if (binding?.supports.cancel && binding.verbs.cancel) {
@@ -92,13 +94,13 @@ export async function cancelRun(p: {
         if (res.status !== "ok") {
           const message =
             res.status === "proposed"
-              ? `cancelling the ${ext.provider} task needs approval: ${res.reviewUrl}`
+              ? `cancelling the ${service} task needs approval: ${res.reviewUrl}`
               : res.message;
           logger.warn({ runId: run.id, message }, "external cancel failed");
           await postDispatchNotice({
             channelId,
             ownerId,
-            content: `Could not cancel the ${ext.provider} task: ${message}`,
+            content: `Could not cancel the ${service} task: ${message}`,
             // Once per distinct failure — a repeated identical one is not news.
             idempotencyKey: `external-agent:${run.id}:cancel-failed:${message}`,
           });
@@ -112,7 +114,7 @@ export async function cancelRun(p: {
     }
     if (externalCancelled === null) {
       externalCancelled = false;
-      note ??= `The ${ext.provider} agent cannot be cancelled from Synap — its task may keep running until it finishes on its side.`;
+      note ??= `The ${service} agent cannot be cancelled from Synap — its task may keep running until it finishes on its side.`;
     }
   }
 
