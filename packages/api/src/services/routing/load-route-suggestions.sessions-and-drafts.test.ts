@@ -122,7 +122,7 @@ describe("draft-process offer", () => {
       statusProperty: "track-status",
     });
     expect(draft.signals).toEqual([]);
-    expect(draft.reason).toMatch(/No process is set up for/);
+    expect(draft.reason).toMatch(/No template is set up for/);
   });
 
   it("is NOT offered when a playbook is built for the kind", async () => {

@@ -145,17 +145,19 @@ export function draftProcessRoute(
   statusProperty: string
 ): RankedRoute {
   const noun = resolveObjectNoun(profileSlug).toLowerCase();
+  // The thing drafted is a playbook: its noun comes from the one door.
+  const template = resolveObjectNoun("playbook").toLowerCase();
   return {
     candidate: {
       kind: "draft_process",
       id: `draft:${profileSlug}`,
-      name: `Draft a process for ${noun} items`,
+      name: `Draft a ${template} for ${noun} items`,
       subjectProfileSlug: profileSlug,
       statusProperty,
     },
     // An offer, not evidence: it carries no signal and never outranks one.
     score: 0,
-    reason: `No process is set up for ${noun} items yet`,
+    reason: `No ${template} is set up for ${noun} items yet`,
     signals: [],
   };
 }

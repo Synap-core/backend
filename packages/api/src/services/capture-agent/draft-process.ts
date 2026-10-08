@@ -62,6 +62,6 @@ export async function draftProcessForKind(input: {
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     entities: [],
     plan: { playbooks: [op] },
-    summary: `Draft a process for ${resolveObjectNoun(input.profileSlug).toLowerCase()} items`,
+    summary: `Draft a ${resolveObjectNoun("playbook").toLowerCase()} for ${resolveObjectNoun(input.profileSlug).toLowerCase()} items`,
   });
 }
