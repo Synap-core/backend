@@ -221,6 +221,33 @@ describe("AppRepository.register — idempotent by owner+name", () => {
     );
     expect(rows).toEqual([{ n: 1 }]);
   });
+
+  it("a revived app does NOT carry the revoked approval — a human must approve again", async () => {
+    const first = await repo.register({ ownerUserId: OWNER, name: "revived" });
+    await repo.setApprovedRequests(first.id, [
+      { permission: "entities.read", workspaceId: "ws-1" },
+    ]);
+    expect((await repo.get(first.id))!.approvedRequests).toHaveLength(1);
+    await repo.revoke(first.id);
+    // Revoke keeps the record of what it had…
+    expect((await repo.get(first.id))!.approvedRequests).toHaveLength(1);
+
+    const revived = await repo.register({
+      ownerUserId: OWNER,
+      name: "revived",
+    });
+    // …but reviving starts a new ask.
+    expect(revived.approvedRequests).toBeNull();
+  });
+
+  it("a re-register of a LIVE app keeps its approval (idempotent upsert)", async () => {
+    const first = await repo.register({ ownerUserId: OWNER, name: "live" });
+    await repo.setApprovedRequests(first.id, [
+      { permission: "entities.read", workspaceId: "ws-1" },
+    ]);
+    const again = await repo.register({ ownerUserId: OWNER, name: "live" });
+    expect(again.approvedRequests).toHaveLength(1);
+  });
 });
 
 describe("AppRepository.getByPublicId — the client_id grant join", () => {
@@ -330,13 +357,14 @@ describe("AppRepository — the app's own agent (0313)", () => {
       [KEY_A]
     );
     expect(key.rows).toEqual([{ user_id: AGENT, linked_user_id: OWNER }]);
-    const g = await pg.query<{ principal_user_id: string; on_behalf_of: string }>(
+    const g = await pg.query<{
+      principal_user_id: string;
+      on_behalf_of: string;
+    }>(
       "SELECT principal_user_id, on_behalf_of FROM grants WHERE api_key_id = $1",
       [KEY_A]
     );
-    expect(g.rows).toEqual([
-      { principal_user_id: AGENT, on_behalf_of: OWNER },
-    ]);
+    expect(g.rows).toEqual([{ principal_user_id: AGENT, on_behalf_of: OWNER }]);
   });
 
   it("adoptKey never takes a key someone else holds", async () => {
@@ -345,7 +373,11 @@ describe("AppRepository — the app's own agent (0313)", () => {
       "INSERT INTO api_keys (id, is_active, user_id) VALUES ($1, true, $2)",
       [KEY_A, OTHER_OWNER]
     );
-    await repo.adoptKey({ apiKeyId: KEY_A, ownerUserId: OWNER, agentUserId: AGENT });
+    await repo.adoptKey({
+      apiKeyId: KEY_A,
+      ownerUserId: OWNER,
+      agentUserId: AGENT,
+    });
     const key = await pg.query<{ user_id: string }>(
       "SELECT user_id FROM api_keys WHERE id = $1",
       [KEY_A]
@@ -618,9 +650,7 @@ describe("AppRepository.withdrawPendingRequests", () => {
       id: string;
       status: string;
       reason: string | null;
-    }>(
-      "SELECT id, status, data->>'withdrawReason' AS reason FROM proposals"
-    );
+    }>("SELECT id, status, data->>'withdrawReason' AS reason FROM proposals");
     const by = new Map(rows.map((r) => [r.id, r]));
     expect(by.get(pending)).toMatchObject({
       status: "withdrawn",

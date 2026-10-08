@@ -129,7 +129,9 @@ export async function wakeExternalAgent(
         channelId,
         ownerId,
         content: `Could not pass your ${p.kind} to the agent: ${message}`,
-        idempotencyKey: `agent-wake-failed:${p.sessionId}:${p.agentUserId}:${p.proposalId ?? p.slotKey ?? ""}:${Date.now()}`,
+        // Keyed on the send's own operation key (never a clock), so a replayed
+        // answer / repeated decision posts this notice once.
+        idempotencyKey: `agent-wake-failed:${p.sessionId}:${p.agentUserId}:${p.idempotencyKey}`,
       });
     }
     return { status: "failed", message };

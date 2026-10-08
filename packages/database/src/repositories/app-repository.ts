@@ -232,6 +232,13 @@ export class AppRepository {
         revokedAt: null,
         removedAt: null,
       };
+      // Reviving is a NEW ask, not a resumed one: the approval a person
+      // revoked must not come back with the name. Clearing it here (not in
+      // `revoke`) keeps the revoked row's record of what it had, while
+      // `issueKey` refuses until a human approves again — which is what the
+      // revoke copy ("register it again to ask for access") promises.
+      if (existing.revokedAt || existing.removedAt)
+        patch.approvedRequests = null;
       if (input.description !== undefined)
         patch.description = input.description;
       if (input.logoUrl !== undefined) patch.logoUrl = input.logoUrl;
