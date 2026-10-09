@@ -1,4 +1,15 @@
-import { and, count, eq, gt, gte, isNull, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  eq,
+  gt,
+  gte,
+  isNull,
+  like,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import { users, type AgentMetadata } from "../schema/users.js";
 import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import { governanceRules } from "../schema/governance-rules.js";
@@ -19,11 +30,15 @@ import {
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 import {
+  AGENT_POSTURE_NAMES,
   resolveAgentPosture,
   type AgentPostureName,
 } from "@synap/governance-policy/postures";
 import { filterUncoveredActions } from "./floor-covered-actions.js";
-import { settingsMirrorCreatedBy } from "./governance-rule-provenance.js";
+import {
+  SETTINGS_MIRROR_CREATED_BY_PREFIX,
+  settingsMirrorCreatedBy,
+} from "./governance-rule-provenance.js";
 import {
   resolveGuidelines,
   resolveMostSpecificPosture,
@@ -695,22 +710,51 @@ export async function syncAutoApproveRules(
  * case: a new agent is inserted STRICT (`writesRequireProposal: true`) and only
  * this commit loosens it, so a failed apply leaves the agent proposing
  * everything — never auto-approving an update without its `propose` rule.
+ *
+ * SCOPE (founder decision 2026-10-08: "Its writes" applies pod-wide OR to ONE
+ * chosen space, never silently "the first granted space"). `scope` omitted or
+ * `{kind:"pod"}` = the pod-wide posture above, unchanged. `{kind:"workspace"}`
+ * writes the SAME rule set with `scope_kind = 'workspace'` for that space —
+ * an agent+workspace rule outranks the agent+pod rule inside that space at
+ * rung 2.8 (`resolveGovernanceRule`), either direction, so a space posture is
+ * honoured there and nowhere else. A space posture never touches the pod
+ * marker or the dial (both are pod-wide facts), and its REPLACE revokes ONLY
+ * that space's settings-mirror rows for this agent (`created_by` under
+ * `system:settings-mirror:`) — a rule a person typed into the Rules editor for
+ * that space (`user:` prefix) or an earned widening is never touched. The read
+ * half derives the space's posture from those rows ({@link readAgentGovernance}),
+ * so no second marker exists to drift.
  */
+export type AgentPostureScope =
+  { kind: "pod" } | { kind: "workspace"; workspaceId: string };
+
 export async function applyAgentPosture(input: {
   db: DbHandle;
   agentUserId: string;
   /**
    * A stricter preset, or `null` = "follow the pod default": revoke this
    * agent's own override rows and drop the marker — nothing new is written.
+   * In a space: `null` drops the space override, so the pod posture applies.
    */
   posture: AgentPostureName | null;
   /** The acting human — stored namespaced like every settings-mirror row. */
   createdBy: string;
+  /** Where the posture applies. Omitted ⇒ pod-wide (the historical door). */
+  scope?: AgentPostureScope;
 }): Promise<{
   posture: AgentPostureName | null;
   writesRequireProposal: boolean;
 }> {
   const { db, agentUserId, createdBy } = input;
+  if (input.scope?.kind === "workspace") {
+    return applyAgentSpacePosture({
+      db,
+      agentUserId,
+      workspaceId: input.scope.workspaceId,
+      posture: input.posture,
+      createdBy,
+    });
+  }
   const posture = input.posture ? resolveAgentPosture(input.posture) : null;
   const autos = posture
     ? Array.from(new Set(filterUncoveredActions(posture.autoApproveFor)))
@@ -770,6 +814,92 @@ export async function applyAgentPosture(input: {
   };
 }
 
+/** Rows a SPACE posture owns: this agent's settings-mirror action rules there. */
+function spacePostureRowsWhere(agentUserId: string, workspaceId?: string) {
+  return and(
+    isNull(governanceRules.revokedAt),
+    isNull(governanceRules.sourceProposalId),
+    eq(governanceRules.targetKind, "action"),
+    eq(governanceRules.principalKind, "agent"),
+    eq(governanceRules.agentUserId, agentUserId),
+    eq(governanceRules.scopeKind, "workspace"),
+    like(governanceRules.createdBy, `${SETTINGS_MIRROR_CREATED_BY_PREFIX}%`),
+    ...(workspaceId ? [eq(governanceRules.workspaceId, workspaceId)] : [])
+  );
+}
+
+/** The space half of {@link applyAgentPosture} — same rule set, one space. */
+async function applyAgentSpacePosture(input: {
+  db: DbHandle;
+  agentUserId: string;
+  workspaceId: string;
+  posture: AgentPostureName | null;
+  createdBy: string;
+}): Promise<{
+  posture: AgentPostureName | null;
+  writesRequireProposal: boolean;
+}> {
+  const { db, agentUserId, workspaceId, createdBy } = input;
+  const posture = input.posture ? resolveAgentPosture(input.posture) : null;
+  const rows = posture
+    ? [
+        ...Array.from(
+          new Set(filterUncoveredActions(posture.autoApproveFor))
+        ).map((p) => ({ targetPattern: p, verdict: "auto" as const })),
+        ...Array.from(new Set(posture.proposeFor)).map((p) => ({
+          targetPattern: p,
+          verdict: "propose" as const,
+        })),
+      ]
+    : [];
+  await db.transaction(async (tx) => {
+    await tx
+      .update(governanceRules)
+      .set({ revokedAt: new Date() })
+      .where(spacePostureRowsWhere(agentUserId, workspaceId));
+    if (rows.length > 0) {
+      await tx.insert(governanceRules).values(
+        rows.map((r) => ({
+          principalKind: "agent" as const,
+          agentUserId,
+          scopeKind: "workspace" as const,
+          workspaceId,
+          targetKind: "action" as const,
+          targetPattern: r.targetPattern,
+          verdict: r.verdict,
+          createdBy: settingsMirrorCreatedBy(createdBy),
+        }))
+      );
+    }
+  });
+  return {
+    posture: posture ? posture.name : null,
+    writesRequireProposal: true,
+  };
+}
+
+/**
+ * Which named posture a set of settings-mirror rows IS — exact set equality
+ * against every preset's (auto, propose) projection, so the read can only claim
+ * a name the rows actually encode. Rows matching no preset ⇒ `null` (custom).
+ */
+function matchPostureName(
+  rows: ReadonlyArray<{ pattern: string; verdict: "auto" | "propose" }>
+): AgentPostureName | null {
+  const key = (v: string, p: string) => `${v} ${p}`;
+  const have = new Set(rows.map((r) => key(r.verdict, r.pattern)));
+  for (const name of AGENT_POSTURE_NAMES) {
+    const p = resolveAgentPosture(name);
+    const want = new Set([
+      ...filterUncoveredActions(p.autoApproveFor).map((x) => key("auto", x)),
+      ...p.proposeFor.map((x) => key("propose", x)),
+    ]);
+    if (want.size === have.size && [...want].every((k) => have.has(k)))
+      return name;
+  }
+  return null;
+}
+
 /** What `GET /agent-users/:id/governance` returns (null ⇒ no such agent). */
 export interface AgentGovernanceState {
   /** The named posture last applied, or null (custom / never set). */
@@ -777,6 +907,13 @@ export interface AgentGovernanceState {
   writesRequireProposal: boolean;
   /** Active agent-scoped, pod-scope action rules (this agent's own). */
   rules: Array<{ pattern: string; verdict: "auto" | "propose" }>;
+  /**
+   * Per-space overrides written by a SPACE posture ({@link applyAgentPosture}
+   * with `scope.kind = "workspace"`), one entry per space that has any.
+   * `posture` is DERIVED from the rows (exact match to a preset), `null` when
+   * they match none. Inside that space it outranks the pod posture.
+   */
+  spaces: Array<{ workspaceId: string; posture: AgentPostureName | null }>;
   /**
    * Has anyone ever set this agent's governance? A posture marker, any own
    * rule, or `writesRequireProposal` explicitly off. `synap init` reads this
@@ -815,13 +952,39 @@ export async function readAgentGovernance(input: {
     );
   const rules = rows.map((r) => ({ pattern: r.pattern, verdict: r.verdict }));
   const posture = meta.governancePosture ?? null;
+  const spaceRows = await db
+    .select({
+      workspaceId: governanceRules.workspaceId,
+      pattern: governanceRules.targetPattern,
+      verdict: governanceRules.verdict,
+    })
+    .from(governanceRules)
+    .where(spacePostureRowsWhere(agentUserId));
+  const bySpace = new Map<
+    string,
+    Array<{ pattern: string; verdict: "auto" | "propose" }>
+  >();
+  for (const r of spaceRows) {
+    if (!r.workspaceId) continue;
+    const list = bySpace.get(r.workspaceId) ?? [];
+    list.push({ pattern: r.pattern, verdict: r.verdict });
+    bySpace.set(r.workspaceId, list);
+  }
+  const spaces = [...bySpace.entries()]
+    .map(([workspaceId, list]) => ({
+      workspaceId,
+      posture: matchPostureName(list),
+    }))
+    .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
   return {
     posture,
     writesRequireProposal: meta.writesRequireProposal === true,
     rules,
+    spaces,
     configured:
       posture !== null ||
       rules.length > 0 ||
+      spaces.length > 0 ||
       meta.writesRequireProposal === false,
   };
 }

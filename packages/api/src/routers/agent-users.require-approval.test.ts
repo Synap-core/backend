@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
     posture: null as string | null,
     writesRequireProposal: true,
     rules: [],
+    spaces: [],
     configured: false,
   },
   podDefault: { enabled: true, ruleId: "r1" },
@@ -95,6 +96,7 @@ beforeEach(() => {
     posture: null,
     writesRequireProposal: true,
     rules: [],
+    spaces: [],
     configured: false,
   };
   h.podDefault = { enabled: true, ruleId: "r1" };

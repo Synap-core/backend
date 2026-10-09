@@ -52,6 +52,7 @@ import {
   readAgentGovernance,
 } from "@synap/database/agent-governance";
 import { readReversibleDefault } from "@synap/database";
+import { assertCanManageRule } from "./governance-rules.js";
 import {
   AGENT_WRITE_MODE_LINE,
   resolveAgentDirection,
@@ -254,6 +255,80 @@ export function withViewerVerbs<
       ? `${viewer.podAdminOrigin}/approve-agents?keys=${pendingKeyIds.map(encodeURIComponent).join(",")}`
       : null;
   return { ...rest, viewerCanDisconnect, approveUrl };
+}
+
+/**
+ * Move an agent's ask-first posture to EXACTLY one scope (or none) — the
+ * scoped "Its writes" door. Composes THE posture writer (`applyAgentPosture`),
+ * never a second store.
+ *
+ * WHO: the procedure's own gate (`manage` on `input.workspaceId`) already
+ * covers the pod scope, as it always has. Every SPACE this call writes or
+ * clears is additionally checked with the Rules editor's gate
+ * (`assertCanManageRule`: editor+ in that space AND owner of the agent, or a
+ * pod admin) — the same authority that may author an agent rule there. All
+ * checks run BEFORE any write.
+ *
+ * ORDER: the target is written first (tighten), then the other scopes are
+ * cleared (loosen). A failure in between leaves the agent stricter than asked,
+ * never looser.
+ */
+async function applyAskFirstScope(input: {
+  callerId: string;
+  agentUserId: string;
+  target: null | { kind: "pod" } | { kind: "workspace"; workspaceId: string };
+}): Promise<void> {
+  const { callerId, agentUserId, target } = input;
+  const state = await readAgentGovernance({ db, agentUserId });
+  if (!state) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Agent user not found" });
+  }
+  const targetSpace = target?.kind === "workspace" ? target.workspaceId : null;
+  // Only ask-first is moved: another preset (e.g. `create-with-undo`, set from
+  // `synap init`) in another scope is a different choice and stays.
+  const spacesToClear = state.spaces
+    .filter((sp) => sp.posture === "ask-first")
+    .map((sp) => sp.workspaceId)
+    .filter((id) => id !== targetSpace);
+  for (const workspaceId of [
+    ...(targetSpace ? [targetSpace] : []),
+    ...spacesToClear,
+  ]) {
+    await assertCanManageRule(callerId, {
+      scopeKind: "workspace",
+      workspaceId,
+      principalKind: "agent",
+      agentUserId,
+    });
+  }
+
+  if (target) {
+    await applyAgentPosture({
+      db,
+      agentUserId,
+      posture: "ask-first",
+      createdBy: callerId,
+      scope: target,
+    });
+  }
+  if (target?.kind !== "pod" && state.posture === "ask-first") {
+    await applyAgentPosture({
+      db,
+      agentUserId,
+      posture: null,
+      createdBy: callerId,
+      scope: { kind: "pod" },
+    });
+  }
+  for (const workspaceId of spacesToClear) {
+    await applyAgentPosture({
+      db,
+      agentUserId,
+      posture: null,
+      createdBy: callerId,
+      scope: { kind: "workspace", workspaceId },
+    });
+  }
 }
 
 export const agentUsersRouter = router({
@@ -530,7 +605,7 @@ export const agentUsersRouter = router({
    */
   governance: protectedProcedure
     .input(z.object({ agentUserId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const state = await readAgentGovernance({
         db,
         agentUserId: input.agentUserId,
@@ -547,11 +622,43 @@ export const agentUsersRouter = router({
         podDefaultEnabled: podDefault.enabled,
         writesRequireProposal: state.writesRequireProposal,
       });
+      // Per-space overrides, limited to spaces the caller can see (a space id
+      // and name are never revealed to someone outside it). Names ride along
+      // so a surface can say "in Sales" without a second lookup.
+      const spaceIds = state.spaces.map((sp) => sp.workspaceId);
+      const visible =
+        spaceIds.length === 0
+          ? []
+          : await db
+              .select({ id: workspaces.id, name: workspaces.name })
+              .from(workspaces)
+              .where(
+                and(
+                  inArray(workspaces.id, spaceIds),
+                  userVisibleWhere(workspaces.id, ctx.userId)
+                )
+              );
+      const nameOf = new Map(visible.map((w) => [w.id, w.name]));
       return {
         writeMode,
         line: AGENT_WRITE_MODE_LINE[writeMode],
-        /** The switch: ON iff this agent has the ask-first override. */
+        /** The pod-wide switch: ON iff this agent has the pod ask-first override. */
         askFirst: state.posture === "ask-first",
+        /**
+         * WHERE the posture applies (founder decision 2026-10-08: pod-wide or
+         * one chosen space). `pod` = the pod-wide preset; `spaces` = per-space
+         * overrides, each outranking `pod` inside that space only.
+         */
+        postures: {
+          pod: state.posture,
+          spaces: state.spaces
+            .filter((sp) => nameOf.has(sp.workspaceId))
+            .map((sp) => ({
+              workspaceId: sp.workspaceId,
+              name: nameOf.get(sp.workspaceId)!,
+              posture: sp.posture,
+            })),
+        },
         podDefaultEnabled: podDefault.enabled,
       };
     }),
@@ -569,9 +676,35 @@ export const agentUsersRouter = router({
         description: z.string().optional(),
         capabilities: z.array(z.string()).optional(),
         writesRequireProposal: z.boolean().optional(),
+        /**
+         * "Its writes" with a SCOPE (founder decision 2026-10-08): ask first
+         * EXACTLY here — pod-wide, or in ONE space — and nowhere else; `null`
+         * = ask first nowhere (follow the pod default). Exclusive: moving the
+         * scope clears it from every other scope in the same call. Mutually
+         * exclusive with the legacy pod-only `writesRequireProposal`.
+         */
+        askFirst: z
+          .union([
+            z.null(),
+            z.object({ kind: z.literal("pod") }),
+            z.object({
+              kind: z.literal("workspace"),
+              workspaceId: z.string().uuid(),
+            }),
+          ])
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      if (
+        input.askFirst !== undefined &&
+        input.writesRequireProposal !== undefined
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Send askFirst or writesRequireProposal, not both",
+        });
+      }
       // Caller must be owner or admin
       const perm = await verifyPermission({
         db,
@@ -666,6 +799,14 @@ export const agentUsersRouter = router({
         });
       }
 
+      if (input.askFirst !== undefined) {
+        await applyAskFirstScope({
+          callerId: ctx.userId,
+          agentUserId: input.agentUserId,
+          target: input.askFirst,
+        });
+      }
+
       // Update role if changed
       if (input.role) {
         await db
@@ -690,6 +831,7 @@ export const agentUsersRouter = router({
           name: input.name,
           role: input.role,
           writesRequireProposal: input.writesRequireProposal,
+          ...(input.askFirst !== undefined ? { askFirst: input.askFirst } : {}),
         },
       });
 

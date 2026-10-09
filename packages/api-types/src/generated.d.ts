@@ -31448,6 +31448,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				writeMode: AgentWriteMode;
 				line: string;
 				askFirst: boolean;
+				postures: {
+					pod: "ask-first" | "create-with-undo" | null;
+					spaces: {
+						workspaceId: string;
+						name: string;
+						posture: "ask-first" | "create-with-undo" | null;
+					}[];
+				};
 				podDefaultEnabled: boolean;
 			};
 			meta: object;
@@ -31461,6 +31469,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				capabilities?: string[] | undefined;
 				writesRequireProposal?: boolean | undefined;
+				askFirst?: {
+					kind: "pod";
+				} | {
+					kind: "workspace";
+					workspaceId: string;
+				} | null | undefined;
 			};
 			output: {
 				status: "proposed";

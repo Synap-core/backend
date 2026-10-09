@@ -145,7 +145,7 @@ async function assertWorkspaceEditor(
  * exist/be-undone is determined by its scope + principal, never by who is
  * asking. Throws FORBIDDEN when the caller isn't allowed.
  */
-async function assertCanManageRule(
+export async function assertCanManageRule(
   userId: string,
   rule: {
     scopeKind: "workspace" | "pod";
@@ -697,7 +697,8 @@ export const governanceRulesRouter = router({
           });
           mayGrant = true;
         } catch (err) {
-          if (!(err instanceof TRPCError) || err.code !== "FORBIDDEN") throw err;
+          if (!(err instanceof TRPCError) || err.code !== "FORBIDDEN")
+            throw err;
         }
       }
       return fileNextRung({ userId: ctx.userId, row, mayGrant });
