@@ -144,6 +144,22 @@ export function resolveGoal(
 }
 
 /**
+ * A DECLARED param the caller left unanswered renders as `""`, never as its
+ * literal `{name}` braces. `resolveGoal` keeps braces for names nobody
+ * declared (flows rely on that); an optional declared param is a known blank.
+ */
+export function withDeclaredParamsDefaulted(
+  declared: readonly PlaybookParam[],
+  values: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...values };
+  for (const p of declared) {
+    if (out[p.name] === undefined || out[p.name] === null) out[p.name] = "";
+  }
+  return out;
+}
+
+/**
  * The run's bound SUBJECT answers the playbook's entity param when the caller
  * left it unanswered.
  *
@@ -584,10 +600,13 @@ export async function instantiateSessionRow(
     input.goalOverride ??
     resolveGoal(
       playbook.goalTemplate,
-      renderSubjectParamValues(
+      withDeclaredParamsDefaulted(
         declaredParams,
-        paramResolution.values,
-        input.subjectId ? { id: input.subjectId, title: subjectTitle } : null
+        renderSubjectParamValues(
+          declaredParams,
+          paramResolution.values,
+          input.subjectId ? { id: input.subjectId, title: subjectTitle } : null
+        )
       ),
       playbook.id
     );

@@ -71,7 +71,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return { ...actual, getDb: async () => db };
 });
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   createLogger: () => ({
     warn: () => {},
     error: () => {},
@@ -232,6 +233,20 @@ describe("unanswered REQUIRED param — the two doors", () => {
     // The default still applied; the missing one renders as it always did.
     expect(metadataOf()[RUN_PROMPT_METADATA_KEY]).toBe(
       "Write a warm digest about ."
+    );
+  });
+
+  it("an optional declared {name} param left unanswered renders empty, never as braces", async () => {
+    PLAYBOOK = basePlaybook({
+      goalTemplate: "Write about {topic} for {audience}.",
+      params: [
+        { name: "topic", type: "text", required: true },
+        { name: "audience", type: "text" },
+      ],
+    });
+    await instantiateSession({ ...RUN, params: { topic: "tides" } });
+    expect(metadataOf()[RUN_PROMPT_METADATA_KEY]).toBe(
+      "Write about tides for ."
     );
   });
 
