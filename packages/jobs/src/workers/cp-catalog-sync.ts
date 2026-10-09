@@ -492,10 +492,14 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
   for (const row of rows) {
     const key = `${row.source}|${row.kind}|${row.slug}`;
     const existing = deduped.get(key);
-    if (
+    // A capability's version is a content hash, so "newest" is meaningless and
+    // an imposter row could win it. The CP serves the owning (official) row
+    // first for a key: keep the first occurrence. Other kinds keep newest.
+    const replace =
       !existing ||
-      compareVersions(row.version ?? "", existing.version ?? "") > 0
-    ) {
+      (row.kind !== "capability" &&
+        compareVersions(row.version ?? "", existing.version ?? "") > 0);
+    if (replace) {
       deduped.set(key, row);
     }
   }

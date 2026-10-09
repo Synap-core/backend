@@ -115,7 +115,23 @@ export async function handleCapabilityTemplateSync(): Promise<void> {
   }
 
   const now = new Date();
-  const rows = items.map((item) => ({
+  // ONE row per key. A duplicate key in one batch makes Postgres refuse the
+  // whole upsert ("ON CONFLICT DO UPDATE cannot affect row a second time"),
+  // which froze this cache on every pod. The CP serves the official row first
+  // for a key; keep the first occurrence and say which ones were dropped.
+  const seenKeys = new Set<string>();
+  const unique = items.filter((item) => {
+    if (seenKeys.has(item.key)) return false;
+    seenKeys.add(item.key);
+    return true;
+  });
+  if (unique.length < items.length) {
+    logger.warn(
+      { dropped: items.length - unique.length },
+      "Control Plane returned duplicate capability keys — kept the first of each"
+    );
+  }
+  const rows = unique.map((item) => ({
     key: item.key,
     name: item.name,
     description: item.description ?? null,

@@ -453,7 +453,7 @@ describe("handleCpCatalogSync — derived search tokens fold into tags", () => {
 });
 
 describe("handleCpCatalogSync — dedupe by (source, kind, slug) before upsert", () => {
-  it("dedupes duplicate slugs from the same source/kind, keeping the newest version", async () => {
+  it("dedupes a duplicate CAPABILITY key keeping the FIRST row the CP served (a content-hash version is not an order)", async () => {
     fetchMock.mockImplementation(async (urlArg: string) => {
       const url = String(urlArg);
       if (url.includes("/api/marketplace/capabilities")) {
@@ -483,10 +483,11 @@ describe("handleCpCatalogSync — dedupe by (source, kind, slug) before upsert",
     await handleCpCatalogSync();
 
     const rows = upsertedRows() as Array<{ slug: string; version: string }>;
-    // Only ONE row should be upserted (the newer version)
+    // ONE row, and it is the first one served: the CP serves the owning
+    // (official) row first. "Newest" by hash would let an imposter win.
     expect(rows).toHaveLength(1);
     expect(rows[0]!.slug).toBe("fireflies");
-    expect(rows[0]!.version).toBe("h-53e4b4d3acc3");
+    expect(rows[0]!.version).toBe("h-16a7f0bd5ee5");
     // Warning should be logged about dedup
     expect(loggerMock.warn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -538,43 +539,23 @@ describe("handleCpCatalogSync — dedupe by (source, kind, slug) before upsert",
     expect(warnCalls).toHaveLength(0);
   });
 
-  it("handles empty version strings (keeps non-empty over empty)", async () => {
-    fetchMock.mockImplementation(async (urlArg: string) => {
-      const url = String(urlArg);
-      if (url.includes("/api/marketplace/capabilities")) {
-        return jsonRes({
-          capabilities: [
-            { key: "test-cap", name: "Test", version: "" },
-            { key: "test-cap", name: "Test", version: "1.0.0" },
-          ],
-        });
-      }
-      if (url.includes("/api/marketplace/cells"))
-        return jsonRes({ cells: [], total: 0 });
-      return jsonRes({ packages: [], total: 0 });
+  it("a non-capability kind still keeps the newest version (cells: semver)", async () => {
+    const cell = (version: string) => ({
+      key: "chart",
+      name: "Chart",
+      packageSlug: "acme",
+      code: "export default () => null",
+      packageVersion: version,
     });
-
-    await handleCpCatalogSync();
-
-    const rows = upsertedRows() as Array<{ slug: string; version: string }>;
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.version).toBe("1.0.0");
-  });
-
-  it("handles semver comparison correctly", async () => {
     fetchMock.mockImplementation(async (urlArg: string) => {
       const url = String(urlArg);
-      if (url.includes("/api/marketplace/capabilities")) {
-        return jsonRes({
-          capabilities: [
-            { key: "test-cap", name: "Test", version: "1.2.3" },
-            { key: "test-cap", name: "Test", version: "1.2.4" },
-            { key: "test-cap", name: "Test", version: "2.0.0" },
-          ],
-        });
-      }
       if (url.includes("/api/marketplace/cells"))
-        return jsonRes({ cells: [], total: 0 });
+        return jsonRes({
+          cells: [cell("1.2.3"), cell("2.0.0"), cell("1.2.4")],
+          total: 3,
+        });
+      if (url.includes("/api/marketplace/capabilities"))
+        return jsonRes({ capabilities: [] });
       return jsonRes({ packages: [], total: 0 });
     });
 
@@ -583,5 +564,28 @@ describe("handleCpCatalogSync — dedupe by (source, kind, slug) before upsert",
     const rows = upsertedRows() as Array<{ slug: string; version: string }>;
     expect(rows).toHaveLength(1);
     expect(rows[0]!.version).toBe("2.0.0");
+  });
+
+  it("a capability keeps the first row even when a later one has a 'higher' version", async () => {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/capabilities")) {
+        return jsonRes({
+          capabilities: [
+            { key: "test-cap", name: "Official", version: "1.0.0" },
+            { key: "test-cap", name: "Imposter", version: "9.9.9" },
+          ],
+        });
+      }
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      return jsonRes({ packages: [], total: 0 });
+    });
+
+    await handleCpCatalogSync();
+
+    const rows = upsertedRows() as Array<{ slug: string; name: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.name).toBe("Official");
   });
 });
