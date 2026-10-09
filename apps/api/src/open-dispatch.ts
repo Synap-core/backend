@@ -39,6 +39,10 @@ export const TYPED_OPEN_KINDS = [
   // (packages/api/src/utils/deep-links.ts) on every "not enabled / not
   // connected" refusal, so a blocked agent can hand the user the exact card.
   "capability",
+  // A Settings SECTION (`/open/settings/agents`) — the door an owed slot
+  // hands a person whose fix lives in Settings (the "no agent is bound"
+  // ask). Bounced like every non-hosted kind; the apps route it by section.
+  "settings",
 ] as const;
 
 export type TypedOpenKind = (typeof TYPED_OPEN_KINDS)[number];

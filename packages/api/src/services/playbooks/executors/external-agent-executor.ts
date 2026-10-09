@@ -43,6 +43,7 @@ import type {
   ExpectedOutput,
   RunContext,
   RunResult,
+  SlotAsk,
 } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import {
@@ -81,7 +82,7 @@ import { paramOwedSlots } from "../../focus-sessions/param-slots.js";
 import { normalizeExpectedLabel } from "../../focus-sessions/expected-label.js";
 import { updateExpectedOutputsLocked } from "../../focus-sessions/delegate-output.js";
 import { notifySessionNeedsYou } from "../../focus-sessions/notify-needs-you.js";
-import { podPublicOrigin } from "../../../utils/deep-links.js";
+import { openTypedLink, podPublicOrigin } from "../../../utils/deep-links.js";
 
 const logger = createLogger({ module: "external-agent-executor" });
 
@@ -89,6 +90,8 @@ const logger = createLogger({ module: "external-agent-executor" });
 export const AGENT_USER_ID_PARAM = "agentUserId";
 /** The owed slot's label — one per session, merged by label. */
 export const CHOOSE_AGENT_SLOT_LABEL = "Answer: Choose an agent";
+/** The Settings section where a person binds an agent (`/open/settings/<it>`). */
+export const AGENT_SETTINGS_SECTION = "agents";
 
 interface SessionRow {
   id: string;
@@ -214,24 +217,35 @@ async function oweChooseAgentSlot(p: {
     p.playbookName,
     owedAt,
     p.candidates.length === 0
-      ? "No agent is bound for dispatch yet — bind one to its provider in Settings › Agents, then run this again."
+      ? "No agent is bound for dispatch yet. Bind one to its provider — this run starts again by itself once you do."
       : "Several agents can take this work; pick the one that builds it, then run this again."
   );
+  // Zero options is not a question with no answers: it is something to DO —
+  // an `act` ask whose door opens agent Settings. Binding an agent there
+  // re-dispatches this run (`redispatchAfterAgentBound`, the same door as an
+  // answer to this slot).
+  const settingsDoor = openTypedLink("settings", AGENT_SETTINGS_SECTION);
+  const ask: SlotAsk =
+    named.length > 0
+      ? {
+          mode: "choose",
+          options: named.map((a) => ({
+            label: a.name?.trim() || "Agent",
+            value: a.id,
+          })),
+        }
+      : {
+          mode: "act",
+          // An ask's url is http(s) only: a pod without PUBLIC_URL (a
+          // pod-relative link) gives the steps alone, never a dead door.
+          ...(/^https?:\/\//.test(settingsDoor) ? { url: settingsDoor } : {}),
+          steps: ["Bind one of your agents to its provider."],
+        };
   const chooseSlot: ExpectedOutput = {
     ...slot!,
     label: CHOOSE_AGENT_SLOT_LABEL,
     kind: PARAM_SLOT_KIND,
-    ...(named.length > 0
-      ? {
-          ask: {
-            mode: "choose",
-            options: named.map((a) => ({
-              label: a.name?.trim() || "Agent",
-              value: a.id,
-            })),
-          },
-        }
-      : {}),
+    ask,
   };
   let before: ExpectedOutput[] = [];
   let after: ExpectedOutput[] = [];

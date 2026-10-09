@@ -37,6 +37,7 @@ import {
 } from "../links/links-service.js";
 import { CHOOSE_AGENT_SLOT_LABEL } from "../playbooks/executors/external-agent-executor.js";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
+import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 import { asRecord } from "./binding-call.js";
 
 const logger = createLogger({ module: "agent-dispatch/redispatch" });
@@ -135,6 +136,64 @@ export async function redispatchAfterAgentChoice(
   }
   await recordExecutorResult(run.id, result);
   return { status: "redispatched", runId: run.id, runStatus: result.status };
+}
+
+/**
+ * An agent was BOUND (`agentUsers.setBinding`) ⇒ every session of its owner
+ * still owed "Choose an agent" is re-dispatched — through the SAME door as an
+ * answer to that slot ({@link redispatchAfterAgentChoice}), never a second
+ * dispatch path. The owed slot is retired first, so a run that still cannot
+ * pick one agent re-owes it FRESH (with the now-bindable agents as options)
+ * instead of keeping the old zero-option ask. Each session is independent: one
+ * failing re-dispatch is logged and the rest still run.
+ */
+export async function redispatchAfterAgentBound(
+  ownerUserId: string
+): Promise<Array<{ sessionId: string } & RedispatchOutcome>> {
+  const label = normalizeExpectedLabel(CHOOSE_AGENT_SLOT_LABEL);
+  const rows = await db
+    .select({
+      id: focusSessions.id,
+      expectedOutputs: focusSessions.expectedOutputs,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.userId, ownerUserId),
+        drizzleSql`${focusSessions.expectedOutputs} @> ${JSON.stringify([
+          { label: CHOOSE_AGENT_SLOT_LABEL },
+        ])}::jsonb`
+      )
+    )
+    .limit(50);
+  const owing = rows.filter((r) =>
+    (Array.isArray(r.expectedOutputs) ? r.expectedOutputs : []).some(
+      (o: { label?: string; status?: string } | null) =>
+        normalizeExpectedLabel(o?.label) === label && o?.status !== "done"
+    )
+  );
+  const out: Array<{ sessionId: string } & RedispatchOutcome> = [];
+  for (const row of owing) {
+    try {
+      await updateExpectedOutputsLocked(row.id, (current) => {
+        const next = current.filter(
+          (o) =>
+            !(normalizeExpectedLabel(o?.label) === label && o.status !== "done")
+        );
+        return next.length === current.length ? null : next;
+      });
+      out.push({
+        sessionId: row.id,
+        ...(await redispatchAfterAgentChoice(row.id)),
+      });
+    } catch (err) {
+      logger.error(
+        { err, sessionId: row.id },
+        "agent bound — re-dispatching the run FAILED"
+      );
+    }
+  }
+  return out;
 }
 
 export const agentChoiceRedispatchReactor: Reactor = {

@@ -97,7 +97,17 @@ const fakeDb: any = {
   insert: () => chain([]),
   delete: () => chain([]),
   transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(fakeDb),
-  query: {},
+  // The tRPC middlewares (guest containment, read-only guard) look the caller
+  // up through the relational API: an unknown row is a plain signed-in human.
+  query: new Proxy(
+    {},
+    {
+      get: () => ({
+        findFirst: async () => undefined,
+        findMany: async () => [],
+      }),
+    }
+  ),
 };
 
 class FakeAppRepository {
@@ -260,6 +270,8 @@ const { registerAppExecutors } =
   await import("../../../proposals/executors/app.js");
 const { proposalExecRegistry } =
   await import("../../../proposals/execution-registry.js");
+const { appsRouter } = await import("../../../apps.js");
+const { runWithActingAgent } = await import("@synap/database");
 
 function makeApp_(vars: Record<string, unknown>) {
   const app = new OpenAPIHono();
@@ -729,5 +741,134 @@ describe("app-connect service — rename and remove for good (tRPC doors)", () =
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(state.removed).toBe(false);
     expect(state.renamedTo).toBeNull();
+  });
+});
+
+/**
+ * Every app-lifecycle WRITE refuses an agent credential and a scoped key
+ * (`assertOwnerCredential`) — an agent key resolves `userId` to the human it
+ * acts for, so the owner floor alone let it revoke the owner's apps or revive
+ * a revoked one. Per door: refused for an agent and for a scoped key, with
+ * NOTHING written; allowed for the owner signed in as themselves.
+ */
+describe("app lifecycle writes — the owner's own credential only", () => {
+  const SCOPED = {
+    scopes: [{ permissions: ["entity.person.create"] }],
+    clientId: PUBLIC_ID,
+  };
+  const nothingWritten = () => {
+    expect(state.registered).toBeNull();
+    expect(state.revokedKeyCalls).toHaveLength(0);
+    expect(state.revokedGrantKeyIdCalls).toHaveLength(0);
+    expect(state.withdrawCalls).toHaveLength(0);
+    expect(state.renamedTo).toBeNull();
+    expect(state.removed).toBe(false);
+    expect(state.events).toHaveLength(0);
+  };
+
+  it("REST POST /apps refuses an agent credential (no revive)", async () => {
+    state.app = makeApp({ revokedAt: new Date("2026-10-07T00:00:00Z") });
+    const app = makeApp_({ scopes: WRITE, userId: OWNER, agentUserId: AGENT });
+    const res = await post(app, "/apps", { name: "synap.live" });
+    expect(res.status).toBe(403);
+    nothingWritten();
+  });
+
+  it("REST POST /apps refuses a scoped key", async () => {
+    state.ambientGrant = SCOPED;
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+    const res = await post(app, "/apps", { name: "synap.live" });
+    expect(res.status).toBe(403);
+    nothingWritten();
+  });
+
+  it("REST DELETE /apps/:id refuses an agent credential (cannot revoke its parent)", async () => {
+    state.existingKeyIds = ["old-key-1"];
+    state.pendingIds = [PROPOSAL_ID];
+    const app = makeApp_({ scopes: WRITE, userId: OWNER, agentUserId: AGENT });
+    const res = await app.request(`/apps/${PUBLIC_ID}`, { method: "DELETE" });
+    expect(res.status).toBe(403);
+    nothingWritten();
+  });
+
+  it("REST DELETE /apps/:id refuses a scoped key", async () => {
+    state.existingKeyIds = ["old-key-1"];
+    state.ambientGrant = SCOPED;
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+    const res = await app.request(`/apps/${PUBLIC_ID}`, { method: "DELETE" });
+    expect(res.status).toBe(403);
+    nothingWritten();
+  });
+
+  const caller = () =>
+    appsRouter.createCaller({ authenticated: true, userId: OWNER } as never);
+  const trpcDoors: Array<[string, () => Promise<unknown>]> = [
+    ["apps.create", () => caller().create({ name: "synap.live" })],
+    [
+      "apps.rename",
+      () => caller().rename({ publicId: PUBLIC_ID, name: "Landing" }),
+    ],
+    ["apps.revoke", () => caller().revoke({ publicId: PUBLIC_ID })],
+    ["apps.remove", () => caller().remove({ publicId: PUBLIC_ID })],
+    ["apps.issueKey", () => caller().issueKey({ publicId: PUBLIC_ID })],
+  ];
+
+  for (const [door, call] of trpcDoors) {
+    it(`tRPC ${door} refuses an agent principal`, async () => {
+      state.app = makeApp({
+        revokedAt: door === "apps.remove" ? new Date() : null,
+        approvedRequests: [
+          { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+        ],
+      });
+      state.existingKeyIds = ["old-key-1"];
+      await expect(runWithActingAgent(AGENT, call)).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringMatching(/^An agent credential cannot /),
+      });
+      nothingWritten();
+      expect(state.keyInput).toBeNull();
+    });
+
+    it(`tRPC ${door} refuses a scoped key`, async () => {
+      state.app = makeApp({
+        revokedAt: door === "apps.remove" ? new Date() : null,
+        approvedRequests: [
+          { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+        ],
+      });
+      state.existingKeyIds = ["old-key-1"];
+      state.ambientGrant = SCOPED;
+      await expect(call()).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringMatching(/^A scoped key cannot /),
+      });
+      nothingWritten();
+      expect(state.keyInput).toBeNull();
+    });
+  }
+
+  it("the owner signed in as themselves passes every tRPC door", async () => {
+    state.app = makeApp({
+      approvedRequests: [
+        { permission: "entity.person.create", workspaceId: WORKSPACE_ID },
+      ],
+    });
+    await expect(
+      caller().create({ name: "synap.live" })
+    ).resolves.toMatchObject({ public_id: PUBLIC_ID });
+    expect(state.registered).toMatchObject({ ownerUserId: OWNER });
+    await caller().rename({ publicId: PUBLIC_ID, name: "Landing" });
+    expect(state.renamedTo).toBe("Landing");
+    await expect(
+      caller().issueKey({ publicId: PUBLIC_ID })
+    ).resolves.toMatchObject({ keyId: "key-0001" });
+    await expect(caller().revoke({ publicId: PUBLIC_ID })).resolves.toEqual({
+      revoked: true,
+      publicId: PUBLIC_ID,
+    });
+    state.app = makeApp({ revokedAt: new Date() });
+    await caller().remove({ publicId: PUBLIC_ID });
+    expect(state.removed).toBe(true);
   });
 });

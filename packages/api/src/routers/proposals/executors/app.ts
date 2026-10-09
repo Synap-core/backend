@@ -5,6 +5,9 @@
  * The app ASKED for reach; this records the human's answer on the app
  * (`apps.approved_requests`). It mints NOTHING — the bearer key is minted on
  * demand by `POST /apps/:id/key`, so no plaintext ever rests in a proposal.
+ * Approval is the truth: a key the app already holds is re-derived from the
+ * new approval at once (`applyApprovedReach` — its grants and the app agent's
+ * memberships), so a narrowed approval narrows the live key.
  *
  * IDENTITY: only the app's OWNER may approve. `app/connect` is filed by the
  * owner's CLI, but the default `owner_and_admins` policy could let a workspace
@@ -26,6 +29,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { auditLog } from "../../../utils/audit-log.js";
+import { applyApprovedReach } from "../../../services/app-connect.js";
 
 export function registerAppExecutors(): void {
   registerProposalExecutor({
@@ -88,6 +92,10 @@ export function registerAppExecutors(): void {
           message: "Could not record the app's approved requests.",
         });
       }
+      // Before the proposal is marked approved: if this throws, the proposal
+      // stays pending and a retry re-applies (idempotent) — never an approved
+      // proposal whose live key still holds the old reach.
+      const rederivedKeys = await applyApprovedReach(appId);
 
       await db
         .update(proposals)
@@ -113,6 +121,7 @@ export function registerAppExecutors(): void {
           publicId: app.publicId,
           proposalId: input.proposalId,
           requests,
+          rederivedKeys,
         },
       });
 

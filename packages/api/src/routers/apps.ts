@@ -22,6 +22,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import {
   issueKey,
   loadOwnedApp,
+  registerApp,
   removeApp,
   renameApp,
   requestAccess,
@@ -79,15 +80,18 @@ export const appsRouter = router({
     .mutation(async ({ ctx, input }) => {
       // Fields the caller did NOT send stay `undefined` — `register` reads that
       // as "leave it alone", so re-adding an existing name cannot wipe the
-      // description it already had.
-      const registered = await new AppRepository(db).register({
-        ownerUserId: ctx.userId,
-        name: input.name,
-        description: input.description ?? undefined,
-        logoUrl: input.logoUrl ?? undefined,
-        mode: input.mode ?? undefined,
-      });
-      return serializeApp(await loadOwnedApp(registered.publicId, ctx.userId));
+      // description it already had. An agent principal / scoped key is
+      // refused by the service (`assertOwnerCredential`), as every lifecycle
+      // write is.
+      return serializeApp(
+        await registerApp({
+          ownerUserId: ctx.userId,
+          name: input.name,
+          description: input.description ?? undefined,
+          logoUrl: input.logoUrl ?? undefined,
+          mode: input.mode ?? undefined,
+        })
+      );
     }),
 
   /** One of the caller's own apps, by public id, with its keys — floored on the owner. */

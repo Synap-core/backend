@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   },
   failCreate: false,
   tool: null as null | Record<string, unknown>,
+  redispatchedFor: [] as string[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -45,6 +46,14 @@ vi.mock("../middleware/audit-log.js", async () => {
   return { auditLogMiddleware: t.middleware(({ next }) => next()) };
 });
 vi.mock("../utils/audit-log.js", () => ({ auditLog: async () => null }));
+// The re-dispatch door has its own suite (redispatch-on-choice.pglite); here
+// only WHO it is called for, and when.
+vi.mock("../services/agent-dispatch/redispatch-on-choice.js", () => ({
+  redispatchAfterAgentBound: async (ownerUserId: string) => {
+    h.redispatchedFor.push(ownerUserId);
+    return [];
+  },
+}));
 vi.mock("../access/index.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   scopedDb: () => ({ findFirst: async () => h.tool }),
@@ -114,6 +123,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   h.failCreate = false;
+  h.redispatchedFor.length = 0;
   await q(`delete from links`);
   await q(
     `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata) values ($1, 'participant', $2, 'tool', $3, 'dispatched_via', '{}'::jsonb)`,
@@ -148,5 +158,18 @@ describe("agentUsers.setBinding — replace is one transaction", () => {
       caller().setBinding({ agentUserId: AGENT, toolId: NEW_TOOL })
     ).rejects.toThrow();
     expect(await boundTo()).toEqual([OLD_TOOL]);
+  });
+
+  it("a saved binding re-dispatches the AGENT OWNER's waiting runs; an unbind or a failed save does not", async () => {
+    await caller().setBinding({ agentUserId: AGENT, toolId: NEW_TOOL });
+    expect(h.redispatchedFor).toEqual([OWNER]);
+    h.redispatchedFor.length = 0;
+    await caller().setBinding({ agentUserId: AGENT, toolId: null });
+    expect(h.redispatchedFor).toEqual([]);
+    h.failCreate = true;
+    await expect(
+      caller().setBinding({ agentUserId: AGENT, toolId: NEW_TOOL })
+    ).rejects.toThrow();
+    expect(h.redispatchedFor).toEqual([]);
   });
 });

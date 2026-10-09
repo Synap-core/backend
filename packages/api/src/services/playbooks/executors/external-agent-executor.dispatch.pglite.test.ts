@@ -311,6 +311,9 @@ describe("external-agent executor — dispatch through the stored binding", () =
     const res = await exec.run(ctx(sid, { agentUserId: FOREIGN }));
     expect(res.status).toBe("failed");
     expect(res.error).toContain("not one of your agents");
+    // Named, never a raw id.
+    expect(res.error).toContain("Their agent");
+    expect(res.error).not.toContain(FOREIGN);
     expect(h.calls).toHaveLength(0);
   });
 
@@ -364,5 +367,51 @@ describe("external-agent executor — dispatch through the stored binding", () =
     expect(
       (await slots(sid)).filter((s) => s.label === CHOOSE_AGENT_SLOT_LABEL)
     ).toHaveLength(1);
+  });
+
+  it("NO agent bound at all ⇒ the owed slot is an ACT ask whose door opens agent Settings (never a zero-option choose)", async () => {
+    const loner = randomUUID();
+    await q(
+      `insert into users (id, email, name, timezone, user_type) values ($1, 'l@x.test', 'Loner', 'UTC', 'human')`,
+      [loner]
+    );
+    const sid = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, title, status, expected_outputs, agent_ids, metadata, criteria, channel_id, created_at, updated_at, started_at)
+       values ($1, $2, 'Ship it', 'Ship it', 'active', '[]'::jsonb, '{}', '{}'::jsonb, '[]'::jsonb, $3, now(), now(), now())`,
+      [sid, loner, randomUUID()]
+    );
+    const res = await exec.run({ ...ctx(sid), userId: loner });
+    expect(res.status).toBe("failed");
+    const [slot] = (await slots(sid)).filter(
+      (s) => s.label === CHOOSE_AGENT_SLOT_LABEL
+    );
+    expect(slot!.ask).toEqual({
+      mode: "act",
+      url: "https://pod.example.test/open/settings/agents",
+      steps: ["Bind one of your agents to its provider."],
+    });
+    expect(String(slot!.why)).not.toContain("Settings ›");
+  });
+
+  it("a PROPOSED start records a pending_start external agent with its proposal (the section shows it)", async () => {
+    h.next = {
+      kind: "proposed",
+      proposalId: "prop-7",
+      reviewUrl: "https://pod.example.test/open/prop-7",
+      ackState: "pending",
+    };
+    const sid = await session();
+    const res = await exec.run(ctx(sid, { agentUserId: AGENT_A }));
+    expect(res.status).toBe("proposed");
+    expect(res.externalAgent).toMatchObject({
+      agentUserId: AGENT_A,
+      toolId: TOOL_A,
+      status: "pending_start",
+      proposalId: "prop-7",
+      externalId: null,
+    });
+    // The provider is named by the service-mark registry, never its token.
+    expect(String(h.posts.at(-1)?.content)).not.toContain("acme-cloud-agent");
   });
 });

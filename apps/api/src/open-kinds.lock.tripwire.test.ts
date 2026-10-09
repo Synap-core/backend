@@ -20,12 +20,13 @@ const POD_ADMIN_BOUNCE_TYPES = [
   "project",
   "workspace",
   "capability",
+  "settings",
 ] as const;
 
 // Frozen copy of TYPED_DEEP_LINK_KINDS (packages/api/src/utils/deep-links.ts).
 // `openTypedLink` may only emit kinds the typed route actually serves; a kind
 // added there without a route is a dead link, which is worse than none.
-const DEEP_LINK_EMITTED_KINDS = ["capability"] as const;
+const DEEP_LINK_EMITTED_KINDS = ["capability", "settings"] as const;
 
 describe("open kinds lock", () => {
   it("every kind deep-links.ts emits is served by TYPED_OPEN_KINDS", () => {

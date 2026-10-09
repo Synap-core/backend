@@ -35,6 +35,7 @@ import {
 import {
   issueKey,
   loadOwnedApp,
+  registerApp,
   requestAccess,
   revokeApp,
   serializeApp,
@@ -86,21 +87,18 @@ export function registerAppsRoutes(app: HubHono): void {
       );
     }
     try {
-      // Unset fields stay `undefined` so `register` leaves them alone — an agent
-      // re-registering a name it already uses must not blank the description.
-      const record = await new AppRepository(db).register({
+      // Unset fields stay `undefined` so `register` leaves them alone — a
+      // re-register of a name already in use must not blank the description.
+      // Answers through the ONE projection, the same shape as every read.
+      const found = await registerApp({
         ownerUserId: userId,
         name: body.data.name,
         description: body.data.description ?? undefined,
         logoUrl: body.data.logoUrl ?? undefined,
         mode: body.data.mode ?? undefined,
+        actorAgentUserId: c.get("agentUserId") as string | undefined,
       });
-      // Read back through the ONE projection: register answers the same shape
-      // as every other read.
-      return c.json(
-        { app: serializeApp(await loadOwnedApp(record.publicId, userId)) },
-        201
-      );
+      return c.json({ app: serializeApp(found) }, 201);
     } catch (err) {
       return fail(c, err, "POST /apps");
     }
@@ -184,7 +182,7 @@ export function registerAppsRoutes(app: HubHono): void {
     }
   });
 
-  // ── DELETE /apps/:id — revoke the app (and its keys) ──────────────────────
+  // ── DELETE /apps/:id — revoke the app (the owner, never an agent) ─────────
   app.delete("/apps/:id", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
@@ -195,6 +193,7 @@ export function registerAppsRoutes(app: HubHono): void {
       const { publicId } = await revokeApp({
         publicId: c.req.param("id"),
         ownerUserId: userId,
+        actorAgentUserId: c.get("agentUserId") as string | undefined,
       });
       return c.json({ revoked: true, public_id: publicId });
     } catch (err) {

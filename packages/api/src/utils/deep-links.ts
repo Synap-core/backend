@@ -90,8 +90,11 @@ export function openPath(id: string): string {
  * itself locked against pod-admin's HOST ∪ BOUNCE list by
  * `apps/api/src/open-kinds.lock.test.ts` — the lock carries a frozen copy of
  * this union so a kind emitted here can never outrun the route that serves it.
+ *
+ * `settings` takes a Settings SECTION as its id (`agents`): the door an owed
+ * slot hands a person whose fix lives in Settings (e.g. "bind an agent").
  */
-export const TYPED_DEEP_LINK_KINDS = ["capability"] as const;
+export const TYPED_DEEP_LINK_KINDS = ["capability", "settings"] as const;
 export type TypedDeepLinkKind = (typeof TYPED_DEEP_LINK_KINDS)[number];
 
 /** Absolute, clickable typed link: `${PUBLIC_URL}/open/<type>/<id>`. */

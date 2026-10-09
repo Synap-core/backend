@@ -62,6 +62,10 @@ import {
 import { AccessContext, scopedDb } from "../access/index.js";
 import { links, tools } from "@synap/database/schema";
 import { createLink } from "../services/links/links-service.js";
+import { redispatchAfterAgentBound } from "../services/agent-dispatch/redispatch-on-choice.js";
+import { createLogger } from "@synap-core/core";
+
+const bindingLogger = createLogger({ module: "agent-users/set-binding" });
 import {
   AgentBindingError,
   loadAgentDispatchSummaries,
@@ -889,6 +893,21 @@ export const agentUsersRouter = router({
           by: isOwner ? "owner" : "pod_admin",
         },
       });
+
+      // A NEW binding unblocks the owner's runs that failed for want of one:
+      // each session still owed "Choose an agent" is re-dispatched through the
+      // same door an answer to that slot uses. The binding is saved either
+      // way, so a re-dispatch failure is logged, never this mutation's error.
+      if (input.toolId && agent.createdByUserId) {
+        try {
+          await redispatchAfterAgentBound(agent.createdByUserId);
+        } catch (err) {
+          bindingLogger.error(
+            { err, agentUserId: agent.id },
+            "binding saved, but re-dispatching the owner's waiting runs failed"
+          );
+        }
+      }
 
       const summary = (await loadAgentDispatchSummaries([agent.id])).get(
         agent.id

@@ -110,6 +110,58 @@ export async function loadOwnedApp(
   return found;
 }
 
+/**
+ * The ONE credential check every app-lifecycle WRITE runs (register/revive,
+ * issue key, rename, revoke, remove): the caller must be the owner signed in
+ * AS THEMSELVES — neither an agent's credential (`actorAgentUserId`, or the
+ * request's ambient acting agent) nor a grant-bound key. An agent key resolves
+ * `userId` to the human it acts for, so without this a scoped agent could
+ * revoke its owner's apps (its own parent included) or revive a revoked one.
+ * The CLI still works: `synap login` / `pods add` keys are the human's own,
+ * with no agent principal and no grant. Reads stay open.
+ */
+export function assertOwnerCredential(
+  act: string,
+  actorAgentUserId?: string | null
+): void {
+  if (actorAgentUserId ?? getActingAgentUserId()) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `An agent credential cannot ${act} — sign in as the app's owner.`,
+    });
+  }
+  if (getRequestGrant()) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `A scoped key cannot ${act} — use your own sign-in or CLI key.`,
+    });
+  }
+}
+
+/**
+ * Register (or revive, by owner + name) an app — the ONE service behind
+ * `POST /api/hub/apps` and `apps.create`. Reviving clears the old approval
+ * (`AppRepository.register`). Returns the app through the one read projection.
+ */
+export async function registerApp(args: {
+  ownerUserId: string;
+  name: string;
+  description?: string | null;
+  logoUrl?: string | null;
+  mode?: "specific";
+  actorAgentUserId?: string | null;
+}): Promise<AppWithGrants> {
+  assertOwnerCredential("register an app", args.actorAgentUserId);
+  const record = await new AppRepository(db).register({
+    ownerUserId: args.ownerUserId,
+    name: args.name,
+    description: args.description,
+    logoUrl: args.logoUrl,
+    mode: args.mode,
+  });
+  return loadOwnedApp(record.publicId, args.ownerUserId);
+}
+
 function assertNotRevoked(found: AppWithGrants): void {
   // Revoked is terminal until the app is registered again (which clears it).
   if (found.app.revokedAt) {
@@ -346,6 +398,64 @@ async function syncAppAgentMemberships(
 }
 
 /**
+ * Make the app's reach EQUAL what its owner approved: the agent's workspace
+ * memberships (the RBAC floor) and each given key's grants (one per approved
+ * workspace), both derived from `approved`. The ONE derivation behind
+ * `issueKey`, `adoptLegacyAppKey` and a re-approval (`applyApprovedReach`).
+ * Idempotent: the memberships converge and `attachMany` replaces a key's
+ * active grant set, so a re-run with the same approval changes nothing.
+ */
+async function setApprovedReach(args: {
+  app: { publicId: string; ownerUserId: string };
+  agentUserId: string;
+  approved: readonly AppApprovedRequest[];
+  apiKeyIds: readonly string[];
+}): Promise<void> {
+  const owner = args.app.ownerUserId;
+  await syncAppAgentMemberships(args.agentUserId, owner, args.approved);
+  for (const apiKeyId of args.apiKeyIds) {
+    await attachGrantsOrRevoke({
+      apiKeyId,
+      principalUserId: args.agentUserId,
+      onBehalfOf: owner,
+      grants: grantsForApprovedRequests(args.approved),
+      expiresAt: null,
+      createdBy: owner,
+      clientId: args.app.publicId,
+    });
+  }
+}
+
+/**
+ * After an approval: approval is the truth, so the LIVE key(s) and the app's
+ * agent are re-derived from the app's new `approved_requests` — narrowing it
+ * narrows the key at once, widening it reaches the key without a re-issue.
+ * Only keys the app's agent HOLDS are touched; a pre-0313 key still held by
+ * the human is re-derived when it is adopted (`adoptLegacyAppKey` reads the
+ * approval then). No agent, no live key, nothing approved, or a revoked app ⇒
+ * nothing to do. Returns how many keys were re-granted.
+ */
+export async function applyApprovedReach(appId: string): Promise<number> {
+  const app = await new AppRepository(db).get(appId);
+  const approved = app?.approvedRequests ?? [];
+  if (!app?.agentUserId || app.revokedAt || approved.length === 0) return 0;
+  const live = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .where(
+      and(eq(apiKeys.userId, app.agentUserId), eq(apiKeys.isActive, true))
+    );
+  if (live.length === 0) return 0;
+  await setApprovedReach({
+    app,
+    agentUserId: app.agentUserId,
+    approved,
+    apiKeyIds: live.map((k) => k.id),
+  });
+  return live.length;
+}
+
+/**
  * A key minted before 0313 is held by the HUMAN (no agent, ungoverned). The
  * first time it authenticates it moves onto the app's agent — same plaintext,
  * so the app keeps working — and its grants are RE-DERIVED from what the owner
@@ -382,17 +492,13 @@ export async function adoptLegacyAppKey(args: {
     .limit(1);
   if (key?.userId === agentUserId) return agentUserId;
   if (key?.userId !== found.app.ownerUserId) return null;
-  await syncAppAgentMemberships(agentUserId, found.app.ownerUserId, approved);
   // Grants first, then the key: a crash in between leaves a human-held key
   // that the next request adopts again.
-  await attachGrantsOrRevoke({
-    apiKeyId: args.apiKeyId,
-    principalUserId: agentUserId,
-    onBehalfOf: found.app.ownerUserId,
-    grants: grantsForApprovedRequests(approved),
-    expiresAt: null,
-    createdBy: found.app.ownerUserId,
-    clientId: found.app.publicId,
+  await setApprovedReach({
+    app: found.app,
+    agentUserId,
+    approved,
+    apiKeyIds: [args.apiKeyId],
   });
   await repo.adoptKey({
     apiKeyId: args.apiKeyId,
@@ -441,20 +547,7 @@ export async function issueKey(args: {
   /** The door issuing it (the agent's provenance on first issue). */
   via: AppKeyDoor;
 }): Promise<{ apiKey: string; keyId: string }> {
-  if (args.actorAgentUserId ?? getActingAgentUserId()) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message:
-        "An agent credential cannot mint an app key — sign in as the app's owner.",
-    });
-  }
-  if (getRequestGrant()) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message:
-        "A scoped key cannot mint an app key — use your own sign-in or CLI key.",
-    });
-  }
+  assertOwnerCredential("mint an app key", args.actorAgentUserId);
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
   const approved = found.app.approvedRequests ?? [];
@@ -467,7 +560,6 @@ export async function issueKey(args: {
   }
   const userId = args.ownerUserId;
   const agentUserId = await ensureAppAgent(found, args.via);
-  await syncAppAgentMemberships(agentUserId, userId, approved);
   const rotated = await revokeAppKeys(
     found,
     userId,
@@ -491,14 +583,11 @@ export async function issueKey(args: {
     },
     userId
   );
-  await attachGrantsOrRevoke({
-    apiKeyId: keyRow.id,
-    principalUserId: agentUserId,
-    onBehalfOf: userId,
-    grants: grantsForApprovedRequests(approved),
-    expiresAt: null,
-    createdBy: userId,
-    clientId: found.app.publicId,
+  await setApprovedReach({
+    app: found.app,
+    agentUserId,
+    approved,
+    apiKeyIds: [keyRow.id],
   });
   await recordAppEvent(found, userId, APP_EVENT_ACTIONS.keyIssued, {
     keyId: keyRow.id,
@@ -515,7 +604,9 @@ export async function issueKey(args: {
 export async function revokeApp(args: {
   publicId: string;
   ownerUserId: string;
+  actorAgentUserId?: string | null;
 }): Promise<{ publicId: string }> {
+  assertOwnerCredential("revoke an app", args.actorAgentUserId);
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   const repo = new AppRepository(db);
   const withdrawn = await repo.withdrawPendingRequests(
@@ -552,7 +643,9 @@ export async function renameApp(args: {
   publicId: string;
   ownerUserId: string;
   name: string;
+  actorAgentUserId?: string | null;
 }): Promise<AppWithGrants> {
+  assertOwnerCredential("rename an app", args.actorAgentUserId);
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   const to = args.name.trim();
   if (to === found.app.name) return found;
@@ -588,7 +681,9 @@ export async function renameApp(args: {
 export async function removeApp(args: {
   publicId: string;
   ownerUserId: string;
+  actorAgentUserId?: string | null;
 }): Promise<{ publicId: string }> {
+  assertOwnerCredential("remove an app", args.actorAgentUserId);
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   if (!found.app.revokedAt) {
     throw new TRPCError({

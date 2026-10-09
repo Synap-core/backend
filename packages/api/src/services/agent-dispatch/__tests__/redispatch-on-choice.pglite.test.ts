@@ -93,6 +93,7 @@ import {
 import {
   agentChoiceRedispatchReactor,
   redispatchAfterAgentChoice,
+  redispatchAfterAgentBound,
 } from "../redispatch-on-choice.js";
 import { CHOOSE_AGENT_SLOT_LABEL } from "../../playbooks/executors/external-agent-executor.js";
 
@@ -226,6 +227,69 @@ describe("re-dispatch after 'Choose an agent'", () => {
       status: "nothing_to_redispatch",
     });
     expect(h.calls).toHaveLength(1);
+  });
+
+  it("BINDING an agent re-dispatches every session of its owner still owed 'Choose an agent' — the slot retired, the same run, once", async () => {
+    const slot = {
+      label: CHOOSE_AGENT_SLOT_LABEL,
+      kind: "param",
+      owner: "human",
+      ask: { mode: "act", steps: ["Bind one of your agents to its provider."] },
+    };
+    // Owed, unanswered: re-dispatched.
+    const owed = await failedChooseRun();
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb, metadata = '{}'::jsonb where id = $1`,
+      [
+        owed.sessionId,
+        JSON.stringify([slot, { label: "Other", owner: "human" }]),
+      ]
+    );
+    // Already answered (done): not owed, left alone.
+    const answered = await failedChooseRun();
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [answered.sessionId, JSON.stringify([{ ...slot, status: "done" }])]
+    );
+    const out = await redispatchAfterAgentBound(OWNER);
+    expect(out).toEqual([
+      {
+        sessionId: owed.sessionId,
+        status: "redispatched",
+        runId: owed.runId,
+        runStatus: "running",
+      },
+    ]);
+    // The single bound agent is chosen by the executor's own rule.
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]).toMatchObject({ agentUserId: AGENT, toolId: TOOL });
+    expect((await run(owed.runId)).status).toBe("running");
+    expect((await run(answered.runId)).status).toBe("failed");
+    const left = (
+      await q<{ expected_outputs: Array<{ label: string }> }>(
+        `select expected_outputs from focus_sessions where id = $1`,
+        [owed.sessionId]
+      )
+    ).rows[0]!.expected_outputs.map((o) => o.label);
+    expect(left).toEqual(["Other"]);
+    // A second bind finds nothing owed.
+    expect(await redispatchAfterAgentBound(OWNER)).toEqual([]);
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it("a binding for ANOTHER owner never re-dispatches this owner's sessions", async () => {
+    const owed = await failedChooseRun();
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        owed.sessionId,
+        JSON.stringify([{ label: CHOOSE_AGENT_SLOT_LABEL, owner: "human" }]),
+      ]
+    );
+    expect(await redispatchAfterAgentBound(randomUUID())).toEqual([]);
+    expect((await run(owed.runId)).status).toBe("failed");
+    // Clean up for the other tests.
+    await q(`update focus_sessions set expected_outputs = '[]'::jsonb`);
   });
 
   it("the reactor matches ONLY the 'Choose an agent' param slot's answer", () => {

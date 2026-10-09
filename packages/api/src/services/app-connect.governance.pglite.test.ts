@@ -86,6 +86,8 @@ import {
 import { resolveKeyIdentity } from "../access/key-identity.js";
 import { attachGrantsOrRevoke } from "./key-grant.js";
 import { appsRouter } from "../routers/apps.js";
+import { registerAppExecutors } from "../routers/proposals/executors/app.js";
+import { proposalExecRegistry } from "../routers/proposals/execution-registry.js";
 import {
   grantsForApprovedRequests,
   issueKey,
@@ -467,5 +469,110 @@ describe("an app is governed like an agent (founder decision 2)", () => {
     expect(listed.agent_user_id).toBe(appAgent);
     const key = listed.keys.find((k) => k.id === issued.keyId);
     expect(key).toMatchObject({ isActive: true, expiresAt: null });
+  });
+});
+
+/**
+ * Approval is the truth: a re-approval reaches the LIVE key and the app's
+ * agent at once — through the real `app/connect` executor, not a hand call of
+ * the derivation. Approve A+B, issue the key, re-approve C ⇒ the key's grant
+ * and the agent's memberships are exactly C. The input that rules out "only
+ * issueKey derives reach" is the narrowing: before the fix the key kept A+B.
+ */
+describe("a re-approval re-derives the live key and the app's agent", () => {
+  it("approve A+B, issue key, re-approve C ⇒ grant == C, memberships == C", async () => {
+    const OPS = randomUUID();
+    await q(
+      `insert into workspaces (id, name, owner_id) values ($1, 'Ops', $2)`,
+      [OPS, OWNER]
+    );
+    const repo = new AppRepository(h.db as never);
+    const app = await repo.register({
+      ownerUserId: OWNER,
+      name: "re-approved",
+    });
+    await repo.setApprovedRequests(app.id, [
+      { permission: "entity.person.create", workspaceId: SALES },
+      { permission: "entity.note.read", workspaceId: FINANCE },
+    ]);
+    const key = await issueKey({
+      publicId: app.publicId,
+      ownerUserId: OWNER,
+      via: "ui",
+    });
+    const agent = (await repo.getByPublicId(app.publicId))!.app.agentUserId!;
+    const membershipsOf = async () =>
+      (
+        await q<{ workspace_id: string; role: string }>(
+          `select workspace_id, role from workspace_members where user_id = $1 order by workspace_id`,
+          [agent]
+        )
+      ).rows;
+    const scopesOf = async () => {
+      const g = await new (await import("@synap/database")).GrantRepository(
+        h.db as never
+      ).resolveForKey(key.keyId);
+      return g!.scopes.map((s) => ({
+        permissions: [...s.permissions],
+        workspaceIds: s.workspaceIds,
+      }));
+    };
+    expect(await scopesOf()).toHaveLength(2);
+    expect(await membershipsOf()).toHaveLength(2);
+
+    // The owner approves a NEW request for C through the real executor.
+    const proposalId = randomUUID();
+    const C = [{ permission: "entity.task.create", workspaceId: OPS }];
+    await q(
+      `insert into proposals (id, target_type, target_id, proposal_type, status, data, created_by)
+       values ($1, 'app', $2, 'connect', 'pending', $3::jsonb, $4)`,
+      [
+        proposalId,
+        app.id,
+        JSON.stringify({ appId: app.id, publicId: app.publicId, requests: C }),
+        OWNER,
+      ]
+    );
+    registerAppExecutors();
+    const result = await proposalExecRegistry
+      .resolveExact("app/connect")!
+      .execute({
+        proposal: {
+          id: proposalId,
+          targetType: "app",
+          targetId: app.id,
+          proposalType: "connect",
+          workspaceId: null,
+          sessionId: null,
+          projectId: null,
+          agentUserId: null,
+          sourceMessageId: null,
+          data: { appId: app.id, publicId: app.publicId, requests: C },
+        },
+        payload: null,
+        userId: OWNER,
+        input: { proposalId },
+        ctx: {} as never,
+        deps: {
+          emitProposalReviewed: () => {},
+          reportProposalOutcome: () => {},
+        } as never,
+      } as never);
+    expect(result.success).toBe(true);
+
+    // The SAME live key now holds exactly C — no re-issue needed.
+    expect(await scopesOf()).toEqual([
+      { permissions: ["entity.task.create"], workspaceIds: [OPS] },
+    ]);
+    expect(await membershipsOf()).toEqual([
+      { workspace_id: OPS, role: "editor" },
+    ]);
+    const [live] = (
+      await q<{ is_active: boolean }>(
+        `select is_active from api_keys where id = $1`,
+        [key.keyId]
+      )
+    ).rows;
+    expect(live!.is_active).toBe(true);
   });
 });
