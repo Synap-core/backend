@@ -127,18 +127,32 @@ validation is not yet wired for ad-hoc publishes (official templates are
 validated corpus-wide from their YAML by the official publish
 (`synap market publish --official`) before it posts). Don't claim a composed publish was fully validated; say what actually ran.
 
-**Official templates — ONE writer.** The official template catalog has ONE
-writer: `synap market publish --official [slug...]` (the founder's command: its
-`synap login` session must own the `synap-official` vendor; it previews the diff
-against the live catalog and asks before writing; `--dry-run` previews only) →
-ONE implementation `synap-app/packages/workspace-templates/scripts/publish-official-lib.mjs`
-→ `POST /api/packages` (`publishPackageCore`). `scripts/publish-official.mjs` is
-only its CI wrapper (`publish-official-templates.yml`). The CP never reseeds on
-deploy; `seed-templates.ts` is an insert-only, by-hand bootstrap for an empty
-catalog. A YAML change reaches pods only when that publish runs; a CP-door change
-ships CP-deploy first, then publish. `definition.sourcePackage` (the
-`mergeCatalog` winner signal) is official-only — the CP rejects it (403) from any
-other publisher, so never put it in an ad-hoc package.
+**Official templates — ONE catalog, ONE writer.** Every official template, of
+every kind, lives in ONE catalog package: `synap-app/packages/workspace-templates/`
+(npm `@synap-core/workspace-templates`; a rename to `packages/catalog` /
+`@synap-core/catalog` is planned, not done). By kind: workspaces in `src/*.yaml`,
+then `capabilities/`, `skills/`, `packs/`, `automations/`. Each file is one manifest
+`{apiVersion: synap/v1, kind, meta, spec, dependencies}`. Its `README.md` is the
+how-to. It has ONE writer: `synap catalog publish --official [--kind k] [slug...]`.
+That is the founder's command: its `synap login` session must own the
+`synap-official` vendor. It refuses a non-official account before the preview,
+validates the whole corpus, previews the diff against the live catalog, and asks
+before writing; `--dry-run` previews only. `synap market publish --official` is
+its alias for `--kind workspace`. Both go through the ONE lib
+`scripts/catalog-lib.mjs` → `POST /api/packages` (`publishPackageCore`).
+`synap catalog validate|diff` are the read-only verbs. `scripts/publish-official.mjs`
+is only the CI wrapper (`publish-official-templates.yml`): a read-only preview on
+PRs, and on main a live publish of the kinds in `SYNAP_CATALOG_LIVE_KINDS` (default
+`workspace`). The CP never reseeds on deploy, neither templates nor capabilities.
+`seed-templates.ts` and `seed-capability-templates.ts` are insert-only, by-hand
+bootstraps for an empty CP. A catalog change reaches pods only when that publish
+runs. A CP-door change ships CP-deploy first, then publish.
+`definition.sourcePackage` (the `mergeCatalog` winner signal) is official-only:
+the CP rejects it (403) from any other publisher, so never put it in an ad-hoc
+package. Official capability keys are reserved: an ad-hoc publish of a capability
+whose slug or `capability.key` matches an official one gets 409
+`OFFICIAL_CAPABILITY_KEY_RESERVED`. Pick your own key. As an agent you never run
+the official publish; you author, then hand the command to the human.
 
 ## What you're producing
 
