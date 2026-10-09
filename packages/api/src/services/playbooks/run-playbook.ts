@@ -385,7 +385,7 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     // only the template it was launched from — a run whose playbook has since
     // been re-declared must still read as what it actually needed.
     requiredIntents: playbook.requiredIntents,
-    // The kind the run's subject must be (synap-68's subject-kind floor).
+    // The kind the run's subject must be (the subject-kind floor).
     subjectProfile: playbook.subjectProfile,
   };
 }
@@ -759,8 +759,8 @@ export async function runPlaybook(
     };
   }
 
-  // The subject must be the kind the playbook runs on (helper by synap-68):
-  // after the subject is resolved, before any session is minted.
+  // The subject must be the kind the playbook runs on: checked after the
+  // subject is resolved, before any session is minted.
   await assertRunSubjectMatchesPlaybook({
     subjectId: runInput.subjectId,
     subjectProfile: playbook.subjectProfile,
