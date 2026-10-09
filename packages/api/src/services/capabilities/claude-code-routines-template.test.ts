@@ -87,6 +87,7 @@ type Skill = {
 };
 type Template = {
   key: string;
+  playbooks?: Array<Record<string, unknown>>;
   name: string;
   params: Array<{ name: string; required?: boolean }>;
   vault: Array<{ ref: string; value: string }>;
@@ -144,6 +145,23 @@ describe("claude-code-routines template — appliable binding", () => {
     const parsed = CapabilityDefinitionSchema.parse(tpl());
     expect(parsed.key).toBe("claude-code-routines");
     expect(parsed.skills).toHaveLength(2);
+  });
+
+  it("ships ONE runnable hand-off playbook that dispatches through the external-agent executor", () => {
+    const parsed = CapabilityDefinitionSchema.parse(tpl());
+    expect(parsed.playbooks).toHaveLength(1);
+    const pb = parsed.playbooks![0]! as Record<string, any>;
+    expect(pb.executor).toBe("external-agent");
+    expect(pb.status).toBe("active");
+    // `{task}` survives the applier's `{{param}}` interpolation untouched and
+    // names a declared, required param; `repo` is the param the executor reads.
+    const after = applied().playbooks![0]! as Record<string, any>;
+    expect(after.goalTemplate).toBe("{task}");
+    const names = (
+      pb.params as Array<{ name: string; required?: boolean }>
+    ).map((p) => p.name);
+    expect(names).toEqual(["task", "repo"]);
+    expect(pb.params[0].required).toBe(true);
   });
 
   it("binding: external-agent, start + send only, Bearer auth pinned to api.anthropic.com", () => {
