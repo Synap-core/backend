@@ -13,7 +13,14 @@
  */
 
 import { z } from "zod";
-import { db, eq, and, isNull, inArray } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  isNull,
+  inArray,
+  getWorkspaceMembership,
+} from "@synap/database";
 import { aiProviders, aiProviderCredentials } from "@synap/database/schema";
 import {
   encryptServiceKey,
@@ -160,6 +167,60 @@ async function applyUpsert(
   }
 }
 
+// ── Credential overrides: read + write authority ─────────────────────────────
+
+const PLAINTEXT_KEY_TYPES: ReadonlySet<string> = new Set([
+  "is_internal",
+  "system",
+]);
+
+/** `sk-or-v1…bdc6` — enough to recognise a key, never enough to use it. */
+function maskSecret(secret: string | null): string | null {
+  if (!secret) return null;
+  if (secret.length <= 12) return "…";
+  return `${secret.slice(0, 8)}…${secret.slice(-4)}`;
+}
+
+/**
+ * Who may write a credential override.
+ *
+ * A credential override decides which account pays for — and can read — every
+ * prompt the IS sends for its scope, so it is never a default-scope write:
+ *  - an AGENT key needs the narrow `providers.write` scope (not in the default
+ *    bundle, same treatment as provider CRUD above);
+ *  - a workspace-level override needs workspace owner/admin;
+ *  - a user-level override is always the caller's OWN row.
+ */
+async function credentialWriteGate(
+  c: HonoLikeContext
+): Promise<
+  | { ok: true; userId: string; workspaceId: string | undefined }
+  | { ok: false; status: 401 | 403; error: string }
+> {
+  const userId = c.get("userId") as string | undefined;
+  if (!userId) return { ok: false, status: 401, error: "Unauthorized" };
+  const agentUserId = c.get("agentUserId") as string | undefined;
+  if (agentUserId && missingScope(c)) {
+    return {
+      ok: false,
+      status: 403,
+      error: `Missing scope: ${PROVIDER_SCOPE} (agent keys cannot change provider credentials by default)`,
+    };
+  }
+  const workspaceId = c.req.query("workspaceId") || undefined;
+  if (workspaceId) {
+    const membership = await getWorkspaceMembership(db, workspaceId, userId);
+    if (!membership || !["owner", "admin"].includes(String(membership.role))) {
+      return {
+        ok: false,
+        status: 403,
+        error: "Workspace owner or admin role required",
+      };
+    }
+  }
+  return { ok: true, userId, workspaceId };
+}
+
 // ── Route registration ────────────────────────────────────────────────────────
 
 export function registerAiProvidersRoutes(app: HubHono): void {
@@ -189,6 +250,13 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     const agentUserId = c.get("agentUserId") as string | undefined;
     const userId = linkedUserId ?? agentUserId;
     const workspaceId = c.req.query("workspaceId");
+    // Plaintext provider secrets go ONLY to the trusted runtime keys
+    // (is_internal = the Intelligence Service, system = pod-admin service key).
+    // `hub-protocol.read` is in EVERY agent key's default bundle, so gating
+    // plaintext on it handed every connected agent the pod's provider keys.
+    const mayReadPlaintext = PLAINTEXT_KEY_TYPES.has(
+      (c.get("keyType") as string | undefined) ?? ""
+    );
 
     const providerIds = (
       await db.query.aiProviders.findMany({
@@ -216,12 +284,13 @@ export function registerAiProvidersRoutes(app: HubHono): void {
       const source = override?.source ?? "pod-wide";
       return {
         providerId: p.providerId,
-        apiKey,
+        apiKey: mayReadPlaintext ? apiKey : maskSecret(apiKey),
+        hasApiKey: apiKey !== null,
         source,
       };
     });
 
-    return c.json({ providers });
+    return c.json({ providers, masked: !mayReadPlaintext });
   });
 
   // POST /ai-providers — upsert (governed)
@@ -411,9 +480,9 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // PATCH /ai-providers/credentials — upsert per-user/workspace API key override
   app.patch("/ai-providers/credentials", async (c) => {
-    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
-      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
-    }
+    const gate = await credentialWriteGate(c);
+    if (!gate.ok) return c.json({ error: gate.error }, gate.status);
+    const { userId, workspaceId } = gate;
 
     let body: z.infer<typeof SetCredentialSchema>;
     try {
@@ -421,24 +490,22 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     } catch (err) {
       return c.json({ error: String(err) }, 400);
     }
-
-    const linkedUserId = c.get("linkedUserId") as string | undefined;
-    const agentUserId = c.get("agentUserId") as string | undefined;
-    const userId = linkedUserId ?? agentUserId ?? (c.get("userId") as string);
-
-    if (!userId) {
-      return c.json({ error: "Unauthorized" }, 401);
+    const provider = await db.query.aiProviders.findFirst({
+      where: eq(aiProviders.providerId, body.providerId),
+    });
+    if (!provider) {
+      return c.json({ error: `No such provider: ${body.providerId}` }, 404);
     }
 
     const encryptedApiKey = encryptServiceKey(body.apiKey);
     const now = new Date();
 
-    // If workspace is specified, store as workspace-level override
-    if (body.workspaceId) {
+    // `?workspaceId=` → workspace-level override (owner/admin, checked by the gate)
+    if (workspaceId) {
       const existing = await db.query.aiProviderCredentials.findFirst({
         where: and(
           eq(aiProviderCredentials.providerId, body.providerId),
-          eq(aiProviderCredentials.workspaceId, body.workspaceId as any),
+          eq(aiProviderCredentials.workspaceId, workspaceId as any),
           isNull(aiProviderCredentials.userId)
         ),
       });
@@ -456,7 +523,7 @@ export function registerAiProvidersRoutes(app: HubHono): void {
       } else {
         await db.insert(aiProviderCredentials).values({
           providerId: body.providerId,
-          workspaceId: body.workspaceId as any,
+          workspaceId: workspaceId as any,
           userId: null,
           encryptedApiKey,
           enabled: body.enabled,
@@ -505,25 +572,13 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // DELETE /ai-providers/credentials/:providerId
   app.delete("/ai-providers/credentials/:providerId", async (c) => {
-    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
-      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
-    }
-
+    const gate = await credentialWriteGate(c);
+    if (!gate.ok) return c.json({ error: gate.error }, gate.status);
+    const { userId, workspaceId } = gate;
     const providerId = c.req.param("providerId");
-    const linkedUserId = c.get("linkedUserId") as string | undefined;
-    const agentUserId = c.get("agentUserId") as string | undefined;
-    const userId = linkedUserId ?? agentUserId ?? (c.get("userId") as string);
-    const workspaceId = c.req.query("workspaceId");
 
-    if (!userId) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-
-    // Delete both user-level and workspace-level if matching
-    const conditions = [
-      eq(aiProviderCredentials.providerId, providerId),
-      eq(aiProviderCredentials.enabled, true),
-    ];
+    // The caller's own row, or the workspace row (owner/admin, checked by the gate)
+    const conditions = [eq(aiProviderCredentials.providerId, providerId)];
 
     if (workspaceId) {
       conditions.push(
