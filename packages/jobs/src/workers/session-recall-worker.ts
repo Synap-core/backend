@@ -88,14 +88,18 @@ export async function handleSessionRecall(job: PgBoss.Job): Promise<void> {
 /**
  * The sweep's candidate predicate, in SQL (exported so a PGlite test can drive
  * the real one): open, started within the lookback, not an agent's write
- * receipt, and either never recalled or failed with attempts left and the
+ * receipt (an ADOPTED receipt is a started session: it keeps `source` for its
+ * provenance line, and `adoptedAt` says a start took it over), and either never recalled or failed with attempts left and the
  * cool-off elapsed.
  */
 export function recallSweepCandidatesWhere() {
   return drizzleSql`(
     ${focusSessions.status} IN ('active', 'paused', 'forming')
     AND ${focusSessions.startedAt} > now() - make_interval(hours => ${RECALL_SWEEP_LOOKBACK_HOURS})
-    AND (${focusSessions.metadata}->>'source' IS DISTINCT FROM ${RECEIPT_SOURCE})
+    AND (
+      ${focusSessions.metadata}->>'source' IS DISTINCT FROM ${RECEIPT_SOURCE}
+      OR ${focusSessions.metadata}->>'adoptedAt' IS NOT NULL
+    )
     AND (
       ${focusSessions.metadata}->>'recalledAt' IS NULL
       OR (

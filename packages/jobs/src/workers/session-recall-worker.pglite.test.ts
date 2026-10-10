@@ -110,6 +110,10 @@ describe("session recall sweep — selection", () => {
       },
     });
     ids.receipt = await session({ metadata: { source: "agent-write" } });
+    // A start adopted the receipt: it keeps `source` for its provenance line.
+    ids.adopted = await session({
+      metadata: { source: "agent-write", adoptedAt: ago(1) },
+    });
     ids.old = await session({ startedHoursAgo: 12 });
     ids.closed = await session({ status: "closed" });
     await handleSessionRecallSweep();
@@ -118,6 +122,10 @@ describe("session recall sweep — selection", () => {
   it("recalls never-recalled open sessions from any door", () => {
     expect(swept).toContain(ids.fresh);
     expect(swept).toContain(ids.paused);
+  });
+
+  it("recalls a receipt a start adopted — it is a session with a goal now", () => {
+    expect(swept).toContain(ids.adopted);
   });
 
   it("retries a FAILED recall with attempts left after its cool-off — never an EMPTY one", () => {
@@ -136,6 +144,6 @@ describe("session recall sweep — selection", () => {
     ]) {
       expect(swept, k).not.toContain(ids[k]);
     }
-    expect(swept).toHaveLength(3);
+    expect(swept).toHaveLength(4);
   });
 });

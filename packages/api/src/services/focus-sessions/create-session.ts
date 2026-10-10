@@ -1049,8 +1049,9 @@ export async function createFocusSession(
   // Recall: look for raw captures/notes that could help this session, in the
   // background (`session-recall.ts`; an automation's session is skipped
   // there). Never awaited on the job, never fails the start; the 2-min sweep
-  // is the floor if this enqueue drops.
-  if (!outcome.adopted) void enqueueSessionRecall(sessionOut.id, "start");
+  // is the floor if this enqueue drops. An ADOPTED session is a start too: the
+  // auto-opened receipt only now becomes a unit of work with a goal.
+  void enqueueSessionRecall(sessionOut.id, "start");
 
   return {
     status: "created",
