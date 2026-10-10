@@ -1,16 +1,22 @@
 /**
  * summarizeGrant — the ONE read-only rendering model of a grant: structured
- * rows (for marks: a chip per action, "All" when a subject pattern grants
- * every action) plus a short sentence for places with room for one line
- * (a connection list row, a consent screen subtitle).
+ * rows (for marks: a chip per action) plus a short sentence for places with
+ * room for one line (a connection list row, a consent screen subtitle).
+ *
+ * A BARE subject pattern (`proposal`, `entity.note`) grants every action on
+ * it, review verbs included — approving a proposal, merging a record — none of
+ * which has a checkbox. Such a row never reads like its catalog actions: it
+ * reads "Everything on Proposals, approving included".
  *
  * Words come from the vocabulary door through `./catalog.ts`; nothing here
  * names a subject or an action by hand.
  */
 
 import {
+  resolveActionProgressive,
   resolveObjectNoun,
   resolveObjectNounPlural,
+  resolveStatusLabel,
 } from "../vocabulary/index.js";
 import { GRANT_ACTIONS, parsePermission } from "./grammar.js";
 import {
@@ -42,6 +48,11 @@ export interface GrantSummaryRow {
   readonly actions: readonly GrantAction[];
   /** A subject/kind pattern grants EVERY action on it, gate verbs included. */
   readonly all: boolean;
+  /**
+   * `all` rows only: what that means, in words — "Everything, approving
+   * included". null when the row grants only the actions it lists.
+   */
+  readonly everything: string | null;
 }
 
 export interface GrantSummary {
@@ -58,13 +69,20 @@ export interface GrantSummary {
   readonly projectIds: readonly string[] | null;
   /** null = no object pinning; else how many objects it is pinned to. */
   readonly entityCount: number | null;
+  /** The draft's lifetime — `never` too when `expiresAt` is null. */
   readonly lifetime: GrantLifetime;
   /** What it may do: "Read Entities, Documents; Create Notes" / "Full access". */
   readonly what: string;
   /** Narrowing, one part each: "1 Space", "2 Projects". Empty = anywhere. */
   readonly where: readonly string[];
-  /** The draft's lifetime: "90 days" / "Never expires". */
+  /**
+   * When it stops working: the key's real expiry when `expiresAt` was given
+   * ("Until 12 Jan 2027" / "Never expires" / "Expired"), else the draft's
+   * lifetime ("90 days" / "Never expires").
+   */
   readonly when: string;
+  /** `expiresAt` was given and has passed. */
+  readonly expired: boolean;
   /** One line: what · where · when. */
   readonly sentence: string;
 }
@@ -72,6 +90,49 @@ export interface GrantSummary {
 export interface SummarizeGrantOptions {
   /** The pod's own names for kinds (slug → name), when it has them. */
   readonly kindNames?: Readonly<Record<string, string>>;
+  /**
+   * An EXISTING key's expiry (`apiKeys.expiresAt`): null = never, a date =
+   * that date. Omitted → the draft's lifetime (a key not minted yet).
+   */
+  readonly expiresAt?: Date | string | null;
+}
+
+/**
+ * The review verbs a bare pattern carries that no checkbox offers, named so
+ * an "everything" row says what it really hands over. Not every action a
+ * subject has — the ones a person would not expect "everything" to include.
+ */
+const GATE_ACTIONS: Readonly<Record<string, readonly string[]>> = {
+  proposal: ["approve"],
+  entity: ["merge"],
+};
+
+/** "Everything[ on <label>][, approving included]". */
+function everythingText(subject: string, label?: string): string {
+  const head = label ? `Everything on ${label}` : "Everything";
+  const gates = (GATE_ACTIONS[subject] ?? []).map((a) =>
+    resolveActionProgressive(a).toLowerCase()
+  );
+  return gates.length > 0 ? `${head}, ${gates.join(" and ")} included` : head;
+}
+
+const UNTIL_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
+
+function expiryWhen(expiresAt: Date | string | null): {
+  when: string;
+  expired: boolean;
+} {
+  if (expiresAt === null) return { when: "Never expires", expired: false };
+  const at = typeof expiresAt === "string" ? new Date(expiresAt) : expiresAt;
+  if (Number.isNaN(at.getTime()))
+    return { when: "Expiry unknown", expired: false };
+  if (at.getTime() <= Date.now())
+    return { when: resolveStatusLabel("expired"), expired: true };
+  return { when: `Until ${UNTIL_FORMAT.format(at)}`, expired: false };
 }
 
 const nonEmpty = (ids: readonly string[] | null | undefined) =>
@@ -129,6 +190,7 @@ export function summarizeGrant(
             label: grantSubjectLabel(subject),
             actions,
             all: has(subject),
+            everything: has(subject) ? everythingText(subject) : null,
           });
         continue;
       }
@@ -143,6 +205,7 @@ export function summarizeGrant(
           label: grantSubjectLabel(subject),
           actions: every,
           all: has(subject),
+          everything: has(subject) ? everythingText(subject) : null,
         });
       const kinds = new Set<string>();
       for (const p of valid) {
@@ -162,6 +225,9 @@ export function summarizeGrant(
             label: grantKindLabel(kind, opts.kindNames?.[kind]),
             actions,
             all: has(`${subject}.${kind}`),
+            everything: has(`${subject}.${kind}`)
+              ? everythingText(subject)
+              : null,
           });
       }
     }
@@ -171,16 +237,19 @@ export function summarizeGrant(
   const workspaceIds = nonEmpty(draft.workspaceIds);
   const projectIds = nonEmpty(draft.projectIds);
   const entityIds = nonEmpty(draft.entityIds);
-  const lifetime = grantLifetime(draft);
+  const lifetime: GrantLifetime =
+    opts.expiresAt === null ? { kind: "never" } : grantLifetime(draft);
 
   let what: string;
   if (full) what = "Full access";
   else if (rows.length === 0 && other.length === 0) what = "No access";
   else {
-    const parts: string[] = [];
+    const parts = rows
+      .filter((r) => r.all)
+      .map((r) => everythingText(r.subject, r.label));
     for (const action of GRANT_ACTIONS) {
       const labels = rows
-        .filter((r) => r.all || r.actions.includes(action))
+        .filter((r) => !r.all && r.actions.includes(action))
         .map((r) => r.label);
       if (labels.length > 0)
         parts.push(`${grantActionLabel(action)} ${labels.join(", ")}`);
@@ -192,8 +261,16 @@ export function summarizeGrant(
   if (workspaceIds) where.push(count(workspaceIds.length, "workspace"));
   if (projectIds) where.push(count(projectIds.length, "project"));
   if (entityIds) where.push(count(entityIds.length, "entity"));
-  const when =
-    lifetime.kind === "never" ? "Never expires" : `${lifetime.days} days`;
+  const { when, expired } =
+    opts.expiresAt !== undefined
+      ? expiryWhen(opts.expiresAt)
+      : {
+          when:
+            lifetime.kind === "never"
+              ? "Never expires"
+              : `${lifetime.days} days`,
+          expired: false,
+        };
 
   return {
     full,
@@ -207,6 +284,7 @@ export function summarizeGrant(
     what,
     where,
     when,
+    expired,
     sentence: [what, ...where, when].join(" · "),
   };
 }

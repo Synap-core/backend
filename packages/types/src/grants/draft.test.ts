@@ -6,7 +6,10 @@
  * promotes to `*`.
  */
 import { describe, expect, it } from "vitest";
-import { resolveObjectNounPlural } from "../vocabulary/index.js";
+import {
+  resolveActionProgressive,
+  resolveObjectNounPlural,
+} from "../vocabulary/index.js";
 import {
   applyGrantRole,
   EMPTY_GRANT_DRAFT,
@@ -347,6 +350,7 @@ describe("summarizeGrant", () => {
         label: resolveObjectNounPlural("entity"),
         actions: ["read"],
         all: false,
+        everything: null,
       },
       {
         key: "entity.note",
@@ -355,13 +359,61 @@ describe("summarizeGrant", () => {
         label: "Notes (mine)",
         actions: ["create", "update", "delete"],
         all: true,
+        everything: `Everything, ${resolveActionProgressive("merge").toLowerCase()} included`,
       },
     ]);
+  });
+  // `proposal` grants approve/merge/delete, not just the one Read checkbox:
+  // reading it as "Read Proposals" hid the most dangerous grant there is.
+  it("a bare subject reads as everything, approving included — never as its catalog actions", () => {
+    const proposals = resolveObjectNounPlural("proposal");
+    const s = summarizeGrant(draft("proposal", "document.read"));
+    const row = (key: string) => s.rows.find((r) => r.key === key);
+    expect(row("proposal")).toMatchObject({
+      all: true,
+      everything: "Everything, approving included",
+    });
+    expect(row("document")).toMatchObject({ all: false, everything: null });
+    expect(s.what).toBe(
+      `Everything on ${proposals}, approving included; Read ${resolveObjectNounPlural("document")}`
+    );
+    expect(s.what).not.toContain(`Read ${proposals}`);
+  });
+  it("only the pattern itself reads as everything — proposal.read stays Read", () => {
+    const s = summarizeGrant(draft("proposal.read"));
+    expect(s.rows[0]).toMatchObject({ all: false, everything: null });
+    expect(s.what).toBe(`Read ${resolveObjectNounPlural("proposal")}`);
   });
   it("lists outside-catalog and invalid patterns instead of dropping them", () => {
     const s = summarizeGrant(draft("vault.redeem", "entity.note.merge", "Bad"));
     expect(s.other).toEqual(["entity.note.merge", "vault.redeem"]);
     expect(s.invalid).toEqual(["Bad"]);
+  });
+});
+
+describe("summarizeGrant — a minted key's real expiry", () => {
+  const d = draft("view.read");
+  it("renders the date, not the 90-day default", () => {
+    const s = summarizeGrant(d, { expiresAt: "2099-01-12T12:00:00.000Z" });
+    expect(s.when).toBe("Until 12 Jan 2099");
+    expect(s.sentence.endsWith("· Until 12 Jan 2099")).toBe(true);
+    expect(s.expired).toBe(false);
+    expect(
+      summarizeGrant(d, { expiresAt: new Date("2099-01-12T12:00:00Z") }).when
+    ).toBe("Until 12 Jan 2099");
+  });
+  it("null is never — and the lifetime says so", () => {
+    const s = summarizeGrant(d, { expiresAt: null });
+    expect(s.when).toBe("Never expires");
+    expect(s.lifetime).toEqual({ kind: "never" });
+  });
+  it("a passed date is expired", () => {
+    const s = summarizeGrant(d, { expiresAt: "2001-01-01T00:00:00Z" });
+    expect([s.when, s.expired]).toEqual(["Expired", true]);
+  });
+  it("omitted keeps the draft's lifetime (a key not minted yet)", () => {
+    expect(summarizeGrant(d).when).toBe("90 days");
+    expect(summarizeGrant({ ...d, expiresInDays: 7 }).when).toBe("7 days");
   });
 });
 
