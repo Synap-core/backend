@@ -153,7 +153,7 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // second spelling of one verb into a table whose whole job is to have one.
   // A key here earns its place by being emitted, not by being well-formed.
   received: { imperative: "Receive", past: "Received" },
-  merge: { imperative: "Merge", past: "Merged" },
+  merge: { imperative: "Merge", past: "Merged", progressive: "Merging" },
   link: { imperative: "Link", past: "Linked" },
   unlink: { imperative: "Unlink", past: "Unlinked" },
   attach: { imperative: "Attach", past: "Attached" },
