@@ -93,14 +93,19 @@ import {
 } from "./_shared.js";
 import { toPodAdminOrigin } from "../../../utils/pod-admin-origin.js";
 
-/** Escape a user-derived value before interpolating it into an HTML string. */
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+/**
+ * Where a person approves a pending agent key: the pod-admin app (already
+ * Kratos-authed there), not a page on the API origin. Reverse-proxy-safe: the
+ * pod's PUBLIC_URL first — the request URL is the internal (often http://) one
+ * behind nginx.
+ */
+function approvalPageUrl(
+  requestUrl: string,
+  keyId: string,
+  agentType: string
+): string {
+  const origin = process.env.PUBLIC_URL || new URL(requestUrl).origin;
+  return `${toPodAdminOrigin(origin)}/approve-agent/${keyId}?agentType=${encodeURIComponent(agentType)}`;
 }
 
 /**
@@ -1090,14 +1095,7 @@ export function registerSetupRoutes(app: HubHono): void {
           .update(apiKeys)
           .set({ isActive: false })
           .where(eq(apiKeys.id, apiKey.id));
-        // Reverse-proxy-safe: prefer the pod's PUBLIC_URL, fall back to request
-        // origin. c.req.url picks up the internal (often http://) URL behind nginx.
-        const origin = process.env.PUBLIC_URL || new URL(c.req.url).origin;
-        // Approval lives in the pod-admin app (operator is already Kratos-authed
-        // there), NOT a bare REST page on the API origin. Swap pod.<root> →
-        // pod-admin.<root>, mirroring the /admin/connect redirect. The CLI just
-        // opens whatever reviewUrl we return, so no client change is needed.
-        const reviewUrl = `${toPodAdminOrigin(origin)}/approve-agent/${apiKey.id}?agentType=${encodeURIComponent(agentType)}`;
+        const reviewUrl = approvalPageUrl(c.req.url, apiKey.id, agentType);
         return c.json({
           agentUserId,
           workspaceId: ws?.id ?? null,
@@ -2125,6 +2123,31 @@ export function registerSetupRoutes(app: HubHono): void {
     }
   }
 
+  /**
+   * What a pending key would be allowed to do, as the approval pages show it:
+   * its scopes, EVERY live grant scope (a key holds a set — `null` = never
+   * granted, so only its scopes bound it) and its real expiry.
+   */
+  async function pendingKeyAccess(key: {
+    id: string;
+    scope: string[];
+    expiresAt: Date | null;
+  }) {
+    const keyGrant = await new GrantRepository(db).resolveForKey(key.id);
+    return {
+      scopes: key.scope,
+      expiresAt: key.expiresAt,
+      grants: keyGrant
+        ? keyGrant.scopes.map((g) => ({
+            permissions: [...g.permissions],
+            workspaceIds: g.workspaceIds ?? null,
+            projectIds: g.projectIds ?? null,
+            entityIds: g.entityIds ?? null,
+          }))
+        : null,
+    };
+  }
+
   // ─── One-click batch approval (V1 D5) ─────────────────────────────────────
   // `synap init` connects several harnesses at once (Claude Code, Codex, …),
   // each minting a PENDING key. The person approves them together in ONE step,
@@ -2137,10 +2160,10 @@ export function registerSetupRoutes(app: HubHono): void {
 
   /**
    * POST /setup/agent/pending/lookup — what the batch approval page shows:
-   * each requested key's name, agent type and instance label, and whether it
-   * is still pending. Only keys the signed-in person may decide are described;
-   * the rest come back `forbidden` / `not_found` (never another person's
-   * agent details).
+   * each requested key's name, agent type and instance label, whether it is
+   * still pending, and what it would be allowed to do (`pendingKeyAccess`).
+   * Only keys the signed-in person may decide are described; the rest come
+   * back `forbidden` / `not_found` (never another person's agent details).
    */
   app.post("/setup/agent/pending/lookup", async (c) => {
     const approverId = await resolveKratosPodUserId(c);
@@ -2162,6 +2185,8 @@ export function registerSetupRoutes(app: HubHono): void {
         isActive: apiKeys.isActive,
         revokedAt: apiKeys.revokedAt,
         linkedUserId: apiKeys.linkedUserId,
+        scope: apiKeys.scope,
+        expiresAt: apiKeys.expiresAt,
         agentType: users.agentType,
         agentName: users.name,
       })
@@ -2191,6 +2216,7 @@ export function registerSetupRoutes(app: HubHono): void {
         agentType: r.agentType ?? null,
         agentName: r.agentName ?? null,
         instanceId: r.instanceId ?? null,
+        ...(await pendingKeyAccess(r)),
       });
     }
     return c.json({ keys });
@@ -2297,60 +2323,17 @@ export function registerSetupRoutes(app: HubHono): void {
     return c.json({ status: "pending" });
   });
 
-  /** HTML review page opened by the CLI in the user's browser. */
+  /**
+   * The review link older CLIs open. Approval lives in pod-admin, which reads
+   * the key's REAL access — this only forwards there.
+   */
   app.get("/setup/agent/pending/:keyId/review", async (c) => {
     const keyId = requireUuidParam(c, "keyId");
     if (keyId instanceof Response) return keyId;
-    const agentType = escapeHtml(c.req.query("agentType") ?? "agent");
-    const keyShort = escapeHtml(keyId.slice(0, 8));
-
-    const html = `<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Approve Agent Access — Synap</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0a0a0a;color:#e2e2e2;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-.card{background:#111;border:1px solid #222;border-radius:14px;padding:36px;max-width:460px;width:100%}
-h1{font-size:18px;font-weight:600;margin-bottom:6px}
-.sub{color:#777;font-size:14px;line-height:1.5;margin-bottom:24px}
-.detail{background:#161616;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:24px}
-.row{display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:5px 0;border-bottom:1px solid #1c1c1c}
-.row:last-child{border:none}
-.label{color:#666}.value{color:#e2e2e2;font-family:ui-monospace,monospace;font-size:12px}
-.scopes{font-size:11px;color:#555;margin-top:10px;line-height:1.6}
-.actions{display:flex;gap:10px}
-button{flex:1;padding:11px;border-radius:8px;border:none;font-size:14px;font-weight:500;cursor:pointer;transition:opacity .15s}
-button:hover{opacity:.85}.approve{background:#059669;color:#fff}.reject{background:#1a1a1a;color:#e2e2e2;border:1px solid #2a2a2a}
-.msg{text-align:center;padding:14px 0;font-size:14px;display:none}
-.ok{color:#059669}.err{color:#dc2626}
-</style></head><body>
-<div class="card">
-  <h1>Approve Agent Access</h1>
-  <p class="sub">A <code>synap connect</code> session is requesting to register <strong>${agentType}</strong> as an agent on your pod.</p>
-  <div class="detail">
-    <div class="row"><span class="label">Surface</span><span class="value">${agentType}</span></div>
-    <div class="row"><span class="label">Key ID</span><span class="value">${keyShort}…</span></div>
-    <div class="scopes">Scopes: hub-protocol.read · hub-protocol.write · mcp.read · mcp.write</div>
-  </div>
-  <div class="actions" id="actions">
-    <button class="approve" onclick="act('approve')">Approve</button>
-    <button class="reject" onclick="act('reject')">Reject</button>
-  </div>
-  <div class="msg ok" id="ok">Approved — you can close this tab. The CLI will continue automatically.</div>
-  <div class="msg err" id="err"></div>
-</div>
-<script>
-async function act(action){
-  try{
-    const r=await fetch(location.pathname.replace('/review','/'+action),{method:'POST',headers:{'Content-Type':'application/json'}});
-    if(r.ok){document.getElementById('actions').style.display='none';document.getElementById('ok').style.display='block';}
-    else{const d=await r.json().catch(()=>({}));show('err',d.error||'Error ('+r.status+')');}
-  }catch(e){show('err',e.message);}
-}
-function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el.style.display='block';}
-</script></body></html>`;
-    return c.html(html);
+    return c.redirect(
+      approvalPageUrl(c.req.url, keyId, c.req.query("agentType") ?? "agent"),
+      302
+    );
   });
 
   /** Approve a pending key — only the connection's linked human, or a pod admin. */
@@ -2385,9 +2368,11 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
 
   /**
    * What a pending key would be allowed to do — for the approval page, so the
-   * person approves the key's REAL scopes and grant, not a hard-coded list.
-   * Same caller rule as approve/reject: the connection's linked human, or a
-   * pod admin (a Kratos session on the pod).
+   * person approves the key's REAL scopes, grants and expiry, not a hard-coded
+   * list. Same caller rule as approve/reject: the connection's linked human,
+   * or a pod admin (a Kratos session on the pod). A key the caller may not
+   * decide answers exactly like a missing one, so the route never says which
+   * UUIDs are pending keys.
    */
   app.get("/setup/agent/pending/:keyId/details", async (c) => {
     const keyId = requireUuidParam(c, "keyId");
@@ -2406,41 +2391,17 @@ function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el
         linkedUserId: true,
       },
     });
-    if (!key || key.revokedAt)
+    if (
+      !key ||
+      key.revokedAt ||
+      !(await canDecidePendingConnection(approverId, key.linkedUserId))
+    )
       return c.json(
         { error: "Pending key not found or already processed" },
         404
       );
-    if (!(await canDecidePendingConnection(approverId, key.linkedUserId)))
-      return c.json({ error: "Not authorized to decide this connection" }, 403);
 
-    const keyGrant = await new GrantRepository(db).resolveForKey(keyId);
-    // A pending agent key is minted with exactly ONE grant (`/setup/agent`).
-    // Several would not fit this one-grant wire shape — refuse loudly rather
-    // than show the approver a part of what the key could do.
-    if (keyGrant && keyGrant.scopes.length !== 1) {
-      return c.json(
-        {
-          error:
-            "This pending key carries several grants — review it in Pod admin.",
-        },
-        409
-      );
-    }
-    const grant = keyGrant?.scopes[0];
-    return c.json({
-      keyName: key.keyName,
-      scopes: key.scope,
-      expiresAt: key.expiresAt,
-      grant: grant
-        ? {
-            permissions: grant.permissions,
-            workspaceIds: grant.workspaceIds ?? null,
-            projectIds: grant.projectIds ?? null,
-            entityIds: grant.entityIds ?? null,
-          }
-        : null,
-    });
+    return c.json({ keyName: key.keyName, ...(await pendingKeyAccess(key)) });
   });
 
   /** Reject a pending key — only the connection's linked human, or a pod admin. */

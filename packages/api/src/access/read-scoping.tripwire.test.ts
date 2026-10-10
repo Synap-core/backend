@@ -280,6 +280,12 @@ const HONO_CLEARS = [
   // only safe BECAUSE the scopedProcedure recognition above ships in the same
   // change — otherwise it would false-clear a delegate to an unscanned builder).
   "getCaller(c",
+  // The pending-agent-key decider (`hub-protocol/rest/setup.ts`): the row's
+  // OWNER floor (`key.linkedUserId === approverId`) or `assertPodAdmin` — the
+  // same gate approve/reject apply. Recognized as a call, like the others: the
+  // scan cannot see that the handler returns nothing when it says no
+  // (`setup.pending-details.test.ts` asserts that behaviourally).
+  "canDecidePendingConnection(",
 ];
 
 // An inline membership floor: `workspaceMembers.findFirst` co-occurring with an
