@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildGrantSections, GRANT_SUBJECT_GROUPS } from "./sections.js";
+import {
+  buildGrantSections,
+  GRANT_SUBJECT_DESCRIPTIONS,
+  GRANT_SUBJECT_GROUPS,
+} from "./sections.js";
 import { GRANT_SUBJECT_CATALOG } from "./catalog.js";
 import { AGENT_GRANT_CATALOG } from "./agent.js";
 
@@ -76,11 +80,46 @@ describe("buildGrantSections", () => {
     expect(sections[0].rows.map((r) => r.key)).toEqual(["entity.person"]);
   });
 
-  it("always-allowed actions count as granted", () => {
+  // An agent reads everything; counting reads showed N/N on every section.
+  it("always-allowed actions show as granted but never count", () => {
     const sections = buildGrantSections({
       draft: { permissions: [] },
+      catalog: AGENT_GRANT_CATALOG,
+      kinds,
       alwaysAllowed: ["read"],
     });
-    expect(sections.every((s) => s.grantedRows === s.rows.length)).toBe(true);
+    expect(sections.length).toBeGreaterThan(3);
+    expect(
+      sections.every((s) => s.rows.every((r) => r.granted.includes("read")))
+    ).toBe(true);
+    expect(sections.map((s) => s.grantedRows)).toEqual(sections.map(() => 0));
+    const records = buildGrantSections({
+      draft: { permissions: ["entity.person.create"] },
+      catalog: AGENT_GRANT_CATALOG,
+      kinds,
+      alwaysAllowed: ["read"],
+    })[0];
+    expect(records.grantedRows).toBe(1);
+  });
+
+  it("search matches the actions a row offers", () => {
+    const rows = buildGrantSections({
+      draft: { permissions: [] },
+      query: "delete",
+    }).flatMap((s) => s.rows);
+    const offering = GRANT_SUBJECT_CATALOG.filter((s) =>
+      s.actions.includes("delete")
+    ).map((s) => s.subject);
+    expect(offering.length).toBeGreaterThan(0);
+    expect(rows.map((r) => r.subject).sort()).toEqual(offering.sort());
+  });
+
+  it("every catalog subject has a description", () => {
+    const subjects = new Set(
+      [...GRANT_SUBJECT_CATALOG, ...AGENT_GRANT_CATALOG].map((s) => s.subject)
+    );
+    expect(subjects.size).toBeGreaterThan(10);
+    for (const subject of subjects)
+      expect(GRANT_SUBJECT_DESCRIPTIONS[subject]?.trim(), subject).toBeTruthy();
   });
 });

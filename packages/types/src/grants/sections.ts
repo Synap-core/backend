@@ -19,6 +19,7 @@
 
 import {
   GRANT_SUBJECT_CATALOG,
+  grantActionLabel,
   grantKindLabel,
   grantSubjectLabel,
   isQualifiedGrantSubject,
@@ -101,7 +102,11 @@ export interface GrantSection {
   readonly id: string;
   readonly label: string;
   readonly rows: readonly GrantSectionRow[];
-  /** Rows granting at least one action. */
+  /**
+   * Rows granting at least one action BEYOND `alwaysAllowed` — what this
+   * holder was actually given. An agent reads everything, so counting reads
+   * would show every row as granted.
+   */
   readonly grantedRows: number;
 }
 
@@ -109,7 +114,7 @@ export interface BuildGrantSectionsInput {
   readonly draft: GrantDraft;
   readonly catalog?: readonly GrantSubjectSpec[];
   readonly kinds?: readonly GrantSectionKind[];
-  /** Case-insensitive filter on a row's label and description. */
+  /** Case-insensitive filter on a row's label, description and action words. */
   readonly query?: string;
   /** Actions always granted to this holder (an agent's reads). */
   readonly alwaysAllowed?: readonly GrantAction[];
@@ -128,10 +133,11 @@ export function buildGrantSections({
   alwaysAllowed = [],
 }: BuildGrantSectionsInput): GrantSection[] {
   const q = query.trim().toLowerCase();
-  const matches = (r: { label: string; description: string }) =>
+  const matches = (r: GrantSectionRow) =>
     !q ||
     r.label.toLowerCase().includes(q) ||
-    r.description.toLowerCase().includes(q);
+    r.description.toLowerCase().includes(q) ||
+    r.actions.some((a) => grantActionLabel(a).toLowerCase().includes(q));
 
   const rowFor = (
     spec: GrantSubjectSpec,
@@ -190,7 +196,9 @@ export function buildGrantSections({
         id: g.id,
         label: g.label,
         rows,
-        grantedRows: rows.filter((r) => r.granted.length > 0).length,
+        grantedRows: rows.filter((r) =>
+          r.granted.some((a) => !alwaysAllowed.includes(a))
+        ).length,
       };
     })
     .filter((s) => s.rows.length > 0);
