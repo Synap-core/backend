@@ -166,6 +166,38 @@ describe("recordApprovedAgentStart", () => {
     expect(h.posts).toHaveLength(1);
   });
 
+  it("an approved start with NO task id FAILS the run (never running with a null id) — and the room is told, once", async () => {
+    const runId = await proposedRun();
+    const call = () =>
+      recordApprovedAgentStart({
+        proposal: { agentUserId: AGENT },
+        verbId: "acme_start",
+        parameters: { runId },
+        result: { url: "https://acme/t/none" },
+      });
+    const out = await call();
+    expect(out).toMatchObject({ status: "failed", runId });
+    const r = await q<{
+      status: string;
+      error: string | null;
+      completed_at: unknown;
+      external_agent: unknown;
+    }>(
+      `select status, error, completed_at, external_agent from playbook_runs where id = $1`,
+      [runId]
+    );
+    const run = r.rows[0]!;
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("returned no task id");
+    expect(run.error).toContain("https://acme/t/none");
+    expect(run.completed_at).not.toBeNull();
+    expect(run.external_agent).toBeNull();
+    expect(h.posts).toHaveLength(1);
+    expect(String(h.posts[0]!.content)).toContain("returned no task id");
+    expect((await call()).status).toBe("skipped");
+    expect(h.posts).toHaveLength(1);
+  });
+
   it("any other verb is not a start", async () => {
     const runId = await proposedRun();
     expect(

@@ -71,9 +71,11 @@ import {
 } from "../../agent-dispatch/agent-binding.js";
 import {
   asOptionalString,
+  agentDisplayName,
   asRecord,
   callBindingVerb,
   externalRefFromStartResult,
+  noTaskIdMessage,
   fenceUntrustedData,
   postDispatchNotice,
 } from "../../agent-dispatch/binding-call.js";
@@ -175,16 +177,6 @@ async function agentKeyRef(
     .orderBy(desc(apiKeys.createdAt))
     .limit(1);
   return key ? { apiKeyId: key.id, keyPrefix: key.keyPrefix } : null;
-}
-
-/** An agent as a person reads it — its name, never its id. */
-export async function agentDisplayName(agentUserId: string): Promise<string> {
-  const [row] = await db
-    .select({ name: users.name })
-    .from(users)
-    .where(eq(users.id, agentUserId))
-    .limit(1);
-  return row?.name?.trim() || "This agent";
 }
 
 /**
@@ -492,6 +484,19 @@ export class ExternalAgentExecutor implements Executor {
     }
 
     const { externalId, url } = externalRefFromStartResult(started.result);
+    // Nothing to follow: the status poll, the wake and cancel all key on the
+    // task id, so a "running" run with none could never be answered or stopped.
+    // Fail it here, through the same failure writer as a refused start.
+    if (!externalId) {
+      logger.warn(
+        { runId, agentUserId, toolId: binding.toolId },
+        "external-agent start returned no task id"
+      );
+      return fail(
+        noTaskIdMessage(await agentDisplayName(agentUserId), url),
+        "start-no-task-id"
+      );
+    }
     // No link in prose: the session section carries "Open in <service>".
     await postDispatchNotice({
       channelId: ctx.channelId,
@@ -501,7 +506,7 @@ export class ExternalAgentExecutor implements Executor {
     });
     return {
       status: "running",
-      summary: `dispatched to ${service}${externalId ? ` (${externalId})` : ""}`,
+      summary: `dispatched to ${service} (${externalId})`,
       externalAgent: {
         agentUserId,
         toolId: binding.toolId,

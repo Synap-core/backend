@@ -23,8 +23,10 @@ import { AgentBindingError, resolveAgentBinding } from "./agent-binding.js";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import {
   asOptionalString,
+  agentDisplayName,
   asRecord,
   externalRefFromStartResult,
+  noTaskIdMessage,
   postSessionNotice,
 } from "./binding-call.js";
 
@@ -32,6 +34,8 @@ const logger = createLogger({ module: "agent-dispatch/approved-start" });
 
 export type ApprovedStartOutcome =
   | { status: "recorded"; runId: string }
+  /** The verb ran but returned no task id: the run was FAILED, not tracked. */
+  | { status: "failed"; runId: string; error: string }
   | { status: "not_a_start" }
   | { status: "skipped"; reason: string };
 
@@ -62,6 +66,43 @@ export async function recordApprovedAgentStart(p: {
     }
 
     const { externalId, url } = externalRefFromStartResult(p.result);
+    const service = resolveServiceName(binding.provider);
+    // Claimed in the WHERE clause, so a double approve records once.
+    const claimable = and(
+      eq(playbookRuns.id, runId),
+      eq(playbookRuns.executor, "external-agent"),
+      eq(playbookRuns.status, "proposed"),
+      // Nothing recorded yet, or the PENDING start the executor recorded
+      // (`status: 'pending_start'`) — never a hand-off already recorded.
+      drizzleSql`(${playbookRuns.externalAgent} IS NULL OR ${playbookRuns.externalAgent}->>'status' = 'pending_start')`
+    );
+    if (!externalId) {
+      // Same decision as the direct start: no task id ⇒ nothing to poll, answer
+      // or cancel, so the run FAILS rather than sitting `running` untracked.
+      const error = noTaskIdMessage(await agentDisplayName(agentUserId), url);
+      const failedRun = await db
+        .update(playbookRuns)
+        .set({
+          status: "failed",
+          completedAt: new Date(),
+          error,
+          externalAgent: null,
+        })
+        .where(claimable)
+        .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
+      if (failedRun.length === 0) {
+        return {
+          status: "skipped",
+          reason: "run is not a proposed external-agent start",
+        };
+      }
+      await postSessionNotice(
+        failedRun[0]!.sessionId,
+        `Could not hand this run to an agent: ${error}`,
+        `external-agent:${runId}:start-no-task-id`
+      );
+      return { status: "failed", runId, error };
+    }
     const ref: PlaybookRunExternalAgent = {
       agentUserId,
       toolId: binding.toolId,
@@ -71,8 +112,7 @@ export async function recordApprovedAgentStart(p: {
       status: "running",
       startedAt: new Date().toISOString(),
     };
-    const service = resolveServiceName(binding.provider);
-    const summary = `dispatched to ${service}${externalId ? ` (${externalId})` : ""}`;
+    const summary = `dispatched to ${service} (${externalId})`;
     const claimed = await db
       .update(playbookRuns)
       .set({
@@ -81,16 +121,7 @@ export async function recordApprovedAgentStart(p: {
         summary,
         externalAgent: ref,
       })
-      .where(
-        and(
-          eq(playbookRuns.id, runId),
-          eq(playbookRuns.executor, "external-agent"),
-          eq(playbookRuns.status, "proposed"),
-          // Nothing recorded yet, or the PENDING start the executor recorded
-          // (`status: 'pending_start'`) — never a hand-off already recorded.
-          drizzleSql`(${playbookRuns.externalAgent} IS NULL OR ${playbookRuns.externalAgent}->>'status' = 'pending_start')`
-        )
-      )
+      .where(claimable)
       .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
     if (claimed.length === 0) {
       return {

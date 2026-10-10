@@ -14,7 +14,7 @@
 
 import { createLogger } from "@synap-core/core";
 import { randomBytes } from "node:crypto";
-import { db, eq, focusSessions } from "@synap/database";
+import { db, eq, focusSessions, users } from "@synap/database";
 import { executeCapability } from "../capabilities/execute-capability.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import type { SlotAsk } from "@synap/playbooks";
@@ -137,6 +137,26 @@ export function externalRefFromStartResult(result: unknown): {
       null,
     url: asOptionalString(r.url) ?? null,
   };
+}
+
+/**
+ * Why a start that returned no task id is a FAILED run — ONE sentence for the
+ * direct start (the executor) and an approved proposed start. The status poll,
+ * the wake and cancel all key on the task id, so a run without one could never
+ * be followed, answered or stopped.
+ */
+export function noTaskIdMessage(agentName: string, url: string | null): string {
+  return `The ${agentName} agent started the task but returned no task id, so Synap can't follow it${url ? ` — check ${url}` : ""}.`;
+}
+
+/** An agent as a person reads it — its name, never its id. */
+export async function agentDisplayName(agentUserId: string): Promise<string> {
+  const [row] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  return row?.name?.trim() || "This agent";
 }
 
 /**

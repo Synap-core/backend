@@ -299,6 +299,24 @@ describe("external-agent executor — dispatch through the stored binding", () =
     ).toBe(true);
   });
 
+  it("a start that returns NO task id ⇒ the run FAILS honestly; nothing is recorded as running", async () => {
+    h.next = {
+      kind: "run",
+      skillId: "s",
+      result: { url: "https://agent.example/t/none" },
+      ackState: "committed",
+    };
+    const sid = await session();
+    const res = await exec.run(ctx(sid, { agentUserId: AGENT_A }));
+    expect(res.status).toBe("failed");
+    expect(res.error).toContain("returned no task id");
+    expect(res.error).toContain("https://agent.example/t/none");
+    expect(res.externalAgent).toBeUndefined();
+    expect(
+      h.posts.some((p) => String(p.content).includes("returned no task id"))
+    ).toBe(true);
+  });
+
   it("a param naming a non-dispatch agent fails — never a silent default", async () => {
     const sid = await session();
     const res = await exec.run(ctx(sid, { agentUserId: IS_AGENT }));
