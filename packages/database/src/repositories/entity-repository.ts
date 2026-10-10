@@ -600,7 +600,9 @@ export class EntityRepository extends BaseRepository<
     //    identity-resolution-service.test.ts ("strong-signal race").
     //    A signal-write error is still logged and swallowed — never fails the
     //    create after the row exists.
-    const signals = extractIdentitySignals(validatedProperties);
+    const signals = extractIdentitySignals(validatedProperties, {
+      kind: entityType,
+    });
     if (signals.length > 0) {
       try {
         await registerIdentitySignals(

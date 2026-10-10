@@ -202,7 +202,9 @@ export async function materializeEntity(
     // would be wrong anyway. On a strong hit we ENRICH (mirror
     // EntityUpsertService): reuse the matched entity, register any new signals
     // against it, backfill project membership, and skip the insert.
-    const signals = extractIdentitySignals(input.properties);
+    const signals = extractIdentitySignals(input.properties, {
+      kind: input.profileSlug,
+    });
     if (signals.length > 0) {
       const resolution = await resolveIdentity(db, {
         userId: input.userId,

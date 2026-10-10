@@ -854,7 +854,7 @@ const captureBaseRouter = router({
         userId,
         kindSlug: profileSlug,
         name: title,
-        signals: extractIdentitySignals(properties),
+        signals: extractIdentitySignals(properties, { kind: profileSlug }),
         userScope: ownerPrivateVisibleWhere(
           entitiesTable.workspaceId,
           entitiesTable.userId,
@@ -3513,7 +3513,9 @@ const captureBaseRouter = router({
           userId,
           kindSlug: e.profileSlug,
           name: e.title,
-          signals: extractIdentitySignals(e.properties),
+          signals: extractIdentitySignals(e.properties, {
+            kind: e.profileSlug,
+          }),
           userScope: ownerPrivateVisibleWhere(
             entitiesTable.workspaceId,
             entitiesTable.userId,

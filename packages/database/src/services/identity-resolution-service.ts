@@ -51,6 +51,10 @@ export type StrongSignalType =
   | "github_username"
   | "twitter_handle"
   | "website"
+  // A captured page's own address — `properties.url` on the bookmark family
+  // ONLY (see URL_IDENTITY_KINDS). A namespace of its own, never `website`: a
+  // bookmark of acme.com must not resolve to the company Acme.
+  | "url"
   // Opaque provider-scoped id (`${provider}:${externalId}`). Registered by the
   // external-link idempotency door; read by EntityUpsertService's strong path.
   // Not derived from any property key — case must be PRESERVED (see normalize).
@@ -106,6 +110,60 @@ export interface IdentityResolution {
   candidates: ResolvedIdentityEntity[];
 }
 
+/** Query params that only say WHERE a link was clicked, never WHAT it is. */
+const TRACKING_PARAM = /^(utm_.*|fbclid|gclid)$/i;
+
+/**
+ * Canonical form of a URL identity atom: host lowercased and `www.` dropped,
+ * `#fragment` dropped, tracking params (`utm_*`, `fbclid`, `gclid`) dropped,
+ * trailing slash stripped. Every OTHER query param is kept, byte for byte and
+ * in order — it can be identity (YouTube `?v=`). Path and query keep their
+ * case. A value that does not parse as an http(s) URL is only trimmed and
+ * slash-stripped (the previous behaviour), never rejected.
+ */
+export function canonicalizeUrl(value: string): string {
+  const v = value.trim();
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return v.replace(/\/+$/, "");
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    return v.replace(/\/+$/, "");
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  const port = u.port ? `:${u.port}` : "";
+  const path = u.pathname.replace(/\/+$/, "");
+  const kept = u.search
+    .replace(/^\?/, "")
+    .split("&")
+    .filter((pair) => {
+      if (!pair) return false;
+      const rawKey = pair.split("=")[0];
+      let key = rawKey;
+      try {
+        key = decodeURIComponent(rawKey);
+      } catch {
+        /* malformed escape — judge the raw key */
+      }
+      return !TRACKING_PARAM.test(key);
+    });
+  const query = kept.length > 0 ? `?${kept.join("&")}` : "";
+  return `${u.protocol}//${host}${port}${path}${query}`;
+}
+
+/**
+ * The form `linkedin_url` / `website` atoms were stored in BEFORE
+ * `canonicalizeUrl` (lowercase + one trailing slash stripped). Rows written
+ * then are never rewritten, so `resolveIdentity` also looks this form up —
+ * otherwise a `www.` LinkedIn URL registered last month would stop matching
+ * the same URL today and mint a duplicate person.
+ */
+function legacyUrlSignalValue(value: string): string {
+  return value.trim().toLowerCase().replace(/\/$/, "");
+}
+
 /**
  * Normalize a strong signal value to its canonical stored form — the SINGLE
  * door for signal normalization, so a lookup and a write agree byte-for-byte.
@@ -127,7 +185,13 @@ export function normalizeIdentitySignal(type: string, value: string): string {
 
     case "linkedin_url":
     case "website":
-      return v.toLowerCase().replace(/\/$/, "");
+      // Same canonical URL, then fully case-folded — these two atoms were
+      // always case-insensitive (a LinkedIn slug, a company's domain).
+      return canonicalizeUrl(v).toLowerCase();
+
+    case "url":
+      // A page address: path and query case is significant (`?v=dQw4…`).
+      return canonicalizeUrl(v);
 
     case "github_username":
     case "twitter_handle":
@@ -159,10 +223,34 @@ export const IDENTITY_SIGNAL_PROPERTY_KEYS: Record<StrongSignalType, string[]> =
     website: ["website"],
     twitter_handle: ["twitterHandle", "twitter-handle"],
     github_username: ["githubUsername", "github-username"],
+    // EMPTY on purpose: `properties.url` is identity only on a
+    // URL_IDENTITY_KINDS entity, and this map is read KIND-BLIND (guest forms'
+    // `planCarriesSignal` would refuse every note answer carrying a `url`).
+    // Consequence: an entity UPDATE that changes a bookmark's url does not
+    // re-register (mutate.ts gates on this map). Creates always register.
+    url: [],
     // No property key maps to external_id — it's derived from (provider,
     // externalId), so a property change never re-registers it.
     external_id: [],
   };
+
+/**
+ * Kinds whose `properties.url` IS the subject's identity: the system capture
+ * hierarchy `bookmark` → `website` / `article` / `signal_item` (every profile
+ * seeded with `parentSlug: "bookmark"` in `ensure-system-profiles.ts`; the
+ * `url-identity-kinds` test derives that set from the seeder and fails if the
+ * two drift). A person's or a task's `url` is just a link the subject mentions,
+ * so it is NOT an identity atom there.
+ *
+ * Does not cover user-defined kinds parented under `bookmark` — the extractor
+ * is pure and has no profile tree to walk.
+ */
+export const URL_IDENTITY_KINDS: ReadonlySet<string> = new Set([
+  "bookmark",
+  "website",
+  "article",
+  "signal_item",
+]);
 
 /**
  * Extract ALL strong identity signals from an entity's property bag — the ONE
@@ -179,10 +267,13 @@ export const IDENTITY_SIGNAL_PROPERTY_KEYS: Record<StrongSignalType, string[]> =
  * @param opts.aliases When true, also scans `properties.aliases[]` entries and
  *   registers any that look like an email or URL (best-effort — aliases carry
  *   no explicit type).
+ * @param opts.kind The entity's kind (profile slug). Required for the `url`
+ *   atom: `properties.url` is identity only on a URL_IDENTITY_KINDS kind.
+ *   Omitted ⇒ no `url` atom (the pre-2026-10 behaviour).
  */
 export function extractIdentitySignals(
   properties: Record<string, unknown> | undefined,
-  opts?: { aliases?: boolean }
+  opts?: { aliases?: boolean; kind?: string | null }
 ): IdentitySignal[] {
   if (!properties) return [];
   const signals: IdentitySignal[] = [];
@@ -205,6 +296,16 @@ export function extractIdentitySignals(
   const website = properties.website;
   if (typeof website === "string" && /^https?:\/\//.test(website)) {
     signals.push({ type: "website", value: website });
+  }
+
+  const url = properties.url;
+  if (
+    opts?.kind &&
+    URL_IDENTITY_KINDS.has(opts.kind) &&
+    typeof url === "string" &&
+    /^https?:\/\//i.test(url.trim())
+  ) {
+    signals.push({ type: "url", value: url });
   }
 
   const twitter = properties.twitterHandle ?? properties["twitter-handle"];
@@ -323,10 +424,17 @@ export async function resolveIdentity(
   // ── STRONG: globally-unique identity signals ──────────────────────────────
   const normalizedSignals = (params.signals ?? [])
     .filter((s) => s && s.type && typeof s.value === "string" && s.value.trim())
-    .map((s) => ({
-      type: s.type,
-      value: normalizeIdentitySignal(s.type, s.value),
-    }));
+    .flatMap((s) => {
+      const value = normalizeIdentitySignal(s.type, s.value);
+      const canonical = { type: s.type, value };
+      if (s.type !== "linkedin_url" && s.type !== "website") return [canonical];
+      // Read-compat with rows stored before canonicalizeUrl (see
+      // legacyUrlSignalValue). Writes only ever store the canonical form.
+      const legacy = legacyUrlSignalValue(s.value);
+      return legacy === value
+        ? [canonical]
+        : [canonical, { type: s.type, value: legacy }];
+    });
 
   if (normalizedSignals.length > 0) {
     const signalMatch = await db.query.entityIdentitySignals.findFirst({

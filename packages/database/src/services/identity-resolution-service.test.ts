@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
+  URL_IDENTITY_KINDS,
+  canonicalizeUrl,
   extractIdentitySignals,
   normalizeIdentitySignal,
 } from "./identity-resolution-service.js";
@@ -141,6 +145,127 @@ describe("strong-signal race (documented residual)", () => {
     expect(signals).toHaveLength(1);
     expect(normalizeIdentitySignal(signals[0].type, signals[0].value)).toBe(
       "race@example.com"
+    );
+  });
+});
+
+/**
+ * URL identity atom (D8): the same URL captured twice must canonicalise to ONE
+ * key, so the second capture resolves to the first bookmark.
+ */
+describe("canonicalizeUrl / url-type normalisation", () => {
+  const table: Array<[string, string, string]> = [
+    ["www dropped", "https://www.x.com/a", "https://x.com/a"],
+    ["host lowercased", "https://WWW.X.COM/a", "https://x.com/a"],
+    ["fragment dropped", "https://x.com/a#section-2", "https://x.com/a"],
+    ["trailing slash", "https://x.com/a/", "https://x.com/a"],
+    ["bare host slash", "https://x.com/", "https://x.com"],
+    [
+      "utm_* dropped",
+      "https://x.com/a?utm_source=y&utm_medium=email",
+      "https://x.com/a",
+    ],
+    ["fbclid dropped", "https://x.com/a?fbclid=IwAR0", "https://x.com/a"],
+    ["gclid dropped", "https://x.com/a?gclid=Cj0K", "https://x.com/a"],
+    [
+      "keeps v= (identity), drops tracking around it",
+      "https://www.youtube.com/watch?utm_source=tw&v=dQw4w9WgXcQ&fbclid=1",
+      "https://youtube.com/watch?v=dQw4w9WgXcQ",
+    ],
+    [
+      "keeps path + query case",
+      "https://x.com/Path/To?Id=AbC",
+      "https://x.com/Path/To?Id=AbC",
+    ],
+    [
+      "everything at once",
+      "https://www.x.com/a?utm_source=y#z",
+      "https://x.com/a",
+    ],
+  ];
+  it.each(table)("%s", (_label, input, expected) => {
+    expect(canonicalizeUrl(input)).toBe(expected);
+    expect(normalizeIdentitySignal("url", input)).toBe(expected);
+  });
+
+  it("a non-URL value is trimmed + slash-stripped, never thrown on", () => {
+    expect(canonicalizeUrl("  not a url/ ")).toBe("not a url");
+  });
+
+  it("linkedin_url / website get the same canonical form, then case-folded", () => {
+    expect(
+      normalizeIdentitySignal(
+        "linkedin_url",
+        "https://www.linkedin.com/in/Alice/?utm_source=share#x"
+      )
+    ).toBe("https://linkedin.com/in/alice");
+    expect(
+      normalizeIdentitySignal("website", "https://WWW.Acme.com/?gclid=1")
+    ).toBe("https://acme.com");
+  });
+});
+
+describe("extractIdentitySignals — url atom is kind-gated", () => {
+  it("emits a url atom for every URL_IDENTITY_KINDS kind", () => {
+    for (const kind of URL_IDENTITY_KINDS) {
+      expect(
+        extractIdentitySignals({ url: "https://x.com/a" }, { kind })
+      ).toEqual([{ type: "url", value: "https://x.com/a" }]);
+    }
+  });
+
+  it("a person's url is NOT identity", () => {
+    expect(
+      extractIdentitySignals({ url: "https://x.com/a" }, { kind: "person" })
+    ).toEqual([]);
+  });
+
+  it("no kind ⇒ no url atom (callers that do not pass a kind are unchanged)", () => {
+    expect(extractIdentitySignals({ url: "https://x.com/a" })).toEqual([]);
+  });
+
+  it("a non-http url value is ignored", () => {
+    expect(
+      extractIdentitySignals({ url: "obsidian://open?x" }, { kind: "bookmark" })
+    ).toEqual([]);
+  });
+
+  it("the url atom is its own namespace — never `website`", () => {
+    const [s] = extractIdentitySignals(
+      { url: "https://acme.com" },
+      { kind: "bookmark" }
+    );
+    expect(s.type).toBe("url");
+  });
+});
+
+/**
+ * URL_IDENTITY_KINDS is hand-listed in the pure extractor; the SOURCE of the
+ * bookmark family is the system-profile seeder. Derive the family from the
+ * seeder's own `parentSlug: "bookmark"` entries and pin equality, so a new
+ * child of `bookmark` added there fails here until it is classified.
+ * Limitation: reads the seeder SOURCE (regex over `slug:`/`parentSlug:` pairs
+ * inside one object literal); it does not see user-defined kinds.
+ */
+describe("URL_IDENTITY_KINDS ↔ ensure-system-profiles bookmark family", () => {
+  it("equals bookmark + every seeded profile parented under bookmark", () => {
+    const src = readFileSync(
+      fileURLToPath(
+        new URL("../utils/ensure-system-profiles.ts", import.meta.url)
+      ),
+      "utf8"
+    );
+    const children = [
+      ...src.matchAll(
+        /slug:\s*"([a-z_]+)",\s*\n\s*displayName:[^}]*?\}\s*,\s*\n\s*parentSlug:\s*"bookmark"/g
+      ),
+    ].map((m) => m[1]);
+    // Non-vacuity: the seeder still declares the known children.
+    expect(children).toEqual(
+      expect.arrayContaining(["website", "article", "signal_item"])
+    );
+    expect(new Set(["bookmark", ...children])).toEqual(
+      new Set(URL_IDENTITY_KINDS)
     );
   });
 });

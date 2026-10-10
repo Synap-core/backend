@@ -157,7 +157,8 @@ export async function findPendingSignalMatches(
       // A pending op that already LINKS an existing entity isn't a new candidate.
       if (op.existingEntityId) continue;
       const opSignals = extractIdentitySignals(
-        op.properties as Record<string, unknown> | undefined
+        op.properties as Record<string, unknown> | undefined,
+        { kind: op.profileSlug }
       ).map((s) => ({
         type: s.type,
         value: normalizeIdentitySignal(s.type, s.value),

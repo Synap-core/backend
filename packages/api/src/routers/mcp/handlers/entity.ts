@@ -681,7 +681,8 @@ export const entityHandlers: McpHandlerMap = {
         args.signals as Parameters<typeof signalsFromExplicit>[0]
       ),
       ...extractIdentitySignals(
-        args.properties as Record<string, unknown> | undefined
+        args.properties as Record<string, unknown> | undefined,
+        { kind: args.kindSlug as string | undefined }
       ),
     ];
 

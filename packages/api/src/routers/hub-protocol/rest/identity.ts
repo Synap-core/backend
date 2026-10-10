@@ -182,7 +182,7 @@ export function registerIdentityRoutes(app: HubHono): void {
       // so scope the weak path to the user's visible rows, not one workspace.
       const signals: IdentitySignal[] = [
         ...signalsFromExplicit(body.signals),
-        ...extractIdentitySignals(body.properties),
+        ...extractIdentitySignals(body.properties, { kind: body.kindSlug }),
       ];
 
       const resolution = await resolveIdentity(db, {

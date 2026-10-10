@@ -333,7 +333,9 @@ const captureHandler: McpToolHandler = async (
         !Array.isArray(only.properties)
           ? (only.properties as Record<string, unknown>)
           : {};
-      const onlySignals = extractIdentitySignals(onlyProps);
+      const onlySignals = extractIdentitySignals(onlyProps, {
+        kind: only.profileSlug as string | undefined,
+      });
       // `IdentitySignal.type` is a plain string upstream — index the
       // strong-signal key map through a widened view rather than casting the
       // signal type, so an unknown atom yields no keys instead of throwing.
@@ -451,7 +453,8 @@ const captureHandler: McpToolHandler = async (
             kindSlug: e.profileSlug as string,
             name: candidateTitle,
             signals: extractIdentitySignals(
-              e.properties as Record<string, unknown> | undefined
+              e.properties as Record<string, unknown> | undefined,
+              { kind: e.profileSlug as string | undefined }
             ),
             userScope: visibleScope,
           });

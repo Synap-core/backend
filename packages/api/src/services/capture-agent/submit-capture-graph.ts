@@ -1141,7 +1141,9 @@ export async function submitCaptureGraph(
       : isNull(entities.workspaceId);
     for (const e of toResolve) {
       try {
-        const signals = extractIdentitySignals(e.properties);
+        const signals = extractIdentitySignals(e.properties, {
+          kind: e.profileSlug,
+        });
         const res = await resolveIdentity(db, {
           userId,
           kindSlug: e.profileSlug,

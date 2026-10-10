@@ -271,7 +271,9 @@ export const migrationRouter = router({
               userId,
               kindSlug: entityInput.profileSlug,
               name: entityInput.title,
-              signals: extractIdentitySignals(entityInput.properties ?? {}),
+              signals: extractIdentitySignals(entityInput.properties ?? {}, {
+                kind: entityInput.profileSlug,
+              }),
               userScope: eq(entities.workspaceId, workspaceId),
             });
 

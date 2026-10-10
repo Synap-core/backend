@@ -483,7 +483,9 @@ export const createProcs = {
       // a proposal that merges is reported with `deduplicated: true` so the
       // executor records it as LINKED, not created (see approve-executors.ts).
       const dedupSignals = [
-        ...extractIdentitySignals(input.properties ?? {}),
+        ...extractIdentitySignals(input.properties ?? {}, {
+          kind: profileSlug,
+        }),
         ...(roleIdentityProperties
           ? extractIdentitySignals(roleIdentityProperties)
           : []),

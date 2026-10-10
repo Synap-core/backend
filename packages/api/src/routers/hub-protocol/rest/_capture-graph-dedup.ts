@@ -187,8 +187,11 @@ export function identityValues(
  * a person and a company sharing an email are the same subject and collapse.
  * Sources the SAME strong-atom notion + normalizer as the resolveIdentity SSOT.
  */
-function strongDedupKeys(properties?: Record<string, unknown>): string[] {
-  return extractIdentitySignals(properties).map(
+function strongDedupKeys(
+  properties: Record<string, unknown> | undefined,
+  kind: string | undefined
+): string[] {
+  return extractIdentitySignals(properties, { kind }).map(
     (s) => `!strong!${s.type}::${normalizeIdentitySignal(s.type, s.value)}`
   );
 }
@@ -205,7 +208,7 @@ export function entityDedupKeys(e: CaptureGraphEntity): string[] {
   const weak = identityValues(e.title ?? e.ref, e.properties).map(
     (v) => prefix + v
   );
-  return [...weak, ...strongDedupKeys(e.properties)];
+  return [...weak, ...strongDedupKeys(e.properties, e.profileSlug)];
 }
 
 /**
