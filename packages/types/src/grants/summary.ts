@@ -24,9 +24,9 @@ import {
   grantActionLabel,
   grantKindLabel,
   grantSubjectLabel,
-  grantSubjectSpec,
   isQualifiedGrantSubject,
   type GrantAction,
+  type GrantSubjectSpec,
 } from "./catalog.js";
 import {
   grantLifetime,
@@ -91,6 +91,17 @@ export interface SummarizeGrantOptions {
   /** The pod's own names for kinds (slug → name), when it has them. */
   readonly kindNames?: Readonly<Record<string, string>>;
   /**
+   * The subjects the holder can be granted (default GRANT_SUBJECT_CATALOG;
+   * agents: AGENT_GRANT_CATALOG), so each gets a named row, not "+1 more".
+   */
+  readonly catalog?: readonly GrantSubjectSpec[];
+  /**
+   * Actions the holder can never be refused (an agent reads what its person
+   * reads, `AGENT_ALWAYS_ALLOWED`). The sentence says them once — "Read only",
+   * "Read everything; Create Notes" — instead of "No access".
+   */
+  readonly alwaysAllowed?: readonly GrantAction[];
+  /**
    * An EXISTING key's expiry (`apiKeys.expiresAt`): null = never, a date =
    * that date. Omitted → the draft's lifetime (a key not minted yet).
    */
@@ -138,10 +149,13 @@ function expiryWhen(expiresAt: Date | string | null): {
 const nonEmpty = (ids: readonly string[] | null | undefined) =>
   ids && ids.length > 0 ? ids : null;
 
-function isCatalogPattern(p: string): boolean {
+function isCatalogPattern(
+  p: string,
+  catalog: readonly GrantSubjectSpec[]
+): boolean {
   const segs = parsePermission(p);
   if (segs[0] === "*") return true;
-  const spec = grantSubjectSpec(segs[0]);
+  const spec = catalog.find((s) => s.subject === segs[0]);
   if (!spec) return false;
   const action = segs[isQualifiedGrantSubject(segs[0]) ? 2 : 1];
   return (
@@ -173,10 +187,12 @@ export function summarizeGrant(
   const d: GrantDraft = { ...draft, permissions: valid };
   const full = isFullAccess(d);
   const has = (p: string) => valid.includes(p);
+  const catalog = opts.catalog ?? GRANT_SUBJECT_CATALOG;
+  const alwaysAllowed = opts.alwaysAllowed ?? [];
 
   const rows: GrantSummaryRow[] = [];
   if (!full) {
-    for (const spec of GRANT_SUBJECT_CATALOG) {
+    for (const spec of catalog) {
       const { subject } = spec;
       if (!isQualifiedGrantSubject(subject)) {
         const actions = spec.actions.filter((action) =>
@@ -232,7 +248,7 @@ export function summarizeGrant(
       }
     }
   }
-  const other = full ? [] : valid.filter((p) => !isCatalogPattern(p));
+  const other = full ? [] : valid.filter((p) => !isCatalogPattern(p, catalog));
 
   const workspaceIds = nonEmpty(draft.workspaceIds);
   const projectIds = nonEmpty(draft.projectIds);
@@ -242,12 +258,12 @@ export function summarizeGrant(
 
   let what: string;
   if (full) what = "Full access";
-  else if (rows.length === 0 && other.length === 0) what = "No access";
   else {
     const parts = rows
       .filter((r) => r.all)
       .map((r) => everythingText(r.subject, r.label));
     for (const action of GRANT_ACTIONS) {
+      if (alwaysAllowed.includes(action)) continue;
       const labels = rows
         .filter((r) => !r.all && r.actions.includes(action))
         .map((r) => r.label);
@@ -255,7 +271,13 @@ export function summarizeGrant(
         parts.push(`${grantActionLabel(action)} ${labels.join(", ")}`);
     }
     if (other.length > 0) parts.push(`+${other.length} more`);
-    what = parts.join("; ");
+    const always = alwaysAllowed.map(grantActionLabel).join(", ");
+    if (always)
+      what =
+        parts.length > 0
+          ? [`${always} everything`, ...parts].join("; ")
+          : `${always} only`;
+    else what = parts.length > 0 ? parts.join("; ") : "No access";
   }
   const where: string[] = [];
   if (workspaceIds) where.push(count(workspaceIds.length, "workspace"));
@@ -286,5 +308,85 @@ export function summarizeGrant(
     when,
     expired,
     sentence: [what, ...where, when].join(" · "),
+  };
+}
+
+/**
+ * What a key may touch, as a key list reads it (`apiKeys.list` /
+ * `listForWorkspace` → `access` + `grants`):
+ *  - `ungranted` — it never had a grant: bounded only by its scopes;
+ *  - `granted`   — `grants` holds every live grant (a key holds a SET);
+ *  - `ended`     — it had grants and none is live: it may touch NOTHING.
+ */
+export type KeyAccess = "ungranted" | "granted" | "ended";
+
+/** One live grant on the key-list wire. `expiresAt` null = never. */
+export interface KeyAccessGrant extends GrantDraft {
+  readonly expiresAt: Date | string | null;
+}
+
+export interface KeyAccessLine {
+  /** What the person called this grant, when they did. */
+  readonly label: string | null;
+  readonly summary: GrantSummary;
+}
+
+export interface KeyAccessDescription {
+  readonly access: KeyAccess;
+  /** Unbounded by any grant: `ungranted`, or a live `*` grant. Mark as danger. */
+  readonly full: boolean;
+  /** `ended`: the key may touch nothing. */
+  readonly ended: boolean;
+  /** `granted` only: one per live grant, in wire order. Empty otherwise. */
+  readonly lines: readonly KeyAccessLine[];
+  /** One line for a row: the fixed wording, or each grant's sentence. */
+  readonly sentence: string;
+}
+
+/** The ONE wording of the two states that are not a grant. */
+export const KEY_ACCESS_UNGRANTED_SENTENCE =
+  "Full access: everything its scopes allow";
+export const KEY_ACCESS_ENDED_SENTENCE = "Can touch nothing: its access ended";
+
+export function describeKeyAccess(
+  key: {
+    readonly access: KeyAccess;
+    readonly grants: readonly KeyAccessGrant[];
+  },
+  opts: Pick<SummarizeGrantOptions, "kindNames"> = {}
+): KeyAccessDescription {
+  if (key.access === "ungranted")
+    return {
+      access: key.access,
+      full: true,
+      ended: false,
+      lines: [],
+      sentence: KEY_ACCESS_UNGRANTED_SENTENCE,
+    };
+  if (key.access === "ended")
+    return {
+      access: key.access,
+      full: false,
+      ended: true,
+      lines: [],
+      sentence: KEY_ACCESS_ENDED_SENTENCE,
+    };
+  const lines = key.grants.map((g) => ({
+    label: g.label?.trim() || null,
+    summary: summarizeGrant(g, {
+      kindNames: opts.kindNames,
+      expiresAt: g.expiresAt,
+    }),
+  }));
+  return {
+    access: key.access,
+    full: lines.some((l) => l.summary.full),
+    ended: false,
+    lines,
+    sentence: lines
+      .map((l) =>
+        l.label ? `${l.label}: ${l.summary.sentence}` : l.summary.sentence
+      )
+      .join(" | "),
   };
 }
