@@ -9,7 +9,13 @@
  * choosing "Read-only site" must not silently undo "only the Brand space".
  */
 
-import { normalizeGrantPermissions, type GrantDraft } from "./draft.js";
+import {
+  EMPTY_GRANT_DRAFT,
+  normalizeGrantPermissions,
+  toGrantMintInput,
+  type GrantDraft,
+  type GrantMintInput,
+} from "./draft.js";
 
 export interface GrantRole {
   /** Stable id (a preset slug, or a stored role's uuid). */
@@ -102,4 +108,47 @@ export function matchGrantRole(
       theirs.length === mine.length && theirs.every((p, i) => p === mine[i])
     );
   });
+}
+
+/** The `grantRoles.create` / `.update` input (`id` added for an update). */
+export interface GrantRoleInput {
+  name: string;
+  description?: string;
+  grant: Omit<GrantMintInput["grant"], "label" | "roleId"> & {
+    /** Omitted → the role sets no lifetime; a number → days; null → never. */
+    expiresInDays?: number | null;
+  };
+}
+
+/**
+ * A draft saved as a role: its permissions, narrowing and lifetime choice —
+ * the same projection a mint of it gets (`toGrantMintInput`), minus the
+ * per-key label and lineage.
+ */
+export function toGrantRoleInput(
+  name: string,
+  description: string,
+  draft: GrantDraft
+): GrantRoleInput {
+  const { grant, expiresInDays } = toGrantMintInput(draft);
+  const { label: _label, ...rest } = grant;
+  return {
+    name: name.trim(),
+    ...(description.trim() ? { description: description.trim() } : {}),
+    grant: {
+      ...rest,
+      ...(expiresInDays !== undefined ? { expiresInDays } : {}),
+    },
+  };
+}
+
+/**
+ * The full mint input for a key made from a role, as-is: its permissions AND
+ * its narrowing and lifetime, plus `roleId` lineage for the person's own
+ * stored role (never for a preset).
+ */
+export function grantMintFromRole(role: GrantRole): GrantMintInput {
+  const input = toGrantMintInput(applyGrantRole(EMPTY_GRANT_DRAFT, role));
+  if (role.stored) input.grant.roleId = role.id;
+  return input;
 }

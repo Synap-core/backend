@@ -15,6 +15,7 @@ import {
   EMPTY_GRANT_DRAFT,
   GRANT_PRESETS,
   GRANT_SUBJECT_CATALOG,
+  grantMintFromRole,
   isGranted,
   isImpliedByAllKinds,
   matchGrantRole,
@@ -28,9 +29,11 @@ import {
   summarizeGrant,
   toggleGrant,
   toGrantMintInput,
+  toGrantRoleInput,
   validateGrantDraft,
   type GrantCell,
   type GrantDraft,
+  type GrantRole,
 } from "./index.js";
 
 const ctx = { kinds: ["note", "task", "person"] };
@@ -479,5 +482,75 @@ describe("presets (roles)", () => {
     expect(
       setGrantPermissions(EMPTY_GRANT_DRAFT, ["entity.read"]).permissions
     ).toEqual(["entity.*.read"]);
+  });
+});
+
+describe("role ⇄ wire", () => {
+  const stored: GrantRole = {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Brand writer",
+    description: "",
+    stored: true,
+    grant: {
+      permissions: ["document.update", "entity.read"],
+      workspaceIds: ["w1"],
+      projectIds: ["p1"],
+      expiresInDays: 30,
+    },
+  };
+
+  // pod-admin's picker minted only {permissions, roleId}: a role made for the
+  // Brand space minted a key for every space, valid for 90 days.
+  it("a key from a stored role keeps its narrowing, lifetime and lineage", () => {
+    expect(grantMintFromRole(stored)).toEqual({
+      grant: {
+        permissions: ["entity.*.read", "document.update"],
+        workspaceIds: ["w1"],
+        projectIds: ["p1"],
+        roleId: stored.id,
+      },
+      expiresInDays: 30,
+    });
+  });
+  it("a preset records no lineage and keeps the default lifetime", () => {
+    expect(grantMintFromRole(GRANT_PRESETS[0])).toEqual({
+      grant: { permissions: ["entity.*.read", "document.read", "view.read"] },
+    });
+  });
+  it("a draft saved as a role keeps workspaces, projects and lifetime; drops the key label", () => {
+    const d: GrantDraft = {
+      ...stored.grant,
+      label: "My key",
+      expiresInDays: null,
+    };
+    expect(toGrantRoleInput("  Brand writer ", "  For the site ", d)).toEqual({
+      name: "Brand writer",
+      description: "For the site",
+      grant: {
+        permissions: ["entity.*.read", "document.update"],
+        workspaceIds: ["w1"],
+        projectIds: ["p1"],
+        expiresInDays: null,
+      },
+    });
+    expect(toGrantRoleInput("R", " ", draft("view.read"))).toEqual({
+      name: "R",
+      grant: { permissions: ["view.read"] },
+    });
+  });
+  it("round-trips: a role saved from a draft mints what the draft mints", () => {
+    const d: GrantDraft = { ...stored.grant };
+    const saved = toGrantRoleInput("R", "", d);
+    const role: GrantRole = {
+      id: stored.id,
+      name: saved.name,
+      description: "",
+      stored: true,
+      grant: saved.grant,
+    };
+    expect(grantMintFromRole(role)).toEqual({
+      ...toGrantMintInput(d),
+      grant: { ...toGrantMintInput(d).grant, roleId: stored.id },
+    });
   });
 });
