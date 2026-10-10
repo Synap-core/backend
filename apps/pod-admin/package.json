@@ -29,6 +29,7 @@
     "superjson": "^2.2.6"
   },
   "devDependencies": {
+    "@trpc/server": "^11.16.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
