@@ -46,20 +46,27 @@ function createRepository(row: ReturnType<typeof oldKeyRow>) {
       return { returning };
     },
   }));
-  const where = vi.fn(async () => undefined);
+  const where = vi.fn(() => ({ returning: async () => [{ id: OLD_KEY_ID }] }));
   const update = vi.fn(() => ({ set: () => ({ where }) }));
 
-  const database = {
+  // The key has no grant rows: rotation carries nothing (pinned on PGlite in
+  // api-keys.rotate-grants.pglite.test.ts).
+  const select = vi.fn(() => ({
+    from: () => ({ where: () => ({ orderBy: async () => [] }) }),
+  }));
+  const database: Record<string, unknown> = {
     query: { apiKeys: { findFirst: vi.fn(async () => row) } },
     insert,
     update,
-  } as unknown as ConstructorParameters<typeof ApiKeyRepository>[0];
+    select,
+    transaction: async (fn: (tx: unknown) => unknown) => fn(database),
+  };
 
   const eventRepo = { append: vi.fn(async () => undefined) };
 
   return {
     repository: new ApiKeyRepository(
-      database,
+      database as unknown as ConstructorParameters<typeof ApiKeyRepository>[0],
       eventRepo as unknown as EventRepository
     ),
     insertedValues,

@@ -14,17 +14,18 @@ import {
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { integrationKindSchema } from "@synap-core/types";
-import { API_KEY_SCOPES, grants } from "@synap/database/schema";
+import { API_KEY_SCOPES } from "@synap/database/schema";
 import {
   db,
   and,
   eq,
   or,
   inArray,
-  isNull,
   getDb,
   EventRepository,
   ApiKeyRepository,
+  GrantRepository,
+  type KeyReach,
   sql,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
@@ -111,27 +112,17 @@ function generateApiKey(prefix: string): string {
 }
 
 /**
- * The ACTIVE grant of each key (what it may touch), keyed by key id. ONE
- * read for every key list (personal + workspace), so both screens show the
- * same grant. A key with no active grant is absent (a legacy, ungranted key).
+ * What each key may touch, keyed by key id — ONE read for every key list
+ * (personal + workspace), so both screens say the same thing. `grant` is the
+ * newest live grant, kept while clients move to `grants` + `access`.
  */
-async function loadActiveGrantsByKey(keyIds: readonly string[]) {
-  const query = db
-    .select({
-      apiKeyId: grants.apiKeyId,
-      permissions: grants.permissions,
-      workspaceIds: grants.workspaceIds,
-      projectIds: grants.projectIds,
-      entityIds: grants.entityIds,
-      label: grants.label,
-      expiresAt: grants.expiresAt,
-    })
-    .from(grants)
-    .where(
-      and(inArray(grants.apiKeyId, [...keyIds]), isNull(grants.revokedAt))
-    );
-  const rows = keyIds.length === 0 ? [] : await query;
-  return new Map(rows.map(({ apiKeyId, ...grant }) => [apiKeyId, grant]));
+const UNGRANTED: KeyReach = { access: "ungranted", grants: [] };
+async function loadKeyReach(keyIds: readonly string[]) {
+  const reach = await new GrantRepository(db).reachForKeys(keyIds);
+  return (keyId: string) => {
+    const { access, grants } = reach.get(keyId) ?? UNGRANTED;
+    return { access, grants, grant: grants[0] ?? null };
+  };
 }
 
 export const apiKeysRouter = router({
@@ -160,9 +151,8 @@ export const apiKeysRouter = router({
       orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
     });
 
-    // W1 — the active grant of each key (what it may touch), for the
-    // connections screen. A key with none is a legacy, ungranted key.
-    const grantByKey = await loadActiveGrantsByKey(keys.map((k) => k.id));
+    // W1 — what each key may touch, for the connections screen.
+    const reachOf = await loadKeyReach(keys.map((k) => k.id));
 
     // Remove sensitive fields (keyHash)
     return keys.map((key) => ({
@@ -174,8 +164,8 @@ export const apiKeysRouter = router({
       linkedUserId: key.linkedUserId,
       /** True when an agent acting for you holds this key, not you. */
       heldByAgent: key.userId !== ctx.userId,
-      /** What this key may touch (W1); null = a legacy, ungranted key. */
-      grant: grantByKey.get(key.id) ?? null,
+      /** What this key may touch (W1): `access` + every live grant. */
+      ...reachOf(key.id),
       scope: key.scope,
       isActive: key.isActive,
       expiresAt: key.expiresAt,
@@ -1152,7 +1142,7 @@ export const apiKeysRouter = router({
       where: eq(apiKeys.workspaceId, ctx.workspaceId),
       orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
     });
-    const grantByKey = await loadActiveGrantsByKey(keys.map((k) => k.id));
+    const reachOf = await loadKeyReach(keys.map((k) => k.id));
 
     return keys.map((key) => ({
       id: key.id,
@@ -1170,8 +1160,8 @@ export const apiKeysRouter = router({
       revokedAt: key.revokedAt,
       revokedReason: key.revokedReason,
       workspaceId: key.workspaceId,
-      /** What this key may touch; null = a legacy, ungranted key. */
-      grant: grantByKey.get(key.id) ?? null,
+      /** What this key may touch: `access` + every live grant. */
+      ...reachOf(key.id),
     }));
   }),
 

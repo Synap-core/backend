@@ -39,6 +39,33 @@ export interface AttachGrantInput {
 const emptyToNull = (v?: string[] | null) =>
   v && v.length > 0 ? [...new Set(v)] : null;
 
+const isLive = (
+  r: { revokedAt: Date | null; expiresAt: Date | null },
+  now: Date
+) => r.revokedAt === null && (r.expiresAt === null || r.expiresAt > now);
+
+/**
+ * What a key may touch, as a key list shows it:
+ *   - `ungranted` — it never had a grant (bounded by its scopes only);
+ *   - `granted`   — `grants` holds every live one (a key holds a SET);
+ *   - `ended`     — it had grants and none is live: it may touch NOTHING.
+ */
+export type KeyAccess = "ungranted" | "granted" | "ended";
+export interface KeyReach {
+  access: KeyAccess;
+  grants: Array<
+    Pick<
+      GrantRecord,
+      | "permissions"
+      | "workspaceIds"
+      | "projectIds"
+      | "entityIds"
+      | "label"
+      | "expiresAt"
+    >
+  >;
+}
+
 export class GrantRepository {
   private readonly db: PostgresJsDatabase<any>;
 
@@ -119,9 +146,7 @@ export class GrantRepository {
       .orderBy(desc(grants.createdAt));
     if (rows.length === 0) return null;
     const now = new Date();
-    const live = rows.filter(
-      (r) => r.revokedAt === null && (r.expiresAt === null || r.expiresAt > now)
-    );
+    const live = rows.filter((r) => isLive(r, now));
     const clientId = (live[0] ?? rows[0]).clientId;
     if (live.length === 0) return { scopes: [{ permissions: [] }], clientId };
     return {
@@ -133,6 +158,42 @@ export class GrantRepository {
       })),
       clientId,
     };
+  }
+
+  /**
+   * The reach of each key, newest grant first — ONE read for every key list,
+   * so they all say the same thing. A key absent from the map never had a
+   * grant (`ungranted`).
+   */
+  async reachForKeys(
+    apiKeyIds: readonly string[]
+  ): Promise<Map<string, KeyReach>> {
+    const byKey = new Map<string, KeyReach>();
+    if (apiKeyIds.length === 0) return byKey;
+    const rows = await this.db
+      .select({
+        apiKeyId: grants.apiKeyId,
+        permissions: grants.permissions,
+        workspaceIds: grants.workspaceIds,
+        projectIds: grants.projectIds,
+        entityIds: grants.entityIds,
+        label: grants.label,
+        expiresAt: grants.expiresAt,
+        revokedAt: grants.revokedAt,
+      })
+      .from(grants)
+      .where(inArray(grants.apiKeyId, [...apiKeyIds]))
+      .orderBy(desc(grants.createdAt));
+    const now = new Date();
+    for (const { apiKeyId, revokedAt, ...grant } of rows) {
+      const reach = byKey.get(apiKeyId) ?? { access: "ended", grants: [] };
+      if (isLive({ revokedAt, expiresAt: grant.expiresAt }, now)) {
+        reach.access = "granted";
+        reach.grants.push(grant);
+      }
+      byKey.set(apiKeyId, reach);
+    }
+    return byKey;
   }
 
   /** Every grant made on a human's behalf (for /my-connections). */
@@ -164,6 +225,52 @@ export class GrantRepository {
           eq(grants.principalUserId, args.from)
         )
       );
+  }
+
+  /**
+   * Hand a key's grants to the key that replaces it (rotation). Run inside the
+   * rotation's transaction: the new key must never exist without its bound.
+   *
+   *   - never had a grant → nothing to carry; the new key stays ungranted too;
+   *   - live grants → each is copied (same scope, expiry, label, client, role)
+   *     and the old key's are revoked;
+   *   - had grants, none live → the newest ended row is copied as it stands,
+   *     so the new key still resolves to deny-all. Carrying nothing would make
+   *     it read as ungranted — a rotation turned into a widening.
+   */
+  async carryOver(args: {
+    fromKeyId: string;
+    toKeyId: string;
+    by: string;
+  }): Promise<void> {
+    const rows = await this.db
+      .select()
+      .from(grants)
+      .where(eq(grants.apiKeyId, args.fromKeyId))
+      .orderBy(desc(grants.createdAt));
+    if (rows.length === 0) return;
+    const now = new Date();
+    const live = rows.filter((r) => isLive(r, now));
+    const carried = live.length > 0 ? live : [rows[0]];
+    await this.db.insert(grants).values(
+      carried.map((r) => ({
+        apiKeyId: args.toKeyId,
+        principalUserId: r.principalUserId,
+        onBehalfOf: r.onBehalfOf,
+        permissions: r.permissions,
+        workspaceIds: r.workspaceIds,
+        projectIds: r.projectIds,
+        entityIds: r.entityIds,
+        expiresAt: r.expiresAt,
+        label: r.label,
+        clientId: r.clientId,
+        roleId: r.roleId,
+        createdBy: args.by,
+        revokedAt: r.revokedAt,
+        revokedBy: r.revokedBy,
+      }))
+    );
+    await this.revokeForKeys([args.fromKeyId], args.by);
   }
 
   /**

@@ -10,8 +10,16 @@
 import { randomBytes, createHash } from "crypto";
 import bcrypt from "bcrypt";
 import { TRPCError } from "@trpc/server";
-import { db, sql as pgSql, drizzleSql as sql } from "@synap/database"; // pgSql = postgres.js, sql = Drizzle
-import { revokeApiKeys, onApiKeysRevoked } from "@synap/database/api-key-revocation";
+import {
+  db,
+  GrantRepository,
+  sql as pgSql,
+  drizzleSql as sql,
+} from "@synap/database"; // pgSql = postgres.js, sql = Drizzle
+import {
+  revokeApiKeys,
+  onApiKeysRevoked,
+} from "@synap/database/api-key-revocation";
 import {
   apiKeys,
   KEY_PREFIXES,
@@ -684,7 +692,20 @@ export class ApiKeyService {
       })
       .where(eq(apiKeys.id, newKeyId));
 
-    // 4. Revoke the old key
+    // 4. The key's grants follow it — an ungranted key may do everything its
+    // scopes allow, so a new key that cannot take them must not survive.
+    try {
+      await new GrantRepository(db).carryOver({
+        fromKeyId: keyId,
+        toKeyId: newKeyId,
+        by: userId,
+      });
+    } catch (err) {
+      await this.revokeApiKey(newKeyId, userId, "Rotation failed: grants");
+      throw err;
+    }
+
+    // 5. Revoke the old key
     await this.revokeApiKey(keyId, userId, "Rotated to new key");
 
     // Invalidate the verification cache so the rotated-away key stops

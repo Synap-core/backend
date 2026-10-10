@@ -11,6 +11,7 @@ import { apiKeys } from "../schema/index.js";
 import type { ApiKeyToolProfile } from "../schema/api-keys.js";
 import { BaseRepository } from "./base-repository.js";
 import { revokeApiKeys } from "../utils/api-key-revocation.js";
+import { GrantRepository } from "./grant-repository.js";
 import type { EventRepository } from "./event-repository.js";
 
 export interface CreateApiKeyInput {
@@ -181,35 +182,48 @@ export class ApiKeyRepository extends BaseRepository<
     // keyLookupHash is the ONE field that must NOT be copied: it is derived
     // from the KEY MATERIAL (sha256 of the plaintext), so it is recomputed for
     // the new key exactly as the api-keys service does on mint.
-    const [newApiKey] = await this.db
-      .insert(apiKeys)
-      .values({
-        keyName: oldKey.keyName,
-        keyPrefix: oldKey.keyPrefix,
-        keyHash,
-        keyLookupHash: createHash("sha256").update(newKey).digest("hex"),
-        keyType: oldKey.keyType,
-        description: oldKey.description,
-        hubId: oldKey.hubId,
-        scope: oldKey.scope,
-        expiresAt: oldKey.expiresAt,
-        userId: oldKey.userId,
-        workspaceId: oldKey.workspaceId,
-        linkedUserId: oldKey.linkedUserId,
-        instanceId: oldKey.instanceId,
-        parentKeyId: oldKey.parentKeyId,
-        // The MCP tool surface the client lists — a rotation must not widen
-        // an entry key to every tool, nor forget what it unlocked.
-        toolProfile: oldKey.toolProfile,
-        toolGroups: oldKey.toolGroups,
-        isActive: true,
-        usageCount: 0,
-        rotatedFromId: id,
-        createdBy: userId,
-      })
-      .returning();
+    //
+    // The key's grants are part of that identity: they live in their own
+    // table, so they are carried in the same transaction as the insert (an
+    // ungranted key may do everything its scopes allow).
+    const newApiKey = await this.db.transaction(async (tx: any) => {
+      const [inserted] = await tx
+        .insert(apiKeys)
+        .values({
+          keyName: oldKey.keyName,
+          keyPrefix: oldKey.keyPrefix,
+          keyHash,
+          keyLookupHash: createHash("sha256").update(newKey).digest("hex"),
+          keyType: oldKey.keyType,
+          description: oldKey.description,
+          hubId: oldKey.hubId,
+          scope: oldKey.scope,
+          expiresAt: oldKey.expiresAt,
+          userId: oldKey.userId,
+          workspaceId: oldKey.workspaceId,
+          linkedUserId: oldKey.linkedUserId,
+          instanceId: oldKey.instanceId,
+          parentKeyId: oldKey.parentKeyId,
+          // The MCP tool surface the client lists — a rotation must not widen
+          // an entry key to every tool, nor forget what it unlocked.
+          toolProfile: oldKey.toolProfile,
+          toolGroups: oldKey.toolGroups,
+          isActive: true,
+          usageCount: 0,
+          rotatedFromId: id,
+          createdBy: userId,
+        })
+        .returning();
+      await new GrantRepository(tx).carryOver({
+        fromKeyId: id,
+        toKeyId: inserted.id,
+        by: userId,
+      });
+      return inserted;
+    });
 
-    // Revoke old key
+    // After commit: the revoke door drops the verification cache, and a drop
+    // inside the transaction lets the old key re-cache as valid until commit.
     await revokeApiKeys(this.db, {
       where: eq(apiKeys.id, id),
       revokedBy: userId,
