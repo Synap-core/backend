@@ -18,6 +18,7 @@ import {
   isGranted,
   isImpliedByAllKinds,
   matchGrantRole,
+  MAX_GRANT_PERMISSIONS,
   normalizeGrantPermissions,
   parsePermission,
   patternMatches,
@@ -289,6 +290,41 @@ describe("validateGrantDraft", () => {
         "no-permissions",
         "invalid-lifetime",
       ]);
+  });
+});
+
+describe("validateGrantDraft — the mint door's cap", () => {
+  // Unticking one kind under "Every kind" splits the pattern into one per
+  // remaining kind: 20 kinds × 4 actions lands at 76 patterns, which the door
+  // (permissions.max(64)) refuses. The editor must say so before Save.
+  it("reports a draft past MAX_GRANT_PERMISSIONS, in words", () => {
+    const kinds = Array.from({ length: 20 }, (_, i) => `kind${i}`);
+    let d = draft(
+      "entity.*.read",
+      "entity.*.create",
+      "entity.*.update",
+      "entity.*.delete"
+    );
+    for (const action of ["read", "create", "update", "delete"] as const)
+      d = toggleGrant(d, { subject: "entity", kind: "kind0", action }, false, {
+        kinds,
+      });
+    expect(d.permissions).toHaveLength(76);
+    const v = validateGrantDraft(d);
+    expect(v.ok).toBe(false);
+    const p =
+      !v.ok && v.problems.find((x) => x.code === "too-many-permissions");
+    expect(p).toMatchObject({ count: 76, max: MAX_GRANT_PERMISSIONS });
+    expect(p && "message" in p && p.message).toContain("at most 64");
+  });
+  it("accepts exactly the cap", () => {
+    const d = draft(
+      ...Array.from(
+        { length: MAX_GRANT_PERMISSIONS },
+        (_, i) => `entity.k${i}.read`
+      )
+    );
+    expect(validateGrantDraft(d)).toEqual({ ok: true });
   });
 });
 

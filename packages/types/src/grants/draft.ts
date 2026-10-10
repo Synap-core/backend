@@ -35,6 +35,12 @@ import {
 /** The longest lifetime the mint door accepts (`ExpiresInDaysSchema`). */
 export const MAX_KEY_TTL_DAYS = 36_500;
 
+/**
+ * The most permission patterns one grant may hold — the mint door's
+ * `GrantInputSchema.permissions.max(64)` (api `services/key-grant.ts`).
+ */
+export const MAX_GRANT_PERMISSIONS = 64;
+
 export interface GrantDraft {
   /** Permission patterns, `<subject>[.<kind>].<action>`. */
   readonly permissions: readonly string[];
@@ -341,7 +347,13 @@ export type GrantProblem =
       readonly pattern: string;
       readonly message: string;
     }
-  | { readonly code: "invalid-lifetime"; readonly days: number };
+  | { readonly code: "invalid-lifetime"; readonly days: number }
+  | {
+      readonly code: "too-many-permissions";
+      readonly count: number;
+      readonly max: number;
+      readonly message: string;
+    };
 
 export type GrantValidation =
   | { readonly ok: true }
@@ -368,6 +380,14 @@ export function validateGrantDraft(draft: GrantDraft): GrantValidation {
       }
     }
   }
+  const count = normalizeGrantPermissions(draft.permissions).length;
+  if (count > MAX_GRANT_PERMISSIONS)
+    problems.push({
+      code: "too-many-permissions",
+      count,
+      max: MAX_GRANT_PERMISSIONS,
+      message: `This grant lists ${count} separate permissions; a key holds at most ${MAX_GRANT_PERMISSIONS}. Tick a broader row, such as "Every kind", instead of many single ones.`,
+    });
   const d = draft.expiresInDays;
   if (
     typeof d === "number" &&
