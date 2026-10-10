@@ -24,6 +24,7 @@ import {
   eq,
   and,
   inArray,
+  isNull,
   sql,
   getActingAgentUserId,
   getRequestGrant,
@@ -37,6 +38,7 @@ import {
 } from "@synap/database";
 import {
   apiKeys,
+  apps,
   users,
   workspaceMembers,
   workspaces,
@@ -506,6 +508,52 @@ export async function adoptLegacyAppKey(args: {
     agentUserId,
   });
   return agentUserId;
+}
+
+/**
+ * Boot pass: adopt every pre-0313 app key now, instead of waiting for the
+ * app's first call. Until a key is adopted its app has no agent, so its owner
+ * cannot set the agent's write mode ("apply automatically") before the first
+ * write lands as a proposal. Same door as the lazy path (`adoptLegacyAppKey`),
+ * so a key it cannot adopt stays human-held and is refused on use. Idempotent:
+ * an app with an agent is skipped. Returns how many keys moved.
+ */
+export async function adoptLegacyAppKeys(): Promise<number> {
+  const legacy = await db
+    .select({ publicId: apps.publicId, ownerUserId: apps.ownerUserId })
+    .from(apps)
+    .where(
+      and(
+        isNull(apps.agentUserId),
+        isNull(apps.revokedAt),
+        isNull(apps.removedAt)
+      )
+    );
+  const repo = new AppRepository(db);
+  let adopted = 0;
+  for (const app of legacy) {
+    const keyIds = await repo.keyIdsFor(app.publicId);
+    if (keyIds.length === 0) continue;
+    const live = await db
+      .select({ id: apiKeys.id })
+      .from(apiKeys)
+      .where(
+        and(
+          inArray(apiKeys.id, keyIds),
+          eq(apiKeys.userId, app.ownerUserId),
+          eq(apiKeys.isActive, true)
+        )
+      );
+    for (const key of live) {
+      const agentUserId = await adoptLegacyAppKey({
+        apiKeyId: key.id,
+        keyOwnerUserId: app.ownerUserId,
+        publicId: app.publicId,
+      });
+      if (agentUserId) adopted++;
+    }
+  }
+  return adopted;
 }
 
 /** Revoke an app's keys AND their grants (the ONE grant write door). */

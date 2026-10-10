@@ -89,6 +89,7 @@ import { appsRouter } from "../routers/apps.js";
 import { registerAppExecutors } from "../routers/proposals/executors/app.js";
 import { proposalExecRegistry } from "../routers/proposals/execution-registry.js";
 import {
+  adoptLegacyAppKeys,
   grantsForApprovedRequests,
   issueKey,
   revokeApp,
@@ -574,5 +575,45 @@ describe("a re-approval re-derives the live key and the app's agent", () => {
       )
     ).rows;
     expect(live!.is_active).toBe(true);
+  });
+});
+
+describe("boot adopts pre-0313 app keys before the app's first call", () => {
+  it("the owner can set the app agent's write mode without waiting for a write", async () => {
+    const repo = new AppRepository(h.db as never);
+    const legacyKey = async (name: string) => {
+      const app = await repo.register({ ownerUserId: OWNER, name });
+      await repo.setApprovedRequests(app.id, APPROVED);
+      const keyId = await mintAppKey(OWNER, null);
+      await attachGrantsOrRevoke({
+        apiKeyId: keyId,
+        principalUserId: OWNER,
+        onBehalfOf: OWNER,
+        grants: grantsForApprovedRequests(APPROVED),
+        expiresAt: null,
+        createdBy: OWNER,
+        clientId: app.publicId,
+      });
+      return { app, keyId };
+    };
+    const live = await legacyKey("boot-live");
+    const revoked = await legacyKey("boot-revoked");
+    await repo.revoke(revoked.app.id);
+
+    expect(await adoptLegacyAppKeys()).toBeGreaterThanOrEqual(1);
+    const agent = (await repo.getByPublicId(live.app.publicId))!.app.agentUserId;
+    expect(agent).toBeTruthy();
+    const holder = async (keyId: string) =>
+      (
+        await q<{ user_id: string }>(`select user_id from api_keys where id = $1`, [
+          keyId,
+        ])
+      ).rows[0]!.user_id;
+    expect(await holder(live.keyId)).toBe(agent);
+    // A revoked app is never given an agent; its key stays refused on use.
+    expect((await repo.getByPublicId(revoked.app.publicId))!.app.agentUserId).toBeNull();
+    expect(await holder(revoked.keyId)).toBe(OWNER);
+    // Idempotent: nothing left to adopt.
+    expect(await adoptLegacyAppKeys()).toBe(0);
   });
 });

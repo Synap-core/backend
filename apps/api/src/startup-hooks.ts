@@ -30,6 +30,7 @@ import {
   setDynamicCorsOrigins,
   ensureSynapCoreCapability,
   ensureSystemSkills,
+  adoptLegacyAppKeys,
   ensureCoreRenderers,
   ensureCaptureAgent,
   ensureSessionNarrativeRule,
@@ -696,6 +697,16 @@ export async function runStartupHooks(): Promise<void> {
     await ensureSystemSkills();
   } catch (err) {
     logger.warn({ err }, "Failed to seed system skills on startup (non-fatal)");
+  }
+
+  // Move pre-0313 app keys onto their app's own agent now, so the owner can set
+  // its write mode before the app's first call. Idempotent + non-fatal; a key
+  // it cannot adopt is refused on use, exactly as on the lazy path.
+  try {
+    const adopted = await adoptLegacyAppKeys();
+    if (adopted > 0) logger.info({ adopted }, "Adopted legacy app keys");
+  } catch (err) {
+    logger.warn({ err }, "Failed to adopt legacy app keys on startup (non-fatal)");
   }
 
   // Install the first-party MCP-Apps renderers FROM THE CATALOG and bind them
