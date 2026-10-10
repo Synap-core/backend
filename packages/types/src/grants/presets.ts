@@ -1,9 +1,8 @@
 /**
- * GRANT_PRESETS — named, reusable permission lists. They are the seed of
- * ROLES: a role is `{ id, name, description, grant }`, the exact shape a
- * future `roles` store persists for an AI, a person or an app. A selector
- * shows presets and stored roles through the same `GrantRole` type, so moving
- * a preset into the store changes where it is read from, not how it renders.
+ * ROLES — named, reusable grants: `{ id, name, description, grant }`. The
+ * built-in ones are GRANT_PRESETS; a person's own are stored (`grantRoles.*`,
+ * `stored: true`). Every picker reads both through the same `GrantRole` type,
+ * so a preset and a stored role render, apply and mint the same way.
  *
  * A preset carries PERMISSIONS (and, if it says so, narrowing). Applying one
  * keeps the draft's own lifetime and narrowing unless the preset sets them —

@@ -4,8 +4,8 @@
  * A draft is exactly the mint door's wire shape (`apiKeys.create` `grant` +
  * `expiresInDays`), so the selector never translates: what you see is what is
  * minted. Every op returns a NEW draft and normalises it, so two drafts that
- * grant the same thing are spelled the same (that is what lets a preset — a
- * future ROLE — be recognised by value).
+ * grant the same thing are spelled the same (that is what lets a role be
+ * recognised by value).
  *
  * TWO RULES THE OPS KEEP (each has a test that fails without it):
  *  1. Normalising never WIDENS a catalog cell's coverage, and never produces
@@ -15,12 +15,6 @@
  *     into the catalog cells it covered, minus this one. That is a NARROWING:
  *     the broken pattern's coverage outside the catalog (gate verbs such as
  *     `entity.note.merge`, other subjects under `*`) is dropped, never kept.
- *
- * The one sanctioned widening: ticking EVERY catalog action of a subject (or of
- * one kind) compacts to the subject pattern (`entity.knowledge`), which in the
- * grammar means "every action", gate verbs included. That is the design
- * decision of W1 ("`entity.knowledge` = every action on knowledge"), and the
- * summary renders it as "All", not as four verbs.
  */
 
 import {
@@ -33,7 +27,6 @@ import {
 } from "./grammar.js";
 import {
   GRANT_SUBJECT_CATALOG,
-  grantSubjectSpec,
   isQualifiedGrantSubject,
   type GrantAction,
   type GrantSubjectSpec,
@@ -242,11 +235,6 @@ function withPermissions(draft: GrantDraft, permissions: string[]): GrantDraft {
   return { ...draft, permissions: normalizeGrantPermissions(permissions) };
 }
 
-/** The same draft, permissions normalised. */
-export function normalizeGrantDraft(draft: GrantDraft): GrantDraft {
-  return withPermissions(draft, [...draft.permissions]);
-}
-
 // ── editing ────────────────────────────────────────────────────────────────
 
 /** Turn one cell on or off (see rule 2 in the header for OFF). */
@@ -284,25 +272,6 @@ export function toggleGrant(
     }
   }
   return withPermissions(draft, out);
-}
-
-/**
- * Set exactly which actions a subject row (or one kind of it) grants — the
- * "all / none" row control. Actions outside the subject's catalog are ignored.
- */
-export function setRowActions(
-  draft: GrantDraft,
-  row: { subject: string; kind?: string | null },
-  actions: readonly GrantAction[],
-  ctx: GrantContext
-): GrantDraft {
-  const spec = grantSubjectSpec(row.subject);
-  if (!spec) return draft;
-  let next = draft;
-  for (const action of spec.actions) {
-    next = toggleGrant(next, { ...row, action }, actions.includes(action), ctx);
-  }
-  return next;
 }
 
 /** Replace the permission list (a preset / role, or "Full access"). */

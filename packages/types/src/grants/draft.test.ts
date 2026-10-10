@@ -21,7 +21,6 @@ import {
   setGrantLifetime,
   setGrantPermissions,
   setGrantWorkspaces,
-  setRowActions,
   summarizeGrant,
   toggleGrant,
   toGrantMintInput,
@@ -56,6 +55,16 @@ describe("catalog ⊂ grammar", () => {
   });
 });
 
+/** Tick each action of one row, one toggle at a time — as a person does. */
+const tickAll = (
+  row: { subject: string; kind?: string },
+  actions: GrantCell["action"][]
+): GrantDraft =>
+  actions.reduce<GrantDraft>(
+    (d, action) => toggleGrant(d, { ...row, action }, true, ctx),
+    EMPTY_GRANT_DRAFT
+  );
+
 describe("toggleGrant ON", () => {
   it("adds the one cell", () => {
     const d = toggleGrant(
@@ -67,12 +76,12 @@ describe("toggleGrant ON", () => {
     expect(d.permissions).toEqual(["entity.note.read"]);
   });
   it("never widens four ticked actions into the kind pattern (entity.knowledge grants merge too)", () => {
-    const d = setRowActions(
-      EMPTY_GRANT_DRAFT,
-      { subject: "entity", kind: "knowledge" },
-      ["read", "create", "update", "delete"],
-      ctx
-    );
+    const d = tickAll({ subject: "entity", kind: "knowledge" }, [
+      "read",
+      "create",
+      "update",
+      "delete",
+    ]);
     expect(d.permissions).toEqual([
       "entity.knowledge.read",
       "entity.knowledge.create",
@@ -90,12 +99,7 @@ describe("toggleGrant ON", () => {
     expect(d.permissions).toEqual(["proposal.read"]);
   });
   it("does NOT compact three of four (rules out a >=3 threshold)", () => {
-    const d = setRowActions(
-      EMPTY_GRANT_DRAFT,
-      { subject: "document" },
-      ["read", "create", "update"],
-      ctx
-    );
+    const d = tickAll({ subject: "document" }, ["read", "create", "update"]);
     expect(d.permissions).toEqual([
       "document.read",
       "document.create",

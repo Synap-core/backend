@@ -57,10 +57,3 @@ export function draftToAgentCapabilities(draft: GrantDraft): string[] {
   if (perms.length === 0) return [...AGENT_READ_ONLY_CAPABILITIES];
   return perms;
 }
-
-/** Is this stored list unrestricted (full access)? */
-export function isUnrestrictedAgent(
-  capabilities: readonly string[] | null | undefined
-): boolean {
-  return agentCapabilitiesToDraft(capabilities).permissions.includes("*");
-}

@@ -29,8 +29,6 @@ export interface GrantSubjectSpec {
   readonly actions: readonly GrantAction[];
 }
 
-const ALL_ACTIONS = GRANT_ACTIONS;
-
 /**
  * The subjects a selector offers, in display order. The set is the read
  * subjects the access layer knows (`api/src/access/grant-read.ts`
@@ -40,10 +38,10 @@ const ALL_ACTIONS = GRANT_ACTIONS;
  * granted only by an explicit pattern, never by a checkbox.
  */
 export const GRANT_SUBJECT_CATALOG: readonly GrantSubjectSpec[] = [
-  { subject: "entity", actions: ALL_ACTIONS },
-  { subject: "document", actions: ALL_ACTIONS },
-  { subject: "view", actions: ALL_ACTIONS },
-  { subject: "relation", actions: ALL_ACTIONS },
+  { subject: "entity", actions: GRANT_ACTIONS },
+  { subject: "document", actions: GRANT_ACTIONS },
+  { subject: "view", actions: GRANT_ACTIONS },
+  { subject: "relation", actions: GRANT_ACTIONS },
   { subject: "project", actions: ["read", "create", "update"] },
   { subject: "session", actions: ["read", "create", "update"] },
   { subject: "proposal", actions: ["read"] },

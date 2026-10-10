@@ -6,8 +6,9 @@
  *  - `catalog`  — the subjects × actions a UI offers, worded by the vocabulary.
  *  - `draft`    — the value a selector edits (= the mint wire shape) and its ops.
  *  - `summary`  — the read-only rendering model.
- *  - `presets`  — named permission lists, the seed of ROLES.
+ *  - `presets`  — roles: built-in presets and the person's stored roles.
  *  - `agent`    — an agent's capability allowlist, edited as a grant.
+ *  - `sections` — how an editor groups, describes and counts the subjects.
  *
  * Pure and dependency-free: browser, Electron, landing, Node and CLI.
  */

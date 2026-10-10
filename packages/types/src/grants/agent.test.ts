@@ -2,13 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   agentCapabilitiesToDraft,
   draftToAgentCapabilities,
-  isUnrestrictedAgent,
   AGENT_READ_ONLY_CAPABILITIES,
   AGENT_GRANT_CATALOG,
 } from "./agent.js";
 import { toggleGrant } from "./draft.js";
 import { grantRoleLineage, GRANT_PRESETS, type GrantRole } from "./presets.js";
 import { patternMatches } from "./grammar.js";
+
+const isUnrestricted = (caps: readonly string[]) =>
+  agentCapabilitiesToDraft(caps).permissions.includes("*");
 
 describe("agent capabilities ⇄ grant draft", () => {
   it("empty, legacy *.* and * are all full access", () => {
@@ -27,8 +29,8 @@ describe("agent capabilities ⇄ grant draft", () => {
       permissions: ["entity.*.read", "document.read"],
     });
     expect(reads).toEqual(["entity.*.read", "document.read"]);
-    expect(isUnrestrictedAgent(reads)).toBe(false);
-    expect(isUnrestrictedAgent(AGENT_READ_ONLY_CAPABILITIES)).toBe(false);
+    expect(isUnrestricted(reads)).toBe(false);
+    expect(isUnrestricted(AGENT_READ_ONLY_CAPABILITIES)).toBe(false);
     // …and the read-only list permits no write.
     for (const action of ["create", "update", "delete"])
       expect(
@@ -53,7 +55,7 @@ describe("agent capabilities ⇄ grant draft", () => {
   it("round-trips a legacy list without widening it", () => {
     const legacy = ["entity.create", "document.update", "search.*"];
     const back = draftToAgentCapabilities(agentCapabilitiesToDraft(legacy));
-    expect(isUnrestrictedAgent(back)).toBe(false);
+    expect(isUnrestricted(back)).toBe(false);
     expect(back).toContain("entity.*.create");
     expect(back).not.toContain("entity.*.delete");
   });

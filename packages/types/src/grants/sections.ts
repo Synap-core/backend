@@ -1,8 +1,7 @@
 /**
  * The grant editor's SECTIONS — how the subjects a person can grant are
- * grouped, described and counted. Pure: every grant UI (web selector, relay,
- * pod-admin) reads the same sections, so "Records · 3/24" means the same thing
- * on every surface.
+ * grouped, described and counted. Pure, so any grant editor reads the same
+ * sections; today that is the web selector (`@synap-core/grant-selector`).
  *
  * The rows are DERIVED, never hand-listed per surface:
  *  - one row per catalog subject (`GRANT_SUBJECT_CATALOG`, or an editor's own
