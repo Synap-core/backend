@@ -38,14 +38,6 @@ export const skillsRouter = router({
       );
       const caller = regularSkillsRouter.createCaller(callerContext);
 
-      // Call regular API's list endpoint
-      const result = await caller.list({
-        workspaceId: input.workspaceId,
-        status: input.status || "all",
-        approved: input.approved,
-        limit: 100, // Get all active skills
-      });
-
       // Agent-tool-loader exclusion (W5): this Hub endpoint is IS-only (its sole
       // backend consumer is GET /agent-skills/executable, which feeds the IS
       // agent-tool loader). The IS wraps each returned skill as an executable
@@ -54,9 +46,37 @@ export const skillsRouter = router({
       // fail. Exclude them HERE (the narrowest IS-only chokepoint) rather than on
       // the shared `skills.list`, which the browser UI reads directly and must
       // keep showing every kind.
-      return result.skills.filter(
-        (s: { kind: string | null }) =>
-          s.kind === "code" || s.kind === "instruction"
+      //
+      // The kind filter runs IN THE QUERY, before the limit — never after it.
+      // Filtering a `limit: 100` page afterwards let builtin/declarative rows
+      // spend the page, so a user's newest instruction skills and rules could
+      // silently fall off the end of what the IS ever saw. Each kind is paged
+      // to exhaustion (`skills.list` caps a page at 100).
+      const PAGE = 100;
+      type Row = {
+        kind: string | null;
+        createdAt: Date | string;
+        [k: string]: unknown;
+      };
+      const rows: Row[] = [];
+      for (const kind of ["code", "instruction"] as const) {
+        for (let offset = 0; ; offset += PAGE) {
+          const { skills: page } = await caller.list({
+            workspaceId: input.workspaceId,
+            kind,
+            status: input.status || "all",
+            approved: input.approved,
+            limit: PAGE,
+            offset,
+          });
+          rows.push(...page);
+          if (page.length < PAGE) break;
+        }
+      }
+      // One list, newest first — the order the single query used to return.
+      return rows.sort(
+        (a: Row, b: Row) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
     }),
 
