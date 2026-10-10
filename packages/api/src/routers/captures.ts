@@ -600,9 +600,15 @@ export const capturesRouter = router({
         case "given":
           return result;
         case "not_found":
-          throw new TRPCError({ code: "NOT_FOUND", message: "Capture not found" });
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Capture not found",
+          });
         case "agent_not_found":
-          throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found" });
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Agent not found",
+          });
         case "agent_not_wakeable":
           throw new TRPCError({ code: "BAD_REQUEST", message: result.message });
         case "empty_capture":
@@ -612,6 +618,11 @@ export const capturesRouter = router({
           });
         case "proposed":
           throw new TRPCError({ code: "FORBIDDEN", message: result.message });
+        case "dispatch_failed":
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: result.message,
+          });
       }
     }),
 });

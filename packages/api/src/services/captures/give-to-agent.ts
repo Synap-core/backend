@@ -10,12 +10,22 @@
  * where a pull-only agent looks: orient's `startHere.handedToYou` lists open
  * sessions naming it, and `startHere.openSessions` counts it.
  *
- * HONEST DELIVERY. Nothing here WAKES an agent: an external agent (Claude
- * Code, Codex…) only sees the work when it next calls the pod. So the answer
- * says "Delivered when <agent> checks in", with its last-seen time — never
- * "sent". A house agent (twin, IS persona) has no check-in; it is REFUSED
- * here until a wake exists for it, rather than filed where nothing will read
- * it.
+ * HONEST DELIVERY. A connected agent (Claude Code, Codex…) that the pod cannot
+ * reach only sees the work when it next calls the pod. So the answer says
+ * "Delivered when <agent> checks in", with its last-seen time — never "sent".
+ * A house agent (twin, IS persona) has no check-in; it is REFUSED here until a
+ * wake exists for it, rather than filed where nothing will read it.
+ *
+ * A BOUND agent (reach `'dispatch'`: a person stored how the pod reaches it) is
+ * PUSHED instead: its binding's capability ships a hand-off playbook
+ * (`findHandOffPlaybook`), and the capture runs it through the ONE run door
+ * (`runPlaybook` → the external-agent executor → the binding's `start` verb,
+ * governed). The line then says what really happened — sent, waiting on an
+ * approval, or not sent and why. A binding whose template ships no hand-off
+ * playbook is refused by name, never filed as pull work it will not read.
+ * Idempotent per capture: while a hand-off run of this capture is live or
+ * proposed, giving it again returns that session (each start is a new provider
+ * session and spends the provider's rate limit).
  *
  * Idempotent by the create door's own twin rule: giving the same capture again
  * while its session is open returns that session (`deduped: true`). The twin
@@ -34,13 +44,26 @@ import {
   desc,
   documents,
   documentVersions,
+  drizzleSql,
   eq,
+  inArray,
+  LIVE_RUN_STATUSES,
+  playbookRuns,
   readDocumentVersionContent,
 } from "@synap/database";
 import { resolveAgentDirection } from "@synap-core/types/agents";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { queryAgentUsers } from "../../routers/agent-users.js";
 import { agentsOperatedBy, loadAgentPresence } from "../agent-presence.js";
+import {
+  AgentBindingError,
+  ownedAgentIds,
+  resolveAgentBinding,
+  resolveAgentReach,
+} from "../agent-dispatch/agent-binding.js";
+import { findHandOffPlaybook } from "../agent-dispatch/hand-off-playbook.js";
+import { runPlaybook } from "../playbooks/run-playbook.js";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import { attachSessionAgent } from "../focus-sessions/attach-session-agent.js";
 import { createFocusSession } from "../focus-sessions/create-session.js";
 import {
@@ -86,10 +109,15 @@ export type GiveToAgentResult =
        */
       roster: RosterAgent[];
       /**
-       * How the work reaches the agent. `on_check_in` — it sees it the next
-       * time it calls the pod (orient / wait); nothing wakes it.
+       * How the work reaches the agent.
+       *   `on_check_in`       — it sees it the next time it calls the pod
+       *                         (orient / wait); nothing wakes it.
+       *   `sent`              — a bound agent: its provider accepted the task.
+       *   `awaiting_approval` — a bound agent: starting it is a proposal.
+       *   `not_sent`          — a bound agent: the start failed (the line and
+       *                         the session room say why).
        */
-      delivery: "on_check_in";
+      delivery: GiveDelivery;
       /** The one line the phone shows. */
       line: string;
     }
@@ -97,9 +125,44 @@ export type GiveToAgentResult =
   | { status: "agent_not_found" }
   | { status: "agent_not_wakeable"; message: string }
   | { status: "empty_capture" }
-  | { status: "proposed"; message: string };
+  | { status: "proposed"; message: string }
+  /** A bound agent's hand-off could not even start a run (the message says why). */
+  | { status: "dispatch_failed"; message: string };
 
-function goalFrom(text: string | null, row: { title: string | null }, source: IntakeSourceMetadata): string | null {
+export type GiveDelivery =
+  "on_check_in" | "sent" | "awaiting_approval" | "not_sent";
+
+/** A hand-off run still in flight — or still waiting on its approval. */
+const OPEN_HAND_OFF_STATUSES = [...LIVE_RUN_STATUSES, "proposed"] as const;
+
+function deliveryOf(runStatus: string | null | undefined): GiveDelivery {
+  if (runStatus === "proposed") return "awaiting_approval";
+  if (runStatus === "failed" || runStatus === "cancelled") return "not_sent";
+  return "sent";
+}
+
+function dispatchLine(
+  delivery: GiveDelivery,
+  who: string,
+  error?: string | null
+): string {
+  switch (delivery) {
+    case "awaiting_approval":
+      return `Sending this to ${who} needs your approval`;
+    case "not_sent":
+      return error?.trim()
+        ? `Not sent to ${who}: ${error.trim()}`
+        : `Not sent to ${who}. The session says why`;
+    default:
+      return `Sent to ${who}`;
+  }
+}
+
+function goalFrom(
+  text: string | null,
+  row: { title: string | null },
+  source: IntakeSourceMetadata
+): string | null {
   const words = (text ?? "").replace(/\s+/g, " ").trim();
   if (words) return words.slice(0, GOAL_MAX);
   const named = source.url || source.filename || row.title;
@@ -131,6 +194,7 @@ export async function giveCaptureToAgent(p: {
 
   // The agent: one the caller's roster shows (`agentUsers.list`'s floor).
   let agent: { id: string; name: string | null } | null = null;
+  let bound = false;
   if (p.agentUserId) {
     const roster = await queryAgentUsers({ userId: p.userId }, undefined);
     const found = roster.find((r) => r.id === p.agentUserId);
@@ -145,11 +209,15 @@ export async function giveCaptureToAgent(p: {
         message: `${found.name ?? "This agent"} is the pod's own agent and never checks in to pick this up. Ask it in its chat instead.`,
       };
     }
-    // Visible is not enough: the agent must act for THIS person, or it will
-    // never see the session (its orient reads its operator's sessions).
-    if (!(await agentsOperatedBy(p.userId, [found.id])).has(found.id)) {
-      return { status: "agent_not_found" };
-    }
+    bound = (await resolveAgentReach(found.id)) === "dispatch";
+    // Visible is not enough. A bound agent must be one this person OWNS (the
+    // run executor's own floor — it never hands a teammate's agent the work);
+    // a pulling agent must act for THIS person, or it will never see the
+    // session (its orient reads its operator's sessions).
+    const mine = bound
+      ? (await ownedAgentIds(p.userId, [found.id])).has(found.id)
+      : (await agentsOperatedBy(p.userId, [found.id])).has(found.id);
+    if (!mine) return { status: "agent_not_found" };
     agent = { id: found.id, name: found.name };
   }
 
@@ -166,6 +234,17 @@ export async function giveCaptureToAgent(p: {
   const text = latest ? await readDocumentVersionContent(latest) : null;
   const goal = goalFrom(text, row, source);
   if (!goal) return { status: "empty_capture" };
+
+  if (agent && bound) {
+    return handToBoundAgent({
+      userId: p.userId,
+      captureId: row.id,
+      captureWorkspaceId: row.workspaceId ?? null,
+      parentSessionId: source?.sessionId ?? null,
+      agent,
+      goal,
+    });
+  }
 
   const created = await createFocusSession({
     userId: p.userId,
@@ -233,4 +312,123 @@ export async function giveCaptureToAgent(p: {
     delivery: "on_check_in",
     line: deliveryLine(roster),
   };
+}
+
+/**
+ * A BOUND agent: run its binding's hand-off playbook with the capture as the
+ * task, through the ONE run door. See the header for the contract.
+ */
+async function handToBoundAgent(p: {
+  userId: string;
+  captureId: string;
+  captureWorkspaceId: string | null;
+  parentSessionId: string | null;
+  agent: { id: string; name: string | null };
+  goal: string;
+}): Promise<GiveToAgentResult> {
+  const who = p.agent.name ?? "your agent";
+  let binding;
+  try {
+    binding = await resolveAgentBinding(p.agent.id);
+  } catch (err) {
+    if (!(err instanceof AgentBindingError)) throw err;
+    return {
+      status: "agent_not_wakeable",
+      message: `${who} cannot be reached: ${err.message}`,
+    };
+  }
+  if (!binding) {
+    return {
+      status: "agent_not_wakeable",
+      message: `${who} has no way for the pod to reach it. Bind it in Settings > Agents.`,
+    };
+  }
+  const service = resolveServiceName(binding.provider);
+  const playbook = await findHandOffPlaybook(binding.toolId);
+  if (!playbook) {
+    return {
+      status: "agent_not_wakeable",
+      message: `${who} is reached through ${service}, which ships no hand-off playbook. Run one of its playbooks from a session instead.`,
+    };
+  }
+  const workspaceId = playbook.workspaceId ?? p.captureWorkspaceId;
+  if (!workspaceId) {
+    return {
+      status: "dispatch_failed",
+      message: `"${playbook.name}" has no space to run in.`,
+    };
+  }
+
+  const presence = await loadAgentPresence([p.agent.id]);
+  const rosterAgent: RosterAgent = {
+    id: p.agent.id,
+    name: p.agent.name,
+    lastSeenAt: presence.get(p.agent.id)?.lastSeenAt ?? null,
+  };
+  const given = (
+    sessionId: string,
+    deduped: boolean,
+    runStatus: string | null | undefined,
+    error?: string | null
+  ): GiveToAgentResult => {
+    const delivery = deliveryOf(runStatus);
+    return {
+      status: "given",
+      sessionId,
+      deduped,
+      agent: rosterAgent,
+      roster: [rosterAgent],
+      delivery,
+      line: dispatchLine(delivery, who, error),
+    };
+  };
+
+  // A hand-off of THIS capture still in flight (or awaiting its approval) is
+  // returned, never started twice.
+  const [open] = await db
+    .select({ sessionId: playbookRuns.sessionId, status: playbookRuns.status })
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.playbookId, playbook.id),
+        eq(playbookRuns.createdBy, p.userId),
+        drizzleSql`${playbookRuns.input}->>'captureId' = ${p.captureId}`,
+        inArray(playbookRuns.status, [...OPEN_HAND_OFF_STATUSES])
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt))
+    .limit(1);
+  if (open?.sessionId) return given(open.sessionId, true, open.status);
+
+  let started;
+  try {
+    started = await runPlaybook({
+      playbookId: playbook.id,
+      workspaceId,
+      userId: p.userId,
+      // `task` is the hand-off playbook's goal param; `agentUserId` is the
+      // executor's "which agent" param; `captureId` keys the dedupe above.
+      params: { task: p.goal, agentUserId: p.agent.id, captureId: p.captureId },
+      onMissingRequired: "owe",
+      agentIds: [p.agent.id],
+      ...(p.parentSessionId ? { parentSessionId: p.parentSessionId } : {}),
+    });
+  } catch (err) {
+    return {
+      status: "dispatch_failed",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (!started.session) {
+    return {
+      status: "dispatch_failed",
+      message: `"${playbook.name}" did not start a run.`,
+    };
+  }
+  return given(
+    started.session.id,
+    started.reused === true,
+    started.run?.status,
+    started.run?.error
+  );
 }
