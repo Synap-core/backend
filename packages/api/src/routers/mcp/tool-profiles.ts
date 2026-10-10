@@ -133,6 +133,7 @@ export const TOOL_GROUPS = {
   build: [
     "synap_create_view",
     "synap_list_views",
+    "synap_update_view_content",
     "synap_list_widgets",
     "synap_create_cell",
     "synap_promote_cell_to_renderer",
