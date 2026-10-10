@@ -45,6 +45,11 @@ vi.mock("./_shared.js", () => ({
 /** The api_keys row the calling bearer resolves to. Reassigned per test. */
 let callingKeyRow: Record<string, unknown> | undefined;
 
+/** The grant door the rotation must call to keep the key's grant. */
+const { carryOver } = vi.hoisted(() => ({
+  carryOver: vi.fn(async (_args: unknown) => undefined),
+}));
+
 vi.mock("@synap/database", () => ({
   db: {
     query: {
@@ -54,6 +59,9 @@ vi.mock("@synap/database", () => ({
     },
   },
   eq: vi.fn((a, b) => ({ type: "eq", a, b })),
+  GrantRepository: vi.fn(function GrantRepository() {
+    return { carryOver };
+  }),
 }));
 
 vi.mock("@synap/database/schema", () => ({
@@ -248,5 +256,50 @@ describe("POST /keys/rotate-cli — never widens a key", () => {
     expect(res.status).toBe(403);
     expect(vi.mocked(apiKeyService.generateApiKey)).not.toHaveBeenCalled();
     expect(vi.mocked(apiKeyService.revokeApiKey)).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /keys/rotate-cli — keeps the key's grant", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    carryOver.mockImplementation(async () => undefined);
+    callingKeyRow = { ...CONFINED_AGENT_KEY };
+  });
+
+  const rotate = () =>
+    buildTestApp().request("/keys/rotate-cli", {
+      method: "POST",
+      headers: { "x-test-key-id": OLD_KEY_ID },
+    });
+
+  it("carries the old key's grant onto the new key before revoking the old one", async () => {
+    const res = await rotate();
+    expect(res.status).toBe(200);
+    expect(carryOver).toHaveBeenCalledWith({
+      fromKeyId: OLD_KEY_ID,
+      toKeyId: "new-key-id",
+      by: "user-1",
+    });
+    const revoke = vi.mocked(apiKeyService.revokeApiKey);
+    expect(carryOver.mock.invocationCallOrder[0]).toBeLessThan(
+      revoke.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("revokes the new key and keeps the old one when the grant cannot be carried", async () => {
+    carryOver.mockRejectedValueOnce(new Error("db down"));
+    const res = await rotate();
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    const revoke = vi.mocked(apiKeyService.revokeApiKey);
+    expect(revoke).toHaveBeenCalledWith(
+      "new-key-id",
+      "user-1",
+      expect.any(String)
+    );
+    expect(revoke).not.toHaveBeenCalledWith(
+      OLD_KEY_ID,
+      expect.anything(),
+      expect.anything()
+    );
   });
 });

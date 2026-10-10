@@ -8,7 +8,7 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
-import { db, eq } from "@synap/database";
+import { db, eq, GrantRepository } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 import type { ApiKeyScope } from "@synap/database";
 import { apiKeyService } from "../../../services/api-keys.js";
@@ -160,6 +160,23 @@ export function registerKeysRoutes(app: HubHono): void {
               description: keyRecord.description,
             }
           );
+
+        // The grant is part of the credential: a rotated key that lost it
+        // would resolve as ungranted (everything its scopes allow).
+        try {
+          await new GrantRepository(db).carryOver({
+            fromKeyId: keyId,
+            toKeyId: newKeyId,
+            by: userId,
+          });
+        } catch (err) {
+          await apiKeyService.revokeApiKey(
+            newKeyId,
+            userId,
+            "Rotation could not carry the key's grant"
+          );
+          throw err;
+        }
 
         await apiKeyService.revokeApiKey(
           keyId,
