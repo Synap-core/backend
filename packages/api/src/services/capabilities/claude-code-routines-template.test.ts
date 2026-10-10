@@ -74,7 +74,6 @@ import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { __vaultHandlerForTests as vaultHandler } from "../../connectors/external-dispatch.js";
 import { AgentBindingConfigSchema } from "../agent-dispatch/agent-binding.js";
 import { DELEGATE_AGENT_TASK_INTENT } from "@synap-core/types/capability-intents";
-import { normalizeExternalAgentStatus } from "../agent-dispatch/poll-external-agents.js";
 import { fenceUntrustedData } from "../agent-dispatch/binding-call.js";
 
 type Skill = {
