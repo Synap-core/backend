@@ -9,13 +9,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   submit: vi.fn(),
-  openDraft: null as null | { id: string; name: string },
+  openDraft: null as null | {
+    id: string;
+    name: string;
+    createdBy: string;
+    authorName: string | null;
+    authorEmail: string | null;
+    authorType: string | null;
+    authorAgentMetadata: null;
+  },
 }));
 vi.mock("./submit-capture-graph.js", () => ({ submitCaptureGraph: h.submit }));
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const q = {
     from: () => q,
+    leftJoin: () => q,
     where: () => q,
     orderBy: () => q,
     limit: async () => (h.openDraft ? [h.openDraft] : []),
@@ -35,6 +44,16 @@ const INPUT = {
   profileSlug: "track",
   statusProperty: "track-status",
 };
+
+const draft = (o: { createdBy: string; authorName?: string | null }) => ({
+  id: "pb-draft",
+  name: "Track template",
+  createdBy: o.createdBy,
+  authorName: o.authorName === undefined ? "Bea" : o.authorName,
+  authorEmail: "bea@x.test",
+  authorType: "human",
+  authorAgentMetadata: null,
+});
 
 beforeEach(() => {
   h.submit.mockReset();
@@ -68,7 +87,7 @@ describe("draftProcessForKind", () => {
   });
 
   it("a repeat confirm with an OPEN draft returns it and files nothing", async () => {
-    h.openDraft = { id: "pb-draft", name: "Track template" };
+    h.openDraft = draft({ createdBy: "u1" });
     const res = await draftProcessForKind(INPUT);
     expect(h.submit).not.toHaveBeenCalled();
     expect(res).toMatchObject({ applied: true, deduped: true });
@@ -79,6 +98,39 @@ describe("draftProcessForKind", () => {
         id: "pb-draft",
       }),
     ]);
+  });
+
+  it("an OPEN draft by ANOTHER member is returned naming its author and carrying its id", async () => {
+    h.openDraft = draft({ createdBy: "u2", authorName: "Bea" });
+    const res = await draftProcessForKind(INPUT);
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(res.existingDraft).toEqual({
+      id: "pb-draft",
+      name: "Track template",
+      draftedBy: { userId: "u2", name: "Bea", isYou: false },
+    });
+  });
+
+  it("the caller's OWN open draft says so", async () => {
+    h.openDraft = draft({ createdBy: "u1", authorName: "Ann" });
+    const res = await draftProcessForKind(INPUT);
+    expect(res.existingDraft?.draftedBy).toEqual({
+      userId: "u1",
+      name: "Ann",
+      isYou: true,
+    });
+  });
+
+  it("an author with no name falls back to their email, never a raw id", async () => {
+    h.openDraft = draft({ createdBy: "u2", authorName: null });
+    const res = await draftProcessForKind(INPUT);
+    expect(res.existingDraft?.draftedBy.name).toBe("bea@x.test");
+  });
+
+  it("a freshly filed draft carries no existingDraft", async () => {
+    h.submit.mockResolvedValue({ applied: false, proposalId: "p1" });
+    const res = await draftProcessForKind(INPUT);
+    expect(res.existingDraft).toBeUndefined();
   });
 
   it("the key does not depend on the lifecycle hint; a different name is a different draft", () => {

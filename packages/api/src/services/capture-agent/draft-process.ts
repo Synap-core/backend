@@ -18,7 +18,9 @@
  * A confirm can be repeated (a persisted offer tapped again, a retry after an
  * unclear answer, two surfaces). It never files a second draft:
  *  - an open DRAFT playbook for the kind in the workspace is returned as the
- *    applied result (`deduped: true`, its id on the plan step);
+ *    applied result (`deduped: true`, its id on the plan step, and
+ *    `existingDraft` naming who drafted it — drafts are workspace-shared, so
+ *    the receipt must not pass another member's draft off as the caller's);
  *  - otherwise the graph is filed under a stable idempotency key
  *    (`draft-process:<workspace>:<kind>[:<name>]`), so the capture-graph door
  *    returns the caller's PENDING (or auto-applied) draft proposal instead of a
@@ -31,7 +33,16 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
-import { db, playbooks, and, eq, desc, drizzleSql } from "@synap/database";
+import {
+  db,
+  playbooks,
+  users,
+  and,
+  eq,
+  desc,
+  drizzleSql,
+} from "@synap/database";
+import { displayNameForUser } from "../../routers/proposals/helper-functions.js";
 import {
   submitCaptureGraph,
   type SubmitCaptureGraphResult,
@@ -72,6 +83,24 @@ export function draftProcessIdempotencyKey(input: {
   return `draft-process:${input.workspaceId}:${input.profileSlug}${name ? `:${name}` : ""}`;
 }
 
+/**
+ * Who drafted the draft a repeat confirm landed on. Drafts are workspace-shared
+ * by design, so the receipt must say whose it is: `isYou` ⇒ "You already
+ * drafted this"; otherwise "Already drafted by <name>". `name` is resolved
+ * here (never in a client); null only when the author's user row is gone.
+ */
+export interface ExistingDraftReceipt {
+  /** The playbook the confirm deduped onto (the door to open). */
+  id: string;
+  name: string;
+  draftedBy: { userId: string; name: string | null; isYou: boolean };
+}
+
+/** The capture-graph receipt, plus `existingDraft` when the dedupe answered. */
+export type DraftProcessResult = SubmitCaptureGraphResult & {
+  existingDraft?: ExistingDraftReceipt;
+};
+
 export async function draftProcessForKind(input: {
   userId: string;
   agentUserId?: string | null;
@@ -79,12 +108,21 @@ export async function draftProcessForKind(input: {
   profileSlug: string;
   statusProperty?: string | null;
   name?: string | null;
-}): Promise<SubmitCaptureGraphResult> {
+}): Promise<DraftProcessResult> {
   const draftSummary = `Draft a ${resolveObjectNoun("playbook").toLowerCase()} for ${resolveObjectNounPlural(input.profileSlug).toLowerCase()}`;
 
   const [open] = await db
-    .select({ id: playbooks.id, name: playbooks.name })
+    .select({
+      id: playbooks.id,
+      name: playbooks.name,
+      createdBy: playbooks.createdBy,
+      authorName: users.name,
+      authorEmail: users.email,
+      authorType: users.userType,
+      authorAgentMetadata: users.agentMetadata,
+    })
     .from(playbooks)
+    .leftJoin(users, eq(users.id, playbooks.createdBy))
     .where(
       and(
         eq(playbooks.workspaceId, input.workspaceId),
@@ -95,7 +133,24 @@ export async function draftProcessForKind(input: {
     .orderBy(desc(playbooks.createdAt))
     .limit(1);
   if (open) {
+    const authorName = open.authorEmail
+      ? (displayNameForUser({
+          name: open.authorName,
+          email: open.authorEmail,
+          userType: open.authorType ?? "human",
+          agentMetadata: open.authorAgentMetadata,
+        }) ?? null)
+      : null;
     return {
+      existingDraft: {
+        id: open.id,
+        name: open.name,
+        draftedBy: {
+          userId: open.createdBy,
+          name: authorName,
+          isYou: open.createdBy === input.userId,
+        },
+      },
       proposalId: undefined,
       entityCount: 0,
       relationCount: 0,
