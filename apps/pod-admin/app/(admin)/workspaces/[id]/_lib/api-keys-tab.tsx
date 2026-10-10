@@ -31,10 +31,13 @@ import {
 import { StatusPill } from "../../../components/status-pill";
 import {
   GrantRolePicker,
-  grantFromRole,
+  keyMintFromRole,
+  roleFitsWorkspace,
+  roleSetsLifetime,
   useGrantRoleOptions,
 } from "../../../trust-keys/_lib/grant-role-picker";
-import { GRANT_PRESETS } from "@synap-core/types/grants";
+import { useOfferedKeyScopes } from "../../../trust-keys/_lib/api-keys-section";
+import type { GrantMintInput } from "@synap-core/types/grants";
 
 interface ApiKey {
   id: string;
@@ -90,15 +93,6 @@ function typeBadge(keyType: string | null | undefined): string {
   if (keyType === "system") return "System";
   return "Operator";
 }
-
-const COMMON_SCOPES = [
-  "data.read",
-  "data.write",
-  "hub-protocol.read",
-  "hub-protocol.write",
-  "setup.agent",
-  "sync",
-];
 
 export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
   const [createOpen, setCreateOpen] = useState(false);
@@ -204,7 +198,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
               scope: input.scope,
               workspaceId,
               expiresInDays: input.expiresInDays,
-              ...(input.grant ? { grant: input.grant } : {}),
+              grant: input.grant,
             });
             if (res && "key" in res && typeof res.key === "string" && res.key) {
               setRevealedKey({ keyName: input.keyName, plaintext: res.key });
@@ -320,12 +314,12 @@ type CreateInput = {
   scope: string[];
   /** null = never (omitted = the 90-day default). */
   expiresInDays?: number | null;
-  /** What it may touch; absent = no grant (bounded only by scopes). */
-  grant?: { permissions: string[]; roleId?: string };
+  /** What it may touch, confined to this workspace. */
+  grant: GrantMintInput["grant"];
 };
 
 function CreateKeyModal({
-  workspaceId: _workspaceId,
+  workspaceId,
   isPending,
   onClose,
   onConfirm,
@@ -342,8 +336,23 @@ function CreateKeyModal({
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["data.read"]);
   const [expiry, setExpiry] = useState("90");
-  const { roles, isError: rolesFailed } = useGrantRoleOptions();
-  const [roleId, setRoleId] = useState<string>(GRANT_PRESETS[0].id);
+  const {
+    roles: allRoles,
+    isError: rolesFailed,
+    refetch: refetchRoles,
+  } = useGrantRoleOptions();
+  // A key made here is confined to this workspace, so roles made for other
+  // workspaces are not offered, and neither is "No grant" (an ungranted key
+  // would reach every workspace its owner can).
+  const roles = allRoles.filter((r) => roleFitsWorkspace(r, workspaceId));
+  const [roleId, setRoleId] = useState<string>(roles[0].id);
+  const offeredScopes = useOfferedKeyScopes("personal");
+  const expiresInDays = expiry === "never" ? null : Number(expiry);
+  const minted = keyMintFromRole(roleId, roles, {
+    expiresInDays,
+    workspaceId,
+  });
+  const roleLifetime = roleSetsLifetime(roleId, roles);
 
   function toggle(s: string) {
     setScopes((prev) =>
@@ -382,7 +391,7 @@ function CreateKeyModal({
               Scopes
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {COMMON_SCOPES.map((s) => {
+              {offeredScopes.map((s) => {
                 const active = scopes.includes(s);
                 return (
                   <button
@@ -406,24 +415,31 @@ function CreateKeyModal({
             value={roleId}
             onChange={setRoleId}
             roles={roles}
+            minted={minted}
+            scopes={scopes}
             rolesFailed={rolesFailed}
+            onRetryRoles={refetchRoles}
+            allowNoGrant={false}
             isDisabled={isPending}
           />
-          <Select
-            label="Expires in"
-            size="sm"
-            selectedKeys={[expiry]}
-            onSelectionChange={(keys) => {
-              const k = Array.from(keys as Set<string>)[0];
-              if (k) setExpiry(k);
-            }}
-            isDisabled={isPending}
-          >
-            <SelectItem key="never">Never</SelectItem>
-            <SelectItem key="30">30 days</SelectItem>
-            <SelectItem key="90">90 days</SelectItem>
-            <SelectItem key="365">1 year</SelectItem>
-          </Select>
+          {/* A role with its own lifetime sets it; the summary line says when. */}
+          {roleLifetime ? null : (
+            <Select
+              label="Expires in"
+              size="sm"
+              selectedKeys={[expiry]}
+              onSelectionChange={(keys) => {
+                const k = Array.from(keys as Set<string>)[0];
+                if (k) setExpiry(k);
+              }}
+              isDisabled={isPending}
+            >
+              <SelectItem key="never">Never</SelectItem>
+              <SelectItem key="30">30 days</SelectItem>
+              <SelectItem key="90">90 days</SelectItem>
+              <SelectItem key="365">1 year</SelectItem>
+            </Select>
+          )}
         </ModalBody>
         <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
           <Button
@@ -439,14 +455,17 @@ function CreateKeyModal({
             color="primary"
             radius="md"
             size="sm"
-            isDisabled={!name.trim() || scopes.length === 0 || isPending}
+            isDisabled={
+              !name.trim() || scopes.length === 0 || !minted || isPending
+            }
             isLoading={isPending}
             onPress={() =>
+              minted &&
               void onConfirm({
                 keyName: name.trim(),
                 scope: scopes,
-                expiresInDays: expiry === "never" ? null : Number(expiry),
-                grant: grantFromRole(roleId, roles),
+                expiresInDays: minted.expiresInDays,
+                grant: minted.grant,
               })
             }
           >

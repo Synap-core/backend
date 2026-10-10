@@ -3,18 +3,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { Button, CardBody, CardHeader } from "@heroui/react";
-import { Bot, Check, ShieldCheck, X } from "lucide-react";
+import { Bot, Check, X } from "lucide-react";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import { publicPodUrl } from "../../../lib/public-pod-url";
-import { summarizeGrant } from "@synap-core/types/grants";
+import {
+  approveLabel,
+  viewPendingAccess,
+  type PendingAccess,
+  type PendingAccessView,
+} from "./pending-access";
+import { PendingAccessBlock } from "./PendingAccessBlock";
 
 /** What the pending key would be allowed to do — read from the pod, never assumed. */
-interface PendingDetails {
-  scopes: string[];
-  grant: { permissions: string[] } | null;
-}
 type DetailsRead =
   | { state: "loading" }
-  | { state: "ok"; data: PendingDetails }
+  | { state: "ok"; view: PendingAccessView }
   | { state: "failed"; message: string };
 
 type Step =
@@ -54,7 +57,11 @@ export function ApproveForm({
           throw new Error(
             (body as { error?: string }).error || `Error (${res.status})`
           );
-        if (live) setDetails({ state: "ok", data: body as PendingDetails });
+        if (live)
+          setDetails({
+            state: "ok",
+            view: viewPendingAccess(body as PendingAccess),
+          });
       })
       .catch((err) => {
         if (live)
@@ -96,10 +103,11 @@ export function ApproveForm({
         });
       }
     },
-    [keyId]
+    [keyId, podUrl]
   );
 
   const busy = step.kind === "working";
+  const agentName = resolveServiceName(agentType);
 
   return (
     <ReceiverShell podHost={podHost} identity={identity} width="sm">
@@ -116,17 +124,17 @@ export function ApproveForm({
           <Bot className="h-5 w-5" strokeWidth={2} />
         </span>
         <div className="flex flex-col gap-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
+          <p className="text-tiny font-semibold uppercase tracking-wide text-foreground/65">
             Agent access request
           </p>
-          <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
-            Approve {agentType}
+          <h1 className="font-heading text-2xl font-medium leading-tight tracking-tight text-foreground">
+            Approve {agentName}
           </h1>
-          <p className="text-[13px] leading-relaxed text-foreground/65">
+          <p className="text-small leading-relaxed text-foreground/65">
             A{" "}
             <code className="font-mono text-foreground/80">synap connect</code>{" "}
             session wants to register{" "}
-            <span className="font-medium text-foreground">{agentType}</span> as
+            <span className="font-medium text-foreground">{agentName}</span> as
             an agent on your pod.
           </p>
         </div>
@@ -136,49 +144,32 @@ export function ApproveForm({
         {(step.kind === "idle" || step.kind === "working") && (
           <>
             <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-              <Row label="Surface" value={agentType} />
-              <Row label="Key ID" value={`${keyId.slice(0, 8)}…`} mono />
-              <div className="pt-1.5">
-                <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/45">
-                  <ShieldCheck className="h-3 w-3" /> It will be able to
-                </p>
-                {details.state === "loading" && (
-                  <p className="text-[12.5px] text-foreground/45">Reading…</p>
-                )}
-                {details.state === "failed" && (
-                  <div className="flex items-center justify-between gap-2 text-[12.5px] text-danger">
-                    <span>
-                      Couldn&apos;t read what it asks for: {details.message}
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      onPress={() => setAttempt((n) => n + 1)}
-                    >
-                      Retry
-                    </Button>
-                  </div>
-                )}
-                {details.state === "ok" && (
-                  <div className="flex flex-col gap-1.5">
-                    <p className="text-[13px] text-foreground/85">
-                      {details.data.grant
-                        ? summarizeGrant(details.data.grant).sentence
-                        : "Everything you can do (no grant)"}
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {details.data.scopes.map((s) => (
-                        <span
-                          key={s}
-                          className="rounded-md bg-foreground/[0.05] px-2 py-0.5 font-mono text-[11px] text-foreground/70 ring-1 ring-inset ring-foreground/10"
-                        >
-                          {s}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <p className="text-tiny font-medium uppercase tracking-wide text-foreground/65">
+                It will be able to
+              </p>
+              {details.state === "loading" && (
+                <p className="text-small text-foreground/65">Reading…</p>
+              )}
+              {details.state === "failed" && (
+                <div
+                  role="alert"
+                  className="flex items-center justify-between gap-2 text-small text-danger"
+                >
+                  <span>
+                    Couldn&apos;t read what it asks for: {details.message}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    onPress={() => setAttempt((n) => n + 1)}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              )}
+              {details.state === "ok" && (
+                <PendingAccessBlock view={details.view} />
+              )}
             </div>
 
             <div className="flex gap-2.5">
@@ -197,7 +188,7 @@ export function ApproveForm({
                   )
                 }
               >
-                Approve
+                {approveLabel(details.state === "ok" && details.view.full)}
               </Button>
               <Button
                 variant="flat"
@@ -240,10 +231,10 @@ export function ApproveForm({
                 strokeWidth={2.2}
               />
               <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-medium text-foreground">
+                <p className="text-small font-medium text-foreground">
                   Couldn&apos;t process the request
                 </p>
-                <p className="mt-0.5 text-[12.5px] text-foreground/65">
+                <p className="mt-0.5 text-small text-foreground/65">
                   {step.message}
                 </p>
               </div>
@@ -264,23 +255,11 @@ export function ApproveForm({
   );
 }
 
-export function Row({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+export function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between text-[13px]">
-      <span className="text-foreground/45">{label}</span>
-      <span
-        className={`text-foreground/85 ${mono ? "font-mono text-[12px]" : ""}`}
-      >
-        {value}
-      </span>
+    <div className="flex items-center justify-between text-small">
+      <span className="text-foreground/65">{label}</span>
+      <span className="text-foreground/85">{value}</span>
     </div>
   );
 }
@@ -313,10 +292,8 @@ export function Outcome({
         {icon}
       </span>
       <div className="flex flex-col gap-1">
-        <p className="text-[14px] font-medium text-foreground">{title}</p>
-        <p className="max-w-[18rem] text-[12.5px] text-foreground/65">
-          {message}
-        </p>
+        <p className="text-medium font-medium text-foreground">{title}</p>
+        <p className="max-w-[18rem] text-small text-foreground/65">{message}</p>
       </div>
     </div>
   );

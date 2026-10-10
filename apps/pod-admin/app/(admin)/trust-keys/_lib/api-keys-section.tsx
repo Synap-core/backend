@@ -63,10 +63,11 @@ import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative, shortId } from "./format";
 import {
   GrantRolePicker,
-  grantFromRole,
+  keyMintFromRole,
+  roleSetsLifetime,
   useGrantRoleOptions,
 } from "./grant-role-picker";
-import { GRANT_PRESETS } from "@synap-core/types/grants";
+import { GRANT_PRESETS, type GrantMintInput } from "@synap-core/types/grants";
 
 export interface UnifiedKey {
   id: string;
@@ -164,6 +165,25 @@ const KEY_TYPE_SCOPES = {
     "mcp.write",
   ],
 } as const;
+
+/**
+ * The scopes a key dialog offers for a key type. The backend is the source of
+ * truth for which scopes are valid: the per-key-type curation (which subset to
+ * OFFER) is filtered through its canonical list, so a scope the validator
+ * doesn't accept can never be shown or selected — even if a local list drifts.
+ */
+export function useOfferedKeyScopes(
+  kind: keyof typeof KEY_TYPE_SCOPES
+): readonly string[] {
+  const scopeQuery = trpc.apiKeys.availableScopes.useQuery(undefined, {
+    staleTime: 300_000,
+  });
+  const backendScopes = scopeQuery.data?.scopes;
+  const curated = KEY_TYPE_SCOPES[kind];
+  return backendScopes
+    ? curated.filter((s) => backendScopes.includes(s))
+    : curated;
+}
 
 export function ApiKeysSection() {
   const operatorKeys = trpc.apiKeys.adminListAll.useQuery(undefined, {
@@ -647,7 +667,7 @@ type CreateKeyInput = {
   /** null = never; a personal key omitted = 90 days. */
   expiresInDays?: number | null;
   /** Personal keys only: what it may touch; absent = no grant. */
-  grant?: { permissions: string[]; roleId?: string };
+  grant?: GrantMintInput["grant"];
 };
 
 function CreateKeyModal({
@@ -667,8 +687,18 @@ function CreateKeyModal({
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["data.read"]);
   const [expiry, setExpiry] = useState<string>("90");
-  const { roles, isError: rolesFailed } = useGrantRoleOptions();
+  const {
+    roles,
+    isError: rolesFailed,
+    refetch: refetchRoles,
+  } = useGrantRoleOptions();
   const [roleId, setRoleId] = useState<string>(GRANT_PRESETS[0].id);
+  const expiresInDays = expiry === "never" ? null : Number(expiry);
+  const minted =
+    kind === "personal"
+      ? keyMintFromRole(roleId, roles, { expiresInDays })
+      : undefined;
+  const roleLifetime = kind === "personal" && roleSetsLifetime(roleId, roles);
 
   function toggle(s: string) {
     setScopes((prev) =>
@@ -676,19 +706,7 @@ function CreateKeyModal({
     );
   }
 
-  // The backend is the source of truth for which scopes are valid. We keep the
-  // per-key-type curation (which subset to OFFER) but filter it through the
-  // backend's canonical list, so a scope the validator doesn't accept can never
-  // be shown or selected — even if this local list drifts again.
-  const scopeQuery = trpc.apiKeys.availableScopes.useQuery(undefined, {
-    staleTime: 300_000,
-  });
-  const backendScopes = scopeQuery.data?.scopes;
-  const curated =
-    kind === "system" ? KEY_TYPE_SCOPES.system : KEY_TYPE_SCOPES.personal;
-  const availableScopes = backendScopes
-    ? curated.filter((s) => backendScopes.includes(s))
-    : curated;
+  const availableScopes = useOfferedKeyScopes(kind);
 
   return (
     <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
@@ -776,24 +794,30 @@ function CreateKeyModal({
               value={roleId}
               onChange={setRoleId}
               roles={roles}
+              minted={minted}
+              scopes={scopes}
               rolesFailed={rolesFailed}
+              onRetryRoles={refetchRoles}
               isDisabled={isPending}
             />
           ) : null}
-          <Select
-            label="Expires in"
-            size="sm"
-            selectedKeys={[expiry]}
-            onSelectionChange={(keys) => {
-              const k = Array.from(keys as Set<string>)[0];
-              if (k) setExpiry(k);
-            }}
-          >
-            <SelectItem key="never">Never</SelectItem>
-            <SelectItem key="30">30 days</SelectItem>
-            <SelectItem key="90">90 days</SelectItem>
-            <SelectItem key="365">1 year</SelectItem>
-          </Select>
+          {/* A role with its own lifetime sets it; the summary line says when. */}
+          {roleLifetime ? null : (
+            <Select
+              label="Expires in"
+              size="sm"
+              selectedKeys={[expiry]}
+              onSelectionChange={(keys) => {
+                const k = Array.from(keys as Set<string>)[0];
+                if (k) setExpiry(k);
+              }}
+            >
+              <SelectItem key="never">Never</SelectItem>
+              <SelectItem key="30">30 days</SelectItem>
+              <SelectItem key="90">90 days</SelectItem>
+              <SelectItem key="365">1 year</SelectItem>
+            </Select>
+          )}
         </ModalBody>
         <ModalFooter>
           <Button
@@ -816,10 +840,8 @@ function CreateKeyModal({
                 kind,
                 keyName: name.trim(),
                 scope: scopes,
-                expiresInDays: expiry === "never" ? null : Number(expiry),
-                ...(kind === "personal"
-                  ? { grant: grantFromRole(roleId, roles) }
-                  : {}),
+                expiresInDays: minted ? minted.expiresInDays : expiresInDays,
+                ...(minted ? { grant: minted.grant } : {}),
               })
             }
           >

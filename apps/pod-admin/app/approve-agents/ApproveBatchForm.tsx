@@ -8,10 +8,18 @@ import { resolveServiceMark } from "@synap-core/types/service-marks";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { publicPodUrl } from "../../lib/public-pod-url";
 import { Outcome, Row } from "../approve-agent/[keyId]/ApproveForm";
+import {
+  approveLabel,
+  hasAccessFacts,
+  viewPendingAccess,
+  type PendingAccess,
+} from "../approve-agent/[keyId]/pending-access";
+import { PendingAccessBlock } from "../approve-agent/[keyId]/PendingAccessBlock";
 
 type KeyStatus = "pending" | "active" | "rejected" | "not_found" | "forbidden";
 
-interface PendingKey {
+/** A lookup row; a decidable key also carries what it would be allowed to do. */
+interface PendingKey extends Partial<PendingAccess> {
   keyId: string;
   status: KeyStatus;
   keyName?: string;
@@ -131,6 +139,11 @@ export function ApproveBatchForm({
   }, [load]);
 
   const pending = keys.filter((k) => k.status === "pending");
+  // Never approve blind: every pending key's access must have been read.
+  const accessRead = pending.every(hasAccessFacts);
+  const anyFull = pending.some(
+    (k) => hasAccessFacts(k) && viewPendingAccess(k).full
+  );
   const allConnected =
     keys.length > 0 && keys.every((k) => k.status === "active");
 
@@ -225,13 +238,13 @@ export function ApproveBatchForm({
           <Bot className="h-5 w-5" strokeWidth={2} />
         </span>
         <div className="flex flex-col gap-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
+          <p className="text-tiny font-semibold uppercase tracking-wide text-foreground/65">
             Agent access request
           </p>
-          <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
+          <h1 className="font-heading text-2xl font-medium leading-tight tracking-tight text-foreground">
             Connect your agents
           </h1>
-          <p className="text-[13px] leading-relaxed text-foreground/65">
+          <p className="text-small leading-relaxed text-foreground/65">
             <code className="font-mono text-foreground/80">synap init</code>{" "}
             wants to connect these agents to your pod. They can read it and make
             changes under your trust rules.
@@ -255,35 +268,55 @@ export function ApproveBatchForm({
           <>
             <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
               {keys.map((k) => (
-                <div key={k.keyId} className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    <Row
-                      label={agentLabel(k)}
-                      value={
-                        k.status === "pending"
-                          ? (k.instanceId ?? "Waiting for you")
-                          : resolveStatusLabel(statusToken(k.status))
-                      }
-                    />
+                <div key={k.keyId} className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <Row
+                        label={agentLabel(k)}
+                        value={
+                          k.status === "pending"
+                            ? (k.instanceId ?? "Waiting for you")
+                            : resolveStatusLabel(statusToken(k.status))
+                        }
+                      />
+                    </div>
+                    {k.status === "pending" && (
+                      <Button
+                        size="sm"
+                        variant="light"
+                        radius="md"
+                        className="min-w-0 px-2 text-foreground/65"
+                        aria-label={`Reject ${agentLabel(k)}`}
+                        isDisabled={isBusy}
+                        isLoading={
+                          typeof busy === "object" &&
+                          busy !== null &&
+                          busy.rejecting === k.keyId
+                        }
+                        onPress={() => void rejectRow(k)}
+                      >
+                        Reject
+                      </Button>
+                    )}
                   </div>
-                  {k.status === "pending" && (
-                    <Button
-                      size="sm"
-                      variant="light"
-                      radius="md"
-                      className="min-w-0 px-2 text-foreground/65"
-                      aria-label={`Reject ${agentLabel(k)}`}
-                      isDisabled={isBusy}
-                      isLoading={
-                        typeof busy === "object" &&
-                        busy !== null &&
-                        busy.rejecting === k.keyId
-                      }
-                      onPress={() => void rejectRow(k)}
-                    >
-                      Reject
-                    </Button>
-                  )}
+                  {k.status === "pending" &&
+                    (hasAccessFacts(k) ? (
+                      <PendingAccessBlock view={viewPendingAccess(k)} />
+                    ) : (
+                      <div
+                        role="alert"
+                        className="flex items-center justify-between gap-2 text-small text-danger"
+                      >
+                        <span>Couldn&apos;t read what it asks for.</span>
+                        <Button
+                          size="sm"
+                          variant="flat"
+                          onPress={() => void load()}
+                        >
+                          Retry
+                        </Button>
+                      </div>
+                    ))}
                 </div>
               ))}
             </div>
@@ -296,7 +329,7 @@ export function ApproveBatchForm({
                 radius="md"
                 size="md"
                 className="flex-1 font-medium"
-                isDisabled={isBusy || pending.length === 0}
+                isDisabled={isBusy || pending.length === 0 || !accessRead}
                 isLoading={busy === "approve"}
                 onPress={() => void approveAll()}
                 startContent={
@@ -307,9 +340,7 @@ export function ApproveBatchForm({
               >
                 {pending.length === 0
                   ? "Nothing left to approve"
-                  : pending.length === 1
-                    ? "Approve agent"
-                    : `Approve all ${pending.length}`}
+                  : approveLabel(anyFull, pending.length)}
               </Button>
               {pending.length > 1 && (
                 <Button
@@ -421,9 +452,9 @@ function Notice({ title, detail }: { title: string; detail?: string }) {
         strokeWidth={2.2}
       />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-medium text-foreground">{title}</p>
+        <p className="text-small font-medium text-foreground">{title}</p>
         {detail && (
-          <p className="mt-0.5 text-[12.5px] text-foreground/65">{detail}</p>
+          <p className="mt-0.5 text-small text-foreground/65">{detail}</p>
         )}
       </div>
     </div>
