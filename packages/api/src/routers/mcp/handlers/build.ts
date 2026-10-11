@@ -94,13 +94,23 @@ const REVISE_PATCH_SCHEMA = z.object({
 });
 
 /**
- * Why match_playbooks scoped to ONE auto-picked workspace — said for the case
- * that actually happened. `resolveEntityWorkspaceId` auto-picks both when NO
- * entity was given and when a given entity's workspace could not be resolved;
- * the note used to blame "the entity's own workspace" for both, so a caller
- * that never passed an entity was told about one it never sent. A projectId
- * ranks track templates higher but never chooses the workspace — say so, or
- * the caller reads the project as the scope.
+ * What match_playbooks actually searched when it auto-picked a workspace —
+ * said for the case that actually happened.
+ *
+ * The note used to claim playbooks "were matched against ONE workspace" while
+ * the result held playbooks from several: `playbooks.matchForEntity` reads the
+ * catalog through the playbooks VisibilityRule with NO workspace lens
+ * (`AccessContext.from(ctx)`), i.e. every active playbook in ANY workspace the
+ * caller can see plus pod-wide ones. The picked workspace does NOT filter the
+ * matches; it is only the lens `loadFacetSlugsBatch` reads an entity's ROLE
+ * facets through (which roles widen the kind match). So the note says what
+ * was searched, what the pick did, and that each row carries its own
+ * `workspaceId`.
+ *
+ * `resolveEntityWorkspaceId` auto-picks both when NO entity was given and when
+ * a given entity's workspace could not be resolved; the two cases get
+ * different words. A projectId ranks track templates higher but never chooses
+ * the workspace — say so, or the caller reads the project as the scope.
  */
 export function matchScopeNote(p: {
   entityGiven: boolean;
@@ -108,10 +118,10 @@ export function matchScopeNote(p: {
   memberCount: number;
   projectId?: string;
 }): string {
-  const scope = `playbooks were matched against ONE workspace (${p.matchWsId}) of your ${p.memberCount} member workspaces`;
+  const searched = `Playbooks were matched across all your ${p.memberCount} member workspaces plus pod-wide ones — each result carries its own workspaceId; check it before running one.`;
   const why = p.entityGiven
-    ? `The entity's own workspace could not be resolved (deleted, pod-global, or not visible to you), so ${scope}. If this looks incomplete, the entity's real workspace may differ — pass an explicit workspaceId to scope deliberately.`
-    : `No workspaceId or entityId was given, so ${scope}. Pass workspaceId to choose the space, or entityId to match in that entity's own workspace.`;
+    ? `The entity's own workspace could not be resolved (deleted, pod-global, or not visible to you), so its role facets were read through an auto-picked workspace (${p.matchWsId}): roles it holds only in another space did not widen the match. ${searched} Pass workspaceId to read the entity's roles in the right space.`
+    : `No workspaceId or entityId was given. ${searched} The auto-picked workspace (${p.matchWsId}) is only the call's context; it does not filter the matches. Pass entityId to also match that entity's kind and roles.`;
   const project = p.projectId
     ? ` projectId ${p.projectId} only lifts that project's track templates in the ranking; it does not choose the workspace.`
     : "";

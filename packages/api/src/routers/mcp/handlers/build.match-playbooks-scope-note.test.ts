@@ -80,4 +80,42 @@ describe("synap_match_playbooks — auto-pick note", () => {
     expect(n).toMatch(/does not choose the workspace/);
     expect(await note({ intentText: "launch" })).not.toContain("projectId");
   });
+
+  it("TELLS THE TRUTH about what was searched: rows from several workspaces ⇒ never 'ONE workspace'", async () => {
+    // What matchForEntity really returns: the playbooks VisibilityRule is read
+    // with NO workspace lens, so rows come from every visible workspace.
+    matchForEntity.mockResolvedValueOnce([
+      { id: "pb-a", score: 2, workspaceId: "ws-2" },
+      { id: "pb-b", score: 1, workspaceId: "ws-3" },
+      { id: "pb-c", score: 1, workspaceId: null },
+    ] as never);
+    const res = await buildHandlers.synap_match_playbooks!({
+      toolName: "synap_match_playbooks",
+      args: { intentText: "write a post" },
+      userId: "user-1",
+      apiKeyScopes: ["mcp.read"],
+      caller: {} as McpToolContext["caller"],
+      lensCaller: {} as McpToolContext["lensCaller"],
+      workspaceAccessible: true,
+    } as McpToolContext);
+    const body = JSON.parse((res.content?.[0] as { text: string }).text) as {
+      note: string;
+      playbooks: Array<{ workspaceId: string | null }>;
+    };
+    // Non-vacuity: the result really does span several workspaces.
+    expect(new Set(body.playbooks.map((p) => p.workspaceId)).size).toBe(3);
+    expect(body.note).not.toMatch(/ONE workspace/i);
+    expect(body.note).toContain("all your 3 member workspaces plus pod-wide");
+    expect(body.note).toMatch(/does not filter the matches/);
+    expect(body.note).toMatch(/each result carries its own workspaceId/);
+  });
+
+  it("entity given: the pick is named as the ROLE-facet lens, not the search scope", async () => {
+    const n = await note({ entityId: ENTITY });
+    expect(n).not.toMatch(/ONE workspace/i);
+    expect(n).toMatch(
+      /role facets were read through an auto-picked workspace \(ws-1\)/
+    );
+    expect(n).toContain("all your 3 member workspaces");
+  });
 });
