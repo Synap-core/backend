@@ -775,6 +775,54 @@ async function proposeAgentActivation(
   return null;
 }
 
+/**
+ * An AGENT editing, pausing or deleting an automation goes through the gate
+ * like create: its grant refuses, the structure floor (update) or the
+ * destructive floor (delete) proposes, and the `automation/update` /
+ * `automation/delete` executor replays the reviewed change. Returns the
+ * proposal response, or null when no agent is acting or the gate granted.
+ */
+async function gateAgentAutomationChange(
+  ctx: {
+    userId: Parameters<typeof checkPermissionOrPropose>[0]["userId"];
+    agentUserId?: string | null;
+  },
+  automation: { id: string; workspaceId: string | null },
+  action: "update" | "delete",
+  update?: Record<string, unknown>
+): Promise<{ status: "proposed"; proposalId: string; message: string } | null> {
+  const agentUserId = actingAgentUserId(ctx);
+  if (!agentUserId) return null;
+  const perm = await checkPermissionOrPropose({
+    userId: ctx.userId,
+    agentUserId,
+    workspaceId: automation.workspaceId ?? null,
+    subjectType: "automation",
+    action,
+    data: { automationId: automation.id, ...(update ? { update } : {}) },
+  });
+  if ("denied" in perm && perm.denied) {
+    throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+  }
+  if (
+    "proposalId" in perm &&
+    perm.proposalId &&
+    !("granted" in perm && perm.granted)
+  ) {
+    return {
+      status: "proposed",
+      proposalId: perm.proposalId,
+      message: proposedMessageFor(
+        perm.proposalType,
+        action === "delete"
+          ? "Automation deletion proposed for review"
+          : "Automation change proposed for review"
+      ),
+    };
+  }
+  return null;
+}
+
 async function insertAutomationAfterGovernance(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
@@ -2491,6 +2539,11 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
         ownerId: existing.createdBy,
       });
+      await assertKeyMayWrite({
+        subjectType: "automation",
+        action: "update",
+        workspaceId: existing.workspaceId,
+      });
 
       // D2: an agent moving an automation to `active` proposes the whole update.
       if (input.status === "active" && existing.status !== "active") {
@@ -2656,6 +2709,22 @@ export const automationsRouter = router({
             stableStringify(existing.triggerConfig));
       if (definitionChanged) updates.version = (existing.version ?? 1) + 1;
 
+      // A rule edit rewrites its own automation under the `rule.update` gate it
+      // already passed (services/rules/update.ts) — not a second proposal.
+      if (
+        (ctx as { governedByParentWrite?: string }).governedByParentWrite !==
+        "rule.update"
+      ) {
+        const { workspaceId: _ws, ...requested } = input;
+        const proposed = await gateAgentAutomationChange(
+          ctx,
+          existing,
+          "update",
+          requested
+        );
+        if (proposed) return proposed;
+      }
+
       await database
         .update(automations)
         .set(updates)
@@ -2693,6 +2762,13 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
         ownerId: existing.createdBy,
       });
+      await assertKeyMayWrite({
+        subjectType: "automation",
+        action: "delete",
+        workspaceId: existing.workspaceId,
+      });
+      const proposed = await gateAgentAutomationChange(ctx, existing, "delete");
+      if (proposed) return proposed;
 
       await database.delete(automations).where(eq(automations.id, input.id));
 
@@ -2723,6 +2799,11 @@ export const automationsRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: existing.workspaceId,
         ownerId: existing.createdBy,
+      });
+      await assertKeyMayWrite({
+        subjectType: "automation",
+        action: "activate",
+        workspaceId: existing.workspaceId,
       });
       if (existing.status === "active") {
         return { status: "already_active" };
@@ -2783,6 +2864,20 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
         ownerId: existing.createdBy,
       });
+      await assertKeyMayWrite({
+        subjectType: "automation",
+        action: "update",
+        workspaceId: existing.workspaceId,
+      });
+      const proposed = await gateAgentAutomationChange(
+        ctx,
+        existing,
+        "update",
+        {
+          status: "paused",
+        }
+      );
+      if (proposed) return proposed;
 
       await database
         .update(automations)

@@ -671,29 +671,10 @@ const REENTRY_CLASS: Record<string, Classification> = {
   "tool.request": "gated",
   "playbook.update": "gated",
   "automation.activate": "gated",
-  "automation.update": {
-    ungated:
-      "automationsRouter.update carries no gate on the path this verb can " +
-      "reach. Its ONLY gate call is the activation branch " +
-      '(`input.status === "active"` -> proposeAgentActivation), and ' +
-      "`automation.update` deliberately does NOT accept `status` at all — the " +
-      "lifecycle lives on automation.activate / automation.pause, which are " +
-      "also the only paths that compute `nextRunAt`. What is left is a " +
-      "definition patch on an object the operator already sees, workspace-write " +
-      "gated on the LOADED row (assertWorkspaceWrite) and re-validated " +
-      "(event pattern, filters, flow verbs, dataContract). Not " +
-      "destructive/admin/structural by the derivation below; `automation.update` " +
-      "is absent from AGENT_STRUCTURE_DOOR_CLASS, which classifies only " +
-      "create/activate/execute.",
-  },
-  "automation.pause": {
-    ungated:
-      "automationsRouter.pause carries no checkPermissionOrPropose, " +
-      "deliberately: pausing is DE-ESCALATION — stopping a misbehaving " +
-      "automation must not itself wait for review. It is workspace-write gated " +
-      "on the loaded row (assertWorkspaceWrite) and fully reversible via " +
-      "automation.activate, which DOES propose for an agent.",
-  },
+  "automation.update": "gated",
+  // An agent pausing proposes `automation.update` (founder rule: ask first by
+  // default for any change; SB2 2026-10-11 retired the de-escalation carve-out).
+  "automation.pause": "gated",
   // ── Wave B — lifecycle revision/retire ─────────────────────────────────
   "playbook.archive": "gated",
   "skill.update_rule": {

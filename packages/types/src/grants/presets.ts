@@ -80,7 +80,7 @@ export const AI_WRITE_SUBJECTS: Readonly<
   Record<string, readonly ("create" | "update")[]>
 > = {
   artifact: ["create"],
-  automation: ["create"],
+  automation: ["create", "update"],
   capability: ["create"],
   cell: ["create", "update"],
   document: ["create", "update"],

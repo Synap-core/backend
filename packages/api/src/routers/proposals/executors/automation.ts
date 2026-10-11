@@ -204,6 +204,79 @@ export function registerAutomationExecutors(): void {
     },
   });
 
+  // ── automation / update · automation / delete ─────────────────────────────
+  // An AGENT editing, pausing or deleting an automation (the router gates it
+  // like create). Replayed through the SAME router door as the approver, whose
+  // request carries no acting-agent scope — so the door cannot re-gate; RBAC
+  // and the approver's own grant still run on the loaded row.
+  for (const action of ["update", "delete"] as const) {
+    registerProposalExecutor({
+      key: `automation/${action}`,
+      async execute({ proposal, userId, input, deps }) {
+        const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+          {}) as Record<string, unknown>;
+        const automationId = innerData.automationId as string | undefined;
+        if (!automationId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Automation ${action} proposal is missing automationId`,
+          });
+        }
+
+        const [alreadyDone] = await db
+          .select({ status: proposals.status })
+          .from(proposals)
+          .where(eq(proposals.id, input.proposalId));
+        if (alreadyDone?.status === ProposalStatus.APPROVED) {
+          return { success: true, alreadyApproved: true };
+        }
+
+        const { automationsRouter } = await import("../../automations.js");
+        const automationCaller = automationsRouter.createCaller({
+          db,
+          authenticated: true as const,
+          userId,
+        } as unknown as Context);
+        const update = (innerData.update ?? {}) as Record<string, unknown>;
+        const result =
+          action === "delete"
+            ? await automationCaller.delete({ id: automationId })
+            : await automationCaller.update({
+                ...update,
+                id: automationId,
+              } as never);
+        if (result.status === "proposed") {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Approved automation ${action} filed another proposal`,
+          });
+        }
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return {
+          success: true,
+          primaryId: action === "delete" ? undefined : automationId,
+        };
+      },
+    });
+  }
+
   // ── automation / activate ────────────────────────────────────────────────────
   // An AGENT switching an automation on (D2, rung 2.09): `automations.activate`,
   // or `automations.update` moving it to `active` (then `data.update` carries

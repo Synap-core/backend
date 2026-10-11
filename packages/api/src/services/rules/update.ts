@@ -421,6 +421,7 @@ export async function updateRuleGoverned(
         authenticated: true as const,
         userId: input.userId,
         workspaceId: targetWorkspaceId,
+        governedByParentWrite: "rule.update",
       } as unknown as Context);
       try {
         await caller.update({

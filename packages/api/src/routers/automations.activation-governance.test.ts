@@ -8,9 +8,8 @@
  * call. The agent is read from the request's acting-agent scope — driven here
  * with the REAL `runWithActingAgent`, the same entry the key-auth doors use.
  *
- * NOT covered: definition edits to an already-active automation (no status
- * transition) stay ungated — `rules/update.ts` re-enters `update` inside an
- * agent's scope under its own `rule.update` gate.
+ * Definition edits with no status transition are gated as `automation.update`
+ * (`automations.change-governance.test.ts`).
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -141,12 +140,12 @@ describe("automations.update — acting agent", () => {
     expect(h.updates).toEqual([]);
   });
 
-  it("an edit with no status transition is not gated (rule re-entry path)", async () => {
+  it("an edit with no status transition is gated as automation.update", async () => {
     const result = await runWithActingAgent(AGENT, () =>
       caller().update({ id: ID, name: "Renamed" })
     );
-    expect(result).toMatchObject({ status: "updated" });
-    expect(h.gateCalls).toEqual([]);
-    expect(h.updates).toHaveLength(1);
+    expect(result).toMatchObject({ status: "proposed" });
+    expect(h.gateCalls[0]).toMatchObject({ action: "update" });
+    expect(h.updates).toEqual([]);
   });
 });

@@ -3332,9 +3332,9 @@ const automationActivateHandler: BuiltinVerbHandler = async (params, ctx) => {
 
 /**
  * automation.pause — switch an active automation OFF through the governed
- * `automationsRouter.pause` caller. De-escalation: the door gates on the loaded
- * row's workspace (`assertWorkspaceWrite`) and deliberately does NOT propose —
- * stopping a runaway automation must not itself wait for review.
+ * `automationsRouter.pause` caller. The door gates on the loaded row's
+ * workspace (`assertWorkspaceWrite`) and the key's grant; an AGENT pausing
+ * proposes `automation.update` (a person pauses directly).
  */
 const automationPauseParams = z
   .object({

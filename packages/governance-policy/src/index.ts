@@ -683,6 +683,9 @@ type StructureDoor = Extract<
 export const AGENT_STRUCTURE_DOOR_CLASS = {
   "automation/activate": "floored",
   "automation/create": "floored",
+  // Editing (or pausing) an automation changes what runs later with the
+  // person's authority.
+  "automation/update": "floored",
   "cell/create": "floored",
   "cell/define": "floored",
   "playbook/create": "floored",
@@ -696,6 +699,7 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "widget/register": "floored",
   "workspace/create": "floored",
   // Already behind another non-widenable floor.
+  "automation/delete": "other-floor", // 2.5 destructive
   "playbook/archive": "other-floor", // 2.5 destructive
   "profile/create": "other-floor", // 2.08
   "workspace/delete": "other-floor", // 2 admin
@@ -1823,7 +1827,9 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "artifact/setState": "reversible",
   "automation/activate": "disruptive", // struct (2.09)
   "automation/create": "disruptive", // struct (2.09)
+  "automation/delete": "disruptive", // destroy
   "automation/execute": "disruptive", // effect: runs steps now
+  "automation/update": "disruptive", // struct (2.09)
   "bento/arrange": "reversible",
   "capability/attach": "disruptive", // egress
   "capability/create": "disruptive", // egress
@@ -2003,7 +2009,9 @@ export const GATE_WRITE_DOORS = {
   // An agent switching an automation on (`activate`, or `update` to active).
   "automation/activate": "gate",
   "automation/create": "gate",
+  "automation/delete": "gate",
   "automation/execute": "gate",
+  "automation/update": "gate",
   "bento/arrange": "gate",
   "capability/attach": "gate",
   "capability/create": "gate",
