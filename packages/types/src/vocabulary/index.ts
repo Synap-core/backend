@@ -838,6 +838,9 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   failed: "Failed",
   cancelled: "Cancelled",
   skipped: "Skipped",
+  // a stage worker's per-target result (`@synap-core/types/workers`): the
+  // worker made this thing. Beside done / failed / skipped above.
+  created: "Created",
   // W2 calm: a run the reaper found past its window with its session still
   // owing the person an open slot (automation_runs / playbook_runs). Not
   // failed, not running — waiting on the human.

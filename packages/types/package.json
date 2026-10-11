@@ -261,6 +261,10 @@
       "types": "./dist/ai-availability/index.d.ts",
       "import": "./dist/ai-availability/index.js"
     },
+    "./workers": {
+      "types": "./dist/workers/index.d.ts",
+      "import": "./dist/workers/index.js"
+    },
     "./targets": {
       "types": "./dist/targets/index.d.ts",
       "import": "./dist/targets/index.js"

@@ -26,6 +26,7 @@
  */
 
 import type { PlaybookRunNodeDef } from "@synap/database";
+import { WORKER_SKIP_REASONS } from "../workers/index.js";
 
 // ── 1. Mode ─────────────────────────────────────────────────────────────────
 
@@ -137,6 +138,9 @@ export const AUTOMATION_SKIP_REASONS = {
   /** The subject's latest run of this playbook failed recently, so the
    *  subject-idempotent path did not start another one. Step output. */
   coolingDown: "cooling_down",
+  /** Stage workers (`@synap-core/types/workers`): below threshold, approvals
+   *  backlog, stale transition, volume ceiling. Step output + run row. */
+  ...WORKER_SKIP_REASONS,
 } as const;
 export type AutomationSkipReason =
   (typeof AUTOMATION_SKIP_REASONS)[keyof typeof AUTOMATION_SKIP_REASONS];
