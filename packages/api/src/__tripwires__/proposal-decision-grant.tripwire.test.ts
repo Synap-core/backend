@@ -18,9 +18,15 @@ import { join, relative } from "path";
  *     APPROVED / REJECTED / REVERTED) calls the gate. Executors are excluded:
  *     they run only under `applyProposalApproval`, which is in the set.
  *  C. every Hub REST `/proposals/:id/<action>` route delegates to a gated
- *     procedure (the MCP reject tool delegates to `reject` the same way).
+ *     procedure (the MCP reject tool delegates to `reject` the same way), and
+ *     every REVISE door (tRPC `revise`, MCP `synap_revise_proposal`, Hub tRPC
+ *     `updateProposal` — derived: the router files that call the revise core)
+ *     reaches `mergeProposalRevision`, whose locked read calls
+ *     `assertMayReviseProposal` (approve right unless its agent authored it).
  *
- * NOT covered, measured: a door outside `src/routers` that flips a status
+ * NOT covered, measured: a revise door that writes `proposals.data` itself
+ * instead of calling the core (proposals.ts writes `data` for item
+ * dispositions, so a file-level scan cannot tell the two apart); a door outside `src/routers` that flips a status
  * directly (services/** system flows: cleanup packs, guest retention), and an
  * executor imported by something other than the approval registry.
  */
@@ -30,7 +36,6 @@ const read = (rel: string) => readFileSync(join(SRC, rel), "utf8");
 
 const DECIDES: Record<string, "approve" | "reject"> = {
   approve: "approve",
-  revise: "approve", // rewrites what the reviewer then approves
   batchApprove: "approve",
   revert: "approve", // executes writes with the reviewer's authority
   reject: "reject",
@@ -38,6 +43,11 @@ const DECIDES: Record<string, "approve" | "reject"> = {
   rejectItem: "reject",
   restoreItem: "reject",
   reopen: "reject",
+};
+/** Decisions whose key check needs the row, so it runs in a shared core. */
+const DECIDES_IN_CORE: Record<string, string> = {
+  revise:
+    "rewrites what the reviewer approves — the revise core asks the key (assertMayReviseProposal): approve right, unless its agent authored the proposal",
 };
 const NOT_A_DECISION: Record<string, string> = {
   withdraw: "the PROPOSER retracting their own request — no review",
@@ -94,11 +104,23 @@ describe("A — proposals router: every mutation is classified, every decision g
   it("no mutation is unclassified", () => {
     const classified = new Set([
       ...Object.keys(DECIDES),
+      ...Object.keys(DECIDES_IN_CORE),
       ...Object.keys(NOT_A_DECISION),
     ]);
     expect(mutations.filter((m) => !classified.has(m))).toEqual([]);
     expect([...classified].filter((c) => !mutations.includes(c))).toEqual([]);
   });
+
+  it.each(
+    Object.entries(DECIDES)
+      .filter(([, verb]) => verb === "reject")
+      .map(([name]) => name)
+  )(
+    "%s reaches assertCanReviewProposal (an agent key rejects only its own)",
+    (name) => {
+      expect(segments.get(name)).toMatch(/\bassertCanReviewProposal\(\{/);
+    }
+  );
 
   it.each(Object.entries(DECIDES))(
     "%s asks for proposal.%s as its first statement",
@@ -163,4 +185,38 @@ describe("C — Hub REST decision routes delegate to a gated procedure", () => {
       expect(called.some((c) => c in DECIDES)).toBe(true);
     }
   );
+});
+
+describe("C — every revise door reaches the revise core, which asks the key", () => {
+  const core = read("services/proposals/proposals-service.ts");
+  const start = core.indexOf("export async function mergeProposalRevision(");
+  const coreBody = core.slice(start, core.indexOf("\nexport ", start + 1));
+  const callsCore = /\b(mergeProposalRevision|reviseProposal)\s*\(/;
+  const reviseDoors = tsFiles(join(SRC, "routers"))
+    .filter((f) => callsCore.test(readFileSync(f, "utf8")))
+    .map((f) => relative(SRC, f));
+
+  it("sees the three revise doors and the core (non-vacuity)", () => {
+    expect(start).toBeGreaterThan(-1);
+    expect(reviseDoors).toEqual(
+      expect.arrayContaining([
+        "routers/proposals.ts",
+        "routers/mcp/handlers/build.ts",
+        "routers/hub-protocol/proposals.ts",
+      ])
+    );
+  });
+
+  it("the core asks the key on the locked row, as a statement of its own", () => {
+    expect(coreBody).toMatch(/^ {4}assertMayReviseProposal\(existing\);$/m);
+  });
+
+  it("the helper exempts only the authoring agent, then needs approve", () => {
+    const ra = read("routers/proposals/review-authority.ts");
+    const at = ra.indexOf("export function assertMayReviseProposal(");
+    const body = ra.slice(at, ra.indexOf("\n}\n", at));
+    expect(body).toMatch(
+      /if \(actingAgentUserId && proposal\.agentUserId === actingAgentUserId\) return;\s*assertMayDecideProposal\("approve", "revise", grant\);/
+    );
+  });
 });

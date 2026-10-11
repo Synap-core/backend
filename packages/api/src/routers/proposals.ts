@@ -1511,7 +1511,8 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      assertMayDecideProposal("approve", "revise");
+      // The key half (approve right, unless its agent authored the proposal)
+      // runs in the revise core: `assertMayReviseProposal`.
       const userId = requireUserId(ctx.userId);
 
       const proposal = await db.query.proposals.findFirst({

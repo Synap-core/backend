@@ -54,14 +54,19 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("../../routers/proposals/review-authority.js", () => ({
-  computeCanReviewApproval: async (args: { userId: string }) => {
-    h.reviewCalls.push(args.userId);
-    return { allowed: h.allowed, reason: "not-authorized" };
-  },
-}));
+vi.mock(
+  "../../routers/proposals/review-authority.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    computeCanReviewApproval: async (args: { userId: string }) => {
+      h.reviewCalls.push(args.userId);
+      return { allowed: h.allowed, reason: "not-authorized" };
+    },
+  })
+);
 
 const { mergeProposalRevision } = await import("./proposals-service.js");
+const { runWithActingAgent, runWithGrant } = await import("@synap/database");
 
 const AGENT = "agent-user-id";
 const OTHER_AGENT = "other-agent-user-id";
@@ -193,5 +198,70 @@ describe("PATCH reaches the core (so narrative and payload cannot diverge)", () 
       actingAgentUserId: AGENT,
     });
     expect(h.updates).toBe(1);
+  });
+});
+
+describe("THE KEY HALF — revising needs the approve right, unless the key's agent authored it", () => {
+  const AI_KEY = {
+    scopes: [{ permissions: ["proposal.reject", "entity.update"] }],
+    clientId: null,
+  };
+  const APPROVER_KEY = {
+    scopes: [{ permissions: ["proposal.approve"] }],
+    clientId: null,
+  };
+  const asKey = (
+    agent: string | undefined,
+    grant: typeof AI_KEY,
+    fn: () => Promise<void>
+  ) => runWithActingAgent(agent, () => runWithGrant(grant, fn));
+
+  it("the authoring agent's key revises its own proposal without proposal.approve", async () => {
+    await asKey(AGENT, AI_KEY, () =>
+      mergeProposalRevision({
+        proposalId: "p1",
+        summary: "after",
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    );
+    expect(h.updates).toBe(1);
+  });
+
+  it("another agent's key is refused even where the HUMAN ladder admits it (Hub / tRPC doors)", async () => {
+    h.allowed = true; // the key's human owner may review this proposal
+    await expect(
+      asKey(OTHER_AGENT, AI_KEY, () =>
+        mergeProposalRevision({
+          proposalId: "p1",
+          summary: "x",
+          actorId: HUMAN,
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("Give it the 'approve' right"),
+    });
+    expect(h.updates).toBe(0);
+  });
+
+  it("a key holding proposal.approve may revise someone else's proposal", async () => {
+    h.allowed = true;
+    await asKey(OTHER_AGENT, APPROVER_KEY, () =>
+      mergeProposalRevision({ proposalId: "p1", summary: "x", actorId: HUMAN })
+    );
+    expect(h.updates).toBe(1);
+  });
+
+  it("an unauthorized caller still reads NOT_FOUND first (no oracle)", async () => {
+    await expect(
+      asKey(OTHER_AGENT, AI_KEY, () =>
+        mergeProposalRevision({
+          proposalId: "p1",
+          summary: "x",
+          actorId: HUMAN,
+        })
+      )
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

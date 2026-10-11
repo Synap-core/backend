@@ -35,7 +35,8 @@ vi.mock("../../../utils/split-brain-service.js", async (importOriginal) => ({
   isPodReadOnly: vi.fn(async () => false),
 }));
 
-const { runWithGrant } = await import("@synap/database");
+const { runWithGrant, runWithActingAgent } = await import("@synap/database");
+const { assertCanReviewProposal } = await import("../review-authority.js");
 const { proposalsRouter } = await import("../../proposals.js");
 const { secretsVaultRouter } = await import("../../secrets-vault.js");
 const { applyProposalApproval } = await import("../apply-approval.js");
@@ -85,11 +86,6 @@ const DOORS: Door[] = [
     name: "approve",
     verb: "approve",
     call: (c) => p(c).approve({ proposalId: ID }),
-  },
-  {
-    name: "revise",
-    verb: "approve",
-    call: (c) => p(c).revise({ proposalId: ID, data: {} }),
   },
   {
     name: "batchApprove",
@@ -233,5 +229,69 @@ describe("applyProposalApproval — the shared approve core (import apply reache
         "This key may not approve changes. Give it the 'approve' right in its access.",
     });
     expect(h.reached).toBe(false);
+  });
+});
+
+describe("an AGENT key rejects only what its agent authored", () => {
+  const AGENT = "agent-1";
+  const proposalBy = (agentUserId: string | null) =>
+    ({
+      workspaceId: "ws-1",
+      data: {},
+      agentUserId,
+      targetType: "entity",
+      targetId: null,
+      sessionId: null,
+    }) as const;
+  async function review(
+    agent: string | undefined,
+    g: KeyGrant | null,
+    author: string | null,
+    action: "reject" | "reopen" = "reject"
+  ) {
+    h.reached = false;
+    const err = await runWithActingAgent(agent, () =>
+      runWithGrant(g, () =>
+        assertCanReviewProposal({
+          proposal: proposalBy(author),
+          userId: "user-1",
+          action,
+          roster: false,
+        })
+      )
+    ).then(
+      () => null,
+      (e: unknown) => e as { code?: string; message?: string }
+    );
+    return {
+      refused:
+        err?.code === "FORBIDDEN" &&
+        /^This agent may only /.test(err.message ?? ""),
+      reached: h.reached,
+    };
+  }
+
+  it("refuses a person's proposal, before any read", async () => {
+    expect(await review(AGENT, REJECT_ONLY, null)).toEqual({
+      refused: true,
+      reached: false,
+    });
+  });
+  it("refuses another agent's proposal, and reopen too", async () => {
+    expect((await review(AGENT, REJECT_ONLY, "agent-2")).refused).toBe(true);
+    expect(
+      (await review(AGENT, REJECT_ONLY, "agent-2", "reopen")).refused
+    ).toBe(true);
+  });
+  it("its own proposal goes on to the review ladder", async () => {
+    expect(await review(AGENT, REJECT_ONLY, AGENT)).toEqual({
+      refused: false,
+      reached: true,
+    });
+  });
+  it("a person's key and a full-access key are unchanged", async () => {
+    expect((await review(undefined, REJECT_ONLY, null)).refused).toBe(false);
+    expect((await review(AGENT, FULL, null)).refused).toBe(false);
+    expect((await review(AGENT, null, null)).refused).toBe(false);
   });
 });

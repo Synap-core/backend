@@ -580,7 +580,7 @@ export async function mergeProposalRevision(
       !!params.actingAgentUserId &&
       existing.agentUserId === params.actingAgentUserId;
 
-    const { computeCanReviewApproval } =
+    const { computeCanReviewApproval, assertMayReviseProposal } =
       await import("../../routers/proposals/review-authority.js");
     const { allowed: canReview } =
       !isAuthor && params.actorId
@@ -607,6 +607,9 @@ export async function mergeProposalRevision(
       // pre-existing semantics of this gate, preserved deliberately.
       throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
     }
+    // The KEY half: a key revising a proposal its agent did not author needs
+    // the approve right. After the ladder, so a refusal is no existence oracle.
+    assertMayReviseProposal(existing);
 
     if (existing.status !== ProposalStatus.PENDING) {
       throw new TRPCError({

@@ -11,6 +11,7 @@ import {
   and,
   db,
   eq,
+  getActingAgentUserId,
   getRequestGrant,
   getWorkspaceMembership,
   inArray,
@@ -746,6 +747,7 @@ export async function assertCanReviewProposal(args: {
   roster: boolean;
 }): Promise<void> {
   const { proposal, userId, action, roster } = args;
+  assertAgentKeyMayReject(proposal, action);
 
   // reject / reopen — the documented agent capability ("can reject but never
   // approve"). EXACTLY today's behaviour; the class floor applies to approve only.
@@ -809,4 +811,51 @@ export function assertMayDecideProposal(
     code: "FORBIDDEN",
     message: `This key may not ${act} changes. Give it the '${verb}' right in its access.`,
   });
+}
+
+/** Does any live scope of this key hold explicit full access (`*`)? */
+function holdsFullAccess(grant: KeyGrant): boolean {
+  return grant.scopes.some((s) => s.permissions.includes("*"));
+}
+
+/**
+ * An AGENT key granted `proposal.reject` may decline only the proposals IT
+ * authored (`proposals.agentUserId` = the request's acting agent) — withdrawing
+ * or discarding its own work. Declining a person's or another agent's proposal
+ * is a review decision, and the AI's limits never include review. A person's
+ * key, a signed-in session and a full-access (`*`) key — which may approve
+ * too — are unchanged. Every reject-verb door (reject, batchReject, rejectItem,
+ * restoreItem, reopen; MCP and Hub reject delegate to `reject`) reaches it
+ * through `assertCanReviewProposal`.
+ */
+export function assertAgentKeyMayReject(
+  proposal: { agentUserId?: string | null },
+  act: string,
+  actingAgentUserId: string | undefined = getActingAgentUserId(),
+  grant: KeyGrant | undefined = getRequestGrant()
+): void {
+  if (!grant || !actingAgentUserId || holdsFullAccess(grant)) return;
+  if (proposal.agentUserId === actingAgentUserId) return;
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: `This agent may only ${act} its own proposals. A person decides the others.`,
+  });
+}
+
+/**
+ * The KEY half of REVISING a pending proposal. A revise rewrites what a
+ * reviewer then approves, so the key needs the approve right — except the
+ * agent that AUTHORED the proposal: amending its own request is still asking,
+ * not deciding. The author is the request's acting agent, entered from the key
+ * at every key-auth door, never a caller-supplied id. Called by the one revise
+ * core (`mergeProposalRevision`) that every revise door reaches — tRPC
+ * `proposals.revise`, MCP `synap_revise_proposal`, Hub `updateProposal`.
+ */
+export function assertMayReviseProposal(
+  proposal: { agentUserId: string | null },
+  actingAgentUserId: string | undefined = getActingAgentUserId(),
+  grant: KeyGrant | undefined = getRequestGrant()
+): void {
+  if (actingAgentUserId && proposal.agentUserId === actingAgentUserId) return;
+  assertMayDecideProposal("approve", "revise", grant);
 }

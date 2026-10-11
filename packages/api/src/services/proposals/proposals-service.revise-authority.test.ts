@@ -53,15 +53,19 @@ vi.mock("../agent-identity-service.js", () => ({
   ownAgentUserFilter: () => undefined,
 }));
 
-vi.mock("../../routers/proposals/review-authority.js", () => ({
-  computeCanReviewApproval: async (args: Record<string, unknown>) => {
-    h.reviewArgs.push(args);
-    return {
-      allowed: h.allowed,
-      reason: h.allowed ? "owner" : "not-authorized",
-    };
-  },
-}));
+vi.mock(
+  "../../routers/proposals/review-authority.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    computeCanReviewApproval: async (args: Record<string, unknown>) => {
+      h.reviewArgs.push(args);
+      return {
+        allowed: h.allowed,
+        reason: h.allowed ? "owner" : "not-authorized",
+      };
+    },
+  })
+);
 
 import { mergeProposalRevision, reviseProposal } from "./proposals-service.js";
 
