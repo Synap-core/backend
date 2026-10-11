@@ -44,7 +44,7 @@ import {
   type KeyAccessGrant,
 } from "@synap-core/types/grants";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
-import { appMode, appReach } from "@synap-core/types/apps/app-view";
+import { appHolderAccess, appMode } from "@synap-core/types/apps/app-view";
 import {
   resolveAppConnection,
   resolveAppEndConsequence,
@@ -634,8 +634,7 @@ function AppCard({
         </div>
 
         <p className="text-xs text-foreground/70">
-          <span className="text-foreground/55">Can: </span>
-          {appReach(app)}
+          {appHolderAccess(app).sentence}
         </p>
         <p className="text-xs text-foreground/55">{meta}</p>
 

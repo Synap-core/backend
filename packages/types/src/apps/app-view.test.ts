@@ -1,27 +1,15 @@
 /**
- * The ONE derivation of an Application's reach.
+ * An Application's reach, read by the ONE holder reader (`appHolderAccess` →
+ * `resolveHolderAccess`), so an app, a key and an AI are worded alike.
  *
- * Three surfaces render this (pod-admin, relay, the browser) and each maps the
- * FACTS into its own UI type, so this file pins the facts themselves. The
- * discriminating cases are the two the surfaces deliberately differ on, and the
- * one they must never confuse:
- *
- *   - `appReachText` is "" with no live grant (the browser CARD stays quiet and
- *     lets its state chip speak) while `appReach` falls back to "No access yet"
- *     (pod-admin/relay print a line). Same facts, two renderings — pinning only
- *     one would let the other silently change.
- *   - A REVOKED app reads "Access removed", never "No access yet": revoke killed
- *     its keys, so it has no LIVE reach. "No access yet" would claim it never
- *     had any, which is a different and false statement.
+ * The line that must never blur: a REVOKED app reads ended ("can touch
+ * nothing"), an app nothing was approved for reads "No access yet". Revoke
+ * killed its keys, so it has no live reach; "No access yet" would claim it
+ * never had any, which is a different and false statement.
  */
 import { describe, expect, it } from "vitest";
-import {
-  appMode,
-  appReach,
-  appReachLines,
-  appReachText,
-  type AppStateLike,
-} from "./app-view.js";
+import { resolveObjectNounPlural } from "../vocabulary/index.js";
+import { appHolderAccess, appMode, type AppHolderLike } from "./app-view.js";
 
 const GRANT = {
   permissions: ["entity.person.create"],
@@ -30,43 +18,55 @@ const GRANT = {
   entityIds: null,
 };
 
-const app = (over: Partial<AppStateLike> = {}): AppStateLike => ({
+const app = (over: Partial<AppHolderLike> = {}): AppHolderLike => ({
+  name: "synap.live",
   revoked_at: null,
   grants: [GRANT],
   ...over,
 });
 
-describe("reach — the two renderings, and the line that must never blur", () => {
-  it("a revoked app reads 'Access removed', NOT 'No access yet'", () => {
-    const revoked = app({ revoked_at: "2026-10-06T13:00:00.000Z", grants: [] });
-    expect(appReachText(revoked)).toBe("Access removed");
-    expect(appReach(revoked)).toBe("Access removed");
-    // The distinction the pod-admin docblock exists to protect.
-    expect(appReach(revoked)).not.toBe("No access yet");
+describe("appHolderAccess — an app read like any holder", () => {
+  it("a revoked app is ended, NOT 'No access yet'", () => {
+    const revoked = appHolderAccess(
+      app({ revoked_at: "2026-10-06T13:00:00.000Z", grants: [] })
+    );
+    expect(revoked.state).toBe("ended");
+    expect(revoked.sentence).not.toMatch(/No access yet/);
   });
 
-  it("with no grant, the CARD stays quiet while the LINE states it", () => {
-    const empty = app({ grants: [] });
-    // Deliberate divergence, not an accident: browser's card renders the reach
-    // span AND a state chip, so a fallback here would say "No access yet" twice.
-    expect(appReachText(empty)).toBe("");
-    // pod-admin and relay print a line, so the fallback lives in `appReach`.
-    expect(appReach(empty)).toBe("No access yet");
+  it("an app nothing was approved for reads 'No access yet'", () => {
+    const empty = appHolderAccess(app({ grants: [] }));
+    expect(empty.state).toBe("nothing");
+    expect(empty.sentence).toBe("No access yet.");
   });
 
-  it("a live grant renders in the shared what · where words", () => {
-    expect(appReachLines([GRANT])).toEqual(["Create People · 1 Space"]);
-    expect(appReachText(app())).toBe("Create People · 1 Space");
+  it("a live grant is its ceiling, named by the space its request carried", () => {
+    const h = appHolderAccess(
+      app({
+        pending_request: {
+          proposal_id: "p1",
+          requests: [
+            {
+              permission: "entity.person.create",
+              workspaceId: "ws-1",
+              workspaceName: "Sales",
+            },
+          ],
+        },
+      })
+    );
+    expect(h.state).toBe("limited");
+    expect(h.tiers.change).toBe(resolveObjectNounPlural("person"));
+    expect(h.where.spaces).toEqual([{ id: "ws-1", name: "Sales" }]);
+    expect(h.lines).toHaveLength(1);
   });
 
-  it("joins several grants with '; '", () => {
-    const two = appReachText(app({ grants: [GRANT, { ...GRANT, workspaceIds: ["ws-2"] }] }));
-    expect(two.split("; ")).toHaveLength(2);
-  });
-
-  it("appReachLines is the SAME derivation as the text, not a second one", () => {
-    const lines = appReachLines([GRANT]);
-    expect(appReachText(app())).toBe(lines.join("; "));
+  it("a revoked grant is not reach; an app grant never claims a key TTL", () => {
+    const h = appHolderAccess(
+      app({ grants: [{ ...GRANT, revokedAt: "2026-10-01T00:00:00.000Z" }] })
+    );
+    expect(h.state).toBe("nothing");
+    expect(appHolderAccess(app()).lifetime.when).not.toMatch(/days/);
   });
 });
 

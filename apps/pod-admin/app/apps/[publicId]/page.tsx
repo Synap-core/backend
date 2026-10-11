@@ -24,7 +24,7 @@ import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
 import { formatRelative } from "../../(admin)/trust-keys/_lib/format";
 import { chipColor, type AppDetailRow } from "../_lib/app-view";
-import { appMode, grantLines } from "@synap-core/types/apps/app-view";
+import { appHolderAccess, appMode } from "@synap-core/types/apps/app-view";
 import {
   resolveAppConnection,
   resolveAppEndConsequence,
@@ -32,7 +32,6 @@ import {
 } from "@synap-core/types/membrane";
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-
 
 type LoadState = "loading" | "ready" | "missing" | "error";
 
@@ -181,7 +180,9 @@ export default function AppDetailPage() {
         onConfirm={() => confirming && void doEnd(confirming)}
         title={`${resolveConnectionAction(confirming ?? "revoke").label} "${app?.name ?? "this app"}"?`}
         consequence={
-          <p>{app ? endConsequence(app, confirming ?? "revoke").confirm : null}</p>
+          <p>
+            {app ? endConsequence(app, confirming ?? "revoke").confirm : null}
+          </p>
         }
         confirmLabel={resolveConnectionAction(confirming ?? "revoke").label}
         isPending={ending}
@@ -200,7 +201,7 @@ function AppDetail({
   ending: boolean;
 }) {
   const view = resolveAppConnection(app);
-  const lines = grantLines(app);
+  const lines = appHolderAccess(app).lines;
   const revoked = view.state === "revoked";
   const endAct: EndAct = revoked ? "remove" : "revoke";
   const asked = app.pending_request
@@ -243,7 +244,10 @@ function AppDetail({
           </h2>
           <ul className="mt-2 flex flex-col gap-1">
             {asked.lines.map((l) => (
-              <li key={l.workspaceId} className="text-[13px] text-foreground/80">
+              <li
+                key={l.workspaceId}
+                className="text-[13px] text-foreground/80"
+              >
                 {l.text}
               </li>
             ))}
@@ -326,9 +330,13 @@ function AppDetail({
                 key={i}
                 className="rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
               >
-                <p className="text-[13px] text-foreground/85">{line.what}</p>
+                <p className="text-[13px] text-foreground/85">
+                  {line.summary.what}
+                </p>
                 <p className="mt-1 text-[11.5px] text-foreground/55">
-                  {line.where.length > 0 ? line.where.join(" · ") : "Anywhere"}
+                  {line.summary.where.length > 0
+                    ? line.summary.where.join(" · ")
+                    : "Anywhere"}
                 </p>
               </li>
             ))}
