@@ -147,3 +147,24 @@ describe("apiKeys.list — a switched-off key says why", () => {
     expect(keys.find((k) => k.id === OWN_KEY)!.awaitingApproval).toBe(false);
   });
 });
+
+describe("apiKeys.list — an old CLI key that acts as you is flagged", () => {
+  // MACHINE-IDENTITY-PLAN §0: old CLI keys are kept, flagged "acts as you",
+  // and offered a replacement. Rules out: flagging an agent-held key (a
+  // computer's or an agent's writes as ITSELF), or a key minted for no
+  // integration (a personal key you made on purpose).
+  it("flags your own integration Hub key, never an agent-held or non-integration key", async () => {
+    const CLI_KEY = randomUUID();
+    const AGENT_CLI_KEY = randomUUID();
+    await addKey(CLI_KEY, HUMAN, null);
+    await addKey(AGENT_CLI_KEY, AGENT, HUMAN);
+    await h.client!.query(
+      `update api_keys set hub_id = 'integration:cli' where id = any($1)`,
+      [[CLI_KEY, AGENT_CLI_KEY]]
+    );
+    const keys = await caller(HUMAN).list();
+    expect(keys.find((k) => k.id === CLI_KEY)!.actsAsYou).toBe(true);
+    expect(keys.find((k) => k.id === AGENT_CLI_KEY)!.actsAsYou).toBe(false);
+    expect(keys.find((k) => k.id === OWN_KEY)!.actsAsYou).toBe(false);
+  });
+});

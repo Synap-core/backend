@@ -46,6 +46,7 @@ import { relationDefsRouter } from "./routers/relation-defs.js";
 import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { intelligenceRouter } from "./routers/intelligence.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
+import { machinesRouter } from "./routers/machines.js";
 import { governanceRulesRouter } from "./routers/governance-rules.js";
 import { governanceCeilingsRouter } from "./routers/governance-ceilings.js";
 import { guidelinesRouter } from "./routers/guidelines.js";
@@ -157,6 +158,8 @@ export const coreRouter = router({
   relationDefs: relationDefsRouter,
   profileRelations: profileRelationsRouter,
   agentUsers: agentUsersRouter,
+  // Computers (MACHINE-IDENTITY-PLAN W5): Connected › Computers.
+  machines: machinesRouter,
   governanceRules: governanceRulesRouter,
   governanceCeilings: governanceCeilingsRouter,
   guidelines: guidelinesRouter,

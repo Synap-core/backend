@@ -27,6 +27,7 @@ import { assertPodAdmin } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, or, isNull, gt, desc, inArray } from "@synap/database";
 import {
+  GOVERNANCE_PRINCIPAL_CLASSES,
   governanceCeilings,
   workspaceMembers,
   users,
@@ -77,6 +78,8 @@ async function mapCeilingsWithAgentLabels(rows: GovernanceCeilingRow[]) {
     axis: r.axis,
     principalKind: r.principalKind,
     agentUserId: r.agentUserId,
+    /** `class` only: which class — "machine" = "for all computers". */
+    principalClass: r.principalClass,
     agentLabel: r.agentUserId
       ? (agentLabels.get(r.agentUserId) ?? r.agentUserId)
       : null,
@@ -200,8 +203,10 @@ async function assertCanManageCeiling(
 
 const CreateInputSchema = z
   .object({
-    principalKind: z.enum(["agent", "any"]),
+    principalKind: z.enum(["agent", "any", "class"]),
     agentUserId: z.string().min(1).optional(),
+    /** `class` only: which class — "machine" = "for all computers". */
+    principalClass: z.enum(GOVERNANCE_PRINCIPAL_CLASSES).optional(),
     scopeKind: z.enum(["workspace", "pod"]),
     workspaceId: z.string().uuid().optional(),
     limitValue: z.number().int().positive(),
@@ -211,6 +216,11 @@ const CreateInputSchema = z
   .refine((v) => v.principalKind !== "agent" || !!v.agentUserId, {
     message: "agentUserId is required when principalKind is 'agent'",
     path: ["agentUserId"],
+  })
+  .refine((v) => (v.principalKind === "class") === !!v.principalClass, {
+    message:
+      "principalClass is required when (and only when) principalKind is 'class'",
+    path: ["principalClass"],
   })
   .refine((v) => v.scopeKind !== "workspace" || !!v.workspaceId, {
     message: "workspaceId is required when scopeKind is 'workspace'",
@@ -344,6 +354,8 @@ export const governanceCeilingsRouter = router({
           principalKind: input.principalKind,
           agentUserId:
             input.principalKind === "agent" ? input.agentUserId : null,
+          principalClass:
+            input.principalKind === "class" ? input.principalClass : null,
           scopeKind: input.scopeKind,
           workspaceId:
             input.scopeKind === "workspace" ? input.workspaceId : null,

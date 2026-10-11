@@ -153,6 +153,25 @@ async function loadKeyReach(keyIds: readonly string[]) {
   };
 }
 
+/**
+ * An OLD CLI-style key that ACTS AS YOU (MACHINE-IDENTITY-PLAN §0: kept,
+ * flagged, offered a replacement): a Hub key minted for an integration
+ * (`connectIntegration` — `hub_inbound`, `hubId` `integration:<kind>`) that you
+ * hold yourself. Its calls are yours, ungoverned; a computer connected through
+ * the device flow writes as itself instead. Agent-held keys (a computer's, an
+ * agent's) never qualify — they are not you.
+ */
+export function keyActsAsYou(
+  key: { userId: string; keyType: string; hubId: string | null },
+  viewerId: string
+): boolean {
+  return (
+    key.userId === viewerId &&
+    key.keyType === "hub_inbound" &&
+    !!key.hubId?.startsWith("integration:")
+  );
+}
+
 export const apiKeysRouter = router({
   /**
    * The canonical set of scopes a key may carry — the SAME `API_KEY_SCOPES` the
@@ -194,6 +213,8 @@ export const apiKeysRouter = router({
       heldByAgent: key.userId !== ctx.userId,
       /** Who holds it: you, or the agent user acting for you (its holder page). */
       holderUserId: key.userId,
+      /** An old CLI key whose calls are yours (`keyActsAsYou`): replace it with a computer. */
+      actsAsYou: keyActsAsYou(key, ctx.userId),
       /** What this key may touch (W1): `access` + every live grant. */
       ...reachOf(key.id),
       scope: key.scope,

@@ -194,6 +194,50 @@ describe("governanceCeilings.create gating", () => {
 
     expect(result.ceiling).toMatchObject({ id: "ceiling-1" });
   });
+
+  // MACHINE-IDENTITY-PLAN §2d: "for all computers" is a CLASS principal, the
+  // same row shape rules take (the resolver already ranks it agent > class > any).
+  it("stores a 'for all computers' (class) ceiling with its class", async () => {
+    (db.query.workspaces as unknown as { findFirst: unknown }).findFirst =
+      async () => undefined;
+    setMembership(async () => ({ role: "editor" }));
+
+    await caller(OWNER_ID).create({
+      principalKind: "class",
+      principalClass: "machine",
+      scopeKind: "workspace",
+      workspaceId: WORKSPACE_ID,
+      limitValue: 30,
+    });
+
+    expect(h.insertedValues[0]).toMatchObject({
+      principalKind: "class",
+      principalClass: "machine",
+      agentUserId: null,
+    });
+  });
+
+  it("refuses a class ceiling without its class, and a class on another principal", async () => {
+    setMembership(async () => ({ role: "editor" }));
+    await expect(
+      caller(OWNER_ID).create({
+        principalKind: "class",
+        scopeKind: "workspace",
+        workspaceId: WORKSPACE_ID,
+        limitValue: 30,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      caller(OWNER_ID).create({
+        principalKind: "any",
+        principalClass: "machine",
+        scopeKind: "workspace",
+        workspaceId: WORKSPACE_ID,
+        limitValue: 30,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(h.insertedValues).toHaveLength(0);
+  });
 });
 
 describe("governanceCeilings.revoke gating", () => {
