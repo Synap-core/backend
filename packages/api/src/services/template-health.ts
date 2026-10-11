@@ -278,14 +278,141 @@ export function templateHealthFor(
   };
 }
 
+/**
+ * One OVERLAY composed onto a workspace (`settings.installedPacks`): a pack
+ * layered onto the space's own template (business-developer on a CRM space).
+ * Classified by the SAME `templateHealthFor` the workspace row uses — one
+ * derivation — only the sentence differs, because the remedy differs: an
+ * overlay is not a space, so there is nothing to retire-into.
+ */
+export interface OverlayTemplateHealth {
+  slug: string;
+  installedVersion: string | null;
+  latestVersion: string | null;
+  drifted: boolean;
+  lifecycle: TemplateLifecycle;
+  replacedBy: string | null;
+  retiredReason: string | null;
+  lifecycleWarning: string | null;
+  /**
+   * Retired, and its replacement is already on this space (the space's own
+   * template, or another overlay on it): its fields stay, nothing to move.
+   */
+  replacementHere: boolean;
+}
+
+/**
+ * The overlay ledger of a workspace, as health reads it: well-formed entries,
+ * one per slug, never the space's own template (the same skip the overlay
+ * reconcile makes). The ledger also records non-template packs a browser
+ * installed (profile/view packs) — so an overlay absent from the template
+ * catalog is NOT proof it was a template that left it.
+ */
+export function readOverlayLedger(
+  settings: unknown
+): Array<{ slug: string; version: string | null }> {
+  const s = (settings ?? {}) as {
+    packageSlug?: unknown;
+    installedPacks?: unknown;
+  };
+  const identity = typeof s.packageSlug === "string" ? s.packageSlug : null;
+  if (!Array.isArray(s.installedPacks)) return [];
+  const seen = new Set<string>();
+  const out: Array<{ slug: string; version: string | null }> = [];
+  for (const e of s.installedPacks as Array<Record<string, unknown> | null>) {
+    const slug = e && typeof e.slug === "string" ? e.slug : null;
+    if (!slug || slug === identity || seen.has(slug)) continue;
+    seen.add(slug);
+    out.push({
+      slug,
+      version: typeof e!.version === "string" ? e!.version : null,
+    });
+  }
+  return out;
+}
+
+/** Every template slug a workspace's health needs from the catalog: its own + its overlays'. */
+export function templateSlugsOf(settings: unknown): string[] {
+  const s = (settings ?? {}) as { packageSlug?: unknown };
+  return [
+    ...(typeof s.packageSlug === "string" ? [s.packageSlug] : []),
+    ...readOverlayLedger(settings).map((o) => o.slug),
+  ];
+}
+
+/** The plain sentence a person reads for an overlay that is not `current`. */
+export function overlayLifecycleWarning(
+  slug: string,
+  lifecycle: TemplateLifecycle,
+  replacedBy: string | null,
+  retiredReason: string | null,
+  replacementHere: boolean
+): string | null {
+  if (lifecycle === "retired") {
+    const why = retiredReason ? ` ${retiredReason.trim()}` : "";
+    if (replacedBy && replacementHere)
+      return `The "${slug}" overlay on this space was retired.${why} It is replaced by "${replacedBy}", which this space already has. Its fields stay; there is nothing to move.`;
+    return replacedBy
+      ? `The "${slug}" overlay on this space was retired.${why} It is replaced by "${replacedBy}". Its fields stay, but they get no updates until "${replacedBy}" is installed.`
+      : `The "${slug}" overlay on this space was retired.${why} It has no replacement. Its fields stay, but they get no updates.`;
+  }
+  if (lifecycle === "unlisted") {
+    // Not "no longer": the ledger also holds non-template packs, which were
+    // never in the template catalog.
+    return `"${slug}" on this space is not in the template catalog, so it gets no template updates. What it added stays.`;
+  }
+  return null;
+}
+
+/** Health for every overlay a workspace carries, against one resolved catalog view. */
+export function overlayHealthFor(
+  settings: unknown,
+  catalog: TemplateCatalogView
+): OverlayTemplateHealth[] {
+  const ledger = readOverlayLedger(settings);
+  const s = (settings ?? {}) as { packageSlug?: unknown };
+  const present = new Set<string>([
+    ...(typeof s.packageSlug === "string" ? [s.packageSlug] : []),
+    ...ledger.map((o) => o.slug),
+  ]);
+  return ledger.map(({ slug, version }) => {
+    const h = templateHealthFor(slug, version, catalog);
+    const lifecycle = h.lifecycle!; // attached: `slug` is non-null
+    const replacementHere =
+      lifecycle === "retired" &&
+      h.replacedBy != null &&
+      h.replacedBy !== slug &&
+      present.has(h.replacedBy);
+    return {
+      slug,
+      installedVersion: h.installedVersion,
+      latestVersion: h.latestVersion,
+      drifted: h.drifted,
+      lifecycle,
+      replacedBy: h.replacedBy,
+      retiredReason: h.retiredReason,
+      lifecycleWarning: overlayLifecycleWarning(
+        slug,
+        lifecycle,
+        h.replacedBy,
+        h.retiredReason,
+        replacementHere
+      ),
+      replacementHere,
+    };
+  });
+}
+
 /** One workspace's identity + its template health — the MCP `template_health` row shape. */
 export interface WorkspaceTemplateHealth extends TemplateHealth {
   workspaceId: string;
   workspaceName: string;
   packageSlug: string | null;
+  /** The overlays composed onto this space, each with its own standing. */
+  overlays: OverlayTemplateHealth[];
   /**
    * Non-fatal template problems in this space — a retired / unlisted template
-   * (`lifecycleWarning`, first), and an `always` skill whose body is over the
+   * (`lifecycleWarning`, first), then each overlay's warning, and an `always` skill whose body is over the
    * per-skill budget (it loads on demand instead). Empty when there are none.
    */
   warnings: string[];
@@ -357,9 +484,7 @@ export async function listWorkspaceTemplateHealth(
     .where(inArray(workspaces.id, wsIds));
   const active = rows.filter((r) => r.archivedAt == null);
   const catalog = await resolveTemplateCatalog(
-    active.map(
-      (r) => (r.settings as { packageSlug?: string } | null)?.packageSlug ?? ""
-    )
+    active.flatMap((r) => templateSlugsOf(r.settings))
   );
   const warningsByWs = await alwaysSkillWarningsByWorkspace(active);
   return active.map((r) => {
@@ -371,13 +496,18 @@ export async function listWorkspaceTemplateHealth(
     const installedVersion =
       typeof s.packageVersion === "string" ? s.packageVersion : null;
     const health = templateHealthFor(pkgSlug, installedVersion, catalog);
+    const overlays = overlayHealthFor(r.settings, catalog);
     return {
       workspaceId: r.id,
       workspaceName: r.name,
       packageSlug: pkgSlug,
       ...health,
+      overlays,
       warnings: [
         ...(health.lifecycleWarning ? [health.lifecycleWarning] : []),
+        ...overlays.flatMap((o) =>
+          o.lifecycleWarning ? [o.lifecycleWarning] : []
+        ),
         ...(warningsByWs.get(r.id) ?? []),
       ],
     };

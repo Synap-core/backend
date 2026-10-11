@@ -18,9 +18,12 @@
  *     advances to the version just reconciled (invariant 1: the stamp asserts
  *     only what was checked).
  *
- * Non-fatal per pack. A pack whose template cannot be resolved (private, cache
- * miss, a profile/view pack recorded by the browser) is skipped, its ledger
- * untouched.
+ * Non-fatal per pack. A pack whose template cannot be resolved (retired,
+ * private, cache miss, a profile/view pack recorded by the browser) is skipped,
+ * its ledger untouched — and the skip SAYS WHY, through the same catalog
+ * standing template health reports (`classifyTemplateLifecycle`): retired
+ * (and by what), not in the catalog, or catalog unknown. A catalog that could
+ * not be read is `unknown`, never "not there".
  */
 
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
@@ -41,12 +44,21 @@ import {
   reconcileWorkspacePlaybooksToTemplate,
 } from "./playbooks/reconcile-installed-playbooks.js";
 import type { ResolvedWorkspaceTemplate } from "./capabilities/resolve-workspace-template.js";
+import {
+  classifyTemplateLifecycle,
+  type TemplateCatalogView,
+  type TemplateLifecycle,
+} from "./template-health.js";
 
 export interface InstalledPackReconcileOutcome {
   slug: string;
   status: "reconciled" | "skipped" | "partial" | "failed";
   version?: string;
   reason?: string;
+  /** Skipped only: the overlay's catalog standing, the same one template health shows. */
+  lifecycle?: TemplateLifecycle;
+  /** Skipped + retired only: the live slug the catalog names as its replacement. */
+  replacedBy?: string | null;
   playbooks?: {
     missing: string[];
     failed: number;
@@ -62,6 +74,12 @@ export async function reconcileInstalledPacks(opts: {
   settings: Record<string, unknown> | null;
   /** The cache-first resolver (injected so boot can share its per-slug memo). */
   resolve: (slug: string) => Promise<ResolvedWorkspaceTemplate | null>;
+  /**
+   * The template catalog view (`resolveTemplateCatalog`) used to say WHY an
+   * overlay did not resolve. `null` = the caller's read of it FAILED — every
+   * skip then reads "catalog unknown", never "not in the catalog".
+   */
+  catalog: TemplateCatalogView | null;
   now?: string;
 }): Promise<InstalledPackReconcileOutcome[]> {
   const ledger = opts.settings?.installedPacks;
@@ -81,7 +99,7 @@ export async function reconcileInstalledPacks(opts: {
     try {
       const resolved = await opts.resolve(slug);
       if (!resolved) {
-        out.push({ slug, status: "skipped", reason: "template unresolved" });
+        out.push(unresolvedOverlay(slug, opts.catalog));
         continue;
       }
       await reconcileWorkspaceFromDefinition({
@@ -146,4 +164,32 @@ export async function reconcileInstalledPacks(opts: {
     );
   }
   return out;
+}
+
+/** A skipped overlay, with WHY it did not resolve — from the catalog standing. */
+export function unresolvedOverlay(
+  slug: string,
+  catalog: TemplateCatalogView | null
+): InstalledPackReconcileOutcome {
+  if (!catalog) {
+    return {
+      slug,
+      status: "skipped",
+      lifecycle: "unknown",
+      replacedBy: null,
+      reason: "catalog unknown: the template catalog could not be read",
+    };
+  }
+  const { lifecycle, replacedBy } = classifyTemplateLifecycle(slug, catalog);
+  const reason =
+    lifecycle === "retired"
+      ? replacedBy
+        ? `retired, replaced by "${replacedBy}"`
+        : "retired, no replacement"
+      : lifecycle === "unlisted"
+        ? "not in the template catalog"
+        : lifecycle === "unknown"
+          ? "catalog unknown: the last template sync was not provably complete"
+          : "in the catalog, but its definition could not be fetched";
+  return { slug, status: "skipped", lifecycle, replacedBy, reason };
 }

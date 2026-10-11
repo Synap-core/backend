@@ -29,6 +29,7 @@ vi.mock(
 );
 
 import { reconcileInstalledPacks } from "./reconcile-installed-packs.js";
+import type { TemplateCatalogView } from "./template-health.js";
 
 const resolve = vi.fn(async (slug: string) =>
   slug === "business-model"
@@ -60,6 +61,7 @@ describe("reconcileInstalledPacks", () => {
       ownerId: "u",
       settings: SETTINGS,
       resolve,
+      catalog: null,
       now: "t1",
     });
     const opts = reconcileMock.mock.calls[0]![0];
@@ -97,6 +99,7 @@ describe("reconcileInstalledPacks", () => {
       ownerId: "u",
       settings: SETTINGS,
       resolve,
+      catalog: null,
     });
     expect(mergeSettingsMock).not.toHaveBeenCalled();
     expect(out.find((o) => o.slug === "business-model")?.status).toBe(
@@ -125,10 +128,98 @@ describe("reconcileInstalledPacks", () => {
       ownerId: "u",
       settings: SETTINGS,
       resolve,
+      catalog: null,
     });
     expect(mergeSettingsMock).not.toHaveBeenCalled();
     const bm = out.find((o) => o.slug === "business-model");
     expect(bm?.status).toBe("partial");
     expect(bm?.playbooks?.proposed).toBe(1);
+  });
+});
+
+// The skip says WHY, from the same standing template health reports — and a
+// catalog that could not be read is "catalog unknown", never "not there".
+describe("reconcileInstalledPacks — an unresolvable overlay says why it was skipped", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const entry = (retired: boolean, replacedBy: string | null = null) => ({
+    version: retired ? null : "h-1",
+    retired,
+    replacedBy,
+    retiredReason: retired ? "gone" : null,
+  });
+  const catalog = (complete: boolean): TemplateCatalogView => ({
+    latestBySlug: new Map([["live-but-unfetchable", "h-1"]]),
+    entryBySlug: new Map([
+      ["business-developer", entry(true, "crm")],
+      ["old-thing", entry(true)],
+      ["live-but-unfetchable", entry(false)],
+    ]),
+    complete,
+  });
+  const settings = {
+    packageSlug: "crm",
+    installedPacks: [
+      "business-developer",
+      "old-thing",
+      "some-profile-pack",
+      "live-but-unfetchable",
+    ].map((slug) => ({ slug, version: "h-1", installedAt: "t0" })),
+  };
+  const run = (c: TemplateCatalogView | null) =>
+    reconcileInstalledPacks({
+      workspaceId: "ws-crm",
+      ownerId: "u",
+      settings,
+      resolve: async () => null,
+      catalog: c,
+    });
+
+  it("names retired (and by what), not in the catalog, and fetch failure apart", async () => {
+    const out = await run(catalog(true));
+    expect(out.every((o) => o.status === "skipped")).toBe(true);
+    expect(reconcileMock).not.toHaveBeenCalled();
+    expect(mergeSettingsMock).not.toHaveBeenCalled(); // ledger untouched
+    const by = new Map(out.map((o) => [o.slug, o]));
+    expect(by.get("business-developer")).toMatchObject({
+      lifecycle: "retired",
+      replacedBy: "crm",
+      reason: 'retired, replaced by "crm"',
+    });
+    expect(by.get("old-thing")).toMatchObject({
+      lifecycle: "retired",
+      replacedBy: null,
+      reason: "retired, no replacement",
+    });
+    expect(by.get("some-profile-pack")).toMatchObject({
+      lifecycle: "unlisted",
+      reason: "not in the template catalog",
+    });
+    expect(by.get("live-but-unfetchable")).toMatchObject({
+      lifecycle: "current",
+      reason: "in the catalog, but its definition could not be fetched",
+    });
+  });
+
+  it("an incomplete catalog never claims an absent overlay is not in it", async () => {
+    const out = await run(catalog(false));
+    expect(out.find((o) => o.slug === "some-profile-pack")).toMatchObject({
+      lifecycle: "unknown",
+      reason: expect.stringMatching(/^catalog unknown/),
+    });
+    // A tombstone is known regardless of completeness.
+    expect(out.find((o) => o.slug === "business-developer")?.lifecycle).toBe(
+      "retired"
+    );
+  });
+
+  it("a catalog read that FAILED makes every skip `unknown`, never `unlisted`", async () => {
+    const out = await run(null);
+    expect(out).toHaveLength(4);
+    for (const o of out) {
+      expect(o.lifecycle).toBe("unknown");
+      expect(o.reason).toBe(
+        "catalog unknown: the template catalog could not be read"
+      );
+    }
   });
 });

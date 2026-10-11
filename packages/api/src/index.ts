@@ -481,6 +481,11 @@ export {
   reconcileInstalledPacks,
   type InstalledPackReconcileOutcome,
 } from "./services/reconcile-installed-packs.js";
+export {
+  resolveTemplateCatalog,
+  readOverlayLedger,
+  type TemplateCatalogView,
+} from "./services/template-health.js";
 // Template rules (package `rules[]`) — the boot pass converges them through
 // the same three-way-stamped applier the install door uses.
 export {

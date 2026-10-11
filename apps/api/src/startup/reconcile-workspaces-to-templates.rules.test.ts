@@ -52,7 +52,11 @@ vi.mock("@synap/api", () => ({
     version: "2.0.0",
     source: "bundle",
     dependencies: [],
-    workspaceDefinition: { flowAutomations: [], commands: [], relationDefs: [] },
+    workspaceDefinition: {
+      flowAutomations: [],
+      commands: [],
+      relationDefs: [],
+    },
     packageDefinition: {
       playbooks: [],
       ...(slug === "brand-library" ? { rules: RULES } : {}),
@@ -63,6 +67,12 @@ vi.mock("@synap/api", () => ({
     h.reconcileWorkspacePlaybooksToTemplate,
   playbookReportConverged: () => true,
   reconcileInstalledPacks: h.reconcileInstalledPacks,
+  resolveTemplateCatalog: async () => ({
+    latestBySlug: new Map(),
+    entryBySlug: new Map(),
+    complete: false,
+  }),
+  readOverlayLedger: () => [],
   applyTemplateRules: h.applyTemplateRules,
   templateRulesConverged: () => h.rulesConverged,
 }));
