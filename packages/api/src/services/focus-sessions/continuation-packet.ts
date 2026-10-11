@@ -18,6 +18,9 @@
  *   - proposal titles → `buildObjectActionTitle` + `extractProposalName`
  *   - open questions  → the capture clarification part (`readCapturePart`) on
  *                        the session's room messages
+ *   - prior stages    → the track (`getTrack`) + its stage order
+ *                        (`deriveTrackStages`), and the outputs join
+ *                        (`listOutputsForSessions`) for those stages' sessions
  *
  * ── A FAILED READ IS NOT AN EMPTY ONE ──────────────────────────────────────
  * Each part that needs a query is a {@link PacketSection}: `ok` with a total and
@@ -67,7 +70,13 @@ import type {
   SlotAsk,
 } from "@synap/playbooks";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
-import { listSessionOutputs, type SessionOutput } from "./session-outputs.js";
+import {
+  listSessionOutputs,
+  listOutputsForSessions,
+  type SessionOutput,
+} from "./session-outputs.js";
+import { deriveTrackStages, filedStageKey } from "@synap-core/types/units";
+import { getTrack } from "../tracks/tracks-service.js";
 import {
   assessRerunAvailability,
   type RerunAvailability,
@@ -166,6 +175,18 @@ export interface PacketChildItem {
   title: string;
   status: string;
   statusLabel: string;
+}
+
+/**
+ * A session of an EARLIER stage of this session's track, with what it produced.
+ * `outputs` is its own section: one session's failed outputs read never hides
+ * the others, and is never "produced nothing".
+ */
+export interface PacketPriorStageSession extends PacketChildItem {
+  stageKey: string;
+  /** The stage's display name as the track pinned it. */
+  stageName: string;
+  outputs: PacketSection<PacketOutputItem>;
 }
 
 /**
@@ -357,6 +378,20 @@ export interface ContinuationPacket {
   unblocks: PacketSection<PacketChildItem>;
   /** Capture clarification questions still open in this session's room, oldest first. */
   openQuestions: PacketSection<PacketQuestionItem>;
+  /**
+   * THE STAGE BRIEF — what the EARLIER stages of this session's track produced,
+   * so a stage starts from pod references, never from the previous chat.
+   * DERIVED, no edge: the sessions filed (`track_stage`) at a stage before this
+   * one in the track's pinned order, nearest stage first (the stage that feeds
+   * this one must never fall past the cut), closed before open within a stage.
+   * `total` counts every such session; `items` is capped at
+   * {@link PACKET_TOP_N}, each with its own capped `outputs`.
+   *
+   * `null` — not a stage session: no track, no stage, a stage the track does
+   * not declare, or a track the reader cannot see (never leaked). A FAILED
+   * read is `unavailable`. Cross-track feeds are not derived here.
+   */
+  priorStages: PacketSection<PacketPriorStageSession> | null;
   /** What already landed, newest first — an agent must not redo these. */
   alreadyDone: PacketSection<PacketDoneItem>;
   /** `decision: null` when nothing was ever approved or rejected here. */
@@ -671,6 +706,90 @@ async function readOutboundSessions(
       title: resolveSessionTitle(r),
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
+    })),
+  };
+}
+
+/**
+ * {@link ContinuationPacket.priorStages}. The track is read through its own
+ * door (`getTrack`, project-floored), the stage order through
+ * `deriveTrackStages` — the rule every track surface uses — and the earlier
+ * stages' sessions under the session floor. Their outputs come from ONE batched
+ * outputs join, the join `listSessionOutputs` runs for a single session.
+ */
+async function readPriorStages(
+  database: typeof db,
+  reader: SessionReader,
+  row: SessionRow
+): Promise<PacketSection<PacketPriorStageSession> | null> {
+  if (!row.trackId || !row.trackStage) return null;
+  const track = await getTrack(row.trackId, { userId: reader.userId });
+  if (!track) return null;
+  const stages = deriveTrackStages(
+    track.definitionSnapshot?.stages,
+    track.currentStage
+  );
+  const at = stages.findIndex(
+    (s) => s.key === filedStageKey(row.trackStage, stages)
+  );
+  if (at === -1) return null;
+  // Nearest earlier stage first.
+  const earlier = stages.slice(0, at).reverse();
+  if (earlier.length === 0) return { status: "ok", total: 0, items: [] };
+  const keys = earlier.map((s) => s.key);
+  const where = and(
+    eq(focusSessions.trackId, row.trackId),
+    inArray(focusSessions.trackStage, keys),
+    sessionReadableWhere(reader)
+  );
+  const [[totalRow], rows] = await Promise.all([
+    database.select({ n: count() }).from(focusSessions).where(where),
+    database
+      .select({
+        id: focusSessions.id,
+        title: focusSessions.title,
+        goal: focusSessions.goal,
+        status: focusSessions.status,
+        trackStage: focusSessions.trackStage,
+        expectedOutputs: focusSessions.expectedOutputs,
+      })
+      .from(focusSessions)
+      .where(where)
+      .orderBy(
+        asc(
+          drizzleSql`array_position(ARRAY[${drizzleSql.join(
+            keys.map((k) => drizzleSql`${k}`),
+            drizzleSql`, `
+          )}]::text[], ${focusSessions.trackStage})`
+        ),
+        desc(eq(focusSessions.status, "closed")),
+        asc(focusSessions.createdAt)
+      )
+      .limit(PACKET_TOP_N),
+  ]);
+  // The rows above are floored, so their ids authorize the ledger read.
+  const joined = await listOutputsForSessions(database, rows).catch(
+    unavailable(
+      row.id,
+      "priorStages.outputs",
+      "What the earlier stages produced could not be read."
+    )
+  );
+  const nameOf = new Map(earlier.map((s) => [s.key, s.name]));
+  return {
+    status: "ok",
+    total: Number(totalRow?.n ?? 0),
+    items: rows.map((r) => ({
+      id: r.id,
+      title: resolveSessionTitle(r),
+      status: r.status,
+      statusLabel: resolveStatusLabel(r.status),
+      stageKey: r.trackStage!,
+      stageName: nameOf.get(r.trackStage!) ?? r.trackStage!,
+      outputs:
+        joined instanceof Map
+          ? outputsSection(joined.get(r.id)?.outputs ?? [])
+          : joined,
     })),
   };
 }
@@ -1403,6 +1522,7 @@ export async function projectContinuationPacket(
     lastDecision,
     evaluation,
     externalAgent,
+    priorStages,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -1532,6 +1652,13 @@ export async function projectContinuationPacket(
           "The agent this session was handed to could not be read."
         )
       ),
+    readPriorStages(database, reader, row).catch(
+      unavailable(
+        row.id,
+        "priorStages",
+        "What the earlier stages of this track produced could not be read."
+      )
+    ),
   ]);
 
   // ONE lineage read, TWO projections: `parent` (identity) and `resume`
@@ -1589,6 +1716,7 @@ export async function projectContinuationPacket(
     blockedBy,
     unblocks,
     openQuestions,
+    priorStages,
     alreadyDone,
     lastDecision,
     run: manifest
