@@ -2100,16 +2100,65 @@ export type StartStageSessionResult = (
        * twin (same goal, track and stage) was returned by the session door.
        */
       status: "created" | "existing" | "deduped";
-      stageKey: string;
+      /** `null` ⇒ a stage-less track: the session is filed at no stage. */
+      stageKey: string | null;
       session: typeof focusSessions.$inferSelect;
     }
   | (Omit<ProposedOutcome, "reviewUrl"> & {
-      stageKey: string;
+      stageKey: string | null;
       /** Present only when the governance door returned one — never invented. */
       reviewUrl?: string;
     })
 ) &
   StageSessionDomainOutcome;
+
+/**
+ * Work in a STAGE-LESS track (W1): a session filed into the track, through
+ * the session door (`createFocusSession` — the same governance, dedup and
+ * project ladder `start_session` + `trackId` uses), in the project's home.
+ * The brief is the caller's goal, else the track's direction, else its name.
+ */
+async function startTrackSession(
+  track: ProjectTrack,
+  input: { title?: string | null; goal?: string | null; actor: TrackActor }
+): Promise<StartStageSessionResult> {
+  const { actor } = input;
+  const db = await getDb();
+  const project = await loadVisibleProject(db, track.projectId, actor.userId);
+  if (!project) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+  }
+  // Dynamic: `create-session.ts` imports this module (resolveTrackFiling).
+  const { createFocusSession } =
+    await import("../focus-sessions/create-session.js");
+  const result = await createFocusSession({
+    userId: actor.userId,
+    agentUserId: actor.agentUserId ?? undefined,
+    workspaceId: project.workspaceId ?? null,
+    projectId: track.projectId,
+    trackId: track.id,
+    title: input.title?.trim() || null,
+    goal: input.goal?.trim() || track.direction?.trim() || track.name,
+    templateId: null,
+    clientKey: requestClientKey(actor.agentUserId ?? undefined) ?? null,
+    adoptAutoOpened: false,
+  });
+  if (result.status === "proposed") {
+    return {
+      status: "proposed",
+      stageKey: null,
+      proposalId: result.proposalId,
+      proposalType: result.proposalType ?? "focus_session.create",
+      message: result.message,
+      ...(result.reviewUrl ? { reviewUrl: result.reviewUrl } : {}),
+    };
+  }
+  return {
+    status: result.status === "deduped" ? "deduped" : "created",
+    stageKey: null,
+    session: result.session,
+  };
+}
 
 /**
  * THE ONE DOOR that starts a stage's session (M2). Entering a stage only
@@ -2148,6 +2197,12 @@ export async function startStageSession(input: {
   }
   const stageKey = resolveFilingStage(track, input.stageKey);
   if (!stageKey) {
+    // A STAGE-LESS track (W1) is a lasting intent: its work is a session
+    // filed into it — `start_session` + `trackId`. This door ALIASES that
+    // during the transition, never refuses it.
+    if (stageKeys(track.definitionSnapshot?.stages).length === 0) {
+      return startTrackSession(track, input);
+    }
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Track "${track.name}" stands on no stage — pass stageKey.`,

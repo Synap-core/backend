@@ -249,3 +249,63 @@ describe("continuation packet — what the earlier stages produced", () => {
     }
   });
 });
+
+describe("continuation packet — a STAGE-LESS track degrades to its recent closed sessions (W1)", () => {
+  const LASTING = randomUUID();
+  const L = { done: randomUUID(), open: randomUUID(), now: randomUUID() };
+  const NOTE = randomUUID();
+
+  async function lastingSession(id: string, title: string, status: string) {
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, track_stage, title, goal, status, expected_outputs, metadata, origin, created_at, updated_at, started_at)
+       values ($1, $2, null, $3, $4, null, $5, $6, $7, '[]'::jsonb, '{}'::jsonb, 'human', now(), now(), now())`,
+      [id, USER, PROJECT, LASTING, title, title, status]
+    );
+  }
+
+  beforeAll(async () => {
+    await q(
+      `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, current_stage, status, created_at, updated_at)
+       values ($1, $2, $3, 'Grow the newsletter', '{}'::jsonb, '1', null, 'active', now(), now())`,
+      [LASTING, PROJECT, USER]
+    );
+    await lastingSession(L.done, "Issue #12", "closed");
+    await lastingSession(L.open, "Issue #13 draft", "active");
+    await lastingSession(L.now, "Issue #14", "active");
+    await q(
+      `insert into artifacts (id, session_id, user_id, kind, ref_id, title, origin_kind, state, props, created_at)
+       values ($1, $2, $3, 'document', $4, 'Issue #12 — sent', 'agent', 'kept', '{}'::jsonb, now())`,
+      [randomUUID(), L.done, USER, NOTE]
+    );
+  });
+
+  it("lists the track's CLOSED sessions (not open ones, not itself) with what they produced", async () => {
+    expect((await packetFor(L.now)).priorStages).toEqual({
+      status: "ok",
+      total: 1,
+      items: [
+        {
+          id: L.done,
+          title: "Issue #12",
+          status: "closed",
+          statusLabel: expect.any(String),
+          stageKey: null,
+          stageName: null,
+          outputs: {
+            status: "ok",
+            total: 1,
+            items: [expect.objectContaining({ kind: "document", refId: NOTE })],
+          },
+        },
+      ],
+    });
+  });
+
+  it("the closed session itself does not list itself", async () => {
+    expect((await packetFor(L.done)).priorStages).toEqual({
+      status: "ok",
+      total: 0,
+      items: [],
+    });
+  });
+});

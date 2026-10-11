@@ -174,6 +174,7 @@ import type {
   HubDiagnoseResult,
   CreateFocusSessionInput,
   CreateFocusSessionResult,
+  HubFocusSession,
   ListFocusSessionsOptions,
   HubFocusSessionListItem,
   GetFocusSessionOptions,
@@ -2671,6 +2672,34 @@ export class HubRestClient {
     let stageKey = input?.stageKey;
     if (!stageKey) {
       const track = await this.getTrack(trackId);
+      if (!track.currentStage && (track.stages ?? []).length === 0) {
+        // A STAGE-LESS track (a lasting intent): its work is a session filed
+        // into it — the session door with `trackId`, never a refusal.
+        const created = await this.createFocusSession({
+          trackId,
+          goal: input?.goal || track.name,
+        });
+        if (created.status === "proposed") {
+          // The proposed arm of the union (HubFocusSession's index signature
+          // keeps TS from narrowing it on `status` alone).
+          const p = created as Extract<
+            CreateFocusSessionResult,
+            { session: null }
+          >;
+          return {
+            status: "proposed",
+            proposalId: p.proposalId,
+            ...(p.reviewUrl ? { reviewUrl: p.reviewUrl } : {}),
+            ...(p.message ? { message: p.message } : {}),
+            stageKey: null,
+          };
+        }
+        return {
+          status: "created",
+          stageKey: null,
+          session: created as HubFocusSession,
+        };
+      }
       if (!track.currentStage) {
         throw new HubApiError(
           `Track "${track.name}" stands on no stage — pass stageKey.`,

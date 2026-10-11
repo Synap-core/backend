@@ -678,6 +678,23 @@ describe("W5 a stage-less track's agent works in its project's linked spaces", (
     expect(proposalTypeOf(await sessionWrite(CRM, session.id))).toBe("join");
   });
 
+  it("start_stage_session on a stage-less track never refuses: it starts a session filed into the track", async () => {
+    const { trackId } = await personStartsLinked();
+    const res = await startStageSession({
+      trackId,
+      goal: "Call the three warmest accounts",
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("human start proposed");
+    expect(res.status).toBe("created");
+    expect(res.stageKey).toBeNull();
+    expect(res.session).toMatchObject({
+      trackId,
+      trackStage: null,
+      goal: "Call the three warmest accounts",
+    });
+  });
+
   it("an agent's stage-less start states the linked spaces as the consent", async () => {
     const projectId = await newProject();
     await linkProject(projectId, CRM);

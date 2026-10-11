@@ -127,11 +127,38 @@ describe("startStageSession", () => {
   });
 
   it("refuses (no guess) when the track stands on no stage", async () => {
-    replies.push({ status: 200, body: { ...TRACK, currentStage: null } });
+    replies.push({
+      status: 200,
+      body: {
+        ...TRACK,
+        currentStage: null,
+        stages: [{ key: "frame", name: "Frame", position: "not_started" }],
+      },
+    });
     await expect(client.startStageSession(TRACK.id)).rejects.toBeInstanceOf(
       HubApiError
     );
     expect(calls).toHaveLength(1);
+  });
+
+  it("a STAGE-LESS track starts a session filed into it (never refuses)", async () => {
+    replies.push({
+      status: 200,
+      body: { ...TRACK, currentStage: null, stages: [] },
+    });
+    replies.push({ status: 200, body: { id: "user-1" } }); // GET /users/me
+    replies.push({ status: 201, body: { id: "s-9", goal: "x" } });
+    const out = await client.startStageSession(TRACK.id, { goal: "Ship it" });
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      `GET https://pod.example.test/api/hub/tracks/${TRACK.id}`,
+      `GET https://pod.example.test/api/hub/users/me`,
+      `POST https://pod.example.test/api/hub/focus-sessions`,
+    ]);
+    expect(calls[2]!.body).toMatchObject({
+      trackId: TRACK.id,
+      goal: "Ship it",
+    });
+    expect(out).toMatchObject({ status: "created", stageKey: null });
   });
 
   it("passes domainFallback + domainNote through untouched", async () => {

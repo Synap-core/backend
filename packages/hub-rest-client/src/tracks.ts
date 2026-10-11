@@ -153,10 +153,11 @@ interface StageDomainOutcome {
 export type HubStartStageSessionResult =
   | ({
       status: "created" | "existing" | "deduped";
-      stageKey: string;
+      /** `null` ⇒ a stage-less track: the session is filed at no stage. */
+      stageKey: string | null;
       session: HubFocusSession;
     } & StageDomainOutcome)
-  | (HubTrackProposed & { stageKey: string } & StageDomainOutcome);
+  | (HubTrackProposed & { stageKey: string | null } & StageDomainOutcome);
 
 /** Track fields POST /focus-sessions accepts — a session born inside a track. */
 export interface FocusSessionTrackScope {

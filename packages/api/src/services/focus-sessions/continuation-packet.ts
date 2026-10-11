@@ -44,6 +44,7 @@ import {
   eq,
   asc,
   desc,
+  ne,
   inArray,
   notInArray,
   isNull,
@@ -183,9 +184,10 @@ export interface PacketChildItem {
  * the others, and is never "produced nothing".
  */
 export interface PacketPriorStageSession extends PacketChildItem {
-  stageKey: string;
-  /** The stage's display name as the track pinned it. */
-  stageName: string;
+  /** `null` ⇒ a STAGE-LESS track (W1): a recent closed session in the track. */
+  stageKey: string | null;
+  /** The stage's display name as the track pinned it; `null` with no stage. */
+  stageName: string | null;
   outputs: PacketSection<PacketOutputItem>;
 }
 
@@ -387,9 +389,14 @@ export interface ContinuationPacket {
    * `total` counts every such session; `items` is capped at
    * {@link PACKET_TOP_N}, each with its own capped `outputs`.
    *
-   * `null` — not a stage session: no track, no stage, a stage the track does
-   * not declare, or a track the reader cannot see (never leaked). A FAILED
-   * read is `unavailable`. Cross-track feeds are not derived here.
+   * A STAGE-LESS track (W1, a lasting intent) has no earlier stage: there it
+   * DEGRADES to the track's recent CLOSED sessions (other than this one),
+   * newest first, with `stageKey`/`stageName` null.
+   *
+   * `null` — not a track session (no track), a staged track's session with no
+   * stage or a stage the track does not declare, or a track the reader cannot
+   * see (never leaked). A FAILED read is `unavailable`. Cross-track feeds are
+   * not derived here.
    */
   priorStages: PacketSection<PacketPriorStageSession> | null;
   /** What already landed, newest first — an agent must not redo these. */
@@ -722,13 +729,17 @@ async function readPriorStages(
   reader: SessionReader,
   row: SessionRow
 ): Promise<PacketSection<PacketPriorStageSession> | null> {
-  if (!row.trackId || !row.trackStage) return null;
+  if (!row.trackId) return null;
   const track = await getTrack(row.trackId, { userId: reader.userId });
   if (!track) return null;
   const stages = deriveTrackStages(
     track.definitionSnapshot?.stages,
     track.currentStage
   );
+  if (stages.length === 0) {
+    return readRecentTrackSessions(database, reader, row, row.trackId);
+  }
+  if (!row.trackStage) return null;
   const at = stages.findIndex(
     (s) => s.key === filedStageKey(row.trackStage, stages)
   );
@@ -786,6 +797,63 @@ async function readPriorStages(
       statusLabel: resolveStatusLabel(r.status),
       stageKey: r.trackStage!,
       stageName: nameOf.get(r.trackStage!) ?? r.trackStage!,
+      outputs:
+        joined instanceof Map
+          ? outputsSection(joined.get(r.id)?.outputs ?? [])
+          : joined,
+    })),
+  };
+}
+
+/**
+ * The stage-less degrade of {@link readPriorStages} (W1): what the track's
+ * recent CLOSED sessions produced — newest first, this session excluded,
+ * under the same session floor and the same batched outputs join.
+ */
+async function readRecentTrackSessions(
+  database: typeof db,
+  reader: SessionReader,
+  row: SessionRow,
+  trackId: string
+): Promise<PacketSection<PacketPriorStageSession>> {
+  const where = and(
+    eq(focusSessions.trackId, trackId),
+    eq(focusSessions.status, "closed"),
+    ne(focusSessions.id, row.id),
+    sessionReadableWhere(reader)
+  );
+  const [[totalRow], rows] = await Promise.all([
+    database.select({ n: count() }).from(focusSessions).where(where),
+    database
+      .select({
+        id: focusSessions.id,
+        title: focusSessions.title,
+        goal: focusSessions.goal,
+        status: focusSessions.status,
+        expectedOutputs: focusSessions.expectedOutputs,
+      })
+      .from(focusSessions)
+      .where(where)
+      .orderBy(desc(focusSessions.updatedAt), desc(focusSessions.createdAt))
+      .limit(PACKET_TOP_N),
+  ]);
+  const joined = await listOutputsForSessions(database, rows).catch(
+    unavailable(
+      row.id,
+      "priorStages.outputs",
+      "What earlier sessions in this track produced could not be read."
+    )
+  );
+  return {
+    status: "ok",
+    total: Number(totalRow?.n ?? 0),
+    items: rows.map((r) => ({
+      id: r.id,
+      title: resolveSessionTitle(r),
+      status: r.status,
+      statusLabel: resolveStatusLabel(r.status),
+      stageKey: null,
+      stageName: null,
       outputs:
         joined instanceof Map
           ? outputsSection(joined.get(r.id)?.outputs ?? [])
