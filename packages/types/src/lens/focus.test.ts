@@ -21,6 +21,7 @@ import {
   lensFocus,
   lensFocusOrder,
   lensFocusSections,
+  trackStepFocusState,
   SESSION_STEP_SECTIONS,
 } from "./focus.js";
 
@@ -321,5 +322,46 @@ describe("the sections and the order", () => {
     const drawn = ["happening", "produced", "happened"] as const;
     expect(lensFocusOrder(drawn, "blocking")).toEqual([...drawn]);
     expect(lensFocusOrder(drawn, null)).toEqual([...drawn]);
+  });
+});
+
+describe("trackStepFocusState — the selected step's state, one derivation", () => {
+  it("a step behind the track is done; one ahead is not started", () => {
+    expect(trackStepFocusState({ position: "done" }, null, "working")).toBe(
+      "done"
+    );
+    expect(
+      trackStepFocusState({ position: "not_started" }, moveOn(), "needs_you")
+    ).toBe("not_started");
+  });
+
+  it("the current step with criteria met (Move on enabled) reads done", () => {
+    expect(
+      trackStepFocusState({ position: "active" }, moveOn(), "working")
+    ).toBe("done");
+  });
+
+  it("criteria unmet or not offered ⇒ the track's own state", () => {
+    expect(
+      trackStepFocusState(
+        { position: "active" },
+        moveOn({ enabled: false }),
+        "working"
+      )
+    ).toBe("working");
+    expect(
+      trackStepFocusState(
+        { position: "active" },
+        moveOn({ offered: false }),
+        "paused"
+      )
+    ).toBe("paused");
+    expect(trackStepFocusState({ position: "active" }, null, null)).toBeNull();
+  });
+
+  it("what you HOLD outranks moving on: needs_you / failed / blocked stay", () => {
+    for (const s of ["needs_you", "failed", "blocked"]) {
+      expect(trackStepFocusState({ position: "active" }, moveOn(), s)).toBe(s);
+    }
   });
 });

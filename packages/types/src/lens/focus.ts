@@ -36,7 +36,7 @@
  */
 
 import { resolveActionLabel } from "../vocabulary/index.js";
-import type { TrackMoveOn } from "../units/track-step.js";
+import type { TrackMoveOn, TrackStepCard } from "../units/track-step.js";
 import { lensSections, type LensSection } from "./classes.js";
 import type { LensNextMove } from "./header.js";
 import type { LensDoor, LensVerb } from "./rows.js";
@@ -239,4 +239,31 @@ export function lensFocusOrder<K extends string>(
   const first = sections.find((s) => s === lead);
   if (first === undefined) return [...sections];
   return [first, ...sections.filter((s) => s !== first)];
+}
+
+/**
+ * The SELECTED TRACK STEP's state — the `state` {@link lensFocus} takes at
+ * track scope. A step card carries a position, not a unit state, so this is
+ * the ONE place it is derived (browser and relay would otherwise each invent
+ * it):
+ *   - a step behind the track (`done`) ⇒ `done`;
+ *   - a step ahead of it (`not_started`) ⇒ `not_started`;
+ *   - the CURRENT step ⇒ the track's own state, except that criteria met
+ *     (Move on offered AND enabled) reads `done` — the step's work is finished
+ *     and the move is the reader's. A live obligation, a failure or a blocker
+ *     on the track still outranks that: what you hold comes before moving on.
+ */
+export function trackStepFocusState(
+  card: Pick<TrackStepCard, "position">,
+  moveOn: TrackMoveOn | null | undefined,
+  trackState: string | null | undefined
+): string | null {
+  if (card.position === "done") return "done";
+  if (card.position === "not_started") return "not_started";
+  const state = trackState ?? null;
+  if (state === "needs_you" || state === "failed" || state === "blocked") {
+    return state;
+  }
+  if (moveOn?.offered && moveOn.enabled) return "done";
+  return state;
 }
