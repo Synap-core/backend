@@ -16,9 +16,11 @@ const h = vi.hoisted(() => ({
   rowsByTable: new Map<unknown, Record<string, unknown>[]>(),
   bodies: new Map<string, string>(),
   outputsThrow: false,
+  roomThrow: false,
+  channelId: null as string | null,
 }));
 
-const SESSION = {
+const SESSION_BASE = {
   id: "s-1",
   userId: "u-1",
   workspaceId: null,
@@ -40,17 +42,32 @@ const SESSION = {
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
-  const chain = (rows: Record<string, unknown>[]) => ({
-    where: () => Promise.resolve(rows),
+  const chain = (table: unknown, rows: Record<string, unknown>[]) => ({
+    where: () =>
+      Object.assign(Promise.resolve(rows), {
+        // The room read: newest first, as the DB orders it.
+        orderBy: () => ({
+          limit: async () => {
+            if (table === actual.messages && h.roomThrow)
+              throw new Error("messages read failed");
+            return rows;
+          },
+        }),
+      }),
   });
   return {
     ...actual,
     db: {
       query: {
-        focusSessions: { findFirst: vi.fn(async () => SESSION) },
+        focusSessions: {
+          findFirst: vi.fn(async () => ({
+            ...SESSION_BASE,
+            channelId: h.channelId,
+          })),
+        },
       },
       select: () => ({
-        from: (table: unknown) => chain(h.rowsByTable.get(table) ?? []),
+        from: (table: unknown) => chain(table, h.rowsByTable.get(table) ?? []),
       }),
     },
   };
@@ -102,10 +119,14 @@ vi.mock("@synap/intelligence-client", () => ({
   ),
 }));
 
-import { documents, entities } from "@synap/database";
+import { documents, entities, messages } from "@synap/database";
 import { hydrationScopeWhere } from "../../object-graph/graph-service.js";
 import { evaluateSession } from "./evaluate.js";
-import { buildJudgeMaterial, MATERIAL_MAX } from "./judge-material.js";
+import {
+  buildJudgeMaterial,
+  fairShares,
+  MATERIAL_MAX,
+} from "./judge-material.js";
 
 const AUDIT_BODY =
   "## Audit\n- links writer: packages/database/src/utils/session-spawn.ts:104\n- graph fold: graph-service.ts:1601";
@@ -113,6 +134,8 @@ const AUDIT_BODY =
 beforeEach(() => {
   h.judgeCalls = [];
   h.outputsThrow = false;
+  h.roomThrow = false;
+  h.channelId = null;
   h.bodies = new Map([["k/audit.md", AUDIT_BODY]]);
   h.rowsByTable = new Map<unknown, Record<string, unknown>[]>([
     [
@@ -204,5 +227,95 @@ describe("buildJudgeMaterial — budget", () => {
     expect(material).toContain("### document: A");
     expect(material).toContain("### document: B");
     expect(material).toContain("…[truncated]");
+  });
+});
+
+describe("judge rung — the session room is part of the material", () => {
+  it("the judge reads the room's latest human + agent messages, oldest first", async () => {
+    h.channelId = "ch-1";
+    h.rowsByTable.set(messages, [
+      { authorType: "ai_agent", content: "FRICTION LOG: 3 retries on deploy" },
+      { authorType: "human", content: "please log friction as you go" },
+    ]);
+    await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    const { material } = h.judgeCalls[0]!;
+    expect(material).toContain("SESSION ROOM (latest 2 messages");
+    expect(material).toContain("[agent] FRICTION LOG: 3 retries on deploy");
+    expect(material.indexOf("[person] please log")).toBeLessThan(
+      material.indexOf("[agent] FRICTION LOG")
+    );
+  });
+
+  it("a FAILED room read is stated in the material, and the judge still runs", async () => {
+    h.channelId = "ch-1";
+    h.roomThrow = true;
+    const out = await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    expect(out.status).toBe("evaluated");
+    expect(h.judgeCalls[0]!.material).toContain(
+      "SESSION ROOM: unavailable — the room could not be read (messages read failed)"
+    );
+  });
+});
+
+describe("buildJudgeMaterial — fair budget", () => {
+  const S = { goal: "g", expectedOutputs: [], verificationReport: null };
+
+  it("the cap is pinned to the IS limit (16000)", () => {
+    expect(MATERIAL_MAX).toBe(16_000);
+  });
+
+  it("a long FIRST document cannot push a later document's content out", () => {
+    const material = buildJudgeMaterial(S, [], undefined, [
+      { kind: "document", title: "Huge", text: "x".repeat(60_000) },
+      { kind: "document", title: "Later", text: "LATER-DOC-EVIDENCE" },
+    ]);
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(material).toContain("LATER-DOC-EVIDENCE");
+  });
+
+  it("evidence at the END of a long document survives the cut", () => {
+    const material = buildJudgeMaterial(S, [], undefined, [
+      {
+        kind: "document",
+        title: "Report",
+        text: `${"x".repeat(60_000)}\nFRICTION: none observed`,
+      },
+    ]);
+    expect(material).toContain("FRICTION: none observed");
+    expect(material).toContain("…[truncated]…");
+  });
+
+  it("budget a short item leaves goes to the long one (not split evenly)", () => {
+    // The marker sits 5000 chars from the end: an even split keeps ~3.7k of
+    // the tail; a fair (water-filled) share keeps ~7k.
+    const long = `${"x".repeat(40_000)}TAIL-MARKER${"y".repeat(5_000)}`;
+    const material = buildJudgeMaterial(S, [], undefined, [
+      { kind: "document", title: "Short", text: "short" },
+      { kind: "document", title: "Long", text: long },
+    ]);
+    expect(material).toContain("TAIL-MARKER");
+  });
+
+  it("a clipped room keeps its NEWEST messages, and earlier checks still fit", () => {
+    const msgs = Array.from({ length: 20 }, (_, i) => ({
+      author: "agent",
+      text: `msg-${i} ${"z".repeat(790)}`,
+    }));
+    const material = buildJudgeMaterial(
+      S,
+      [{ criterionKey: "c", verdict: "unmeasured", rationale: "EARLIER-ROW" }],
+      undefined,
+      [{ kind: "document", title: "D", text: "q".repeat(30_000) }],
+      { status: "ok", messages: msgs }
+    );
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(material).toContain("msg-19 ");
+    expect(material).not.toContain("msg-0 ");
+    expect(material).toContain("EARLIER-ROW");
+  });
+
+  it("fairShares: short items keep everything, never over budget", () => {
+    expect(fairShares([10, 1000, 1000], 1010)).toEqual([10, 500, 500]);
+    expect(fairShares([5, 5], 100)).toEqual([5, 5]);
   });
 });

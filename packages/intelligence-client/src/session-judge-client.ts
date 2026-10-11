@@ -14,7 +14,7 @@ import { postSessionIntelligence } from "./session-intelligence-client.js";
 
 export interface JudgeCriteriaRequest {
   criteria: Array<{ key: string; statement: string; hint?: string }>;
-  /** ≤ 8000 chars: outputs, summary, posted evidence. */
+  /** ≤ 16000 chars (`MATERIAL_MAX`, judge-material.ts): the produced work, the room. */
   material: string;
   /** The model that did the work — never allowed to grade it. */
   excludeModel?: string;

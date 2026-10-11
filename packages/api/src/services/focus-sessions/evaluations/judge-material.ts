@@ -16,9 +16,30 @@
  * A produced item whose content could not be read says so in the material
  * ("[content could not be read: …]") — never an empty body the judge would
  * read as "nothing there".
+ *
+ * `loadRoomMaterial` adds the session ROOM: its latest human + agent messages
+ * (evidence is often posted there, never in a document). A failed room read
+ * is written into the material ("room unavailable"), never silently omitted.
+ *
+ * Budget: every produced item and the room get a FAIR share (water-filling —
+ * a short section keeps all of its text, what it leaves is re-split among the
+ * rest), so a long first document can no longer starve a later one. A clipped
+ * document keeps its head AND its tail (conclusions and logs land at the
+ * end); a clipped room keeps its newest messages. Every cut says `[truncated]`.
  */
 
-import { db, documents, entities, and, inArray } from "@synap/database";
+import {
+  db,
+  documents,
+  entities,
+  messages,
+  MessageAuthorType,
+  and,
+  desc,
+  eq,
+  inArray,
+  isNull,
+} from "@synap/database";
 import { storage } from "@synap/storage";
 import type { focusSessions } from "@synap/database";
 import { listSessionOutputs } from "../session-outputs.js";
@@ -26,10 +47,19 @@ import { hydrationScopeWhere } from "../../object-graph/graph-service.js";
 import type { SessionEvaluationRow } from "./record.js";
 import type { PostedEvidence } from "./evaluate.js";
 
-/** The IS route's `material` limit (`judge.ts`: `z.string().max(8000)`). */
-export const MATERIAL_MAX = 8000;
+/**
+ * PINNED to the IS route's `material` limit (synap-intelligence-service
+ * `routes/session-intelligence/judge.ts`: `JUDGE_MATERIAL_MAX`). The repos
+ * cannot import each other, so the two are kept equal by hand — raise the IS
+ * value FIRST and deploy the IS before this; a larger material is a 400 there.
+ */
+export const MATERIAL_MAX = 16_000;
 const REPORT_MAX = 1200;
 const EARLIER_MAX = 1200;
+/** How many of the room's latest messages the judge reads. */
+export const ROOM_MESSAGES_N = 20;
+const ROOM_MESSAGE_MAX = 800;
+const TRUNCATED = "…[truncated]…";
 
 /** One produced thing, with the text a judge can read. */
 export interface ProducedMaterial {
@@ -167,17 +197,95 @@ export async function loadProducedMaterial(params: {
   return out;
 }
 
-function clip(s: string, max: number): string {
-  if (max <= 0) return "";
-  return s.length <= max
-    ? s
-    : `${s.slice(0, Math.max(0, max - 14))}…[truncated]`;
+/**
+ * The session room's latest human + agent messages, oldest → newest. `ok` with
+ * no messages is a true empty (no room, or nothing said); `failed` is a read
+ * that did not happen, and the material says so.
+ */
+export type RoomMaterial =
+  | { status: "ok"; messages: Array<{ author: string; text: string }> }
+  | { status: "failed"; reason: string };
+
+/**
+ * The room of a session the caller already loaded floored on its owner
+ * (`evaluateSession`): the owner's own pod data. System / bot notices and
+ * ephemeral replies are noise, not evidence, and are left out.
+ */
+export async function loadRoomMaterial(
+  channelId: string | null
+): Promise<RoomMaterial> {
+  if (!channelId) return { status: "ok", messages: [] };
+  try {
+    const rows = await db
+      .select({ authorType: messages.authorType, content: messages.content })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.channelId, channelId),
+          inArray(messages.authorType, [
+            MessageAuthorType.HUMAN,
+            MessageAuthorType.AI_AGENT,
+          ]),
+          eq(messages.ephemeral, false),
+          isNull(messages.deletedAt)
+        )
+      )
+      .orderBy(desc(messages.timestamp))
+      .limit(ROOM_MESSAGES_N);
+    return {
+      status: "ok",
+      messages: rows.reverse().map((r) => ({
+        author: r.authorType === MessageAuthorType.HUMAN ? "person" : "agent",
+        text: clip(r.content, ROOM_MESSAGE_MAX),
+      })),
+    };
+  } catch (err) {
+    return {
+      status: "failed",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * ≤ `max` chars. `ends` keeps the head and the tail (a document's verdict and
+ * logs are often at its end); `tail` keeps only the end (the newest messages).
+ */
+function clip(s: string, max: number, keep: "ends" | "tail" = "ends"): string {
+  if (s.length <= max) return s;
+  const room = max - TRUNCATED.length;
+  if (room <= 0) return max > 0 ? TRUNCATED.slice(0, max) : "";
+  if (keep === "tail") return `${TRUNCATED}${s.slice(s.length - room)}`;
+  const head = Math.ceil(room / 2);
+  return `${s.slice(0, head)}${TRUNCATED}${s.slice(s.length - (room - head))}`;
+}
+
+/**
+ * Pure: split `budget` across texts so none starves another — the shortest
+ * keep everything, the rest share what is left evenly (water-filling).
+ */
+export function fairShares(
+  lengths: readonly number[],
+  budget: number
+): number[] {
+  const shares = new Array<number>(lengths.length).fill(0);
+  let left = Math.max(0, budget);
+  const order = lengths
+    .map((n, i) => [n, i] as const)
+    .sort((a, b) => a[0] - b[0]);
+  order.forEach(([n, i], k) => {
+    const share = Math.min(n, Math.floor(left / (order.length - k)));
+    shares[i] = share;
+    left -= share;
+  });
+  return shares;
 }
 
 /**
  * Pure: the judge's material, ≤ {@link MATERIAL_MAX} chars. The fixed facts
  * (goal, declared outputs, posted evidence, report, earlier checks) come
- * first; the produced CONTENT gets every remaining byte, split evenly.
+ * first; the produced CONTENT and the session room share every remaining
+ * byte through {@link fairShares}.
  */
 export function buildJudgeMaterial(
   session: Pick<
@@ -189,7 +297,8 @@ export function buildJudgeMaterial(
     "criterionKey" | "verdict" | "rationale"
   >[],
   evidence: PostedEvidence | undefined,
-  produced: readonly ProducedMaterial[]
+  produced: readonly ProducedMaterial[],
+  room: RoomMaterial = { status: "ok", messages: [] }
 ): string {
   const outputs = Array.isArray(session.expectedOutputs)
     ? (session.expectedOutputs as Array<{ label?: string; status?: string }>)
@@ -218,27 +327,48 @@ export function buildJudgeMaterial(
       )
     : "";
 
-  let producedPart = "";
-  if (produced.length) {
-    const heading = "PRODUCED (the content of what this session made):";
-    const fixed = [...head, earlier].filter(Boolean).join("\n\n").length;
-    const headers = produced.map(
-      (p) =>
-        `### ${p.kind}: ${p.title}${p.slotLabel ? ` (for "${p.slotLabel}")` : ""}`
-    );
-    const overhead =
-      heading.length + headers.reduce((n, h) => n + h.length + 2, 0) + 8;
-    const budget = MATERIAL_MAX - fixed - overhead;
-    const each = Math.floor(Math.max(0, budget) / produced.length);
-    producedPart = [
-      heading,
-      ...produced.map((p, i) =>
-        p.text ? `${headers[i]}\n${clip(p.text, each)}` : headers[i]
-      ),
-    ].join("\n");
-  }
+  // Every section that carries content competes for one budget, fairly.
+  const producedHeading = "PRODUCED (the content of what this session made):";
+  const headers = produced.map(
+    (p) =>
+      `### ${p.kind}: ${p.title}${p.slotLabel ? ` (for "${p.slotLabel}")` : ""}`
+  );
+  const roomHeading =
+    room.status === "failed"
+      ? `SESSION ROOM: unavailable — the room could not be read (${room.reason}).`
+      : room.messages.length
+        ? `SESSION ROOM (latest ${room.messages.length} messages, oldest first):`
+        : "";
+  const roomText =
+    room.status === "ok"
+      ? room.messages.map((m) => `[${m.author}] ${m.text}`).join("\n")
+      : "";
+  const texts = [...produced.map((p) => p.text), roomText];
+  const fixed = [...head, earlier].filter(Boolean).join("\n\n").length;
+  const overhead =
+    (produced.length ? producedHeading.length + 2 : 0) +
+    headers.reduce((n, h) => n + h.length + 1, 0) +
+    (roomHeading ? roomHeading.length + 3 : 0) +
+    texts.filter(Boolean).length +
+    8;
+  const shares = fairShares(
+    texts.map((t) => t.length),
+    MATERIAL_MAX - fixed - overhead
+  );
 
-  return [...head, producedPart, earlier]
+  const producedPart = produced.length
+    ? [
+        producedHeading,
+        ...produced.map((p, i) =>
+          p.text ? `${headers[i]}\n${clip(p.text, shares[i]!)}` : headers[i]
+        ),
+      ].join("\n")
+    : "";
+  const roomPart = roomText
+    ? `${roomHeading}\n${clip(roomText, shares[produced.length]!, "tail")}`
+    : roomHeading;
+
+  return [...head, producedPart, roomPart, earlier]
     .filter(Boolean)
     .join("\n\n")
     .slice(0, MATERIAL_MAX);

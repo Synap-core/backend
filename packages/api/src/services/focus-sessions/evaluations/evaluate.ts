@@ -39,7 +39,11 @@ import {
   type SessionEvaluationRow,
   type SessionEvaluationSummary,
 } from "./record.js";
-import { buildJudgeMaterial, loadProducedMaterial } from "./judge-material.js";
+import {
+  buildJudgeMaterial,
+  loadProducedMaterial,
+  loadRoomMaterial,
+} from "./judge-material.js";
 
 /** What an agent posts: one entry per evidence key. */
 export type PostedEvidence = Record<
@@ -234,7 +238,12 @@ export async function evaluateSession(
       // entities' content, floored to the session owner. A failed read throws
       // into the catch below ("the judge could not run"), never a verdict
       // over labels alone.
-      const produced = await loadProducedMaterial({ sessionId, userId });
+      // The room is read too (evidence is often posted there); a failed room
+      // read is stated in the material, not fatal to the judge.
+      const [produced, room] = await Promise.all([
+        loadProducedMaterial({ sessionId, userId }),
+        loadRoomMaterial(session.channelId),
+      ]);
       const judgement = await judgeSessionCriteria(
         svc.endpoint,
         svc.serviceApiKey,
@@ -248,7 +257,8 @@ export async function evaluateSession(
             session,
             rows,
             params.evidence,
-            produced
+            produced,
+            room
           ),
           ...(typeof modelId === "string" && modelId
             ? { excludeModel: modelId }
