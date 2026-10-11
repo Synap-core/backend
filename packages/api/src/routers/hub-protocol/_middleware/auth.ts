@@ -392,7 +392,7 @@ export const hubAuthMiddleware = async (
     // bounded by its grant (access/grant-door-fence.ts). Fail closed.
     if (isFencedGrant(keyIdentity.grant)) {
       const rel = c.req.path.replace(/^\/api\/hub(?=\/)/, "");
-      if (!restDoorAllowed(c.req.method, rel)) {
+      if (!restDoorAllowed(c.req.method, rel, keyIdentity.grant!)) {
         return c.json(
           { error: GRANT_DOOR_UNSUPPORTED, code: "GRANT_DOOR_UNSUPPORTED" },
           403

@@ -553,7 +553,10 @@ mcpHttpApp.post("/", async (c) => {
     const toolName = (parsedBody as { params?: { name?: string } }).params
       ?.name;
     const tool = (await tools.list()).find((t) => t.name === toolName);
-    if (tool && !mcpToolAllowed(tool.name, tool.annotations?.readOnlyHint)) {
+    if (
+      tool &&
+      !mcpToolAllowed(tool.name, tool.annotations?.readOnlyHint, grant!)
+    ) {
       return jsonRpcForbidden(
         (parsedBody as { id?: unknown } | null)?.id ?? null,
         GRANT_DOOR_UNSUPPORTED

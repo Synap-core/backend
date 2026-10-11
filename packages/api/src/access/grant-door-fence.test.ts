@@ -5,6 +5,10 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  AI_READ_PROPOSE_ROLE_ID,
+  GRANT_PRESETS,
+} from "@synap-core/types/grants";
+import {
   isFencedGrant,
   mcpToolAllowed,
   restDoorAllowed,
@@ -25,6 +29,14 @@ describe("isFencedGrant", () => {
     expect(isFencedGrant(null)).toBe(false);
   });
 });
+
+const key = (...scopes: Array<Record<string, unknown>>) =>
+  ({ scopes, clientId: null }) as never;
+const AI = key({
+  permissions: GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
+    .grant.permissions,
+});
+const DOC_ONLY = key({ permissions: ["document.read"] });
 
 describe("restDoorAllowed", () => {
   it.each([
@@ -47,15 +59,66 @@ describe("restDoorAllowed", () => {
     ["PATCH", "/entities/abc", true],
     ["DELETE", "/entities/abc", true],
   ] as const)("%s %s → %s", (method, path, ok) => {
-    expect(restDoorAllowed(method, path)).toBe(ok);
+    expect(restDoorAllowed(method, path, DOC_ONLY)).toBe(ok);
   });
 });
 
 describe("mcpToolAllowed / trpcProcedureAllowed", () => {
   it("read tools only when seamed; write tools always", () => {
-    expect(mcpToolAllowed("synap_get_entities", true)).toBe(true);
-    expect(mcpToolAllowed("synap_ask", true)).toBe(false);
-    expect(mcpToolAllowed("synap_create_entity", false)).toBe(true);
+    expect(mcpToolAllowed("synap_get_entities", true, DOC_ONLY)).toBe(true);
+    expect(mcpToolAllowed("synap_ask", true, DOC_ONLY)).toBe(false);
+    expect(mcpToolAllowed("synap_create_entity", false, DOC_ONLY)).toBe(true);
+    expect(mcpToolAllowed("synap_not_classified", true, AI)).toBe(false);
+  });
+  it.each([
+    "synap_ask",
+    "synap_orient",
+    "synap_find",
+    "synap_get_entity",
+    "synap_list_sessions",
+  ])("the AI preset may call %s", (tool) => {
+    expect(mcpToolAllowed(tool, true, AI)).toBe(true);
+  });
+  it("an aggregate door needs EVERY subject it reads, unnarrowed", () => {
+    // document.read alone does not read the entities ask returns.
+    expect(mcpToolAllowed("synap_ask", true, DOC_ONLY)).toBe(false);
+    // Every subject, but only one kind of entity: ask cannot narrow to it.
+    const oneKind = key({
+      permissions: [
+        "entity.note.read",
+        "document.read",
+        "relation.read",
+        "proposal.read",
+        "preference.read",
+        "project.read",
+      ],
+    });
+    expect(mcpToolAllowed("synap_ask", true, oneKind)).toBe(false);
+    // Every subject, but narrowed to one workspace: refused.
+    const ai = GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
+      .grant.permissions;
+    expect(
+      mcpToolAllowed(
+        "synap_ask",
+        true,
+        key({ permissions: ai, workspaceIds: ["w1"] })
+      )
+    ).toBe(false);
+    // The same scope beside an unnarrowed one passes (any ONE scope suffices).
+    expect(
+      mcpToolAllowed(
+        "synap_ask",
+        true,
+        key({ permissions: ai, workspaceIds: ["w1"] }, { permissions: ai })
+      )
+    ).toBe(true);
+    expect(mcpToolAllowed("synap_diagnose", true, AI)).toBe(false);
+  });
+  it("hub POST reads follow the same declaration", () => {
+    expect(restDoorAllowed("POST", "/knowledge/ask", AI)).toBe(true);
+    expect(restDoorAllowed("POST", "/knowledge/ask", DOC_ONLY)).toBe(false);
+    expect(restDoorAllowed("POST", "/diagnose", AI)).toBe(false);
+    expect(restDoorAllowed("POST", "/capabilities/execute", AI)).toBe(false);
   });
   it("queries only when seamed; mutations always", () => {
     expect(trpcProcedureAllowed("query", "entities.getEntities")).toBe(true);
