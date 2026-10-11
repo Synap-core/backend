@@ -378,3 +378,78 @@ describe("agent/connect — approving an AI is a proposal", () => {
     );
   });
 });
+
+describe("agent/updateCapabilities — an edit that became a proposal applies on approval", () => {
+  async function capabilitiesProposal(capabilities: string[]) {
+    const id = randomUUID();
+    const data = { agentUserId: AGENT, capabilities };
+    await q(
+      `insert into proposals (id, target_type, target_id, proposal_type, data, status, created_by)
+       values ($1, 'agent', $2, 'updateCapabilities', $3::jsonb, 'pending', $4)`,
+      [id, AGENT, JSON.stringify(data), OWNER]
+    );
+    return { id, data };
+  }
+  const approveCaps = (id: string, data: unknown, as = OWNER) =>
+    proposalExecRegistry.resolveExact("agent/updateCapabilities")!.execute({
+      proposal: {
+        id,
+        targetType: "agent",
+        targetId: AGENT,
+        proposalType: "updateCapabilities",
+        workspaceId: null,
+        sessionId: null,
+        projectId: null,
+        agentUserId: null,
+        sourceMessageId: null,
+        data,
+      },
+      payload: null,
+      userId: as,
+      input: { proposalId: id },
+      ctx: {} as never,
+      deps: {
+        emitProposalReviewed: () => {},
+        reportProposalOutcome: () => {},
+      } as never,
+    } as never);
+  const storedCaps = async () =>
+    (
+      await q<{ caps: string[] }>(
+        `select agent_metadata -> 'capabilities' as caps from users where id = $1`,
+        [AGENT]
+      )
+    ).rows[0]!.caps;
+
+  it("sets the capabilities and re-grants the agent's live keys", async () => {
+    const keyId = await mintKey(AGENT, true);
+    const { id, data } = await capabilitiesProposal(["entity.note.create"]);
+    const result = await approveCaps(id, data);
+    expect(result.success).toBe(true);
+    expect(await storedCaps()).toEqual(["entity.note.create"]);
+    const [scope] = (await grantOf(keyId))!;
+    expect(scope!.permissions).toContain("entity.note.create");
+    expect(scope!.permissions).not.toContain("entity.*.create");
+    expect(await proposalStatus(id)).toBe("approved");
+    // Restore the preset for the other rows.
+    const back = await capabilitiesProposal(PRESET);
+    await approveCaps(back.id, back.data);
+    expect(await storedCaps()).toEqual(PRESET);
+  });
+
+  it("refuses someone who is not the agent's person nor a pod admin", async () => {
+    const { id, data } = await capabilitiesProposal(["entity.note.create"]);
+    await expect(approveCaps(id, data, OTHER)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(await storedCaps()).toEqual(PRESET);
+    expect(await proposalStatus(id)).toBe("pending");
+  });
+
+  it("refuses a pattern that does not parse", async () => {
+    const { id, data } = await capabilitiesProposal(["Not.A.Grant.Pattern"]);
+    await expect(approveCaps(id, data)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+  });
+});

@@ -693,6 +693,30 @@ export async function reapplyAgentKeyGrants(args: {
 }
 
 /**
+ * Set an agent's capabilities — its ONE limit — and re-grant every key it
+ * holds, so a narrowing binds its live keys at once. The apply half of an
+ * `agent/updateCapabilities` proposal (`executors/agent.ts`). Merges into the
+ * stored metadata in one statement. Returns how many keys were re-granted.
+ */
+export async function applyAgentCapabilities(args: {
+  agentUserId: string;
+  capabilities: readonly string[];
+  actorId: string;
+}): Promise<number> {
+  await db
+    .update(users)
+    .set({
+      agentMetadata: drizzleSql`jsonb_set(coalesce(${users.agentMetadata}, '{}'::jsonb), '{capabilities}', ${JSON.stringify(args.capabilities)}::jsonb)`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(users.id, args.agentUserId), eq(users.userType, "agent")));
+  return reapplyAgentKeyGrants({
+    agentUserId: args.agentUserId,
+    createdBy: args.actorId,
+  });
+}
+
+/**
  * Creates a named agent user (userType="agent") and issues a Hub Protocol
  * API key for it. Idempotent by (agentType + createdByUserId): if an agent
  * of the same type already exists for this user, a fresh key is issued for

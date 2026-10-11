@@ -234,7 +234,6 @@ const SEVERED =
  * the "no stale gap" test fails if you leave it.
  */
 const ACKNOWLEDGED_GAPS: Gap[] = [
-  { door: "agent/updateCapabilities", reason: SEVERED },
   { door: "artifact/setState", reason: SEVERED },
   { door: "bento/arrange", reason: SEVERED },
   { door: "context/link", reason: SEVERED },
@@ -279,7 +278,7 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
  * LOWERED. Raising it is how this contract would quietly erode, so any PR that
  * raises it is doing the thing this file exists to prevent.
  */
-const GAP_CEILING = 10;
+const GAP_CEILING = 9;
 
 // ── Load the sources ─────────────────────────────────────────────────────────
 
