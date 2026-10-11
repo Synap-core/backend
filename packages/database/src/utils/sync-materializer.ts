@@ -21,6 +21,11 @@ import { relations } from "../schema/relations.js";
 import { profiles, ProfileScope } from "../schema/profiles.js";
 import { syncConflicts } from "../schema/sync.js";
 import { reservedProfileSlugReason } from "./reserved-profile-slugs.js";
+import {
+  createCanMintKindTwin,
+  ProfileKindTwinError,
+} from "./profile-slug-precedence.js";
+import { ProfileRepository } from "../repositories/profile-repository.js";
 
 const logger = createLogger({ module: "sync-materializer" });
 
@@ -609,6 +614,24 @@ async function materializeProfile(
     )
       ? (scopeValue as ProfileScope)
       : ProfileScope.WORKSPACE;
+
+    // The kind-twin floor (`ProfileRepository.create()`), restated for the
+    // same reason as the reservation above: a peer's workspace/user-scoped
+    // kind must not shadow a slug this pod already holds pod-wide. Skipped,
+    // not thrown — it will never become valid by retrying.
+    const kindTwin = createCanMintKindTwin({
+      scope: validScope,
+      profileKind: data.profileKind as string | undefined,
+    })
+      ? await new ProfileRepository(db).findActivePodWideKind(slug)
+      : null;
+    if (kindTwin && kindTwin.id !== subjectId) {
+      logger.warn(
+        { subjectId, slug, action, holderId: kindTwin.id },
+        `Sync: refusing peer profile — ${new ProfileKindTwinError(slug, kindTwin).message}`
+      );
+      return false;
+    }
 
     await db
       .insert(profiles)

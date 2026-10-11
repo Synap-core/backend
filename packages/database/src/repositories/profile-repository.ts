@@ -25,6 +25,11 @@ import {
   excludeReservedProfiles,
 } from "../utils/reserved-profile-slugs.js";
 import {
+  compareForSlug,
+  createCanMintKindTwin,
+  ProfileKindTwinError,
+} from "../utils/profile-slug-precedence.js";
+import {
   excludeProbeProfiles,
   isProbeWriteContext,
   getActingAgentUserId,
@@ -233,6 +238,19 @@ export class ProfileRepository {
       throw new AgentKindRequiresProposalError(input.slug);
     }
 
+    // Kind-twin floor: a KIND is one row per slug. A workspace/user-scoped
+    // kind row for a slug an ACTIVE system/shared kind already holds is a twin
+    // (entities stay row-blind on `type`, but schema splits by profile id) —
+    // refuse it, naming the holder so the door can reuse it instead. Checked
+    // here because this method is the floor under every create door; the one
+    // write that bypasses it (peer sync, `sync-materializer.ts`) restates it.
+    // A probe create is exempt: probes are dogfood scaffolding, hidden from
+    // every slug read outside a probe context.
+    if (!isProbeWriteContext() && createCanMintKindTwin(input)) {
+      const holder = await this.findActivePodWideKind(input.slug);
+      if (holder) throw new ProfileKindTwinError(input.slug, holder);
+    }
+
     // Validate parent profile exists if provided
     if (input.parentProfileId) {
       const parent = await this.getById(input.parentProfileId);
@@ -397,9 +415,8 @@ export class ProfileRepository {
     // (system row + workspace-scope twin). findFirst has no ORDER BY, so which
     // twin won was arbitrary — and this resolver feeds entities.create's
     // entityScope decision and FacetRepository.attach's profile pick, making
-    // entity visibility scope nondeterministic on twin slugs. Pick by
-    // specificity (most caller-specific wins), mirroring
-    // getBySlugForWorkspace's priority sort; created_at ASC as tie-break.
+    // entity visibility scope nondeterministic on twin slugs. Ranked by the
+    // shared precedence rule below; created_at ASC as tie-break.
     const rows = await this.db.query.profiles.findMany({
       where: and(
         eq(profiles.slug, slug),
@@ -409,17 +426,10 @@ export class ProfileRepository {
       ),
     });
     if (rows.length === 0) return null;
-    const priority = (p: Profile) => {
-      if (p.scope === ProfileScope.USER) return 0;
-      if (p.scope === ProfileScope.WORKSPACE) return 1;
-      if (p.scope === ProfileScope.SHARED) return 2;
-      return 3; // system
-    };
-    rows.sort(
-      (a, b) =>
-        priority(a) - priority(b) ||
-        a.createdAt.getTime() - b.createdAt.getTime()
-    );
+    // ONE precedence rule (`utils/profile-slug-precedence.ts`), pod lens: the
+    // caller's own user row, then — for a KIND — the pod-wide row over any
+    // workspace twin (no lens ⇒ a workspace pick is arbitrary).
+    rows.sort(compareForSlug("pod"));
     return rows[0];
   }
 
@@ -473,14 +483,9 @@ export class ProfileRepository {
 
     if (rows.length === 0) return null;
 
-    // Pick by priority: workspace > shared > system
-    const priority = (p: Profile) => {
-      if (p.scope === ProfileScope.WORKSPACE) return 0;
-      if (p.scope === ProfileScope.SHARED) return 1;
-      return 2; // system
-    };
-
-    rows.sort((a, b) => priority(a.p) - priority(b.p));
+    // Pick by the ONE precedence rule, workspace lens: workspace > shared > system.
+    const byPrecedence = compareForSlug("workspace");
+    rows.sort((a, b) => byPrecedence(a.p, b.p));
     return rows[0].p;
   }
 
@@ -501,6 +506,28 @@ export class ProfileRepository {
         slugResolvableWhere()
       ),
     });
+  }
+
+  /**
+   * The ACTIVE system/shared KIND row holding this slug, if any — the holder
+   * the kind-twin floor in `create()` refuses to shadow. At most one exists
+   * (`profiles_slug_system_shared_uniq`). Probe rows are not holders: they are
+   * hidden from slug reads, and a real create reclaims rather than twins them.
+   */
+  async findActivePodWideKind(
+    slug: string
+  ): Promise<{ id: string; scope: string } | null> {
+    const row = await this.db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.slug, slug),
+        eq(profiles.isActive, true),
+        eq(profiles.profileKind, "kind"),
+        inArray(profiles.scope, [ProfileScope.SYSTEM, ProfileScope.SHARED]),
+        sql`${profiles.origin} <> ${PROFILE_ORIGIN_PROBE}`
+      ),
+      columns: { id: true, scope: true },
+    });
+    return row ?? null;
   }
 
   /**
