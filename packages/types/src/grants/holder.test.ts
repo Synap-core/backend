@@ -113,7 +113,7 @@ describe("resolveHolderAccess — keys", () => {
     expect(h.where).toEqual({
       anywhere: false,
       spaces: [{ id: "ws-sales", name: "Sales" }],
-      projectCount: 0,
+      projectIds: [],
     });
     expect(h.lifetime.when).toBe("Until 12 Jan 2027");
     expect(h.draft).toEqual({
@@ -365,5 +365,20 @@ describe("grantsOfRequests", () => {
         expiresAt: null,
       },
     ]);
+  });
+});
+
+describe("where — projects", () => {
+  // Rules out: a count with no ids, so "Only in 2 projects" could not be a door.
+  it("names each project it is narrowed to, once", () => {
+    const h = key({
+      source: "grants",
+      access: "granted",
+      grants: [
+        grant(["entity.note.read"], { projectIds: ["p1", "p2"] }),
+        grant(["document.read"], { projectIds: ["p2"] }),
+      ],
+    });
+    expect(h.where.projectIds).toEqual(["p1", "p2"]);
   });
 });

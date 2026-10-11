@@ -120,7 +120,8 @@ export interface HolderAccess {
   readonly where: {
     readonly anywhere: boolean;
     readonly spaces: readonly { id: string; name: string }[];
-    readonly projectCount: number;
+    /** The projects it is narrowed to (none = no project narrowing). */
+    readonly projectIds: readonly string[];
   };
   readonly lifetime: {
     readonly when: string;
@@ -338,7 +339,7 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
       tiers: { read: HOLDER_NOTHING, change: null, approve: null },
       danger: { full: false, approves: false, deletes: false },
       lines: [],
-      where: { anywhere: false, spaces: [], projectCount: 0 },
+      where: { anywhere: false, spaces: [], projectIds: [] },
       lifetime,
       posture,
       other: [],
@@ -446,7 +447,7 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
     where: {
       anywhere: spaceIds === null,
       spaces,
-      projectCount: projects.size,
+      projectIds: [...projects],
     },
     lifetime,
     posture,
