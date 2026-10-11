@@ -197,3 +197,16 @@ describe("capture_result suggestions (D6)", () => {
     expect(ok([{ ...step, kind: "agent" }])).toBe(false);
   });
 });
+
+describe("capture_result row candidate (D9)", () => {
+  it("round-trips the top duplicate; refuses a score outside 0..1", () => {
+    const candidate = { entityId: "e-1", title: "Alice Martin", score: 0.82 };
+    const p = part({ ...base, candidate });
+    expect(readCapturePart({ capturePart: p })).toEqual(p);
+    expect(
+      CaptureResultPartSchema.safeParse(
+        part({ ...base, candidate: { ...candidate, score: 2 } })
+      ).success
+    ).toBe(false);
+  });
+});

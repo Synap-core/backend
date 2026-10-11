@@ -39,6 +39,8 @@ const h = vi.hoisted(() => ({
   playbookMatches: [] as unknown[] | string,
   ruleMatches: [] as unknown[] | string,
   matchCalls: [] as Array<Record<string, unknown>>,
+  /** Title-dedup search hits (Typesense documents). */
+  searchHits: [] as Array<{ document: Record<string, unknown> }>,
   /** What the ONE writer handed to the message insert — the persisted part. */
   written: [] as Array<{ id: string; part: unknown }>,
 }));
@@ -130,7 +132,9 @@ vi.mock("../../utils/intelligence-routing.js", async (importOriginal) => ({
 
 vi.mock("@synap/search", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  searchService: { searchCollection: async () => ({ results: [] }) },
+  searchService: {
+    searchCollection: async () => ({ results: structuredClone(h.searchHits) }),
+  },
 }));
 vi.mock("../../services/routing-memory.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -248,6 +252,7 @@ beforeEach(() => {
   h.playbookMatches = [];
   h.ruleMatches = [];
   h.matchCalls = [];
+  h.searchHits = [];
   h.profiles = [{ id: "p-note", slug: "note", displayName: "Note" }];
   h.projectRows = PROJECTS;
   h.isBody = { entities: [ENTITY], relations: [], followUp: null };
@@ -516,5 +521,37 @@ describe("capture.structure — next steps ride the part before anything is file
     h.ruleMatches = "rules down";
     await callerFor(`user-${randomUUID()}`, WS).structure({ text: "other" });
     expect(persisted()).not.toHaveProperty("suggestions");
+  });
+});
+
+describe("capture.structure — the row names its top fuzzy duplicate (D9)", () => {
+  const EXISTING = "99999999-9999-4999-8999-999999999999";
+
+  it("the best dedup candidate's id, title and score arrive on the row", async () => {
+    h.searchHits = [
+      {
+        document: {
+          id: EXISTING,
+          title: "Lunch with Alice!",
+          entityType: "note",
+        },
+      },
+    ];
+    const r = (await run()) as {
+      dedupCandidates: Record<string, Array<{ score: number }>>;
+    };
+    const [row] = persisted().rows;
+    expect(row!.updatesExisting).toBe(true);
+    // The SAME candidate the response names — one fact, two views.
+    expect(row!.candidate).toEqual({
+      entityId: EXISTING,
+      title: "Lunch with Alice!",
+      score: r.dedupCandidates.t1![0]!.score,
+    });
+  });
+
+  it("no duplicate: no candidate (absent, never an empty one)", async () => {
+    await run();
+    expect(persisted().rows[0]).not.toHaveProperty("candidate");
   });
 });

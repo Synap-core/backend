@@ -239,6 +239,8 @@ export function projectCaptureResultRows(input: {
   matchedTempIds: ReadonlySet<string>;
   /** tempIds the user had already dismissed on an earlier part (carried over). */
   dismissedTempIds: ReadonlySet<string>;
+  /** The top dedup candidate per tempId (D9). */
+  candidates?: ReadonlyMap<string, NonNullable<CaptureResultRow["candidate"]>>;
   /** Structure relations; pruned to rows that exist and capped. */
   relations?: ReadonlyArray<CaptureResultRelation> | null;
 }): {
@@ -267,6 +269,8 @@ export function projectCaptureResultRows(input: {
     if (bounded.properties) row.properties = bounded.properties;
     if (bounded.content !== undefined) row.content = bounded.content;
     Object.assign(row, projectRowSignals(p));
+    const candidate = input.candidates?.get(p.tempId);
+    if (candidate) row.candidate = candidate;
     // Whole-row cap: the optional fields go first, the row itself stays.
     if (
       Buffer.byteLength(JSON.stringify(row), "utf8") >
@@ -387,6 +391,45 @@ export function projectCaptureRoutingBlocks(input: {
       };
     }
     out.placement = placement;
+  }
+  return out;
+}
+
+/**
+ * The best dedup candidate per tempId, bounded for the row (D9). PURE. The
+ * list is the pod's own dedup output (`mergeDedupCandidates`, best first); an
+ * entry out of shape is skipped, never guessed.
+ */
+export function topDedupCandidates(
+  dedupCandidates: Record<string, ReadonlyArray<unknown>>
+): Map<string, NonNullable<CaptureResultRow["candidate"]>> {
+  const L = CAPTURE_RESULT_LIMITS;
+  const out = new Map<string, NonNullable<CaptureResultRow["candidate"]>>();
+  for (const [tempId, list] of Object.entries(dedupCandidates)) {
+    if (!Array.isArray(list)) continue;
+    let best: NonNullable<CaptureResultRow["candidate"]> | null = null;
+    for (const c of list as ReadonlyArray<Record<string, unknown> | null>) {
+      if (
+        !c ||
+        typeof c.entityId !== "string" ||
+        !c.entityId ||
+        typeof c.score !== "number" ||
+        !Number.isFinite(c.score)
+      ) {
+        continue;
+      }
+      const score = Math.min(1, Math.max(0, c.score));
+      if (best && best.score >= score) continue;
+      best = {
+        entityId: c.entityId.slice(0, L.routingIdMaxChars),
+        title: (typeof c.title === "string" ? c.title : "").slice(
+          0,
+          L.titleMaxChars
+        ),
+        score,
+      };
+    }
+    if (best) out.set(tempId, best);
   }
   return out;
 }
@@ -523,6 +566,9 @@ export async function persistCaptureResult(
     relations: input.relations,
     matchedTempIds,
     dismissedTempIds,
+    candidates: input.dedupSkipped
+      ? undefined
+      : topDedupCandidates(input.dedupCandidates),
   });
 
   const verdict = {

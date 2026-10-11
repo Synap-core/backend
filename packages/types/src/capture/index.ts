@@ -313,6 +313,18 @@ export const CaptureResultRowSchema = z.object({
    * are filed by "File all", `likely` ones need a tap, `unsure` ones fold.
    */
   label: z.enum(CAPTURE_ROW_LABELS).optional(),
+  /**
+   * The pod's top fuzzy duplicate for this row (D9): what it would UPDATE.
+   * The client keeps the update-vs-create rule (`autoDecideAction`); this only
+   * names the candidate. Absent = no candidate, or dedup did not run (`notice`).
+   */
+  candidate: z
+    .object({
+      entityId: z.string().min(1).max(CAPTURE_RESULT_LIMITS.routingIdMaxChars),
+      title: z.string().max(CAPTURE_RESULT_LIMITS.titleMaxChars),
+      score: z.number().min(0).max(1),
+    })
+    .optional(),
 });
 export type CaptureResultRow = z.infer<typeof CaptureResultRowSchema>;
 
@@ -339,6 +351,7 @@ export const PROJECTED_RESULT_ROW_FIELDS = [
   "roles",
   "confidence",
   "label",
+  "candidate",
 ] as const satisfies ReadonlyArray<keyof CaptureResultRow>;
 
 /** Withheld from the part, each with its reason — never merely forgotten. */
