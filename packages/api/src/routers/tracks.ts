@@ -30,6 +30,7 @@ import {
   startTrack,
   type TrackActor,
 } from "../services/tracks/tracks-service.js";
+import { readTrackHistory } from "../services/tracks/track-history.js";
 
 function actorOf(
   ctx: { userId: string; agentUserId?: string | null; isHubProtocol?: boolean },
@@ -80,6 +81,21 @@ export const tracksRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
       }
       return loadTrackView(track, ctx);
+    }),
+
+  /**
+   * Everything that happened to ONE track, newest first, actors named by the
+   * pod (`TrackHistoryWire`, @synap-core/types/units). Group it with
+   * `trackHistoryGroups` — never on the surface's own rule.
+   */
+  history: podProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const history = await readTrackHistory(input.id, actorOf(ctx));
+      if (!history) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+      }
+      return history;
     }),
 
   /**

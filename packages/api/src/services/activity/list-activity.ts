@@ -120,12 +120,13 @@ import {
   authoredByUser,
   ownAgentUserFilter,
 } from "../agent-identity-service.js";
-import { displayNameForUser } from "../../routers/proposals/helper-functions.js";
+import { activityActorOf } from "./activity-actors.js";
 import { proposalPayloadTargetName } from "../../routers/proposals/display.js";
 import { nameRedactedProposals } from "../object-graph/graph-service.js";
 import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
 import { proposalChangeCountSql } from "../proposals/object-subject.js";
 import { workAndTrackedRunsWhere } from "../focus-sessions/session-list-conditions.js";
+import { TRACK_STAGE_GATE_TARGET_TYPE } from "../playbooks/stage-gate.js";
 
 export interface ActivityQuery {
   database?: typeof db;
@@ -334,9 +335,13 @@ const DECISION_STATUSES = [
 
 const LIVE_SESSION_STATUSES = ["active", "paused", "forming"] as const;
 
-/** A proposal filed into one of this track's sessions. */
+/**
+ * A proposal filed into one of this track's sessions, or about the track
+ * itself — a track stage gate (`target_type = 'track'`, no session), which a
+ * session-only test left out of the track lens entirely.
+ */
 const proposalInTrack = (trackId: string) =>
-  drizzleSql`exists (select 1 from ${focusSessions} where ${focusSessions.id} = ${proposals.sessionId} and ${focusSessions.trackId} = ${trackId})`;
+  drizzleSql`(exists (select 1 from ${focusSessions} where ${focusSessions.id} = ${proposals.sessionId} and ${focusSessions.trackId} = ${trackId}) or (${proposals.targetType} = ${TRACK_STAGE_GATE_TARGET_TYPE} and ${proposals.targetId} = ${trackId}))`;
 
 /**
  * STRICTER than `proposalUserFloor` (routers/proposals/scope-conditions.ts):
@@ -969,20 +974,13 @@ async function enrich(
     sessionRows.map((s) => [s.id, resolveSessionTitle(s) || "Session"])
   );
 
-  const actorOf = (c: Candidate): ActivityActor => {
-    const u = c.actorId ? userById.get(c.actorId) : undefined;
-    const name = u ? (displayNameForUser(u as never) ?? null) : null;
-    if (c.actorIsAgent || u?.userType === "agent") {
-      return { kind: "agent", id: c.actorId, name };
-    }
-    if (!c.actorId) return { kind: "system", id: null, name: null };
-    return {
-      kind: "human",
-      id: c.actorId,
-      name,
-      isViewer: c.actorId === viewer,
-    };
-  };
+  const actorOf = (c: Candidate): ActivityActor =>
+    activityActorOf(
+      c.actorId,
+      c.actorId ? userById.get(c.actorId) : undefined,
+      viewer,
+      c.actorIsAgent
+    );
 
   return page.map((c): ActivityRow => {
     const project = c.projectId

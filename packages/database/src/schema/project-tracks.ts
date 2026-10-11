@@ -80,6 +80,12 @@ export interface ProjectTrackStageHistoryEntry {
   enteredAt: string;
   /** Who moved it: the agent's user id when an agent drove it, else the human. */
   actor: string;
+  /**
+   * The verdict of the entered stage's `check` ENTRY gate (measuring the
+   * stage LEFT), stamped after the gate ran (`TrackRepository.stampStageCheck`).
+   * Absent = no check gate ran on this move.
+   */
+  check?: { passed: boolean; failing: string[]; reason?: string };
 }
 
 /**

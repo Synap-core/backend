@@ -84,6 +84,7 @@ import {
   readTrackDirection,
   readTrackKpi,
   readTrackStage,
+  readTrackCheckGate,
   readTrackStageHistory,
   slotKeyBase,
   CLOSED_TRACK_STATUSES,
@@ -94,6 +95,7 @@ import {
   TRACK_KPI_UNIT_MAX,
   type TrackKpi,
   type TrackPausedBy,
+  type TrackCheckGate,
   type TrackStage,
   type TrackStageHistoryEntry,
   type TrackStatus,
@@ -103,7 +105,9 @@ import {
   CHECK_GATE_METADATA_KEY,
   OPEN_SESSION_STATUSES,
 } from "@synap-core/types/focus-sessions";
+import type { ActivityActor } from "@synap-core/types/activity";
 import { trackRepository } from "./track-repo.js";
+import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
@@ -207,6 +211,10 @@ void _sameKpi;
 
 // ── projection ──────────────────────────────────────────────────────────────
 
+export type TrackViewStageHistoryEntry = TrackStageHistoryEntry & {
+  enteredBy?: ActivityActor;
+};
+
 export interface TrackView {
   id: string;
   projectId: string;
@@ -230,8 +238,18 @@ export interface TrackView {
    * live playbook, whose params may have moved on since the pin.
    */
   declaredParams: unknown[];
-  /** Every stage the track entered, oldest first (0274). */
-  stageHistory: TrackStageHistoryEntry[];
+  /**
+   * Every stage the track entered, oldest first (0274). `enteredBy` names the
+   * mover (resolved by the pod — a client cannot); absent when the names could
+   * not be read (a write's fallback view), never a guessed name.
+   */
+  stageHistory: TrackViewStageHistoryEntry[];
+  /**
+   * What the check gate that HOLDS the track recorded — `null` unless
+   * `pausedBy === "check"`. `fromStage` is the step it measured (the one
+   * left); `stageKey` the step entered, whose entry gate it is.
+   */
+  checkGate: TrackCheckGate | null;
   /** Where the track is heading, one line (0302) — `null` when unsaid. */
   direction: string | null;
   /**
@@ -250,7 +268,9 @@ export interface TrackView {
  */
 export function toTrackView(
   track: ProjectTrack,
-  sessionsByStage?: Readonly<Record<string, number>>
+  sessionsByStage?: Readonly<Record<string, number>>,
+  /** Names the stage-history movers — absent ⇒ `enteredBy` absent. */
+  actorOf?: (actorId: string) => ActivityActor
 ): TrackView {
   return {
     id: track.id,
@@ -271,7 +291,10 @@ export function toTrackView(
     declaredParams: Array.isArray(track.definitionSnapshot?.params)
       ? track.definitionSnapshot.params
       : [],
-    stageHistory: readTrackStageHistory(track.stageHistory),
+    stageHistory: readTrackStageHistory(track.stageHistory).map((e) =>
+      actorOf ? { ...e, enteredBy: actorOf(e.actor) } : e
+    ),
+    checkGate: readTrackCheckGate(track),
     direction: readTrackDirection(track.direction),
     kpi: readTrackKpi(track.kpi),
     createdAt: new Date(track.createdAt).toISOString(),
@@ -343,8 +366,17 @@ export async function loadTrackViews(
   tracks: ProjectTrack[],
   actor: Pick<TrackActor, "userId">
 ): Promise<TrackView[]> {
-  const counts = await countTrackSessionsByStage(tracks, actor.userId);
-  return tracks.map((t) => toTrackView(t, counts.get(t.id) ?? {}));
+  const [counts, movers] = await Promise.all([
+    countTrackSessionsByStage(tracks, actor.userId),
+    loadActorRows(
+      tracks.flatMap((t) =>
+        readTrackStageHistory(t.stageHistory).map((e) => e.actor)
+      )
+    ),
+  ]);
+  const actorOf = (id: string) =>
+    activityActorOf(id || null, movers.get(id), actor.userId);
+  return tracks.map((t) => toTrackView(t, counts.get(t.id) ?? {}, actorOf));
 }
 
 /**
@@ -1314,10 +1346,42 @@ export async function applyTrackStageAdvance(params: {
       )
     : null;
 
-  // The RETURNED row is the post-gate state: when the gate paused the track,
-  // re-read it, so `paused: true` never travels beside `status: "active"`.
+  // A CHECK verdict is stamped on the history entry this move appended, so
+  // the track's timeline says whether the step left was met (U5 history) —
+  // a pass left no trace anywhere before. After the move, never able to undo
+  // it: a failed stamp is logged, and the advance stands.
+  let stamped = false;
+  if (outcome?.kind === "check") {
+    const entered = readTrackStageHistory(updated.stageHistory).at(-1);
+    if (entered) {
+      try {
+        stamped =
+          (await (
+            await repo()
+          ).stampStageCheck(
+            track.id,
+            entered.enteredAt,
+            {
+              passed: outcome.passed,
+              failing: outcome.failing,
+              ...(outcome.reason ? { reason: outcome.reason } : {}),
+            },
+            userId
+          )) !== null;
+      } catch (err) {
+        logger.warn(
+          { err, trackId: track.id, toStage },
+          "check verdict not stamped on the track's stage history"
+        );
+      }
+    }
+  }
+
+  // The RETURNED row is the post-gate state: when the gate paused the track
+  // (or its verdict was stamped), re-read it, so `paused: true` never travels
+  // beside `status: "active"`.
   let after = updated;
-  if (outcome?.paused) {
+  if (outcome?.paused || stamped) {
     const db = await getDb();
     const [row] = await db
       .select()

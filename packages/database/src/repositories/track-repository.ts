@@ -286,6 +286,46 @@ export class TrackRepository extends BaseRepository<
   }
 
   /**
+   * Stamp a check gate's verdict on the stage-history entry its move appended
+   * — the entry whose `enteredAt` is `enteredAt` and which is still the LAST
+   * one (a later move means this verdict no longer describes the newest entry;
+   * it is then written onto the matching entry wherever it sits). Not an
+   * append: the timeline keeps exactly one entry per move. Returns the row, or
+   * `null` when no entry matched. Emits `track.update.completed` like every
+   * track write.
+   */
+  async stampStageCheck(
+    id: string,
+    enteredAt: string,
+    check: { passed: boolean; failing: string[]; reason?: string },
+    userId: string
+  ): Promise<ProjectTrack | null> {
+    const [track] = await this.db
+      .update(projectTracks)
+      .set({
+        stageHistory: sql`(
+          SELECT COALESCE(jsonb_agg(
+            CASE WHEN e->>'enteredAt' = ${enteredAt}
+              THEN e || jsonb_build_object('check', ${JSON.stringify(check)}::jsonb)
+              ELSE e END
+            ORDER BY i), '[]'::jsonb)
+          FROM jsonb_array_elements(${projectTracks.stageHistory}) WITH ORDINALITY AS t(e, i)
+        )`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(projectTracks.id, id),
+          sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${projectTracks.stageHistory}) e WHERE e->>'enteredAt' = ${enteredAt})`
+        )
+      )
+      .returning();
+    if (!track) return null;
+    await this.emitCompleted("update", track, userId);
+    return track as ProjectTrack;
+  }
+
+  /**
    * PATCH the track's param answers (0274), merged IN SQL:
    * `(params || set) - clear`. Only the keys this write names change, so two
    * concurrent answers to different params both land — a read-modify-write of

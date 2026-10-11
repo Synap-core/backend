@@ -614,6 +614,30 @@ describe("activity.list — one ledger through the real door", () => {
     );
   });
 
+  it("the track filter carries the track's own stage-gate decisions (no session) — U5", async () => {
+    const GATE = randomUUID();
+    await proposal({
+      id: GATE,
+      status: "approved",
+      targetType: "track",
+      targetId: TRACK,
+      proposalType: "playbook.stage_gate",
+      at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      agent: null,
+      ws: null,
+      reviewedBy: USER,
+      reviewedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+      data: { trackId: TRACK, stageKey: "review", stageName: "Review" },
+    });
+    try {
+      const got = ids((await list({ trackId: TRACK, limit: 100 })).items);
+      expect(got).toContain(`decision:${GATE}`);
+      expect(got).toContain(`proposal:${GATE}`);
+    } finally {
+      await q(`delete from proposals where id = $1`, [GATE]);
+    }
+  });
+
   it("a roster member reads a shared session's real name in a proposal title", async () => {
     const { items } = await list({ limit: 100 });
     const row = items.find((r) => r.id === `proposal:${P_SHARED}`)!;
