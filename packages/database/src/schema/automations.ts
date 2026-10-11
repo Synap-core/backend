@@ -851,8 +851,39 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      *     `runPlaybook`. Producer: the rule grammar's `__mode` key.
      */
     mode?: "run" | "appointment" | "propose";
+    /**
+     * STAGE WORKER — present when this node is an ENABLED worker (work model
+     * L4): a playbook activator compiled for a scope. Carries what the runner
+     * needs to decide whether to start, and how big the run is. Absent ⇒ an
+     * ordinary playbook run, unchanged. Producer: the activator compiler
+     * (`playbook-activators.ts` / `workers.ts`, via the rule grammar's
+     * `__worker` key). Forwarded WHOLE by every executor call site (one field,
+     * one forward — the `playbook-run-mode-honoured` tripwire pins it).
+     */
+    worker?: PlaybookRunWorkerSpec;
     errorHandling?: NodeErrorHandling;
   };
+}
+
+/**
+ * A worker node's runtime spec. Mirrors the declared activator
+ * (`WorkerActivator`, `@synap-core/types/workers`) minus what the rule's
+ * trigger already encodes. `writes: "propose"` = every agent write inside a
+ * per_moment batch becomes a proposal (the batch card); a per_thing worker's
+ * propose mode is the node's own `mode: "propose"` instead.
+ */
+export interface PlaybookRunWorkerSpec {
+  /** The activator's key within its playbook (`activatorKey`). */
+  key: string;
+  size: "per_thing" | "per_moment";
+  /** The subject kind or role the worker works on. */
+  profileSlug: string;
+  /** The status its things sit in (enters_status / count / schedule). */
+  status?: string;
+  /** A `count` worker's threshold. */
+  minCount?: number;
+  maxPendingApprovals?: number;
+  writes?: "run" | "propose";
 }
 
 export type AutomationNode =

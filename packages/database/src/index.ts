@@ -75,6 +75,7 @@ export * from "./utils/open-run-session.js";
 export * from "./utils/owed-slot-predicate.js";
 export * from "./utils/open-room-question.js";
 export * from "./utils/live-run-status.js";
+export * from "./utils/worker-enablement.js";
 export * from "./utils/resolve-session-project.js";
 export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
