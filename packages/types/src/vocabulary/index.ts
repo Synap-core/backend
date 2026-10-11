@@ -574,6 +574,10 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
   // "Property" and proposals read `Retire Property "x"`. It keys the alias
   // TARGET, so `property`, `property_def` and `property_defs` all land here.
   property: "Field",
+  // A computer (MACHINE-IDENTITY-PLAN): an agent user of type `machine` that
+  // holds its own key and hosts agents. "Machine" is the code word; the person
+  // reads "Computer".
+  machine: "Computer",
 };
 
 /**

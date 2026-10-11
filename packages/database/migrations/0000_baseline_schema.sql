@@ -55,6 +55,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS "users_control_plane_user_id_unique"
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "user_type" text DEFAULT 'human';
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_metadata" jsonb;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_via" text;
+-- 0320: the computer an agent runs on (MACHINE-IDENTITY-PLAN). FK + the
+-- (person, type, computer) unique index live in 0320.
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "host_user_id" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "kratos_identity_id" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
@@ -4426,6 +4429,8 @@ EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 -- 0260: connection target (idempotent for a pre-0260 baseline).
 ALTER TYPE governance_target ADD VALUE IF NOT EXISTS 'connection';
+-- 0320: the `class` principal ("for all computers").
+ALTER TYPE governance_principal ADD VALUE IF NOT EXISTS 'class';
 DO $$ BEGIN
   CREATE TYPE governance_verdict AS ENUM ('auto', 'propose');
 EXCEPTION WHEN duplicate_object THEN null;
@@ -4449,6 +4454,7 @@ CREATE TABLE IF NOT EXISTS "governance_rules" (
 );
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "principal_kind" governance_principal;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "agent_user_id" text;
+ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "principal_class" text; -- 0320
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "scope_kind" governance_scope;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "target_kind" governance_target;
@@ -4605,6 +4611,7 @@ CREATE TABLE IF NOT EXISTS "governance_ceilings" (
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "axis" governance_ceiling_axis;
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "principal_kind" governance_principal;
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "agent_user_id" text;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "principal_class" text; -- 0320
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "scope_kind" governance_scope;
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "limit_value" integer;

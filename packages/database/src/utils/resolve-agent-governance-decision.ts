@@ -217,13 +217,46 @@ export type AgentGovernanceResolution =
 /** A candidate row's specificity-scoring columns (subset of `governanceRules`). */
 interface GovernanceRuleCandidate {
   id: string;
-  principalKind: "agent" | "any";
+  principalKind: "agent" | "any" | "class";
   scopeKind: "workspace" | "pod";
   targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile: string | null;
   verdict: "auto" | "propose";
   createdAt: Date;
+}
+
+/**
+ * Principal specificity — ONE ranking for rules AND ceilings: a specific
+ * agent (2) > every agent of a class, e.g. "for all computers" (1) > any (0).
+ */
+export function principalSpecificity(
+  principalKind: "agent" | "any" | "class"
+): number {
+  return principalKind === "agent" ? 2 : principalKind === "class" ? 1 : 0;
+}
+
+/**
+ * The SQL eligibility of a principal for `agentUserId`: `any`, that agent's
+ * own rows, and the rows of its CLASS (its `users.agent_type`, read in the
+ * same statement — e.g. 'machine' for "for all computers"). Shared by the
+ * rule and both ceiling resolvers so the three can never disagree.
+ */
+function principalEligible(
+  table: typeof governanceRules | typeof governanceCeilings,
+  agentUserId: string
+) {
+  return or(
+    eq(table.principalKind, "any"),
+    and(
+      eq(table.principalKind, "agent"),
+      eq(table.agentUserId, agentUserId)
+    ),
+    and(
+      eq(table.principalKind, "class"),
+      sql`${table.principalClass} = (SELECT ${users.agentType} FROM ${users} WHERE ${users.id} = ${agentUserId})`
+    )
+  );
 }
 
 /**
@@ -303,8 +336,10 @@ function scoreRuleTarget(
  * `governance_rules` row, minus persistence columns.
  */
 export interface DraftGovernanceRuleTarget {
-  principalKind: "any" | "agent";
+  principalKind: "any" | "agent" | "class";
   agentUserId?: string | null;
+  /** Set when principalKind = 'class' (e.g. 'machine'). */
+  principalClass?: string | null;
   scopeKind: "pod" | "workspace";
   workspaceId?: string | null;
   targetKind: "action" | "profile" | "capability" | "connection";
@@ -322,6 +357,8 @@ export interface GovernedWriteDescriptor {
   action: string;
   profileSlug?: string | null;
   agentUserId?: string | null;
+  /** The acting agent's class (`users.agent_type`), for a `class` rule. */
+  agentClass?: string | null;
   workspaceId?: string | null;
   capabilityId?: string | null;
   capabilityVerbName?: string | null;
@@ -349,6 +386,15 @@ export function draftRuleMatchesWrite(
   // an "agent" rule only matches its own agent's writes; "any" matches all.
   if (rule.principalKind === "agent") {
     if (!write.agentUserId || rule.agentUserId !== write.agentUserId) {
+      return false;
+    }
+  }
+  if (rule.principalKind === "class") {
+    if (
+      !write.agentUserId ||
+      !rule.principalClass ||
+      rule.principalClass !== write.agentClass
+    ) {
       return false;
     }
   }
@@ -462,15 +508,11 @@ export async function resolveGovernanceRule(
   } = input;
   const eventKey = `${subjectType}.${action}`;
 
+  // A CLASS row ("for all computers") is per-agent-identity like an agent
+  // row, so it follows the same `includeAgentPrincipal` gate.
   const principalCondition =
     includeAgentPrincipal && agentUserId
-      ? or(
-          eq(governanceRules.principalKind, "any"),
-          and(
-            eq(governanceRules.principalKind, "agent"),
-            eq(governanceRules.agentUserId, agentUserId)
-          )
-        )
+      ? principalEligible(governanceRules, agentUserId)
       : eq(governanceRules.principalKind, "any");
 
   const candidates = (await db
@@ -521,7 +563,7 @@ export async function resolveGovernanceRule(
     // future query change (or a hand-built candidate list, e.g. in tests)
     // can never accidentally let an agent-scoped rule leak into a caller
     // (the automation door) that must not consult per-agent rules.
-    if (!includeAgentPrincipal && rule.principalKind === "agent") continue;
+    if (!includeAgentPrincipal && rule.principalKind !== "any") continue;
     // ATTRIBUTION IS THE PREREQUISITE of the reversible-by-default lane: an
     // anonymous write (no agent) never matches the class row, so it keeps the
     // floor it had (rung 8 / propose).
@@ -536,7 +578,7 @@ export async function resolveGovernanceRule(
       capabilityVerbName
     );
     if (targetScore === undefined) continue;
-    const principalScore = rule.principalKind === "agent" ? 2 : 0;
+    const principalScore = principalSpecificity(rule.principalKind);
     const scopeScore = rule.scopeKind === "workspace" ? 2 : 0;
     const score = principalScore + scopeScore + targetScore;
     if (
@@ -1139,13 +1181,7 @@ export async function resolveDailyWriteCeiling(
           isNull(governanceCeilings.expiresAt),
           gt(governanceCeilings.expiresAt, new Date())
         ),
-        or(
-          eq(governanceCeilings.principalKind, "any"),
-          and(
-            eq(governanceCeilings.principalKind, "agent"),
-            eq(governanceCeilings.agentUserId, agentUserId)
-          )
-        ),
+        principalEligible(governanceCeilings, agentUserId),
         or(
           eq(governanceCeilings.scopeKind, "pod"),
           workspaceId
@@ -1157,7 +1193,7 @@ export async function resolveDailyWriteCeiling(
         )
       )
     )) as Array<{
-    principalKind: "agent" | "any";
+    principalKind: "agent" | "any" | "class";
     scopeKind: "workspace" | "pod";
     limitValue: number;
     createdAt: Date;
@@ -1166,7 +1202,7 @@ export async function resolveDailyWriteCeiling(
   let best: { score: number; createdAt: Date; limitValue: number } | undefined;
   for (const row of candidates) {
     const score =
-      (row.principalKind === "agent" ? 2 : 0) +
+      principalSpecificity(row.principalKind) +
       (row.scopeKind === "workspace" ? 2 : 0);
     if (
       !best ||
@@ -1217,23 +1253,17 @@ export async function resolvePendingProposalCap(
           gt(governanceCeilings.expiresAt, new Date())
         ),
         eq(governanceCeilings.scopeKind, "pod"),
-        or(
-          eq(governanceCeilings.principalKind, "any"),
-          and(
-            eq(governanceCeilings.principalKind, "agent"),
-            eq(governanceCeilings.agentUserId, agentUserId)
-          )
-        )
+        principalEligible(governanceCeilings, agentUserId)
       )
     )) as Array<{
-    principalKind: "agent" | "any";
+    principalKind: "agent" | "any" | "class";
     limitValue: number;
     createdAt: Date;
   }>;
 
   let best: { score: number; createdAt: Date; limitValue: number } | undefined;
   for (const row of candidates) {
-    const score = row.principalKind === "agent" ? 2 : 0;
+    const score = principalSpecificity(row.principalKind);
     if (
       !best ||
       score > best.score ||
@@ -1306,9 +1336,51 @@ export async function countAgentWritesTodayUtc(
   return row?.n ?? 0;
 }
 
+/** How strict a resolution is — the host step keeps the stricter one. */
+function strictness(r: AgentGovernanceResolution): number {
+  switch (r.decision) {
+    case "deny":
+      return 2;
+    case "propose":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * THE call site of agent governance (`checkPermissionOrPropose`, the
+ * automation door, the dry-run all come here).
+ *
+ * HOST STEP (MACHINE-IDENTITY-PLAN §2c, founder decision 1 "never looser"):
+ * an agent that runs on a COMPUTER (`users.host_user_id`) is resolved twice
+ * through the SAME ladder — once as itself, once as its computer — and the
+ * STRICTER verdict wins (deny > propose > execute). No second engine: both
+ * passes are `resolveForPrincipal`, which is the unchanged ladder. Floors and
+ * the destructive rungs are untouched (they run in both passes). To loosen
+ * "Claude Code on devbox" you loosen devbox itself, or "all computers".
+ */
 export async function resolveAgentGovernanceDecision(
   input: ResolveAgentGovernanceInput
 ): Promise<AgentGovernanceResolution> {
+  const own = await resolveForPrincipal(input);
+  if (own.resolution.decision === "not-agent" || !own.hostUserId) {
+    return own.resolution;
+  }
+  const host = await resolveForPrincipal({
+    ...input,
+    agentUserId: own.hostUserId,
+  });
+  if (host.resolution.decision === "not-agent") return own.resolution;
+  return strictness(host.resolution) > strictness(own.resolution)
+    ? host.resolution
+    : own.resolution;
+}
+
+async function resolveForPrincipal(input: ResolveAgentGovernanceInput): Promise<{
+  resolution: AgentGovernanceResolution;
+  hostUserId: string | null;
+}> {
   const { db, agentUserId, workspaceId, subjectType, action } = input;
 
   // (b) Confirm the actor is an agent user (defence-in-depth) + load metadata.
@@ -1316,14 +1388,19 @@ export async function resolveAgentGovernanceDecision(
     .select({
       userType: users.userType,
       agentMetadata: users.agentMetadata,
+      hostUserId: users.hostUserId,
     })
     .from(users)
     .where(eq(users.id, agentUserId))
     .limit(1);
 
   if (agentUser?.userType !== "agent") {
-    return { decision: "not-agent" };
+    return { resolution: { decision: "not-agent" }, hostUserId: null };
   }
+  const hostUserId =
+    agentUser.hostUserId && agentUser.hostUserId !== agentUserId
+      ? agentUser.hostUserId
+      : null;
 
   // (c) Load workspace settings + compute agent-owned-workspace. At pod scope
   // (no workspace) there is no override source; both fall back to absent.
@@ -1455,7 +1532,10 @@ export async function resolveAgentGovernanceDecision(
 
   // (e) Verdict → plain resolution. All side effects stay with the caller.
   if (decision.verdict === "deny") {
-    return { decision: "deny", reason: decision.reason };
+    return {
+      resolution: { decision: "deny", reason: decision.reason },
+      hostUserId,
+    };
   }
   if (decision.verdict === "propose") {
     // `reasonCode` is the STRUCTURED companion to `reason` — the PROPOSE_REASON
@@ -1463,9 +1543,12 @@ export async function resolveAgentGovernanceDecision(
     // Carried out so the chat door can persist it on the proposal row and the
     // review UI can branch on it (e.g. force-propose "why this needs you").
     return {
-      decision: "propose",
-      reason: decision.reason,
-      reasonCode: decision.reasonCode,
+      resolution: {
+        decision: "propose",
+        reason: decision.reason,
+        reasonCode: decision.reasonCode,
+      },
+      hostUserId,
     };
   }
   // `explicitAutoApproveFor` now carries the MATCHED RULE pattern (one-store),
@@ -1475,13 +1558,18 @@ export async function resolveAgentGovernanceDecision(
   // (execute came from rung 3 ownership or rung 8 default) yields `undefined`,
   // which the caller already falls back to DEFAULT_AUTO_APPROVE for.
   return {
-    decision: "execute",
-    explicitAutoApproveFor: ruleMatch ? [ruleMatch.matchedPattern] : undefined,
-    // Set by the engine only when rung 2.8 decided — never inferred from a
-    // match alone, since a rung above it may have been the one that executed.
-    ...(decision.governanceRuleId
-      ? { governanceRuleId: decision.governanceRuleId }
-      : {}),
+    resolution: {
+      decision: "execute",
+      explicitAutoApproveFor: ruleMatch
+        ? [ruleMatch.matchedPattern]
+        : undefined,
+      // Set by the engine only when rung 2.8 decided — never inferred from a
+      // match alone, since a rung above it may have been the one that executed.
+      ...(decision.governanceRuleId
+        ? { governanceRuleId: decision.governanceRuleId }
+        : {}),
+    },
+    hostUserId,
   };
 }
 

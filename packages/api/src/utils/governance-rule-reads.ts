@@ -20,6 +20,7 @@
  * the enforcement path is `resolveGovernanceRule` (@synap/database), untouched.
  */
 
+import { agentDisplayName } from "@synap-core/types/agents";
 import {
   db,
   eq,
@@ -83,11 +84,35 @@ export async function resolveAgentLabels(
   if (ids.length === 0) return labels;
 
   const agents = await db
-    .select({ id: users.id, name: users.name, agentType: users.agentType })
+    .select({
+      id: users.id,
+      name: users.name,
+      agentType: users.agentType,
+      hostUserId: users.hostUserId,
+    })
     .from(users)
     .where(inArray(users.id, ids));
+  // An agent on a computer reads "Claude Code on devbox" (the ONE phrasing,
+  // `agentDisplayName`) — its twin on another computer is another principal.
+  const hostIds = Array.from(
+    new Set(agents.map((a) => a.hostUserId).filter((h): h is string => !!h))
+  );
+  const hostNames = new Map<string, string | null>();
+  if (hostIds.length > 0) {
+    for (const h of await db
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(inArray(users.id, hostIds)))
+      hostNames.set(h.id, h.name);
+  }
   for (const a of agents) {
-    labels.set(a.id, a.name ?? a.agentType ?? a.id);
+    const name = a.name ?? a.agentType ?? a.id;
+    labels.set(
+      a.id,
+      a.hostUserId
+        ? agentDisplayName({ name, hostName: hostNames.get(a.hostUserId) })
+        : name
+    );
   }
   return labels;
 }
@@ -106,6 +131,8 @@ export async function mapRulesWithAgentLabels(rows: GovernanceRuleRow[]) {
     id: r.id,
     principalKind: r.principalKind,
     agentUserId: r.agentUserId,
+    /** `class` rows: which class ("machine" = for all computers). */
+    principalClass: r.principalClass,
     agentLabel: r.agentUserId
       ? (agentLabels.get(r.agentUserId) ?? r.agentUserId)
       : null,

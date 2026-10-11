@@ -53,6 +53,8 @@ export const governanceCeilings = pgTable(
     principalKind: governancePrincipalEnum("principal_kind").notNull(),
     // Set when principalKind = 'agent'.
     agentUserId: text("agent_user_id"),
+    // Set when principalKind = 'class' (an agent_type, e.g. 'machine').
+    principalClass: text("principal_class"),
 
     scopeKind: governanceScopeEnum("scope_kind").notNull(),
     // Set when scopeKind = 'workspace'.

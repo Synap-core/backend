@@ -24,12 +24,23 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
+/**
+ * `class` (0320): every agent of one CLASS — today only `machine` ("for all
+ * computers"), named in `principal_class`. Ranked between a specific agent and
+ * `any`: agent=2 > class=1 > any=0, the same in governance_ceilings.
+ */
 export const governancePrincipalEnum = pgEnum("governance_principal", [
   "agent",
   "any",
+  "class",
 ]);
 export const GOVERNANCE_PRINCIPALS = governancePrincipalEnum.enumValues;
 export type GovernancePrincipal = (typeof GOVERNANCE_PRINCIPALS)[number];
+
+/** The classes a `class` principal may name (`principal_class`). */
+export const GOVERNANCE_PRINCIPAL_CLASSES = ["machine"] as const;
+export type GovernancePrincipalClass =
+  (typeof GOVERNANCE_PRINCIPAL_CLASSES)[number];
 
 export const governanceScopeEnum = pgEnum("governance_scope", [
   "workspace",
@@ -70,6 +81,8 @@ export const governanceRules = pgTable(
     principalKind: governancePrincipalEnum("principal_kind").notNull(),
     // Set when principalKind = 'agent'.
     agentUserId: text("agent_user_id"),
+    // Set when principalKind = 'class' (an agent_type, e.g. 'machine').
+    principalClass: text("principal_class"),
 
     scopeKind: governanceScopeEnum("scope_kind").notNull(),
     // Set when scopeKind = 'workspace'.

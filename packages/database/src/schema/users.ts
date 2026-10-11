@@ -23,7 +23,12 @@ import { userPreferences } from "./user-preferences.js";
  * equality floor between the two. A writer stamping a new value fails the
  * build here first.
  */
-export type AgentCreatedVia = "cli" | "ui" | "system" | "intelligence-service";
+export type AgentCreatedVia =
+  | "cli"
+  | "ui"
+  | "system"
+  | "intelligence-service"
+  | "device";
 
 export interface AgentMetadata {
   agentType: string;
@@ -95,6 +100,19 @@ export interface AgentMetadata {
    * "advisory" is implemented today — the field exists so a future "enforced"
    * value doesn't require another migration. */
   focusMode?: "advisory";
+  /**
+   * COMPUTER principals only (`agent_type = 'machine'`, MACHINE-IDENTITY-PLAN
+   * §2a): what the device flow reported. `hostname` is how a re-enrolment
+   * offers to reuse the computer; the editable display name is `users.name`.
+   */
+  hostname?: string;
+  platform?: string;
+  /**
+   * COMPUTER principals only: this computer's key lifetime in days. Absent ⇒
+   * the pod default (`pod_settings.settings.machineDefaults.keyTtlDays`), else
+   * 90. Applies to the computer's key and to the keys of the agents it hosts.
+   */
+  keyTtlDays?: number;
 }
 
 export const users = pgTable("users", {
@@ -131,6 +149,13 @@ export const users = pgTable("users", {
   // agents created before migration 0225. Stamped at each creation call-site.
   createdVia: text("created_via").$type<AgentCreatedVia>(),
   parentAgentId: text("parent_agent_id").references((): any => users.id, {
+    onDelete: "set null",
+  }),
+  // The COMPUTER this agent runs on (0320, MACHINE-IDENTITY-PLAN §2b). NULL =
+  // no computer (every agent before 0320). Deliberately NOT `parent_agent_id`,
+  // which means orchestrator → persona and hands the parent read access to
+  // the child's configs. Uniqueness: one agent per (person, type, computer).
+  hostUserId: text("host_user_id").references((): any => users.id, {
     onDelete: "set null",
   }),
 

@@ -141,7 +141,7 @@ async function assertCanManageCeiling(
   ceiling: {
     scopeKind: "workspace" | "pod";
     workspaceId?: string | null;
-    principalKind: "agent" | "any";
+    principalKind: "agent" | "any" | "class";
     agentUserId?: string | null;
   }
 ): Promise<void> {

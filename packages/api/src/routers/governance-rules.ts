@@ -45,6 +45,7 @@ import {
   setReversibleDefault,
 } from "@synap/database";
 import {
+  GOVERNANCE_PRINCIPAL_CLASSES,
   governanceRules,
   workspaceMembers,
   workspaces,
@@ -150,7 +151,7 @@ export async function assertCanManageRule(
   rule: {
     scopeKind: "workspace" | "pod";
     workspaceId?: string | null;
-    principalKind: "agent" | "any";
+    principalKind: "agent" | "any" | "class";
     agentUserId?: string | null;
   }
 ): Promise<void> {
@@ -229,8 +230,10 @@ async function assertOwnsConnection(
 
 const CreateInputSchema = z
   .object({
-    principalKind: z.enum(["agent", "any"]),
+    principalKind: z.enum(["agent", "any", "class"]),
     agentUserId: z.string().min(1).optional(),
+    /** `class` only: which class — "machine" = "for all computers". */
+    principalClass: z.enum(GOVERNANCE_PRINCIPAL_CLASSES).optional(),
     scopeKind: z.enum(["workspace", "pod"]),
     workspaceId: z.string().uuid().optional(),
     targetKind: z.enum(["action", "profile", "capability", "connection"]),
@@ -243,6 +246,10 @@ const CreateInputSchema = z
   .refine((v) => v.principalKind !== "agent" || !!v.agentUserId, {
     message: "agentUserId is required when principalKind is 'agent'",
     path: ["agentUserId"],
+  })
+  .refine((v) => (v.principalKind === "class") === !!v.principalClass, {
+    message: "principalClass is required when (and only when) principalKind is 'class'",
+    path: ["principalClass"],
   })
   .refine((v) => v.scopeKind !== "workspace" || !!v.workspaceId, {
     message: "workspaceId is required when scopeKind is 'workspace'",
@@ -619,6 +626,8 @@ export const governanceRulesRouter = router({
           principalKind: input.principalKind,
           agentUserId:
             input.principalKind === "agent" ? input.agentUserId : null,
+          principalClass:
+            input.principalKind === "class" ? input.principalClass : null,
           scopeKind: input.scopeKind,
           workspaceId:
             input.scopeKind === "workspace" ? input.workspaceId : null,

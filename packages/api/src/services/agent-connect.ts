@@ -39,7 +39,12 @@ import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { parsePermission, patternMatches } from "@synap-core/types/grants";
 import { createPendingProposal } from "../utils/permission-check.js";
 import { assertPodAdmin } from "../trpc.js";
-import { earlierEnd, liveGrantsOfKey, scopesWithinLive } from "./key-grant.js";
+import {
+  clipHostedAgentGrants,
+  earlierEnd,
+  liveGrantsOfKey,
+  scopesWithinLive,
+} from "./key-grant.js";
 
 export const AGENT_CONNECT_TARGET_TYPE = "agent";
 export const AGENT_CONNECT_PROPOSAL_TYPE = "connect";
@@ -233,6 +238,8 @@ export async function narrowKeyGrants(args: {
       createdBy: args.createdBy,
     }))
   );
+  // Narrowing a COMPUTER's key narrows what its agents may hold.
+  await clipHostedAgentGrants(live[0]!.principalUserId, args.createdBy);
   return true;
 }
 

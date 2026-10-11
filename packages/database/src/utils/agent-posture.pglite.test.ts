@@ -34,7 +34,9 @@ beforeAll(async () => {
     CREATE TABLE users (
       id text PRIMARY KEY,
       user_type text NOT NULL DEFAULT 'human',
-      agent_metadata jsonb
+      agent_metadata jsonb,
+      agent_type text,
+      host_user_id text
     );
     CREATE TABLE entities (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -42,7 +44,7 @@ beforeAll(async () => {
       document_id uuid,
       deleted_at timestamptz
     );
-    CREATE TYPE governance_principal AS ENUM ('agent','any');
+    CREATE TYPE governance_principal AS ENUM ('agent','any','class');
     CREATE TYPE governance_scope AS ENUM ('workspace','pod');
     CREATE TYPE governance_target AS ENUM ('action','profile','capability','connection');
     CREATE TYPE governance_verdict AS ENUM ('auto','propose');
@@ -50,6 +52,7 @@ beforeAll(async () => {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       principal_kind governance_principal NOT NULL,
       agent_user_id text,
+      principal_class text,
       scope_kind governance_scope NOT NULL,
       workspace_id uuid,
       target_kind governance_target NOT NULL,
@@ -66,6 +69,7 @@ beforeAll(async () => {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       principal_kind text NOT NULL,
       agent_user_id text,
+      principal_class text,
       scope_kind text NOT NULL,
       workspace_id uuid,
       axis text NOT NULL,

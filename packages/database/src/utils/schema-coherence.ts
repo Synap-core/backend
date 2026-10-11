@@ -27,7 +27,10 @@
 
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { sql } from "../client-pg.js";
-import { governanceTargetEnum } from "../schema/governance-rules.js";
+import {
+  governancePrincipalEnum,
+  governanceTargetEnum,
+} from "../schema/governance-rules.js";
 import { governanceCeilingAxisEnum } from "../schema/governance-ceilings.js";
 import { entityExternalLinks } from "../schema/entity-external-links.js";
 import { notificationPreferences } from "../schema/notifications.js";
@@ -961,6 +964,24 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "apps",
     column: "agent_user_id",
     addedBy: "0313_apps_agent_user.sql",
+  },
+  // Computers (0320, MACHINE-IDENTITY-PLAN): the host link every governed
+  // agent write reads (host step), and the class principal column both rule
+  // stores select. Missing means every agent write would 42703.
+  {
+    table: "users",
+    column: "host_user_id",
+    addedBy: "0320_machine_identity.sql",
+  },
+  {
+    table: "governance_rules",
+    column: "principal_class",
+    addedBy: "0320_machine_identity.sql",
+  },
+  {
+    table: "governance_ceilings",
+    column: "principal_class",
+    addedBy: "0320_machine_identity.sql",
   },
 
   // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
@@ -1909,6 +1930,9 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
 const REQUIRED_ENUMS = [
   governanceTargetEnum,
   governanceCeilingAxisEnum,
+  // 0320: `class` ("for all computers") — the resolver compares it on every
+  // governed agent write, so a pod missing it fails every agent write.
+  governancePrincipalEnum,
 ] as const;
 
 /** A tagged-template query function shaped like postgres.js's `sql`. */

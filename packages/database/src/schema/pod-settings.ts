@@ -97,7 +97,17 @@ export interface GovernanceBackfillMarker {
   convergedAt: string;
 }
 
+/**
+ * Pod defaults for COMPUTERS (MACHINE-IDENTITY-PLAN §5, founder decision 4):
+ * the key lifetime a computer and the agents it hosts get when the computer
+ * itself sets none (`users.agent_metadata.keyTtlDays`). Absent ⇒ 90 days.
+ */
+export interface PodMachineDefaults {
+  keyTtlDays?: number;
+}
+
 export interface PodSettingsBlob {
+  machineDefaults?: PodMachineDefaults;
   intelligenceDefaults?: PodIntelligenceDefaults;
   proactiveDefaults?: PodProactiveDefaults;
   catalogSyncStamps?: Record<string, CatalogSyncStamp>;

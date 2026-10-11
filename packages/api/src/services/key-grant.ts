@@ -16,8 +16,18 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db, eq, GrantRepository, GrantRoleRepository } from "@synap/database";
-import { apiKeys } from "@synap/database/schema";
+import {
+  and,
+  db,
+  eq,
+  gt,
+  isNull,
+  or,
+  GrantRepository,
+  GrantRoleRepository,
+} from "@synap/database";
+import { apiKeys, grants as grantRows, users } from "@synap/database/schema";
+import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import { MAX_GRANT_PERMISSIONS } from "@synap-core/types/grants";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
@@ -153,6 +163,10 @@ export async function attachGrantsOrRevoke(args: {
         createdBy: args.createdBy,
       }))
     );
+    // A hosted agent never holds more than its computer; a computer whose
+    // grant changed re-clips the agents it hosts (MACHINE-IDENTITY-PLAN §2c).
+    // Inside the try: if the clip fails, the key is revoked below.
+    await clipHostedAgentGrants(args.principalUserId, args.createdBy);
   } catch (err) {
     await revokeApiKeys(db, {
       where: eq(apiKeys.id, args.apiKeyId),
@@ -296,4 +310,172 @@ export function grantWithinLive(
     first = false;
   }
   return first ? null : { endsAt };
+}
+
+// ---------------------------------------------------------------------------
+// Hosted agents never exceed their computer (MACHINE-IDENTITY-PLAN §2c).
+// ---------------------------------------------------------------------------
+
+/**
+ * What a principal may touch right now: the live grants of every key it holds
+ * that still works (active, not revoked, not expired). Empty = nothing — a
+ * computer whose keys were all revoked lends its agents nothing.
+ */
+async function liveGrantsOfPrincipal(
+  userId: string
+): Promise<LiveGrantScope[]> {
+  const now = new Date();
+  const keys = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.userId, userId),
+        eq(apiKeys.isActive, true),
+        isNull(apiKeys.revokedAt),
+        or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, now))
+      )
+    );
+  const out: LiveGrantScope[] = [];
+  for (const key of keys) out.push(...(await liveGrantsOfKey(key.id)));
+  return out;
+}
+
+/** One scope, written so two equal reaches compare equal. */
+function scopeKey(s: {
+  permissions: readonly string[];
+  workspaceIds?: readonly string[] | null;
+  projectIds?: readonly string[] | null;
+  entityIds?: readonly string[] | null;
+  expiresAt?: Date | null;
+}): string {
+  const sorted = (v?: readonly string[] | null) =>
+    v && v.length > 0 ? [...new Set(v)].sort() : null;
+  return JSON.stringify([
+    sorted(s.permissions),
+    sorted(s.workspaceIds),
+    sorted(s.projectIds),
+    sorted(s.entityIds),
+    s.expiresAt ? s.expiresAt.getTime() : null,
+  ]);
+}
+
+/**
+ * THE ONE DOOR that keeps "an agent never exceeds its computer" true for
+ * ACCESS. Call it after EVERY grant write, with the principal whose grants
+ * changed:
+ *   - a COMPUTER (`agent_type = 'machine'`): every agent it hosts
+ *     (`users.host_user_id`) is re-clipped to its new reach — the narrowing
+ *     or revoke of a computer reaches its agents at once;
+ *   - a HOSTED agent: that agent is clipped to its computer's live grants;
+ *   - anyone else: nothing to do (one indexed read).
+ *
+ * A write-time invariant, not a second evaluator: `KeyGrant` stays "any one
+ * scope permits" and no consumer intersects anything at request time. Each
+ * key's live grants are intersected with the computer's (`scopesWithinLive`,
+ * the same rule `/setup/agent` bounds a new key with) and replaced only when
+ * that changes them; a key left with nothing in common touches nothing (its
+ * live grants revoked). Fails CLOSED: a key whose clip throws has its live
+ * grants revoked before the error propagates. Returns how many keys changed.
+ *
+ * Tripwire: `__tripwires__/hosted-agent-grant-clip.tripwire.test.ts` derives
+ * every grant-write site and asserts each one calls this.
+ */
+export async function clipHostedAgentGrants(
+  principalUserId: string,
+  by: string
+): Promise<number> {
+  const [principal] = await db
+    .select({
+      id: users.id,
+      agentType: users.agentType,
+      hostUserId: users.hostUserId,
+    })
+    .from(users)
+    .where(eq(users.id, principalUserId))
+    .limit(1);
+  if (!principal) return 0;
+
+  let hostUserId: string;
+  let agentIds: string[];
+  if (principal.agentType === MACHINE_AGENT_TYPE) {
+    hostUserId = principal.id;
+    agentIds = (
+      await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.hostUserId, principal.id))
+    ).map((r) => r.id);
+  } else if (principal.hostUserId) {
+    hostUserId = principal.hostUserId;
+    agentIds = [principal.id];
+  } else {
+    return 0;
+  }
+  if (agentIds.length === 0) return 0;
+
+  const hostLive = await liveGrantsOfPrincipal(hostUserId);
+  const repo = new GrantRepository(db);
+  let changed = 0;
+  for (const agentId of agentIds) {
+    const keys = await db
+      .select({ id: apiKeys.id })
+      .from(apiKeys)
+      .where(and(eq(apiKeys.userId, agentId), isNull(apiKeys.revokedAt)));
+    for (const key of keys) {
+      try {
+        const now = Date.now();
+        const live = (
+          await db
+            .select()
+            .from(grantRows)
+            .where(
+              and(eq(grantRows.apiKeyId, key.id), isNull(grantRows.revokedAt))
+            )
+        ).filter(
+          (r) =>
+            r.permissions.length > 0 &&
+            (r.expiresAt === null || r.expiresAt.getTime() > now)
+        );
+        if (live.length === 0) continue; // already touches nothing
+        const clipped = new Map<
+          string,
+          { row: (typeof live)[number]; scope: GrantInput & { expiresAt: Date | null } }
+        >();
+        for (const row of live)
+          for (const scope of scopesWithinLive([row], hostLive, row.expiresAt))
+            clipped.set(scopeKey(scope), { row, scope });
+        const before = new Set(live.map((r) => scopeKey(r)));
+        const same =
+          before.size === clipped.size &&
+          [...clipped.keys()].every((k) => before.has(k));
+        if (same) continue;
+        changed++;
+        if (clipped.size === 0) {
+          await repo.revokeForKeys([key.id], by);
+          continue;
+        }
+        await repo.attachMany(
+          [...clipped.values()].map(({ row, scope }) => ({
+            apiKeyId: key.id,
+            principalUserId: row.principalUserId,
+            onBehalfOf: row.onBehalfOf,
+            permissions: scope.permissions,
+            workspaceIds: scope.workspaceIds ?? null,
+            projectIds: scope.projectIds ?? null,
+            entityIds: scope.entityIds ?? null,
+            expiresAt: scope.expiresAt,
+            label: row.label,
+            clientId: row.clientId,
+            roleId: row.roleId,
+            createdBy: by,
+          }))
+        );
+      } catch (err) {
+        await repo.revokeForKeys([key.id], by);
+        throw err;
+      }
+    }
+  }
+  return changed;
 }

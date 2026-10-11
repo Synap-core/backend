@@ -29,7 +29,11 @@ import {
   clientKeyScope,
 } from "@synap/database";
 import { agents, apps, users } from "@synap/database/schema";
-import type { AgentMetadata, ApiKeyToolProfile } from "@synap/database/schema";
+import type {
+  AgentCreatedVia,
+  AgentMetadata,
+  ApiKeyToolProfile,
+} from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
@@ -483,11 +487,15 @@ interface ProvisionLogger {
 }
 
 /**
- * Find-or-create a non-personal (service) agent user for **(creatorId, agentType)**.
+ * Find-or-create a non-personal (service) agent user for **(creatorId, agentType)**
+ * — singleton per **(createdByUserId, agentType)** on ONE computer: with
+ * `hostUserId` it is "Claude Code on devbox", a distinct principal from the
+ * same type with no computer (`host_user_id IS NULL`, every agent before 0320).
  *
  * Shared by `createNamedAgent` and `provisionSurfaceAgentKey` so both doors share
  * one insert shape and the same race recovery against
- * `idx_users_service_agent_creator_type_unique` (migration 0228). Concurrent
+ * `idx_users_service_agent_creator_type_host_unique` (migration 0320, which
+ * replaced 0228's `idx_users_service_agent_creator_type_unique`). Concurrent
  * inserts re-select the winning (oldest) singleton.
  *
  * Non-twin service agents always stamp `writesRequireProposal: true` and
@@ -506,20 +514,29 @@ export async function findOrCreateServiceAgentUser(opts: {
    * "intelligence-service" so a synced agent-user is not mislabelled as a CLI
    * adjunct.
    */
-  createdVia?: "cli" | "intelligence-service" | "ui" | "system";
+  createdVia?: AgentCreatedVia;
+  /**
+   * The COMPUTER this agent runs on (`users.host_user_id`, 0320). Part of the
+   * identity: omitted/null finds and creates the agent with NO computer — the
+   * pre-0320 singleton, unchanged.
+   */
+  hostUserId?: string | null;
   logger?: ProvisionLogger;
 }): Promise<{ agentUserId: string; email: string }> {
   const { creatorId, agentType, label, logger } = opts;
+  const hostUserId = opts.hostUserId ?? null;
+  const sameIdentity = and(
+    eq(users.userType, "agent"),
+    eq(users.agentType, agentType),
+    eq(users.createdByUserId, creatorId),
+    eq(users.isPersonalAgent, false),
+    hostUserId ? eq(users.hostUserId, hostUserId) : isNull(users.hostUserId)
+  );
 
   // Deterministic: if a race produced more than one row for this pair, reuse the
   // OLDEST so the singleton is stable across calls.
   const existing = await db.query.users.findFirst({
-    where: and(
-      eq(users.userType, "agent"),
-      eq(users.agentType, agentType),
-      eq(users.createdByUserId, creatorId),
-      eq(users.isPersonalAgent, false)
-    ),
+    where: sameIdentity,
     orderBy: (u, { asc }) => [asc(u.createdAt)],
     columns: { id: true, email: true, createdVia: true },
   });
@@ -574,6 +591,7 @@ export async function findOrCreateServiceAgentUser(opts: {
       isPersonalAgent: false,
       createdByUserId: creatorId,
       createdVia: opts.createdVia ?? "cli",
+      hostUserId,
       agentMetadata,
       timezone: "UTC",
       locale: "en",
@@ -591,12 +609,7 @@ export async function findOrCreateServiceAgentUser(opts: {
     // DB firewall: unique (created_by_user_id, agent_type) for service agents
     // rejects a concurrent insert. Re-resolve the winning singleton and reuse.
     const raced = await db.query.users.findFirst({
-      where: and(
-        eq(users.userType, "agent"),
-        eq(users.agentType, agentType),
-        eq(users.createdByUserId, creatorId),
-        eq(users.isPersonalAgent, false)
-      ),
+      where: sameIdentity,
       orderBy: (u, { asc }) => [asc(u.createdAt)],
       columns: { id: true, email: true },
     });
@@ -884,6 +897,13 @@ export interface ProvisionSurfaceAgentKeyOpts {
    * `"builder"` lists every tool.
    */
   toolProfile?: ApiKeyToolProfile;
+  /**
+   * The COMPUTER the agent runs on (0320): the agent is then the distinct
+   * "<type> on <computer>" principal, not the creator's computer-less one.
+   */
+  hostUserId?: string | null;
+  /** Provenance of a NEW agent user (`users.created_via`). Default "cli". */
+  createdVia?: AgentCreatedVia;
   logger?: ProvisionLogger;
 }
 
@@ -980,6 +1000,8 @@ export async function provisionSurfaceAgentKey(
       // A NEW AI starts with "AI — read & propose"; an existing one keeps its own.
       capabilities: aiDefaultCapabilities(),
     },
+    hostUserId: opts.hostUserId ?? null,
+    ...(opts.createdVia ? { createdVia: opts.createdVia } : {}),
     logger,
   });
 

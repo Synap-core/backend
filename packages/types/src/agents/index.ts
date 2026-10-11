@@ -321,6 +321,7 @@ export const AGENT_ORIGINS = [
   "ui",
   "system",
   "intelligence-service",
+  "device",
 ] as const;
 export type AgentOrigin = (typeof AGENT_ORIGINS)[number];
 
@@ -332,13 +333,16 @@ export type AgentDirection = "external" | "house";
  *  - `cli`  — a person ran `synap init` for their own agent;
  *  - `ui`   — a person made or activated it from the app (an add-on agent);
  *  - `system` — the pod made it for itself (twin, capture, form agents);
- *  - `intelligence-service` — an IS persona the pod runs.
+ *  - `intelligence-service` — an IS persona the pod runs;
+ *  - `device` — a person approved a computer (and the agents on it) through
+ *    the device flow (`/setup/device`, MACHINE-IDENTITY-PLAN §4).
  */
 export const AGENT_DIRECTION_BY_ORIGIN = {
   cli: "external",
   ui: "external",
   system: "house",
   "intelligence-service": "house",
+  device: "external",
 } as const satisfies Record<AgentOrigin, AgentDirection>;
 
 /** The slice of an agent row the direction reads. */
@@ -908,4 +912,29 @@ export function externalAgentQuietFlipInMs(
   const at = agent.lastNewsAt ? Date.parse(agent.lastNewsAt) : NaN;
   if (!Number.isFinite(at)) return null;
   return Math.max(0, at + after - now);
+}
+
+// ---------------------------------------------------------------------------
+// Computers (MACHINE-IDENTITY-PLAN §2). A computer is an agent user of type
+// `machine`; an agent created on it points at it (`users.host_user_id`), so
+// "Claude Code on devbox" is its own principal, not the Mac's Claude Code.
+// ---------------------------------------------------------------------------
+
+/** `users.agent_type` of a computer principal. */
+export const MACHINE_AGENT_TYPE = "machine";
+
+/**
+ * The ONE way an agent is named where it might be confused with its twin on
+ * another computer: "Claude Code on devbox". An agent with no computer keeps
+ * its own name. Rosters, governance rows, proposals and the approval card all
+ * read this, so the phrasing cannot fork.
+ */
+export function agentDisplayName(input: {
+  name: string | null | undefined;
+  /** The display name of the computer it runs on, when it has one. */
+  hostName?: string | null;
+}): string {
+  const name = input.name?.trim() || resolveObjectNoun("agent");
+  const host = input.hostName?.trim();
+  return host ? `${name} on ${host}` : name;
 }

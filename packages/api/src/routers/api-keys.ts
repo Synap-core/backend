@@ -39,6 +39,7 @@ import {
   assertGrantInput,
   attachFullAccessGrant,
   attachGrantOrRevoke,
+  clipHostedAgentGrants,
 } from "../services/key-grant.js";
 import {
   apiKeys,
@@ -623,6 +624,9 @@ export const apiKeysRouter = router({
           createdBy: ctx.userId,
         }))
       );
+      // A hosted agent's key stays within its computer; a computer's change
+      // re-clips the agents it hosts (MACHINE-IDENTITY-PLAN §2c).
+      await clipHostedAgentGrants(key.userId, ctx.userId);
 
       auditLog({
         subjectType: "apiKey",
