@@ -113,6 +113,16 @@ const FIXTURES: Record<keyof typeof PROPOSE_REASON, AgentPolicyInput> = {
     action: "update",
     channelCapabilities: { canAct: false, canPropose: true },
   },
+  HUMAN_ONLY_STATUS: {
+    subjectType: "entity",
+    action: "transition",
+    lifecycleMove: { intoTerminal: true, humanOnly: true },
+  },
+  LIFECYCLE_TERMINAL: {
+    subjectType: "entity",
+    action: "transition",
+    lifecycleMove: { intoTerminal: true, humanOnly: false },
+  },
 };
 
 describe("trust ladder reach ↔ the engine", () => {

@@ -196,6 +196,10 @@ export const GOVERNANCE_REASON_RULE_REACH = {
   GOVERNANCE_RULE: "rule",
   AGENT_OWNED_DESTRUCTIVE: "floor",
   WRITES_REQUIRE_PROPOSAL: "below",
+  // Work model W14: a person-only lifecycle option is decided ABOVE 2.8; an
+  // agent closing a thing (done/lost) proposes BELOW it, so a rule decides first.
+  HUMAN_ONLY_STATUS: "floor",
+  LIFECYCLE_TERMINAL: "below",
   CHANNEL_PROPOSE: "ambiguous",
 } as const satisfies Record<string, "floor" | "rule" | "below" | "ambiguous">;
 

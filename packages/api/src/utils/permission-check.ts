@@ -998,6 +998,13 @@ export interface PermissionCheckBaseOpts {
    */
   forcePropose?: boolean;
   /**
+   * The write MOVES a lifecycle status (work model W14) — set ONLY by the
+   * `moveStatus` door and the create/attach doors for an initial status. Feeds
+   * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
+   * / 2.86 (other moves: execute once attributed).
+   */
+  lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
+  /**
    * Lifecycle complete escape for focus sessions (pack mode).
    *
    * Two effects when true:
@@ -1134,6 +1141,8 @@ interface AnonymousPolicyFacts {
   forcePropose: boolean;
   /** rung 2.1 (criteria) — an AI write that changes a session's criteria. */
   criteriaChange: boolean;
+  /** rungs 2.075/2.85/2.86 — a lifecycle move, classified by the moveStatus door. */
+  lifecycleMove: { intoTerminal: boolean; humanOnly: boolean } | undefined;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
   podAdminSchemaChange: boolean;
   /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
@@ -1233,6 +1242,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     subjectUoValidated: facts.subjectUoValidated,
     forcePropose: facts.forcePropose,
     criteriaChange: facts.criteriaChange,
+    lifecycleMove: facts.lifecycleMove,
     podAdminSchemaChange: facts.podAdminSchemaChange,
     governanceRuleVerdict: facts.governanceRuleVerdict,
     governanceRuleId: facts.governanceRuleId,
@@ -1825,6 +1835,7 @@ async function evaluatePermission(
         subjectUoValidated,
         forcePropose: effectiveForcePropose,
         criteriaChange: isAgentCriteriaChange,
+        lifecycleMove: opts.lifecycleMove,
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
@@ -2249,6 +2260,7 @@ async function evaluatePermission(
           subjectUoValidated,
           forcePropose: effectiveForcePropose,
           criteriaChange: isAgentCriteriaChange,
+          lifecycleMove: opts.lifecycleMove,
           podAdminSchemaChange,
           governanceRuleVerdict: ruleMatch?.verdict,
           governanceRuleId: ruleMatch?.ruleId,

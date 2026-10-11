@@ -107,6 +107,11 @@ export type AutomationGovernanceResult =
 
 export interface AutomationGovernanceOpts {
   /**
+   * The write MOVES a lifecycle status (work model W14), classified by the
+   * `moveStatus` door — feeds the engine's lifecycle rungs.
+   */
+  lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
+  /**
    * The automation's owning principal (automation.createdBy). For AI-created
    * automations this is the agent's user id; for manual automations it is a
    * human user id. The gate resolves which it is and applies the correct policy.
@@ -220,6 +225,7 @@ export async function checkAutomationWriteOrPropose(
     // governance_rules row (e.g. "note" auto vs "lead" propose) applies to
     // automation writes too — full parity with the chat door.
     subjectProfileSlug,
+    lifecycleMove: opts.lifecycleMove,
     preferAgentMetadataAutoApproveFor: false,
   });
 

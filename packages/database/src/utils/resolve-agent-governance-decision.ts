@@ -109,6 +109,11 @@ export interface ResolveAgentGovernanceInput {
   /** Rung 2.1 (criteria) — an AI write that CHANGES a focus session's criteria (chat door). Automation omits. */
   criteriaChange?: boolean;
   /**
+   * Rungs 2.075 / 2.85 / 2.86 — the write MOVES a lifecycle status (work model
+   * W14), classified by the `moveStatus` door from the option it enters.
+   */
+  lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
+  /**
    * Rung 2.07 — the write links a required field or a default onto a
    * pod-admin-owned kind and its principal is not a pod admin (chat door,
    * resolved in `permission-check.ts`). Automation omits.
@@ -1415,6 +1420,7 @@ export async function resolveAgentGovernanceDecision(
     subjectUoValidated: input.subjectUoValidated,
     forcePropose: input.forcePropose,
     criteriaChange: input.criteriaChange,
+    lifecycleMove: input.lifecycleMove,
     podAdminSchemaChange: input.podAdminSchemaChange,
     governanceRuleVerdict: ruleMatch?.verdict,
     governanceRuleId: ruleMatch?.ruleId,

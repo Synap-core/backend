@@ -820,6 +820,8 @@ export type KnownGovernanceAction =
   | "activate"
   | "declare_source"
   | "configure_public_projection"
+  // Work model L2: the `moveStatus` door's lifecycle move (entity.transition).
+  | "transition"
   | "write";
 
 /**
@@ -889,6 +891,8 @@ export function requiredPermissionFor(
     // Setting a workspace's public-projection config (Hub
     // public-projection door) is a governed write — same editor+ floor.
     action === "configure_public_projection" ||
+    // Work model L2: a lifecycle move through the `moveStatus` door.
+    action === "transition" ||
     action === "write"
   ) {
     return "write";
@@ -1194,6 +1198,20 @@ export interface AgentPolicyInput {
    */
   criteriaChange?: boolean;
   /**
+   * The write MOVES a thing's lifecycle status (work model L2, W14) — set ONLY
+   * by the `moveStatus` door (and the create/attach doors for an initial
+   * status, `from` null), classified from the declared option it moves INTO:
+   *  - `humanOnly`    → always propose, ABOVE the rules store (rung 2.075):
+   *                     no rule can widen a person-only option.
+   *  - `intoTerminal` → propose BY DEFAULT (rung 2.85, BELOW the rules store,
+   *                     so an operator rule on `entity.transition` may widen it).
+   *  - otherwise      → execute (rung 2.86): a move between open/active/paused
+   *                     options is routine once the agent is attributed — the
+   *                     origin/ceiling floors (2.55/2.56) still apply above.
+   * Absent → no effect (every existing verdict unchanged).
+   */
+  lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
+  /**
    * The write adds a REQUIRED field or a DEFAULT to a kind the pod administrator
    * owns (a system kind, or a shared kind with no home workspace), and the
    * principal behind it is NOT a pod admin — rung 2.07. Such a link applies to
@@ -1360,6 +1378,10 @@ export const PROPOSE_REASON = {
     "This adds a required field or a default to a system kind, which changes every workspace at once; a pod admin must approve it.",
   AGENT_SCHEMA_DEFINITION:
     "An agent is defining a new kind or role, which changes what the pod can hold; a person must approve it, and no governance rule can widen it.",
+  HUMAN_ONLY_STATUS:
+    "Only a person may move this into that status; no governance rule can widen it.",
+  LIFECYCLE_TERMINAL:
+    "An agent is closing this (moving it into a done or lost status); a person approves that by default.",
   AGENT_STRUCTURE_WRITE:
     "An agent is creating a workspace, cell, playbook or automation (or switching one on), which changes what the pod does; a person must approve it, and no governance rule can widen it.",
 } as const;
@@ -1478,6 +1500,17 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.AGENT_STRUCTURE_WRITE,
       reasonCode: "AGENT_STRUCTURE_WRITE",
+    };
+  }
+
+  // 2.075 HUMAN-ONLY LIFECYCLE OPTION → always propose; above the rules store
+  // (2.8), ownership (3), autoApproveFor (4) and DEFAULT_AUTO_APPROVE (8), so a
+  // person-only status (a deal "won") is never entered by an agent unreviewed.
+  if (input.lifecycleMove?.humanOnly === true) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.HUMAN_ONLY_STATUS,
+      reasonCode: "HUMAN_ONLY_STATUS",
     };
   }
 
@@ -1676,6 +1709,20 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
           reason: PROPOSE_REASON.GOVERNANCE_RULE,
           reasonCode: "GOVERNANCE_RULE",
         };
+  }
+
+  // 2.85 / 2.86 LIFECYCLE MOVE DEFAULT (W14). Below the rules store so an
+  // operator rule can widen (or tighten) it; above ownership and the
+  // auto-approve lists so neither silently decides a status move.
+  if (input.lifecycleMove) {
+    if (input.lifecycleMove.intoTerminal) {
+      return {
+        verdict: "propose",
+        reason: PROPOSE_REASON.LIFECYCLE_TERMINAL,
+        reasonCode: "LIFECYCLE_TERMINAL",
+      };
+    }
+    return { verdict: "execute" };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").
