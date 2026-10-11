@@ -8,6 +8,12 @@
  * a live run must match it too; a door matching `status = 'running'` alone
  * silently drops the final write and leaves the run parked forever.
  *
+ * `stale` (playbook runs only, D6 2026-10-11) is a run an EXTERNAL agent holds
+ * that the reaper found quiet: not finished, not failed, revived to `running`
+ * by the next write attributed to its session. Live for the same reason as
+ * `waiting_on_you` — a late capture-back, `complete_session`, a cancel or a
+ * provider poll must still land on it.
+ *
  * `running`-only stays correct for exactly two readers, by design: the stale
  * sweeps (a waiting run is not "stale", it is waiting) and "in flight now"
  * counters (`hasRunning` / `runningCount`).
@@ -16,7 +22,11 @@
 import { inArray, notInArray, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
-export const LIVE_RUN_STATUSES = ["running", "waiting_on_you"] as const;
+export const LIVE_RUN_STATUSES = [
+  "running",
+  "waiting_on_you",
+  "stale",
+] as const;
 export type LiveRunStatus = (typeof LIVE_RUN_STATUSES)[number];
 
 export function isLiveRunStatus(status: unknown): status is LiveRunStatus {

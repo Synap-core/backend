@@ -40,7 +40,12 @@ export type PlaybookRunStatus =
   | "cancelled"
   // W2 calm: the reaper found the run quiet with its session still owing the
   // person an open slot — waiting on the human, never force-failed.
-  | "waiting_on_you";
+  | "waiting_on_you"
+  // The reaper found a run an EXTERNAL agent holds quiet past its window (D6,
+  // 2026-10-11). Not failed — nothing the pod launched died — and not
+  // terminal: the next write attributed to its session revives it to
+  // `running` (`reviveStaleSession`). Same word as the session status.
+  | "stale";
 
 /** The normalized state of an external agent's task (the `status` verb). */
 export type ExternalAgentState = "running" | "needs_input" | "done" | "failed";
@@ -119,6 +124,7 @@ export const playbookRuns = pgTable(
         "proposed",
         "cancelled",
         "waiting_on_you",
+        "stale",
       ],
     })
       .$type<PlaybookRunStatus>()

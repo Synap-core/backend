@@ -29,6 +29,7 @@ import type {
   SeedKindProfileOp,
   DeclareKindOp,
   DedupeProfileRowsOp,
+  DedupeRelationDefsOp,
   ReconcileEntityScopeOp,
   ReconcileFacetScopeOp,
   RemapPropertyValuesOp,
@@ -42,6 +43,10 @@ import {
   buildValueMapJson,
 } from "./manifest.js";
 import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
+import {
+  classifyRelationDefCopies,
+  type RelationDefMeaning,
+} from "../repositories/relation-def-repository.js";
 import { foldPropertyKey } from "../services/did-you-mean.js";
 import { WORKSPACE_MEMBERSHIP_ROLE_CATEGORY } from "../utils/facet-visibility.js";
 import type { ProfileRetirement } from "../utils/resolve-profile-for-apply.js";
@@ -123,6 +128,18 @@ export interface OpCounts {
   entitiesKeyRenamed?: number;
   /** renamePropertyKey: of those, entities that carried BOTH keys — the losing value was discarded per onConflict. */
   entitiesKeyConflicts?: number;
+  /** dedupeRelationDefs: redundant workspace copies drained onto the pod-wide row. */
+  relationDefsCollapsed?: number;
+  /** dedupeRelationDefs: workspace copies left alone — they carry their own meaning. */
+  relationDefsKept?: number;
+  /** dedupeRelationDefs: profile_relations edges moved onto the pod-wide row. */
+  profileRelationsRepointed?: number;
+  /** dedupeRelationDefs (tail): edges that duplicated a pod-wide edge, folded + deleted. */
+  profileRelationsMerged?: number;
+  /** dedupeRelationDefs: property_defs.relation_def_id moved onto the pod-wide row. */
+  propertyDefRelationsRepointed?: number;
+  /** dedupeRelationDefs (tail): drained copies deleted. */
+  relationDefsDeleted?: number;
 }
 
 export type OpStatus =
@@ -212,6 +229,9 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   mergeInto: "fatal",
   dedupeProfileRows: "fatal",
   // ADVISORY — per-entity value/scope remaps; data stays dual-readable.
+  // dedupeRelationDefs: one transaction; until it lands, getBySlug resolves
+  // either row, so a failed collapse leaves the pod exactly as readable.
+  dedupeRelationDefs: "advisory",
   remapPropertyValues: "advisory",
   moveBasePropertyToFacet: "advisory",
   renamePropertyKey: "advisory",
@@ -230,15 +250,20 @@ export function conversionBootSeverity(op: ConversionOp): "fatal" | "advisory" {
  * Does this op carry a DESTRUCTIVE tail — a step gated behind the
  * `destructiveTail` run flag that deactivates (retires) profile rows?
  *
- * Exactly the two ops whose `applyOp` handler reads `destructiveTail`:
- * `mergeInto` (deactivates the merged-away source profiles) and
- * `dedupeProfileRows` (deactivates the drained duplicate rows). This IS the
+ * Exactly the ops whose `applyOp` handler reads `destructiveTail`:
+ * `mergeInto` (deactivates the merged-away source profiles),
+ * `dedupeProfileRows` (deactivates the drained duplicate rows) and
+ * `dedupeRelationDefs` (deletes the drained relation-def copies). This IS the
  * engine's existing classification — it just names the same `if
- * (destructiveTail)` branches those two handlers already contain, so the
+ * (destructiveTail)` branches those handlers already contain, so the
  * startup caller and the CLI share one definition of "destructive".
  */
 export function opHasDestructiveTail(op: ConversionOp): boolean {
-  return op.op === "mergeInto" || op.op === "dedupeProfileRows";
+  return (
+    op.op === "mergeInto" ||
+    op.op === "dedupeProfileRows" ||
+    op.op === "dedupeRelationDefs"
+  );
 }
 
 export interface RunSummary {
@@ -540,6 +565,8 @@ async function applyOp(
       return applyMergeInto(tx, op, options.destructiveTail, plan);
     case "dedupeProfileRows":
       return applyDedupeProfileRows(tx, op, options.destructiveTail, plan);
+    case "dedupeRelationDefs":
+      return applyDedupeRelationDefs(tx, op, options.destructiveTail);
     case "reconcileEntityScope":
       return applyReconcileEntityScope(tx, op);
     case "reconcileFacetScope":
@@ -1724,6 +1751,123 @@ async function applyDedupeProfileRows(
   return counts;
 }
 
+/**
+ * dedupeRelationDefs — see the op's docstring in manifest.ts. The redundancy
+ * call is `classifyRelationDefCopies` (the diagnose counter's own predicate);
+ * every statement below is keyed on ONE copy id at a time.
+ */
+async function applyDedupeRelationDefs(
+  tx: Sql,
+  op: DedupeRelationDefsOp,
+  destructiveTail: boolean
+): Promise<OpCounts> {
+  const counts: OpCounts = {
+    relationDefsCollapsed: 0,
+    relationDefsKept: 0,
+    profileRelationsRepointed: 0,
+    propertyDefRelationsRepointed: 0,
+    profileRelationsMerged: 0,
+    relationDefsDeleted: 0,
+  };
+  const slug = op.slug ?? null;
+  const rows = await tx<
+    Array<{
+      id: string;
+      slug: string;
+      workspace_id: string | null;
+      display_name: string;
+      description: string | null;
+      ui_hints: unknown;
+      is_directional: boolean;
+    }>
+  >`
+    SELECT id, slug, workspace_id, display_name, description, ui_hints, is_directional
+    FROM relation_defs
+    WHERE slug IN (SELECT slug FROM relation_defs WHERE workspace_id IS NULL)
+      AND (${slug}::text IS NULL OR slug = ${slug}::text)
+    ORDER BY slug, created_at, id
+  `;
+  const defs: Array<RelationDefMeaning & { id: string }> = rows.map((r) => ({
+    id: r.id,
+    slug: r.slug,
+    workspaceId: r.workspace_id,
+    displayName: r.display_name,
+    description: r.description,
+    uiHints: r.ui_hints,
+    isDirectional: r.is_directional,
+  }));
+
+  for (const { base, redundant, kept } of classifyRelationDefCopies(defs)) {
+    counts.relationDefsKept! += kept.length;
+    for (const copy of redundant) {
+      counts.relationDefsCollapsed! += 1;
+
+      const pd = await tx`
+        UPDATE property_defs SET relation_def_id = ${base.id}
+        WHERE relation_def_id = ${copy.id}
+      `;
+      counts.propertyDefRelationsRepointed! += pd.count ?? 0;
+
+      // Collision-skipped on the (source, target, relation_def) primary key:
+      // an edge the pod-wide row already has stays on the copy for the tail.
+      const pr = await tx`
+        UPDATE profile_relations c SET relation_def_id = ${base.id}
+        WHERE c.relation_def_id = ${copy.id}
+          AND NOT EXISTS (
+            SELECT 1 FROM profile_relations b
+            WHERE b.relation_def_id = ${base.id}
+              AND b.source_profile_id = c.source_profile_id
+              AND b.target_profile_id = c.target_profile_id
+          )
+      `;
+      counts.profileRelationsRepointed! += pr.count ?? 0;
+
+      if (!destructiveTail) continue;
+
+      // Fold each colliding edge into its pod-wide twin (fill-if-absent of the
+      // bound property def; the survivor's order + metadata win), then drop it.
+      await tx`
+        UPDATE profile_relations b SET property_def_id = c.property_def_id
+        FROM profile_relations c
+        WHERE c.relation_def_id = ${copy.id}
+          AND b.relation_def_id = ${base.id}
+          AND b.source_profile_id = c.source_profile_id
+          AND b.target_profile_id = c.target_profile_id
+          AND b.property_def_id IS NULL
+          AND c.property_def_id IS NOT NULL
+      `;
+      const merged = await tx`
+        DELETE FROM profile_relations c
+        WHERE c.relation_def_id = ${copy.id}
+          AND EXISTS (
+            SELECT 1 FROM profile_relations b
+            WHERE b.relation_def_id = ${base.id}
+              AND b.source_profile_id = c.source_profile_id
+              AND b.target_profile_id = c.target_profile_id
+          )
+      `;
+      counts.profileRelationsMerged! += merged.count ?? 0;
+
+      // Never let the delete cascade: anything still pointing at the copy here
+      // is a reference the repoint did not cover — refuse, roll back.
+      const left = await tx<Array<{ edges: number; props: number }>>`
+        SELECT
+          (SELECT COUNT(*)::int FROM profile_relations WHERE relation_def_id = ${copy.id}) AS edges,
+          (SELECT COUNT(*)::int FROM property_defs WHERE relation_def_id = ${copy.id}) AS props
+      `;
+      const { edges = 0, props = 0 } = left[0] ?? {};
+      if (edges > 0 || props > 0) {
+        throw new Error(
+          `dedupeRelationDefs '${op.opKey}': relation def ${copy.id} ('${copy.slug}', workspace ${copy.workspaceId}) still has ${edges} profile_relations and ${props} property_defs after the repoint — refusing to delete it (the delete would cascade them).`
+        );
+      }
+      const del = await tx`DELETE FROM relation_defs WHERE id = ${copy.id}`;
+      counts.relationDefsDeleted! += del.count ?? 0;
+    }
+  }
+  return counts;
+}
+
 async function applyReconcileEntityScope(
   tx: Sql,
   op: ReconcileEntityScopeOp
@@ -2046,6 +2190,7 @@ export async function computeCounts(
     }
     case "mergeInto":
     case "dedupeProfileRows":
+    case "dedupeRelationDefs":
     case "renamePropertyKey":
       // Derived, not mirrored: the apply itself, rolled back. (renamePropertyKey
       // carries no field plan — opCarriesFieldPlan stays merge/dedupe only — but

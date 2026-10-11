@@ -4924,7 +4924,7 @@ export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * load-bearing, because the scorecard feeds governance widening and a `failed`
  * row would grade a playbook for a person's change of mind.
  */
-export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "waiting_on_you";
+export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled" | "waiting_on_you" | "stale";
 /** The normalized state of an external agent's task (the `status` verb). */
 export type ExternalAgentState = "running" | "needs_input" | "done" | "failed";
 /**
@@ -5257,7 +5257,7 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
 /**
  * What a key may touch, as a key list shows it:
- *   - `ungranted` — it never had a grant (bounded by its scopes only);
+ *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
  *   - `granted`   — `grants` holds every live one (a key holds a SET);
  *   - `ended`     — it had grants and none is live: it may touch NOTHING.
  */
@@ -5669,7 +5669,8 @@ export interface ReconcileReport {
 	/**
 	 * Relation defs seeded create-if-missing (keyed on `slug`), carrying full
 	 * metadata (description/isDirectional/uiHints). DISTINCT from `entityLinks`,
-	 * which mints bare (slug+displayName) defs as a side effect of profile edges.
+	 * which reuses the def that resolves for a slug and creates one only when
+	 * nothing does.
 	 * `created` = slug absent → inserted; `skipped` = slug already present
 	 * (workspace-scoped or pod-wide) → left untouched.
 	 */
@@ -8005,7 +8006,12 @@ export interface UnitStateView {
 	glyph: UnitGlyph;
 	rail: UnitRail;
 }
-export type TrackStagePosition = "done" | "active" | "not_started";
+declare const TRACK_STAGE_POSITIONS: readonly [
+	"done",
+	"active",
+	"not_started"
+];
+export type TrackStagePosition = (typeof TRACK_STAGE_POSITIONS)[number];
 export interface TrackStage {
 	key: string;
 	name: string;
@@ -14067,6 +14073,17 @@ export interface PacketChildItem {
 	statusLabel: string;
 }
 /**
+ * A session of an EARLIER stage of this session's track, with what it produced.
+ * `outputs` is its own section: one session's failed outputs read never hides
+ * the others, and is never "produced nothing".
+ */
+export interface PacketPriorStageSession extends PacketChildItem {
+	stageKey: string;
+	/** The stage's display name as the track pinned it. */
+	stageName: string;
+	outputs: PacketSection<PacketOutputItem>;
+}
+/**
  * A session named by the detour stack — the one you pop back TO, or the detour
  * this one was put down FOR. Identity only: never a bare id, because "come back
  * to 9f3c-…" is the unreadable row this projection exists to prevent.
@@ -14256,6 +14273,20 @@ export interface ContinuationPacket {
 	unblocks: PacketSection<PacketChildItem>;
 	/** Capture clarification questions still open in this session's room, oldest first. */
 	openQuestions: PacketSection<PacketQuestionItem>;
+	/**
+	 * THE STAGE BRIEF — what the EARLIER stages of this session's track produced,
+	 * so a stage starts from pod references, never from the previous chat.
+	 * DERIVED, no edge: the sessions filed (`track_stage`) at a stage before this
+	 * one in the track's pinned order, nearest stage first (the stage that feeds
+	 * this one must never fall past the cut), closed before open within a stage.
+	 * `total` counts every such session; `items` is capped at
+	 * {@link PACKET_TOP_N}, each with its own capped `outputs`.
+	 *
+	 * `null` — not a stage session: no track, no stage, a stage the track does
+	 * not declare, or a track the reader cannot see (never leaked). A FAILED
+	 * read is `unavailable`. Cross-track feeds are not derived here.
+	 */
+	priorStages: PacketSection<PacketPriorStageSession> | null;
 	/** What already landed, newest first — an agent must not redo these. */
 	alreadyDone: PacketSection<PacketDoneItem>;
 	/** `decision: null` when nothing was ever approved or rejected here. */
@@ -21792,6 +21823,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				revokedAt: Date | null;
 				revokedReason: string | null;
+				awaitingApproval: boolean;
 				access: KeyAccess;
 				grants: Pick<{
 					id: string;
@@ -21810,25 +21842,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string | null;
 					clientId: string | null;
 					roleId: string | null;
-				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label">[];
-				grant: Pick<{
-					id: string;
-					createdAt: Date;
-					createdBy: string;
-					expiresAt: Date | null;
-					revokedAt: Date | null;
-					permissions: string[];
-					revokedBy: string | null;
-					apiKeyId: string;
-					principalUserId: string;
-					onBehalfOf: string;
-					workspaceIds: string[] | null;
-					projectIds: string[] | null;
-					entityIds: string[] | null;
-					label: string | null;
-					clientId: string | null;
-					roleId: string | null;
-				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label">;
+				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label" | "roleId">[];
 				id: string;
 				keyName: string;
 				keyPrefix: string;
@@ -21836,6 +21850,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				hubId: string | null;
 				linkedUserId: string | null;
 				heldByAgent: boolean;
+				holderUserId: string;
 			}[];
 			meta: object;
 		}>;
@@ -21867,17 +21882,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				keyName: string;
 				scope: string[];
-				hubId?: string | undefined;
-				expiresInDays?: number | null | undefined;
-				workspaceId?: string | undefined;
-				grant?: {
+				grant: {
 					permissions: string[];
 					workspaceIds?: string[] | undefined;
 					projectIds?: string[] | undefined;
 					entityIds?: string[] | undefined;
 					label?: string | undefined;
 					roleId?: string | undefined;
-				} | undefined;
+				};
+				hubId?: string | undefined;
+				expiresInDays?: number | null | undefined;
+				workspaceId?: string | undefined;
 			};
 			output: {
 				id: `${string}-${string}-${string}-${string}-${string}`;
@@ -21930,6 +21945,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "rotated";
 				message: string;
 				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		setGrants: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				keyId: string;
+				grants: {
+					permissions: string[];
+					workspaceIds?: string[] | undefined;
+					projectIds?: string[] | undefined;
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					roleId?: string | undefined;
+				}[];
+			};
+			output: {
+				access: KeyAccess;
+				grants: Pick<{
+					id: string;
+					createdAt: Date;
+					createdBy: string;
+					expiresAt: Date | null;
+					revokedAt: Date | null;
+					permissions: string[];
+					revokedBy: string | null;
+					apiKeyId: string;
+					principalUserId: string;
+					onBehalfOf: string;
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					roleId: string | null;
+				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label" | "roleId">[];
+				status: "updated";
 			};
 			meta: object;
 		}>;
@@ -22111,25 +22162,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string | null;
 					clientId: string | null;
 					roleId: string | null;
-				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label">[];
-				grant: Pick<{
-					id: string;
-					createdAt: Date;
-					createdBy: string;
-					expiresAt: Date | null;
-					revokedAt: Date | null;
-					permissions: string[];
-					revokedBy: string | null;
-					apiKeyId: string;
-					principalUserId: string;
-					onBehalfOf: string;
-					workspaceIds: string[] | null;
-					projectIds: string[] | null;
-					entityIds: string[] | null;
-					label: string | null;
-					clientId: string | null;
-					roleId: string | null;
-				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label">;
+				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label" | "roleId">[];
 				id: string;
 				keyName: string;
 				keyPrefix: string;
@@ -22152,15 +22185,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				name: string;
 				scopes: string[];
-				expiresAt?: Date | undefined;
-				expiresInDays?: number | null | undefined;
-				grant?: {
+				grant: {
 					permissions: string[];
 					projectIds?: string[] | undefined;
 					entityIds?: string[] | undefined;
 					label?: string | undefined;
 					roleId?: string | undefined;
-				} | undefined;
+				};
+				expiresAt?: Date | undefined;
+				expiresInDays?: number | null | undefined;
 			};
 			output: {
 				id: `${string}-${string}-${string}-${string}-${string}`;
@@ -31513,6 +31546,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | string[] | null | undefined;
 			};
 			output: {
+				pendingProposalId: string | null;
 				operatedByViewer: boolean;
 				reach: "pod" | "dispatch" | "pull";
 				binding: AgentBindingSummary | null;
@@ -35393,6 +35427,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 			};
 			output: {
+				status: "proposed";
+				proposalId: string;
+				message: string;
+			} | {
 				status: string;
 			};
 			meta: object;
@@ -36489,7 +36527,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
 				projectId?: string | string[] | null | undefined;
-				status?: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale" | ("active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale")[] | "all" | undefined;
+				status?: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled" | ("active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled")[] | "all" | undefined;
 				statusSince?: {
 					stale?: string | undefined;
 					closed?: string | undefined;
@@ -36517,7 +36555,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				metadata: unknown;
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				subjectEntityId: string | null;
 				startedAt: Date;
 				playbookId: string | null;
@@ -36557,7 +36595,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				offset?: number | undefined;
 				workspaceId?: string | string[] | null | undefined;
 				projectId?: string | string[] | null | undefined;
-				status?: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale" | ("active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale")[] | "all" | undefined;
+				status?: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled" | ("active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled")[] | "all" | undefined;
 				statusSince?: {
 					stale?: string | undefined;
 					closed?: string | undefined;
@@ -36582,7 +36620,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
-					status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+					status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 					subjectEntityId: string | null;
 					startedAt: Date;
 					playbookId: string | null;
@@ -36640,7 +36678,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				metadata: unknown;
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				subjectEntityId: string | null;
 				startedAt: Date;
 				playbookId: string | null;
@@ -36722,7 +36760,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
-					status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+					status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 					subjectEntityId: string | null;
 					startedAt: Date;
 					playbookId: string | null;
@@ -36766,7 +36804,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
-					status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+					status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 					subjectEntityId: string | null;
 					startedAt: Date;
 					playbookId: string | null;
@@ -36835,7 +36873,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reason?: string | undefined;
 			};
 			output: {
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				session: {
 					title: string | null;
 					id: string;
@@ -36845,7 +36883,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
-					status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+					status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 					subjectEntityId: string | null;
 					startedAt: Date;
 					playbookId: string | null;
@@ -36976,7 +37014,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				metadata: unknown;
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				subjectEntityId: string | null;
 				startedAt: Date;
 				playbookId: string | null;
@@ -37095,7 +37133,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				metadata: unknown;
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				subjectEntityId: string | null;
 				startedAt: Date;
 				playbookId: string | null;
@@ -37372,7 +37410,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				metadata: unknown;
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				subjectEntityId: string | null;
 				startedAt: Date;
 				playbookId: string | null;
@@ -37404,7 +37442,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				metadata: unknown;
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				subjectEntityId: string | null;
 				startedAt: Date;
 				playbookId: string | null;
@@ -37822,7 +37860,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				metadata: unknown;
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				subjectEntityId: string | null;
 				startedAt: Date;
 				playbookId: string | null;
@@ -37860,7 +37898,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				metadata: unknown;
-				status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+				status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 				subjectEntityId: string | null;
 				startedAt: Date;
 				playbookId: string | null;
@@ -39365,7 +39403,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					metadata: unknown;
-					status: "active" | "paused" | "failed" | "cancelled" | "closed" | "forming" | "scheduled" | "stale";
+					status: "active" | "paused" | "failed" | "cancelled" | "stale" | "closed" | "forming" | "scheduled";
 					subjectEntityId: string | null;
 					startedAt: Date;
 					playbookId: string | null;

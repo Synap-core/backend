@@ -20,6 +20,7 @@ import { z } from "zod";
 import { db, eq, playbookRuns } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { applyRunCapture } from "../../../services/runs/apply-run-capture.js";
+import { reviveSessionForWrite } from "../../../services/focus-sessions/revive-stale-session.js";
 import { cancelRun } from "../../../services/agent-dispatch/cancel-run.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { listRuns, getRun } from "../../../services/runs/index.js";
@@ -414,7 +415,19 @@ export function registerRunsRoutes(app: HubHono): void {
       if ("denied" in perm && perm.denied) {
         return c.json({ error: perm.reason }, 403);
       }
+      // D6: a capture-back is the agent coming back to its session. The gate
+      // above carries no session handle (its subject is the run), so the
+      // revive the gate does for session-attributed writes is done here.
+      const reviveRunSession = () =>
+        run.sessionId
+          ? reviveSessionForWrite({
+              userId: acting.userId,
+              sessionId: run.sessionId,
+              subjectType: "playbook_run",
+            })
+          : undefined;
       if ("proposalId" in perm) {
+        await reviveRunSession();
         return c.json({
           id: runId,
           status: run.status,
@@ -448,6 +461,7 @@ export function registerRunsRoutes(app: HubHono): void {
         );
       }
 
+      await reviveRunSession();
       return c.json({
         id: updated.id,
         status: updated.status,

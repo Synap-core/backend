@@ -2209,7 +2209,8 @@ export const definitionEngineProcedures = {
         }
 
         // 2. Batch create entities
-        const { ProfileRepository } = await import("@synap/database");
+        const { ProfileRepository, isProfileKindTwinError } =
+          await import("@synap/database");
         const profileRepo = new ProfileRepository(database);
         const profileCache = new Map<string, string>();
 
@@ -2278,6 +2279,14 @@ export const definitionEngineProcedures = {
             profileCache.set(e.profileSlug, newProfile.id);
             profilesCreated++;
           } catch (err) {
+            // The kind already lives pod-wide (a SHARED row this workspace was
+            // never granted): reuse it, as `resolveProfileForApply` does —
+            // never a twin.
+            if (isProfileKindTwinError(err)) {
+              await profileRepo.grantAccess(err.holder.id, input.workspaceId);
+              profileCache.set(e.profileSlug, err.holder.id);
+              continue;
+            }
             errors.push({
               stage: "profiles",
               refKey: e.profileSlug,

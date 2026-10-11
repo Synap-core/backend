@@ -49,6 +49,7 @@ import {
   reservedEntityKindReason,
   pickUnderlyingKind,
   promoteMultiKindRoleCreate,
+  isProfileKindTwinError,
 } from "@synap/database";
 import { reconcileKindWithPlacement } from "./kind-placement.js";
 import { entities, workspaces, links } from "@synap/database/schema";
@@ -1827,26 +1828,37 @@ export const createProcs = {
         // error in step 3 rather than forcing a bogus scope.
         if (!ctx.workspaceId) continue;
         const hints = profileHintsMap.get(entity.profileSlug) ?? {};
-        const newProfile = await profileRepo.create({
-          slug: entity.profileSlug,
-          displayName: hints.displayName ?? entity.profileSlug,
-          // An agent is refused at the ProfileRepository floor (D6).
-          origin: "authored",
-          uiHints: {
-            icon: hints.icon,
-            color: hints.color,
-            description: hints.description,
-          },
-          scope: "workspace" as any,
-          workspaceId: ctx.workspaceId,
-          userId: ctx.userId,
-        });
+        let newProfile;
+        try {
+          newProfile = await profileRepo.create({
+            slug: entity.profileSlug,
+            displayName: hints.displayName ?? entity.profileSlug,
+            // An agent is refused at the ProfileRepository floor (D6).
+            origin: "authored",
+            uiHints: {
+              icon: hints.icon,
+              color: hints.color,
+              description: hints.description,
+            },
+            scope: "workspace" as any,
+            workspaceId: ctx.workspaceId,
+            userId: ctx.userId,
+          });
+          profilesCreated++;
+        } catch (err) {
+          // The kind already lives pod-wide — a SHARED row this lens was never
+          // granted (a system row would have resolved above). Reuse it, exactly
+          // as the template door does (`resolveProfileForApply`), never a twin.
+          if (!isProfileKindTwinError(err)) throw err;
+          await profileRepo.grantAccess(err.holder.id, ctx.workspaceId);
+          newProfile = await profileRepo.getById(err.holder.id);
+          if (!newProfile) throw err;
+        }
         profileCache.set(entity.profileSlug, newProfile.id);
         entityScopeCache.set(
           entity.profileSlug,
           newProfile.entityScope ?? null
         );
-        profilesCreated++;
       }
 
       // 2. Resolve per-slug placement via the ONE door, UP FRONT (cached per

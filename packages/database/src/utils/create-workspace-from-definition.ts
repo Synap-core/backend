@@ -423,10 +423,11 @@ export interface WorkspaceDefinitionInput {
 
   /**
    * Full relation-def metadata seeded create-if-`slug`-missing by the door.
-   * DISTINCT from `entityLinks`: that step mints a bare relation_def (slug +
-   * displayName) as a side effect of a profile→profile edge and DROPS
-   * description/isDirectional/uiHints — so a template shipping the full
-   * `DefaultRelationDef` set (see `default-relation-defs.ts`) must carry it here.
+   * DISTINCT from `entityLinks`: that step reuses the def a slug already
+   * resolves to and creates one only for a slug nothing resolves (taking this
+   * list's metadata when declared) — `resolveOrCreateForLink`. A template
+   * shipping the full `DefaultRelationDef` set (see `default-relation-defs.ts`)
+   * carries it here.
    * No version — user-owned after first seed. Reconciled by
    * `reconcileWorkspaceFromDefinition` only.
    */
@@ -1563,9 +1564,11 @@ export async function createWorkspaceFromDefinition(
       }
 
       try {
-        const relDef = await relDefRepo.create({
-          slug: link.type,
-          displayName: link.label ?? link.type.replace(/_/g, " "),
+        // Reuse the def that already resolves (a pod-wide default) — never a
+        // workspace copy that shadows it. One rule with the reconciler.
+        const relDef = await relDefRepo.resolveOrCreateForLink({
+          link,
+          declared: definition.relationDefs,
           workspaceId,
           userId,
         });

@@ -27,6 +27,7 @@ export type ConversionOp =
   | KeepOp
   | ExtractNonEntityOp
   | DedupeProfileRowsOp
+  | DedupeRelationDefsOp
   | ReconcileEntityScopeOp
   | ReconcileFacetScopeOp
   | RemapPropertyValuesOp
@@ -261,6 +262,39 @@ export interface DedupeProfileRowsOp extends BaseOp {
    * `earliest` = the earliest created_at outright. Default `system`.
    */
   canonical?: "system" | "earliest";
+}
+
+/**
+ * Collapse REDUNDANT workspace copies of a relation def onto the pod-wide row
+ * of the same slug. "Redundant" is `isRedundantRelationDefCopy`
+ * (relation-def-repository.ts) — the ONE predicate the diagnose
+ * `duplicateRelationDefs` counter also reads: collapsing the copy loses
+ * nothing. A copy with its own meaning (label, description, inverse label,
+ * stated directionality) is a workspace customization and is kept; a slug with
+ * no pod-wide row is never touched.
+ *
+ * Every reference is repointed BEFORE the copy goes, because deleting a
+ * relation_def CASCADES its `profile_relations` edges and SET-NULLs
+ * `property_defs.relation_def_id`:
+ *   - `property_defs.relation_def_id` → the pod-wide row;
+ *   - `profile_relations.relation_def_id` → the pod-wide row, collision-skipped
+ *     on the (source, target, relation_def) primary key.
+ * (`relations.type` is the slug, so entity edges never split.)
+ *
+ * DESTRUCTIVE TAIL: the copies are then DELETED (relation_defs has no
+ * is_active). An edge that collided (the same source→target already exists on
+ * the pod-wide row) folds into that row — its `property_def_id` fills the
+ * survivor's when absent — and is deleted. A copy still holding a
+ * non-colliding edge after the repoint is a refusal, never a cascade. Like
+ * dedupeProfileRows, boot defers the whole op (`deferDestructive`) and the
+ * engine refuses an apply without `destructiveTail`.
+ *
+ * `slug` optional: omitted = every slug that has a pod-wide row. Idempotent: a
+ * re-run finds no redundant copy.
+ */
+export interface DedupeRelationDefsOp extends BaseOp {
+  op: "dedupeRelationDefs";
+  slug?: string;
 }
 
 /**
@@ -1478,6 +1512,20 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // property_def or an enum option (reconcile only ADDS them), so live pods
     // keep both until the governed retire-field door
     // (`synap_retire_field` → proposePropertyDefRetire) is used per pod.
+
+    // ─── Schema convergence D5: relation types defined more than once ──────
+    //
+    // 22 default slugs carried 15 rows each on the founder pod: the pod-wide
+    // base row plus 14 workspace copies from the per-workspace seeder that
+    // predates the 0118 base layer, and the template reconciler's entityLinks
+    // step kept minting bare copies (fixed in the same change). Collapse every
+    // copy that says nothing the base does not; customizations stay. Destructive
+    // (deletes the drained copies) ⇒ boot defers it; an operator applies it with
+    // `--apply --only d5.dedupe.relation-defs --destructive-tail` after a dry run.
+    {
+      op: "dedupeRelationDefs",
+      opKey: "d5.dedupe.relation-defs",
+    },
   ],
 };
 
@@ -1493,6 +1541,7 @@ export const CONVERSION_OP_TYPES = [
   "keep",
   "extractNonEntity",
   "dedupeProfileRows",
+  "dedupeRelationDefs",
   "reconcileEntityScope",
   "reconcileFacetScope",
   "remapPropertyValues",
@@ -1676,6 +1725,7 @@ export function validateManifest(manifest: ConversionManifest): void {
           );
         }
         break;
+      case "dedupeRelationDefs":
       case "reconcileEntityScope":
       case "reconcileFacetScope":
         // slug is OPTIONAL (omitted = all pod-scope kinds / shared roles);

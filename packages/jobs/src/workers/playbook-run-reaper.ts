@@ -22,9 +22,19 @@
  * external agent turn is legitimately long — a false-fail would abandon live
  * work, so we err toward waiting.
  *
- * The capture-back / session-finalize doors both UPDATE ... WHERE status =
- * 'running', so a late report against a reaped (now 'failed') run cleanly no-ops
+ * The capture-back / session-finalize doors both UPDATE ... WHERE the status is
+ * LIVE, so a late report against a reaped (now 'failed') run cleanly no-ops
  * instead of double-writing — this reaper is safe to run alongside them.
+ *
+ * WHO HOLDS THE RUN decides the verdict (D6, 2026-10-11). A run the pod handed
+ * to the IS is FAILED when it goes quiet: an IS turn that never captured back
+ * is a dead worker, and the parent automation's breakers must see it. A run an
+ * EXTERNAL agent holds (Claude Code following "AI Dev Session") is only QUIET —
+ * that agent comes back on its own clock, and one did: three outputs and
+ * progress 90 landed six hours after the reaper failed its run. Such a run is
+ * marked `stale` with its session (not terminal: no `completedAt`, no parent
+ * settle, the session stays open), and the next write attributed to that
+ * session revives both (`reviveStaleSession`, api).
  */
 
 import {
@@ -71,6 +81,41 @@ export const RUN_SESSION_NOT_ACTIVE = drizzleSql`NOT EXISTS (
   WHERE fs.id = ${playbookRuns.sessionId}
     AND fs.status IN ('active', 'paused')
     AND fs.updated_at > now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')
+)`;
+
+/**
+ * The run is held by an EXTERNAL agent, not by a worker the pod launched:
+ *   • `executor = 'external-agent'` — dispatched through an agent binding, or
+ *   • its session was OPENED BY an external key-auth client: `metadata.clientKey`
+ *     is `key:<apiKeyId>…`. `clientKeyForApiKey` (@synap/database, the ONE
+ *     client-identity resolver) returns `key:` for every MCP / Hub REST key and
+ *     NOTHING for the IS's `is_internal` key, whose sessions carry the
+ *     `agent:<id>` fallback instead. This arm is what catches a session an
+ *     agent STARTED from a playbook (`start_session` + `templateId`): that run
+ *     copies the playbook's `executor` — `is-agent` on every playbook the pod
+ *     has — although nothing was dispatched to the IS.
+ * A run `runPlaybook` dispatched to the IS matches neither (its session is
+ * minted by `instantiateSession`, which stamps no client) and keeps the
+ * failure verdict.
+ *
+ * AND its session is still OPEN (active / paused / stale): `stale` promises a
+ * revival, and only an open session can be written to again. A run under a
+ * closed or missing session has nothing to come back to — it fails as before.
+ */
+export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
+  (
+    ${playbookRuns.executor} = 'external-agent'
+    OR EXISTS (
+      SELECT 1 FROM focus_sessions fs
+      WHERE fs.id = ${playbookRuns.sessionId}
+        AND fs.metadata ->> 'clientKey' LIKE 'key:%'
+    )
+  )
+  AND EXISTS (
+    SELECT 1 FROM focus_sessions fs
+    WHERE fs.id = ${playbookRuns.sessionId}
+      AND fs.status IN ('active', 'paused', 'stale')
+  )
 )`;
 
 /** A running run past the window whose session shows no recent activity. */
@@ -123,6 +168,40 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       logger.info(
         { waiting: waiting.length },
         "Playbook run reaper marked runs waiting on the person"
+      );
+    }
+
+    // 0b. A quiet run an EXTERNAL agent holds is STALE, never failed: the
+    //     agent works on its own clock and may still deliver. Marked before
+    //     the fail sweep so it can never reach it. No `completedAt` (it did not
+    //     finish) and no parent settle (stale is not terminal). Its session is
+    //     marked stale too — open, reopenable — instead of closed, so the
+    //     agent's next write revives it rather than landing in a closed room.
+    const staled = await db
+      .update(playbookRuns)
+      .set({ status: "stale" })
+      .where(and(RUN_IS_STALE, RUN_HELD_BY_EXTERNAL_AGENT))
+      .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
+    if (staled.length > 0) {
+      const staleSessionIds = staled
+        .map((r) => r.sessionId)
+        .filter((id): id is string => !!id);
+      // Status only, the focus-session reaper's own write: `updatedAt` stays
+      // the last real activity. Not a lifecycle exit, so not the close door.
+      if (staleSessionIds.length > 0) {
+        await db
+          .update(focusSessions)
+          .set({ status: "stale" })
+          .where(
+            and(
+              inArray(focusSessions.id, staleSessionIds),
+              drizzleSql`${focusSessions.status} IN ('active', 'paused')`
+            )
+          );
+      }
+      logger.info(
+        { staled: staled.length },
+        "Playbook run reaper marked external-agent runs stale"
       );
     }
 

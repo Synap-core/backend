@@ -7,7 +7,9 @@
  *   - zero-entity non-core kinds (per profile ROW, not per slug);
  *   - twins (read from the schema-contract signal already gathered — never a
  *     second query);
- *   - duplicate relation defs (one slug, several visible rows);
+ *   - duplicate relation defs: workspace copies that say nothing the pod-wide
+ *     row of their slug does not (`classifyRelationDefCopies`, the predicate
+ *     the `dedupeRelationDefs` conversion op collapses by);
  *   - never-run automations;
  *   - stale WORK sessions older than STALE_SESSION_DAYS;
  *   - pending objectWork proposals older than OLD_PROPOSAL_DAYS.
@@ -46,6 +48,7 @@ import {
   proposals,
   ProposalStatus,
   ProfileScope,
+  classifyRelationDefCopies,
 } from "@synap/database";
 import {
   userVisibleWhere,
@@ -154,7 +157,7 @@ export async function gatherSchemaHygieneSignal(params: {
   const staleCutoff = cutoffIso(now, STALE_SESSION_DAYS);
   const proposalCutoff = cutoffIso(now, OLD_PROPOSAL_DAYS);
 
-  const [kinds, relDupes, neverRun, stale, oldProposals] = await Promise.all([
+  const [kinds, relDefRows, neverRun, stale, oldProposals] = await Promise.all([
     db
       .select({
         profileId: profiles.id,
@@ -177,7 +180,11 @@ export async function gatherSchemaHygieneSignal(params: {
     db
       .select({
         slug: relationDefs.slug,
-        rows: drizzleSql<number>`cast(count(*) as integer)`,
+        workspaceId: relationDefs.workspaceId,
+        displayName: relationDefs.displayName,
+        description: relationDefs.description,
+        uiHints: relationDefs.uiHints,
+        isDirectional: relationDefs.isDirectional,
       })
       .from(relationDefs)
       .where(
@@ -190,9 +197,7 @@ export async function gatherSchemaHygieneSignal(params: {
               )
             : undefined
         )
-      )
-      .groupBy(relationDefs.slug)
-      .having(drizzleSql`count(*) > 1`),
+      ),
     db
       .select({
         id: automations.id,
@@ -265,10 +270,13 @@ export async function gatherSchemaHygieneSignal(params: {
 
   return {
     zeroEntityKinds: kinds,
-    duplicateRelationDefs: relDupes.map((r) => ({
-      slug: r.slug,
-      rows: Number(r.rows),
-    })),
+    // A slug counts only when a visible workspace row is a REDUNDANT copy of
+    // the pod-wide row — the predicate the `dedupeRelationDefs` conversion op
+    // collapses by. A template's own per-workspace type, or a customized copy,
+    // is not a duplicate.
+    duplicateRelationDefs: classifyRelationDefCopies(relDefRows)
+      .filter((g) => g.redundant.length > 0)
+      .map((g) => ({ slug: g.base.slug, rows: 1 + g.redundant.length })),
     neverRunAutomations: neverRun,
     staleWorkSessions: {
       total: Number(stale[0]?.total ?? 0),

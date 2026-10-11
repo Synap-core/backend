@@ -43,8 +43,11 @@ export async function applyRunCapture(p: {
   usedCapabilities?: Array<{ kind: "tool" | "skill" | "command"; id: string }>;
 }): Promise<PlaybookRun | null> {
   const { run } = p;
-  // Terminal statuses stamp completed_at.
-  const nextStatus = p.status ?? run.status;
+  // Terminal statuses stamp completed_at. A capture IS activity, so a run the
+  // reaper marked `stale` (an external agent gone quiet, D6) that reports
+  // without a status is running again.
+  const nextStatus =
+    p.status ?? (run.status === "stale" ? "running" : run.status);
   const terminal =
     nextStatus === "completed" ||
     nextStatus === "failed" ||

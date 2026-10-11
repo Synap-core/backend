@@ -7,6 +7,8 @@ vi.mock("@synap-core/core", () => ({
     error: vi.fn(),
     debug: vi.fn(),
   }),
+  // profile-repository's kind-twin refusal extends it at module load.
+  ConflictError: class ConflictError extends Error {},
 }));
 
 import {

@@ -890,6 +890,53 @@ describe("diagnose schema hygiene — every number is the caller's", () => {
     expect(signal.staleWorkSessions.total).toBe(1);
     expect(signal.oldObjectWorkProposals.total).toBe(1);
   });
+
+  it("counts a relation slug only when a visible workspace row is a redundant copy of the pod-wide row", async () => {
+    const def = (
+      slug: string,
+      workspaceId: string | null,
+      displayName: string,
+      description: string | null,
+      uiHints: Record<string, unknown> = {},
+      isDirectional = true
+    ) =>
+      q(
+        `insert into relation_defs (id, slug, display_name, description, workspace_id, user_id, ui_hints, is_directional)
+         values ($1, $2, $3, $4, $5, 'system', $6::jsonb, $7)`,
+        [
+          randomUUID(),
+          slug,
+          displayName,
+          description,
+          workspaceId,
+          JSON.stringify(uiHints),
+          isDirectional,
+        ]
+      );
+    // depends_on: pod-wide + a bare entityLinks mint in A's space (redundant)
+    // + the same in B's space (invisible to A).
+    await def("depends_on", null, "Depends On", "Needs the target", {
+      inverseLabel: "Blocks",
+    });
+    await def("depends_on", WS_A, "depends on", null);
+    await def("depends_on", WS_B, "depends on", null);
+    // references: a copy with its own description is a customization.
+    await def("references", null, "References", "Cites the target");
+    await def("references", WS_A, "References", "A brand asset cites it");
+    // supports: a per-template type with no pod-wide row — never a duplicate.
+    await def("supports", WS_A, "Supports", "Backs the target");
+    await def("supports", WS_B, "Supports", "Backs the target");
+
+    const signal = await gatherSchemaHygieneSignal({
+      userId: A,
+      workspaceId: null,
+      now: NOW,
+    });
+
+    expect(signal.duplicateRelationDefs).toEqual([
+      { slug: "depends_on", rows: 2 },
+    ]);
+  });
 });
 
 describe("review card data — what the reviewer actually sees", () => {

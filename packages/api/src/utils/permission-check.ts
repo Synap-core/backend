@@ -96,6 +96,7 @@ import {
 } from "../services/agent-identity-service.js";
 import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expected-output.js";
 import { slotKeyAt } from "../services/focus-sessions/slot-keys.js";
+import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
@@ -1057,6 +1058,13 @@ export async function checkPermissionOrPropose(
       "Dry-run sentinel escaped commit-mode permission check"
     );
     return { denied: true, reason: "Permission check error" };
+  }
+  // D6: a write (executed OR proposed) attributed to a STALE session is the
+  // agent coming back — revive the session and its stale run. Here because
+  // this is the one door every governed write passes; never on a denial,
+  // never in dry-run (`previewPermissionDecision` does not come through here).
+  if (!("denied" in result && result.denied)) {
+    await reviveSessionForWrite(opts);
   }
   return result;
 }

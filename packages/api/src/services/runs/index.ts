@@ -92,6 +92,7 @@ import {
 } from "@synap-core/types/run-activity";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { loadSessionActivity } from "./session-activity.js";
+import { runStatusOfPlaybookRun } from "./playbook-run-status.js";
 import {
   CAPABILITY_RUN_EVENT_KIND,
   capabilityRunEventWhere,
@@ -256,7 +257,8 @@ type PlaybookRunStatusValue =
   | "failed"
   | "proposed"
   | "cancelled"
-  | "waiting_on_you";
+  | "waiting_on_you"
+  | "stale";
 type FocusSessionStatus =
   | "active"
   | "paused"
@@ -284,13 +286,15 @@ function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
 
 function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
   switch (status) {
+    // A `stale` run projects to `cancelled` (`runStatusOfPlaybookRun`), so the
+    // reverse filter MUST include it — the same pairing `sessionStatusValues`
+    // keeps for a stale session.
+    case "cancelled":
+      return ["cancelled", "stale"];
     case "running":
     case "completed":
     case "failed":
     case "proposed":
-    // A run RELEASED by its session (`follow-playbook.ts` detach). Filterable
-    // like any other: it is a real row with a real end, not an absence.
-    case "cancelled":
     // W2 calm: the reaper found the run quiet, its session owing the person.
     case "waiting_on_you":
       return [status];
@@ -533,7 +537,7 @@ async function listPlaybookRuns(
     flowType: "playbook" as const,
     flowId: r.playbookId,
     flowName: r.flowName ?? "Playbook",
-    status: r.status as RunStatus,
+    status: runStatusOfPlaybookRun(r.status),
     startedAt: r.startedAt,
     completedAt: r.completedAt ?? null,
     lastActivityAt: r.lastActivityAt ?? null,
@@ -1785,7 +1789,7 @@ async function groupPlaybookRuns(
     flowName: r.flowName ?? "Playbook",
     runCount: r.runCount,
     latestRunId: r.latestRunId,
-    latestStatus: r.latestStatus as RunStatus,
+    latestStatus: runStatusOfPlaybookRun(r.latestStatus),
     // `max(startedAt)` is a RAW SQL aggregate — postgres.js returns it as a
     // STRING, not a Date (the `drizzleSql<Date>` above is a compile-time cast
     // only). Coerce so `latestStartedAt` really is the `Date` its type claims;

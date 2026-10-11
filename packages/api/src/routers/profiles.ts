@@ -377,7 +377,18 @@ export const profilesRouter = router({
 
       // Check for slug conflict within this workspace context.
       // Returns workspace-owned profile first, then shared/system if accessible.
-      const existing = await profileRepo.getBySlug(input.slug, ctx.workspaceId);
+      // A KIND is one row per slug: when this lens cannot see it but a pod-wide
+      // (shared, not yet granted here) row holds it, that row IS the existing
+      // kind — the branch below grants it. Creating instead would be refused by
+      // the kind-twin floor in `ProfileRepository.create()`.
+      const lensHit = await profileRepo.getBySlug(input.slug, ctx.workspaceId);
+      const podWideKind =
+        !lensHit && input.profileKind !== "role"
+          ? await profileRepo.findActivePodWideKind(input.slug)
+          : null;
+      const existing =
+        lensHit ??
+        (podWideKind ? await profileRepo.getById(podWideKind.id) : null);
       if (existing) {
         logger.info(
           { slug: input.slug, existingId: existing.id },

@@ -304,7 +304,8 @@ export interface ReconcileReport {
   /**
    * Relation defs seeded create-if-missing (keyed on `slug`), carrying full
    * metadata (description/isDirectional/uiHints). DISTINCT from `entityLinks`,
-   * which mints bare (slug+displayName) defs as a side effect of profile edges.
+   * which reuses the def that resolves for a slug and creates one only when
+   * nothing does.
    * `created` = slug absent → inserted; `skipped` = slug already present
    * (workspace-scoped or pod-wide) → left untouched.
    */
@@ -913,15 +914,19 @@ export async function reconcileWorkspaceFromDefinition(
 
     report.entityLinks.added.push(key);
     if (!dryRun) {
-      // find-or-create the workspace-scoped relation def, then link the profiles.
-      // Both repo calls are idempotent (relDef by slug+workspace; profile_relation
-      // by unique (source,target,relationDef) with onConflictDoUpdate).
-      const relDef = await relDefRepo.create({
-        slug: link.type,
-        displayName: link.label ?? link.type.replace(/_/g, " "),
-        workspaceId,
-        userId,
-      });
+      // REUSE the def that already resolves in this lens — never mint a
+      // workspace copy that shadows a pod-wide slug (the one rule,
+      // `resolveOrCreateForLink`, shared with createWorkspaceFromDefinition;
+      // step 9 then skips a slug it created). profile_relation is idempotent
+      // on (source,target,relationDef).
+      const relDef =
+        existingDef ??
+        (await relDefRepo.resolveOrCreateForLink({
+          link,
+          declared: definition.relationDefs,
+          workspaceId,
+          userId,
+        }));
       await profileRelRepo.link({
         sourceProfileId: sourceId,
         targetProfileId: targetId,
@@ -1426,12 +1431,11 @@ export async function reconcileWorkspaceFromDefinition(
 
   // ── 9. Relation defs — create-if-missing (keyed on slug, no version) ────────
   //
-  // DISTINCT from the entityLinks step (step 4): entityLinks mint a BARE
-  // relation_def (slug + displayName only) as a side effect of wiring a
-  // profile→profile edge, DROPPING description/isDirectional/uiHints. A template
-  // shipping the full `DefaultRelationDef` metadata (see default-relation-defs.ts)
-  // must carry it HERE so those fields survive. Mirrors `ensureDefaultRelationDefs`
-  // (create-if-missing, no version — user-owned after first seed). `relDefRepo`
+  // DISTINCT from the entityLinks step (step 4), which reuses a def that
+  // already resolves and only creates one for a slug nothing resolves (taking
+  // this list's metadata for it when declared). This step creates the declared
+  // defs no entityLink named, so description/isDirectional/uiHints survive.
+  // Mirrors `ensureDefaultRelationDefs` (create-if-missing, no version — user-owned after first seed). `relDefRepo`
   // is the same instance step 4 uses; `.list()` returns workspace-scoped defs
   // AND pod-wide globals, so a slug already seeded pod-wide is a skip, not a dup.
   if ((definition.relationDefs ?? []).length > 0) {

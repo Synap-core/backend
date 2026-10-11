@@ -590,6 +590,7 @@ export type ExternalAgentStatus = (typeof EXTERNAL_AGENT_STATUSES)[number];
 export const EXTERNAL_AGENT_LIVE_RUN_STATUSES = [
   "running",
   "waiting_on_you",
+  "stale",
 ] as const;
 
 /**

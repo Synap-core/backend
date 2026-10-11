@@ -9,12 +9,13 @@ import {
   LIVE_RUN_STATUSES,
 } from "@synap/database";
 
-/** `'running','waiting_on_you'` — THE live set, as a SQL list literal. */
+/** `'running','waiting_on_you','stale'` — THE live set, as a SQL list literal. */
 const LIVE_RUN_SQL_LIST = drizzleSql.raw(
   LIVE_RUN_STATUSES.map((s) => `'${s}'`).join(", ")
 );
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import type { RunStatus } from "./types.js";
+import { runStatusOfPlaybookRun } from "./playbook-run-status.js";
 
 export interface RecentFlowRef {
   flowType: "automation" | "playbook";
@@ -69,7 +70,8 @@ function rowsFromResult(result: unknown): RawRunRow[] {
 function mapRow(row: RawRunRow): RecentFlowRun {
   return {
     id: row.id,
-    status: row.status as RunStatus,
+    // Only a playbook run can be `stale`; every other value is identity.
+    status: runStatusOfPlaybookRun(row.status),
     startedAt: new Date(row.startedAt),
     completedAt: row.completedAt ? new Date(row.completedAt) : null,
     sessionId: row.sessionId ?? null,

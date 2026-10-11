@@ -198,9 +198,11 @@ describe("an OPEN agent question waits on the person (external agents ask and st
       const sess = await session({ idleHours: 30, status: "stale" });
       await askInRoom(sess, answered);
       const run = randomUUID();
+      // IS-held, so the answered twin keeps the FAIL verdict (an external
+      // agent's quiet run goes `stale` instead — D6, covered below).
       await q(
         `insert into playbook_runs (id, playbook_id, session_id, executor, status, started_at, created_by, input)
-         values ($1, $2, $3, 'external-agent', 'running', now() - interval '30 hours', 'u1', '{}'::jsonb)`,
+         values ($1, $2, $3, 'is-agent', 'running', now() - interval '30 hours', 'u1', '{}'::jsonb)`,
         [run, randomUUID(), sess]
       );
       return { run, sess };
@@ -279,9 +281,11 @@ describe("playbook-run reaper", () => {
   ): Promise<{ run: string; sess: string }> {
     const sess = await session({ idleHours: 30, outputs, status: "stale" });
     const run = randomUUID();
+    // IS-held: the non-owing twin must keep the FAIL verdict (D6 stales an
+    // external agent's quiet run instead — covered in its own block below).
     await q(
       `insert into playbook_runs (id, playbook_id, session_id, executor, status, started_at, created_by, input)
-       values ($1, $2, $3, 'external-agent', 'running', now() - interval '30 hours', 'u1', '{}'::jsonb)`,
+       values ($1, $2, $3, 'is-agent', 'running', now() - interval '30 hours', 'u1', '{}'::jsonb)`,
       [run, randomUUID(), sess]
     );
     return { run, sess };
@@ -322,6 +326,74 @@ describe("playbook-run reaper", () => {
     );
     await handlePlaybookRunReaper();
     expect(await statusOf("playbook_runs", run)).toBe("failed");
+  });
+});
+
+describe("D6 — a quiet run an EXTERNAL agent holds goes stale, never failed", () => {
+  async function quietRun(opts: {
+    executor: "is-agent" | "external-agent";
+    sessionStatus?: string;
+    clientKey?: string;
+  }): Promise<{ run: string; sess: string }> {
+    const sess = await session({
+      idleHours: 30,
+      status: opts.sessionStatus ?? "active",
+      metadata: opts.clientKey ? { clientKey: opts.clientKey } : {},
+    });
+    const run = randomUUID();
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, started_at, created_by, input)
+       values ($1, $2, $3, $4, 'running', now() - interval '30 hours', 'u1', '{}'::jsonb)`,
+      [run, randomUUID(), sess, opts.executor]
+    );
+    return { run, sess };
+  }
+  const completedAtOf = async (id: string) =>
+    (
+      await q<{ completed_at: unknown }>(
+        `select completed_at from playbook_runs where id = $1`,
+        [id]
+      )
+    ).rows[0]!.completed_at;
+
+  it("an external-agent run is marked stale with its session (open, no completedAt, never closed); the IS twin fails", async () => {
+    const ext = await quietRun({ executor: "external-agent" });
+    const is = await quietRun({ executor: "is-agent" });
+    await handlePlaybookRunReaper();
+    expect(await statusOf("playbook_runs", ext.run)).toBe("stale");
+    expect(await completedAtOf(ext.run)).toBeNull();
+    expect(await statusOf("focus_sessions", ext.sess)).toBe("stale");
+    expect(closed).not.toContain(ext.sess);
+    expect(await statusOf("playbook_runs", is.run)).toBe("failed");
+    expect(closed).toContain(is.sess);
+  });
+
+  it("a session an external KEY opened (start_session + templateId) holds its run, even with executor is-agent; an IS session does not", async () => {
+    const keyed = await quietRun({ executor: "is-agent", clientKey: "key:k1" });
+    const isOwned = await quietRun({
+      executor: "is-agent",
+      clientKey: "agent:a1",
+    });
+    await handlePlaybookRunReaper();
+    expect(await statusOf("playbook_runs", keyed.run)).toBe("stale");
+    expect(await statusOf("playbook_runs", isOwned.run)).toBe("failed");
+  });
+
+  it("a stale run is left alone by later sweeps (not terminal, nothing to re-fail)", async () => {
+    const ext = await quietRun({ executor: "external-agent" });
+    await handlePlaybookRunReaper();
+    await handlePlaybookRunReaper();
+    expect(await statusOf("playbook_runs", ext.run)).toBe("stale");
+    expect(closed).not.toContain(ext.sess);
+  });
+
+  it("an external-agent run under a CLOSED session has nothing to come back to — it fails", async () => {
+    const gone = await quietRun({
+      executor: "external-agent",
+      sessionStatus: "closed",
+    });
+    await handlePlaybookRunReaper();
+    expect(await statusOf("playbook_runs", gone.run)).toBe("failed");
   });
 });
 
