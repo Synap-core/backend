@@ -358,7 +358,10 @@ There are exactly **three**. A fourth was deleted in 2026-10-01 (see below).
 
 Consumed by: `@synap/api` (`intent-registry`, `create-from-definition`,
 `schemas/playbook-definition.ts`), `synap-app/packages/workspace-templates`
-(`validate.ts` — the `taskIntents` check), and the CP's `seed-capability-templates.ts`.
+(`validate.ts` — the `taskIntents` check), and the CP's `seed-capability-templates.ts`
+(only the insert-only bootstrap of an empty CP — official capabilities are authored in
+the catalog, `synap-app/packages/workspace-templates/capabilities/`, and published with
+`synap catalog publish --official`).
 
 ### Which field on which surface
 

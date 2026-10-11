@@ -15,6 +15,17 @@
       "capability": null
     }
   },
+  "synap/processes": {
+    "teachesTools": ["synap_create_playbook"],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Processes: a playbook that runs a kind's lifecycle — stage statuses, gates, rework loops, typed outputs, activators. Pod-local, not an official template.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap/operating-mode-rules": {
     "teachesTools": ["search_unified", "memory_search", "remember_fact"],
     "skillGroup": "core",

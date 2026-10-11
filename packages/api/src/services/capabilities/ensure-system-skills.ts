@@ -1,8 +1,9 @@
 /**
- * ensureSystemSkills (W5) — seed the AI-teaching-substrate baseline skills as DB rows.
+ * ensureSystemSkills (W5) — seed the AI-teaching-substrate system skills as DB rows.
  *
- * Reads every baseline skill package (`skills/manifest.json` → `synap`, `synap-schema`,
- * `synap-ui`) off disk via the SAME loader `GET /skills/system` uses
+ * Reads every skill package `skills/manifest.json` lists — `baseline` AND `workflow`
+ * (e.g. `synap`, `synap-schema`, `synap-ui`, `synap-market`) — off disk via the SAME
+ * loader `GET /skills/system` uses
  * (`loadSkillPackagesFromDisk`, see `hub-protocol/rest/skills.ts`) and upserts one
  * `kind='instruction'` row per topic `.md` file — pod-scoped, born `approved` (prompt-only,
  * no side effects), namespaced `system/<package>/<file-stem>` so user-authored skills can

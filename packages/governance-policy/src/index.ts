@@ -510,25 +510,29 @@ export const ADMIN_ACTIONS_RESERVED: readonly string[] = [
   "trustedIssuer.delete",
   "connector.connect",
   "connector.disconnect",
-  // Marketplace publish. NO pod-side publish door exists today: both live
-  // publishers hold the USER'S OWN Control Plane credential in the client and
-  // POST straight to `{CP}/api/packages` — the browser via `cpFetch`
-  // (browser/…/PublishWizard.tsx:721) and the CLI via its `synap login` session
-  // token (synap-cli/src/lib/cp-packages.ts:626). Neither traverses pod
-  // governance at all, and the pod holds no CP user credential to publish with
-  // (the `TODO(identity-seam)` at
-  // services/capabilities/marketplace-install.ts:144).
+  // Marketplace publish. NO pod-side publish door exists: every live publisher
+  // holds the USER'S OWN Control Plane credential and POSTs straight to the CP
+  // — the browser via `cpFetch` (browser/…/PublishWizard.tsx), the CLI via its
+  // `synap login` session token (synap-cli/src/lib/cp-packages.ts
+  // `publishPackage`), the catalog via `synap catalog publish --official`
+  // (synap-app/packages/workspace-templates/scripts/catalog-lib.mjs), and an
+  // AGENT via the CP's own MCP tool `market_publish`
+  // (synap-control-plane-api/src/routes/mcp.ts). None of them traverses pod
+  // governance, and the pod holds no CP user credential to publish with (the
+  // `TODO(identity-seam)` in services/capabilities/marketplace-install.ts).
   //
-  // Reserved rather than live BECAUSE of that absence — it can name no gate
-  // door, so it cannot be typed into ADMIN_ACTIONS_LIVE. It is reserved rather
-  // than omitted because publishing is OUTWARD-FACING and effectively
+  // Reserved rather than live BECAUSE of that absence — it can name no pod
+  // gate door, so it cannot be typed into ADMIN_ACTIONS_LIVE. It is reserved
+  // rather than omitted because publishing is OUTWARD-FACING and effectively
   // irreversible: the catalog is public, the version is content-derived, and
   // the soft-delist (`PATCH /api/packages/:slug` → `isPublic:false`) does not
-  // un-distribute what was already fetched. Nothing is exploitable today, but
-  // the floor becomes LOAD-BEARING the moment an agent-facing publish door
-  // lands — without it a rung-2.8 `governance_rules` row or a rung-4
-  // `autoApproveFor` entry could auto-execute a public, permanent write. That
-  // is the same LATENT FLOOR GAP reasoning as `projectMember.create` above.
+  // un-distribute what was already fetched. The agent-facing door that exists
+  // (`market_publish`) is governed by the CP, not here: the CP is where an
+  // official-vendor publish off the catalog door must be refused. This floor
+  // becomes LOAD-BEARING the moment a POD-side publish door lands — without it
+  // a rung-2.8 `governance_rules` row or a rung-4 `autoApproveFor` entry could
+  // auto-execute a public, permanent write. That is the same LATENT FLOOR GAP
+  // reasoning as `projectMember.create` above.
   //
   // BOTH SPELLINGS, per this file's own precedent: the composed event key takes
   // the RAW subjectType, and listing one spelling is how `workspace.delete`
