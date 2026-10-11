@@ -17,6 +17,8 @@ When the user describes a lead (inbound person, prospect, or company lead):
 2. `attach_facet` the `lead` role with `leadStage: "new"`
 3. Do NOT open a deal yet — a deal starts when the person decides to pursue
 
+A booked call (Cal.com) is lead evidence, not a deal. The booking already resolves the person (and company), attaches `lead` at `leadStage: "engaged"` — moving an earlier lead forward, never a qualified, nurturing, converted or disqualified one back — and links the call as an `event` `attended_by` the person. Do not open a deal for a booking.
+
 ```json
 POST /api/hub/entities
 { "userId": "{userId}", "workspaceId": "{wsId}",

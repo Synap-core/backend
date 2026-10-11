@@ -152,7 +152,8 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
 // `x-cal-signature-256` = hex HMAC-SHA256 of the RAW body, NO `sha256=` prefix —
 // different from Synap's own `/inbound` scheme), dedup on booking uid + trigger,
 // and turn a BOOKING_CREATED into ONE composite `capture/graph` proposal
-// (person + company + deal(lead) + event) via the shared submitCaptureGraph door.
+// (person wearing the `lead` role at engaged + company + event, never a deal —
+// W15) via the shared submitCaptureGraph door.
 // The `event` entity is event-sync-shaped, so an approved booking also mirrors to
 // a native Discord scheduled event with no Google-Calendar dependency.
 //
