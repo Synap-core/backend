@@ -872,6 +872,23 @@ export function registerPackagesRoutes(app: HubHono): void {
         scopes: c.get("scopes") ?? [],
       });
       Object.assign(result, post);
+    } else if (workspaceId && body.playbooks?.length) {
+      // "unchanged" says the version STAMP matches — not that every playbook
+      // the template declares exists. A stamp written by a pass that did not
+      // create a later-added playbook (boot reports it `missing`; it never
+      // creates) would otherwise leave that playbook off the pod for good: an
+      // update is exactly this door, and it would short-circuit here. The
+      // playbook layer alone is database-only (no Control Plane fetch, the
+      // cost the skip exists to avoid): it creates what is missing through the
+      // same governed create, reconciles the rest, and keeps owner archives.
+      const post = await applyPackagePostWorkspace({
+        workspaceId,
+        body: { _meta: body._meta, playbooks: body.playbooks },
+        userId,
+        agentUserId,
+        scopes: c.get("scopes") ?? [],
+      });
+      Object.assign(result, post);
     }
 
     // Stamp uses-edges onto every resolved require/compose workspace (shared

@@ -17,8 +17,16 @@
  * `definition_snapshot`). Non-fatal per row.
  *
  * Boot does NOT create a playbook the template added after install: creation
- * needs grant resolution and an install context — that is the install door's
- * job. Such a playbook is reported `missing`.
+ * needs grant resolution and an install context — that is the apply door's job
+ * (`POST /packages/apply` creates it, also on a same-version re-apply). Such a
+ * playbook is reported `missing`, and a `missing` playbook WITHHOLDS the version
+ * stamp (`playbookReportConverged`): a stamp that claimed the template while a
+ * playbook it declares was never created would make the next apply short-circuit
+ * as up to date, and the playbook would reach the pod never.
+ *
+ * A template playbook the OWNER archived is not missing: it is reported
+ * `ownerArchived`, never recreated by the apply door, and does not withhold the
+ * stamp ({@link findOwnerArchivedPlaybook} is the one predicate both use).
  */
 
 import type { Context } from "../../types/context.js";
@@ -82,10 +90,44 @@ async function convergeActivators(playbookId: string, ctx: Context) {
   await convergePlaybookActivatorsSafely({ playbookId, userId });
 }
 
+/**
+ * The owner archived this template playbook: an archived row of that name in
+ * the workspace, and no live one (the caller has already looked for a live
+ * one). The apply door does not recreate it and boot does not report it
+ * `missing` — archive is how an owner deletes a playbook (`playbooks.archive`;
+ * there is no hard delete), so the template must not bring it back.
+ */
+export async function findOwnerArchivedPlaybook(
+  workspaceId: string,
+  name: string
+): Promise<{ id: string } | null> {
+  const {
+    db,
+    and,
+    eq,
+    drizzleSql,
+    playbooks: playbooksTable,
+  } = await import("@synap/database");
+  const [row] = await db
+    .select({ id: playbooksTable.id })
+    .from(playbooksTable)
+    .where(
+      and(
+        drizzleSql`lower(${playbooksTable.name}) = lower(${name})`,
+        eq(playbooksTable.workspaceId, workspaceId),
+        eq(playbooksTable.status, "archived")
+      )
+    )
+    .limit(1);
+  return row ?? null;
+}
+
 export interface WorkspacePlaybooksReconcileReport {
   results: InstalledPlaybookReconcileResult[];
-  /** Template playbooks with no live row in the workspace (install creates them). */
+  /** Template playbooks with no row in the workspace (the apply door creates them). */
   missing: string[];
+  /** Template playbooks the owner archived — respected, never recreated. */
+  ownerArchived: string[];
   /** Rows whose reconcile threw — reported, never fatal. */
   failed: Array<{ name: string; error: string }>;
 }
@@ -94,15 +136,21 @@ export interface WorkspacePlaybooksReconcileReport {
  * Did this workspace's playbooks CONVERGE? The only question a version stamp may
  * answer (backend-rules invariant 1: never stamp a marker you did not earn).
  * A `proposed` row is a change QUEUED for review, not applied — counting it as
- * converged advanced the stamp and re-filed the proposal every boot. Every
+ * converged advanced the stamp and re-filed the proposal every boot. A
+ * `missing` playbook was never created, so it is not converged either (an
+ * owner-archived one is not missing). Every
  * stamping caller (the installed-packs ledger, the boot base-template pass)
  * asks this one predicate.
  */
 export function playbookReportConverged(
-  report: Pick<WorkspacePlaybooksReconcileReport, "results" | "failed">
+  report: Pick<
+    WorkspacePlaybooksReconcileReport,
+    "results" | "failed" | "missing"
+  >
 ): boolean {
   return (
     report.failed.length === 0 &&
+    report.missing.length === 0 &&
     report.results.every((r) => r.kind !== "proposed")
   );
 }
@@ -124,6 +172,7 @@ export async function reconcileWorkspacePlaybooksToTemplate(args: {
   const report: WorkspacePlaybooksReconcileReport = {
     results: [],
     missing: [],
+    ownerArchived: [],
     failed: [],
   };
   if (args.templatePlaybooks.length === 0) return report;
@@ -167,7 +216,14 @@ export async function reconcileWorkspacePlaybooksToTemplate(args: {
         .orderBy(asc(playbooksTable.createdAt), asc(playbooksTable.id))
         .limit(1);
       if (!row) {
-        report.missing.push(name);
+        if (
+          args.workspaceId &&
+          (await findOwnerArchivedPlaybook(args.workspaceId, name))
+        ) {
+          report.ownerArchived.push(name);
+        } else {
+          report.missing.push(name);
+        }
         continue;
       }
       report.results.push(

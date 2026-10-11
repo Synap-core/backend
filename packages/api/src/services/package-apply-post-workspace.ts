@@ -29,6 +29,7 @@ import {
   stampPlaybookMarketSource,
 } from "./playbooks/playbook-market-source.js";
 import {
+  findOwnerArchivedPlaybook,
   reconcileInstalledPlaybook,
   type InstalledPlaybookReconcileResult,
 } from "./playbooks/reconcile-installed-playbooks.js";
@@ -745,6 +746,18 @@ async function applyPackagePostWorkspaceInner(
             });
             continue;
           }
+          // The owner archived this template playbook: a re-apply / update
+          // never brings it back (the same predicate boot uses to keep it out
+          // of `missing`).
+          const archived = await findOwnerArchivedPlaybook(workspaceId, p.name);
+          if (archived) {
+            pbs.push({
+              name: p.name,
+              status: "owner-archived",
+              playbookId: archived.id,
+            });
+            continue;
+          }
         }
         // `playbooks.create` requires a goalTemplate; the wire type has it
         // optional. The blanket `as never` below used to make that hole
@@ -788,6 +801,11 @@ async function applyPackagePostWorkspaceInner(
           status: p.status as PlaybookCreateInput["status"],
           agentUserId,
           source: "intelligence",
+          // The template is the author, and it already chose this playbook
+          // beside its siblings: the near-twin guard (`findOverlappingPlaybooks`,
+          // meant for an agent inventing a twin) refused "Win a deal" next to
+          // "Qualify a lead" of the SAME template. Exact-name reuse still holds.
+          forceCreate: true,
         });
         // `playbooksRouter.create` does not accept/materialize grants — they
         // become `playbook --grants--> {tool|skill}` link edges via
@@ -1040,9 +1058,8 @@ async function applyPackagePostWorkspaceInner(
   // load, and a draft never reaches a model.
   if (body.skills?.length && workspaceId) {
     try {
-      const { applyTemplateSkills } = await import(
-        "./skills/template-skills.js"
-      );
+      const { applyTemplateSkills } =
+        await import("./skills/template-skills.js");
       result.skills = await applyTemplateSkills({
         workspaceId,
         userId,
