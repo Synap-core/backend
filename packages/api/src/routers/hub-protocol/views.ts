@@ -138,11 +138,15 @@ export const hubViewsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.userId!;
+      // The session handle rides on the caller context so `views.create`'s
+      // governance gate resolves the caller's slot claim against the session
+      // row — without it an approval stamped the first open view slot.
       const callerContext = await createHubProtocolCallerContext(
         userId,
         ctx.scopes || [],
         input.workspaceId ?? null,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined
       );
       const caller = regularViewsRouter.createCaller(callerContext);
 
@@ -157,14 +161,14 @@ export const hubViewsRouter = router({
         source: "intelligence",
         agentUserId: input.agentUserId,
         reasoning: input.reasoning,
+        expectedLabel: input.expectedLabel,
         ...(input.projectId ? { projectId: input.projectId } : {}),
       });
 
-      // OUTPUT LEDGER — a view an agent creates for a session never appeared
-      // as an output before this: `views.create` records nothing on any
-      // ledger. `ctx.sessionId` is populated whenever the caller carries a
-      // verified `X-Session-Id` (MCP: threaded through `createHubProtocolCaller`;
-      // Hub REST: the pod-wide `sessionMiddleware` + `getCaller`'s fallback).
+      // OUTPUT LEDGER. `views.create` records a view it CREATES; this also
+      // covers the view it hands back as already existing (its idempotent
+      // name+type return records nothing). The recorder is idempotent on
+      // session+kind+refId+expectedLabel, so the created case writes one row.
       // Never recorded on the proposal-gated path (`result.view` is `null`
       // there) — nothing has been created yet for the session to have produced.
       if (
@@ -519,6 +523,8 @@ export const hubViewsRouter = router({
         reasoning: input.reasoning,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
         sessionId: ctx.sessionId ?? undefined,
+        // The slot this update fulfils — the same label the artifact records.
+        expectedLabel: input.expectedLabel,
         data: {
           id: input.viewId,
           version: input.version,

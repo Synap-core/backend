@@ -145,3 +145,181 @@ describe("tripwire: every recordSessionArtifact() call forwards expectedLabel", 
     ).toEqual([]);
   });
 });
+
+/**
+ * TRIPWIRE (bug #9) — a door that RECORDS the caller's slot claim on the
+ * artifact must also GIVE it to the governance gate.
+ *
+ * The artifact's `props.expectedLabel` is read by the outputs join; the gate's
+ * `opts.expectedLabel` (rung 0 of `resolveSessionSlotClaim`, resolved against
+ * the row `opts.sessionId` names) is what the approval stamps `done` by. A door
+ * that records the label but gates without it lets an approval stamp the FIRST
+ * open slot of the kind — the documents created 2,1,3,4 swapped slots 1 and 2,
+ * and the view doors (`views.create`, hub `createView` / `updateContent`) kept
+ * the defect after the document door was fixed.
+ *
+ * HOW: every non-test source file is split into handler chunks (a tRPC
+ * `.mutation(`/`.query(` or a Hono `app.<verb>(`). In a chunk whose
+ * `recordSessionArtifact(` forwards a real label (not `expectedLabel: undefined`):
+ *   - every `checkPermissionOrPropose(` call forwards `expectedLabel` AND
+ *     `sessionId` (an identifier argument is resolved to its `const x = {…}`
+ *     in the same chunk);
+ *   - a procedure chunk with NO direct gate delegates — every `…Caller.create(`
+ *     there must forward `expectedLabel` to the gated door it calls.
+ *
+ * NOT covered (measured): a gate reached through a helper function outside the
+ * chunk (e.g. `createGovernedFileEntityFromBuffer`), and whether a delegate's
+ * caller context carries the session handle.
+ */
+
+interface CallSite {
+  arg: string;
+}
+
+function callArgs(source: string, re: RegExp): CallSite[] {
+  const out: CallSite[] = [];
+  re.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source))) {
+    let depth = 0;
+    let end = -1;
+    for (let i = m.index + m[0].length - 1; i < source.length; i++) {
+      const ch = source[i];
+      if (ch === "(") depth++;
+      else if (ch === ")") {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    if (end === -1) break;
+    out.push({ arg: source.slice(m.index + m[0].length, end) });
+    re.lastIndex = end;
+  }
+  return out;
+}
+
+function handlerChunks(
+  source: string
+): { text: string; isProcedure: boolean }[] {
+  const starts = [0];
+  const boundary =
+    /\.(?:mutation|query)\(|\bapp\.(?:get|post|put|patch|delete)\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = boundary.exec(source))) starts.push(m.index);
+  starts.push(source.length);
+  const chunks: { text: string; isProcedure: boolean }[] = [];
+  for (let k = 0; k < starts.length - 1; k++) {
+    chunks.push({
+      text: source.slice(starts[k], starts[k + 1]),
+      isProcedure: k > 0,
+    });
+  }
+  return chunks;
+}
+
+const forwards = (arg: string, key: string) =>
+  new RegExp(`\\b${key}\\s*[:,}]`).test(arg);
+
+/** Resolve `checkPermissionOrPropose(gateOpts)` to the `const gateOpts = {…}` literal. */
+function resolveGateArg(chunk: string, arg: string): string {
+  const id = arg.trim();
+  if (!/^[A-Za-z_$][\w$]*$/.test(id)) return arg;
+  const decl = new RegExp(`const\\s+${id}\\s*=\\s*\\{`).exec(chunk);
+  if (!decl) return arg;
+  let depth = 0;
+  for (let i = decl.index + decl[0].length - 1; i < chunk.length; i++) {
+    if (chunk[i] === "{") depth++;
+    else if (chunk[i] === "}") {
+      depth--;
+      if (depth === 0) return chunk.slice(decl.index, i + 1);
+    }
+  }
+  return arg;
+}
+
+/** Offenders in one source text; also counts the gate sites it checked. */
+function gateLabelOffenders(source: string): {
+  offenders: string[];
+  checked: number;
+} {
+  const offenders: string[] = [];
+  let checked = 0;
+  for (const { text, isProcedure } of handlerChunks(stripComments(source))) {
+    const recordsLabel = callArgs(text, /recordSessionArtifact\(/g).some(
+      (c) =>
+        /\bexpectedLabel\s*:\s*(?!undefined\b)/.test(c.arg) ||
+        /\bexpectedLabel\s*[,}]/.test(c.arg)
+    );
+    if (!recordsLabel) continue;
+    const gates = callArgs(text, /checkPermissionOrPropose\(/g);
+    for (const g of gates) {
+      checked++;
+      const literal = resolveGateArg(text, g.arg);
+      if (
+        !forwards(literal, "expectedLabel") ||
+        !forwards(literal, "sessionId")
+      ) {
+        offenders.push(
+          `gate: ${literal.trim().slice(0, 80).replace(/\s+/g, " ")}`
+        );
+      }
+    }
+    if (gates.length === 0 && isProcedure) {
+      for (const d of callArgs(text, /\b\w*[cC]aller\.create\(/g)) {
+        checked++;
+        if (!forwards(d.arg, "expectedLabel")) {
+          offenders.push(
+            `delegation: ${d.arg.trim().slice(0, 80).replace(/\s+/g, " ")}`
+          );
+        }
+      }
+    }
+  }
+  return { offenders, checked };
+}
+
+describe("tripwire: a door that records expectedLabel gives it to the gate", () => {
+  it("self-check: a literal recording door that gates without the label is caught", () => {
+    const bad = `
+      x.mutation(async ({ input, ctx }) => {
+        const gateOpts = { userId, sessionId: ctx.sessionId, data: {} };
+        await checkPermissionOrPropose(gateOpts);
+        await recordSessionArtifact({ sessionId, expectedLabel: input.expectedLabel });
+      })`;
+    const good = bad.replace(
+      "data: {}",
+      "expectedLabel: input.expectedLabel, data: {}"
+    );
+    const delegating = `
+      x.mutation(async ({ input, ctx }) => {
+        const result = await caller.create({ name: input.name });
+        await recordSessionArtifact({ sessionId, expectedLabel: input.expectedLabel });
+      })`;
+    expect(gateLabelOffenders(bad).offenders).toHaveLength(1);
+    expect(gateLabelOffenders(good)).toEqual({ offenders: [], checked: 1 });
+    expect(gateLabelOffenders(delegating).offenders).toHaveLength(1);
+  });
+
+  it("every gate in a label-recording door forwards expectedLabel + sessionId", () => {
+    const offenders: string[] = [];
+    let checked = 0;
+    for (const f of tsFiles(SRC_ROOT)) {
+      const r = gateLabelOffenders(readFileSync(f, "utf8"));
+      checked += r.checked;
+      for (const o of r.offenders)
+        offenders.push(`${f.replace(SRC_ROOT, "src")} — ${o}`);
+    }
+    // Non-vacuity: tRPC views.create, hub views.createView (delegation) and
+    // updateContent, hub documents.createDocument, entities.create = 5 sites.
+    // A count that DROPS means the scan broke — investigate, never lower it.
+    expect(checked).toBeGreaterThanOrEqual(5);
+    expect(
+      offenders,
+      "A door records the caller's expectedLabel on the artifact but does not give it (and the " +
+        "session) to the governance gate — the approval will stamp the first open slot of the kind."
+    ).toEqual([]);
+  });
+});

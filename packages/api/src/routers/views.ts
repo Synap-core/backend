@@ -457,15 +457,13 @@ export const viewsRouter = router({
         /**
          * The declared session-output slot this view fulfils, exactly as
          * declared on `focus_sessions.expectedOutputs[].label`. Forwarded to
-         * `recordSessionArtifact` below, never guessed when absent.
+         * `recordSessionArtifact` below and to the governance gate (the slot
+         * an approval stamps), never guessed when absent.
          *
-         * DOOR PARITY with the Hub twin (`hub-protocol/views.ts createView`),
-         * which has carried it since the Output-Loop W5 wave. That twin
-         * DELEGATES to this procedure and then records the artifact itself — on
-         * a caller context built without a session handle — so the recording
-         * added here fires only for a DIRECT tRPC call and the two cannot
-         * double-write. (The recorder is idempotent on
-         * `session+kind+refId+expectedLabel` regardless.)
+         * The Hub twin (`hub-protocol/views.ts createView`) DELEGATES here with
+         * its session handle and this label, then records the artifact too —
+         * the recorder is idempotent on `session+kind+refId+expectedLabel`, so
+         * a created view gets one row.
          */
         expectedLabel: z.string().min(1).max(500).optional(),
         /**
@@ -531,6 +529,10 @@ export const viewsRouter = router({
           reasoning: input.reasoning,
           correlationId,
           requestedEventId: requestedEvent?.id,
+          sessionId: ctx.sessionId ?? undefined,
+          // The slot this view fulfils — the claim the approval stamps by,
+          // the same label the artifact below records.
+          expectedLabel: input.expectedLabel,
           // FULL create payload — a review that only stored {name,type} produced
           // an empty bento on approve (config dropped; executor minted a new id).
           data: {
