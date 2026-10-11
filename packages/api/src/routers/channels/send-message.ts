@@ -76,6 +76,10 @@ import {
   type AnchoredCommentPlan,
 } from "../../utils/anchored-comment-turn.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
+import {
+  planCaptureCommentTurn,
+  withCaptureTurnEntries,
+} from "../../services/intake/capture-room.js";
 import { withTurnSessionTitle } from "../../services/focus-sessions/turn-context-session-title.js";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import {
@@ -323,6 +327,23 @@ export const sendMessageProcedure = protectedProcedure
       anchoredComment
         ? { ...(turnContext ?? {}), anchor: anchoredComment.context }
         : turnContext;
+    // A capture room: the owner's comment is a turn (founder rule 2026-10-12),
+    // and the agent that answers it sees the note and the current suggestions.
+    // Turn-only: the message persists the caller's context, never the note.
+    let captureTurn: Awaited<ReturnType<typeof planCaptureCommentTurn>> = null;
+    if (!input.ephemeral && !ctx.agentUserId) {
+      try {
+        captureTurn = await planCaptureCommentTurn({ channelId, userId });
+      } catch (err) {
+        logger.error(
+          { err, channelId },
+          "capture room read failed — this comment runs no capture turn"
+        );
+      }
+    }
+    const agentTurnContext = captureTurn
+      ? withCaptureTurnEntries(outgoingTurnContext, captureTurn.entries)
+      : outgoingTurnContext;
 
     // If no explicit agentId in the request and channel has an assigned agent, use it for IS routing
     if (!requestedAgentId && channel.assignedAgentId) {
@@ -858,7 +879,7 @@ export const sendMessageProcedure = protectedProcedure
         messageId: userMessageId,
         content,
         userId,
-        wake: staysSilent && !anchoredComment?.decision.trigger,
+        wake: staysSilent && !anchoredComment?.decision.trigger && !captureTurn,
       });
     }
     if (staysSilent) {
@@ -880,7 +901,17 @@ export const sendMessageProcedure = protectedProcedure
           sourceUserId: userId,
           focusSessionId: activeFocusSessionId,
           agentType: anchoredComment.decision.agentType ?? "meta",
-          turnContext: outgoingTurnContext,
+          turnContext: agentTurnContext,
+        });
+      } else if (captureTurn) {
+        await triggerAutoRespond({
+          channelId,
+          userMessageId,
+          content,
+          sourceUserId: userId,
+          focusSessionId: activeFocusSessionId,
+          agentType: captureTurn.agentType,
+          turnContext: agentTurnContext,
         });
       }
       return { messageId: userMessageId, channelId };
@@ -1133,7 +1164,7 @@ export const sendMessageProcedure = protectedProcedure
       ...getPodCallback(),
       channelKind,
       focusSessionId: activeFocusSessionId,
-      ...(outgoingTurnContext ? { turnContext: outgoingTurnContext } : {}),
+      ...(agentTurnContext ? { turnContext: agentTurnContext } : {}),
       ...(input.onboardingSkill
         ? { forcedSkillName: input.onboardingSkill }
         : {}),

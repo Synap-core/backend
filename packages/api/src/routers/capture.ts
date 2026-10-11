@@ -45,6 +45,7 @@ import {
   persistCaptureResult,
   type PersistedCaptureResult,
 } from "../services/intake/capture-result-part.js";
+import { readRestructureRoom } from "../services/intake/capture-room.js";
 import { CaptureAnswerSchema } from "@synap-core/types/capture";
 import {
   KNOWN_SOURCE_HASHES_MAX,
@@ -1745,6 +1746,20 @@ const captureBaseRouter = router({
       // caller so `capture.execute` can record it on the route decision.
       let workspaceDecision: WorkspaceDecisionRecord | undefined;
 
+      // A re-read of a capture room takes every comment the owner wrote since
+      // the last round, read from the room itself (never client-supplied), and
+      // — unless the caller sent its own — that round's open rows as the
+      // records to refine rather than re-invent.
+      const roomRound = input.sessionId
+        ? await readRestructureRoom({
+            sessionId: input.sessionId,
+            userId,
+            database,
+          })
+        : null;
+      const previousEntities =
+        input.previousEntities ?? roomRound?.previousEntities;
+
       const structureInput = {
         text: input.text ?? "",
         file: input.file,
@@ -1752,14 +1767,15 @@ const captureBaseRouter = router({
         html: input.html,
         context: input.context,
         instructions: structureInstructions,
+        ...(roomRound?.comments.length ? { comments: roomRound.comments } : {}),
         hints: {
           availableProfiles,
           availableWorkspaces,
           availableProjects,
           existingEntityNames,
           previousEntities: anchorPreviousEntity
-            ? [anchorPreviousEntity, ...(input.previousEntities ?? [])]
-            : input.previousEntities,
+            ? [anchorPreviousEntity, ...(previousEntities ?? [])]
+            : previousEntities,
           routingMemory,
           ...(availableRelationTypes ? { availableRelationTypes } : {}),
         },

@@ -25,6 +25,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({
   plan: vi.fn(),
+  capture: vi.fn(async (): Promise<unknown> => null),
   trigger: vi.fn(async () => true),
   inserted: [] as Array<Record<string, unknown>>,
   channel: null as Record<string, unknown> | null,
@@ -87,6 +88,12 @@ vi.mock("../../utils/anchored-comment-turn.js", async (importOriginal) => ({
     typeof import("../../utils/anchored-comment-turn.js")
   >()),
   planAnchoredCommentTurn: m.plan,
+}));
+vi.mock("../../services/intake/capture-room.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../services/intake/capture-room.js")
+  >()),
+  planCaptureCommentTurn: m.capture,
 }));
 vi.mock("../../utils/trigger-auto-respond.js", async (importOriginal) => ({
   ...(await importOriginal<
@@ -173,6 +180,7 @@ const answering = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.capture.mockResolvedValue(null);
   m.inserted.length = 0;
   m.chatEvents.length = 0;
   m.roster = [{ memberId: RESEARCHER, agentType: "researcher" }];
@@ -249,5 +257,44 @@ describe("chat.sendMessage — anchored comment in a silent GROUP room", () => {
     expect(m.trigger).toHaveBeenCalledWith(
       expect.objectContaining({ agentType: "meta" })
     );
+  });
+});
+
+describe("chat.sendMessage — a plain comment in a CAPTURE room", () => {
+  const entries = [
+    { key: "capture.kind", value: "capture_room" },
+    { key: "capture.note", value: "idea of content for synap" },
+    {
+      key: "capture.suggestions",
+      value: ["Suggested · Post · Idea of content for Synap"],
+    },
+  ];
+
+  it("wakes the orchestrator with the note and the current suggestions in its context", async () => {
+    m.capture.mockResolvedValue({ agentType: "meta", entries });
+
+    const out = await send({ content: "make it about relay instead" });
+
+    expect(out).toEqual({ messageId: expect.any(String), channelId: CHANNEL });
+    expect(m.capture).toHaveBeenCalledWith({
+      channelId: CHANNEL,
+      userId: "user-1",
+    });
+    expect(m.trigger).toHaveBeenCalledTimes(1);
+    expect(m.trigger).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: CHANNEL,
+        agentType: "meta",
+        turnContext: { entries },
+      })
+    );
+    // The note rides the TURN only; the stored comment carries none of it.
+    expect(m.inserted[0]?.metadata).toBeUndefined();
+  });
+
+  it("a plain comment in a room that is not a capture room stays silent", async () => {
+    await send({ content: "just a thought" });
+
+    expect(m.trigger).not.toHaveBeenCalled();
   });
 });

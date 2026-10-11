@@ -1007,6 +1007,12 @@ export class IntelligenceHubClient {
        */
       instructions?: string;
       /**
+       * The person's comments in the capture room since the last structure
+       * round, oldest first — corrections that outrank the note. Pod-built
+       * from the room, never client-supplied. An older IS ignores it.
+       */
+      comments?: string[];
+      /**
        * The pod's preferred vision model id (`intelligenceDefaults.visionModelId`).
        * A PREFERENCE the IS honours only when it serves exactly that id; an older
        * IS ignores it.
@@ -1015,11 +1021,17 @@ export class IntelligenceHubClient {
       hints?: {
         preferredProfiles?: string[];
         existingEntityNames?: string[];
+        /**
+         * Kinds the structurer may pick, best-ranked first. `propertyHints`
+         * only on the best-ranked few; `spaces` names the spaces that hold
+         * the kind (an older IS ignores it).
+         */
         availableProfiles?: Array<{
           slug: string;
           displayName: string;
           description?: string;
           propertyHints?: string;
+          spaces?: string[];
         }>;
         availableWorkspaces?: Array<{
           id: string;
@@ -1089,6 +1101,8 @@ export class IntelligenceHubClient {
       description?: string;
       properties?: Record<string, unknown>;
       confidence: number;
+      /** How sure the structurer is this record is wanted (two-pass IS). */
+      label?: "certain" | "likely" | "unsure";
       /**
        * Kind + Facets: role-profiles the IS proposes attaching to this entity
        * (a person who is a client + investor). `contextTempId` references

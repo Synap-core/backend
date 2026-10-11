@@ -28,6 +28,13 @@ const h = vi.hoisted(() => ({
     description: string | null;
   }>,
   isBody: {} as Record<string, unknown>,
+  /** What `capture.structure` sent the IS, per call. */
+  isInputs: [] as Array<Record<string, unknown>>,
+  /** What the room reader answers for a re-read of a capture session. */
+  room: null as unknown,
+  /** The profiles the person can see, and the workspace each read asked for. */
+  profiles: [] as Array<Record<string, unknown>>,
+  profileReads: [] as string[],
   /** What the ONE writer handed to the message insert — the persisted part. */
   written: [] as Array<{ id: string; part: unknown }>,
 }));
@@ -73,10 +80,18 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: async () => ({ select: () => selectChain() }),
     // The result writer's own reads (previous part, asked-round count) see an
     // empty room: no Postgres here.
-    db: { select: () => selectChain() },
+    db: {
+      select: () => selectChain(),
+      // The workspace gate a capture FROM a space passes (pod member).
+      query: {
+        workspaceMembers: { findFirst: async () => ({ role: "owner" }) },
+        workspaces: { findFirst: async () => ({ archivedAt: null }) },
+      },
+    },
     ProfileResolutionService: class {
-      async getAccessibleProfiles() {
-        return [{ id: "p-note", slug: "note", displayName: "Note" }];
+      async getAccessibleProfiles(_userId: string, workspaceId: string) {
+        h.profileReads.push(workspaceId);
+        return h.profiles;
       }
       async getEffectiveProperties() {
         return [];
@@ -100,7 +115,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("../../utils/intelligence-routing.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   resolveIntelligenceService: async () => ({
-    client: { structure: async () => structuredClone(h.isBody) },
+    client: {
+      structure: async (input: Record<string, unknown>) => {
+        h.isInputs.push(structuredClone(input));
+        return structuredClone(h.isBody);
+      },
+    },
   }),
 }));
 
@@ -158,6 +178,11 @@ vi.mock(
   })
 );
 
+vi.mock("../../services/intake/capture-room.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readRestructureRoom: async () => h.room,
+}));
+
 import { captureRouter } from "../capture.js";
 import { readCapturePart } from "@synap-core/types/capture";
 
@@ -174,11 +199,11 @@ const PROJECTS = [
   { id: randomUUID(), name: "Launch The Architech", description: null },
 ];
 
-function callerFor(userId: string) {
+function callerFor(userId: string, workspaceId: string | null = null) {
   return captureRouter.createCaller({
     authenticated: true,
     userId,
-    workspaceId: null,
+    workspaceId,
     sessionId: null,
     agentUserId: null,
   } as never);
@@ -196,6 +221,10 @@ function persisted() {
 
 beforeEach(() => {
   h.written = [];
+  h.isInputs = [];
+  h.room = null;
+  h.profileReads = [];
+  h.profiles = [{ id: "p-note", slug: "note", displayName: "Note" }];
   h.projectRows = PROJECTS;
   h.isBody = { entities: [ENTITY], relations: [], followUp: null };
 });
@@ -296,5 +325,57 @@ describe("projectCaptureRoutingBlocks — a placement WITH a suggestion", () => 
         ...blocks,
       }).success
     ).toBe(true);
+  });
+});
+
+describe("capture.structure — a re-read takes the room's comments", () => {
+  const SESSION = "55555555-5555-4555-8555-555555555555";
+  const reread = () =>
+    callerFor(`user-${randomUUID()}`).structure({
+      text: "idea of content for synap",
+      sessionId: SESSION,
+    });
+
+  it("sends every comment since the last round, and the open rows to refine", async () => {
+    h.room = {
+      comments: ["make it about relay", "and tag it Launch"],
+      previousEntities: [
+        { tempId: "t1", profileSlug: "post", title: "Synap content idea" },
+      ],
+    };
+    await reread();
+    expect(h.isInputs).toHaveLength(1);
+    expect(h.isInputs[0]!.comments).toEqual([
+      "make it about relay",
+      "and tag it Launch",
+    ]);
+    expect(
+      (h.isInputs[0]!.hints as { previousEntities?: unknown }).previousEntities
+    ).toEqual([
+      { tempId: "t1", profileSlug: "post", title: "Synap content idea" },
+    ]);
+  });
+
+  it("a room with no comments sends no comments field", async () => {
+    h.room = { comments: [] };
+    await reread();
+    expect(h.isInputs[0]).not.toHaveProperty("comments");
+  });
+
+  it("the caller's own previousEntities win over the room's", async () => {
+    h.room = {
+      comments: ["x"],
+      previousEntities: [{ tempId: "room", profileSlug: "note", title: "R" }],
+    };
+    await callerFor(`user-${randomUUID()}`).structure({
+      text: "hi",
+      sessionId: SESSION,
+      previousEntities: [{ tempId: "mine", profileSlug: "note", title: "M" }],
+    });
+    expect(
+      (
+        h.isInputs[0]!.hints as { previousEntities?: Array<{ tempId: string }> }
+      ).previousEntities?.map((e) => e.tempId)
+    ).toEqual(["mine"]);
   });
 });
