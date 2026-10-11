@@ -312,10 +312,10 @@ describe("validateGrantDraft", () => {
 
 describe("validateGrantDraft — the mint door's cap", () => {
   // Unticking one kind under "Every kind" splits the pattern into one per
-  // remaining kind: 20 kinds × 4 actions lands at 76 patterns, which the door
-  // (permissions.max(64)) refuses. The editor must say so before Save.
+  // remaining kind: 40 kinds × 4 actions lands at 156 patterns, which the door
+  // (permissions.max(MAX_GRANT_PERMISSIONS)) refuses. The editor must say so before Save.
   it("reports a draft past MAX_GRANT_PERMISSIONS, in words", () => {
-    const kinds = Array.from({ length: 20 }, (_, i) => `kind${i}`);
+    const kinds = Array.from({ length: 40 }, (_, i) => `kind${i}`);
     let d = draft(
       "entity.*.read",
       "entity.*.create",
@@ -326,13 +326,13 @@ describe("validateGrantDraft — the mint door's cap", () => {
       d = toggleGrant(d, { subject: "entity", kind: "kind0", action }, false, {
         kinds,
       });
-    expect(d.permissions).toHaveLength(76);
+    expect(d.permissions).toHaveLength(156);
     const v = validateGrantDraft(d);
     expect(v.ok).toBe(false);
     const p =
       !v.ok && v.problems.find((x) => x.code === "too-many-permissions");
-    expect(p).toMatchObject({ count: 76, max: MAX_GRANT_PERMISSIONS });
-    expect(p && "message" in p && p.message).toContain("at most 64");
+    expect(p).toMatchObject({ count: 156, max: MAX_GRANT_PERMISSIONS });
+    expect(p && "message" in p && p.message).toContain("at most 128");
   });
   it("accepts exactly the cap", () => {
     const d = draft(

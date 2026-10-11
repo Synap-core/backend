@@ -966,6 +966,41 @@ export function isAutoApproved(
 }
 
 /**
+ * Gate subjectTypes whose GRANT subject is a different word (not just a
+ * different spelling): the write door says `focus_session`, the grant catalog
+ * and the read hook say `session`.
+ */
+const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
+  workspaces: "workspace",
+  focus_session: "session",
+};
+
+/** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
+const toGrammarToken = (token: string): string =>
+  token
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/\./g, "_")
+    .toLowerCase();
+
+/**
+ * The grant request key for a gate door or a read-hook subject, in the grant
+ * grammar's spelling (lowercase, `_`-joined). ONE fold for every refusing
+ * layer — the key grant (api `utils/grant-write-check.ts`), the read hook (api
+ * `access/grant-read.ts`) and the agent capability rung (`agentHasCapability`)
+ * — so a door the grammar cannot spell (`relationDef`, `apiKey`,
+ * `view/updateContent`) is grantable, and the three never disagree.
+ */
+export function grantRequestKey(
+  subjectType: string,
+  action: string
+): { subject: string; action: string } {
+  return {
+    subject: GRANT_SUBJECT_FOLDS[subjectType] ?? toGrammarToken(subjectType),
+    action: toGrammarToken(action),
+  };
+}
+
+/**
  * CBAC: does the agent's capability allowlist permit this event key?
  *
  * An allowlist entry is either a legacy key — exact ("entity.create"),
@@ -995,9 +1030,8 @@ export function agentHasCapability(
     return true;
   if (!eventKey.startsWith(`${subjectType}.`)) return false;
   const req = {
-    subject: subjectType,
+    ...grantRequestKey(subjectType, eventKey.slice(subjectType.length + 1)),
     qualifier: kind ?? null,
-    action: eventKey.slice(subjectType.length + 1),
   };
   return capabilities.some((pattern) => {
     try {

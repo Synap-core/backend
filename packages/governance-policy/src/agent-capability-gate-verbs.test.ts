@@ -56,4 +56,33 @@ describe("agentHasCapability — gate verbs must be named", () => {
       true
     );
   });
+  // Rules out: the capability rung reading the raw door name while the key
+  // grant reads the grammar spelling (P2 listed focus_session as a workaround).
+  it("reads a door in the grant grammar's spelling (grantRequestKey)", () => {
+    expect(
+      agentHasCapability("focus_session.create", "focus_session", [
+        "session.create",
+      ])
+    ).toBe(true);
+    expect(
+      agentHasCapability("view.updateContent", "view", ["view.update_content"])
+    ).toBe(true);
+    expect(
+      agentHasCapability("relationDef.create", "relationDef", [
+        "relation_def.create",
+      ])
+    ).toBe(true);
+    expect(
+      agentHasCapability(
+        "entity.renderer.set",
+        "entity",
+        ["entity.*.renderer_set"],
+        "note"
+      )
+    ).toBe(true);
+    // A bare subject still names no gate verb, folded or not.
+    expect(agentHasCapability("view.updateContent", "view", ["view"])).toBe(
+      false
+    );
+  });
 });

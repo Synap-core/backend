@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_GATE_VERBS,
   AI_PRESET_EXCLUSIONS,
   AI_READ_PROPOSE_ROLE_ID,
   AI_READ_SUBJECTS,
@@ -52,13 +53,37 @@ describe("AI — read & propose", () => {
       expect(allows(perms, { subject, action: "delete" }), subject).toBe(false);
       for (const action of GRANT_GATE_ACTIONS)
         expect(allows(perms, { subject, action }), `${subject}.${action}`).toBe(
-          false
+          subject === "proposal" && action === "reject"
         );
     }
     for (const key of Object.keys(AI_PRESET_EXCLUSIONS)) {
       const [subject, action] = key.split(".");
       expect(allows(perms, { subject, action }), key).toBe(false);
     }
+  });
+});
+
+describe("AI — read & propose: the gate verbs", () => {
+  it("rejects a proposal, never approves one", () => {
+    expect(allows(perms, { subject: "proposal", action: "reject" })).toBe(true);
+    expect(allows(perms, { subject: "proposal", action: "approve" })).toBe(
+      false
+    );
+  });
+  it("holds each named daily verb, and no exclusion", () => {
+    for (const v of AI_GATE_VERBS) {
+      const segs = v.split(".");
+      const req =
+        segs.length === 3
+          ? { subject: segs[0], qualifier: "note", action: segs[2] }
+          : { subject: segs[0], action: segs[1] };
+      expect(allows(perms, req), v).toBe(true);
+      expect(Object.keys(AI_PRESET_EXCLUSIONS)).not.toContain(v);
+    }
+  });
+  it("lists sessions once, in the grammar spelling", () => {
+    expect(perms.some((p) => p.startsWith("focus_session"))).toBe(false);
+    expect(perms).toContain("session.create");
   });
 });
 

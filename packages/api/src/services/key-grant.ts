@@ -13,6 +13,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db, eq, GrantRepository, GrantRoleRepository } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
+import { MAX_GRANT_PERMISSIONS } from "@synap-core/types/grants";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   assertPermissions,
@@ -21,7 +22,10 @@ import {
 
 export const GrantInputSchema = z.object({
   /** `<subject>[.<kind>].<action>` patterns, e.g. `entity.knowledge.read`. */
-  permissions: z.array(z.string().min(1).max(120)).min(1).max(64),
+  permissions: z
+    .array(z.string().min(1).max(120))
+    .min(1)
+    .max(MAX_GRANT_PERMISSIONS),
   workspaceIds: z.array(z.string().uuid()).max(64).optional(),
   projectIds: z.array(z.string().uuid()).max(64).optional(),
   entityIds: z.array(z.string().uuid()).max(256).optional(),

@@ -34,11 +34,13 @@ import { parsePermission } from "./grammar.js";
  *    exclusions. A new door or read subject fails the tripwire until it is
  *    added here or excluded with its reason.
  *
- * No gate verb (approve, merge, archive, run, attach, section_update, …) and no
- * delete: a bare subject would cover delete, so every pattern names its verb.
- * `focus_session` is listed beside `session` because the agent capability rung
- * (`agentHasCapability`) reads the gate's raw subject while the key grant reads
- * the folded one (`grant-write-check.ts` GRANT_SUBJECT_ALIASES).
+ *  - VERBS: the non-destructive gate verbs an agent uses daily (AI_GATE_VERBS),
+ *    each named — a bare subject never covers one.
+ *
+ * Never delete, archive, merge, purge or approve: a bare subject would cover
+ * delete, so every pattern names its verb. Subjects are in the grammar's
+ * spelling (`session`, `relation_def`, `view.update_content`); every refusing
+ * layer folds a door name to it through governance-policy `grantRequestKey`.
  */
 export const AI_READ_SUBJECTS = [
   "agent",
@@ -61,6 +63,7 @@ export const AI_READ_SUBJECTS = [
   "project",
   "proposal",
   "relation",
+  "relation_def",
   "renderer",
   "role",
   "session",
@@ -83,7 +86,6 @@ export const AI_WRITE_SUBJECTS: Readonly<
   document: ["create", "update"],
   entity: ["create", "update"],
   facet: ["update"],
-  focus_session: ["create", "update"],
   link: ["create"],
   playbook: ["create", "update"],
   playbook_run: ["update"],
@@ -100,6 +102,43 @@ export const AI_WRITE_SUBJECTS: Readonly<
 };
 
 /**
+ * The gate verbs (not read/create/update/delete) an AI holds by default —
+ * "change anything" (founder Option A) minus every destructive, approving,
+ * access-widening or administrative verb, which AI_PRESET_EXCLUSIONS names.
+ * Rejecting a proposal is in (an agent withdraws or discards its own work);
+ * approving never is.
+ */
+export const AI_GATE_VERBS: readonly string[] = [
+  "a2ai.join",
+  "artifact.set_state",
+  "automation.activate",
+  "automation.execute",
+  "bento.arrange",
+  "capability.attach",
+  "capability.renderer_set",
+  "cell.define",
+  "channel.create_branch",
+  "command.execute",
+  "context.link",
+  "document.section_update",
+  "document.session_narrative_update",
+  "entity.*.renderer_set",
+  "facet.attach",
+  "facet.detach",
+  "playbook.promote",
+  "playbook.run",
+  "proactive.recap",
+  "profile.renderer_set",
+  "project.file_entities",
+  "project.instantiate_from_playbook",
+  "project.spawn_from_session",
+  "proposal.reject",
+  "view.update_content",
+  "whiteboard.place",
+  "widget.register",
+];
+
+/**
  * What the AI preset leaves out on purpose, keyed `<subject>.<action>` as the
  * read hook / write door names it. The tripwire refuses an entry that names
  * nothing real, and checks each one is refused.
@@ -107,24 +146,42 @@ export const AI_WRITE_SUBJECTS: Readonly<
 export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
   "vault.read":
     "Secrets: an AI reads a secret only through an explicit vault grant.",
-  "apiKey.read": "Credentials.",
-  "apiKey.create": "Credentials: an AI never mints keys.",
-  "apiKey.update": "Credentials.",
-  "aiProvider.create":
+  "vault.grant": "Secrets: widens who may use a secret.",
+  "api_key.read": "Credentials.",
+  "api_key.create": "Credentials: an AI never mints keys.",
+  "api_key.update": "Credentials.",
+  "ai_provider.create":
     "Sets where prompts are sent: a credential-shaped write.",
-  "aiProvider.update":
+  "ai_provider.update":
     "Sets where prompts are sent: a credential-shaped write.",
+  "agent.update_capabilities":
+    "Governance: an AI never widens an agent's limits.",
+  "app.connect": "Access: what an app may reach is a person's approval.",
+  "session.grant_capability": "Access: widens what a session's agent may do.",
+  "profile.grant_access": "Access: shares a kind with another space.",
+  "relation.expose": "Access: widens who may see a record.",
+  "share.create": "Sharing exposes a record to guests: an access decision.",
+  "project_member.create":
+    "Membership: widens who may read across a project's spaces.",
+  "workspace_member.add": "Membership.",
+  "workspace_member.remove": "Membership.",
+  "workspace_member.update_role": "Membership.",
+  "channel.merge_branch":
+    "A merge: folds a branch's work back into its thread.",
+  "channel.bind": "Connects the pod to an outside service.",
+  "channel.unbind": "Disconnects the pod from an outside service.",
+  "channel.create_external": "Connects the pod to an outside service.",
   "workspace.create": "Space administration.",
   "workspace.update": "Space administration.",
-  "projectMember.create":
-    "Membership: widens who may read across a project's spaces.",
+  "workspace.adopt": "Space administration.",
+  "workspace.restore": "Space administration.",
+  "workspace.declare_source": "Space administration.",
+  "workspace.configure_public_projection":
+    "Space administration: publishes a space.",
   "role.create": "Role definitions are the permission table itself.",
   "role.update": "Role definitions are the permission table itself.",
   "rule.create": "Governance: a rule decides what agents may do unasked.",
   "rule.update": "Governance: a rule decides what agents may do unasked.",
-  "share.create": "Sharing exposes a record to guests: an access decision.",
-  "relationDef.read":
-    "Not nameable: the grammar is lowercase, so only `*` reads this subject.",
 };
 
 const AI_READ_PROPOSE_PERMISSIONS: readonly string[] =
@@ -133,6 +190,7 @@ const AI_READ_PROPOSE_PERMISSIONS: readonly string[] =
     ...Object.entries(AI_WRITE_SUBJECTS).flatMap(([s, actions]) =>
       actions.map((a) => `${s}.${a}`)
     ),
+    ...AI_GATE_VERBS,
   ]);
 
 /** The preset id every surface and test names the AI default by. */
@@ -159,7 +217,7 @@ export const GRANT_PRESETS: readonly GrantRole[] = [
     id: AI_READ_PROPOSE_ROLE_ID,
     name: "AI — read & propose",
     description:
-      "Reads everything and creates or changes records, documents, sessions, links, views and kinds. Never deletes, never approves, and has no secrets, keys or space settings. Its writes still follow your review rules.",
+      "Reads everything and creates or changes records, documents, sessions, links, views and kinds; runs playbooks and may reject a proposal. Never deletes, never approves, and has no secrets, keys, sharing or space settings. Its writes still follow your review rules.",
     grant: { permissions: AI_READ_PROPOSE_PERMISSIONS },
   },
   {

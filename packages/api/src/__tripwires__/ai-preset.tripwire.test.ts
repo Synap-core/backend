@@ -1,24 +1,30 @@
 /**
- * TRIPWIRE — the "AI — read & propose" preset covers every subject it should,
- * and nothing it must not.
+ * TRIPWIRE — the "AI — read & propose" preset covers every subject and verb it
+ * should, and nothing it must not.
  *
  * The preset lives in `@synap-core/types/grants`, which cannot import the two
  * sources it is built from (a build cycle). This guard DERIVES both here:
- *  - reads  = every subject in GRANT_READ_SPECS (the read hook);
- *  - writes = every create/update door in GATE_WRITE_DOORS.
- * Each must be permitted by the preset, at BOTH refusing layers — the key grant
- * (`grantRequestForWrite` + `permits`, which folds focus_session → session) and
- * the agent capability rung (`decideAgentPolicy` rung 1, which reads the raw
- * door subject) — or be listed in AI_PRESET_EXCLUSIONS with a reason. A new
- * door or read subject therefore fails here until someone decides.
+ *  - reads = every subject in GRANT_READ_SPECS (the read hook);
+ *  - doors = every door in GATE_WRITE_DOORS, folded to the grammar spelling by
+ *    `grantRequestKey` (the fold every refusing layer uses).
+ * Every door verb is CLASSIFIED: a destructive verb (DESTRUCTIVE_ACTIONS) or
+ * `approve` must be refused; every other verb — create, update and each gate
+ * verb — must be permitted at BOTH refusing layers, the key grant
+ * (`grantRequestForWrite` + `permits`) and the agent capability rung
+ * (`decideAgentPolicy` rung 1), or be listed in AI_PRESET_EXCLUSIONS with a
+ * reason (and then be refused at both). A new door fails here until decided.
  *
- * NOT COVERED (stated): doors whose verb is not create/update are asserted
- * REFUSED (no gate verb, no delete), not individually reviewed; a write path
- * that does not pass `checkPermissionOrPropose` (posting a channel message) is
- * outside both layers and outside this guard.
+ * NOT COVERED (stated): a write path that does not pass
+ * `checkPermissionOrPropose` (posting a channel message) is outside both
+ * layers and outside this guard.
  */
 import { describe, expect, it } from "vitest";
-import { GATE_WRITE_DOORS, decideAgentPolicy } from "@synap/governance-policy";
+import {
+  DESTRUCTIVE_ACTIONS,
+  GATE_WRITE_DOORS,
+  decideAgentPolicy,
+  grantRequestKey,
+} from "@synap/governance-policy";
 import { permits } from "@synap/governance-policy/grants";
 import {
   AI_PRESET_EXCLUSIONS,
@@ -39,9 +45,13 @@ const readSubjects = [
 ];
 const doors = Object.keys(GATE_WRITE_DOORS).map((d) => {
   const i = d.indexOf("/");
-  return { subject: d.slice(0, i), action: d.slice(i + 1) };
+  const raw = { subject: d.slice(0, i), action: d.slice(i + 1) };
+  const key = grantRequestKey(raw.subject, raw.action);
+  return { ...raw, key: `${key.subject}.${key.action}`, verb: key.action };
 });
-const writeDoors = doors.filter((d) => ["create", "update"].includes(d.action));
+const refusedVerb = (verb: string) =>
+  DESTRUCTIVE_ACTIONS.includes(verb) || verb === "approve";
+const grantedDoors = doors.filter((d) => !refusedVerb(d.verb));
 const excluded = (key: string) => key in AI_PRESET_EXCLUSIONS;
 
 /** The key grant's answer for a gate door (the same request the gate builds). */
@@ -68,7 +78,8 @@ function capabilityAllows(subjectType: string, action: string) {
 describe("AI preset coverage (derived from the read hook and the write doors)", () => {
   it("scans real sources (non-vacuity)", () => {
     expect(readSubjects.length).toBeGreaterThanOrEqual(25);
-    expect(writeDoors.length).toBeGreaterThanOrEqual(40);
+    expect(grantedDoors.length).toBeGreaterThanOrEqual(60);
+    expect(doors.some((d) => d.key === "view.update_content")).toBe(true);
     expect(PRESET.length).toBeGreaterThan(30);
     expect(PRESET.length).toBeLessThanOrEqual(MAX_GRANT_PERMISSIONS);
   });
@@ -85,41 +96,49 @@ describe("AI preset coverage (derived from the read hook and the write doors)", 
     ).toEqual([]);
   });
 
-  it("creates/updates on every gated write subject at BOTH layers, or excludes it", async () => {
+  it("holds every non-destructive door verb at BOTH layers, or excludes it", async () => {
     const missing: string[] = [];
-    for (const { subject, action } of writeDoors) {
-      if (excluded(`${subject}.${action}`)) continue;
+    for (const { subject, action, key } of grantedDoors) {
+      if (excluded(key)) continue;
       if (!(await grantAllows(subject, action)))
-        missing.push(`${subject}.${action} (key grant)`);
+        missing.push(`${key} (key grant)`);
       if (!capabilityAllows(subject, action))
-        missing.push(`${subject}.${action} (capability rung)`);
+        missing.push(`${key} (capability rung)`);
     }
     expect(
       missing,
-      "Add the subject to AI_WRITE_SUBJECTS or AI_PRESET_EXCLUSIONS (types/grants/presets.ts)."
+      "Add the verb to AI_WRITE_SUBJECTS / AI_GATE_VERBS or AI_PRESET_EXCLUSIONS (types/grants/presets.ts)."
     ).toEqual([]);
   });
 
-  it("refuses every exclusion, every delete and every other door verb", async () => {
+  it("refuses every exclusion, every delete/archive/merge/purge and approve", async () => {
     const leaks: string[] = [];
+    for (const { subject, action, key, verb } of doors) {
+      if (!refusedVerb(verb) && !excluded(key)) continue;
+      if (await grantAllows(subject, action)) leaks.push(`${key} (key grant)`);
+      if (capabilityAllows(subject, action))
+        leaks.push(`${key} (capability rung)`);
+    }
     for (const key of Object.keys(AI_PRESET_EXCLUSIONS)) {
       const [subject, action] = key.split(".") as [string, string];
       if (permits(SCOPE, { subject, action })) leaks.push(key);
     }
-    for (const { subject, action } of doors) {
-      if (action === "create" || action === "update") continue;
-      if (await grantAllows(subject, action))
-        leaks.push(`${subject}/${action} (key grant)`);
-      if (capabilityAllows(subject, action))
-        leaks.push(`${subject}/${action} (capability rung)`);
-    }
     expect(leaks).toEqual([]);
   });
 
-  it("every exclusion names a real read subject or write door", () => {
+  it("rejects a proposal, never approves one", () => {
+    expect(permits(SCOPE, { subject: "proposal", action: "reject" })).toBe(
+      true
+    );
+    expect(permits(SCOPE, { subject: "proposal", action: "approve" })).toBe(
+      false
+    );
+  });
+
+  it("every exclusion names a real read subject or door", () => {
     const real = new Set([
       ...readSubjects.map((s) => `${s}.read`),
-      ...writeDoors.map((d) => `${d.subject}.${d.action}`),
+      ...doors.map((d) => d.key),
     ]);
     expect(
       Object.keys(AI_PRESET_EXCLUSIONS).filter((k) => !real.has(k))
@@ -130,6 +149,12 @@ describe("AI preset coverage (derived from the read hook and the write doors)", 
 describe("an agent holding the preset", () => {
   it("can start a session, link, build a view and define a kind", async () => {
     for (const [subject, action] of [
+      ["facet", "attach"],
+      ["document", "session_narrative_update"],
+      ["playbook", "run"],
+      ["channel", "create_branch"],
+      ["view", "updateContent"],
+      ["relationDef", "create"],
       ["focus_session", "create"],
       ["focus_session", "update"],
       ["link", "create"],

@@ -36,10 +36,10 @@ import {
 export const MAX_KEY_TTL_DAYS = 36_500;
 
 /**
- * The most permission patterns one grant may hold — the mint door's
- * `GrantInputSchema.permissions.max(64)` (api `services/key-grant.ts`).
+ * The most permission patterns one grant may hold. The ONE literal: the mint
+ * door's `GrantInputSchema` (api `services/key-grant.ts`) imports it.
  */
-export const MAX_GRANT_PERMISSIONS = 64;
+export const MAX_GRANT_PERMISSIONS = 128;
 
 export interface GrantDraft {
   /** Permission patterns, `<subject>[.<kind>].<action>`. */

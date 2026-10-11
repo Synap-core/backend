@@ -9,9 +9,11 @@
  *
  * The request key is derived HERE, server-side, from the gate's own
  * subject/action plus the object's kind — a caller never names it:
- *   subject   = the gate subjectType, folded to the grant subject a person
- *               grants and reads (GRANT_SUBJECT_ALIASES: workspaces → workspace,
- *               focus_session → session)
+ *   subject   = the gate subjectType, action = the gate action, both folded
+ *               to the grant grammar's spelling by governance-policy
+ *               `grantRequestKey` (focus_session → session, relationDef →
+ *               relation_def, updateContent → update_content) — the same fold
+ *               the read hook and the agent capability rung use
  *   qualifier = for `entity`: data.profileSlug / data.type, else the stored kind
  *               of data.id / data.entityId (profiles.slug, then entities.type)
  *   workspace = the gate's workspaceId
@@ -22,6 +24,7 @@
 
 import { db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
 import { entities, profiles } from "@synap/database/schema";
+import { grantRequestKey } from "@synap/governance-policy";
 import { permits, type GrantRequest } from "@synap/governance-policy/grants";
 
 export interface GrantWriteInput {
@@ -45,22 +48,12 @@ async function storedKind(entityId: string): Promise<string | undefined> {
   return row?.slug ?? row?.type ?? undefined;
 }
 
-/**
- * Gate subjectTypes whose grant subject is spelled differently. A session is
- * `session` in the grant catalog and on reads (access/grant-read.ts); its
- * write door is `focus_session`.
- */
-const GRANT_SUBJECT_ALIASES: Readonly<Record<string, string>> = {
-  workspaces: "workspace",
-  focus_session: "session",
-};
-
 /** The server-derived request a grant is checked against. */
 export async function grantRequestForWrite(
   input: GrantWriteInput
 ): Promise<GrantRequest> {
   const data = input.data ?? {};
-  const subject = GRANT_SUBJECT_ALIASES[input.subjectType] ?? input.subjectType;
+  const { subject, action } = grantRequestKey(input.subjectType, input.action);
   const entityId = str(data.id) ?? str(data.entityId);
   let qualifier: string | undefined;
   if (subject === "entity") {
@@ -73,7 +66,7 @@ export async function grantRequestForWrite(
   return {
     subject,
     qualifier: qualifier ?? null,
-    action: input.action,
+    action,
     workspaceId: input.workspaceId ?? null,
     entityId: entityId ?? null,
     projectIds: projectId ? [projectId] : null,

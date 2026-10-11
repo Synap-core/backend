@@ -77,6 +77,7 @@ import {
   QUALIFIED_GRANT_SUBJECTS,
   type GrantScope,
 } from "@synap/governance-policy/grants";
+import { grantRequestKey } from "@synap/governance-policy";
 import { projectLensWhere } from "../utils/project-scope.js";
 
 export interface GrantReadSpec {
@@ -90,12 +91,13 @@ export interface GrantReadSpec {
   projectEntityColumn?: AnyPgColumn;
 }
 
+/** `subject` is folded to the grammar spelling (`relationDef` → `relation_def`). */
 const spec = (
   subject: string,
   t: { id?: AnyPgColumn; workspaceId?: AnyPgColumn },
   extra: Partial<GrantReadSpec> = {}
 ): GrantReadSpec => ({
-  subject,
+  subject: grantRequestKey(subject, "read").subject,
   idColumn: t.id,
   workspaceColumn: t.workspaceId,
   ...extra,
