@@ -791,7 +791,7 @@ async function gateAgentAutomationChange(
   action: "update" | "delete",
   update?: Record<string, unknown>
 ): Promise<{ status: "proposed"; proposalId: string; message: string } | null> {
-  const agentUserId = actingAgentUserId(ctx);
+  const agentUserId = await actingAgentUserId(ctx);
   if (!agentUserId) return null;
   const perm = await checkPermissionOrPropose({
     userId: ctx.userId,
@@ -2378,7 +2378,7 @@ export const automationsRouter = router({
       const database = await getDb();
       // The authenticated agent governs, never only the input (an agent key
       // omitting `agentUserId` must still propose / be bounded by its grant).
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const createdBy = agentUserId ?? ctx.userId!;
 
       await prepareAutomationForMaterialization(database, input, createdBy);
@@ -3178,7 +3178,7 @@ export const automationsRouter = router({
       // UI/CLI "run now" to a proposal. RBAC for the operator path is unchanged
       // (assertWorkspaceWrite above); the agent path additionally runs the gate,
       // which owns the agent's own RBAC + propose/execute decision.
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       await assertKeyMayWrite({
         subjectType: "automation",
         action: "execute",

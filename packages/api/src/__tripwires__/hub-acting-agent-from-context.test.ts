@@ -96,14 +96,16 @@ function violations(chunk: Chunk): string[] {
   if (rawReads)
     out.push(`${id}: reads ${rawReads[0]} outside actingAgentUserId`);
 
-  const helperLocal = /const (\w+) = actingAgentUserId\(ctx\b/.exec(body)?.[1];
+  const helperLocal = /const (\w+) = \(?await actingAgentUserId\(ctx\b/.exec(
+    body
+  )?.[1];
   for (const m of body.matchAll(/createHubProtocolCallerContext\(/g)) {
     const open = (m.index ?? 0) + "createHubProtocolCallerContext".length;
     const args = topLevelArgs(body.slice(open + 1, closeParen(body, open)));
     const sixth = args[5];
     const ok =
       !!sixth &&
-      (/^actingAgentUserId\(ctx\b/.test(sixth) ||
+      (/^\(?await actingAgentUserId\(ctx\b/.test(sixth) ||
         (!!helperLocal && sixth === helperLocal));
     if (!ok)
       out.push(
@@ -157,7 +159,7 @@ describe("tripwire: hub tRPC writes take the agent from the authenticated contex
       id: "sample:ok",
       body: `x: scopedProcedure(["w"]).input(z.object({ agentUserId: z.string() }))
         .mutation(async ({ input, ctx }) => {
-          const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+          const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
           const c = await createHubProtocolCallerContext(a, b, c, d, e, agentUserId);
         })`,
     };
@@ -187,7 +189,7 @@ describe("tripwire: hub tRPC writes take the agent from the authenticated contex
     const trigger = src.slice(src.indexOf("  trigger: protectedProcedure"));
     for (const body of [create, trigger]) {
       expect(body).toMatch(
-        /const agentUserId = actingAgentUserId\(ctx, input\.agentUserId\)/
+        /const agentUserId = await actingAgentUserId\(ctx, input\.agentUserId\)/
       );
       expect(body).not.toMatch(/if \(input\.agentUserId\)/);
     }

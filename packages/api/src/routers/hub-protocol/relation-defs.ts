@@ -50,7 +50,7 @@ export const hubRelationDefsRouter = router({
         input.workspaceId,
         undefined,
         undefined,
-        actingAgentUserId(ctx)
+        await actingAgentUserId(ctx)
       );
       const caller = relationDefsRouter.createCaller(callerContext as any);
       return caller.create({

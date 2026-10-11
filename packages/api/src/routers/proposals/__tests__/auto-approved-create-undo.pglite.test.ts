@@ -23,6 +23,12 @@
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+
+// The document create names its agent in the body (the IS naming the persona
+// it runs); attribution needs the agent to belong to the key's person.
+vi.mock("../../hub-protocol/agent-belongs-to.js", () => ({
+  agentBelongsTo: async () => true,
+}));
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({

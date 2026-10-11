@@ -128,7 +128,7 @@ export const hubWidgetDefinitionsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       // Identity floor: `input.userId` is the acting identity fed to
       // checkPermissionOrPropose — a hub PAT may act only as its own owner.
       assertMayActAs(ctx, input.userId);

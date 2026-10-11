@@ -40,7 +40,7 @@ export const hubPlaybooksRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       assertMayActAs(ctx, input.userId);
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -74,7 +74,7 @@ export const hubPlaybooksRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { userId, ...rest } = input;
       assertMayActAs(ctx, userId);
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const callerContext = await createHubProtocolCallerContext(
         userId,
         ctx.scopes || [],

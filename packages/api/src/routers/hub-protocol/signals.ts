@@ -521,7 +521,7 @@ export const signalsRouter = router({
           workspaceId,
           undefined,
           undefined,
-          actingAgentUserId(ctx)
+          await actingAgentUserId(ctx)
         );
         const caller = regularEntitiesRouter.createCaller(callerContext);
 

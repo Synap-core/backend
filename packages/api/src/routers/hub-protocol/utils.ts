@@ -5,6 +5,8 @@
  */
 
 import { getActingAgentUserId, getDb } from "@synap/database";
+import { TRPCError } from "@trpc/server";
+import { agentBelongsTo } from "./agent-belongs-to.js";
 import type { Context } from "../../types/context.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
 
@@ -84,15 +86,26 @@ export async function createHubProtocolCallerContext(
  * `input.agentUserId` (tripwire: `__tripwires__/hub-acting-agent-from-context`).
  *
  * The AUTHENTICATED agent wins: `ctx.agentUserId` is set by api-key-auth for an
- * agent key (direct tRPC mount) and threaded by `getCaller` on the REST door. A
- * body-supplied id may only attribute a write made with a key that is not
- * itself an agent (the first-party IS naming the persona it runs). Last, the
- * request's acting-agent scope entered by the key-auth doors, so omitting the
- * field never turns an agent write into an ungoverned operator write.
+ * agent key (direct tRPC mount) and threaded by `getCaller` on the REST door;
+ * then the request's acting-agent scope entered by the key-auth doors, so
+ * omitting the field never turns an agent write into an ungoverned operator
+ * write. Only a key that is NOT itself an agent may attribute a write to a
+ * body-supplied agent (the first-party IS naming the persona it runs) — and
+ * only to an agent that belongs to the key's human ({@link agentBelongsTo});
+ * naming anyone else's agent is refused, never silently dropped.
  */
-export function actingAgentUserId(
-  ctx: { agentUserId?: string | null },
+export async function actingAgentUserId(
+  ctx: { agentUserId?: string | null; userId?: string | null },
   requested?: string | null
-): string | undefined {
-  return ctx.agentUserId ?? requested ?? getActingAgentUserId() ?? undefined;
+): Promise<string | undefined> {
+  const authenticated = ctx.agentUserId ?? getActingAgentUserId();
+  if (authenticated) return authenticated;
+  if (!requested) return undefined;
+  if (!ctx.userId || !(await agentBelongsTo(ctx.userId, requested))) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `This key cannot act as agent ${requested}: it is not an agent of this key's person.`,
+    });
+  }
+  return requested;
 }

@@ -137,7 +137,7 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       // The session handle rides on the caller context so `views.create`'s
       // governance gate resolves the caller's slot claim against the session
@@ -217,7 +217,7 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const db = await getDb();
@@ -322,7 +322,7 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       const db = await getDb();
       const view = await db.query.views.findFirst({
@@ -452,7 +452,7 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const db = await getDb();

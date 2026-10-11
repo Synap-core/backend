@@ -74,7 +74,7 @@ export const linkingRouter = router({
       }
 
       const workspaceId = channel.workspaceId ?? undefined;
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
 
       // Governance: "context.link" is auto-approved by default whitelist.
       // Still verifies workspace membership for the acting user.
@@ -172,7 +172,7 @@ export const linkingRouter = router({
       }
 
       const workspaceId = channel.workspaceId ?? undefined;
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
 
       // Governance: "context.link" is auto-approved by default whitelist.
       // Still verifies workspace membership for the acting user.

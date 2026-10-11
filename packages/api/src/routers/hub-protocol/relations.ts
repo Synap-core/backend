@@ -143,7 +143,7 @@ export const hubRelationsRouter = router({
         // governance membrane. relations.create now reads ctx.agentUserId.
         // (`reasoning` is still declared with no channel — relations.create has
         // no reasoning input and drops metadata before the gate.)
-        actingAgentUserId(ctx, input.agentUserId)
+        await actingAgentUserId(ctx, input.agentUserId)
       );
       const caller = regularRelationsRouter.createCaller(callerContext);
 
@@ -183,7 +183,7 @@ export const hubRelationsRouter = router({
         input.workspaceId,
         ctx.sourceMessageId ?? undefined,
         undefined,
-        actingAgentUserId(ctx, input.agentUserId)
+        await actingAgentUserId(ctx, input.agentUserId)
       );
       const caller = regularRelationsRouter.createCaller(callerContext);
 

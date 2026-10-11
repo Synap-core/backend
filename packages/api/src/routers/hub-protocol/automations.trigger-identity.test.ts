@@ -14,6 +14,11 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// A body agentUserId from a key that is not an agent is attributed only to an
+// agent of that key's person (hub-protocol/utils actingAgentUserId); these
+// cases model the first-party IS naming its own persona.
+vi.mock("./agent-belongs-to.js", () => ({ agentBelongsTo: async () => true }));
+
 const h = vi.hoisted(() => ({
   triggerCalls: [] as Array<Record<string, unknown>>,
   createCalls: [] as Array<Record<string, unknown>>,

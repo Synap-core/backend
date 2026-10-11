@@ -132,7 +132,7 @@ export const skillsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,

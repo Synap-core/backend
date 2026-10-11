@@ -39,7 +39,7 @@ export const hubAutomationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       assertMayActAs(ctx, input.userId);
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -154,7 +154,7 @@ export const hubAutomationsRouter = router({
         input.workspaceId ?? null,
         undefined,
         undefined,
-        actingAgentUserId(ctx)
+        await actingAgentUserId(ctx)
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.update({
@@ -191,7 +191,7 @@ export const hubAutomationsRouter = router({
         input.workspaceId ?? null,
         undefined,
         undefined,
-        actingAgentUserId(ctx)
+        await actingAgentUserId(ctx)
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.activate({
@@ -220,7 +220,7 @@ export const hubAutomationsRouter = router({
         input.workspaceId ?? null,
         undefined,
         undefined,
-        actingAgentUserId(ctx)
+        await actingAgentUserId(ctx)
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.pause({
@@ -249,7 +249,7 @@ export const hubAutomationsRouter = router({
         input.workspaceId ?? null,
         undefined,
         undefined,
-        actingAgentUserId(ctx)
+        await actingAgentUserId(ctx)
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.delete({
@@ -275,7 +275,7 @@ export const hubAutomationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       assertMayActAs(ctx, input.userId);
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],

@@ -373,7 +373,7 @@ export const channelsRouter = router({
         action: "create",
         workspaceId: input.workspaceId,
       });
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       if (agentUserId) {
         await assertAgentInWorkspace(
           agentUserId,
@@ -520,7 +520,7 @@ export const channelsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       checkHubRateLimit(ctx.apiKeyId, "postToA2AIChannel");
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId)!;
+      const agentUserId = (await actingAgentUserId(ctx, input.agentUserId))!;
       // Verify agentUserId is a member of the workspace
       await assertAgentInWorkspace(
         agentUserId,

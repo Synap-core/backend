@@ -196,7 +196,7 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
@@ -356,7 +356,7 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       // Identity floor: `input.userId` is the acting identity fed to
       // checkPermissionOrPropose and the setProfileRenderer write — a hub PAT may
       // act only as its own owner.
@@ -476,7 +476,7 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       // Identity floor: `input.userId` is the acting identity fed to
       // checkPermissionOrPropose and the createAndLinkPropertyDef write
       // (auto-approved → a live schema write into the target workspace) — a hub
@@ -624,7 +624,7 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       // Identity floor — same rule as createPropertyDef: a hub PAT may act
       // only as its own owner.
       assertMayActAs(ctx, input.userId);

@@ -15,6 +15,12 @@
  * this is a schema/door contract, not a Postgres integration test.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The MCP door names the key's own agent; in production the key-auth door's
+// acting-agent scope resolves it first (hub-protocol/utils actingAgentUserId).
+vi.mock("../hub-protocol/agent-belongs-to.js", () => ({
+  agentBelongsTo: async () => true,
+}));
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";

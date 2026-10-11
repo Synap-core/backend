@@ -112,7 +112,7 @@ export const documentsRouter = router({
       if (decodedTitle !== input.title) input.title = decodedTitle;
       const userId = ctx.userId!;
       const documentId = randomUUID();
-      const actingAgent = actingAgentUserId(ctx, input.agentUserId);
+      const actingAgent = await actingAgentUserId(ctx, input.agentUserId);
       const agentUserId = actingAgent ?? userId;
       const correlationId = randomUUID();
 
@@ -439,7 +439,7 @@ export const documentsRouter = router({
       applyDocumentPatch({
         userId: ctx.userId!,
         // The authenticated agent key's identity when the body names none.
-        agentUserId: actingAgentUserId(ctx, input.agentUserId) ?? null,
+        agentUserId: (await actingAgentUserId(ctx, input.agentUserId)) ?? null,
         documentId: input.documentId,
         ...(input.baseRevision !== undefined
           ? { baseRevision: input.baseRevision }
@@ -482,7 +482,7 @@ export const documentsRouter = router({
         (await loadPatchDocument(input.documentId)).contentRevision;
       return applyDocumentPatch({
         userId,
-        agentUserId: actingAgentUserId(ctx, input.agentUserId) ?? null,
+        agentUserId: (await actingAgentUserId(ctx, input.agentUserId)) ?? null,
         documentId: input.documentId,
         baseRevision,
         ops: [{ op: "replace_all", content: input.proposedContent }],
@@ -528,7 +528,7 @@ export const documentsRouter = router({
         userId: ctx.userId!,
         // The authenticated agent key's identity when the body names none — a
         // body-only agent id is how agent writes previously ran as the human.
-        agentUserId: actingAgentUserId(ctx, input.agentUserId) ?? null,
+        agentUserId: (await actingAgentUserId(ctx, input.agentUserId)) ?? null,
         sessionId: input.sessionId,
         ambientSessionId: ctx.sessionId ?? null,
         sectionId: input.sectionId,

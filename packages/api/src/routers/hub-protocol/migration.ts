@@ -145,7 +145,7 @@ export const migrationRouter = router({
         workspaceId,
         ctx.sourceMessageId ?? undefined,
         undefined,
-        actingAgentUserId(ctx)
+        await actingAgentUserId(ctx)
       );
 
       let profilesCreated = 0;
