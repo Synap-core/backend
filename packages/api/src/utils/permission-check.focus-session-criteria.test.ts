@@ -169,6 +169,14 @@ describe("an AI update that writes CRITERIA is floored to a proposal", () => {
     expect(perm).toMatchObject({ granted: false, proposalId: "proposal-1" });
   });
 
+  it("the proposal is filed ON the session it changes, so the session lists it", async () => {
+    await checkPermissionOrPropose(aiUpdate({ criteria: [CRITERION] }));
+    expect(mockInsertPendingProposal).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(mockInsertPendingProposal.mock.calls[0])).toContain(
+      `"sessionId":"${SESSION}"`
+    );
+  });
+
   it("CLEARING the criteria is a contract change too, not an exemption", async () => {
     await checkPermissionOrPropose(aiUpdate({ criteria: [] }));
     expect(criteriaChangeArg()).toBe(true);

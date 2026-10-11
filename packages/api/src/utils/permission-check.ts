@@ -1868,36 +1868,44 @@ async function evaluatePermission(
       // in hand and the guard is real.
       const governedSessionId =
         sessionId ??
-        (dryRun || subjectType.startsWith("focus_session")
+        (dryRun
           ? null
-          : await resolveAgentProposalSessionOnce(
-              receiptSessionInput({
-                userId,
-                agentUserId,
-                workspaceId,
-                projectId,
-                // Grouped by the calling client; an IS turn (no key-auth client)
-                // groups by the channel it acts in.
-                channelId: actingChannelId,
-                goal: deriveAgentProposalSessionGoal({
-                  data,
-                  proposalType: action,
-                  targetType: subjectType,
-                  notificationDescription: opts.reasoning ?? null,
-                  // The SAME sentence the proposal itself stores as its summary
-                  // (`createProposal` builds it from the same three inputs), so
-                  // the receipt session and the proposal detail cannot name one
-                  // write two different things. Ranked below every author-supplied
-                  // arm inside the deriver, so it only ever displaces the
-                  // `Agent <type> · <target>` machine-token fallback.
-                  summary: buildProposalSummary(
-                    singularSubjectType(subjectType),
-                    action,
-                    data
-                  ),
-                }),
-              })
-            ));
+          : subjectType.startsWith("focus_session")
+            ? // A session's UPDATE is about that session: file it there, so a
+              // criteria change or a filing waits in the session's own "needs
+              // you" (live 2026-10-11: a CRITERIA_CHANGE proposal landed with
+              // no session and no session listed it). Never a receipt session.
+              action === "update" && typeof data?.id === "string"
+              ? data.id
+              : null
+            : await resolveAgentProposalSessionOnce(
+                receiptSessionInput({
+                  userId,
+                  agentUserId,
+                  workspaceId,
+                  projectId,
+                  // Grouped by the calling client; an IS turn (no key-auth client)
+                  // groups by the channel it acts in.
+                  channelId: actingChannelId,
+                  goal: deriveAgentProposalSessionGoal({
+                    data,
+                    proposalType: action,
+                    targetType: subjectType,
+                    notificationDescription: opts.reasoning ?? null,
+                    // The SAME sentence the proposal itself stores as its summary
+                    // (`createProposal` builds it from the same three inputs), so
+                    // the receipt session and the proposal detail cannot name one
+                    // write two different things. Ranked below every author-supplied
+                    // arm inside the deriver, so it only ever displaces the
+                    // `Agent <type> · <target>` machine-token fallback.
+                    summary: buildProposalSummary(
+                      singularSubjectType(subjectType),
+                      action,
+                      data
+                    ),
+                  }),
+                })
+              ));
 
       // Re-stamp the frozen envelope ONLY when the hoist actually resolved a
       // session the caller did not supply. Same object otherwise, so every
