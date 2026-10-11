@@ -236,11 +236,11 @@ describe("key lists say what a key may touch", () => {
     const a = mine.find((k) => k.id === keyId)!;
     const b = ws.find((k) => k.id === keyId)!;
     // Both lists read the same door, so they must agree.
-    expect({ access: b.access, grants: b.grants, grant: b.grant }).toEqual({
+    expect({ access: b.access, grants: b.grants }).toEqual({
       access: a.access,
       grants: a.grants,
-      grant: a.grant,
     });
+    expect("grant" in a).toBe(false);
     return a;
   };
 
@@ -265,7 +265,6 @@ describe("key lists say what a key may touch", () => {
     );
     const key = await listed(id);
     expect(key.grants).toEqual([]);
-    expect(key.grant).toBeNull();
     expect(key.access).toBe("ended");
   });
 
@@ -282,6 +281,5 @@ describe("key lists say what a key may touch", () => {
     const id = await addKey();
     const key = await listed(id);
     expect(key.access).toBe("ungranted");
-    expect(key.grant).toBeNull();
   });
 });

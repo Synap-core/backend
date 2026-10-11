@@ -39,7 +39,9 @@ import {
 } from "../(admin)/trust-keys/_lib/api-keys-section";
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
 import {
-  describeKeyAccess,
+  FULL_ACCESS_ACCESSIBLE_NAME,
+  FULL_ACCESS_LABEL,
+  resolveHolderAccess,
   type KeyAccess,
   type KeyAccessGrant,
 } from "@synap-core/types/grants";
@@ -308,7 +310,7 @@ export default function MyConnectionsPage() {
           Connected
         </h1>
         <p className="mt-1 text-[13px] leading-5 text-foreground/60">
-          Every app you own and every key you&apos;ve minted for this Pod — with
+          Every app you own and every key you&apos;ve minted for this Pod, with
           exactly what each may touch. Revoking one here only affects you.
         </p>
       </header>
@@ -528,12 +530,7 @@ function KeyCard({
           </div>
         </div>
 
-        {apiKey.isActive ? (
-          <p className="text-xs text-foreground/70">
-            <span className="text-foreground/55">Can: </span>
-            {describeKeyAccess(apiKey).sentence}
-          </p>
-        ) : null}
+        {apiKey.isActive ? <KeyAccessLine apiKey={apiKey} /> : null}
         <p className="text-xs text-foreground/55">{meta}</p>
 
         {onRevoke ? (
@@ -553,6 +550,32 @@ function KeyCard({
         ) : null}
       </CardBody>
     </Card>
+  );
+}
+
+/** The key as every holder reads: the ONE sentence, and the red Full-access mark. */
+function KeyAccessLine({ apiKey }: { apiKey: ConnectionKey }) {
+  const access = resolveHolderAccess({
+    kind: "key",
+    name: apiKey.keyName,
+    limits: { source: "grants", access: apiKey.access, grants: apiKey.grants },
+    expiresAt: apiKey.expiresAt ?? null,
+    revokedAt: apiKey.revokedAt ?? null,
+  });
+  return (
+    <p className="flex flex-wrap items-center gap-2 text-xs text-foreground/70">
+      <span>{access.sentence}</span>
+      {access.danger.full ? (
+        <Chip
+          size="sm"
+          variant="flat"
+          color="danger"
+          aria-label={FULL_ACCESS_ACCESSIBLE_NAME}
+        >
+          {FULL_ACCESS_LABEL}
+        </Chip>
+      ) : null}
+    </p>
   );
 }
 

@@ -118,15 +118,14 @@ function generateApiKey(prefix: string): string {
 
 /**
  * What each key may touch, keyed by key id — ONE read for every key list
- * (personal + workspace), so both screens say the same thing. `grant` is the
- * newest live grant, kept while clients move to `grants` + `access`.
+ * (personal + workspace), so both screens say the same thing.
  */
 const UNGRANTED: KeyReach = { access: "ungranted", grants: [] };
 async function loadKeyReach(keyIds: readonly string[]) {
   const reach = await new GrantRepository(db).reachForKeys(keyIds);
   return (keyId: string) => {
     const { access, grants } = reach.get(keyId) ?? UNGRANTED;
-    return { access, grants, grant: grants[0] ?? null };
+    return { access, grants };
   };
 }
 
@@ -179,8 +178,14 @@ export const apiKeysRouter = router({
       lastUsedAt: key.lastUsedAt,
       usageCount: key.usageCount,
       createdAt: key.createdAt,
+      /** Stamped by every revoke (`revokeApiKeys`); null = not revoked. */
       revokedAt: key.revokedAt,
       revokedReason: key.revokedReason,
+      /**
+       * Switched off but never revoked: an agent key waiting for the person's
+       * approval (`setup/agent` with requireApproval). It cannot call yet.
+       */
+      awaitingApproval: !key.isActive && key.revokedAt === null,
     }));
   }),
 

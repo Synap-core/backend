@@ -126,3 +126,24 @@ describe("apiKeys.revoke — you can stop a key held for you", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
+
+describe("apiKeys.list — a switched-off key says why", () => {
+  // Rules out: the UIs' `revokedAt ?? createdAt` guess, which read a key
+  // waiting for approval as revoked on the day it was made.
+  it("a revoked key carries its revoke stamp; a key waiting for approval is not revoked", async () => {
+    const PENDING_KEY = randomUUID();
+    await addKey(PENDING_KEY, AGENT, HUMAN);
+    await h.client!.query(
+      `update api_keys set is_active = false where id = $1`,
+      [PENDING_KEY]
+    );
+    const keys = await caller(HUMAN).list();
+    const revoked = keys.find((k) => k.id === AGENT_KEY)!;
+    expect(revoked.revokedAt).not.toBeNull();
+    expect(revoked.awaitingApproval).toBe(false);
+    const pending = keys.find((k) => k.id === PENDING_KEY)!;
+    expect(pending.revokedAt).toBeNull();
+    expect(pending.awaitingApproval).toBe(true);
+    expect(keys.find((k) => k.id === OWN_KEY)!.awaitingApproval).toBe(false);
+  });
+});

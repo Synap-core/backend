@@ -210,7 +210,7 @@ describe("apiKeys.list shows each key's grant (/my-connections)", () => {
       grant: { permissions: ["entity.person.read"], label: "Card site" },
     });
     const keys = await caller().list();
-    expect(keys.find((k) => k.id === granted.id)?.grant).toMatchObject({
+    expect(keys.find((k) => k.id === granted.id)?.grants[0]).toMatchObject({
       permissions: ["entity.person.read"],
       label: "Card site",
     });
@@ -331,7 +331,7 @@ describe("apiKeys.createForWorkspace with a grant (W1f)", () => {
       } as never)
     ).rejects.toThrow();
     const keys = await wsCaller().listForWorkspace();
-    expect(keys.find((k) => k.id === granted.id)?.grant).toMatchObject({
+    expect(keys.find((k) => k.id === granted.id)?.grants[0]).toMatchObject({
       permissions: ["entity.person.create"],
       workspaceIds: [WS],
     });
