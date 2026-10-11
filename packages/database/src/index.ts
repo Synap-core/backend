@@ -280,6 +280,17 @@ export {
   type StoredEnumSource,
 } from "./utils/property-enum.js";
 export {
+  LIFECYCLE_CATEGORIES,
+  TERMINAL_LIFECYCLE_CATEGORIES,
+  isLifecycleCategory,
+  parseLifecycleOptions,
+  findLifecycleOption,
+  classifyLifecycleMove,
+  type LifecycleCategory,
+  type LifecycleOption,
+  type LifecycleDeclaration,
+} from "./utils/lifecycle-model.js";
+export {
   resolvePropertyLabel,
   resolvePropertyOptions,
   type StoredPropertyPresentation,

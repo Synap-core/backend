@@ -68,6 +68,10 @@
       "types": "./dist/property-hints/index.d.ts",
       "import": "./dist/property-hints/index.js"
     },
+    "./lifecycle": {
+      "types": "./dist/lifecycle/index.d.ts",
+      "import": "./dist/lifecycle/index.js"
+    },
     "./renderables": {
       "types": "./dist/renderables/index.d.ts",
       "import": "./dist/renderables/index.js"
