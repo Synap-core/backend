@@ -130,6 +130,14 @@ vi.mock(
   }
 );
 
+// The channel read floor, at ITS module boundary (its SQL is pinned by its own
+// suites): the update door must ask it for THIS room and THIS caller.
+const roomReadable = vi.fn();
+vi.mock("../utils/channel-visibility.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, canUserSeeChannel: roomReadable };
+});
+
 const { focusSessionsRouter } = await import("./focus-sessions.js");
 
 const ctx = { userId: "user-1", authenticated: true } as never;
@@ -153,6 +161,7 @@ beforeEach(() => {
   sets.length = 0;
   inserts.length = 0;
   refVisible.mockResolvedValue(true);
+  roomReadable.mockResolvedValue(true);
   findFirstSpy.mockResolvedValue(sessionRow());
 });
 
@@ -196,6 +205,23 @@ describe("focusSessions.update — the SUBJECT anchor reaches the column", () =>
     // BEFORE the write. A door that threw after assigning `set` would still
     // reject and still leave the row re-pointed.
     expect(sets).toHaveLength(0);
+  });
+});
+
+describe("focusSessions.update — the ROOM is a pointer, not a grant", () => {
+  it("REFUSES a room the caller cannot read, NOT_FOUND, and writes NOTHING", async () => {
+    roomReadable.mockResolvedValue(false);
+    await expect(
+      caller().update({ id: SESSION, channelId: CHANNEL })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(roomReadable).toHaveBeenCalledWith(expect.anything(), CHANNEL, "user-1");
+    expect(sets).toHaveLength(0);
+  });
+
+  it("points the session at a room the caller CAN read", async () => {
+    await caller().update({ id: SESSION, channelId: CHANNEL });
+    expect(roomReadable).toHaveBeenCalledWith(expect.anything(), CHANNEL, "user-1");
+    expect(lastSet()).toMatchObject({ channelId: CHANNEL });
   });
 });
 

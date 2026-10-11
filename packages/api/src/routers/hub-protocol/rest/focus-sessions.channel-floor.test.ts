@@ -5,10 +5,15 @@
  * A session's `channelId` is the room the judge and every room reader read AS
  * the session's: before this floor, any Hub caller could point a session at a
  * stranger's conversation and the criteria judge read it. The floor is the
- * canonical channel read door (`canUserSeeChannel`), asserted to be asked for
- * THIS channel and THIS caller, and a refusal must stop before the service /
- * the membrane (nothing stored, nothing proposed). Driven through the real
- * routes; the door's SQL is pinned by its own suites.
+ * canonical channel read door (`canUserSeeChannel`).
+ *
+ * POST: the floor lives in `createFocusSession` (every start door passes it;
+ * pinned on PGlite by `create-session.room-floor.pglite.test.ts`). Here the
+ * route must hand the service THIS caller and THIS room, and turn the
+ * service's NOT_FOUND into a 404.
+ * PATCH: this route writes the row itself, so the floor is asserted to be
+ * asked for THIS channel and THIS caller, and a refusal must stop before the
+ * membrane (nothing stored, nothing proposed).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -39,15 +44,23 @@ vi.mock("../../../utils/channel-visibility.js", async (orig) => ({
     return h.readable.has(channelId);
   },
 }));
-vi.mock("../../../services/focus-sessions/create-session.js", () => ({
-  createFocusSession: async (p: Record<string, unknown>) => {
-    h.created.push(p);
-    return {
-      status: "created",
-      session: { id: SESSION_ID, channelId: p.channelId },
-    };
-  },
-}));
+vi.mock("../../../services/focus-sessions/create-session.js", async () => {
+  const { TRPCError } = await import("@trpc/server");
+  return {
+    // Stands in for the service's own floor: refuses a room outside
+    // `h.readable` exactly as `createFocusSession` refuses one.
+    createFocusSession: async (p: Record<string, unknown>) => {
+      h.created.push(p);
+      if (p.channelId && !h.readable.has(p.channelId as string)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No channel" });
+      }
+      return {
+        status: "created",
+        session: { id: SESSION_ID, channelId: p.channelId },
+      };
+    },
+  };
+});
 vi.mock("../../../utils/permission-check.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   checkPermissionOrPropose: async (p: Record<string, unknown>) => {
@@ -98,7 +111,7 @@ describe("Hub focus-sessions — a room the caller cannot read is refused", () =
   });
   afterEach(() => findFirstSpy.mockRestore());
 
-  it("POST with someone else's room: 404, asked of the caller, nothing created", async () => {
+  it("POST with someone else's room: the service's refusal is a 404", async () => {
     const res = await send("POST", "/focus-sessions", {
       userId: USER_ID,
       projectId: "p-1",
@@ -106,8 +119,12 @@ describe("Hub focus-sessions — a room the caller cannot read is refused", () =
       channelId: THEIR_ROOM,
     });
     expect(res.status).toBe(404);
-    expect(h.seeCalls).toEqual([[THEIR_ROOM, USER_ID]]);
-    expect(h.created).toHaveLength(0);
+    // ONE door: the route no longer asks the floor itself — the service does.
+    expect(h.seeCalls).toEqual([]);
+    expect(h.created[0]).toMatchObject({
+      userId: USER_ID,
+      channelId: THEIR_ROOM,
+    });
   });
 
   it("POST with the caller's own room reaches the service with it", async () => {

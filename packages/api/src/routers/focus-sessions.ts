@@ -156,6 +156,7 @@ import { emitSideEffects } from "@synap/events";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
+import { canUserSeeChannel } from "../utils/channel-visibility.js";
 import {
   attachNextMove,
   type SessionUnitCounts,
@@ -2015,6 +2016,18 @@ export const focusSessionsRouter = router({
             message: `No project ${input.projectId} you can access`,
           });
         }
+      }
+
+      // Same floor as `createFocusSession` for the session ROOM: a pointer,
+      // not a grant — a room the caller cannot read is refused, never stored.
+      if (
+        input.channelId &&
+        !(await canUserSeeChannel(db, input.channelId, ctx.userId))
+      ) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No channel ${input.channelId} you can access`,
+        });
       }
 
       // Load first to verify ownership

@@ -27,6 +27,8 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { canUserSeeChannel } from "../../utils/channel-visibility.js";
+import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
@@ -379,6 +381,17 @@ export async function createFocusSession(
   // The pin rung 1 receives: the track's project when filed into a track
   // (equal to any explicit projectId — a mismatch was refused above).
   const pinnedProjectId = trackFiling?.projectId ?? explicitProjectId;
+
+  // The session ROOM is a pointer, not a grant: the judge and every room reader
+  // read it AS the session's. A caller-supplied room the caller cannot read is
+  // refused here — the canonical channel read floor, NOT_FOUND so existence is
+  // not revealed — before any read, dedup or the membrane, for every door.
+  if (channelId && !(await canUserSeeChannel(db, channelId, userId))) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `No channel ${channelId} you can access`,
+    });
+  }
 
   // Refused, never truncated: a clipped name is a claim the caller did not make.
   const title = normalizeSessionTitle(rawTitle);

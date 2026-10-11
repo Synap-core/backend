@@ -1176,18 +1176,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         );
       }
     }
-    // The session ROOM is a pointer, not a grant: a room the caller cannot
-    // read is refused here (the canonical channel read floor), never stored —
-    // the judge and every room reader would otherwise read it as the session's.
-    if (
-      body.channelId &&
-      !(await canUserSeeChannel(db, body.channelId, userId))
-    ) {
-      return c.json(
-        { error: `No channel ${body.channelId} you can access` },
-        404
-      );
-    }
+    // The session ROOM floor (a room the caller cannot read → 404) is
+    // enforced by `createFocusSession` itself, for every start door; its
+    // NOT_FOUND maps to 404 through `httpStatusForTrpcError` below.
 
     try {
       // Delegate to the shared service (used by both Hub REST and MCP adapter).
@@ -1396,8 +1387,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           );
         }
       }
-      // Same floor as the create door: a room the caller cannot read is
-      // refused, never pointed at.
+      // Same floor as `createFocusSession` (and the tRPC update): a room the
+      // caller cannot read is refused, never pointed at. Kept HERE because this
+      // PATCH writes the row itself — no service door sits under it.
       if (
         patch.channelId &&
         !(await canUserSeeChannel(db, patch.channelId, userId))
