@@ -80,9 +80,15 @@ vi.mock("../../../services/intake/ensure-intake-session.js", () => ({
 vi.mock("../../../services/intake/record-structure-intake.js", () => ({
   recordStructureIntake: vi.fn(async () => null),
 }));
-vi.mock("../../../services/intake/record-session-run-manifest.js", () => ({
-  runFactsFromStructureMeta: () => ({}),
-}));
+vi.mock(
+  "../../../services/intake/record-session-run-manifest.js",
+  async (orig) => ({
+    ...(await orig<
+      typeof import("../../../services/intake/record-session-run-manifest.js")
+    >()),
+    runFactsFromStructureMeta: () => ({}),
+  })
+);
 vi.mock("../../../utils/pending-capture-dedup.js", () => ({
   computeCaptureGraphIdempotencyKey: () => "k".repeat(64),
 }));
@@ -216,6 +222,19 @@ describe("graph lane — the raw record (raw-capture wave 1)", () => {
   beforeEach(async () => {
     h.submitResult = PENDING;
     (await mocks()).submit.mockClear();
+  });
+
+  it("the run manifest names the AGENT as the engine — never `unknown`, which reads as an older IS having answered", async () => {
+    const { record } = await mocks();
+    record.mockClear();
+    await call(ARGS);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0]![0].runFacts).toEqual({
+      engine: "agent",
+      model: null,
+      provider: null,
+      promptVersion: "none",
+    });
   });
 
   it("a record that returns NO echo does not crash: intake says failed and names it; the graph is still submitted, without ids", async () => {

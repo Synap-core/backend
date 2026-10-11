@@ -619,10 +619,10 @@ const captureHandler: McpToolHandler = async (
     // retried payload — including one the submit below refuses — reuses one
     // room instead of minting another. The raw is recorded BEFORE the submit
     // (below), so it survives a refused submit. The agent structured this graph itself, so no
-    // guideline read and no IS facts exist — the manifest says `unknown`.
+    // guideline read and no IS facts exist — the manifest says `agent`.
     const { recordStructureIntake } =
       await import("../../../services/intake/record-structure-intake.js");
-    const { runFactsFromStructureMeta } =
+    const { AGENT_GRAPH_RUN_FACTS } =
       await import("../../../services/intake/record-session-run-manifest.js");
     const { ensureIntakeSession } =
       await import("../../../services/intake/ensure-intake-session.js");
@@ -679,7 +679,7 @@ const captureHandler: McpToolHandler = async (
           ensuredSession: graphRun,
           source: captureNormalizedText ? { text: captureRawText } : {},
           guidelines: [],
-          runFacts: runFactsFromStructureMeta(undefined),
+          runFacts: AGENT_GRAPH_RUN_FACTS,
           correlationKey: null,
         })) ?? intakeNotRecorded("no intake echo returned");
     } catch (err) {

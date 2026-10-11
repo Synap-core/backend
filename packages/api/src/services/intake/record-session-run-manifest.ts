@@ -34,8 +34,14 @@ export interface RunGuidelineRef {
   version: number;
 }
 
-/** `structure` / `degraded` come from the IS; the other two are pod facts. */
-export type RunEngine = "structure" | "degraded" | "deterministic" | "unknown";
+/**
+ * `structure` / `degraded` come from the IS; the others are pod facts.
+ * `agent` = the caller (an agent) sent the graph already structured, so no
+ * structurer ran — distinct from `unknown`, which is an IS that answered
+ * without saying who it was.
+ */
+export type RunEngine =
+  "structure" | "degraded" | "deterministic" | "agent" | "unknown";
 
 export interface SessionRunManifest {
   version: 1;
@@ -191,6 +197,23 @@ export function runFactsFromStructureMeta(
     ...withTimings,
   };
 }
+
+/**
+ * The run facts of a graph the calling agent structured itself (MCP
+ * `synap_capture` with `entities`). Nothing on the pod answered, so there is
+ * no model and no prompt: `promptVersion: "none"` keeps it out of every
+ * prompt-version comparison, like `deterministic`. Recording `"unknown"` here
+ * read as "an older IS answered" — a claim about a structurer that never ran.
+ */
+export const AGENT_GRAPH_RUN_FACTS: Pick<
+  SessionRunManifest,
+  "engine" | "model" | "provider" | "promptVersion"
+> = Object.freeze({
+  engine: "agent",
+  model: null,
+  provider: null,
+  promptVersion: "none",
+});
 
 /**
  * Fold two structure calls' run facts (an import structures item by item). A
