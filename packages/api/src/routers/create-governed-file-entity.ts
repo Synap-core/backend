@@ -46,6 +46,12 @@ export interface CreateGovernedFileEntityParams {
   scopes: string[];
   /** Active focus-session handle, for proposal/entity grouping. */
   sessionId?: string | null;
+  /**
+   * The declared session slot this file fulfils. Forwarded to `entities.create`,
+   * whose gate resolves it against the session (rung 0) — the claim the
+   * approval stamps by, the same label the session artifact records.
+   */
+  expectedLabel?: string;
   /** Service-key confinement (bound key → pinned workspace). */
   keyType?: string | null;
   keyWorkspaceId?: string | null;
@@ -166,6 +172,7 @@ export async function createGovernedFileEntityForStoredDocument(
     }),
     ...(params.pinWorkspace ? { targetWorkspaceId: workspaceId } : {}),
     ...(agentUserId ? { agentUserId } : {}),
+    ...(params.expectedLabel ? { expectedLabel: params.expectedLabel } : {}),
     source: "agent",
   })) as {
     status?: string;

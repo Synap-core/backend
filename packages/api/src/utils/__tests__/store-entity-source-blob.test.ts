@@ -250,6 +250,27 @@ describe("storeEntitySourceBlob", () => {
     );
   });
 
+  // BUG #9 — the caller's declared slot rides to the gate (rung 0) beside the
+  // session it is resolved against, kept out of `data`.
+  it("gives the gate the declared expectedLabel and the session", async () => {
+    const { db } = makeDb([{ id: "e1" }]);
+    await storeEntitySourceBlob({
+      database: db,
+      userId: "u1",
+      entityId: "e1",
+      buffer: Buffer.from("x"),
+      mimeType: "audio/wav",
+      sessionId: "s1",
+      expectedLabel: "Call recording",
+    });
+    const opts = checkPermissionOrProposeMock.mock.calls[0]![0];
+    expect(opts).toMatchObject({
+      sessionId: "s1",
+      expectedLabel: "Call recording",
+    });
+    expect(opts.data).not.toHaveProperty("expectedLabel");
+  });
+
   it("on a PROPOSED verdict keeps the blob staged and attaches NOTHING", async () => {
     checkPermissionOrProposeMock.mockResolvedValue({
       granted: false,

@@ -388,6 +388,10 @@ export const entityHandlers: McpHandlerMap = {
       typeof args.attachToEntityId === "string" && args.attachToEntityId.trim()
         ? args.attachToEntityId.trim()
         : undefined;
+    // The declared slot this file fulfils: recorded on the artifact AND given
+    // to the gate, so the approval stamps THIS slot, not the first of its kind.
+    const expectedLabel =
+      typeof args.expectedLabel === "string" ? args.expectedLabel : undefined;
 
     // ── Attach mode: stored blob → provenance on an existing entity ────────
     // SAME internal door as POST /entities/:id/source-file. A stored blob,
@@ -403,6 +407,8 @@ export const entityHandlers: McpHandlerMap = {
         mimeType,
         filename,
         workspaceId: storeWorkspaceId,
+        sessionId,
+        expectedLabel,
       });
       // Governance may park the attach — an MCP call is an AGENT write, which
       // is exactly the case the gate exists for. The bytes are staged and ride
@@ -429,10 +435,7 @@ export const entityHandlers: McpHandlerMap = {
         refId: attached.documentId,
         title: title ?? filename,
         agentUserId,
-        expectedLabel:
-          typeof args.expectedLabel === "string"
-            ? args.expectedLabel
-            : undefined,
+        expectedLabel,
       });
       return ok({
         entityId: attachToEntityId,
@@ -458,6 +461,7 @@ export const entityHandlers: McpHandlerMap = {
       sessionId,
       keyType,
       keyWorkspaceId,
+      expectedLabel,
     });
     if (stored.status === "proposed") {
       return ok({
@@ -480,8 +484,7 @@ export const entityHandlers: McpHandlerMap = {
       refId: stored.fileEntityId,
       title: title ?? filename,
       agentUserId,
-      expectedLabel:
-        typeof args.expectedLabel === "string" ? args.expectedLabel : undefined,
+      expectedLabel,
     });
     return ok({
       fileEntityId: stored.fileEntityId,

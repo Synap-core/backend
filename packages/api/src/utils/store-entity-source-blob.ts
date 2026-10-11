@@ -220,6 +220,8 @@ export interface StoreEntitySourceBlobInput extends Omit<
   /** Shared id joining this write to the capture that produced it. */
   correlationId?: string;
   sessionId?: string;
+  /** The declared session slot this attach fulfils (gate rung 0). */
+  expectedLabel?: string;
 }
 
 export type StoreEntitySourceBlobResult =
@@ -713,6 +715,7 @@ export async function storeEntitySourceBlob(
     workspaceId: input.workspaceId ?? null,
     ...(input.correlationId ? { correlationId: input.correlationId } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.expectedLabel ? { expectedLabel: input.expectedLabel } : {}),
   });
 }
 
@@ -732,6 +735,7 @@ export async function gateAndAttachStagedSourceBlob(input: {
   workspaceId?: string | null;
   correlationId?: string;
   sessionId?: string;
+  expectedLabel?: string;
 }): Promise<StoreEntitySourceBlobResult> {
   const { staged } = input;
   const perm: PermissionResult = await checkPermissionOrPropose({
@@ -742,6 +746,9 @@ export async function gateAndAttachStagedSourceBlob(input: {
     reasoning: `Attach source file ${staged.filename ?? staged.mimeType} as provenance`,
     ...(input.correlationId ? { correlationId: input.correlationId } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    // The slot the caller declared — resolved against the session (rung 0),
+    // kept out of `data` like every other door's claim.
+    ...(input.expectedLabel ? { expectedLabel: input.expectedLabel } : {}),
     data: {
       // `data.id` is the proposal's targetId AND what the entity/update
       // executor patches — so an approval replays exactly this write.
