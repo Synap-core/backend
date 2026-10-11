@@ -120,6 +120,17 @@ export async function createPlaybookDoor(
     params?: PlaybookDefinition["params"];
     /** Binary acceptance criteria (`sessionCriteriaSchema`, validated by `playbooks.create`). */
     criteria?: PlaybookDefinition["criteria"];
+    /**
+     * The PROCESS contract's playbook-level declarations
+     * (`schemas/playbook-process.ts`): what starts a run on the subject kind,
+     * and the statuses only a person sets. `playbooks.create` folds both into
+     * `subjectProfile` (`foldProcessIntoSubjectProfile`) and compiles the
+     * activators into governed rules; this door only carries them.
+     */
+    activators?: PlaybookDefinition["activators"];
+    humanOnlyStatuses?: PlaybookDefinition["humanOnlyStatuses"];
+    /** Playbook-level output slots (`playbookExpectedOutputSchema`). */
+    expectedOutputs?: PlaybookDefinition["expectedOutputs"];
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -156,6 +167,13 @@ export async function createPlaybookDoor(
     ...(input.scope ? { scope: input.scope } : {}),
     ...(input.params !== undefined ? { params: input.params } : {}),
     ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
+    ...(input.activators !== undefined ? { activators: input.activators } : {}),
+    ...(input.humanOnlyStatuses !== undefined
+      ? { humanOnlyStatuses: input.humanOnlyStatuses }
+      : {}),
+    ...(input.expectedOutputs !== undefined
+      ? { expectedOutputs: input.expectedOutputs }
+      : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }

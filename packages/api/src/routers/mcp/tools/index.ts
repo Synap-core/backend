@@ -51,6 +51,12 @@ import { BLOCKED_REASONS, OUTPUT_REF_KINDS } from "@synap/playbooks";
 import { AskSchema } from "@synap-core/types/ask";
 
 import { automationDataContractSchema } from "../../automations.js";
+import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
+import {
+  humanOnlyStatusesSchema,
+  playbookActivatorsSchema,
+  playbookSubjectProfileSchema,
+} from "../../../schemas/playbook-process.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
 import { PROJECT_SCOPE_EVENT_PREFIXES } from "../../../services/rules/scope.js";
 import { buildCapabilityExecuteAgentJsonSchema } from "../../../contracts/capability-execute-schema.js";
@@ -221,6 +227,88 @@ function buildAskJsonSchema(): Record<string, unknown> {
 }
 
 const ASK_JSON_SCHEMA = buildAskJsonSchema();
+
+/**
+ * The PROCESS contract on `synap_create_playbook`, DERIVED from the schemas
+ * `playbooks.create` parses it with — `playbookStageSchema` (stage
+ * `subjectStatus` / `gate` / `onFail` / `expectedOutputs`) and
+ * `schemas/playbook-process.ts` (`statusProperty`, `activators`,
+ * `humanOnlyStatuses`). Same reasoning as the builders above: the advertised
+ * shape and the parse that refuses a bad declaration cannot drift apart.
+ * Prose is layered on top; `$schema` stripped for a deterministic manifest.
+ * A slot's `ask` is advertised as a pointer, not re-expanded: it is the ONE ask
+ * shape `synap_start_session` already carries in full.
+ */
+function deriveJsonSchema(
+  schema: z.ZodType,
+  description: string
+): Record<string, unknown> {
+  const derived = z.toJSONSchema(schema, { io: "input" }) as Record<
+    string,
+    unknown
+  >;
+  delete derived.$schema;
+  derived.description = description;
+  return derived;
+}
+
+function buildOutputSlotsJsonSchema(
+  description: string
+): Record<string, unknown> {
+  const derived = deriveJsonSchema(
+    playbookStageSchema.shape.expectedOutputs.unwrap(),
+    description
+  );
+  const item = (derived.items ?? {}) as {
+    properties?: Record<string, Record<string, unknown>>;
+  };
+  if (item.properties?.ask) {
+    item.properties.ask = {
+      description:
+        "Optional, for a slot the PERSON fills: how they answer in one tap — the same `ask` shape as synap_start_session outcomes.",
+    };
+  }
+  if (item.properties?.relationToSubject) {
+    item.properties.relationToSubject.description =
+      "The relation slug written output → subject when the slot is filled (an existing relation type, e.g. made_for). Omit for none.";
+  }
+  return derived;
+}
+
+const PLAYBOOK_PROCESS_JSON_SCHEMA = {
+  stage: {
+    subjectStatus: deriveJsonSchema(
+      playbookStageSchema.shape.subjectStatus.unwrap(),
+      "Entering this stage writes this status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+    ),
+    gate: deriveJsonSchema(
+      playbookStageSchema.shape.gate.unwrap(),
+      "Optional entry gate. {kind:'human'} at every commitment (send to a client, sign, pay, publish, won/lost, anything irreversible); {kind:'check'} only where the stage's own criteria can be verified — it judges the stage being LEFT, so never use it to guard an irreversible status. A gated stage writes its status only when the gate passes."
+    ),
+    onFail: deriveJsonSchema(
+      playbookStageSchema.shape.onFail.unwrap(),
+      "Where a rejected gate sends the run: {toStage: '<stage key>'} (a rework loop)."
+    ),
+    expectedOutputs: buildOutputSlotsJsonSchema(
+      "What this stage must produce: each { kind, label, relationToSubject? }."
+    ),
+  },
+  statusProperty: deriveJsonSchema(
+    playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
+    "Slug of the subject kind's lifecycle property this process owns (e.g. 'post-status'). Needs subjectProfileSlug. One process owns one property."
+  ),
+  activators: deriveJsonSchema(
+    playbookActivatorsSchema,
+    "When the process starts on its subject kind: [{ on: 'created' | 'enters_status', status? (with enters_status), mode: 'propose' (default) | 'run' }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
+  ),
+  humanOnlyStatuses: deriveJsonSchema(
+    humanOnlyStatusesSchema,
+    "Status options no stage owns — set only by a person (e.g. Idea, Archived). With the stages' subjectStatus values they should cover every option of the property."
+  ),
+  expectedOutputs: buildOutputSlotsJsonSchema(
+    "What every run of this playbook must produce (playbook-level slots): each { kind, label, relationToSubject? }."
+  ),
+} as const;
 
 /**
  * `outcomes` (A4) — THE declaration of what a session must yield, on
@@ -1456,7 +1544,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Governed: 'proposed' is success.",
+          "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Governed: 'proposed' is success. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2516,7 +2604,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Pass scope: "project" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default "session" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Pass scope: "project" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default "session" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind: set subjectProfileSlug + statusProperty, give each stage the subjectStatus it writes (an existing status option), gates at the commitments, onFail loops, typed expectedOutputs, plus activators and humanOnlyStatuses — load_skill system/synap/processes first. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.',
         inputSchema: {
           type: "object",
           properties: {
@@ -2533,7 +2621,7 @@ export const tools = {
             stages: {
               type: "array",
               description:
-                "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+                "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
               items: {
                 type: "object",
                 properties: {
@@ -2568,6 +2656,7 @@ export const tools = {
                     description:
                       "True if a subject may sit here indefinitely; otherwise a long dwell is worth surfacing.",
                   },
+                  ...PLAYBOOK_PROCESS_JSON_SCHEMA.stage,
                 },
                 required: ["key", "name", "category"],
               },
@@ -2587,6 +2676,10 @@ export const tools = {
               description:
                 "Slug of the kind or role this playbook runs ON (e.g. 'crm-lead'), so synap_match_playbooks can offer it for that kind. A slug that resolves to no profile is refused — define the kind first.",
             },
+            statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
+            activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
+            humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
+            expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             forceCreate: {
               type: "boolean",
               description:
@@ -3086,7 +3179,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L3 (governed — may propose): create a workspace from a definition. Template-first: market.search(kind:template) + prefer install before freehand create. Only after workspace-design four conditions hold and no template fits. Capture never invents a workspace. Pass stable proposalId for idempotency.",
+          "Escalation L3 (governed — may propose): create a workspace from a definition. Template-first: market.search(kind:template) + prefer install before freehand create. Only after workspace-design four conditions hold and no template fits. Capture never invents a workspace. Pass stable proposalId for idempotency. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4465,7 +4558,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first.",
+          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4651,7 +4744,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK.",
+          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {

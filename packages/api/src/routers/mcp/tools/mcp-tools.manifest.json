@@ -961,7 +961,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Governed: 'proposed' is success.",
+      "description": "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Governed: 'proposed' is success. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3902,7 +3902,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Pass scope: \"project\" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default \"session\" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.",
+      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Pass scope: \"project\" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default \"session\" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind: set subjectProfileSlug + statusProperty, give each stage the subjectStatus it writes (an existing status option), gates at the commitments, onFail loops, typed expectedOutputs, plus activators and humanOnlyStatuses — load_skill system/synap/processes first. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3920,7 +3920,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -3961,6 +3961,92 @@
                 "indefinite": {
                   "type": "boolean",
                   "description": "True if a subject may sit here indefinitely; otherwise a long dwell is worth surfacing."
+                },
+                "subjectStatus": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "Entering this stage writes this status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+                },
+                "gate": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["human", "check"]
+                        },
+                        "proposalType": {
+                          "type": "string",
+                          "enum": ["playbook.stage_gate"]
+                        }
+                      },
+                      "required": ["kind"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "awaits"
+                        },
+                        "proposalType": {
+                          "type": "string",
+                          "enum": ["dev.plan_approval", "dev.deploy_approval"]
+                        }
+                      },
+                      "required": ["proposalType"],
+                      "additionalProperties": false
+                    }
+                  ],
+                  "description": "Optional entry gate. {kind:'human'} at every commitment (send to a client, sign, pay, publish, won/lost, anything irreversible); {kind:'check'} only where the stage's own criteria can be verified — it judges the stage being LEFT, so never use it to guard an irreversible status. A gated stage writes its status only when the gate passes."
+                },
+                "onFail": {
+                  "type": "object",
+                  "properties": {
+                    "toStage": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  },
+                  "required": ["toStage"],
+                  "additionalProperties": false,
+                  "description": "Where a rejected gate sends the run: {toStage: '<stage key>'} (a rework loop)."
+                },
+                "expectedOutputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "label": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "icon": {
+                        "type": "string"
+                      },
+                      "ask": {
+                        "description": "Optional, for a slot the PERSON fills: how they answer in one tap — the same `ask` shape as synap_start_session outcomes."
+                      },
+                      "relationToSubject": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80,
+                        "pattern": "^[a-z][a-z0-9_-]*$",
+                        "description": "The relation slug written output → subject when the slot is filled (an existing relation type, e.g. made_for). Omit for none."
+                      }
+                    },
+                    "required": ["kind", "label"],
+                    "additionalProperties": {}
+                  },
+                  "description": "What this stage must produce: each { kind, label, relationToSubject? }."
                 }
               },
               "required": ["key", "name", "category"]
@@ -3978,6 +4064,80 @@
           "subjectProfileSlug": {
             "type": "string",
             "description": "Slug of the kind or role this playbook runs ON (e.g. 'crm-lead'), so synap_match_playbooks can offer it for that kind. A slug that resolves to no profile is refused — define the kind first."
+          },
+          "statusProperty": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Slug of the subject kind's lifecycle property this process owns (e.g. 'post-status'). Needs subjectProfileSlug. One process owns one property."
+          },
+          "activators": {
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "on": {
+                  "type": "string",
+                  "enum": ["created", "enters_status"]
+                },
+                "status": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "mode": {
+                  "default": "propose",
+                  "type": "string",
+                  "enum": ["run", "propose"]
+                }
+              },
+              "required": ["on"],
+              "additionalProperties": false
+            },
+            "description": "When the process starts on its subject kind: [{ on: 'created' | 'enters_status', status? (with enters_status), mode: 'propose' (default) | 'run' }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
+          },
+          "humanOnlyStatuses": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "description": "Status options no stage owns — set only by a person (e.g. Idea, Archived). With the stages' subjectStatus values they should cover every option of the property."
+          },
+          "expectedOutputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "icon": {
+                  "type": "string"
+                },
+                "ask": {
+                  "description": "Optional, for a slot the PERSON fills: how they answer in one tap — the same `ask` shape as synap_start_session outcomes."
+                },
+                "relationToSubject": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^[a-z][a-z0-9_-]*$",
+                  "description": "The relation slug written output → subject when the slot is filled (an existing relation type, e.g. made_for). Omit for none."
+                }
+              },
+              "required": ["kind", "label"],
+              "additionalProperties": {}
+            },
+            "description": "What every run of this playbook must produce (playbook-level slots): each { kind, label, relationToSubject? }."
           },
           "forceCreate": {
             "type": "boolean",
@@ -4501,7 +4661,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Escalation L3 (governed — may propose): create a workspace from a definition. Template-first: market.search(kind:template) + prefer install before freehand create. Only after workspace-design four conditions hold and no template fits. Capture never invents a workspace. Pass stable proposalId for idempotency.",
+      "description": "Escalation L3 (governed — may propose): create a workspace from a definition. Template-first: market.search(kind:template) + prefer install before freehand create. Only after workspace-design four conditions hold and no template fits. Capture never invents a workspace. Pass stable proposalId for idempotency. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6215,7 +6375,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first.",
+      "description": "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6719,7 +6879,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK.",
+      "description": "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
       "inputSchema": {
         "type": "object",
         "properties": {

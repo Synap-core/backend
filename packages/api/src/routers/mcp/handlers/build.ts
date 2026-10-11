@@ -401,10 +401,22 @@ export const buildHandlers: McpHandlerMap = {
         "draft" | "active" | "paused" | "archived" | undefined,
       // Agents name a kind by SLUG; the column is a record keyed `profileSlug`,
       // which is what the matcher and the dangling-slug guard both read.
-      ...(typeof args.subjectProfileSlug === "string" &&
-      args.subjectProfileSlug.trim()
-        ? { subjectProfile: { profileSlug: args.subjectProfileSlug.trim() } }
-        : {}),
+      // `statusProperty` (the kind's lifecycle property a process owns) rides
+      // in the same record — the stored shape `playbooks.create` validates
+      // with `playbookSubjectProfileSchema`.
+      ...(() => {
+        const subjectProfile: Record<string, unknown> = {};
+        if (
+          typeof args.subjectProfileSlug === "string" &&
+          args.subjectProfileSlug.trim()
+        ) {
+          subjectProfile.profileSlug = args.subjectProfileSlug.trim();
+        }
+        if (args.statusProperty !== undefined) {
+          subjectProfile.statusProperty = args.statusProperty;
+        }
+        return Object.keys(subjectProfile).length > 0 ? { subjectProfile } : {};
+      })(),
       // The overlap refusal's escape hatch. Without it an agent whose playbook
       // legitimately overlaps an existing one is stuck on CONFLICT.
       ...(args.forceCreate === true ? { forceCreate: true } : {}),
@@ -426,6 +438,30 @@ export const buildHandlers: McpHandlerMap = {
             criteria: args.criteria as Parameters<
               typeof createPlaybookDoor
             >[1]["criteria"],
+          }
+        : {}),
+      // The PROCESS contract's playbook-level half (activators,
+      // humanOnlyStatuses, playbook output slots). Untyped here like
+      // params/criteria: `playbooks.create` parses them with the ONE schema
+      // set (`schemas/playbook-process.ts`) and folds them into
+      // `subjectProfile`, so a malformed declaration is refused, never dropped.
+      // Stage-level `subjectStatus` / `gate` / `onFail` / `expectedOutputs`
+      // ride inside `stages`, validated by `playbookStageSchema`.
+      ...(args.activators !== undefined
+        ? {
+            activators: args.activators as Parameters<
+              typeof createPlaybookDoor
+            >[1]["activators"],
+          }
+        : {}),
+      ...(args.humanOnlyStatuses !== undefined
+        ? { humanOnlyStatuses: args.humanOnlyStatuses as string[] }
+        : {}),
+      ...(args.expectedOutputs !== undefined
+        ? {
+            expectedOutputs: args.expectedOutputs as Parameters<
+              typeof createPlaybookDoor
+            >[1]["expectedOutputs"],
           }
         : {}),
     });
