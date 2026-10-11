@@ -176,6 +176,27 @@ describe("an agent holding the preset", () => {
     expect(permits(SCOPE, { subject: "channel", action: "read" })).toBe(true);
   });
 
+  it("never runs a flow with the person's authority (founder rule)", async () => {
+    // An automation, command or tool runs later as the human, outside this
+    // agent's limits. The AI may draft an automation (created disabled).
+    for (const [subject, action] of [
+      ["automation", "activate"],
+      ["automation", "execute"],
+      ["command", "execute"],
+      ["tool", "create"],
+      ["tool", "update"],
+    ] as const) {
+      expect(await grantAllows(subject, action), `${subject}.${action}`).toBe(
+        false
+      );
+      expect(capabilityAllows(subject, action), `${subject}.${action}`).toBe(
+        false
+      );
+    }
+    expect(await grantAllows("automation", "create")).toBe(true);
+    expect(await grantAllows("facet", "detach")).toBe(true);
+  });
+
   it("is refused delete, approve and the vault", async () => {
     expect(await grantAllows("entity", "delete")).toBe(false);
     expect(capabilityAllows("entity", "delete")).toBe(false);

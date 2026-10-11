@@ -96,7 +96,6 @@ export const AI_WRITE_SUBJECTS: Readonly<
   relation_def: ["create"],
   session: ["create", "update"],
   skill: ["create", "update"],
-  tool: ["create", "update"],
   track: ["create", "update"],
   view: ["create", "update"],
 };
@@ -111,14 +110,11 @@ export const AI_WRITE_SUBJECTS: Readonly<
 export const AI_GATE_VERBS: readonly string[] = [
   "a2ai.join",
   "artifact.set_state",
-  "automation.activate",
-  "automation.execute",
   "bento.arrange",
   "capability.attach",
   "capability.renderer_set",
   "cell.define",
   "channel.create_branch",
-  "command.execute",
   "context.link",
   "document.section_update",
   "document.session_narrative_update",
@@ -182,6 +178,16 @@ export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
   "role.update": "Role definitions are the permission table itself.",
   "rule.create": "Governance: a rule decides what agents may do unasked.",
   "rule.update": "Governance: a rule decides what agents may do unasked.",
+  "automation.activate":
+    "Authority: an active automation runs later with the person's authority, unreviewed. Drafts are created disabled.",
+  "automation.execute":
+    "Authority: running a flow acts with the person's authority, beyond this agent's own limits.",
+  "command.execute":
+    "Authority: a command runs a stored flow with the person's authority.",
+  "tool.create":
+    "Authority: a tool is code other flows run with the person's authority.",
+  "tool.update":
+    "Authority: a tool is code other flows run with the person's authority.",
 };
 
 const AI_READ_PROPOSE_PERMISSIONS: readonly string[] =
