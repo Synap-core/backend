@@ -88,6 +88,23 @@ export const OperationalEventTypes = {
       "<fieldName>",
     ],
   },
+  ENTITY_TRANSITIONED: {
+    type: "entity.transition.completed",
+    label: "Status changed",
+    domain: "Entity",
+    description:
+      "Fires when a thing's lifecycle status moves (the kind's own, or a role's), through the one moveStatus door.",
+    filterKeys: [
+      "profileSlug",
+      "role",
+      "property",
+      "from",
+      "to",
+      "fromCategory",
+      "category",
+      "actorKind",
+    ],
+  },
   ENTITY_DELETED: {
     type: "entity.delete.completed",
     label: "Entity deleted",

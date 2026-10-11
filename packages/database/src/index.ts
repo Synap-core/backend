@@ -302,6 +302,18 @@ export {
   type DeclareLifecycleResult,
 } from "./services/lifecycle/declare-lifecycle.js";
 export {
+  resolveStatusMoveTarget,
+  classifyStatusMove,
+  applyStatusMove,
+  LifecycleConflictError,
+  type StatusMoveActor,
+  type StatusMoveTarget,
+  type StatusTransition,
+  type ResolveTargetResult,
+  type ApplyStatusMoveInput,
+  type ApplyStatusMoveResult,
+} from "./services/lifecycle/apply-status-move.js";
+export {
   resolvePropertyLabel,
   resolvePropertyOptions,
   type StoredPropertyPresentation,

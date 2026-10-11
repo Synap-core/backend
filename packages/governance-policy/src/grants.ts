@@ -73,6 +73,7 @@ export const GRANT_GATE_ACTIONS = [
   "restore",
   "purge",
   "move",
+  "transition",
 ] as const;
 
 const SEGMENT = /^(?:\*|[a-z0-9][a-z0-9_-]*)$/;

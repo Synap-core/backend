@@ -26,6 +26,7 @@
 import { registerDocumentExecutors } from "./executors/document.js";
 import { registerChannelExecutors } from "./executors/channel.js";
 import { registerEntityExecutors } from "./executors/entity.js";
+import { registerEntityTransitionExecutors } from "./executors/entity-transition.js";
 import { registerPropertyDefExecutors } from "./executors/property-def.js";
 import { registerFocusSessionExecutors } from "./executors/focus-session.js";
 import { registerDevApprovalExecutors } from "./executors/dev-approval.js";
@@ -73,6 +74,7 @@ export function registerApproveExecutors(): void {
   registerDocumentExecutors();
   registerChannelExecutors();
   registerEntityExecutors();
+  registerEntityTransitionExecutors();
   registerPropertyDefExecutors();
   registerFocusSessionExecutors();
   registerDevApprovalExecutors();

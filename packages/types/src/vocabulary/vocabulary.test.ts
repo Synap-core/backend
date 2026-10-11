@@ -175,6 +175,9 @@ describe("resolveActionLabel — two moods", () => {
     // A propose-mode rule's THEN — two moods, like every verb.
     expect(resolveActionLabel("propose", "imperative")).toBe("Propose");
     expect(resolveActionLabel("propose", "past")).toBe("Proposed");
+    // A lifecycle status move (entity.transition) — never "Transition".
+    expect(resolveActionLabel("entity.transition", "imperative")).toBe("Move");
+    expect(resolveActionLabel("transition", "past")).toBe("Moved");
   });
 
   it("resolves a dotted proposalType by its last segment", () => {

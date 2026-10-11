@@ -130,6 +130,9 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // A propose-mode rule's THEN: it files a proposal instead of acting. Without
   // the row the past mood humanized to "Propose" ("Rule X propose …").
   propose: { imperative: "Propose", past: "Proposed" },
+  // Work model L2: a lifecycle status move (`entity.transition`, the moveStatus
+  // door). "Move" on the pending proposal; "Moved" on the history receipt.
+  transition: { imperative: "Move", past: "Moved" },
   // A NEW run of stored input with the current guidelines (intake plan §4.3 —
   // a rerun is a new session `spawned_from` the previous one). "Rerun" on the
   // button and pending item; "Reran" on the history receipt. Added ahead of its

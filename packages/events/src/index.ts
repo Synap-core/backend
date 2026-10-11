@@ -69,6 +69,14 @@ export {
   type SideEffectPayload,
 } from "./side-effects.js";
 
+// The ONE emitter of a lifecycle transition (work model L2).
+export {
+  emitLifecycleTransition,
+  LIFECYCLE_TRANSITION_EVENT_TYPE,
+  DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS,
+  type LifecycleTransitionEvent,
+} from "./lifecycle-transition.js";
+
 // Reactor registry — a new reaction = registerReactor(...), never an edit to
 // emitSideEffects. getReactors() is exposed for tests/introspection.
 export {

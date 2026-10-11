@@ -1903,6 +1903,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "entity/delete": "disruptive", // destroy
   "entity/renderer.set": "reversible", // one record's view
   "entity/update": "reversible", // kind/scope change is forcePropose'd (2.1)
+  "entity/transition": "reversible", // a status move is moved back; done/lost floored (2.85)
   "facet/attach": "reversible",
   "facet/detach": "reversible", // soft-delete; re-attach recovers it
   "facet/update": "reversible",
@@ -2095,6 +2096,9 @@ export const GATE_WRITE_DOORS = {
   "entity/delete": "gate",
   "entity/renderer.set": "gate",
   "entity/update": "gate+automation",
+  // Work model L2: a lifecycle status move — the `moveStatus` door (api) and
+  // the automation output path (jobs). Executor: `entity/transition`.
+  "entity/transition": "gate+automation",
   "facet/attach": "gate",
   "facet/detach": "gate",
   "facet/update": "gate",

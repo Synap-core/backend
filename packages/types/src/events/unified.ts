@@ -325,6 +325,9 @@ const SUBJECT_EXTRA_ACTIONS: Record<string, readonly string[]> = {
   user: ["updated"],
   // A key is revoked or replaced, never "deleted" / "updated" (`api-keys.ts`).
   apiKey: ["revoke", "rotate"],
+  // A thing's lifecycle status moved — the ONE event of the moveStatus door
+  // (work model L2), `entity.transition.completed`.
+  entity: ["transition"],
 };
 
 /**
