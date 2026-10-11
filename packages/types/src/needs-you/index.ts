@@ -384,3 +384,22 @@ export function needsYouCountsLabel(counts: readonly NeedsYouCount[]): string {
  * the five newest are the ones worth a glance.
  */
 export const SUGGESTIONS_CAP = 5;
+
+/** The needs-you pages' context strip — see `./context.ts`. */
+export {
+  NEEDS_YOU_CONTEXT_COPY,
+  needsYouContextFromOwedSlot,
+  needsYouContextFromProposal,
+  type NeedsYouContext,
+  type NeedsYouContextFrom,
+  type NeedsYouContextLine,
+  type NeedsYouContextRef,
+  type NeedsYouContextStep,
+  type NeedsYouContextUnblocks,
+  type NeedsYouAiCanDoRead,
+  type NeedsYouOutputsRead,
+  type NeedsYouRead,
+  type NeedsYouSessionRead,
+  type OwedSlotContextInput,
+  type ProposalContextInput,
+} from "./context.js";
