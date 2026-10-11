@@ -238,7 +238,11 @@ const MISS_WINDOW_MS = DEVICE_REQUEST_TTL_SECONDS * 1000;
 
 function assertNotLockedOut(personId: string): void {
   const entry = missesByPerson.get(personId);
-  if (entry && entry.resetAt > Date.now() && entry.count >= DEVICE_MAX_WRONG_CODES)
+  if (
+    entry &&
+    entry.resetAt > Date.now() &&
+    entry.count >= DEVICE_MAX_WRONG_CODES
+  )
     throw new TRPCError({
       code: "TOO_MANY_REQUESTS",
       message: "Too many wrong codes. Wait a few minutes, then try again.",
@@ -441,7 +445,9 @@ export async function decideDeviceRequest(
     return { status: "denied" };
   }
 
-  const agents = input.agents ? [...new Set(input.agents)] : row.requestedAgents;
+  const agents = input.agents
+    ? [...new Set(input.agents)]
+    : row.requestedAgents;
   const outside = agents.filter((a) => !row.requestedAgents.includes(a));
   if (outside.length > 0)
     throw new TRPCError({
@@ -575,8 +581,7 @@ export async function collectDeviceToken(args: {
   const now = new Date();
   if (
     row.lastPolledAt &&
-    now.getTime() - row.lastPolledAt.getTime() <
-      row.pollIntervalSeconds * 1000
+    now.getTime() - row.lastPolledAt.getTime() < row.pollIntervalSeconds * 1000
   ) {
     const interval = row.pollIntervalSeconds + DEVICE_SLOW_DOWN_STEP_SECONDS;
     await db
@@ -659,6 +664,77 @@ export async function resolveMachineKeyTtlDays(
     .limit(1);
   const podDefault = pod?.settings?.machineDefaults?.keyTtlDays;
   return valid(podDefault) ? podDefault : AGENT_KEY_TTL_DAYS;
+}
+
+/**
+ * The pod default's bounds. Floor: longer than the rotation lead, or a key
+ * would be "due for rotation" the day it is minted. Ceiling: the resolver's
+ * own `valid` ceiling, so a stored default is never silently ignored.
+ */
+export const MACHINE_KEY_TTL_MIN_DAYS = AGENT_KEY_ROTATION_LEAD_DAYS + 1;
+export const MACHINE_KEY_TTL_MAX_DAYS = 3650;
+
+/**
+ * Pod-admin settings: the pod default computer key lifetime (founder decision
+ * 4). `keyTtlDays` is what a new computer gets (stored default, else 90);
+ * `stored` says whether a pod admin set it.
+ */
+export async function readMachineDefaults(): Promise<{
+  keyTtlDays: number;
+  stored: boolean;
+  defaultKeyTtlDays: number;
+  minKeyTtlDays: number;
+  maxKeyTtlDays: number;
+}> {
+  const [pod] = await db
+    .select({ settings: podSettings.settings })
+    .from(podSettings)
+    .orderBy(podSettings.createdAt)
+    .limit(1);
+  const stored = pod?.settings?.machineDefaults?.keyTtlDays;
+  return {
+    keyTtlDays: await resolveMachineKeyTtlDays(null),
+    stored: typeof stored === "number",
+    defaultKeyTtlDays: AGENT_KEY_TTL_DAYS,
+    minKeyTtlDays: MACHINE_KEY_TTL_MIN_DAYS,
+    maxKeyTtlDays: MACHINE_KEY_TTL_MAX_DAYS,
+  };
+}
+
+/**
+ * Set the pod default computer key lifetime. Merges into the singleton
+ * `pod_settings.settings` blob (the `proactive.setPodDefaults` pattern) and
+ * applies to keys minted from now on; existing keys keep their expiry.
+ */
+export async function setMachineKeyTtlDays(keyTtlDays: number): Promise<void> {
+  if (
+    !Number.isInteger(keyTtlDays) ||
+    keyTtlDays < MACHINE_KEY_TTL_MIN_DAYS ||
+    keyTtlDays > MACHINE_KEY_TTL_MAX_DAYS
+  )
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `A computer key lasts between ${MACHINE_KEY_TTL_MIN_DAYS} and ${MACHINE_KEY_TTL_MAX_DAYS} days.`,
+    });
+  const machineDefaults = { keyTtlDays };
+  const [existing] = await db
+    .select({ id: podSettings.id })
+    .from(podSettings)
+    .orderBy(podSettings.createdAt)
+    .limit(1);
+  if (existing) {
+    await db
+      .update(podSettings)
+      .set({
+        settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${JSON.stringify(
+          { machineDefaults }
+        )}::jsonb`,
+        updatedAt: new Date(),
+      })
+      .where(eq(podSettings.id, existing.id));
+  } else {
+    await db.insert(podSettings).values({ settings: { machineDefaults } });
+  }
 }
 
 /** A NEW principal starts ask-first; one the person already set keeps theirs. */
@@ -758,8 +834,7 @@ async function mintForApprovedRequest(
       linkedUserId: approverId,
       expiresAt: new Date(nowMs + ttlDays * DAY_MS),
       rotationScheduledAt: new Date(
-        nowMs +
-          Math.max(ttlDays - AGENT_KEY_ROTATION_LEAD_DAYS, 1) * DAY_MS
+        nowMs + Math.max(ttlDays - AGENT_KEY_ROTATION_LEAD_DAYS, 1) * DAY_MS
       ),
     },
     approverId,

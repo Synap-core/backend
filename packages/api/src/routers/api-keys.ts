@@ -71,6 +71,8 @@ import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import {
   decideDeviceRequest,
   getDeviceRequest,
+  readMachineDefaults,
+  setMachineKeyTtlDays,
 } from "../services/machine-connect.js";
 
 /**
@@ -710,6 +712,29 @@ export const apiKeysRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx);
       return decideDeviceRequest({ ...input, personId: ctx.userId });
+    }),
+
+  /**
+   * Pod defaults for COMPUTERS (founder decision 4): how long a computer's key
+   * and its agents' keys last when the computer sets nothing itself. Pod admins
+   * only — pod-admin settings, Trust & keys.
+   */
+  getMachineDefaults: podAdminProcedure.query(() => readMachineDefaults()),
+
+  setMachineDefaults: podAdminProcedure
+    .input(z.object({ keyTtlDays: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      await setMachineKeyTtlDays(input.keyTtlDays);
+      void auditLog({
+        subjectType: "apiKey",
+        action: "update",
+        phase: "completed",
+        subjectId: "machine-defaults",
+        userId: ctx.userId,
+        workspaceId: null,
+        data: { kind: "machine_defaults", keyTtlDays: input.keyTtlDays },
+      });
+      return readMachineDefaults();
     }),
 
   /**

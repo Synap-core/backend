@@ -207,6 +207,41 @@ export const SERVICE_MARKS = {
     inkMark: true,
     path: null,
   },
+  // AI clients a person connects from a computer (the API's
+  // `SURFACE_AGENT_TYPES`): an agent is named "<client> on <computer>"
+  // (`agentDisplayName`), so the client's name must be its own, not a
+  // humanized id ("Claude code"). No mark is vendored yet: each draws the
+  // neutral glyph in the surrounding ink until its owner's asset is licensed.
+  "claude-code": {
+    name: "Claude Code",
+    inkMark: true,
+    path: null,
+  },
+  "claude-desktop": {
+    name: "Claude Desktop",
+    inkMark: true,
+    path: null,
+  },
+  codex: {
+    name: "Codex",
+    inkMark: true,
+    path: null,
+  },
+  cursor: {
+    name: "Cursor",
+    inkMark: true,
+    path: null,
+  },
+  raycast: {
+    name: "Raycast",
+    inkMark: true,
+    path: null,
+  },
+  proton: {
+    name: "Proton",
+    inkMark: true,
+    path: null,
+  },
 } as const satisfies Record<string, ServiceMarkDef>;
 
 export type ServiceId = keyof typeof SERVICE_MARKS;

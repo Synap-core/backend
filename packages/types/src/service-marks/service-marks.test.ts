@@ -95,6 +95,24 @@ describe("resolveServiceMark", () => {
   });
 });
 
+describe("AI clients a computer hosts", () => {
+  // W2 dogfood: "Claude code on devbox" — the id was humanized because the
+  // registry had no row for an AI client. Each is named as its maker writes it.
+  it.each([
+    ["claude-code", "Claude Code"],
+    ["claude-desktop", "Claude Desktop"],
+    ["codex", "Codex"],
+    ["cursor", "Cursor"],
+    ["raycast", "Raycast"],
+    ["proton", "Proton"],
+    ["openwebui", "Open WebUI"],
+    ["discord", "Discord"],
+  ])("%s → %s", (id, name) => {
+    expect(normalizeServiceId(id)).toBe(id);
+    expect(resolveServiceName(id)).toBe(name);
+  });
+});
+
 describe("resolveServiceWebUrl", () => {
   it("resolves a canonical id and an alias to the same web home", () => {
     expect(resolveServiceWebUrl("gmail")).toBe("https://mail.google.com");

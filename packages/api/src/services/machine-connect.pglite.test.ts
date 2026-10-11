@@ -69,8 +69,10 @@ import {
   createDeviceRequest,
   decideDeviceRequest,
   getDeviceRequest,
+  readMachineDefaults,
   resetDeviceCodeMissesForTests,
   revokeMachine,
+  setMachineKeyTtlDays,
 } from "./machine-connect.js";
 import { liveGrantsOfKey } from "./key-grant.js";
 
@@ -94,7 +96,9 @@ function ddlFor(table: PgTable): string {
     const def =
       c.name === "created_at" || c.name === "updated_at"
         ? " default now()"
-        : c.hasDefault && c.default !== undefined && typeof c.default !== "object"
+        : c.hasDefault &&
+            c.default !== undefined &&
+            typeof c.default !== "object"
           ? ` default ${typeof c.default === "string" ? `'${c.default}'` : c.default}`
           : "";
     return `"${c.name}" ${type}${key}${def}`;
@@ -299,13 +303,23 @@ describe("approve → collect", () => {
   });
 
   it("mints ONLY at collection, once; the computer and its agents in one step", async () => {
-    const before = (await q<{ n: number }>(`select count(*)::int n from api_keys`))[0]!.n;
+    const before = (
+      await q<{ n: number }>(`select count(*)::int n from api_keys`)
+    )[0]!.n;
     const res = await start("devbox", ["claude-code", "codex"]);
-    await approve(res.user_code, { agents: ["claude-code"], computerName: "My devbox" });
+    await approve(res.user_code, {
+      agents: ["claude-code"],
+      computerName: "My devbox",
+    });
     // Approved — and still no key, no computer.
-    expect((await q<{ n: number }>(`select count(*)::int n from api_keys`))[0]!.n).toBe(before);
     expect(
-      await q(`select id from users where agent_type = 'machine' and created_by_user_id = $1`, [HUMAN])
+      (await q<{ n: number }>(`select count(*)::int n from api_keys`))[0]!.n
+    ).toBe(before);
+    expect(
+      await q(
+        `select id from users where agent_type = 'machine' and created_by_user_id = $1`,
+        [HUMAN]
+      )
     ).toHaveLength(0);
 
     const got = await poll(res.device_code);
@@ -324,7 +338,10 @@ describe("approve → collect", () => {
     );
 
     // Second collection: gone.
-    expect(await poll(res.device_code)).toEqual({ ok: false, error: "expired_token" });
+    expect(await poll(res.device_code)).toEqual({
+      ok: false,
+      error: "expired_token",
+    });
 
     // Model: a machine principal (origin device), a hosted agent, both ask-first.
     const [machine] = await q<Record<string, any>>(
@@ -346,17 +363,28 @@ describe("approve → collect", () => {
       `select * from users where id = $1`,
       [body.agents[0]!.agentUserId]
     );
-    expect(agent).toMatchObject({ host_user_id: body.computer.id, created_via: "device" });
-    expect(agent!.agent_metadata).toMatchObject({ governancePosture: "ask-first" });
+    expect(agent).toMatchObject({
+      host_user_id: body.computer.id,
+      created_via: "device",
+    });
+    expect(agent!.agent_metadata).toMatchObject({
+      governancePosture: "ask-first",
+    });
 
     // Keys: the computer's is a user_pat linked to the approver; both live.
     const [mk] = await q<Record<string, any>>(
       `select * from api_keys where id = $1`,
       [body.computer.keyId]
     );
-    expect(mk).toMatchObject({ key_type: "user_pat", linked_user_id: HUMAN, is_active: true });
+    expect(mk).toMatchObject({
+      key_type: "user_pat",
+      linked_user_id: HUMAN,
+      is_active: true,
+    });
     // Never stored in clear.
-    expect(JSON.stringify(await q(`select * from api_keys`))).not.toContain(body.computer.apiKey);
+    expect(JSON.stringify(await q(`select * from api_keys`))).not.toContain(
+      body.computer.apiKey
+    );
 
     // The agent never holds more than its computer.
     const machinePerms = new Set(
@@ -377,17 +405,24 @@ describe("approve → collect", () => {
     );
     const oldKeys = (await keysOf(first!.id)).filter((k) => !k.revoked_at);
     const res = await start("devbox", ["claude-code"]);
-    const view = await getDeviceRequest({ userCode: res.user_code, personId: HUMAN });
+    const view = await getDeviceRequest({
+      userCode: res.user_code,
+      personId: HUMAN,
+    });
     expect(view.reusableComputers.map((c) => c.id)).toEqual([first!.id]);
     await approve(res.user_code, { reuseComputerId: first!.id });
     const got = await poll(res.device_code);
     if (!got.ok) throw new Error(got.error);
     expect(got.body.computer.id).toBe(first!.id);
     const keys = await keysOf(first!.id);
-    for (const k of oldKeys) expect(keys.find((x) => x.id === k.id)!.revoked_at).not.toBeNull();
+    for (const k of oldKeys)
+      expect(keys.find((x) => x.id === k.id)!.revoked_at).not.toBeNull();
     // Same agent principal on the same computer: one "Claude Code on devbox".
     expect(
-      await q(`select id from users where host_user_id = $1 and agent_type = 'claude-code'`, [first!.id])
+      await q(
+        `select id from users where host_user_id = $1 and agent_type = 'claude-code'`,
+        [first!.id]
+      )
     ).toHaveLength(1);
   });
 
@@ -397,7 +432,10 @@ describe("approve → collect", () => {
       [HUMAN]
     );
     const res = await start("devbox");
-    const view = await getDeviceRequest({ userCode: res.user_code, personId: OTHER });
+    const view = await getDeviceRequest({
+      userCode: res.user_code,
+      personId: OTHER,
+    });
     await expect(
       decideDeviceRequest({
         requestId: view.requestId,
@@ -414,9 +452,55 @@ describe("approve → collect", () => {
       `select id from users where agent_type = 'machine' and created_by_user_id = $1`,
       [HUMAN]
     );
-    const hosted = await q<{ id: string }>(`select id from users where host_user_id = $1`, [m!.id]);
+    const hosted = await q<{ id: string }>(
+      `select id from users where host_user_id = $1`,
+      [m!.id]
+    );
     await revokeMachine({ machineUserId: m!.id, by: HUMAN });
     for (const u of [m!.id, ...hosted.map((x) => x.id)])
       for (const k of await keysOf(u)) expect(k.revoked_at).not.toBeNull();
+  });
+});
+
+describe("pod default key lifetime (founder decision 4)", () => {
+  it("90 days until a pod admin sets it; then /device and new keys read the stored default", async () => {
+    expect((await readMachineDefaults()).keyTtlDays).toBe(90);
+    expect(
+      (
+        await getDeviceRequest({
+          userCode: (await start("ttlbox")).user_code,
+          personId: HUMAN,
+        })
+      ).keyTtlDays
+    ).toBe(90);
+
+    await setMachineKeyTtlDays(30);
+    const after = await readMachineDefaults();
+    expect(after).toMatchObject({ keyTtlDays: 30, stored: true });
+    const res = await start("ttlbox2");
+    expect(
+      (await getDeviceRequest({ userCode: res.user_code, personId: HUMAN }))
+        .keyTtlDays
+    ).toBe(30);
+    // The merge keeps the rest of the singleton blob.
+    await q(
+      `update pod_settings set settings = settings || '{"other":1}'::jsonb`
+    );
+    await setMachineKeyTtlDays(45);
+    const [row] = await q<{ settings: Record<string, unknown> }>(
+      `select settings from pod_settings`
+    );
+    expect(row!.settings).toMatchObject({
+      other: 1,
+      machineDefaults: { keyTtlDays: 45 },
+    });
+  });
+
+  it("refuses a lifetime inside the rotation lead or past the ceiling", async () => {
+    await expect(setMachineKeyTtlDays(14)).rejects.toThrow(
+      /between 15 and 3650/
+    );
+    await expect(setMachineKeyTtlDays(3651)).rejects.toThrow(/between/);
+    await expect(setMachineKeyTtlDays(30.5)).rejects.toThrow(/between/);
   });
 });
