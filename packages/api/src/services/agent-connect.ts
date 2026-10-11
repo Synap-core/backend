@@ -28,16 +28,18 @@ import {
   desc,
   inArray,
   isNull,
+  ne,
   drizzleSql,
   apiKeys,
   proposals,
   GrantRepository,
 } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
+import { ProposalStatus, grants as grantRows } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { parsePermission, patternMatches } from "@synap-core/types/grants";
 import { createPendingProposal } from "../utils/permission-check.js";
 import { assertPodAdmin } from "../trpc.js";
+import { scopesWithinLive } from "./key-grant.js";
 
 export const AGENT_CONNECT_TARGET_TYPE = "agent";
 export const AGENT_CONNECT_PROPOSAL_TYPE = "connect";
@@ -170,6 +172,71 @@ export function grantsForAgentRequests(
 }
 
 /**
+ * Narrow a key's LIVE grant set to `wanted`: each live grant intersected with
+ * it (`scopesWithinLive`), keeping that grant's places (workspace, project,
+ * object), end, label, role and client. Never wider than either side — a place
+ * or verb the key did not hold stays out. Returns false — and writes nothing —
+ * when there is no overlap (or the key holds no live grant): the caller
+ * decides whether that refuses the change or ends the key's access.
+ */
+export async function narrowKeyGrants(args: {
+  keyId: string;
+  wanted: ReadonlyArray<{
+    permissions: readonly string[];
+    workspaceIds?: readonly string[] | null;
+  }>;
+  createdBy: string;
+}): Promise<boolean> {
+  const now = Date.now();
+  const live = (
+    await db
+      .select()
+      .from(grantRows)
+      .where(
+        and(eq(grantRows.apiKeyId, args.keyId), isNull(grantRows.revokedAt))
+      )
+  ).filter(
+    (r) =>
+      r.permissions.length > 0 &&
+      (r.expiresAt === null || r.expiresAt.getTime() > now)
+  );
+  if (live.length === 0) return false;
+  const next = live.flatMap((row) =>
+    scopesWithinLive(
+      args.wanted,
+      [
+        {
+          permissions: row.permissions,
+          workspaceIds: row.workspaceIds,
+          projectIds: row.projectIds,
+          entityIds: row.entityIds,
+          expiresAt: row.expiresAt,
+        },
+      ],
+      row.expiresAt
+    ).map((scope) => ({ row, scope }))
+  );
+  if (next.length === 0) return false;
+  await new GrantRepository(db).attachMany(
+    next.map(({ row, scope }) => ({
+      apiKeyId: args.keyId,
+      principalUserId: row.principalUserId,
+      onBehalfOf: row.onBehalfOf,
+      permissions: scope.permissions,
+      workspaceIds: scope.workspaceIds ?? null,
+      projectIds: scope.projectIds ?? null,
+      entityIds: scope.entityIds ?? null,
+      expiresAt: row.expiresAt,
+      label: row.label,
+      clientId: row.clientId,
+      roleId: row.roleId,
+      createdBy: args.createdBy,
+    }))
+  );
+  return true;
+}
+
+/**
  * File the `agent/connect` proposal for a pending key. `requests` are read off
  * the key's own grant, so the card shows exactly what approving enables.
  */
@@ -275,10 +342,11 @@ async function settleProposal(
  * THE approval of a pending agent key — the pod-admin pages and the
  * `agent/connect` executor both call it, so the two can never disagree.
  *
- *  - `approvedRequests` (the executor's, already checked ⊆ asked) replaces the
- *    key's grant set; omitted, the key keeps the grant it was minted with —
- *    which is exactly what was asked;
- *  - the key is flipped active only while still pending and not revoked;
+ *  - `approvedRequests` (the executor's, already checked ⊆ asked) NARROW the
+ *    key's stored grant set (`narrowKeyGrants`); omitted, the key keeps the
+ *    grant it was minted with — which is exactly what was asked;
+ *  - the key is flipped active only while still pending and not revoked, and
+ *    only then replaces the agent's other live hub keys for its runtime;
  *  - its open `agent/connect` proposal is settled approved (the executor
  *    settles its own, so `settle: false` there). A proposal already REJECTED
  *    wins: the key is revoked and the outcome is `rejected`.
@@ -288,6 +356,8 @@ export async function approvePendingAgentKey(args: {
   approverId: string;
   approvedRequests?: readonly AgentConnectRequest[];
   settleProposal?: boolean;
+  /** The agent the approved proposal names; must own the key (executor). */
+  agentUserId?: string;
 }): Promise<PendingKeyOutcome> {
   const key = await db.query.apiKeys.findFirst({
     where: eq(apiKeys.id, args.keyId),
@@ -298,9 +368,17 @@ export async function approvePendingAgentKey(args: {
       revokedAt: true,
       linkedUserId: true,
       expiresAt: true,
+      keyType: true,
+      instanceId: true,
     },
   });
   if (!key) return "not_found";
+  if (args.agentUserId !== undefined && key.userId !== args.agentUserId)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "This connection names a different agent than the key it would activate. Connect it again.",
+    });
   if (!(await canDecidePendingConnection(args.approverId, key.linkedUserId)))
     return "forbidden";
   if (key.revokedAt) return "rejected";
@@ -317,23 +395,23 @@ export async function approvePendingAgentKey(args: {
   }
 
   if (args.approvedRequests) {
-    const grants = grantsForAgentRequests(args.approvedRequests);
-    if (grants.length === 0)
+    // The approval NARROWS the key's stored grant (bounded at mint by what
+    // the connecting key may touch, pinned to projects/objects as it was);
+    // it is never rebuilt from the workspace-level requests, which would
+    // drop that pinning.
+    const approved = grantsForAgentRequests(args.approvedRequests);
+    if (
+      approved.length === 0 ||
+      !(await narrowKeyGrants({
+        keyId: key.id,
+        wanted: approved,
+        createdBy: args.approverId,
+      }))
+    )
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "Approve at least one thing it may do, or reject it.",
       });
-    await new GrantRepository(db).attachMany(
-      grants.map((g) => ({
-        apiKeyId: key.id,
-        principalUserId: key.userId,
-        onBehalfOf: key.linkedUserId ?? args.approverId,
-        permissions: g.permissions,
-        workspaceIds: g.workspaceIds,
-        expiresAt: key.expiresAt ?? null,
-        createdBy: args.approverId,
-      }))
-    );
   }
 
   const flipped = await db
@@ -348,6 +426,22 @@ export async function approvePendingAgentKey(args: {
     )
     .returning({ id: apiKeys.id });
   if (flipped.length === 0) return "rejected";
+
+  // The approved key REPLACES the agent's live keys for this runtime — here,
+  // at approval, never when the request is filed: a pending request must not
+  // be able to switch an agent's working keys off.
+  if (key.keyType === "hub_inbound")
+    await revokeApiKeys(db, {
+      where: and(
+        eq(apiKeys.userId, key.userId),
+        eq(apiKeys.keyType, "hub_inbound"),
+        eq(apiKeys.isActive, true),
+        ne(apiKeys.id, key.id),
+        key.instanceId ? eq(apiKeys.instanceId, key.instanceId) : undefined
+      ),
+      revokedBy: args.approverId,
+      reason: "Replaced by a newly approved connection",
+    });
 
   if (
     args.settleProposal !== false &&

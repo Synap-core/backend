@@ -28,7 +28,7 @@ import {
   getRequestClientKey,
   clientKeyScope,
 } from "@synap/database";
-import { agents, users } from "@synap/database/schema";
+import { agents, apps, users } from "@synap/database/schema";
 import type { AgentMetadata, ApiKeyToolProfile } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -42,6 +42,7 @@ import {
   aiDefaultCapabilities,
 } from "@synap-core/types/grants";
 import { attachGrantOrRevoke } from "./key-grant.js";
+import { narrowKeyGrants } from "./agent-connect.js";
 import {
   AGENT_KEY_TTL_DAYS,
   AGENT_KEY_ROTATION_LEAD_DAYS,
@@ -659,20 +660,26 @@ export async function attachAgentKeyGrant(args: {
 
 /**
  * Re-apply an agent's capabilities to every key it holds that is not revoked
- * (live and pending), replacing each key's grant set (`attachMany`). Called
- * after its capabilities change, so a narrowing binds its live keys at once.
- * Returns how many keys were re-granted.
+ * (live and pending), so a narrowing binds its keys at once. Each key's grant
+ * set is INTERSECTED with the capabilities (`narrowKeyGrants`): its places
+ * (workspace, project, object), end, label, role and client stay; nothing is
+ * ever widened — a key its owner narrowed stays narrowed, and a widening of
+ * the capabilities reaches a key only when its owner grants it. A key left
+ * with nothing in common touches nothing (its live grants revoked). An APP's
+ * agent is skipped: its keys' reach is the app's approved requests
+ * (`applyApprovedReach`). Returns how many keys were re-granted.
  */
 export async function reapplyAgentKeyGrants(args: {
   agentUserId: string;
   createdBy: string;
 }): Promise<number> {
+  const app = await db.query.apps.findFirst({
+    where: eq(apps.agentUserId, args.agentUserId),
+    columns: { id: true },
+  });
+  if (app) return 0;
   const keys = await db
-    .select({
-      id: apiKeys.id,
-      linkedUserId: apiKeys.linkedUserId,
-      expiresAt: apiKeys.expiresAt,
-    })
+    .select({ id: apiKeys.id })
     .from(apiKeys)
     .where(
       and(eq(apiKeys.userId, args.agentUserId), isNull(apiKeys.revokedAt))
@@ -681,16 +688,12 @@ export async function reapplyAgentKeyGrants(args: {
   const grant = await agentKeyGrant(args.agentUserId);
   const repo = new GrantRepository(db);
   for (const key of keys) {
-    await repo.attachMany([
-      {
-        apiKeyId: key.id,
-        principalUserId: args.agentUserId,
-        onBehalfOf: key.linkedUserId ?? args.createdBy,
-        permissions: grant.permissions,
-        expiresAt: key.expiresAt ?? null,
-        createdBy: args.createdBy,
-      },
-    ]);
+    const holds = await narrowKeyGrants({
+      keyId: key.id,
+      wanted: [grant],
+      createdBy: args.createdBy,
+    });
+    if (!holds) await repo.revokeForKeys([key.id], args.createdBy);
   }
   return keys.length;
 }
@@ -861,6 +864,12 @@ export interface ProvisionSurfaceAgentKeyOpts {
    * return `{ alreadyValid: true }`.
    */
   idempotent?: boolean;
+  /**
+   * The new key awaits its owner's approval (`agent/connect`): its siblings
+   * are NOT revoked now — `approvePendingAgentKey` replaces them when it is
+   * approved. Filing a request must never switch an agent's working keys off.
+   */
+  pendingApproval?: boolean;
   /**
    * Hook invoked once the agent-user is resolved/created and (optionally) its
    * registry row ensured, BEFORE the idempotency check and revoke+mint. The
@@ -1040,14 +1049,15 @@ export async function provisionSurfaceAgentKey(
           }
         : { toolProfile: "entry" };
 
-  await revokeActiveHubInboundKeysForUser(db, {
-    userId: agentUserId,
-    revokedBy: agentUserId,
-    revokedReason: "Re-provisioning — replaced by new key via setup/agent",
-    // Instance mode rotates only THIS runtime's key; legacy mode (undefined)
-    // revokes all siblings so exactly one key stays live.
-    instanceId: instanceId ?? undefined,
-  });
+  if (opts.pendingApproval !== true)
+    await revokeActiveHubInboundKeysForUser(db, {
+      userId: agentUserId,
+      revokedBy: agentUserId,
+      revokedReason: "Re-provisioning — replaced by new key via setup/agent",
+      // Instance mode rotates only THIS runtime's key; legacy mode (undefined)
+      // revokes all siblings so exactly one key stays live.
+      instanceId: instanceId ?? undefined,
+    });
 
   // Agent hub keys carry a bounded lifetime; rotationScheduledAt flags the key
   // for the rotation-check cron a fixed lead before it expires. Only NEW mints

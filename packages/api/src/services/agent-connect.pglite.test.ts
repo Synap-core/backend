@@ -567,3 +567,213 @@ describe('a NEW agent from /setup/agent starts with "AI — read & propose"', ()
     ]);
   });
 });
+
+describe("re-applying capabilities NARROWS each key's own grant set, never rebuilds it", () => {
+  const W1 = randomUUID();
+  const P1 = randomUUID();
+  async function agentWith(capabilities: string[]) {
+    const id = randomUUID();
+    await q(
+      `insert into users (id, email, user_type, created_by_user_id, agent_type, agent_metadata)
+       values ($1, $2, 'agent', $3, 'narrow', $4::jsonb)`,
+      [id, `${id}@x`, OWNER, JSON.stringify({ capabilities })]
+    );
+    return id;
+  }
+  async function keyWithGrant(
+    agent: string,
+    grant: Record<string, unknown>,
+    active = true
+  ) {
+    const id = randomUUID();
+    await q(
+      `insert into api_keys (id, user_id, linked_user_id, is_active, key_type, key_name, key_prefix, key_hash, scope)
+       values ($1, $2, $3, $4, 'hub_inbound', 'k', 'synap_', 'h', '{}')`,
+      [id, agent, OWNER, active]
+    );
+    await new GrantRepository(h.db as never).attachMany([
+      {
+        apiKeyId: id,
+        principalUserId: agent,
+        onBehalfOf: OWNER,
+        expiresAt: null,
+        createdBy: OWNER,
+        permissions: [],
+        ...grant,
+      } as never,
+    ]);
+    return id;
+  }
+  const liveRows = async (keyId: string) =>
+    (
+      await q<{
+        permissions: string[];
+        workspace_ids: string[] | null;
+        project_ids: string[] | null;
+        label: string | null;
+        client_id: string | null;
+      }>(
+        `select permissions, workspace_ids, project_ids, label, client_id from grants
+         where api_key_id = $1 and revoked_at is null`,
+        [keyId]
+      )
+    ).rows;
+
+  it("keeps the key's places, label and client; drops what the agent lost; adds nothing", async () => {
+    const agent = await agentWith(["entity.note.create"]);
+    const keyId = await keyWithGrant(agent, {
+      permissions: ["entity.note.read", "entity.note.create", "document.read"],
+      workspaceIds: [W1],
+      projectIds: [P1],
+      label: "Only the launch project",
+      clientId: "cli-app",
+    });
+    await q(`update users set agent_metadata = $2::jsonb where id = $1`, [
+      agent,
+      JSON.stringify({ capabilities: ["entity.*.create"] }),
+    ]);
+    await reapplyAgentKeyGrants({ agentUserId: agent, createdBy: OWNER });
+    const rows = await liveRows(keyId);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(r.workspace_ids).toEqual([W1]);
+      expect(r.project_ids).toEqual([P1]);
+      expect(r.label).toBe("Only the launch project");
+      expect(r.client_id).toBe("cli-app");
+      expect(r.permissions).not.toContain("entity.*.create");
+    }
+    expect(rows.flatMap((r) => r.permissions)).toContain("entity.note.create");
+  });
+
+  it("a key left with nothing in common touches nothing", async () => {
+    const agent = await agentWith(["entity.note.create"]);
+    const keyId = await keyWithGrant(agent, {
+      permissions: ["document.update"],
+    });
+    await q(`update users set agent_metadata = $2::jsonb where id = $1`, [
+      agent,
+      JSON.stringify({ capabilities: ["entity.note.create"] }),
+    ]);
+    await reapplyAgentKeyGrants({ agentUserId: agent, createdBy: OWNER });
+    expect(await liveRows(keyId)).toEqual([]);
+  });
+
+  it("an app's own agent is skipped: its reach is the app's approved requests", async () => {
+    const agent = await agentWith([]);
+    await q(
+      `insert into apps (id, public_id, name, owner_user_id, agent_user_id) values ($1, $2, 'App', $3, $4)`,
+      [randomUUID(), `app_${agent.slice(0, 8)}`, OWNER, agent]
+    );
+    const keyId = await keyWithGrant(agent, {
+      permissions: ["entity.note.read"],
+      workspaceIds: [W1],
+    });
+    expect(
+      await reapplyAgentKeyGrants({ agentUserId: agent, createdBy: OWNER })
+    ).toBe(0);
+    expect(await liveRows(keyId)).toEqual([
+      expect.objectContaining({
+        permissions: ["entity.note.read"],
+        workspace_ids: [W1],
+      }),
+    ]);
+  });
+
+  it("approving agent/connect narrows the stored (project-pinned) grant, never rebuilds it wider", async () => {
+    const keyId = await keyWithGrant(
+      AGENT,
+      {
+        permissions: ["entity.*.read", "document.read"],
+        projectIds: [P1],
+      },
+      false
+    );
+    const { proposalId } = await fileAgentConnectProposal({
+      keyId,
+      agentUserId: AGENT,
+      ownerUserId: OWNER,
+      agentName: "Claude-code",
+      agentType: "claude-code",
+      expiresAt: null,
+    });
+    const asked: AgentConnectRequest[] = [
+      { permission: "entity.*.read", workspaceId: null },
+      { permission: "document.read", workspaceId: null },
+    ];
+    await approveViaProposal(
+      proposalId,
+      [{ permission: "entity.*.read", workspaceId: null }],
+      asked,
+      keyId
+    );
+    expect(await liveRows(keyId)).toEqual([
+      expect.objectContaining({
+        permissions: ["entity.*.read"],
+        project_ids: [P1],
+      }),
+    ]);
+  });
+});
+
+describe("agent/connect — the approved proposal must name the key's own agent", () => {
+  it("a payload naming another agent is refused and the key stays pending", async () => {
+    const { keyId, proposalId } = await pendingConnection();
+    const asked = [{ permission: "entity.*.read", workspaceId: null }];
+    const data = { agentUserId: FULL_AGENT, keyId, requests: asked, asked };
+    await expect(
+      proposalExecRegistry.resolveExact("agent/connect")!.execute({
+        proposal: {
+          id: proposalId,
+          targetType: "agent",
+          targetId: FULL_AGENT,
+          proposalType: "connect",
+          workspaceId: null,
+          data,
+        },
+        payload: null,
+        userId: OWNER,
+        input: { proposalId },
+        ctx: {} as never,
+        deps: {
+          emitProposalReviewed: () => {},
+          reportProposalOutcome: () => {},
+        } as never,
+      } as never)
+    ).rejects.toThrow(/different agent/);
+    expect(await keyRow(keyId)).toMatchObject({ is_active: false });
+  });
+});
+
+describe("a pending connection never switches the agent's working keys off", () => {
+  it("siblings stay live while it waits, and are replaced when it is approved", async () => {
+    const first = await provisionSurfaceAgentKey({
+      agentType: "sibling-surface",
+      createdByUserId: OWNER,
+      linkedUserId: OWNER,
+    });
+    const liveKey = (first as { keyId: string }).keyId;
+    const pending = await provisionSurfaceAgentKey({
+      agentType: "sibling-surface",
+      createdByUserId: OWNER,
+      linkedUserId: OWNER,
+      pendingApproval: true,
+    });
+    const pendingKey = (pending as { keyId: string }).keyId;
+    // What /setup/agent does for a key caller: the new key waits inactive.
+    await q(`update api_keys set is_active = false where id = $1`, [
+      pendingKey,
+    ]);
+    expect(await keyRow(liveKey)).toMatchObject({
+      is_active: true,
+      revoked_at: null,
+    });
+    expect(
+      await approvePendingAgentKey({ keyId: pendingKey, approverId: OWNER })
+    ).toBe("approved");
+    expect((await keyRow(liveKey)).revoked_at).not.toBeNull();
+    expect(await keyRow(pendingKey)).toMatchObject({
+      is_active: true,
+      revoked_at: null,
+    });
+  });
+});

@@ -258,6 +258,12 @@ export const PROTECTED_ENVELOPE_FIELDS = [
   // wider than it, so a revise that could rewrite it could widen the access
   // being approved.
   "asked",
+  // The identity of an `agent/connect` / `app/connect` request: WHICH key is
+  // activated, for WHICH agent, for WHICH app. A revise that could repoint them
+  // would have a person approve one connection and activate another.
+  "keyId",
+  "agentUserId",
+  "appId",
 ] as const;
 
 /**
@@ -301,6 +307,12 @@ const PROTECTED_FIELD_REASON: Record<
     "it records that the proposal's session was guessed, and decides whether approval places the write into that session's project, not reviewable content",
   asked:
     "it is what the access request originally asked for; a revise may narrow the requests, never rewrite what was asked",
+  keyId:
+    "it names the key an approval activates; a revise may narrow what it may do, never repoint it",
+  agentUserId:
+    "it names the agent the proposal is about; a revise may not repoint it to another agent",
+  appId:
+    "it names the app an approval connects; a revise may not repoint it to another app",
 };
 
 export interface ComputeRevisedEnvelopeParams {

@@ -89,6 +89,7 @@ export function registerAgentExecutors(): void {
         approverId: userId,
         approvedRequests: payload.requests,
         settleProposal: false,
+        agentUserId: payload.agentUserId,
       });
       if (outcome === "forbidden")
         throw new TRPCError({

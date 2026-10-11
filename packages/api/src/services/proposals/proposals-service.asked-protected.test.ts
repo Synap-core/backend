@@ -46,3 +46,21 @@ describe("computeRevisedEnvelope — asked is not revisable", () => {
     ).not.toThrow();
   });
 });
+
+describe("computeRevisedEnvelope — a connect request's identity is not revisable", () => {
+  it.each(["keyId", "agentUserId", "appId"])(
+    "refuses a patch that repoints %s (top level and nested)",
+    (field) => {
+      for (const fields of [
+        { [field]: "someone-else" },
+        { data: { [field]: "someone-else" } },
+      ])
+        expect(() =>
+          computeRevisedEnvelope({
+            envelope: AGENT_CONNECT,
+            patch: { kind: "envelope", fields },
+          })
+        ).toThrow(new RegExp(field));
+    }
+  );
+});
