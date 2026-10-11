@@ -672,9 +672,15 @@ const REENTRY_CLASS: Record<string, Classification> = {
   "playbook.update": "gated",
   "automation.activate": "gated",
   "automation.update": "gated",
-  // An agent pausing proposes `automation.update` (founder rule: ask first by
-  // default for any change; SB2 2026-10-11 retired the de-escalation carve-out).
-  "automation.pause": "gated",
+  "automation.pause": {
+    ungated:
+      "automationsRouter.pause carries no checkPermissionOrPropose, " +
+      "deliberately: pausing is DE-ESCALATION — stopping a misbehaving " +
+      "automation must not itself wait for review. The key's grant bounds it " +
+      "(assertKeyMayWrite automation.update), it is workspace-write gated on " +
+      "the loaded row, and it is reversible only via automation.activate, " +
+      "which DOES propose for an agent.",
+  },
   // ── Wave B — lifecycle revision/retire ─────────────────────────────────
   "playbook.archive": "gated",
   "skill.update_rule": {

@@ -2864,20 +2864,14 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
         ownerId: existing.createdBy,
       });
+      // Pausing is DE-ESCALATION: stopping a misbehaving automation never
+      // waits for review. The key's grant still bounds it; resuming goes
+      // through automation.activate, which proposes for an agent.
       await assertKeyMayWrite({
         subjectType: "automation",
         action: "update",
         workspaceId: existing.workspaceId,
       });
-      const proposed = await gateAgentAutomationChange(
-        ctx,
-        existing,
-        "update",
-        {
-          status: "paused",
-        }
-      );
-      if (proposed) return proposed;
 
       await database
         .update(automations)

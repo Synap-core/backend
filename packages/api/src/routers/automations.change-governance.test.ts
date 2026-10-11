@@ -5,8 +5,8 @@
  * edited, paused or deleted an automation directly, and a narrow human key was
  * never bounded by its grant. Now every key is bounded by its grant
  * (`assertKeyMayWrite`), and an acting agent goes through
- * `checkPermissionOrPropose` (`automation.update` — pause included — and
- * `automation.delete`), whose proposal the `automation/update|delete`
+ * `checkPermissionOrPropose` (`automation.update` and `automation.delete`;
+ * pause is de-escalation and applies at once, still bounded by the grant), whose proposal the `automation/update|delete`
  * executor replays. A rule edit's own rewrite (`governedByParentWrite`) is not
  * proposed twice.
  */
@@ -130,16 +130,13 @@ describe("an acting agent proposes instead of writing", () => {
     expect(h.updates).toEqual([]);
   });
 
-  it("pause → automation.update proposal with status paused", async () => {
+  it("pause is de-escalation: it applies at once, never waits for review", async () => {
     const result = await runWithActingAgent(AGENT, () =>
       caller().pause({ id: ID })
     );
-    expect(result).toMatchObject({ status: "proposed" });
-    expect(h.gateCalls[0]).toMatchObject({
-      action: "update",
-      data: { automationId: ID, update: { status: "paused" } },
-    });
-    expect(h.updates).toEqual([]);
+    expect(result).toMatchObject({ status: "paused" });
+    expect(h.gateCalls).toEqual([]);
+    expect(h.updates).toHaveLength(1);
   });
 
   it("delete → automation.delete proposal, nothing deleted", async () => {
