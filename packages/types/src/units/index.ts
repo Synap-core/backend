@@ -4,6 +4,7 @@ export * from "./lead.js";
 export * from "./phases.js";
 export * from "./session.js";
 export * from "./track.js";
+export * from "./track-step.js";
 export * from "./needs-you.js";
 export * from "./templates.js";
 export * from "./work-from-template.js";
