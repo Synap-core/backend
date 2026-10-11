@@ -447,7 +447,85 @@ export const CaptureResultPartSchema = z.object({
 });
 export type CaptureResultPart = z.infer<typeof CaptureResultPartSchema>;
 
+// ─── The FILED part: what accepting the rows did ────────────────────────────
+//
+// The result part says what the pod PROPOSED; this one says what `capture.execute`
+// then DID with the rows a person accepted. Without it the "Filed" receipt lived
+// only in the accepting device's local storage, so another device (or a
+// reinstall) showed filed rows as still proposed, and an edited re-accept
+// created a duplicate.
+//
+// Written by the pod only (`capture.execute`, one part per accept), into a room
+// that already holds a `capture_result`. Execute's own response stays the
+// caller's receipt; this is the room's copy of it.
+
+/**
+ * What an APPLIED row did: a new record, a patch to an existing one, a strong
+ * identity match the pod resolved itself, or the record the person picked.
+ * The same word on `capture.execute`'s `created[].action` and on a filed row.
+ */
+export const CAPTURE_ROW_ACTIONS = [
+  "created",
+  "updated",
+  "matched",
+  "linked",
+] as const;
+export type CaptureRowAction = (typeof CAPTURE_ROW_ACTIONS)[number];
+
+export const CAPTURE_FILED_OUTCOMES = [
+  ...CAPTURE_ROW_ACTIONS,
+  "proposed",
+  "failed",
+] as const;
+export type CaptureFiledOutcome = (typeof CAPTURE_FILED_OUTCOMES)[number];
+
+export const CaptureFiledRowSchema = z.object({
+  /** The result row's tempId — the join key back to `capture_result`. */
+  tempId: z.string().min(1).max(200),
+  /** The record the row became or touched. `null` when nothing exists yet. */
+  entityId: z
+    .string()
+    .min(1)
+    .max(CAPTURE_RESULT_LIMITS.routingIdMaxChars)
+    .nullable(),
+  /** The review that holds the row (`outcome: "proposed"`), when known. */
+  proposalId: z
+    .string()
+    .min(1)
+    .max(CAPTURE_RESULT_LIMITS.routingIdMaxChars)
+    .nullable(),
+  outcome: z.enum(CAPTURE_FILED_OUTCOMES),
+  /** The title that was SENT (the person may have edited it). */
+  title: z.string().min(1).max(CAPTURE_RESULT_LIMITS.titleMaxChars),
+});
+export type CaptureFiledRow = z.infer<typeof CaptureFiledRowSchema>;
+
+export const CaptureFiledPartSchema = z.object({
+  kind: z.literal("capture_filed"),
+  v: z.literal(1),
+  sessionId: z.string().uuid(),
+  /** The `capture_result` round the accepted rows came from. */
+  round: z.number().int().min(1),
+  rows: z.array(CaptureFiledRowSchema).max(CAPTURE_RESULT_LIMITS.rowsMax),
+  /** More rows were accepted than the part may carry — readers must say so. */
+  truncated: z.boolean(),
+  /** The workspace the rows were filed into (or proposed for). */
+  workspaceId: z
+    .string()
+    .min(1)
+    .max(CAPTURE_RESULT_LIMITS.routingIdMaxChars)
+    .nullable(),
+  /** The project the rows were LINKED into. `null` = none (an AI pick is never a link). */
+  projectId: z
+    .string()
+    .min(1)
+    .max(CAPTURE_RESULT_LIMITS.routingIdMaxChars)
+    .nullable(),
+});
+export type CaptureFiledPart = z.infer<typeof CaptureFiledPartSchema>;
+
 export const CaptureClarificationPartSchema = z.discriminatedUnion("kind", [
+  CaptureFiledPartSchema,
   CaptureResultPartSchema,
   CaptureQuestionPartSchema,
   CaptureAnswerPartSchema,

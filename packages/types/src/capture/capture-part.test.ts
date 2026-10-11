@@ -6,6 +6,7 @@ import {
   CaptureClarificationPartSchema,
   readCapturePart,
   CAPTURE_RESULT_LIMITS,
+  CAPTURE_FILED_OUTCOMES,
 } from "./index.js";
 
 /**
@@ -105,6 +106,18 @@ describe("capture clarification part — golden fixture", () => {
       };
       if (p.kind === "capture_question") return `q:${p.status}`;
       if (p.kind === "capture_answer") return `a:${p.answer!.type}`;
+      if (p.kind === "capture_filed") {
+        if (p.truncated) return "f:truncated";
+        if ((p.rows ?? []).length === 0) return "f:empty";
+        // Every outcome a receipt can show must have a row, or a reader's
+        // rendering of the missing one is never exercised.
+        const outcomes = new Set(
+          (p.rows as unknown as Array<{ outcome: string }>).map((r) => r.outcome)
+        );
+        return CAPTURE_FILED_OUTCOMES.every((o) => outcomes.has(o))
+          ? "f:every-outcome"
+          : "f:rows";
+      }
       // A result's variants are the facts a REPORT must not collapse: rows
       // present, a row the user dropped, a bounded read, and an empty-but-not-
       // failed read. Each is a different sentence on screen.
@@ -128,6 +141,9 @@ describe("capture clarification part — golden fixture", () => {
         "r:dismissed",
         "r:truncated",
         "r:empty",
+        "f:every-outcome",
+        "f:truncated",
+        "f:empty",
       ])
     );
     expect(fixture.invalid.length).toBeGreaterThanOrEqual(10);

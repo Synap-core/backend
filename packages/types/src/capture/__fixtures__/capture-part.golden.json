@@ -550,6 +550,96 @@
           "deterministic": true
         }
       }
+    },
+    {
+      "name": "filed: every outcome — created, matched, linked, updated, proposed with its review, failed — and a linked project",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899",
+            "proposalId": null,
+            "outcome": "created",
+            "title": "Alice Martin"
+          },
+          {
+            "tempId": "t2",
+            "entityId": "0b6a2c11-2222-4d33-9b44-556677889900",
+            "proposalId": null,
+            "outcome": "linked",
+            "title": "Acme"
+          },
+          {
+            "tempId": "t6",
+            "entityId": "2c3d4e5f-6666-4b77-8f88-99aabbccddee",
+            "proposalId": null,
+            "outcome": "matched",
+            "title": "Bob Lee"
+          },
+          {
+            "tempId": "t3",
+            "entityId": "0b6a2c11-2222-4d33-9b44-556677889900",
+            "proposalId": null,
+            "outcome": "updated",
+            "title": "Acme — new address"
+          },
+          {
+            "tempId": "t4",
+            "entityId": null,
+            "proposalId": "c3d4e5f6-3333-4e44-8c55-66778899aabb",
+            "outcome": "proposed",
+            "title": "Follow up with Alice"
+          },
+          {
+            "tempId": "t5",
+            "entityId": null,
+            "proposalId": null,
+            "outcome": "failed",
+            "title": "Book the venue"
+          }
+        ],
+        "truncated": false,
+        "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc",
+        "projectId": "9e8d7c6b-5555-4a66-9e77-8899aabbccdd"
+      }
+    },
+    {
+      "name": "filed: no rows, no workspace — an empty receipt is not a failed one",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [],
+        "truncated": false,
+        "workspaceId": null,
+        "projectId": null
+      }
+    },
+    {
+      "name": "filed: truncated — more rows were accepted than the part carries",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899",
+            "proposalId": null,
+            "outcome": "created",
+            "title": "Alice Martin"
+          }
+        ],
+        "truncated": true,
+        "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc",
+        "projectId": null
+      }
     }
   ],
   "invalid": [
@@ -1570,6 +1660,129 @@
             ]
           }
         }
+      }
+    },
+    {
+      "name": "filed outcome 'filed' — not a pod outcome",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899",
+            "proposalId": null,
+            "outcome": "filed",
+            "title": "Alice Martin"
+          }
+        ],
+        "truncated": false,
+        "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc",
+        "projectId": null
+      }
+    },
+    {
+      "name": "filed row title over 300 chars",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899",
+            "proposalId": null,
+            "outcome": "created",
+            "title": "@@TI301@@"
+          }
+        ],
+        "truncated": false,
+        "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc",
+        "projectId": null
+      }
+    },
+    {
+      "name": "filed row missing proposalId — nullable is not optional",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899",
+            "outcome": "created",
+            "title": "Alice Martin"
+          }
+        ],
+        "truncated": false,
+        "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc",
+        "projectId": null
+      }
+    },
+    {
+      "name": "filed row with an empty entityId",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "entityId": "",
+            "proposalId": null,
+            "outcome": "created",
+            "title": "Alice Martin"
+          }
+        ],
+        "truncated": false,
+        "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc",
+        "projectId": null
+      }
+    },
+    {
+      "name": "filed part missing truncated",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899",
+            "proposalId": null,
+            "outcome": "created",
+            "title": "Alice Martin"
+          }
+        ],
+        "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc",
+        "projectId": null
+      }
+    },
+    {
+      "name": "filed part missing projectId — nullable is not optional",
+      "part": {
+        "kind": "capture_filed",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899",
+            "proposalId": null,
+            "outcome": "created",
+            "title": "Alice Martin"
+          }
+        ],
+        "truncated": false,
+        "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc"
       }
     }
   ],
