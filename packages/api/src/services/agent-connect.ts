@@ -39,7 +39,7 @@ import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { parsePermission, patternMatches } from "@synap-core/types/grants";
 import { createPendingProposal } from "../utils/permission-check.js";
 import { assertPodAdmin } from "../trpc.js";
-import { scopesWithinLive } from "./key-grant.js";
+import { earlierEnd, liveGrantsOfKey, scopesWithinLive } from "./key-grant.js";
 
 export const AGENT_CONNECT_TARGET_TYPE = "agent";
 export const AGENT_CONNECT_PROPOSAL_TYPE = "connect";
@@ -252,6 +252,16 @@ export async function fileAgentConnectProposal(args: {
 }): Promise<{ proposalId: string }> {
   const grant = await new GrantRepository(db).resolveForKey(args.keyId);
   const requests = requestsFromGrantScopes(grant?.scopes ?? []);
+  // The card says when the ACCESS ends: the key's end, or sooner when its
+  // grants were cut to end earlier (bounded by the connecting key).
+  const grantEnds = (await liveGrantsOfKey(args.keyId)).map((g) => g.expiresAt);
+  const accessEndsAt =
+    grantEnds.length === 0 || grantEnds.includes(null)
+      ? args.expiresAt
+      : earlierEnd(
+          args.expiresAt,
+          new Date(Math.max(...grantEnds.map((d) => d!.getTime())))
+        );
   const proposal = await createPendingProposal({
     userId: args.ownerUserId,
     workspaceId: null,
@@ -264,7 +274,7 @@ export async function fileAgentConnectProposal(args: {
       name: args.agentName,
       agentType: args.agentType,
       instanceId: args.instanceId ?? null,
-      expiresAt: args.expiresAt?.toISOString() ?? null,
+      expiresAt: accessEndsAt?.toISOString() ?? null,
       requests,
       asked: requests,
     },

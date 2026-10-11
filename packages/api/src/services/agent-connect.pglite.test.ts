@@ -310,6 +310,33 @@ describe("agent/connect — approving an AI is a proposal", () => {
     ).toEqual(agentKeyGrantPermissions(PRESET).permissions.sort());
   });
 
+  it("the card's end is when the ACCESS ends — a grant cut to end before its key wins", async () => {
+    // Live 2026-10-11: a key ending 2027-01-09 whose grant (bounded by the
+    // connecting key) ended 2027-01-02 filed a card saying 2027-01-09.
+    const keyEnd = new Date(Date.now() + 90 * 86_400_000);
+    const grantEnd = new Date(Date.now() + 80 * 86_400_000);
+    const keyId = await mintKey(AGENT, false);
+    await q(`update grants set expires_at = $2 where api_key_id = $1`, [
+      keyId,
+      grantEnd,
+    ]);
+    const { proposalId } = await fileAgentConnectProposal({
+      keyId,
+      agentUserId: AGENT,
+      ownerUserId: OWNER,
+      agentName: "Claude-code",
+      agentType: "claude-code",
+      expiresAt: keyEnd,
+    });
+    const [row] = (
+      await q<{ data: Record<string, unknown> }>(
+        `select data from proposals where id = $1`,
+        [proposalId]
+      )
+    ).rows;
+    expect(row!.data.expiresAt).toBe(grantEnd.toISOString());
+  });
+
   it("a NARROWED approval activates exactly that key with the narrowed reach", async () => {
     const { keyId, proposalId } = await pendingConnection();
     const other = await pendingConnection();
