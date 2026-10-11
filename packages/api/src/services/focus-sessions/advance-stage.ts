@@ -47,12 +47,33 @@
  *
  * It is a required field, not an option with a default, so a new door cannot
  * silently inherit the wrong half of that pair.
+ *
+ * ── STEP = STATUS (work model L5, 2026-10-12) ───────────────────────────────
+ * For a run whose subject carries the process's status, the step IS the
+ * subject's status. A `"door"` advance into an UNGATED stage that declares a
+ * `subjectStatus` (and is the stage that status maps back to) therefore moves
+ * the SUBJECT first — through `writeStageSubjectStatus` (the status door for a
+ * declared lifecycle) — and does NOT write `current_stage`: the subject's move
+ * fires its event and process-sync's follow advances the run through this same
+ * door (`skipSubjectWrite`), which writes the column, merges the slots and
+ * emits `stage_changed`. A move that is `proposed` advances the run when the
+ * person approves it. The result says so (`stageFollowsSubject`).
+ *
+ * Still writing `current_stage` directly, stated so nobody mistakes it for
+ * done: the `"caller"` doors (their multi-field UPDATE, above), a GATED stage
+ * (the gate pauses AFTER the stage stands; its pass writes the status), a
+ * subject that already holds the value (no event would follow), and a failed
+ * subject write. Those are wave-5 work, with the track stage (L7).
  */
 
 import { db, focusSessions, eq, and } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
-import { resolveStageRef } from "@synap/playbooks";
+import {
+  resolveStageGate,
+  resolveStageRef,
+  stageForSubjectStatus,
+} from "@synap/playbooks";
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import { applyStageGateOnAdvance } from "../playbooks/stage-gate.js";
 import { mergeEnteredStageSlots } from "./stage-slots.js";
@@ -135,6 +156,12 @@ export interface AdvanceSessionStageResult {
   /** Set when a failed check gate returned the run to its `onFail` stage. */
   onFail?: { toStage: string };
   /**
+   * STEP = STATUS: the subject was moved (or its move proposed) and this door
+   * did NOT write `current_stage` — the follow writes it when the move lands.
+   * See the header.
+   */
+  stageFollowsSubject?: true;
+  /**
    * The entered stage's declared `expectedOutputs` merged into the session's
    * slots (`stage-slots.ts`): the labels added, or why the merge failed.
    * Absent when the stage declares none.
@@ -168,6 +195,24 @@ export async function advanceSessionStage(
   const fromStage = session.currentStage ?? null;
 
   if (toStage === fromStage) return UNCHANGED;
+
+  // STEP = STATUS (see the header): the subject moves, the run follows it.
+  let subjectFirst: StageSubjectStatusOutcome | undefined;
+  if (input.stageWrite === "door" && !input.skipSubjectWrite) {
+    subjectFirst = await moveSubjectFirst(input);
+    if (
+      subjectFirst?.status === "written" ||
+      subjectFirst?.status === "proposed"
+    ) {
+      return {
+        changed: true,
+        gated: false,
+        paused: false,
+        subjectStatus: subjectFirst,
+        stageFollowsSubject: true,
+      };
+    }
+  }
 
   if (input.stageWrite === "door") {
     await db
@@ -226,12 +271,15 @@ export async function advanceSessionStage(
   const writeSubject = (): Promise<StageSubjectStatusOutcome> | undefined =>
     input.skipSubjectWrite
       ? undefined
-      : writeStageSubjectStatus({
-          session,
-          toStage,
-          userId,
-          agentUserId: input.agentUserId ?? null,
-        });
+      : // Already attempted (subject-first) — report it, never write twice.
+        subjectFirst
+        ? Promise.resolve(subjectFirst)
+        : writeStageSubjectStatus({
+            session,
+            toStage,
+            userId,
+            agentUserId: input.agentUserId ?? null,
+          });
 
   const slots = stageSlots ? { stageSlots } : {};
 
@@ -279,6 +327,59 @@ export async function advanceSessionStage(
     proposalType: gate.proposalType,
     ...slots,
   };
+}
+
+/** Session statuses process-sync's follow moves (`FOLLOWING_SESSION_STATUSES`). */
+const SUBJECT_LEADS_STATUSES = new Set(["active", "forming"]);
+
+/**
+ * STEP = STATUS: when the entered stage is one the subject's status leads,
+ * write the subject FIRST and return its outcome; `undefined` when this
+ * advance is not one (it then writes the column as before). Never throws.
+ */
+async function moveSubjectFirst(
+  input: AdvanceSessionStageInput
+): Promise<StageSubjectStatusOutcome | undefined> {
+  const { session, toStage } = input;
+  if (!session.subjectEntityId) return undefined;
+  try {
+    const proc = await loadSessionProcess({
+      sessionId: session.id,
+      playbookId: session.playbookId,
+    });
+    if (!proc?.statusProperty) return undefined;
+    const stage = proc.stages.find((s) => s?.key === toStage);
+    const value =
+      typeof stage?.subjectStatus === "string"
+        ? stage.subjectStatus.trim()
+        : "";
+    if (!stage || !value) return undefined;
+    // A gated stage keeps "the stage stands, the gate pauses" (stage-gate.ts).
+    if (resolveStageGate(stage)) return undefined;
+    // The follow lands on the FIRST stage declaring the value; only when that
+    // is this stage does the subject lead to exactly here.
+    if (stageForSubjectStatus(proc.stages, value) !== toStage) return undefined;
+    // The follow only moves an in-flight run.
+    const [row] = await db
+      .select({ status: focusSessions.status })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, session.id))
+      .limit(1);
+    if (!row || !SUBJECT_LEADS_STATUSES.has(row.status as string))
+      return undefined;
+    return await writeStageSubjectStatus({
+      session,
+      toStage,
+      userId: input.userId,
+      agentUserId: input.agentUserId ?? null,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: session.id, toStage },
+      "subject-first advance not taken (the stage is written directly)"
+    );
+    return undefined;
+  }
 }
 
 /** {@link mergeEnteredStageSlots} over the run's own stages; never throws. */

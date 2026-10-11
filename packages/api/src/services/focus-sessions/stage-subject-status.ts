@@ -24,6 +24,11 @@
  *    (`routers/proposals/executors/playbook-stage-gate.ts`) for a human gate,
  *    `resumeCheckGateIfMet` (`evaluations/evaluate.ts`) for a held check.
  *
+ * STEP = STATUS (work model L5, 2026-10-12): for an ungated `"door"` advance
+ * the subject leads, the advance door calls this FIRST and leaves
+ * `current_stage` to process-sync's follow (`advance-stage.ts` header). Every
+ * other path still calls it after the stage write, as described above.
+ *
  * A value listed in `subjectProfile.humanOnlyStatuses` is written with
  * `forcePropose`: whoever drove the advance, a person decides it.
  *
