@@ -41,6 +41,8 @@ export type StatusGroupSubject =
 
 export interface StatusGroupItem {
   id: string;
+  /** A role grouping's facet (the row a role status move targets); null for a kind. */
+  facetId: string | null;
   name: string | null;
   createdAt: string;
   /** The last transition INTO this status; null = none recorded. */
@@ -157,6 +159,7 @@ export async function groupThingsByStatus(params: {
     ? db
         .select({
           id: entities.id,
+          facetId: drizzleSql<string | null>`${entityFacets.id}`.as("facet_id"),
           name: entities.title,
           createdAt: drizzleSql`${entities.createdAt}`.as("created_at"),
           status: drizzleSql<string | null>`${entityFacets.status}`.as(
@@ -178,6 +181,7 @@ export async function groupThingsByStatus(params: {
     : db
         .select({
           id: entities.id,
+          facetId: drizzleSql<string | null>`NULL::uuid`.as("facet_id"),
           name: entities.title,
           createdAt: drizzleSql`${entities.createdAt}`.as("created_at"),
           status: drizzleSql<string | null>`${entities.status}`.as("status"),
@@ -213,6 +217,7 @@ export async function groupThingsByStatus(params: {
   const ranked = db
     .select({
       id: t.id,
+      facetId: t.facetId,
       name: t.name,
       createdAt: t.createdAt,
       status: t.status,
@@ -249,6 +254,7 @@ export async function groupThingsByStatus(params: {
     if (Number(r.rn) <= params.firstN) {
       g.items.push({
         id: r.id as string,
+        facetId: (r.facetId as string | null) ?? null,
         name: (r.name as string | null) ?? null,
         createdAt: iso(r.createdAt),
         enteredAt: r.enteredAt == null ? null : iso(r.enteredAt),

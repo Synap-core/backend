@@ -261,6 +261,7 @@ describe("lifecycle.board — a kind", () => {
     const draft = board.columns[0]!;
     expect(draft.items[0]!.id).toBe(oldDraft);
     expect(draft.items[0]!.enteredAt).toBeNull();
+    expect(draft.items[0]!.facetId).toBeNull(); // a kind board has no facet
     expect(board.columns[1]!.items[0]!.enteredAt).not.toBeNull();
     expect(board.doneWindowed).toBe(1);
     expect(board.lostWindowed).toBe(0);
@@ -344,6 +345,10 @@ describe("lifecycle.board — a role", () => {
     const byId = new Map(onboarding.items.map((i) => [i.id, i]));
     expect(byId.get(a)!.enteredAt).toBeNull();
     expect(byId.get(b)!.enteredAt).not.toBeNull();
+    // A role board names each thing's FACET: the row a role move targets.
+    for (const item of onboarding.items) {
+      expect(item.facetId).toMatch(/^[0-9a-f-]{36}$/);
+    }
     // Longest in column first: Acme since the facet (10d), Beta since 2d.
     expect(onboarding.items[0]!.id).toBe(a);
 

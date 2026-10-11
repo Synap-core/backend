@@ -68,6 +68,8 @@ const lifecycleWire = z.object({
 
 const boardItemWire = z.object({
   id: z.string(),
+  /** A role board's facet — what a role status move (`updateFacet`) targets; null on a kind board. */
+  facetId: z.string().nullable(),
   name: z.string().nullable(),
   /** The raw stored status (useful in the unclassified column). */
   status: z.string().nullable(),
