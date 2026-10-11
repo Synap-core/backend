@@ -240,6 +240,16 @@ export interface CreateFocusSessionParams {
    */
   clientKey?: string | null;
   /**
+   * Adopt this client's AUTO-OPENED session instead of inserting (default
+   * true). `startStageSession` passes false: a step session's name, goal and
+   * slots come from the method, so the writes that auto-opened a session
+   * before it (live 2026-10-11: a proposal to start ANOTHER track) are not
+   * this step's work and must not be swept into its room. The new row still
+   * binds `clientKey`, and a started session outranks an auto-opened one
+   * (`findClientSession`), so later writes land on the step.
+   */
+  adoptAutoOpened?: boolean;
+  /**
    * Rank the pod's playbooks against this session's words when the caller
    * named none (`templateId` undefined — an explicit `null` skips matching).
    * Set by the AI start doors only. NOTHING is applied: the ranked candidates
@@ -514,7 +524,9 @@ export async function createFocusSession(
   // CONVERSATION-scoped client: a key-scoped one's auto-opened session may hold
   // other conversations' writes, which a new goal must never sweep up.
   const adoptId =
-    clientKey && clientKeyScope(clientKey) === "conversation"
+    clientKey &&
+    params.adoptAutoOpened !== false &&
+    clientKeyScope(clientKey) === "conversation"
       ? ((await findClientSession(userId, clientKey, { onlyAutoOpened: true }))
           ?.id ?? null)
       : null;

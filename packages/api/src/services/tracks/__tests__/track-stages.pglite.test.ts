@@ -125,6 +125,14 @@ vi.mock("../../focus-sessions/ensure-session-channel.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   ensureSessionChannel: async () => null,
 }));
+// Pass-through spy: the adoption probe reads the database package's own
+// handle, not this suite's PGlite, so the step door's choice is asserted at
+// the seam (the arguments it hands createFocusSession).
+vi.mock("../../focus-sessions/create-session.js", async (orig) => {
+  const m =
+    await orig<typeof import("../../focus-sessions/create-session.js")>();
+  return { ...m, createFocusSession: vi.fn(m.createFocusSession) };
+});
 vi.mock("../../../utils/domain-event-bridge.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   emitHubRealtimeEvent: () => undefined,
@@ -1297,6 +1305,24 @@ describe("a step session belongs to the CLIENT that started it", () => {
     expect(res.status).toBe("created");
     if (res.status !== "created") return;
     expect((await sessionMeta(res.session.id)).clientKey).toBe(CLIENT);
+  });
+
+  it("never adopts the session the client's earlier writes auto-opened", async () => {
+    const spy = vi.mocked(createFocusSession);
+    spy.mockClear();
+    const res = await runWithClientKey("key:k-1|conv:c-1", () =>
+      startStageSession({
+        trackId: clientTrack,
+        stageKey: "ship",
+        actor: human,
+      })
+    );
+    expect(res.status).toBe("created");
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toMatchObject({
+      clientKey: "key:k-1|conv:c-1",
+      adoptAutoOpened: false,
+    });
   });
 
   it("a human start with no client binds none", async () => {

@@ -478,6 +478,30 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
     expect(result.session.metadata).toMatchObject({ titleSource: "human" });
   });
 
+  it("adoptAutoOpened:false (a track step) leaves the earlier writes where they were, and later writes land on the new session", async () => {
+    // Live 2026-10-11: a step session adopted the receipt holding a proposal
+    // to start ANOTHER track, so that proposal showed under the wrong step.
+    const auto = await receipt(CONV_A, "Create track Orchestrated work");
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      title: "Decide",
+      goal: "Write the phased plan",
+      clientKey: CONV_A,
+      adoptAutoOpened: false,
+    });
+    if (result.status !== "created") throw new Error(result.status);
+    expect(result.adopted).toBeUndefined();
+    expect(result.session.id).not.toBe(auto);
+    const all = await rows();
+    expect(all).toHaveLength(2);
+    expect(all.find((r) => r.id === auto)?.metadata.autoOpened).toBe(true);
+    // The started session outranks the auto-opened one for this client.
+    expect(await receipt(CONV_A, "Create document Plan")).toBe(
+      result.session.id
+    );
+  });
+
   it("another client's auto-opened session is never adopted", async () => {
     const other = await receipt(CONV_B, "Create task");
     const result = await createFocusSession({

@@ -2211,6 +2211,9 @@ export async function startStageSession(input: {
     // started over MCP / Hub REST belongs to that client for write
     // attribution. A human start (no key-auth client, no agent) binds none.
     clientKey: requestClientKey(actor.agentUserId ?? undefined) ?? null,
+    // ...but never takes over the session the client's EARLIER writes
+    // auto-opened: those were not this step's work.
+    adoptAutoOpened: false,
   });
   const domainOutcome = (usesStamped: boolean): StageSessionDomainOutcome =>
     domainWorkspaceId && stage?.domain
