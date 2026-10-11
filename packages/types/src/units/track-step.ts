@@ -1,7 +1,11 @@
 /**
- * TRACK STEP — the track page's step rail, the card of the selected step, its
- * "Move on to <next>" action and the header fact. ONE answer for the browser
- * track page and Relay's track page (U2, design "Track page", 2026-10-11).
+ * TRACK STEP — the track page's step rail, the card of the selected step and
+ * its "Move on to <next>" action. ONE answer for the browser track page and
+ * Relay's track page (U2, design "Track page", 2026-10-11).
+ *
+ * The header's fact ("14 / 50 signups" · "Step 2 of 6") is NOT here: it is
+ * `lensTrackFact` (`../lens/header.ts`), the one rule both track headers
+ * already use (KPI first, and no "Step N of M" once a stage has emerged).
  *
  * ── Where "criteria met" comes from (read before changing) ─────────────────
  * No track read carries a per-stage criteria status: `tracks.get` (`TrackView`)
@@ -33,11 +37,10 @@
  */
 
 import type { EvaluationVerdict } from "../focus-sessions/verdict.js";
-import { humanizeToken, resolveObjectNoun } from "../vocabulary/index.js";
+import { humanizeToken } from "../vocabulary/index.js";
 import type { UnitTone } from "./state.js";
 import {
   isTrackClosed,
-  readTrackKpi,
   trackStageTone,
   type TrackStage,
   type TrackStagePosition,
@@ -122,6 +125,11 @@ function ms(v: string | null | undefined): number {
 /**
  * The ONE session whose verdict grades a step's criteria (rule in the file
  * header). `null` when no session filed at the step counts.
+ *
+ * `rows` must already be narrowed to THIS track (e.g. the `trackStagePath`
+ * step's `sessions`): `projects.path` rows span every track of the project,
+ * and only `trackStage` is matched here, so a raw list would pick a session
+ * from another track's same-keyed step.
  */
 export function trackStepEvidenceSessionId(
   rows: readonly TrackStepSessionLike[],
@@ -374,38 +382,4 @@ export function trackMoveOn(
     }
   }
   return { next, offered: true, enabled: true, missing, block: null };
-}
-
-// ── Header fact ──────────────────────────────────────────────────────────────
-
-export interface TrackHeaderFact {
-  /** `kpi` when the track steers by a STATED number, else `step`. */
-  kind: "kpi" | "step";
-  text: string;
-}
-
-/**
- * The track header's one fact: "14 of 50 signups" when the track has a KPI
- * with a stated `current` (`readTrackKpi`; the unit, else the label, names
- * the number — user content, kept as typed), else "Step 2 of 6 · Decide".
- * `null` when there is neither (no current step and no stated KPI) — OMIT.
- * A KPI with no stated `current` is not a fact yet: it falls to the step.
- */
-export function trackHeaderFact(track: {
-  kpi?: unknown;
-  stages: readonly TrackStage[];
-}): TrackHeaderFact | null {
-  const kpi = readTrackKpi(track.kpi);
-  if (kpi && typeof kpi.current === "number") {
-    return {
-      kind: "kpi",
-      text: `${kpi.current} of ${kpi.target} ${kpi.unit ?? kpi.label}`,
-    };
-  }
-  const at = track.stages.findIndex((s) => s.position === "active");
-  if (at < 0) return null;
-  return {
-    kind: "step",
-    text: `${resolveObjectNoun("stage")} ${at + 1} of ${track.stages.length} · ${track.stages[at]!.name}`,
-  };
 }

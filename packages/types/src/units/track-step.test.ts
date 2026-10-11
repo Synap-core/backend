@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { deriveTrackStages } from "./track.js";
 import {
   TRACK_MOVE_ON_REQUIRES_MET_CRITERIA,
-  trackHeaderFact,
   trackMoveOn,
   trackSelectedStepKey,
   trackStepCard,
@@ -242,29 +241,5 @@ describe("trackMoveOn (D6a)", () => {
     expect(trackMoveOn(stagesAt("decide"), card(ALL_PASS), { status: "paused" }).enabled).toBe(
       true
     );
-  });
-});
-
-describe("trackHeaderFact", () => {
-  it("the stated KPI is the fact", () => {
-    expect(
-      trackHeaderFact({
-        kpi: { label: "Signups", unit: "signups", target: 50, current: 14 },
-        stages: stagesAt("decide"),
-      })
-    ).toEqual({ kind: "kpi", text: "14 of 50 signups" });
-    expect(
-      trackHeaderFact({ kpi: { label: "Signups", target: 50, current: 0 }, stages: [] })
-    ).toEqual({ kind: "kpi", text: "0 of 50 Signups" });
-  });
-
-  it("a KPI with no stated current falls to the step fact, through the vocabulary noun", () => {
-    expect(
-      trackHeaderFact({ kpi: { label: "Signups", target: 50 }, stages: stagesAt("decide") })
-    ).toEqual({ kind: "step", text: "Step 2 of 3 · Decide" });
-  });
-
-  it("neither a KPI nor a current step: `null` (omit)", () => {
-    expect(trackHeaderFact({ kpi: null, stages: stagesAt(null) })).toBeNull();
   });
 });
