@@ -38,6 +38,33 @@ export interface EffectiveProperty extends PropertyDef {
   required: boolean;
   defaultValue: unknown;
   displayOrder: number;
+  /**
+   * This property IS the profile's lifecycle (work model L1) — the same
+   * answer as `getEffectiveLifecycle`, from the same rule
+   * (`nearestLifecycleLink`). Read it; never guess from a select's name.
+   */
+  isLifecycle: boolean;
+}
+
+/**
+ * THE lifecycle declaration rule: the `is_lifecycle` link of the NEAREST
+ * profile in the hierarchy (leaf first, then ancestors) wins. `hierarchy` is
+ * root → leaf. Shared by `getEffectiveLifecycle` and `getEffectiveProperties`
+ * so the flag on a property and the lifecycle read can never disagree.
+ */
+export function nearestLifecycleLink<
+  L extends { profileId: string; isLifecycle?: boolean | null },
+>(
+  hierarchy: ReadonlyArray<{ id: string }>,
+  links: ReadonlyArray<L>
+): L | undefined {
+  for (let i = hierarchy.length - 1; i >= 0; i--) {
+    const link = links.find(
+      (l) => l.profileId === hierarchy[i].id && l.isLifecycle === true
+    );
+    if (link) return link;
+  }
+  return undefined;
 }
 
 /**
@@ -793,6 +820,13 @@ export class ProfileResolutionService {
     // matching profile_properties link is skipped — exactly the intended
     // "this workspace doesn't see that overlay" behaviour.
     const propertyMap = new Map<string, EffectiveProperty>();
+    const lifecycleDefId = nearestLifecycleLink(
+      hierarchy,
+      allProfileProperties
+    )?.propertyDefId;
+    const lifecycleSlug = lifecycleDefId
+      ? propDefMap.get(lifecycleDefId)?.slug
+      : undefined;
 
     for (const profile of hierarchy) {
       const profileProperties = allProfileProperties.filter(
@@ -810,6 +844,7 @@ export class ProfileResolutionService {
             required: profileProperty.required,
             defaultValue: profileProperty.defaultValue,
             displayOrder: profileProperty.displayOrder,
+            isLifecycle: propertyDef.slug === lifecycleSlug,
           });
         } else {
           // Child overrides: required can only go up; child default + order take precedence
@@ -924,6 +959,7 @@ export class ProfileResolutionService {
       .select({
         profileId: profileProperties.profileId,
         propertyDefId: profileProperties.propertyDefId,
+        isLifecycle: profileProperties.isLifecycle,
       })
       .from(profileProperties)
       .where(
@@ -935,12 +971,8 @@ export class ProfileResolutionService {
           eq(profileProperties.isLifecycle, true)
         )
       );
-    if (links.length === 0) return null;
     // `getHierarchy` is root → leaf; the nearest declaration wins.
-    let link: (typeof links)[number] | undefined;
-    for (let i = hierarchy.length - 1; i >= 0 && !link; i--) {
-      link = links.find((l) => l.profileId === hierarchy[i].id);
-    }
+    const link = nearestLifecycleLink(hierarchy, links);
     if (!link) return null;
     const [def] = await this._db
       .select()

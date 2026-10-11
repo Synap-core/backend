@@ -160,6 +160,17 @@ describe("declareLifecycle + getEffectiveLifecycle", () => {
       propertySlug: "bigStage",
     });
     expect(refused.status).toBe("refused");
+
+    // E5: the effective property defs a client reads carry the SAME answer —
+    // `isLifecycle` on the declared property only, inherited by the child.
+    for (const id of [deal, child]) {
+      const flagged = (await resolver.getEffectiveProperties(id, null))
+        .filter((p) => p.isLifecycle)
+        .map((p) => p.slug);
+      expect(flagged).toEqual([
+        (await resolver.getEffectiveLifecycle(id))!.propertySlug,
+      ]);
+    }
   });
 
   it("refuses options without a category and reports uncategorized ones", async () => {

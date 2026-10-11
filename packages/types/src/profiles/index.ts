@@ -95,4 +95,10 @@ export interface EffectiveProperty extends PropertyDef {
   required: boolean;
   defaultValue: unknown;
   displayOrder: number;
+  /**
+   * This property IS the profile's lifecycle (work model L1, pod
+   * `getEffectiveLifecycle` rule). Optional on the wire: a pod older than
+   * E5 omits it — read absence as "not declared here", never guess.
+   */
+  isLifecycle?: boolean;
 }
