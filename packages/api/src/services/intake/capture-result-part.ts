@@ -34,8 +34,11 @@ import {
   isNull,
   drizzleSql,
 } from "@synap/database";
+import type { IntelligenceHubClient } from "@synap/intelligence-client";
 import {
   CAPTURE_RESULT_LIMITS,
+  CAPTURE_ROW_LABELS,
+  type CaptureRowLabel,
   CaptureResultPartSchema,
   readCapturePart,
   type CaptureResultPart,
@@ -73,7 +76,51 @@ export interface CaptureResultProposal {
   properties?: Record<string, unknown> | null;
   /** The proposed entity's long-form body. */
   content?: string | null;
+  /** The proposed record's own description → `row.description`. */
+  description?: string | null;
+  /** The structurer's confidence → `row.confidence` (clamped 0..1). */
+  confidence?: number | null;
+  /** Roles to attach (facets) → `row.roles` (their profile slugs). */
+  facets?: ReadonlyArray<{ profileSlug?: string | null }> | null;
+  /** The decision label → `row.label` (only a known value). */
+  label?: string | null;
 }
+
+/**
+ * Every key of the structurer's entity (the SOURCE of a row), classified.
+ * A new key on the IS wire listed in neither set makes `_SourceClassified`
+ * `never` and stops the build — the projection can no longer drop a field
+ * nobody decided about (description, roles and confidence were dropped this
+ * way until D10).
+ */
+type StructureEntity = NonNullable<
+  Awaited<ReturnType<IntelligenceHubClient["structure"]>>
+>["entities"][number];
+export const PROJECTED_SOURCE_FIELDS = {
+  tempId: "tempId",
+  profileSlug: "profileSlug",
+  title: "title",
+  properties: "properties",
+  description: "description",
+  confidence: "confidence",
+  facets: "roles",
+  label: "label",
+} as const satisfies Partial<
+  Record<keyof StructureEntity, keyof CaptureResultRow>
+>;
+/** Source keys deliberately NOT on the part, each with its reason. */
+export const WITHHELD_SOURCE_FIELDS = {} as const satisfies Partial<
+  Record<keyof StructureEntity, string>
+>;
+type _SourceClassified =
+  Exclude<
+    keyof StructureEntity,
+    keyof typeof PROJECTED_SOURCE_FIELDS
+  > extends keyof typeof WITHHELD_SOURCE_FIELDS
+    ? true
+    : never;
+const _sourceClassified: _SourceClassified = true;
+void _sourceClassified;
 
 /** Property KEYS never persisted into a room part (message metadata). */
 export const SECRET_PROPERTY_KEY = /secret|token|password|api[_-]?key/i;
@@ -135,6 +182,43 @@ export function boundResultFields(p: CaptureResultProposal): {
 }
 
 /**
+ * The structurer's per-record signals, bounded for the part (D10 + D2 label).
+ * PURE. A value out of shape is left off — absent means "the part does not
+ * say", never a guessed default.
+ */
+export function projectRowSignals(
+  p: CaptureResultProposal
+): Pick<CaptureResultRow, "description" | "roles" | "confidence" | "label"> {
+  const L = CAPTURE_RESULT_LIMITS;
+  const out: Pick<
+    CaptureResultRow,
+    "description" | "roles" | "confidence" | "label"
+  > = {};
+  const description = p.description?.replace(/\s+/g, " ").trim();
+  if (description)
+    out.description = description.slice(0, L.descriptionMaxChars);
+  const roles = [
+    ...new Set(
+      (p.facets ?? [])
+        .map((f) => f?.profileSlug?.trim())
+        .filter((slug): slug is string => Boolean(slug))
+        .map((slug) => slug.slice(0, 200))
+    ),
+  ].slice(0, L.rolesMax);
+  if (roles.length > 0) out.roles = roles;
+  if (typeof p.confidence === "number" && Number.isFinite(p.confidence)) {
+    out.confidence = Math.min(1, Math.max(0, p.confidence));
+  }
+  if (
+    typeof p.label === "string" &&
+    (CAPTURE_ROW_LABELS as readonly string[]).includes(p.label)
+  ) {
+    out.label = p.label as CaptureRowLabel;
+  }
+  return out;
+}
+
+/**
  * Project structure proposals onto the part's rows. PURE — no db, no clock.
  *
  * `truncated` is REPORTED, never applied in silence: past `rowsMax` the extra
@@ -181,6 +265,7 @@ export function projectCaptureResultRows(input: {
     };
     if (bounded.properties) row.properties = bounded.properties;
     if (bounded.content !== undefined) row.content = bounded.content;
+    Object.assign(row, projectRowSignals(p));
     // Whole-row cap: the optional fields go first, the row itself stays.
     if (
       Buffer.byteLength(JSON.stringify(row), "utf8") >

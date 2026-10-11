@@ -138,3 +138,30 @@ describe("capture_result part-level project + placement", () => {
     expect(ok({ ...part(base), project: null, placement: null })).toBe(true);
   });
 });
+
+describe("capture_result row signals (D10 + label)", () => {
+  it("round-trips description, roles, confidence and label", () => {
+    const p = part({
+      ...base,
+      description: "A post about sovereign data",
+      roles: ["client", "investor"],
+      confidence: 0.8,
+      label: "likely",
+    });
+    expect(readCapturePart({ capturePart: p })).toEqual(p);
+  });
+
+  it("refuses out-of-bound signals (the reader drops the part, never a field)", () => {
+    const L = CAPTURE_RESULT_LIMITS;
+    const ok = (row: Record<string, unknown>) =>
+      CaptureResultPartSchema.safeParse(part({ ...base, ...row })).success;
+    expect(ok({ description: "d".repeat(L.descriptionMaxChars + 1) })).toBe(
+      false
+    );
+    expect(
+      ok({ roles: Array.from({ length: L.rolesMax + 1 }, (_, i) => `r${i}`) })
+    ).toBe(false);
+    expect(ok({ confidence: 1.5 })).toBe(false);
+    expect(ok({ label: "maybe" })).toBe(false);
+  });
+});

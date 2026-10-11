@@ -410,3 +410,41 @@ describe("capture.structure — schema linking across every visible space (D1)",
     );
   });
 });
+
+describe("capture.structure — the row carries the structurer's signals (D10)", () => {
+  it("description, roles (facets), confidence and label VALUES arrive on the persisted row", async () => {
+    h.isBody = {
+      ...h.isBody,
+      entities: [
+        {
+          ...ENTITY,
+          description: "Lunch to plan the\n  launch",
+          confidence: 0.72,
+          label: "likely",
+          facets: [{ profileSlug: "client" }, { profileSlug: "client" }],
+        },
+      ],
+    };
+    await run();
+    const [row] = persisted().rows;
+    expect(row).toMatchObject({
+      description: "Lunch to plan the launch",
+      roles: ["client"],
+      confidence: 0.72,
+      label: "likely",
+    });
+  });
+
+  it("an unknown label and a missing description stay ABSENT, never defaulted", async () => {
+    h.isBody = {
+      ...h.isBody,
+      entities: [{ ...ENTITY, label: "perhaps" }],
+    };
+    await run();
+    const [row] = persisted().rows;
+    expect(row).not.toHaveProperty("label");
+    expect(row).not.toHaveProperty("description");
+    expect(row).not.toHaveProperty("roles");
+    expect(row!.confidence).toBe(0.9);
+  });
+});

@@ -204,6 +204,10 @@ export const CAPTURE_RESULT_LIMITS = {
   workspaceNameMaxChars: 200,
   /** The AI's reason for a workspace or project pick. */
   routingReasonMaxChars: 500,
+  /** The proposed record's own one-line description (D10). */
+  descriptionMaxChars: 280,
+  /** Roles (facet profile slugs) a row proposes attaching (D10). */
+  rolesMax: 6,
   /** "Why?" rows on a placement suggestion — the contract says at most 3. */
   placementAlternativesMax: 3,
 } as const;
@@ -232,6 +236,10 @@ const ResultPropertyValueSchema = z.unknown().refine(
   },
   { message: "property value out of bounds" }
 );
+
+/** A row's decision label (two-pass structure, D2). */
+export const CAPTURE_ROW_LABELS = ["certain", "likely", "unsure"] as const;
+export type CaptureRowLabel = (typeof CAPTURE_ROW_LABELS)[number];
 
 export const CaptureResultRowSchema = z.object({
   /**
@@ -281,6 +289,26 @@ export const CaptureResultRowSchema = z.object({
   action: z.enum(["create", "update", "link"]).optional(),
   /** Dedup target when `action` is update/link. Same status as `action`. */
   existingEntityId: z.string().uuid().optional(),
+  /**
+   * The proposed record's own description (NOT the pod's reason — that is
+   * `why`). Optional: absent = this part does not say.
+   */
+  description: z
+    .string()
+    .max(CAPTURE_RESULT_LIMITS.descriptionMaxChars)
+    .optional(),
+  /** Role profile slugs (facets) the row proposes attaching — client, investor… */
+  roles: z
+    .array(z.string().min(1).max(200))
+    .max(CAPTURE_RESULT_LIMITS.rolesMax)
+    .optional(),
+  /** The structurer's confidence in this record, 0..1. */
+  confidence: z.number().min(0).max(1).optional(),
+  /**
+   * How sure the structurer is the person wants this record: `certain` rows
+   * are filed by "File all", `likely` ones need a tap, `unsure` ones fold.
+   */
+  label: z.enum(CAPTURE_ROW_LABELS).optional(),
 });
 export type CaptureResultRow = z.infer<typeof CaptureResultRowSchema>;
 
@@ -303,6 +331,10 @@ export const PROJECTED_RESULT_ROW_FIELDS = [
   "content",
   "action",
   "existingEntityId",
+  "description",
+  "roles",
+  "confidence",
+  "label",
 ] as const satisfies ReadonlyArray<keyof CaptureResultRow>;
 
 /** Withheld from the part, each with its reason — never merely forgotten. */
