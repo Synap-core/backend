@@ -31,7 +31,9 @@ import {
   type ProjectAggregateSessionFact,
 } from "./session.js";
 
-export type TrackStagePosition = "done" | "active" | "not_started";
+/** Every stage position, in path order — the ONE list a reader validates against. */
+export const TRACK_STAGE_POSITIONS = ["done", "active", "not_started"] as const;
+export type TrackStagePosition = (typeof TRACK_STAGE_POSITIONS)[number];
 
 export interface TrackStage {
   key: string;
@@ -302,6 +304,15 @@ export function isTrackRetired(track: { status: string }): boolean {
 }
 
 /**
+ * A CLOSED track — `completed` or `archived`: it stands on no live stage, so
+ * no stage session starts on it and its stages offer no move. (Narrower than
+ * "not active": a PAUSED track is still open — it resumes where it stands.)
+ */
+export function isTrackClosed(track: { status: string }): boolean {
+  return track.status === "completed" || isTrackRetired(track);
+}
+
+/**
  * A stage mark's tone. `active` is the ONE accent (`primary`) — NOT `ai`:
  * the AI colour (--synap-ai) is AI provenance only, and a human-run method's current stage is
  * not AI work. `done` is `success`; a stage not yet reached is `textMuted`.
@@ -332,7 +343,7 @@ export function trackUnitInput(
   track: { status: string },
   sessions: readonly ProjectAggregateSessionFact[]
 ): UnitStateInput {
-  if (track.status === "completed" || isTrackRetired(track)) {
+  if (isTrackClosed(track)) {
     return { terminal: true };
   }
   if (track.status === "paused") {
@@ -411,6 +422,68 @@ export function filedStageKey(
 export const NOT_FILED_AT_A_STAGE = `Not filed at a ${resolveObjectNoun(
   "stage"
 ).toLowerCase()}`;
+
+export interface TrackStagePathStep<R> {
+  stage: TrackStage;
+  /** The stage mark's tone ({@link trackStageTone}) — a FILL, never text ink. */
+  tone: UnitTone;
+  /**
+   * When the track LAST entered this stage (stages are re-enterable, so the
+   * latest history entry is where its current stay began). `null` when never
+   * recorded — and always for a stage not yet reached: an old entry recorded
+   * before the track moved back is not an honest date for where it stands now.
+   */
+  enteredAt: string | null;
+  /** The track's sessions FILED at this stage ({@link filedStageKey}), in input order. */
+  sessions: R[];
+}
+
+export interface TrackStagePath<R> {
+  steps: TrackStagePathStep<R>[];
+  /** Sessions filed at no stage the method declares — {@link NOT_FILED_AT_A_STAGE}. */
+  unfiled: R[];
+  /** The stage the track stands on (`position === "active"`), or `null`. */
+  currentKey: string | null;
+}
+
+/**
+ * THE stage path of a track's page (browser track page, Relay's track page):
+ * each stage with its tone, the date it was last entered and the sessions
+ * filed at it. Position is the pod's ({@link deriveTrackStages}); placement is
+ * {@link filedStageKey}. No session vanishes: each of `rows` lands at exactly
+ * one stage or in `unfiled`. `rows` must already be narrowed to this track.
+ */
+export function trackStagePath<R extends { trackStage?: string | null }>(
+  stages: readonly TrackStage[],
+  history: ReadonlyArray<{ stageKey: string; enteredAt: string }>,
+  rows: readonly R[]
+): TrackStagePath<R> {
+  const lastEntered = new Map<string, string>();
+  // History is oldest-first; a later entry for the same key overwrites.
+  for (const entry of history) lastEntered.set(entry.stageKey, entry.enteredAt);
+  const byStage = new Map<string, R[]>(stages.map((s) => [s.key, []]));
+  const unfiled: R[] = [];
+  for (const row of rows) {
+    const key = filedStageKey(row.trackStage, stages);
+    const bucket = key ? byStage.get(key) : undefined;
+    if (bucket) bucket.push(row);
+    else unfiled.push(row);
+  }
+  let currentKey: string | null = null;
+  const steps = stages.map((stage): TrackStagePathStep<R> => {
+    if (stage.position === "active") currentKey = stage.key;
+    return {
+      stage,
+      tone: trackStageTone(stage.position),
+      enteredAt:
+        stage.position === "not_started"
+          ? null
+          : (lastEntered.get(stage.key) ?? null),
+      sessions: byStage.get(stage.key) ?? [],
+    };
+  });
+  return { steps, unfiled, currentKey };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EMERGENT STAGES + DIRECTION + KPI (0302, founder decision 2026-10-05: a track

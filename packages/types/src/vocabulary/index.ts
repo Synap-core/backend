@@ -1473,6 +1473,21 @@ export function resolveMembersDecideLabel(
   return `${noun} members decide`;
 }
 
+/**
+ * Who holds a slot that was HANDED to an agent (`delegatedTo`, an agent TYPE
+ * token) — past mood, because the hand-off already happened. ONE spelling for
+ * the session page's outcome row, the hand-off toast and Relay's owed rows.
+ * `displayName` is the agent's catalogue name when the surface has it; else
+ * the token humanizes, never leaks ("growth_scout" → "Handed to Growth scout").
+ */
+export function resolveHandedToLabel(
+  agentType: string,
+  displayName?: string | null
+): string {
+  const name = displayName?.trim() || humanizeToken(agentType);
+  return `Handed to ${name}`;
+}
+
 // ─── Space brief fields (`SpaceBrief`, stored at settings.onboarding) ────────
 
 /**

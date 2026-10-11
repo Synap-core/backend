@@ -3,6 +3,7 @@ import {
   canTransitionTrack,
   deriveTrackStages,
   filedStageKey,
+  isTrackClosed,
   NOT_FILED_AT_A_STAGE,
   partitionSessionsByTrack,
   readTrackStage,
@@ -11,8 +12,10 @@ import {
   trackStatusMoves,
   trackUnitInput,
   trackPausedBy,
+  TRACK_STAGE_POSITIONS,
   TRACK_STATUS_TRANSITIONS,
   TRACK_STATUSES,
+  trackStagePath,
 } from "./track.js";
 import { resolveUnitState } from "./state.js";
 import { ACTION_VERBS } from "../vocabulary/index.js";
@@ -302,5 +305,90 @@ describe("filedStageKey — THE stage-placement rule", () => {
   });
   it("the group's heading uses the user word for a stage", () => {
     expect(NOT_FILED_AT_A_STAGE).toBe("Not filed at a step");
+  });
+});
+
+describe("TRACK_STAGE_POSITIONS", () => {
+  it("is every position deriveTrackStages can emit, in path order", () => {
+    expect([...TRACK_STAGE_POSITIONS]).toEqual([
+      "done",
+      "active",
+      "not_started",
+    ]);
+    const emitted = new Set(
+      deriveTrackStages(STAGES, "build").map((s) => s.position)
+    );
+    expect([...emitted].sort()).toEqual([...TRACK_STAGE_POSITIONS].sort());
+  });
+});
+
+describe("isTrackClosed", () => {
+  it("completed and archived are closed; active and paused are open", () => {
+    // Rule ruled out: `isTrackRetired` (archived only) — a COMPLETED track
+    // still offered stage starts on the phone.
+    expect(isTrackClosed({ status: "completed" })).toBe(true);
+    expect(isTrackClosed({ status: "archived" })).toBe(true);
+    // Rule ruled out: "not active" — a paused track resumes where it stands.
+    expect(isTrackClosed({ status: "paused" })).toBe(false);
+    expect(isTrackClosed({ status: "active" })).toBe(false);
+  });
+});
+
+describe("trackStagePath — THE stage path of a track page", () => {
+  const stages = deriveTrackStages(STAGES, "build");
+  const row = (id: string, trackStage: string | null) => ({ id, trackStage });
+
+  it("files each session at ITS stage; a missing / undeclared stage ⇒ unfiled", () => {
+    const path = trackStagePath(
+      stages,
+      [],
+      [
+        row("a", "build"),
+        row("b", "discover"),
+        row("c", null),
+        row("d", "retired-stage"),
+      ]
+    );
+    expect(path.steps.map((s) => s.sessions.map((r) => r.id))).toEqual([
+      ["b"],
+      ["a"],
+      [],
+    ]);
+    // Rule ruled out: dropping a session whose stage the method no longer declares.
+    expect(path.unfiled.map((r) => r.id)).toEqual(["c", "d"]);
+  });
+
+  it("tone is the shared stage tone; currentKey is the active stage", () => {
+    const path = trackStagePath(stages, [], []);
+    expect(path.steps.map((s) => s.tone)).toEqual([
+      "success",
+      "primary",
+      "textMuted",
+    ]);
+    expect(path.currentKey).toBe("build");
+    expect(
+      trackStagePath(deriveTrackStages(STAGES, null), [], []).currentKey
+    ).toBe(null);
+  });
+
+  it("entered = the LAST entry per stage; a stage not reached has no date", () => {
+    const path = trackStagePath(
+      stages,
+      [
+        { stageKey: "discover", enteredAt: "2026-09-01" },
+        { stageKey: "build", enteredAt: "2026-09-05" },
+        { stageKey: "ship", enteredAt: "2026-09-08" },
+        { stageKey: "discover", enteredAt: "2026-09-10" },
+        { stageKey: "build", enteredAt: "2026-09-12" },
+      ],
+      []
+    );
+    // Rules ruled out: first entry wins (09-01 / 09-05), and a stage the
+    // track moved back from keeping its stale date (ship 09-08).
+    expect(path.steps.map((s) => s.enteredAt)).toEqual([
+      "2026-09-10",
+      "2026-09-12",
+      null,
+    ]);
   });
 });
