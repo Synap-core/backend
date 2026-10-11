@@ -33,6 +33,19 @@
  *     subject is the source of truth for where the work stands — and LOGGED as
  *     a backward move rather than done silently.
  *
+ *  1b. WORKER TARGETS (work model L4/L5). A transition of thing X also
+ *     settles X in every in-flight session that holds it as a worker TARGET
+ *     (`session --targets--> X`, role `worker_target`, no result yet):
+ *       - moved by THAT session (`sessionId` on the transition) ⇒ `done`: the
+ *         worker moved the thing it was given (it was targeted for sitting in
+ *         a status, and its own move takes it on). Named default: no worker
+ *         declares a goal category yet, so any own move counts.
+ *       - moved by anyone else (a person, another session) ⇒ `skipped`,
+ *         `moved_by_person`, with the transition id, and ONE line in the
+ *         session's room so the agent re-plans without it.
+ *     First verdict wins (`stampWorkerTargetResult`), so a redelivered event
+ *     neither re-stamps nor re-posts. Subject-follow (1) is unchanged.
+ *
  *  2. REJECTED HUMAN GATE → `onFail`. When a `playbook.stage_gate` proposal on a
  *     session is REJECTED and the gated stage declares `onFail.toStage`, the run
  *     is returned there: un-paused (the gate's pause), then advanced through the
@@ -55,7 +68,12 @@ import {
   and,
   inArray,
   isNotNull,
+  insertChannelMessage,
+  listOpenWorkerTargetSessions,
+  stampWorkerTargetResult,
 } from "@synap/database";
+import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import {
   resolveStageGate,
   resolveStageRef,
@@ -105,6 +123,12 @@ export type ProcessSyncOutcome =
       reason: "stale_event" | "held_at_human_gate";
     }
   | { kind: "on_fail"; sessionId: string; fromStage: string; toStage: string }
+  | {
+      kind: "target_settled";
+      sessionId: string;
+      entityId: string;
+      result: "done" | "skipped";
+    }
   | { kind: "failed"; sessionId: string; reason: string };
 
 /** Entry point, called once per matched event by the trigger hop. */
@@ -115,7 +139,10 @@ export async function syncProcessOnEvent(
     return followSubjectStatus(ev);
   }
   if (ev.eventType === LIFECYCLE_TRANSITION_EVENT_TYPE) {
-    return followTransition(ev);
+    return [
+      ...(await followTransition(ev)),
+      ...(await settleWorkerTargets(ev)),
+    ];
   }
   if (ev.eventType === "proposal.rejected.completed") {
     return applyRejectedGateOnFail(ev);
@@ -162,6 +189,81 @@ async function followTransition(
         }
       : undefined
   );
+}
+
+/**
+ * 1b — settle thing X in every in-flight session working it as a worker
+ * target (see the header). Read off the TRANSITION only: it carries the
+ * mover's `sessionId` and exists for kinds and roles alike (the dual-emitted
+ * update does neither).
+ */
+async function settleWorkerTargets(
+  ev: ProcessSyncEvent
+): Promise<ProcessSyncOutcome[]> {
+  const data = ev.data ?? {};
+  const entityId =
+    typeof data.entityId === "string" ? data.entityId : ev.subjectId;
+  const movedBy = typeof data.sessionId === "string" ? data.sessionId : null;
+  const transitionId =
+    typeof data.transitionId === "string" ? data.transitionId : null;
+  const to = typeof data.to === "string" ? data.to : null;
+
+  const sessions = await listOpenWorkerTargetSessions(entityId);
+  const out: ProcessSyncOutcome[] = [];
+  for (const s of sessions) {
+    try {
+      const own = movedBy === s.sessionId;
+      const result = own ? "done" : "skipped";
+      const stamped = await stampWorkerTargetResult({
+        sessionId: s.sessionId,
+        entityId,
+        result,
+        reason: own ? null : WORKER_TARGET_REASONS.movedByPerson,
+        transitionEventId: transitionId,
+      });
+      if (!stamped) continue;
+      out.push({
+        kind: "target_settled",
+        sessionId: s.sessionId,
+        entityId,
+        result,
+      });
+      if (!own && s.channelId) {
+        await postTargetMovedLine(s.channelId, entityId, to);
+      }
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: s.sessionId, entityId },
+        "worker target not settled (non-fatal)"
+      );
+      out.push({
+        kind: "failed",
+        sessionId: s.sessionId,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return out;
+}
+
+/** The one room line that tells the worker a thing left its hands. */
+async function postTargetMovedLine(
+  channelId: string,
+  entityId: string,
+  to: string | null
+): Promise<void> {
+  const [thing] = await db
+    .select({ title: entities.title })
+    .from(entities)
+    .where(eq(entities.id, entityId))
+    .limit(1);
+  const name = thing?.title ? `"${thing.title}"` : "A thing you were working";
+  const where = to ? ` to ${resolveStatusLabel(to)}` : "";
+  await insertChannelMessage({
+    channelId,
+    content: `${name} was moved${where} by someone else. It is skipped here: re-plan without it.`,
+    metadata: { workerTarget: { entityId, result: "skipped" } },
+  });
 }
 
 async function followSubjectStatus(
