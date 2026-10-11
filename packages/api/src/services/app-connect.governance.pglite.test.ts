@@ -73,6 +73,30 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 vi.mock("../utils/audit-log.js", () => ({ auditLog: async () => null }));
+// The filing door's insert runs on the postgres-js client this harness has not;
+// the row it files (the payload under test) lands in PGlite unchanged.
+vi.mock("../utils/permission-check.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const schema = await import("@synap/database/schema");
+  return {
+    ...actual,
+    createPendingProposal: async (input: Record<string, unknown>) => {
+      const [row] = await (h.db as any)
+        .insert(schema.proposals)
+        .values({
+          targetType: input.targetType,
+          targetId: input.targetId,
+          proposalType: input.proposalType,
+          workspaceId: input.workspaceId ?? null,
+          status: "pending",
+          data: input.data,
+          createdBy: input.createdBy,
+        })
+        .returning();
+      return row;
+    },
+  };
+});
 
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
@@ -92,8 +116,10 @@ import {
   adoptLegacyAppKeys,
   grantsForApprovedRequests,
   issueKey,
+  requestAccess,
   revokeApp,
 } from "./app-connect.js";
+import { computeRevisedEnvelope } from "./proposals/proposals-service.js";
 
 const OWNER = "human-owner";
 const PLAIN_AGENT = randomUUID();
@@ -601,19 +627,157 @@ describe("boot adopts pre-0313 app keys before the app's first call", () => {
     await repo.revoke(revoked.app.id);
 
     expect(await adoptLegacyAppKeys()).toBeGreaterThanOrEqual(1);
-    const agent = (await repo.getByPublicId(live.app.publicId))!.app.agentUserId;
+    const agent = (await repo.getByPublicId(live.app.publicId))!.app
+      .agentUserId;
     expect(agent).toBeTruthy();
     const holder = async (keyId: string) =>
       (
-        await q<{ user_id: string }>(`select user_id from api_keys where id = $1`, [
-          keyId,
-        ])
+        await q<{ user_id: string }>(
+          `select user_id from api_keys where id = $1`,
+          [keyId]
+        )
       ).rows[0]!.user_id;
     expect(await holder(live.keyId)).toBe(agent);
     // A revoked app is never given an agent; its key stays refused on use.
-    expect((await repo.getByPublicId(revoked.app.publicId))!.app.agentUserId).toBeNull();
+    expect(
+      (await repo.getByPublicId(revoked.app.publicId))!.app.agentUserId
+    ).toBeNull();
     expect(await holder(revoked.keyId)).toBe(OWNER);
     // Idempotent: nothing left to adopt.
     expect(await adoptLegacyAppKeys()).toBe(0);
+  });
+});
+
+/**
+ * An approval can never widen what the app asked for. `requestAccess` files a
+ * frozen `asked` copy; a revise (the shape `computeRevisedEnvelope` stores) may
+ * narrow `requests`, and the real `app/connect` executor refuses anything the
+ * asked set does not cover.
+ *
+ * Rows that rule out a wrong rule:
+ *  - a narrowed approval APPLIES (a "refuse every revised request" fix fails);
+ *  - a widened kind, a widened verb and a new space are each REFUSED;
+ *  - a revise that rewrites `asked` with the requests is REFUSED (a guard
+ *    reading the stored `asked` alone passes it).
+ */
+describe("an app approval can only narrow what was asked", () => {
+  const ASKED = [
+    { permission: "entity.note", workspaceId: SALES },
+    { permission: "entity.person.read", workspaceId: FINANCE },
+  ];
+
+  async function fileAndRevise(name: string, fields: Record<string, unknown>) {
+    const repo = new AppRepository(h.db as never);
+    const app = await repo.register({ ownerUserId: OWNER, name });
+    const { proposalId } = await requestAccess({
+      publicId: app.publicId,
+      ownerUserId: OWNER,
+      requests: ASKED,
+    });
+    const [row] = (
+      await q<{ data: Record<string, unknown> }>(
+        `select data from proposals where id = $1`,
+        [proposalId]
+      )
+    ).rows;
+    const { merged, revision } = computeRevisedEnvelope({
+      envelope: row!.data,
+      patch: { kind: "inner", fields },
+      actorId: OWNER,
+    });
+    await q(
+      `update proposals set data = $2::jsonb, revision_history = $3::jsonb where id = $1`,
+      [proposalId, JSON.stringify(merged), JSON.stringify([revision])]
+    );
+    return { app, proposalId, data: merged, filed: row!.data };
+  }
+
+  const approve = async (
+    app: { id: string; publicId: string },
+    proposalId: string,
+    data: Record<string, unknown>
+  ) => {
+    registerAppExecutors();
+    return proposalExecRegistry
+      .resolveExact("app/connect")!
+      .execute({
+        proposal: {
+          id: proposalId,
+          targetType: "app",
+          targetId: app.id,
+          proposalType: "connect",
+          workspaceId: null,
+          sessionId: null,
+          projectId: null,
+          agentUserId: null,
+          sourceMessageId: null,
+          data,
+        },
+        payload: null,
+        userId: OWNER,
+        input: { proposalId },
+        ctx: {} as never,
+        deps: {
+          emitProposalReviewed: () => {},
+          reportProposalOutcome: () => {},
+        } as never,
+      } as never)
+      .then(
+        (r) => ({ ok: true as const, r }),
+        (e: unknown) => ({ ok: false as const, message: String(e) })
+      );
+  };
+
+  const approvedOf = async (appId: string) =>
+    (await new AppRepository(h.db as never).get(appId))!.approvedRequests;
+
+  it("files a frozen copy of what was asked", async () => {
+    const { filed } = await fileAndRevise("asked-frozen", {});
+    const inner = (filed.data ?? filed) as Record<string, unknown>;
+    expect(inner.asked).toEqual(ASKED);
+  });
+
+  it("a narrowed approval applies", async () => {
+    const narrowed = [{ permission: "entity.note.read", workspaceId: SALES }];
+    const { app, proposalId, data } = await fileAndRevise("asked-narrow", {
+      requests: narrowed,
+    });
+    const out = await approve(app, proposalId, data);
+    expect(out.ok).toBe(true);
+    expect(await approvedOf(app.id)).toEqual(narrowed);
+  });
+
+  it.each([
+    ["another kind", { permission: "entity.task.read", workspaceId: SALES }],
+    [
+      "a verb not asked",
+      { permission: "entity.person.create", workspaceId: FINANCE },
+    ],
+    ["another space", { permission: "entity.note.read", workspaceId: FINANCE }],
+    ["everything", { permission: "*", workspaceId: SALES }],
+  ])("a widening revise (%s) is refused", async (label, extra) => {
+    const { app, proposalId, data } = await fileAndRevise(
+      `asked-wide-${label}`,
+      {
+        requests: [...ASKED, extra],
+      }
+    );
+    const out = await approve(app, proposalId, data);
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : out.message).toMatch(
+      /can only narrow what the app asked for/
+    );
+    expect(await approvedOf(app.id)).toBeNull();
+  });
+
+  it("a revise that rewrites asked to match a widening is refused", async () => {
+    const wide = [...ASKED, { permission: "*", workspaceId: SALES }];
+    const { app, proposalId, data } = await fileAndRevise("asked-rewritten", {
+      requests: wide,
+      asked: wide,
+    });
+    const out = await approve(app, proposalId, data);
+    expect(out.ok).toBe(false);
+    expect(await approvedOf(app.id)).toBeNull();
   });
 });

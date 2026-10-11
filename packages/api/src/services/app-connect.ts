@@ -31,6 +31,7 @@ import {
   ApiKeyRepository,
   AppNameTakenError,
   APP_EVENT_ACTIONS,
+  readAppConnectRequests,
   AppRepository,
   EventRepository,
   GrantRepository,
@@ -58,6 +59,7 @@ import { auditLog } from "../utils/audit-log.js";
 import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
 import { attachGrantsOrRevoke, type GrantInput } from "./key-grant.js";
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
+import { requestsWithin } from "./agent-connect.js";
 
 /**
  * A request as a door sends it: a permission plus EITHER the workspace's id
@@ -268,6 +270,11 @@ export async function requestAccess(args: {
       publicId: found.app.publicId,
       name: found.app.name,
       requests,
+      // Frozen at filing: what an approval may narrow, never widen.
+      asked: requests.map(({ permission, workspaceId }) => ({
+        permission,
+        workspaceId,
+      })),
     },
     createdBy: args.ownerUserId,
     proposedByUserId: args.ownerUserId,
@@ -278,6 +285,38 @@ export async function requestAccess(args: {
     requests,
   });
   return { proposalId: proposal.id, reviewUrl: openLink(proposal.id) };
+}
+
+const touchesAsked = (fields: unknown): boolean => {
+  if (!fields || typeof fields !== "object") return false;
+  const f = fields as Record<string, unknown>;
+  const nested = f.data as Record<string, unknown> | null | undefined;
+  return (
+    Object.hasOwn(f, "asked") ||
+    (!!nested && typeof nested === "object" && Object.hasOwn(nested, "asked"))
+  );
+};
+
+/**
+ * Is an `app/connect` approval within what the app ASKED for? `asked` is the
+ * copy frozen at filing; the approved `requests` may have been narrowed by a
+ * revise, never widened (`requestsWithin` — the rule `agent/connect` uses).
+ *
+ * `asked` cannot be trusted once a revise has touched it — false. A request
+ * filed before `asked` existed and never revised still holds what was filed.
+ */
+export function appApprovalWithinAsked(args: {
+  data: unknown;
+  revisionHistory: ReadonlyArray<{ patch?: unknown }> | null | undefined;
+  approved: readonly AppApprovedRequest[];
+}): boolean {
+  const outer = (args.data ?? {}) as Record<string, unknown>;
+  const inner = (outer.data ?? outer) as Record<string, unknown>;
+  const history = args.revisionHistory ?? [];
+  if (history.some((r) => touchesAsked(r.patch))) return false;
+  if (inner.asked === undefined) return history.length === 0;
+  const asked = readAppConnectRequests({ requests: inner.asked });
+  return requestsWithin(args.approved, asked);
 }
 
 /**

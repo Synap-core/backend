@@ -7,7 +7,9 @@
  * demand by `POST /apps/:id/key`, so no plaintext ever rests in a proposal.
  * Approval is the truth: a key the app already holds is re-derived from the
  * new approval at once (`applyApprovedReach` — its grants and the app agent's
- * memberships), so a narrowed approval narrows the live key.
+ * memberships), so a narrowed approval narrows the live key. The approved
+ * requests must stay within the frozen `asked` copy filed with the request: a
+ * revise can narrow, never widen (`appApprovalWithinAsked`).
  *
  * IDENTITY: only the app's OWNER may approve. `app/connect` is filed by the
  * owner's CLI, but the default `owner_and_admins` policy could let a workspace
@@ -29,7 +31,10 @@ import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { auditLog } from "../../../utils/audit-log.js";
-import { applyApprovedReach } from "../../../services/app-connect.js";
+import {
+  appApprovalWithinAsked,
+  applyApprovedReach,
+} from "../../../services/app-connect.js";
 
 export function registerAppExecutors(): void {
   registerProposalExecutor({
@@ -57,11 +62,27 @@ export function registerAppExecutors(): void {
       }
 
       const [alreadyDone] = await db
-        .select({ status: proposals.status })
+        .select({
+          status: proposals.status,
+          revisionHistory: proposals.revisionHistory,
+        })
         .from(proposals)
         .where(eq(proposals.id, input.proposalId));
       if (alreadyDone?.status === ProposalStatus.APPROVED) {
         return { success: true, alreadyApproved: true };
+      }
+      if (
+        !appApprovalWithinAsked({
+          data: raw,
+          revisionHistory: alreadyDone?.revisionHistory,
+          approved: requests,
+        })
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "An approval can only narrow what the app asked for. To give it more, ask for access again.",
+        });
       }
 
       const repo = new AppRepository(db);
