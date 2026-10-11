@@ -356,8 +356,8 @@ function resolveSessionSlotClaimIndex(
   // the title rung, so a document titled differently from its slot fell to the
   // FIRST-of-kind guess — documents created in order 2,1,3,4 stamped slot 1
   // with document 2 and vice versa, and the lineage then outranked the
-  // artifact's own claim in the outputs join (live session fc9dd524). Same
-  // trust as rung 1 (the agent chooses its title too) and the same floors.
+  // artifact's own claim in the outputs join. Same trust as rung 1 (the agent
+  // chooses its title too) and the same floors.
   const declared = normalizeExpectedLabel(declaredLabel);
   if (declared) {
     const named = expectedOutputs.findIndex(

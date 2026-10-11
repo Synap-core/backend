@@ -391,7 +391,7 @@ export function joinSessionOutputs(
       // Lineage yields to the object's OWN claim on ANOTHER declared slot: an
       // approval filed without a claim was stamped onto the first slot of its
       // kind (a guess), and the producer's declared label is the evidence of
-      // which deliverable it is (live session fc9dd524: slots 1 and 2 swapped).
+      // which deliverable it is (else two slots of a kind can swap).
       // A claim naming no declared slot (a since-reworded label) is stale and
       // does not outrank lineage.
       if (
