@@ -3126,7 +3126,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "playbook" | "automation" | "agent" | "human";
+			data: "agent" | "playbook" | "automation" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3141,7 +3141,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "playbook" | "automation" | "agent" | "human";
+			$type: "agent" | "playbook" | "automation" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3247,7 +3247,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3709,7 +3709,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "capability" | "human" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4506,7 +4506,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "archived" | "draft";
+			data: "active" | "archived" | "draft" | "paused";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4528,7 +4528,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "session" | "project";
+			data: "project" | "session";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4543,7 +4543,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "session" | "project";
+			$type: "project" | "session";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -16876,24 +16876,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	errorShape: {
 		message: string;
 		data: {
-			reasonCode: string;
-			expectedStatus: string | null;
-			currentStatus: string | null;
-			opRef?: string | undefined;
-			candidates?: {
-				id: string;
-				title: string | null;
-				type: string;
-			}[] | undefined;
-			captureQuestionStatus?: string | undefined;
-			code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-			httpStatus: number;
-			path?: string;
-			stack?: string;
-		} | {
-			reasonCode?: string | undefined;
-			expectedStatus?: undefined;
-			currentStatus?: undefined;
+			reasonCode?: string;
+			expectedStatus?: string | null;
+			currentStatus?: string | null;
 			opRef?: string | undefined;
 			candidates?: {
 				id: string;
@@ -16916,24 +16901,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -16965,24 +16935,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -17157,24 +17112,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -18415,24 +18355,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -19383,24 +19308,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -19513,24 +19423,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -19794,7 +19689,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -19848,7 +19743,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20546,7 +20441,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20600,7 +20495,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20648,7 +20543,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20702,7 +20597,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20764,7 +20659,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20818,7 +20713,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21044,24 +20939,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -21757,24 +21637,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -21797,24 +21662,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -22373,24 +22223,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -22472,24 +22307,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -22979,24 +22799,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -23140,24 +22945,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -23375,24 +23165,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -23483,24 +23258,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -23772,24 +23532,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -24131,24 +23876,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -24217,24 +23947,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -24290,24 +24005,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -24438,24 +24138,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -24564,24 +24249,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -25052,24 +24722,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -25686,24 +25341,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -25756,24 +25396,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -25796,24 +25421,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -25966,24 +25576,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -26218,24 +25813,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -26582,7 +26162,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: "automation";
 				automationId: string;
 				name: string;
-				status: "active" | "archived" | "draft" | "paused" | "error";
+				status: "active" | "archived" | "error" | "draft" | "paused";
 			} | {
 				kind: "playbook";
 				playbookId: string;
@@ -26601,7 +26181,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automations: {
 					automationId: string;
 					name: string;
-					status: "active" | "archived" | "draft" | "paused" | "error";
+					status: "active" | "archived" | "error" | "draft" | "paused";
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					nextRunAt: Date | null;
 				}[];
@@ -26666,24 +26246,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -26956,24 +26521,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -27232,24 +26782,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -27939,6 +27474,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						semanticSlug?: string | null | undefined;
 						profileKind?: "kind" | "role" | undefined;
 						applicableKinds?: string[] | undefined;
+						lifecycle?: {
+							property: string;
+							options: Record<string, unknown>[];
+						} | undefined;
 						properties?: {
 							slug: string;
 							valueType: string;
@@ -28506,6 +28045,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						semanticSlug?: string | null | undefined;
 						profileKind?: "kind" | "role" | undefined;
 						applicableKinds?: string[] | undefined;
+						lifecycle?: {
+							property: string;
+							options: Record<string, unknown>[];
+						} | undefined;
 						properties?: {
 							slug: string;
 							valueType: string;
@@ -28828,24 +28371,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -29380,24 +28908,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -29633,24 +29146,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -29759,24 +29257,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -30011,24 +29494,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -30105,24 +29573,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -30446,24 +29899,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -30577,24 +30015,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -31007,24 +30430,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -31235,24 +30643,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -31401,24 +30794,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -31526,24 +30904,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -32334,24 +31697,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -32384,24 +31732,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -32553,24 +31886,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -32653,24 +31971,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -32777,24 +32080,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -32879,24 +32167,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -33060,24 +32333,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -33141,24 +32399,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -33429,24 +32672,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -33557,24 +32785,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -33781,24 +32994,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -33852,24 +33050,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -34083,24 +33266,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -34201,24 +33369,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -34368,24 +33521,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -34601,24 +33739,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -34672,24 +33795,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -34858,24 +33966,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -34933,24 +34026,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -35178,24 +34256,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -35577,24 +34640,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -35631,7 +34679,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -35825,24 +34873,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -35887,24 +34920,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -36020,24 +35038,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -36191,24 +35194,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -36316,24 +35304,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -36478,24 +35451,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -36624,24 +35582,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -36661,7 +35604,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				status?: "active" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "paused" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -36753,7 +35696,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				patch: {
 					params?: Record<string, unknown> | undefined;
-					status?: "active" | "paused" | "error" | undefined;
+					status?: "active" | "error" | "paused" | undefined;
 					cursor?: string | undefined;
 				};
 			};
@@ -36856,24 +35799,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -36894,7 +35822,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				sourceConfigId?: string | undefined;
-				status?: "active" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "paused" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -36992,24 +35920,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -37029,7 +35942,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
-				status?: "active" | "draft" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "draft" | "paused" | undefined;
 				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
 				limit?: number | undefined;
 			} | undefined;
@@ -37043,7 +35956,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					triggerConfig: AutomationTriggerConfig;
 					flowDefinition: FlowDefinition;
-					status: "active" | "archived" | "draft" | "paused" | "error";
+					status: "active" | "archived" | "error" | "draft" | "paused";
 					errorMessage: string | null;
 					version: number;
 					lastRunAt: Date | null;
@@ -37071,7 +35984,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listPage: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
-				status?: "active" | "draft" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "draft" | "paused" | undefined;
 				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
@@ -37086,7 +35999,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					triggerConfig: AutomationTriggerConfig;
 					flowDefinition: FlowDefinition;
-					status: "active" | "archived" | "draft" | "paused" | "error";
+					status: "active" | "archived" | "error" | "draft" | "paused";
 					errorMessage: string | null;
 					version: number;
 					lastRunAt: Date | null;
@@ -37211,7 +36124,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				id: string;
 				workspaceId: string | null;
-				status: "active" | "archived" | "draft" | "paused" | "error";
+				status: "active" | "archived" | "error" | "draft" | "paused";
 				version: number;
 				createdAt: Date;
 				updatedAt: Date;
@@ -37251,7 +36164,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				description?: string | undefined;
 				triggerConfig?: Record<string, unknown> | undefined;
-				status?: "active" | "draft" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "draft" | "paused" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				state?: Record<string, unknown> | undefined;
 				agentUserId?: string | undefined;
@@ -37283,7 +36196,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					edges: Record<string, unknown>[];
 					precondition?: string | undefined;
 				} | undefined;
-				status?: "active" | "draft" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "draft" | "paused" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				state?: Record<string, unknown> | undefined;
 			};
@@ -37493,24 +36406,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -37674,24 +36572,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -37745,24 +36628,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -38046,24 +36914,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -38141,24 +36994,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -38304,24 +37142,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -38428,24 +37251,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -38468,24 +37276,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -40251,24 +39044,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -40291,24 +39069,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -40351,24 +39114,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -40397,24 +39145,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -40454,24 +39187,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -40548,24 +39266,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			errorShape: {
 				message: string;
 				data: {
-					reasonCode: string;
-					expectedStatus: string | null;
-					currentStatus: string | null;
-					opRef?: string | undefined;
-					candidates?: {
-						id: string;
-						title: string | null;
-						type: string;
-					}[] | undefined;
-					captureQuestionStatus?: string | undefined;
-					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-					httpStatus: number;
-					path?: string;
-					stack?: string;
-				} | {
-					reasonCode?: string | undefined;
-					expectedStatus?: undefined;
-					currentStatus?: undefined;
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
 					opRef?: string | undefined;
 					candidates?: {
 						id: string;
@@ -41591,24 +40294,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -41667,24 +40355,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -41743,24 +40416,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -41834,24 +40492,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -41929,24 +40572,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -41988,24 +40616,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -42143,24 +40756,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -42408,24 +41006,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -42463,24 +41046,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -42642,24 +41210,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -42752,24 +41305,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -43220,24 +41758,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -43311,24 +41834,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -43489,24 +41997,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -43614,24 +42107,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -43720,24 +42198,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -43811,24 +42274,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -43912,24 +42360,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
@@ -43960,24 +42393,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: {
 			message: string;
 			data: {
-				reasonCode: string;
-				expectedStatus: string | null;
-				currentStatus: string | null;
-				opRef?: string | undefined;
-				candidates?: {
-					id: string;
-					title: string | null;
-					type: string;
-				}[] | undefined;
-				captureQuestionStatus?: string | undefined;
-				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
-				httpStatus: number;
-				path?: string;
-				stack?: string;
-			} | {
-				reasonCode?: string | undefined;
-				expectedStatus?: undefined;
-				currentStatus?: undefined;
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
 				opRef?: string | undefined;
 				candidates?: {
 					id: string;
