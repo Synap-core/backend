@@ -62,6 +62,7 @@ export interface KeyReach {
       | "entityIds"
       | "label"
       | "expiresAt"
+      | "roleId"
     >
   >;
 }
@@ -178,6 +179,7 @@ export class GrantRepository {
         entityIds: grants.entityIds,
         label: grants.label,
         expiresAt: grants.expiresAt,
+        roleId: grants.roleId,
         revokedAt: grants.revokedAt,
       })
       .from(grants)

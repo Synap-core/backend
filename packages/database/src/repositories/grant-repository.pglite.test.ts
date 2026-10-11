@@ -181,6 +181,25 @@ describe("GrantRepository (0305, PGlite)", () => {
     expect(rows).toEqual([{ revoked_by: "human-9" }]);
   });
 
+  it("reachForKeys keeps each live grant's role lineage", async () => {
+    const ROLE = "55555555-5555-4555-8555-555555555555";
+    await pg.exec(
+      `INSERT INTO grant_roles (id, user_id, name) VALUES ('${ROLE}', 'human-1', 'Reader') ON CONFLICT DO NOTHING`
+    );
+    await attach({ roleId: ROLE });
+    await repo.attach({
+      apiKeyId: OTHER_KEY,
+      principalUserId: "agent-1",
+      onBehalfOf: "human-1",
+      permissions: ["document.read"],
+      expiresAt: null,
+      createdBy: "human-1",
+    });
+    const reach = await repo.reachForKeys([KEY, OTHER_KEY]);
+    expect(reach.get(KEY)?.grants.map((g) => g.roleId)).toEqual([ROLE]);
+    expect(reach.get(OTHER_KEY)?.grants.map((g) => g.roleId)).toEqual([null]);
+  });
+
   it("revokeForKeys touches only ACTIVE grants and reports zero when none", async () => {
     await attach();
     expect(await repo.revokeForKeys([KEY], "a")).toBe(1);
