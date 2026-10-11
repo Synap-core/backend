@@ -57,6 +57,8 @@ import {
   playbookRuns,
   projects,
   links,
+  ProfileResolutionService,
+  columnsForValue,
 } from "@synap/database";
 import {
   entityFieldApiName,
@@ -675,16 +677,43 @@ async function apply(
       return;
     case "property": {
       const [row] = await tx
-        .select({ properties: entities.properties })
+        .select({
+          properties: entities.properties,
+          profileId: entities.profileId,
+          workspaceId: entities.workspaceId,
+        })
         .from(entities)
         .where(eq(entities.id, target.entityId))
         .limit(1);
       const next = { ...((row?.properties ?? {}) as Record<string, unknown>) };
       if (target.absentBefore) delete next[target.key];
       else next[target.key] = target.before;
+      // Undoing a write to the LIFECYCLE key restores the columns too (they
+      // are the truth; `properties[slug]` is only the read projection), in the
+      // same statement, so the two can never disagree after a revert.
+      const lifecycle = row?.profileId
+        ? await new ProfileResolutionService(db).getEffectiveLifecycle(
+            row.profileId,
+            row.workspaceId
+          )
+        : null;
+      const restoredColumns =
+        lifecycle && lifecycle.propertySlug === target.key
+          ? columnsForValue(
+              lifecycle,
+              target.absentBefore ? null : target.before
+            )
+          : null;
       await tx
         .update(entities)
-        .set({ properties: next, updatedAt: now })
+        .set({
+          properties: next,
+          ...(restoredColumns && {
+            status: restoredColumns.status,
+            statusCategory: restoredColumns.statusCategory,
+          }),
+          updatedAt: now,
+        })
         .where(eq(entities.id, target.entityId));
       return;
     }

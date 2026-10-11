@@ -35,6 +35,8 @@ import {
 import type * as schema from "../schema/index.js";
 import type { Entity } from "../schema/entities.js";
 import { FacetRepository } from "../repositories/facet-repository.js";
+import { ProfileResolutionService } from "./profile-resolution-service.js";
+import { lifecycleColumnsFor } from "./lifecycle/lifecycle-columns.js";
 import type { EventRepository } from "../repositories/event-repository.js";
 
 const logger = createLogger({ module: "entity-merge-service" });
@@ -397,12 +399,24 @@ export async function mergeEntities(
     const rewiredLinkIds: string[] = [];
     const deletedRelationIds: string[] = [];
 
-    // 1. Update winner projection.
+    // 1. Update winner projection. A lifecycle value the loser FILLED (the
+    // winner had none) lands in the columns too — they are the truth and
+    // `properties[slug]` only the read projection, so the two stay equal.
+    const mergedColumns = await lifecycleColumnsFor(
+      new ProfileResolutionService(tx as unknown as Db),
+      winner.profileId,
+      winner.workspaceId,
+      merged
+    );
     await tx
       .update(entities)
       .set({
         title: nextTitle,
         preview: nextPreview,
+        ...(mergedColumns && {
+          status: mergedColumns.status,
+          statusCategory: mergedColumns.statusCategory,
+        }),
         properties: merged,
         documentId: nextDocumentId,
         version: winner.version + 1,
@@ -1040,7 +1054,18 @@ export async function unmergeEntities(
       }
     }
 
-    // 7. Restore winner fields from previousWinnerSnapshot.
+    // 7. Restore winner fields from previousWinnerSnapshot (the lifecycle
+    // columns follow the restored read projection).
+    const restoredWinnerProperties =
+      previousWinnerSnapshot.properties !== undefined
+        ? previousWinnerSnapshot.properties
+        : ((winner.properties ?? {}) as Record<string, unknown>);
+    const restoredColumns = await lifecycleColumnsFor(
+      new ProfileResolutionService(tx as unknown as Db),
+      winner.profileId,
+      winner.workspaceId,
+      restoredWinnerProperties as Record<string, unknown>
+    );
     const winnerSystemData =
       previousWinnerSnapshot.systemData !== undefined
         ? { ...previousWinnerSnapshot.systemData }
@@ -1058,10 +1083,11 @@ export async function unmergeEntities(
           previousWinnerSnapshot.preview !== undefined
             ? previousWinnerSnapshot.preview
             : winner.preview,
-        properties:
-          previousWinnerSnapshot.properties !== undefined
-            ? previousWinnerSnapshot.properties
-            : ((winner.properties ?? {}) as Record<string, unknown>),
+        properties: restoredWinnerProperties,
+        ...(restoredColumns && {
+          status: restoredColumns.status,
+          statusCategory: restoredColumns.statusCategory,
+        }),
         documentId:
           previousWinnerSnapshot.documentId !== undefined
             ? previousWinnerSnapshot.documentId

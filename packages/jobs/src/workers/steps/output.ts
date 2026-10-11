@@ -41,6 +41,10 @@ import {
   PolicyBlockedError,
 } from "../../utils/automation-governance.js";
 import { advanceSessionStageViaSlot } from "../../utils/stage-advance.js";
+import {
+  lifecycleSlugOf,
+  moveStatusFromAutomation,
+} from "../../utils/lifecycle-move.js";
 import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
 import {
   assertAgentWakeBudget,
@@ -430,7 +434,10 @@ export async function executeOutputStep(
         config.entityId,
         "entity_update.entityId"
       );
-      const properties = (config.properties ?? {}) as Record<string, unknown>;
+      // A copy: the lifecycle split below removes the status key from it.
+      const properties = {
+        ...((config.properties ?? {}) as Record<string, unknown>),
+      };
       // `title` / `description` are first-class COLUMNS, not properties, so an
       // automation that only passes `properties` can never rename an entity.
       // That gap made the whole enrichment class inert: `Bookmark Enrichment`
@@ -449,6 +456,57 @@ export async function executeOutputStep(
 
       if (!entityId)
         throw new Error("entity_update requires entityId in config");
+
+      // LIFECYCLE SPLIT (work model L2): the kind's lifecycle key is MOVED
+      // through the status door (`utils/lifecycle-move.ts` — governed as
+      // `entity.transition`, compare-and-set, one transition event), never
+      // patched with the other properties (the repository refuses that).
+      let statusMove: Awaited<
+        ReturnType<typeof moveStatusFromAutomation>
+      > | null = null;
+      const lifecycleSlug = await lifecycleSlugOf(entityId, workspaceId);
+      if (
+        lifecycleSlug &&
+        Object.prototype.hasOwnProperty.call(properties, lifecycleSlug)
+      ) {
+        const to = properties[lifecycleSlug];
+        delete properties[lifecycleSlug];
+        if (typeof to === "string" && to !== "") {
+          statusMove = await moveStatusFromAutomation({
+            ownerId,
+            workspaceId,
+            entityId,
+            to,
+            automationContext,
+            stepRunId: attribution?.stepRunId,
+            nodeId: attribution?.nodeId,
+            producerAgentUserId,
+          });
+          if (statusMove.status === "denied") {
+            throw new PolicyBlockedError(
+              "deny",
+              `status move denied by governance: ${statusMove.reason}`
+            );
+          }
+          if (
+            statusMove.status === "conflict" ||
+            statusMove.status === "refused"
+          ) {
+            throw new Error(
+              `entity_update: status move not applied (${statusMove.status === "conflict" ? `moved meanwhile, now "${statusMove.actual ?? "none"}"` : statusMove.reason})`
+            );
+          }
+        }
+        if (
+          Object.keys(properties).length === 0 &&
+          title === undefined &&
+          description === undefined
+        ) {
+          return statusMove?.status === "proposed"
+            ? { status: "proposed", proposalId: statusMove.proposalId }
+            : { status: "updated", entityId };
+        }
+      }
 
       // Look up the target entity's profile slug so profile-scoped governance
       // rules (e.g. "note=auto, lead=propose") can match on UPDATE the same way

@@ -411,6 +411,17 @@ async function materializeEntity(
 ): Promise<boolean> {
   if (action === "create" || action === "update") {
     const resolvedType = await resolveMaterializedEntityType(data);
+    // REPLICATION, not a move: the peer's lifecycle columns (the truth beside
+    // the `properties` read projection) are copied as the peer holds them,
+    // when the replicated row carries them.
+    const lifecycleReplica = {
+      ...(data.status !== undefined && {
+        status: (data.status as string | null) ?? null,
+      }),
+      ...(data.statusCategory !== undefined && {
+        statusCategory: (data.statusCategory as string | null) ?? null,
+      }),
+    };
     await db
       .insert(entities)
       .values({
@@ -423,6 +434,7 @@ async function materializeEntity(
         preview: data.preview as string | undefined,
         documentId: data.documentId as string | undefined,
         properties: data.properties ?? {},
+        ...lifecycleReplica,
         systemData: data.systemData ?? {},
         version: (data.version as number) ?? 1,
       })
@@ -434,6 +446,7 @@ async function materializeEntity(
           profileId: data.profileId as string | undefined,
           type: resolvedType,
           properties: data.properties ?? {},
+          ...lifecycleReplica,
           systemData: data.systemData ?? {},
           version: (data.version as number) ?? 1,
           updatedAt: new Date(),

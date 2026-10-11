@@ -17,7 +17,18 @@ const h = vi.hoisted(() => ({
   entity: null as null | { properties: Record<string, unknown>; workspaceId: string },
   update: vi.fn(async (_input: Record<string, unknown>) => ({ status: "updated" }) as Record<string, unknown>),
   ctx: [] as Array<Record<string, unknown>>,
+  // The status door. Default: the kind declares no lifecycle → the legacy
+  // governed entity-update path below runs (what the cases above pin).
+  move: vi.fn(
+    async (_input: Record<string, unknown>) =>
+      ({ status: "refused", code: "NO_LIFECYCLE", reason: "none" }) as Record<
+        string,
+        unknown
+      >
+  ),
 }));
+
+vi.mock("../../lifecycle/move-status.js", () => ({ moveStatus: h.move }));
 
 vi.mock("@synap/jobs/utils/session-process.js", () => ({
   loadSessionProcess: async () => h.proc,
@@ -65,6 +76,65 @@ beforeEach(() => {
   h.update.mockClear();
   h.update.mockResolvedValue({ status: "updated" });
   h.ctx.length = 0;
+  h.move.mockClear();
+  h.move.mockResolvedValue({
+    status: "refused",
+    code: "NO_LIFECYCLE",
+    reason: "none",
+  });
+});
+
+describe("writeStageSubjectStatus — the status door (work model L2)", () => {
+  it("when statusProperty IS the declared lifecycle, it MOVES through moveStatus, never entities.update", async () => {
+    h.move.mockResolvedValue({ status: "moved", transition: {} });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "draft",
+      userId: "owner-1",
+      agentUserId: "agent-1",
+    });
+    expect(out).toEqual({ status: "written", property: "post-status", value: "drafting" });
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.move.mock.calls[0]![0]).toMatchObject({
+      entityId: "post-1",
+      property: "post-status",
+      to: "drafting",
+      sessionId: "sess-1",
+      actor: { kind: "agent", agentUserId: "agent-1", userId: "owner-1" },
+    });
+  });
+
+  it("a proposed move is success; a playbook human-only status still forces a proposal", async () => {
+    h.proc!.humanOnlyStatuses = ["published"];
+    h.move.mockResolvedValue({
+      status: "proposed",
+      proposalId: "p-1",
+      proposalType: "entity.transition",
+    });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "publish",
+      userId: "owner-1",
+    });
+    expect(out).toMatchObject({ status: "proposed", proposalId: "p-1" });
+    expect(h.move.mock.calls[0]![0]).toMatchObject({ forcePropose: true });
+  });
+
+  it("a stale subject is a failed write, never an overwrite", async () => {
+    h.move.mockResolvedValue({
+      status: "conflict",
+      expectedFrom: "idea",
+      actual: "published",
+    });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "draft",
+      userId: "owner-1",
+      agentUserId: "agent-1",
+    });
+    expect(out.status).toBe("failed");
+    expect(h.update).not.toHaveBeenCalled();
+  });
 });
 
 describe("writeStageSubjectStatus", () => {

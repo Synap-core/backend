@@ -35,6 +35,12 @@ export interface MoveStatusInput {
   role?: string | null;
   /** Name the facet when a role is attached more than once. */
   facetId?: string | null;
+  /**
+   * The property the caller means to move. When given and it is NOT the
+   * declared lifecycle, the door refuses with `NOT_THE_LIFECYCLE` (the caller
+   * is writing a plain property and keeps its own path).
+   */
+  property?: string;
   /** What the mover saw. `undefined` = not expressed (the current value). */
   expectedFrom?: string | null;
   to: string;
@@ -61,7 +67,11 @@ export type MoveStatusResult =
   | {
       status: "refused";
       code:
-        "NOT_FOUND" | "NO_LIFECYCLE" | "ROLE_NOT_ATTACHED" | "UNKNOWN_OPTION";
+        | "NOT_FOUND"
+        | "NO_LIFECYCLE"
+        | "NOT_THE_LIFECYCLE"
+        | "ROLE_NOT_ATTACHED"
+        | "UNKNOWN_OPTION";
       reason: string;
     };
 
@@ -78,6 +88,13 @@ export async function moveStatus(
     return { status: "refused", code: resolved.code, reason: resolved.reason };
   }
   const { target } = resolved;
+  if (input.property && input.property !== target.lifecycle.propertySlug) {
+    return {
+      status: "refused",
+      code: "NOT_THE_LIFECYCLE",
+      reason: `"${input.property}" is not the lifecycle of ${target.role ?? target.entityType ?? "this kind"} ("${target.lifecycle.propertySlug}" is)`,
+    };
+  }
   const lifecycleMove = classifyStatusMove(target.lifecycle, input.to);
   if (!lifecycleMove) {
     return {

@@ -62,6 +62,7 @@ import {
 } from "../../utils/permission-check.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { getAgentFocusProjectId } from "../../services/agent-identity-service.js";
+import { initialStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -1126,6 +1127,24 @@ export const createProcs = {
         },
       });
 
+      // Lifecycle floor for an entity BORN in a closing / person-only status
+      // (tighten-only — `services/lifecycle/initial-status-floor.ts`). The
+      // value it is born with is the caller's, else the kind's default.
+      const initialLifecycleMove =
+        input.agentUserId || (input.source && input.source !== "user")
+          ? await initialStatusFloor({
+              profileId: earlyResolvedProfile?.id,
+              workspaceId: permWorkspaceId,
+              properties: {
+                ...((earlyResolvedProfile?.defaultValues as Record<
+                  string,
+                  unknown
+                > | null) ?? {}),
+                ...(input.properties ?? {}),
+              },
+            })
+          : undefined;
+
       // 2. Permission check (may create proposal with correlationId)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -1134,6 +1153,7 @@ export const createProcs = {
         subjectType: "entity",
         action: "create",
         source: input.source,
+        lifecycleMove: initialLifecycleMove,
         issuer,
         reasoning: input.reasoning,
         correlationId,

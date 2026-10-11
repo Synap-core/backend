@@ -29,6 +29,11 @@ import {
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { auditLog } from "../../utils/audit-log.js";
+import {
+  moveStatus,
+  type MoveStatusResult,
+} from "../../services/lifecycle/move-status.js";
+import { initialStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
 import { randomUUID } from "crypto";
 import { canWriteFacet } from "../../utils/facet-write-gate.js";
 import {
@@ -224,6 +229,10 @@ export const facetProcs = {
       // an attach the executor then refused, or name an arbitrary twin in the
       // error. Mirroring the executor keeps the two from disagreeing, whatever
       // tie-break `getBySlug` applies.
+      // Lifecycle floor for a role BORN in a closing / person-only status
+      // (tighten-only — `initial-status-floor.ts`).
+      let initialLifecycleMove:
+        { intoTerminal: boolean; humanOnly: boolean } | undefined;
       {
         const target = await new ProfileResolutionService(db).resolveProfile(
           input.profileId ?? input.profileSlug!,
@@ -231,6 +240,12 @@ export const facetProcs = {
           facetWorkspaceId ?? ""
         );
         if (target) {
+          initialLifecycleMove = await initialStatusFloor({
+            profileId: target.id,
+            workspaceId: facetWorkspaceId,
+            status: input.status,
+            properties: input.properties,
+          });
           if (target.profileKind !== "role") {
             throw new FacetProfileKindError(target.id, target.slug);
           }
@@ -296,6 +311,7 @@ export const facetProcs = {
         subjectType: "facet",
         action: "attach",
         source: input.source,
+        lifecycleMove: initialLifecycleMove,
         reasoning: input.reasoning,
         correlationId,
         requestedEventId: requestedEvent?.id,
@@ -418,6 +434,8 @@ export const facetProcs = {
       z.object({
         facetId: z.string().uuid(),
         status: z.string().optional(),
+        /** The role status the caller SAW — `expectedFrom` of the status move. */
+        expectedStatus: z.string().nullable().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
         /** Overlay lens for property validation (defaults to the facet's stored ws). */
         workspaceId: z.string().uuid().nullable().optional(),
@@ -447,6 +465,110 @@ export const facetProcs = {
       }
       const governanceWorkspaceId =
         existing.workspaceId ?? ctx.workspaceId ?? null;
+
+      // LIFECYCLE SPLIT (work model L2): a ROLE's status — `status`, or its
+      // lifecycle property — is MOVED through the one door (`moveStatus`:
+      // compare-and-set, the lifecycle floor, the transition event), first, so
+      // a stale move rejects the whole call before anything is written.
+      let statusMove: MoveStatusResult | undefined;
+      const roleLifecycle = await new ProfileResolutionService(
+        db
+      ).getEffectiveLifecycle(
+        existing.profileId,
+        input.workspaceId ?? existing.workspaceId ?? null
+      );
+      if (roleLifecycle) {
+        const slug = roleLifecycle.propertySlug;
+        const fromProps = input.properties?.[slug];
+        const to = input.status ?? fromProps;
+        if (
+          input.status !== undefined &&
+          fromProps !== undefined &&
+          fromProps !== input.status
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `"status" and "${slug}" disagree; send the role's status once.`,
+          });
+        }
+        if (input.properties && slug in input.properties) {
+          const { [slug]: _moved, ...rest } = input.properties;
+          input.properties = Object.keys(rest).length > 0 ? rest : undefined;
+        }
+        input.status = undefined;
+        if (to !== undefined && to !== existing.status) {
+          if (typeof to !== "string" || to === "") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `"${slug}" is this role's status and needs one of its status values.`,
+            });
+          }
+          // The DELEGATED door (an approved proposal replayed through the
+          // composite caller) carries the agent on `ctx` for ATTRIBUTION and an
+          // approved proposal id: it is replayed, never re-governed.
+          const delegatedAgent =
+            !input.agentUserId && ctx.agentUserId && ctx.governanceProposalId
+              ? ctx.agentUserId
+              : undefined;
+          const actingAgent = input.agentUserId ?? delegatedAgent;
+          statusMove = await moveStatus({
+            entityId: existing.entityId,
+            facetId: existing.id,
+            to,
+            expectedFrom: input.expectedStatus,
+            approvedProposalId: delegatedAgent
+              ? ctx.governanceProposalId
+              : undefined,
+            actor: actingAgent
+              ? { kind: "agent", userId: ctx.userId, agentUserId: actingAgent }
+              : {
+                  kind: input.source === "system" ? "system" : "human",
+                  userId: ctx.userId,
+                },
+            sessionId: ctx.sessionId ?? null,
+            reason: input.reasoning ?? null,
+            workspaceId: governanceWorkspaceId,
+          });
+          if (statusMove.status === "conflict") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `Stale status: expected "${statusMove.expectedFrom ?? "none"}", it is now "${statusMove.actual ?? "none"}". Nothing was changed.`,
+            });
+          }
+          if (statusMove.status === "refused") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: statusMove.reason,
+            });
+          }
+          if (statusMove.status === "denied") {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: statusMove.reason,
+            });
+          }
+        }
+        if (input.properties === undefined) {
+          const facetNow = await facetRepo.getById(input.facetId);
+          if (statusMove?.status === "proposed") {
+            return {
+              status: "proposed" as const,
+              message: "Status change proposed for review",
+              facet: null as Record<string, unknown> | null,
+              proposalId: statusMove.proposalId,
+              proposalType: statusMove.proposalType,
+              reviewUrl: statusMove.reviewUrl,
+              statusMove,
+            };
+          }
+          return {
+            status: "updated" as const,
+            message: "Facet updated",
+            facet: facetNow ?? existing,
+            ...(statusMove ? { statusMove } : {}),
+          };
+        }
+      }
 
       // Best-effort readable label for the parent entity — surfaced on
       // proposal/notification cards (which otherwise show raw entity ids).
@@ -553,7 +675,12 @@ export const facetProcs = {
         proposalId: ctx.governanceProposalId,
       });
 
-      return { status: "updated" as const, message: "Facet updated", facet };
+      return {
+        status: "updated" as const,
+        message: "Facet updated",
+        facet,
+        ...(statusMove ? { statusMove } : {}),
+      };
     }),
 
   /**

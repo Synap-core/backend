@@ -314,6 +314,13 @@ export {
   type ApplyStatusMoveResult,
 } from "./services/lifecycle/apply-status-move.js";
 export {
+  LifecycleWriteOutsideDoorError,
+  assertNoLifecycleMove,
+  columnsForValue,
+  lifecycleColumnsFor,
+  type LifecycleColumns,
+} from "./services/lifecycle/lifecycle-columns.js";
+export {
   resolvePropertyLabel,
   resolvePropertyOptions,
   type StoredPropertyPresentation,

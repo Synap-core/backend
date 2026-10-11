@@ -12,8 +12,10 @@ import {
   webhookSubscriptions,
   resolveVaultSecret,
   resolveIdentity,
+  ProfileResolutionService,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
+import { moveStatus } from "../services/lifecycle/move-status.js";
 import { getBoss } from "@synap/jobs";
 import {
   FIREFLIES_INGEST_QUEUE,
@@ -187,13 +189,44 @@ async function updateBookingEvent(
       drizzleSql`${entities.properties}->>'calBookingUid' = ${uid}`,
       workspaceId ? eq(entities.workspaceId, workspaceId) : drizzleSql`TRUE`
     ),
-    columns: { id: true },
+    columns: { id: true, profileId: true, userId: true },
   });
   for (const r of rows) {
+    // The event kind's LIFECYCLE key (a cancel) is a status move: it goes
+    // through the one door (`moveStatus`, system actor — the booking system
+    // decided it), never a raw JSONB patch (columns = truth, `properties`
+    // = read projection). Every other key is plain maintenance data.
+    let rest = patch;
+    const lifecycle = r.profileId
+      ? await new ProfileResolutionService(db).getEffectiveLifecycle(
+          r.profileId,
+          workspaceId
+        )
+      : null;
+    if (lifecycle && lifecycle.propertySlug in patch) {
+      const { [lifecycle.propertySlug]: to, ...others } = patch;
+      rest = others;
+      if (typeof to === "string") {
+        const moved = await moveStatus({
+          entityId: r.id,
+          to,
+          actor: { kind: "system", userId: r.userId },
+          reason: "Cal.com booking update",
+          workspaceId,
+        });
+        if (moved.status === "refused" || moved.status === "conflict") {
+          logger.warn(
+            { entityId: r.id, to, moved },
+            "cal.com webhook: status move not applied"
+          );
+        }
+      }
+    }
+    if (Object.keys(rest).length === 0) continue;
     await db
       .update(entities)
       .set({
-        properties: drizzleSql`COALESCE(${entities.properties}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+        properties: drizzleSql`COALESCE(${entities.properties}, '{}'::jsonb) || ${JSON.stringify(rest)}::jsonb`,
         updatedAt: new Date(),
       })
       .where(eq(entities.id, r.id));

@@ -19,6 +19,10 @@
  */
 
 import type PgBoss from "pg-boss";
+import {
+  applyApprovedStatusMove,
+  lifecycleSlugOf,
+} from "../utils/lifecycle-move.js";
 import { execFileSync } from "child_process";
 import { realpathSync, existsSync } from "fs";
 import { resolve as resolvePath } from "path";
@@ -481,6 +485,26 @@ async function materializeEntity(
     );
   } else if (action === "update") {
     const entityId = (data.id as string) || subjectId;
+    // An approved update carrying the kind's lifecycle key MOVES it (the one
+    // status write + event); the rest is a plain update.
+    let properties: Record<string, unknown> | undefined =
+      (data.properties as Record<string, unknown>) || undefined;
+    const lifecycleSlug = properties
+      ? await lifecycleSlugOf(entityId, workspaceId ?? null)
+      : null;
+    if (properties && lifecycleSlug && lifecycleSlug in properties) {
+      const { [lifecycleSlug]: to, ...rest } = properties;
+      properties = Object.keys(rest).length > 0 ? rest : undefined;
+      if (typeof to === "string" && to !== "") {
+        await applyApprovedStatusMove({
+          entityId,
+          to,
+          userId,
+          workspaceId: workspaceId ?? null,
+          proposalId: (data.sourceProposalId as string) || null,
+        });
+      }
+    }
     await entityRepo.update(
       entityId,
       {
@@ -488,7 +512,7 @@ async function materializeEntity(
         preview:
           (data.description as string) || (data.preview as string) || undefined,
         documentId: data.documentId as string | undefined,
-        properties: (data.properties as Record<string, unknown>) || undefined,
+        properties,
         // Thread the materializing workspace's lens for validation/indexing.
         // Materialization runs from the workspace that emitted the event.
         workspaceId: workspaceId ?? null,
@@ -562,10 +586,27 @@ async function materializeEntityFacet(
     );
   } else if (action === "update") {
     const facetId = (data.id as string) || subjectId;
+    // An approved facet update carrying a status MOVES the role's status
+    // through the one write when the role declares a lifecycle.
+    let facetStatus = (data.status as string) || undefined;
+    if (facetStatus) {
+      const facetRow = await facetRepo.getById(facetId);
+      const moved = facetRow
+        ? await applyApprovedStatusMove({
+            entityId: facetRow.entityId,
+            facetId,
+            to: facetStatus,
+            userId,
+            workspaceId: facetRow.workspaceId ?? null,
+            proposalId: (data.sourceProposalId as string) || null,
+          })
+        : null;
+      if (moved) facetStatus = undefined;
+    }
     await facetRepo.update(
       facetId,
       {
-        status: (data.status as string) || undefined,
+        status: facetStatus,
         properties: (data.properties as Record<string, unknown>) || undefined,
         // A facet UPDATE only re-homes when the caller passed an explicit
         // workspaceId (the inline door does `input.workspaceId ?? undefined`);

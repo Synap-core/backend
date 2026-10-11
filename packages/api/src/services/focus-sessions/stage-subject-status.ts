@@ -37,6 +37,7 @@ import { db, entities, eq, getWorkspaceMembership } from "@synap/database";
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import type { Context } from "../../types/context.js";
+import { moveStatus } from "../lifecycle/move-status.js";
 
 const logger = createLogger({ module: "focus-sessions/stage-subject-status" });
 
@@ -107,10 +108,67 @@ export async function writeStageSubjectStatus(input: {
     ];
     if (current === value) return { status: "skipped", reason: "already_set" };
 
-    // THE governed door: `entities.update` as the session owner, attributed to
-    // the agent when one drove the advance, inside the session (its
-    // forceProposeWrites governance applies).
     const wsId = subject.workspaceId ?? session.workspaceId ?? null;
+    const reasoning = `The process entered stage "${stage.name ?? stage.key}", which is "${value}".`;
+
+    // THE status door (work model L2) when the playbook's statusProperty IS
+    // the subject kind's declared lifecycle: compare-and-set, the lifecycle
+    // governance floor (a human-only / closing option proposes for an agent),
+    // one transition event. The playbook's own `humanOnlyStatuses` still
+    // force a proposal (OR-ed, never a downgrade).
+    const move = await moveStatus({
+      entityId: session.subjectEntityId,
+      property: proc.statusProperty,
+      to: value,
+      // No belief to defend: the stage decides the value; the door's own
+      // compare-and-set still guards the read→write window.
+      actor: input.agentUserId
+        ? {
+            kind: "agent",
+            userId: input.userId,
+            agentUserId: input.agentUserId,
+          }
+        : { kind: "human", userId: input.userId },
+      sessionId: session.id,
+      reason: reasoning,
+      workspaceId: wsId,
+      forcePropose: proc.humanOnlyStatuses.includes(value) || undefined,
+    });
+    const isTheLifecycle = !(
+      move.status === "refused" &&
+      (move.code === "NO_LIFECYCLE" || move.code === "NOT_THE_LIFECYCLE")
+    );
+    if (isTheLifecycle && move.status !== "refused") {
+      switch (move.status) {
+        case "moved":
+          return { status: "written", property: proc.statusProperty, value };
+        case "unchanged":
+          return { status: "skipped", reason: "already_set" };
+        case "proposed":
+          return {
+            status: "proposed",
+            property: proc.statusProperty,
+            value,
+            proposalId: move.proposalId,
+          };
+        case "conflict":
+          return {
+            status: "failed",
+            reason: `the subject's status moved meanwhile (now "${move.actual ?? "none"}")`,
+          };
+        case "denied":
+          return { status: "failed", reason: move.reason };
+      }
+    }
+    if (isTheLifecycle && move.status === "refused") {
+      return { status: "failed", reason: move.reason };
+    }
+
+    // The kind declares no lifecycle: `statusProperty` is a plain property,
+    // written through the governed entity-update door as before —
+    // `entities.update` as the session owner, attributed to the agent when one
+    // drove the advance, inside the session (its forceProposeWrites governance
+    // applies).
     let workspaceRole = "owner";
     if (wsId) {
       const membership = await getWorkspaceMembership(db, wsId, input.userId);
@@ -131,7 +189,7 @@ export async function writeStageSubjectStatus(input: {
       ...(input.agentUserId
         ? { agentUserId: input.agentUserId, source: "agent" as const }
         : { source: "user" as const }),
-      reasoning: `The process entered stage "${stage.name ?? stage.key}", which is "${value}".`,
+      reasoning,
       ...(proc.humanOnlyStatuses.includes(value) ? { forcePropose: true } : {}),
     })) as { status?: string; proposalId?: string };
     if (res?.status === "proposed" && res.proposalId) {

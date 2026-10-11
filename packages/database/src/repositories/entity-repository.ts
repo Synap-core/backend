@@ -10,6 +10,10 @@ import { entities } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
+import {
+  assertNoLifecycleMove,
+  lifecycleColumnsFor,
+} from "../services/lifecycle/lifecycle-columns.js";
 import { FacetRepository } from "./facet-repository.js";
 import type { EntityFacet } from "../schema/entity-facets.js";
 import type { Entity, NewEntity } from "../schema/entities.js";
@@ -473,6 +477,17 @@ export class EntityRepository extends BaseRepository<
       validatedProperties = data.properties;
     }
 
+    // 2b. LIFECYCLE columns for the new row, from the same value the read
+    // projection holds (a born row is not a move — it has no "from").
+    const bornColumns = roleFacetProfile
+      ? null
+      : await lifecycleColumnsFor(
+          this.profileResolution,
+          profileId,
+          effectiveWorkspaceId,
+          validatedProperties
+        );
+
     // 3. Create entity
     const provenance = stampProvenance({
       userId: data.createdByUserId ?? userId,
@@ -491,6 +506,10 @@ export class EntityRepository extends BaseRepository<
       preview: data.preview,
       documentId: data.documentId,
       properties: validatedProperties,
+      ...(bornColumns && {
+        status: bornColumns.status,
+        statusCategory: bornColumns.statusCategory,
+      }),
       // D8: a TEST-key write is marked here, at the floor every entity create
       // door converges on — no door can forget it (request-write-context.ts).
       systemData: stampProbeMarker(data.systemData ?? {}),
@@ -667,6 +686,26 @@ export class EntityRepository extends BaseRepository<
 
     const validationProfileId = newProfileId || existing.profileId;
 
+    // LIFECYCLE GUARD (work model L2): the lifecycle key is moved ONLY by the
+    // `moveStatus` door — its columns are the truth, `properties[slug]` the
+    // read projection. A generic write that would change it is refused here,
+    // the floor every property writer converges on. Re-sending the current
+    // value is a no-op and passes.
+    const lensForLifecycle = data.workspaceId ?? existing.workspaceId ?? null;
+    const lifecycle =
+      existing.profileId && !newProfileId
+        ? await this.profileResolution.getEffectiveLifecycle(
+            existing.profileId,
+            lensForLifecycle
+          )
+        : null;
+    assertNoLifecycleMove(lifecycle, data, {
+      status: existing.status ?? null,
+      projected: (existing.properties as Record<string, unknown> | null)?.[
+        lifecycle?.propertySlug ?? ""
+      ],
+    });
+
     // Apply key deletions first so the merge step never re-introduces them.
     const baseProperties: Record<string, unknown> = {
       ...(existing.properties as Record<string, unknown>),
@@ -730,6 +769,17 @@ export class EntityRepository extends BaseRepository<
       };
     }
 
+    // A changed KIND has a different lifecycle (or none): re-derive the
+    // columns from the projection the new kind reads, never keep the old ones.
+    const retyped = newProfileId
+      ? await lifecycleColumnsFor(
+          this.profileResolution,
+          newProfileId,
+          lensForLifecycle,
+          updatedProperties
+        )
+      : undefined;
+
     // 3. Update entity
     const [entity] = await this.db
       .update(entities)
@@ -739,6 +789,10 @@ export class EntityRepository extends BaseRepository<
         ...(data.documentId !== undefined && { documentId: data.documentId }),
         ...(newProfileId && { profileId: newProfileId }),
         ...(newType && { type: newType }),
+        ...(retyped !== undefined && {
+          status: retyped?.status ?? null,
+          statusCategory: retyped?.statusCategory ?? null,
+        }),
         properties: updatedProperties,
         updatedAt: new Date(),
       } as Partial<NewEntity>)

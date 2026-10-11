@@ -29,6 +29,11 @@ import {
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 import { stampProvenance } from "../utils/stamp-provenance.js";
+import {
+  assertNoLifecycleMove,
+  columnsForValue,
+  LifecycleWriteOutsideDoorError,
+} from "../services/lifecycle/lifecycle-columns.js";
 
 /** Postgres error code for a unique constraint violation. */
 const UNIQUE_VIOLATION = "23505";
@@ -191,6 +196,33 @@ export class FacetRepository extends BaseRepository<
       validatedProperties = validationResult.normalized;
     }
 
+    // LIFECYCLE columns for the new facet (a born row is not a move). The
+    // role's lifecycle value may arrive as `status` or as the property; when
+    // both are given they must agree. The read projection mirrors the column.
+    const roleLifecycle = await this.profileResolution.getEffectiveLifecycle(
+      profile.id,
+      lensWorkspaceId
+    );
+    let bornStatus: string | undefined = data.status;
+    let bornCategory: string | null = null;
+    if (roleLifecycle) {
+      const slug = roleLifecycle.propertySlug;
+      const fromProps = validatedProperties[slug];
+      if (
+        bornStatus !== undefined &&
+        fromProps !== undefined &&
+        fromProps !== bornStatus
+      ) {
+        throw new LifecycleWriteOutsideDoorError(slug);
+      }
+      const cols = columnsForValue(roleLifecycle, bornStatus ?? fromProps);
+      bornStatus = cols.status ?? undefined;
+      bornCategory = cols.statusCategory;
+      if (cols.status !== null) {
+        validatedProperties = { ...validatedProperties, [slug]: cols.status };
+      }
+    }
+
     const provenance = stampProvenance({
       userId: data.createdByUserId ?? userId,
       agentUserId: data.agentUserId,
@@ -206,7 +238,8 @@ export class FacetRepository extends BaseRepository<
           userId,
           workspaceId,
           contextEntityId: data.contextEntityId ?? null,
-          status: data.status,
+          status: bornStatus,
+          statusCategory: bornCategory,
           properties: validatedProperties,
           createdByKind: provenance.createdByKind,
           createdByUserId: provenance.createdByUserId,
@@ -360,6 +393,30 @@ export class FacetRepository extends BaseRepository<
     if (!existing) {
       throw new Error("Facet not found");
     }
+
+    // LIFECYCLE GUARD: a role's status moves only through the `moveStatus`
+    // door (columns = truth, `properties[slug]` = read projection). A generic
+    // update that would change it — as `status` or as the property — is
+    // refused; re-sending the current value passes.
+    const roleLifecycle = await this.profileResolution.getEffectiveLifecycle(
+      existing.profileId,
+      data.workspaceId ?? existing.workspaceId ?? null
+    );
+    const projected = (existing.properties as Record<string, unknown> | null)?.[
+      roleLifecycle?.propertySlug ?? ""
+    ];
+    assertNoLifecycleMove(
+      roleLifecycle,
+      {
+        properties: {
+          ...(data.properties ?? {}),
+          ...(roleLifecycle && data.status !== undefined
+            ? { [roleLifecycle.propertySlug]: data.status }
+            : {}),
+        },
+      },
+      { status: existing.status ?? null, projected }
+    );
 
     let updatedProperties = existing.properties as Record<string, unknown>;
     if (data.properties) {

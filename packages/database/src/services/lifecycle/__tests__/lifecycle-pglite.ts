@@ -59,6 +59,15 @@ export async function makeLifecyclePglite() {
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));
   }
+  // Bare stand-ins for the tables profile RESOLUTION's visibility predicate
+  // names (no rows: system-scoped profiles resolve without them).
+  await pg.exec(`
+    create table if not exists workspace_members (workspace_id uuid, user_id text, role text);
+    create table if not exists workspaces (id uuid primary key, owner_id text, settings jsonb);
+    create table if not exists pod_members (user_id text);
+    create table if not exists project_members (user_id text, role text);
+    create table if not exists users (id text primary key);
+  `);
   await pg.exec(MIGRATION_0319);
   const db = drizzle(pg, { schema });
   return { pg, db };

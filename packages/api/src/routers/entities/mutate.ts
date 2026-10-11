@@ -20,7 +20,12 @@ import {
   extractIdentitySignals,
   registerIdentitySignals,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
+  ProfileResolutionService,
 } from "@synap/database";
+import {
+  moveStatus,
+  type MoveStatusResult,
+} from "../../services/lifecycle/move-status.js";
 import { entities, views, workspaces } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import {
@@ -138,6 +143,13 @@ export const mutateProcs = {
          * it is OR-ed with the checks that already force a proposal.
          */
         forcePropose: z.boolean().optional(),
+        /**
+         * The lifecycle status the caller SAW (work model L2). When
+         * `properties` carries the lifecycle key, that key is moved through the
+         * `moveStatus` door with this as `expectedFrom`: an agent acting on a
+         * stale value gets CONFLICT and NOTHING in the call is written.
+         */
+        expectedStatus: z.string().nullable().optional(),
         /** When true, removes workspace scoping — entity becomes pod-wide (visible in all workspaces). */
         global: z.boolean().optional(),
         /** Workspace used for permission, audit, overlays, and side effects. */
@@ -173,7 +185,13 @@ export const mutateProcs = {
           isNull(entities.deletedAt),
           entityWriteVisibleWhere(ctx.userId)
         ),
-        columns: { id: true, workspaceId: true, type: true, documentId: true },
+        columns: {
+          id: true,
+          workspaceId: true,
+          type: true,
+          documentId: true,
+          profileId: true,
+        },
       });
       if (!existing) {
         throw new TRPCError({
@@ -217,6 +235,115 @@ export const mutateProcs = {
             overlayWorkspaceId
           )
         : undefined;
+
+      // LIFECYCLE SPLIT (work model L2). The lifecycle key is the kind's
+      // status: its columns are the truth and `properties[slug]` only the read
+      // projection, so it is MOVED through the one door (`moveStatus`:
+      // compare-and-set, the lifecycle governance floor, the transition event),
+      // never patched here. It goes FIRST: a stale move (CONFLICT) rejects the
+      // whole call before anything else is written. A re-typed entity
+      // (`profileSlug`) re-derives its columns in the repository instead.
+      let statusMove: MoveStatusResult | undefined;
+      const lifecycleSlug =
+        existing.profileId && input.profileSlug === undefined
+          ? (
+              await new ProfileResolutionService(db).getEffectiveLifecycle(
+                existing.profileId,
+                overlayWorkspaceId
+              )
+            )?.propertySlug
+          : undefined;
+      if (lifecycleSlug && input.deleteProperties?.includes(lifecycleSlug)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `"${lifecycleSlug}" is this record's status; move it to another status instead of deleting it.`,
+        });
+      }
+      if (
+        lifecycleSlug &&
+        input.properties &&
+        Object.prototype.hasOwnProperty.call(input.properties, lifecycleSlug)
+      ) {
+        const { [lifecycleSlug]: to, ...rest } = input.properties;
+        input.properties = Object.keys(rest).length > 0 ? rest : undefined;
+        if (typeof to !== "string" || to === "") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `"${lifecycleSlug}" is this record's status and needs one of its status values.`,
+          });
+        }
+        statusMove = await moveStatus({
+          entityId: input.id,
+          to,
+          expectedFrom: input.expectedStatus,
+          actor: input.agentUserId
+            ? {
+                kind: "agent",
+                userId: ctx.userId,
+                agentUserId: input.agentUserId,
+              }
+            : {
+                kind: input.source === "system" ? "system" : "human",
+                userId: ctx.userId,
+              },
+          sessionId: ctx.sessionId ?? null,
+          reason: input.reasoning ?? null,
+          workspaceId: overlayWorkspaceId,
+          forcePropose: input.forcePropose,
+        });
+        if (statusMove.status === "conflict") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Stale status: expected "${statusMove.expectedFrom ?? "none"}", it is now "${statusMove.actual ?? "none"}". Nothing was changed.`,
+          });
+        }
+        if (statusMove.status === "refused") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: statusMove.reason,
+          });
+        }
+        if (statusMove.status === "denied") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: statusMove.reason,
+          });
+        }
+        const nothingElse =
+          input.title === undefined &&
+          input.description === undefined &&
+          input.documentId === undefined &&
+          input.properties === undefined &&
+          !input.deleteProperties?.length &&
+          input.global !== true;
+        if (nothingElse) {
+          if (statusMove.status === "proposed") {
+            return {
+              status: "proposed",
+              message: "Status change proposed for review",
+              proposalId: statusMove.proposalId,
+              proposalType: statusMove.proposalType,
+              reviewUrl: statusMove.reviewUrl,
+              statusMove,
+            };
+          }
+          const [after] = await db
+            .select({
+              title: entities.title,
+              preview: entities.preview,
+              properties: entities.properties,
+            })
+            .from(entities)
+            .where(eq(entities.id, input.id))
+            .limit(1);
+          return {
+            status: "updated",
+            message: "Entity updated",
+            written: after,
+            statusMove,
+          };
+        }
+      }
 
       // 1. Emit .requested event
       const requestedEvent = await auditLog({
@@ -286,6 +413,7 @@ export const mutateProcs = {
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
+          ...(statusMove ? { statusMove } : {}),
         };
       }
 
@@ -532,6 +660,9 @@ export const mutateProcs = {
       return {
         status: "updated",
         message: "Entity updated",
+        // The lifecycle part of this call, when it carried the status key
+        // (moved / unchanged / proposed — see LIFECYCLE SPLIT above).
+        ...(statusMove ? { statusMove } : {}),
         // The row as THIS write left it — what an approval's undo stamp
         // records as `after`, read from the write itself so a concurrent edit
         // landing just after it is never recorded as this write's change.
