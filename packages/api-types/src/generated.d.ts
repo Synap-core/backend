@@ -8240,6 +8240,19 @@ export interface TrackStageHistoryEntry {
 	enteredAt: string;
 	/** The user (or agent) id that moved it. */
 	actor: string;
+	/**
+	 * The verdict of the entered step's `check` ENTRY gate, which measured the
+	 * step LEFT (`fromStage`). Present only when such a gate ran on this move;
+	 * absent = no check gate ran (or the move predates the stamp, U5).
+	 */
+	check?: TrackStageCheckVerdict;
+}
+/** A check gate's verdict on one move (`stage_history[].check`). */
+export interface TrackStageCheckVerdict {
+	passed: boolean;
+	/** Required criteria / outcomes not met; `CHECK_GATE_UNEVALUATED` = not measured. */
+	failing: string[];
+	reason?: string;
 }
 /**
  * WHY a paused track is paused — projected by the pod on every track read.
@@ -13252,6 +13265,43 @@ export interface AgentBindingSummary {
 		code: AgentBindingErrorCode;
 		message: string;
 	};
+}
+/** Where a principal's newest key stands — ONE derivation, server-side. */
+export type MachineKeyState = "active" | "expiring" | "expired" | "revoked" | "none";
+export interface MachineKeyView {
+	id: string;
+	state: MachineKeyState;
+	expiresAt: Date | null;
+}
+export interface HostedAgentView {
+	id: string;
+	agentType: string | null;
+	/** "Claude Code" */
+	name: string;
+	/** "Claude Code on devbox" — `agentDisplayName`, the one phrasing. */
+	displayName: string;
+	lastSeenAt: Date | null;
+	key: MachineKeyView | null;
+}
+export interface MachineView {
+	id: string;
+	name: string;
+	hostname: string | null;
+	platform: string | null;
+	createdAt: Date;
+	/** Newest `last_used_at` over the computer's own keys. */
+	lastSeenAt: Date | null;
+	/** The computer's newest key (the live one when there is one). */
+	key: MachineKeyView | null;
+	/** The computer's own lifetime override; null = the pod default. */
+	keyTtlDays: number | null;
+	/** What a key minted now would last (override → pod default → 90). */
+	effectiveKeyTtlDays: number;
+	minKeyTtlDays: number;
+	maxKeyTtlDays: number;
+	/** The live key's access, by the grant's name ("AI — read & propose"). */
+	accessName: string | null;
+	agents: HostedAgentView[];
 }
 declare const TRUST_RUNGS: readonly [
 	"ask",
@@ -22176,6 +22226,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linkedUserId: string | null;
 				heldByAgent: boolean;
 				holderUserId: string;
+				actsAsYou: boolean;
 			}[];
 			meta: object;
 		}>;
@@ -32048,6 +32099,70 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	machines: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				opRef?: string | undefined;
+				reasonCode?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: MachineView[];
+			meta: object;
+		}>;
+		rename: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				machineId: string;
+				name: string;
+			};
+			output: {
+				status: "renamed";
+			};
+			meta: object;
+		}>;
+		setKeyTtl: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				machineId: string;
+				keyTtlDays: number | null;
+			};
+			output: {
+				status: "updated";
+			};
+			meta: object;
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				machineId: string;
+			};
+			output: {
+				status: "proposed";
+				proposalId: string;
+				revokedKeys?: undefined;
+			} | {
+				status: "revoked";
+				revokedKeys: number;
+				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+	}>>;
 	governanceRules: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
@@ -32352,6 +32467,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					axis: "daily_write_count" | "pending_proposal_cap";
 					principalKind: "agent" | "any" | "class";
 					agentUserId: string | null;
+					principalClass: string | null;
 					agentLabel: string | null;
 					scopeKind: "pod" | "workspace";
 					workspaceId: string | null;
@@ -32377,10 +32493,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				principalKind: "agent" | "any";
+				principalKind: "agent" | "any" | "class";
 				scopeKind: "pod" | "workspace";
 				limitValue: number;
 				agentUserId?: string | undefined;
+				principalClass?: "machine" | undefined;
 				workspaceId?: string | undefined;
 				sourceProposalId?: string | undefined;
 				expiresAt?: unknown;
