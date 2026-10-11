@@ -26,6 +26,10 @@ const findWorkspace = vi.fn();
 const findMembership = vi.fn();
 const createAndVerifyServiceKey = vi.fn();
 const attachFullAccessGrant = vi.fn();
+const attachGrantOrRevoke = vi.fn();
+const attachGrantsOrRevoke = vi.fn();
+const liveGrantsOfKey = vi.fn();
+const findUser = vi.fn();
 
 vi.mock("../../../services/api-keys.js", async (importOriginal) => {
   const actual =
@@ -56,7 +60,13 @@ vi.mock(
 vi.mock("../../../services/key-grant.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../services/key-grant.js")>();
-  return { ...actual, attachFullAccessGrant };
+  return {
+    ...actual,
+    attachFullAccessGrant,
+    attachGrantOrRevoke,
+    attachGrantsOrRevoke,
+    liveGrantsOfKey,
+  };
 });
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -67,7 +77,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         workspaces: { findFirst: findWorkspace },
         workspaceMembers: { findFirst: findMembership },
-        users: { findFirst: vi.fn() },
+        users: { findFirst: findUser },
       },
     },
   };
@@ -81,15 +91,42 @@ function makeApp() {
   return app;
 }
 
-const mint = (app: OpenAPIHono) =>
+const mint = (app: OpenAPIHono, extra: Record<string, unknown> = {}) =>
   app.request("/setup/service", {
     method: "POST",
     headers: {
       authorization: "Bearer synap_hub_not_a_jwt",
       "content-type": "application/json",
     },
-    body: JSON.stringify({ workspaceId: WS, scopes: ["hub-protocol.write"] }),
+    body: JSON.stringify({
+      workspaceId: WS,
+      scopes: ["hub-protocol.write"],
+      ...extra,
+    }),
   });
+
+const OTHER_WS = "0eeeeeee-0000-4000-8000-000000000005";
+const SOON = new Date(Date.now() + 3 * 86_400_000);
+const live = (
+  permissions: string[],
+  more: { workspaceIds?: string[]; expiresAt?: Date | null } = {}
+) => ({
+  permissions,
+  workspaceIds: more.workspaceIds ?? null,
+  projectIds: null,
+  entityIds: null,
+  expiresAt: more.expiresAt ?? null,
+});
+
+function asHumanMember() {
+  validateApiKey.mockResolvedValue(surfaceKey(HUMAN));
+  resolveKeyIdentity.mockResolvedValue({
+    effectiveUserId: HUMAN,
+    agentUserId: undefined,
+    isAgent: false,
+  });
+  findMembership.mockResolvedValue({ id: "m-1" });
+}
 
 function surfaceKey(userId: string) {
   return {
@@ -110,8 +147,13 @@ beforeEach(() => {
     findWorkspace,
     findMembership,
     createAndVerifyServiceKey,
+    attachFullAccessGrant,
+    attachGrantOrRevoke,
+    attachGrantsOrRevoke,
+    liveGrantsOfKey,
   ])
     m.mockReset();
+  liveGrantsOfKey.mockResolvedValue([live(["*"])]);
   findWorkspace.mockResolvedValue({ id: WS });
   createAndVerifyServiceKey.mockResolvedValue({
     outcome: "CONNECTED_VERIFIED",
@@ -176,9 +218,109 @@ describe("POST /setup/service — surface-key minting", () => {
       HUMAN,
       HUMAN
     );
-    // P5: no grant asked for = the owner's full reach, explicit — never none.
-    expect(attachFullAccessGrant).toHaveBeenCalledWith(
-      expect.objectContaining({ principalUserId: HUMAN, onBehalfOf: HUMAN })
+    // No grant asked for, KEY caller = a copy of the caller key's own grants
+    // in this space — never the owner's whole reach.
+    expect(liveGrantsOfKey).toHaveBeenCalledWith("key-1");
+    expect(attachGrantsOrRevoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalUserId: HUMAN,
+        onBehalfOf: HUMAN,
+        grants: [
+          expect.objectContaining({ permissions: ["*"], workspaceIds: [WS] }),
+        ],
+      })
     );
+    expect(attachFullAccessGrant).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /setup/service — a key mints only within its own grants", () => {
+  it("a key that may touch nothing → 403, nothing minted", async () => {
+    asHumanMember();
+    liveGrantsOfKey.mockResolvedValue([]);
+    const res = await mint(makeApp());
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toContain("may touch nothing");
+    expect(createAndVerifyServiceKey).not.toHaveBeenCalled();
+  });
+
+  it("no grant asked → the NARROW caller's grant is copied, not `*`", async () => {
+    asHumanMember();
+    liveGrantsOfKey.mockResolvedValue([
+      live(["entity.note.read"], { expiresAt: SOON }),
+    ]);
+    const res = await mint(makeApp());
+    expect(res.status).toBe(200);
+    expect(attachFullAccessGrant).not.toHaveBeenCalled();
+    expect(attachGrantsOrRevoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        grants: [
+          {
+            permissions: ["entity.note.read"],
+            workspaceIds: [WS],
+            expiresAt: SOON,
+          },
+        ],
+      })
+    );
+  });
+
+  it("a caller pinned to ANOTHER space → 403", async () => {
+    asHumanMember();
+    liveGrantsOfKey.mockResolvedValue([
+      live(["*"], { workspaceIds: [OTHER_WS] }),
+    ]);
+    const res = await mint(makeApp());
+    expect(res.status).toBe(403);
+    expect(createAndVerifyServiceKey).not.toHaveBeenCalled();
+  });
+
+  it("a grant WIDER than the caller's → 403, nothing minted", async () => {
+    asHumanMember();
+    liveGrantsOfKey.mockResolvedValue([live(["entity.note.read"])]);
+    const res = await mint(makeApp(), {
+      grant: { permissions: ["entity.delete"] },
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toContain("reaches beyond");
+    expect(createAndVerifyServiceKey).not.toHaveBeenCalled();
+  });
+
+  it("a grant inside the caller's is attached, ending no later than it", async () => {
+    asHumanMember();
+    liveGrantsOfKey.mockResolvedValue([
+      live(["entity.read"], { expiresAt: SOON }),
+    ]);
+    const res = await mint(makeApp(), {
+      grant: { permissions: ["entity.note.read"] },
+    });
+    expect(res.status).toBe(200);
+    expect(attachGrantOrRevoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        grant: expect.objectContaining({
+          permissions: ["entity.note.read"],
+          workspaceIds: [WS],
+        }),
+        expiresAt: SOON,
+      })
+    );
+  });
+
+  it("an operator credential (PROVISIONING_TOKEN) keeps the full-access default", async () => {
+    process.env.PROVISIONING_TOKEN = "prov-token";
+    findUser.mockResolvedValue({ id: HUMAN, userType: "human" });
+    findMembership.mockResolvedValue({ id: "m-1" });
+    const app = makeApp();
+    const res = await app.request("/setup/service", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer prov-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ workspaceId: WS, linkedUserId: HUMAN }),
+    });
+    expect(res.status).toBe(200);
+    expect(liveGrantsOfKey).not.toHaveBeenCalled();
+    expect(attachFullAccessGrant).toHaveBeenCalled();
   });
 });

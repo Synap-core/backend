@@ -24,6 +24,11 @@ import {
   assertPermissions,
   InvalidPermissionError,
 } from "@synap/governance-policy/grants";
+import {
+  permissionCovers,
+  requestsFromGrantScopes,
+  requestsWithin,
+} from "./agent-connect.js";
 
 export const GrantInputSchema = z.object({
   /** `<subject>[.<kind>].<action>` patterns, e.g. `entity.knowledge.read`. */
@@ -111,7 +116,8 @@ export async function attachGrantsOrRevoke(args: {
   apiKeyId: string;
   principalUserId: string;
   onBehalfOf: string;
-  grants: GrantInput[];
+  /** A grant's own `expiresAt` (null = never) overrides `expiresAt` below. */
+  grants: Array<GrantInput & { expiresAt?: Date | null }>;
   expiresAt: Date | null;
   createdBy: string;
   clientId?: string | null;
@@ -139,7 +145,8 @@ export async function attachGrantsOrRevoke(args: {
         workspaceIds: grant.workspaceIds ?? null,
         projectIds: grant.projectIds ?? null,
         entityIds: grant.entityIds ?? null,
-        expiresAt: args.expiresAt,
+        expiresAt:
+          grant.expiresAt !== undefined ? grant.expiresAt : args.expiresAt,
         label: grant.label ?? null,
         clientId: args.clientId ?? null,
         roleId: grant.roleId ?? null,
@@ -154,4 +161,139 @@ export async function attachGrantsOrRevoke(args: {
     });
     throw err;
   }
+}
+
+/** One live grant a key holds, with its own end (null = never). */
+export interface LiveGrantScope {
+  permissions: string[];
+  workspaceIds: string[] | null;
+  projectIds: string[] | null;
+  entityIds: string[] | null;
+  expiresAt: Date | null;
+}
+
+/**
+ * Every live grant a key holds. EMPTY = it may touch nothing (P5, deny by
+ * default: never granted, or every grant ended).
+ */
+export async function liveGrantsOfKey(
+  apiKeyId: string
+): Promise<LiveGrantScope[]> {
+  const reach = (await new GrantRepository(db).reachForKeys([apiKeyId])).get(
+    apiKeyId
+  );
+  return (reach?.grants ?? [])
+    .filter((g) => g.permissions.length > 0)
+    .map((g) => ({
+      permissions: [...g.permissions],
+      workspaceIds: g.workspaceIds ? [...g.workspaceIds] : null,
+      projectIds: g.projectIds ? [...g.projectIds] : null,
+      entityIds: g.entityIds ? [...g.entityIds] : null,
+      expiresAt: g.expiresAt ?? null,
+    }));
+}
+
+/** The earlier of two ends (null = never). */
+export function earlierEnd(a: Date | null, b: Date | null): Date | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a <= b ? a : b;
+}
+
+type ScopeShape = {
+  permissions: readonly string[];
+  workspaceIds?: readonly string[] | null;
+  projectIds?: readonly string[] | null;
+  entityIds?: readonly string[] | null;
+};
+
+/** Both pinnings at once (null = unpinned); `undefined` = they share nothing. */
+function bothPinnings(
+  a: readonly string[] | null | undefined,
+  b: readonly string[] | null | undefined
+): string[] | null | undefined {
+  if (!a?.length) return b?.length ? [...b] : null;
+  if (!b?.length) return [...a];
+  const shared = a.filter((x) => b.includes(x));
+  return shared.length > 0 ? shared : undefined;
+}
+
+/**
+ * `wanted`, cut down to what the holder's live grants reach — one grant per
+ * (wanted × live) overlap, never wider than either, each ending no later than
+ * its live grant nor `keyEndsAt`. A permission only partly inside a live one
+ * is narrowed to the live one's (`permissionCovers`, the `agent/connect` rule).
+ * `[{ permissions: ['*'] }]` = copy the live grants. Empty = no overlap.
+ */
+export function scopesWithinLive(
+  wanted: readonly ScopeShape[],
+  live: readonly LiveGrantScope[],
+  keyEndsAt: Date | null
+): Array<GrantInput & { expiresAt: Date | null }> {
+  const out: Array<GrantInput & { expiresAt: Date | null }> = [];
+  for (const w of wanted)
+    for (const l of live) {
+      const workspaceIds = bothPinnings(w.workspaceIds, l.workspaceIds);
+      const projectIds = bothPinnings(w.projectIds, l.projectIds);
+      const entityIds = bothPinnings(w.entityIds, l.entityIds);
+      if (
+        workspaceIds === undefined ||
+        projectIds === undefined ||
+        entityIds === undefined
+      )
+        continue;
+      const permissions = new Set<string>();
+      for (const p of w.permissions)
+        for (const q of l.permissions) {
+          if (permissionCovers(q, p)) permissions.add(p);
+          else if (permissionCovers(p, q)) permissions.add(q);
+        }
+      if (permissions.size === 0) continue;
+      out.push({
+        permissions: [...permissions],
+        ...(workspaceIds ? { workspaceIds } : {}),
+        ...(projectIds ? { projectIds } : {}),
+        ...(entityIds ? { entityIds } : {}),
+        expiresAt: earlierEnd(l.expiresAt, keyEndsAt),
+      });
+    }
+  return out;
+}
+
+/**
+ * Is `grant` inside the holder's live grants? Each (permission × space) it asks
+ * for must be covered (`requestsWithin`) by ONE live grant whose project and
+ * object pinning it keeps. Returns when that cover ends (the earliest of the
+ * latest covering ends), or `null` when it reaches beyond them.
+ */
+export function grantWithinLive(
+  grant: ScopeShape,
+  live: readonly LiveGrantScope[]
+): { endsAt: Date | null } | null {
+  const keeps = (
+    outer: readonly string[] | null,
+    inner: readonly string[] | null | undefined
+  ) =>
+    !outer?.length ||
+    (!!inner?.length && inner.every((x) => outer.includes(x)));
+  let endsAt: Date | null = null;
+  let first = true;
+  for (const request of requestsFromGrantScopes([grant])) {
+    const covering = live.filter(
+      (l) =>
+        keeps(l.projectIds, grant.projectIds) &&
+        keeps(l.entityIds, grant.entityIds) &&
+        requestsWithin([request], requestsFromGrantScopes([l]))
+    );
+    if (covering.length === 0) return null;
+    const latest = covering.some((l) => l.expiresAt === null)
+      ? null
+      : covering.reduce<Date>(
+          (m, l) => (l.expiresAt! > m ? l.expiresAt! : m),
+          covering[0]!.expiresAt!
+        );
+    endsAt = first ? latest : earlierEnd(endsAt, latest);
+    first = false;
+  }
+  return first ? null : { endsAt };
 }

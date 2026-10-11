@@ -14,6 +14,11 @@ import {
   attachFullAccessGrant,
   attachGrantOrRevoke,
   attachGrantsOrRevoke,
+  earlierEnd,
+  grantWithinLive,
+  liveGrantsOfKey,
+  scopesWithinLive,
+  type LiveGrantScope,
 } from "../../../services/key-grant.js";
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
@@ -256,6 +261,8 @@ async function authenticateServiceSetupRequest(
       authMethod: "jwt" | "provisioning_token" | "api_key" | "api_key_surface";
       jwtIssuerUrl: string | null;
       surfaceKeyUserId?: string;
+      /** Set when the caller is a key: what it mints is bounded by its grants. */
+      callerKeyId?: string;
     }
   | { ok: false; response: Response }
 > {
@@ -366,7 +373,12 @@ async function authenticateServiceSetupRequest(
   {
     const keyRecord = await apiKeyService.validateApiKey(token);
     if (keyRecord?.isActive && keyRecord.scope.includes("setup.agent")) {
-      return { ok: true, authMethod: "api_key", jwtIssuerUrl };
+      return {
+        ok: true,
+        authMethod: "api_key",
+        jwtIssuerUrl,
+        callerKeyId: keyRecord.id,
+      };
     }
     // Path 4: any human-owned `hub-protocol.write` key can mint a service key
     // owned by itself (the key's userId becomes the service key's owner).
@@ -393,6 +405,7 @@ async function authenticateServiceSetupRequest(
         authMethod: "api_key_surface",
         jwtIssuerUrl,
         surfaceKeyUserId: keyRecord.userId,
+        callerKeyId: keyRecord.id,
       };
     }
   }
@@ -592,6 +605,7 @@ export function registerSetupRoutes(app: HubHono): void {
     // misclassify it as human-owned and let it mint arbitrary named agents.
     let surfaceAgentLinkedUserId: string | undefined;
     let surfaceKeyIsHumanOwned = false;
+    let surfaceCallerKeyId: string | undefined;
     if (!authenticated) {
       const keyRecord = await apiKeyService.validateApiKey(token);
       if (
@@ -600,6 +614,7 @@ export function registerSetupRoutes(app: HubHono): void {
       ) {
         authenticated = true;
         authMethod = "api_key_surface";
+        surfaceCallerKeyId = keyRecord.id;
         const identity = await resolveKeyIdentity(keyRecord);
         surfaceKeyIsHumanOwned = !identity.isAgent;
         surfaceAgentLinkedUserId =
@@ -681,10 +696,10 @@ export function registerSetupRoutes(app: HubHono): void {
     }
     const toolProfile: ApiKeyToolProfile | undefined =
       toolProfileParse.data ?? undefined;
-    // Surface installs can request a pending-approval flow: key is created inactive
-    // until the human owner approves it at the review URL.
-    const requireApproval: boolean =
-      authMethod === "api_key_surface" && body.requireApproval === true;
+    // A KEY never connects a live AI by itself: the new key is created
+    // inactive and its owner approves it (`agent/connect`). `requireApproval`
+    // in the body is no longer an opt-in for a key caller — it is the rule.
+    const requireApproval: boolean = authMethod === "api_key_surface";
 
     // Surface-key path: SURFACE_AGENT_TYPES are always allowed (claude-code, cursor, …).
     // Non-surface types (twin, custom slug, assistant, …) are only allowed when the
@@ -704,6 +719,23 @@ export function registerSetupRoutes(app: HubHono): void {
             allowedSurfaceTypes: SURFACE_AGENT_TYPES,
           },
           400
+        );
+      }
+    }
+
+    // What a key connects is bounded by what the key may touch itself; a key
+    // that may touch nothing connects nothing (checked before any mint, since
+    // provisioning rotates the agent's sibling keys).
+    let surfaceCallerGrants: LiveGrantScope[] = [];
+    if (authMethod === "api_key_surface") {
+      surfaceCallerGrants = await liveGrantsOfKey(surfaceCallerKeyId!);
+      if (surfaceCallerGrants.length === 0) {
+        return c.json(
+          {
+            error:
+              "This key may touch nothing, so it cannot connect an AI. Connect it from your signed-in session instead.",
+          },
+          403
         );
       }
     }
@@ -1061,6 +1093,39 @@ export function registerSetupRoutes(app: HubHono): void {
       }
 
       const { registration, apiKey, plainKey } = provisioned;
+
+      // The new key's grant (the agent's own limits) cut down to the calling
+      // key's live grants — a key never hands on more than it may touch.
+      if (authMethod === "api_key_surface") {
+        const keyEndsAt = apiKey.expiresAt ?? null;
+        const bounded = scopesWithinLive(
+          await liveGrantsOfKey(apiKey.id),
+          surfaceCallerGrants,
+          keyEndsAt
+        );
+        const grantedBy = resolvedLinkedUserId ?? agentCreatorId!;
+        if (bounded.length === 0) {
+          await revokeApiKeys(db, {
+            where: eq(apiKeys.id, apiKey.id),
+            reason: "Nothing it may do is within the connecting key — revoked",
+          });
+          return c.json(
+            {
+              error:
+                "Nothing this AI may do is within what this key may touch, so it cannot connect it.",
+            },
+            403
+          );
+        }
+        await attachGrantsOrRevoke({
+          apiKeyId: apiKey.id,
+          principalUserId: agentUserId,
+          onBehalfOf: grantedBy,
+          grants: bounded,
+          expiresAt: keyEndsAt,
+          createdBy: grantedBy,
+        });
+      }
       const registrationTrace = toRegistrationTrace(flowId, registration);
       if (registration.outcome !== "CONNECTED_VERIFIED") {
         logger.error(
@@ -1316,6 +1381,56 @@ export function registerSetupRoutes(app: HubHono): void {
         return c.json({ error: `Workspace ${workspaceId} not found` }, 404);
       }
 
+      // ── A KEY mints only within its own live grants ────────────────────────
+      // No grant asked for → a copy of the caller's grants in this space; one
+      // asked for → it must sit inside them, ending no later. A key that may
+      // touch nothing mints nothing.
+      let grantEndsAt = expiresAt;
+      let callerCopy: ReturnType<typeof scopesWithinLive> | null = null;
+      if (auth.callerKeyId) {
+        const live = await liveGrantsOfKey(auth.callerKeyId);
+        if (live.length === 0) {
+          return c.json(
+            {
+              error:
+                "This key may touch nothing, so it cannot mint another key.",
+            },
+            403
+          );
+        }
+        if (grant) {
+          const within = grantWithinLive(
+            { ...grant, workspaceIds: [ws.id] },
+            live
+          );
+          if (!within) {
+            return c.json(
+              {
+                error:
+                  "That grant reaches beyond what this key may touch itself. Ask for less, or mint it from your signed-in session.",
+              },
+              403
+            );
+          }
+          grantEndsAt = earlierEnd(expiresAt, within.endsAt);
+        } else {
+          callerCopy = scopesWithinLive(
+            [{ permissions: ["*"], workspaceIds: [ws.id] }],
+            live,
+            expiresAt
+          );
+          if (callerCopy.length === 0) {
+            return c.json(
+              {
+                error:
+                  "This key may not touch that space, so it cannot mint a key for it.",
+              },
+              403
+            );
+          }
+        }
+      }
+
       // ── Resolve the owning human ───────────────────────────────────────────
       // Priority: an explicit surface-key caller owns the key it mints; else a
       // caller-named human (body.linkedUserId); else the pod owner.
@@ -1386,13 +1501,23 @@ export function registerSetupRoutes(app: HubHono): void {
       const { apiKey, plainKey } = registration;
 
       // Attach before the key is handed out; a failure revokes the key. No
-      // grant asked for = the owner's full reach, explicit (deny by default).
+      // grant asked for = the caller key's own grants here, or (operator
+      // credential) the owner's full reach, explicit (deny by default).
       if (grant) {
         await attachGrantOrRevoke({
           apiKeyId: apiKey.id,
           principalUserId: ownerUserId,
           onBehalfOf: ownerUserId,
           grant: { ...grant, workspaceIds: [ws.id] },
+          expiresAt: grantEndsAt,
+          createdBy: ownerUserId,
+        });
+      } else if (callerCopy) {
+        await attachGrantsOrRevoke({
+          apiKeyId: apiKey.id,
+          principalUserId: ownerUserId,
+          onBehalfOf: ownerUserId,
+          grants: callerCopy,
           expiresAt,
           createdBy: ownerUserId,
         });
@@ -1595,20 +1720,10 @@ export function registerSetupRoutes(app: HubHono): void {
       }
 
       // 3. The child's grant is the parent's live grant set — a key never
-      //    hands on more than it may touch. A parent that may touch nothing
-      //    has nothing to hand on.
-      const parentGrant = await new GrantRepository(db).resolveForKey(
-        keyRecord.id
-      );
-      const childGrants = parentGrant.scopes
-        .filter((g) => g.permissions.length > 0)
-        .map((g) => ({
-          permissions: [...g.permissions],
-          workspaceIds: g.workspaceIds ? [...g.workspaceIds] : undefined,
-          projectIds: g.projectIds ? [...g.projectIds] : undefined,
-          entityIds: g.entityIds ? [...g.entityIds] : undefined,
-        }));
-      if (childGrants.length === 0) {
+      //    hands on more than it may touch, nor for longer. A parent that may
+      //    touch nothing has nothing to hand on.
+      const parentGrants = await liveGrantsOfKey(keyRecord.id);
+      if (parentGrants.length === 0) {
         return c.json(
           {
             error: "This key may touch nothing, so it cannot mint a sub-token.",
@@ -1638,12 +1753,22 @@ export function registerSetupRoutes(app: HubHono): void {
         return c.json({ error: `Sub-token mint failed: ${msg}` }, 400);
       }
 
+      // Each copied grant keeps its own end, capped by the child key's.
+      const childRow = await db.query.apiKeys.findFirst({
+        where: eq(apiKeys.id, child.keyId),
+        columns: { expiresAt: true },
+      });
+      const childEndsAt = childRow?.expiresAt ?? null;
       await attachGrantsOrRevoke({
         apiKeyId: child.keyId,
         principalUserId: mapping.synapUserId,
         onBehalfOf: mapping.synapUserId,
-        grants: childGrants,
-        expiresAt: null,
+        grants: scopesWithinLive(
+          [{ permissions: ["*"] }],
+          parentGrants,
+          childEndsAt
+        ),
+        expiresAt: childEndsAt,
         createdBy: keyRecord.userId,
       });
 
