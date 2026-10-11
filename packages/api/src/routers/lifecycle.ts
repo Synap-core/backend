@@ -44,6 +44,7 @@ import {
   kindVisibilityConditions,
   pageThingsInColumn,
   roleVisibilityConditions,
+  statusSubjectOfRows,
 } from "./entities/status-groups.js";
 
 /** W17: below this many LIVE things a pipeline defaults to a list. */
@@ -158,8 +159,10 @@ async function resolveProfileLifecycle(
   workspaceId: string | null | undefined
 ): Promise<ResolvedProfile> {
   const rows = await assertKnownProfileSlug(db, profileSlug);
-  const roleRows = rows.filter((r) => r.profileKind === "role");
-  const chosen = roleRows.length > 0 ? roleRows : rows;
+  const { chosen, profileKind, podScopeKind } = statusSubjectOfRows(
+    profileSlug,
+    rows
+  );
   const resolver = new ProfileResolutionService(db);
   let lifecycle: EffectiveLifecycle | null = null;
   for (const r of chosen) {
@@ -176,9 +179,9 @@ async function resolveProfileLifecycle(
     });
   }
   return {
-    profileKind: roleRows.length > 0 ? "role" : "kind",
+    profileKind,
     profileIds: chosen.map((r) => r.id),
-    podScopeKind: chosen.some((r) => r.entityScope === "pod"),
+    podScopeKind,
     lifecycle,
   };
 }

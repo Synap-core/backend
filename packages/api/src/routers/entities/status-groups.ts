@@ -22,9 +22,11 @@ import {
   eq,
   inArray,
   isNull,
+  notInArray,
   drizzleSql,
   facetVisibilityConditions,
   notProbeEntityWhere,
+  profileSlugRows,
 } from "@synap/database";
 import { entities, entityFacets, events } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -403,4 +405,129 @@ export async function countThingsByProfileAndStatus(params: {
     status: (r.status as string | null) ?? null,
     count: Number(r.count),
   }));
+}
+
+/**
+ * A slug's grouping subject: a ROLE when any of its rows is a role (a slug
+ * that is a role groups facets), else a kind. `podScopeKind` = any kind row is
+ * pod-scope (its things live nowhere else). The board's rule, ONE place.
+ */
+export function statusSubjectOfRows(
+  profileSlug: string,
+  rows: Array<{
+    id: string;
+    profileKind: "kind" | "role";
+    entityScope: "pod" | "workspace";
+  }>
+): {
+  subject: StatusGroupSubject;
+  profileKind: "kind" | "role";
+  podScopeKind: boolean;
+  chosen: typeof rows;
+} {
+  const roleRows = rows.filter((r) => r.profileKind === "role");
+  const chosen = roleRows.length > 0 ? roleRows : rows;
+  const profileKind = roleRows.length > 0 ? "role" : "kind";
+  return {
+    subject:
+      profileKind === "role"
+        ? {
+            kind: "role",
+            profileIds: chosen.map((r) => r.id),
+            roleSlug: profileSlug,
+          }
+        : { kind: "kind", profileIds: chosen.map((r) => r.id) },
+    profileKind,
+    podScopeKind: chosen.some((r) => r.entityScope === "pod"),
+    chosen,
+  };
+}
+
+/**
+ * THE things a stage worker works on (work model L4): the visible things of a
+ * kind or role sitting in `status` (or every status, when absent), under the
+ * SAME base set and visibility as the board — so the board's column count and
+ * the worker's set can never disagree. Longest in the column first.
+ *
+ * Visibility is the OWNER's (`userId`, the automation's owner) inside the
+ * worker's space (`workspaceId`, explicit), narrowed to `projectId` for a
+ * project-scoped enablement. `excludeIds` drops things already being worked
+ * (they still count in `total`); `onlyIds` asks about specific things (the
+ * stale-transition check). `total` = everything in the status, unpaged and
+ * unexcluded — what a `count` worker compares with its threshold.
+ *
+ * An unknown slug THROWS (a worker on a deleted vocabulary is a failure, not
+ * an empty week). A failed read throws.
+ */
+export async function listThingsInStatus(params: {
+  profileSlug: string;
+  status?: string | null;
+  userId: string;
+  workspaceId: string | null;
+  projectId?: string | null;
+  limit: number;
+  excludeIds?: readonly string[];
+  onlyIds?: readonly string[];
+}): Promise<{
+  items: Array<StatusGroupItem & { status: string | null }>;
+  total: number;
+  hasMore: boolean;
+}> {
+  if (params.onlyIds && params.onlyIds.length === 0) {
+    return { items: [], total: 0, hasMore: false };
+  }
+  const rows = await profileSlugRows(db, params.profileSlug);
+  if (rows.length === 0) {
+    throw new Error(
+      `"${params.profileSlug}" is not a kind or role in this pod — the worker has nothing to read.`
+    );
+  }
+  const { subject, profileKind, podScopeKind } = statusSubjectOfRows(
+    params.profileSlug,
+    rows
+  );
+  const projectId = params.projectId ?? undefined;
+  const conditions =
+    profileKind === "role"
+      ? await roleVisibilityConditions({
+          userId: params.userId,
+          lensWorkspaceId: params.workspaceId,
+          projectId,
+        })
+      : kindVisibilityConditions({
+          userId: params.userId,
+          lensWorkspaceId: params.workspaceId,
+          explicitWorkspace: true,
+          projectId,
+          podScopeKind,
+        });
+  const narrowed = [
+    ...conditions,
+    ...(params.onlyIds ? [inArray(entities.id, [...params.onlyIds])] : []),
+  ];
+  const statusKey = params.status ?? null;
+  const [page, counts] = await Promise.all([
+    pageThingsInColumn({
+      subject,
+      conditions: [
+        ...narrowed,
+        ...(params.excludeIds?.length
+          ? [notInArray(entities.id, [...params.excludeIds])]
+          : []),
+      ],
+      order: "time_in_column",
+      column: statusKey ? { statuses: [statusKey] } : { outside: [] },
+      offset: 0,
+      limit: params.limit,
+    }),
+    countThingsByProfileAndStatus({
+      kind: profileKind,
+      profileIds: subject.profileIds,
+      conditions: narrowed,
+    }),
+  ]);
+  const total = counts
+    .filter((c) => statusKey === null || c.status === statusKey)
+    .reduce((n, c) => n + c.count, 0);
+  return { items: page.items, total, hasMore: page.hasMore };
 }

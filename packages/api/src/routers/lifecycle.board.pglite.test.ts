@@ -514,3 +514,103 @@ describe("lifecycle.list — the pipelines in scope", () => {
     ]);
   });
 });
+
+describe("listThingsInStatus — the worker's set is the board's column", () => {
+  it("a kind: same count as the board column; exclusion pages but still counts; onlyIds asks about one thing", async () => {
+    const client = await freshDb();
+    const old = await thing(client, {
+      status: "draft",
+      title: "Old draft",
+      createdDaysAgo: 20,
+    });
+    const young = await thing(client, {
+      status: "draft",
+      title: "New draft",
+      createdDaysAgo: 2,
+    });
+    const talks = await thing(client, {
+      status: "negotiating",
+      title: "Talks",
+      createdDaysAgo: 5,
+    });
+    const caller = await lifecycleCaller();
+    const board = await caller.board({ profileSlug: "deal" });
+    const { listThingsInStatus } = await import("./entities/status-groups.js");
+
+    const set = await listThingsInStatus({
+      profileSlug: "deal",
+      status: "draft",
+      userId: USER,
+      workspaceId: null,
+      limit: 10,
+    });
+    expect(set.total).toBe(board.columns.find((c) => c.key === "draft")!.count);
+    expect(set.total).toBe(2);
+    // Longest in the column first — the board's own order.
+    expect(set.items.map((i) => i.id)).toEqual([old, young]);
+
+    const rest = await listThingsInStatus({
+      profileSlug: "deal",
+      status: "draft",
+      userId: USER,
+      workspaceId: null,
+      limit: 10,
+      excludeIds: [old],
+    });
+    expect(rest.items.map((i) => i.id)).toEqual([young]);
+    expect(rest.total).toBe(2);
+
+    const isDraft = (id: string) =>
+      listThingsInStatus({
+        profileSlug: "deal",
+        status: "draft",
+        userId: USER,
+        workspaceId: null,
+        limit: 1,
+        onlyIds: [id],
+      });
+    expect((await isDraft(young)).items).toHaveLength(1);
+    expect((await isDraft(talks)).items).toHaveLength(0);
+
+    await expect(
+      listThingsInStatus({
+        profileSlug: "nope",
+        userId: USER,
+        workspaceId: null,
+        limit: 1,
+      })
+    ).rejects.toThrow(/not a kind or role/);
+  });
+
+  it("a role: reads the FACET status, not the entity's", async () => {
+    const client = await freshDb();
+    const a = await thing(client, {
+      status: "won",
+      title: "Acme",
+      createdDaysAgo: 30,
+    });
+    await client.query(
+      `insert into entity_facets (id, entity_id, profile_id, user_id, status, created_at)
+       values (gen_random_uuid(), $1, $2, $3, 'onboarding', $4)`,
+      [a, CLIENT, USER, ago(3)]
+    );
+    const { listThingsInStatus } = await import("./entities/status-groups.js");
+    const set = await listThingsInStatus({
+      profileSlug: "client",
+      status: "onboarding",
+      userId: USER,
+      workspaceId: null,
+      limit: 10,
+    });
+    expect(set.items.map((i) => i.id)).toEqual([a]);
+    expect(set.items[0]!.facetId).toMatch(/^[0-9a-f-]{36}$/);
+    const none = await listThingsInStatus({
+      profileSlug: "client",
+      status: "won",
+      userId: USER,
+      workspaceId: null,
+      limit: 10,
+    });
+    expect(none.total).toBe(0);
+  });
+});
