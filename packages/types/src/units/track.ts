@@ -24,7 +24,7 @@
  */
 
 import { CHECK_GATE_METADATA_KEY } from "../focus-sessions/check-gate.js";
-import { resolveObjectNoun } from "../vocabulary/index.js";
+import { resolveObjectNoun, resolveStatusLabel } from "../vocabulary/index.js";
 import type { UnitStateInput, UnitTone } from "./state.js";
 import {
   projectAggregateInput,
@@ -297,6 +297,18 @@ export function trackPausedBy(track: {
     (meta as Record<string, unknown>)[CHECK_GATE_METADATA_KEY]
     ? "check"
     : "human";
+}
+
+/**
+ * The words for WHO holds a paused track — ONE phrase for every surface
+ * ("Paused · by a check" / "Paused · by a person"), so Relay and the browser
+ * never build their own from the raw `pausedBy` token. `null` when the track is
+ * not paused (`pausedBy` null): there is nothing to qualify.
+ */
+export function trackPausedByLabel(pausedBy: TrackPausedBy): string | null {
+  if (pausedBy === null) return null;
+  const who = pausedBy === "check" ? "a check" : "a person";
+  return `${resolveStatusLabel("paused")} \u00b7 by ${who}`;
 }
 
 /** A track that takes no new work on a page: its sessions fall to the remainder. */

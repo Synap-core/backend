@@ -13,6 +13,7 @@ import {
   trackStatusMoves,
   trackUnitInput,
   trackPausedBy,
+  trackPausedByLabel,
   TRACK_STAGE_POSITIONS,
   TRACK_STATUS_TRANSITIONS,
   TRACK_STATUSES,
@@ -286,6 +287,16 @@ describe("trackPausedBy", () => {
         metadata: { checkGate: { stageKey: "x" } },
       })
     ).toBeNull();
+  });
+});
+
+describe("trackPausedByLabel", () => {
+  it("names the holder of a paused track, through the paused status word", () => {
+    expect(trackPausedByLabel("check")).toBe("Paused \u00b7 by a check");
+    expect(trackPausedByLabel("human")).toBe("Paused \u00b7 by a person");
+  });
+  it("says nothing for a track that is not paused", () => {
+    expect(trackPausedByLabel(null)).toBeNull();
   });
 });
 
