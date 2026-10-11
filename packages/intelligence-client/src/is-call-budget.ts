@@ -318,11 +318,15 @@ export function describeISHttpError(
 ): Error {
   const elapsedMs = Date.now() - ctx.startedAt;
   const trimmed = (body ?? "").trim().slice(0, 300);
-  return new Error(
+  const err = new Error(
     `IS ${ctx.kind} call failed [IS error] — HTTP ${status}${statusText ? ` ${statusText}` : ""}` +
       ` after ${elapsedMs}ms of a ${ctx.budgetMs}ms budget` +
       ` · endpoint=${ctx.endpoint}` +
       ` · payloadChars=${ctx.payloadChars}` +
       (trimmed ? ` · body=${trimmed}` : "")
   );
+  // The status, for a caller that must tell a refused REQUEST (4xx) from a
+  // failed service. Non-enumerable, like the retry marker above.
+  Object.defineProperty(err, "status", { value: status, enumerable: false });
+  return err;
 }

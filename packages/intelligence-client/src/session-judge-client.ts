@@ -33,6 +33,15 @@ export interface JudgeCriteriaResult {
   model?: string;
 }
 
+/**
+ * Did the IS refuse the judge REQUEST itself (HTTP 400 — its zod validation)?
+ * The one refusal a caller can fix by sending less: an IS deployed before the
+ * material cap was raised refuses a larger `material` this way.
+ */
+export function isJudgeRequestRefused(err: unknown): boolean {
+  return (err as { status?: unknown } | null)?.status === 400;
+}
+
 export async function judgeSessionCriteria(
   serviceUrl: string,
   serviceApiKey: string,

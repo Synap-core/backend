@@ -132,6 +132,7 @@ import { jsonGoverned } from "../proposal-response.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { canUserSeeChannel } from "../../../utils/channel-visibility.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
@@ -1174,6 +1175,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         );
       }
     }
+    // The session ROOM is a pointer, not a grant: a room the caller cannot
+    // read is refused here (the canonical channel read floor), never stored —
+    // the judge and every room reader would otherwise read it as the session's.
+    if (
+      body.channelId &&
+      !(await canUserSeeChannel(db, body.channelId, userId))
+    ) {
+      return c.json(
+        { error: `No channel ${body.channelId} you can access` },
+        404
+      );
+    }
 
     try {
       // Delegate to the shared service (used by both Hub REST and MCP adapter).
@@ -1370,6 +1383,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             404
           );
         }
+      }
+      // Same floor as the create door: a room the caller cannot read is
+      // refused, never pointed at.
+      if (
+        patch.channelId &&
+        !(await canUserSeeChannel(db, patch.channelId, userId))
+      ) {
+        return c.json(
+          { error: `No channel ${patch.channelId} you can access` },
+          404
+        );
       }
 
       // Step 2c: TRACK FILING, resolved before the membrane (a refusal is the

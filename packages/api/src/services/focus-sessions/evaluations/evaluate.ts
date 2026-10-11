@@ -22,9 +22,11 @@
 import { db, focusSessions, and, eq, drizzleSql } from "@synap/database";
 import { readCriteria, type SessionCriterion } from "@synap/playbooks";
 import {
+  isJudgeRequestRefused,
   judgeSessionCriteria,
   resolveIntelligenceService,
 } from "@synap/intelligence-client";
+import { createLogger } from "@synap-core/core";
 import type { EvaluationVerdict } from "@synap-core/types/focus-sessions";
 import { executeCapability } from "../../capabilities/execute-capability.js";
 import {
@@ -41,9 +43,13 @@ import {
 } from "./record.js";
 import {
   buildJudgeMaterial,
+  LEGACY_IS_MATERIAL_MAX,
   loadProducedMaterial,
   loadRoomMaterial,
+  MATERIAL_MAX,
 } from "./judge-material.js";
+
+const logger = createLogger({ module: "focus-sessions/evaluate" });
 
 /** What an agent posts: one entry per evidence key. */
 export type PostedEvidence = Record<
@@ -238,16 +244,15 @@ export async function evaluateSession(
       // entities' content, floored to the session owner. A failed read throws
       // into the catch below ("the judge could not run"), never a verdict
       // over labels alone.
-      // The room is read too (evidence is often posted there); a failed room
-      // read is stated in the material, not fatal to the judge.
+      // The room is read too (evidence is often posted there), as the owner:
+      // a room they cannot read, or a failed read, is stated in the material,
+      // not fatal to the judge.
       const [produced, room] = await Promise.all([
         loadProducedMaterial({ sessionId, userId }),
-        loadRoomMaterial(session.channelId),
+        loadRoomMaterial({ channelId: session.channelId, userId }),
       ]);
-      const judgement = await judgeSessionCriteria(
-        svc.endpoint,
-        svc.serviceApiKey,
-        {
+      const judge = (max: number) =>
+        judgeSessionCriteria(svc.endpoint, svc.serviceApiKey, {
           criteria: judged.map((c) => ({
             key: c.key,
             statement: c.statement,
@@ -258,13 +263,25 @@ export async function evaluateSession(
             rows,
             params.evidence,
             produced,
-            room
+            room,
+            max
           ),
           ...(typeof modelId === "string" && modelId
             ? { excludeModel: modelId }
             : {}),
-        }
-      );
+        });
+      // An IS deployed before the material cap was raised refuses the larger
+      // material as a bad request: rebuild it at that IS's cap (the same fair
+      // budget, not a blind cut) and ask ONCE more. Any other failure, or a
+      // second refusal, is "the judge could not run" below.
+      const judgement = await judge(MATERIAL_MAX).catch((err: unknown) => {
+        if (!isJudgeRequestRefused(err)) throw err;
+        logger.warn(
+          { sessionId, err: err instanceof Error ? err.message : String(err) },
+          `IS refused the judge request; retrying with material capped at ${LEGACY_IS_MATERIAL_MAX}`
+        );
+        return judge(LEGACY_IS_MATERIAL_MAX);
+      });
       const byKey = new Map(judgement.verdicts.map((v) => [v.key, v]));
       for (const c of judged) {
         const v = byKey.get(c.key);

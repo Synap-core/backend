@@ -18,8 +18,10 @@
  * read as "nothing there".
  *
  * `loadRoomMaterial` adds the session ROOM: its latest human + agent messages
- * (evidence is often posted there, never in a document). A failed room read
- * is written into the material ("room unavailable"), never silently omitted.
+ * (evidence is often posted there, never in a document), read as the session
+ * owner through the one history door. A room the owner cannot read ("room not
+ * readable") or a failed read ("room unavailable") is written into the
+ * material, never silently omitted.
  *
  * Budget: every produced item and the room get a FAIR share (water-filling —
  * a short section keeps all of its text, what it leaves is re-split among the
@@ -28,6 +30,7 @@
  * end); a clipped room keeps its newest messages. Every cut says `[truncated]`.
  */
 
+import { TRPCError } from "@trpc/server";
 import {
   db,
   documents,
@@ -35,12 +38,10 @@ import {
   messages,
   MessageAuthorType,
   and,
-  desc,
-  eq,
   inArray,
-  isNull,
 } from "@synap/database";
 import { storage } from "@synap/storage";
+import { queryChannelMessages } from "../../../utils/query-channel-messages.js";
 import type { focusSessions } from "@synap/database";
 import { listSessionOutputs } from "../session-outputs.js";
 import { hydrationScopeWhere } from "../../object-graph/graph-service.js";
@@ -54,6 +55,12 @@ import type { PostedEvidence } from "./evaluate.js";
  * value FIRST and deploy the IS before this; a larger material is a 400 there.
  */
 export const MATERIAL_MAX = 16_000;
+/**
+ * The cap of an IS deployed before the raise (≤ aef1dd82). A judge call the IS
+ * refuses as a bad request is retried ONCE with material rebuilt at this size
+ * (`evaluate.ts`), so a pod deployed ahead of its IS still gets graded.
+ */
+export const LEGACY_IS_MATERIAL_MAX = 8_000;
 const REPORT_MAX = 1200;
 const EARLIER_MAX = 1200;
 /** How many of the room's latest messages the judge reads. */
@@ -199,39 +206,44 @@ export async function loadProducedMaterial(params: {
 
 /**
  * The session room's latest human + agent messages, oldest → newest. `ok` with
- * no messages is a true empty (no room, or nothing said); `failed` is a read
+ * no messages is a true empty (no room, or nothing said); `refused` is a room
+ * the session owner cannot read (a `channelId` pointed at someone else's
+ * conversation) — the judge is told so and never sees it; `failed` is a read
  * that did not happen, and the material says so.
  */
 export type RoomMaterial =
   | { status: "ok"; messages: Array<{ author: string; text: string }> }
+  | { status: "refused" }
   | { status: "failed"; reason: string };
 
 /**
- * The room of a session the caller already loaded floored on its owner
- * (`evaluateSession`): the owner's own pod data. System / bot notices and
- * ephemeral replies are noise, not evidence, and are left out.
+ * The room of a session, read AS ITS OWNER through the one history door
+ * (`queryChannelMessages` with `userId`: the canonical channel read floor,
+ * plus the deleted / ephemeral filters). A session's `channelId` is a pointer,
+ * not a grant — the room is read only when the owner can read that channel.
+ * System / bot notices are noise, not evidence, and are left out.
  */
-export async function loadRoomMaterial(
-  channelId: string | null
-): Promise<RoomMaterial> {
+export async function loadRoomMaterial(params: {
+  channelId: string | null;
+  userId: string;
+}): Promise<RoomMaterial> {
+  const { channelId, userId } = params;
   if (!channelId) return { status: "ok", messages: [] };
   try {
-    const rows = await db
-      .select({ authorType: messages.authorType, content: messages.content })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.channelId, channelId),
-          inArray(messages.authorType, [
-            MessageAuthorType.HUMAN,
-            MessageAuthorType.AI_AGENT,
-          ]),
-          eq(messages.ephemeral, false),
-          isNull(messages.deletedAt)
-        )
-      )
-      .orderBy(desc(messages.timestamp))
-      .limit(ROOM_MESSAGES_N);
+    const rows = await queryChannelMessages<{
+      authorType: string;
+      content: string;
+    }>(db, {
+      channelId,
+      userId,
+      order: "desc",
+      limit: ROOM_MESSAGES_N,
+      columns: { authorType: true, content: true },
+      extraWhere: inArray(messages.authorType, [
+        MessageAuthorType.HUMAN,
+        MessageAuthorType.AI_AGENT,
+      ]),
+    });
     return {
       status: "ok",
       messages: rows.reverse().map((r) => ({
@@ -240,6 +252,8 @@ export async function loadRoomMaterial(
       })),
     };
   } catch (err) {
+    if (err instanceof TRPCError && err.code === "NOT_FOUND")
+      return { status: "refused" };
     return {
       status: "failed",
       reason: err instanceof Error ? err.message : String(err),
@@ -282,7 +296,8 @@ export function fairShares(
 }
 
 /**
- * Pure: the judge's material, ≤ {@link MATERIAL_MAX} chars. The fixed facts
+ * Pure: the judge's material, ≤ `max` chars ({@link MATERIAL_MAX} unless the
+ * caller is retrying for an older IS). The fixed facts
  * (goal, declared outputs, posted evidence, report, earlier checks) come
  * first; the produced CONTENT and the session room share every remaining
  * byte through {@link fairShares}.
@@ -298,7 +313,8 @@ export function buildJudgeMaterial(
   >[],
   evidence: PostedEvidence | undefined,
   produced: readonly ProducedMaterial[],
-  room: RoomMaterial = { status: "ok", messages: [] }
+  room: RoomMaterial = { status: "ok", messages: [] },
+  max: number = MATERIAL_MAX
 ): string {
   const outputs = Array.isArray(session.expectedOutputs)
     ? (session.expectedOutputs as Array<{ label?: string; status?: string }>)
@@ -336,9 +352,11 @@ export function buildJudgeMaterial(
   const roomHeading =
     room.status === "failed"
       ? `SESSION ROOM: unavailable — the room could not be read (${room.reason}).`
-      : room.messages.length
-        ? `SESSION ROOM (latest ${room.messages.length} messages, oldest first):`
-        : "";
+      : room.status === "refused"
+        ? "SESSION ROOM: not readable — the session owner cannot read this room."
+        : room.messages.length
+          ? `SESSION ROOM (latest ${room.messages.length} messages, oldest first):`
+          : "";
   const roomText =
     room.status === "ok"
       ? room.messages.map((m) => `[${m.author}] ${m.text}`).join("\n")
@@ -353,7 +371,7 @@ export function buildJudgeMaterial(
     8;
   const shares = fairShares(
     texts.map((t) => t.length),
-    MATERIAL_MAX - fixed - overhead
+    max - fixed - overhead
   );
 
   const producedPart = produced.length
@@ -371,5 +389,5 @@ export function buildJudgeMaterial(
   return [...head, producedPart, roomPart, earlier]
     .filter(Boolean)
     .join("\n\n")
-    .slice(0, MATERIAL_MAX);
+    .slice(0, max);
 }

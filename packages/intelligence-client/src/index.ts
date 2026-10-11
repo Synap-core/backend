@@ -98,7 +98,10 @@ export {
 
 export type { AiUsageSample, AiUsageTotals } from "./ai-usage-collector.js";
 
-export { judgeSessionCriteria } from "./session-judge-client.js";
+export {
+  judgeSessionCriteria,
+  isJudgeRequestRefused,
+} from "./session-judge-client.js";
 export type {
   JudgeCriteriaRequest,
   JudgeCriteriaResult,
