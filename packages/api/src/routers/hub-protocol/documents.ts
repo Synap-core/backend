@@ -193,6 +193,9 @@ export const documentsRouter = router({
         requestedEventId: requestedEvent?.id,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
         sessionId: ctx.sessionId ?? undefined,
+        // The slot this document fulfils — the claim the approval stamps by,
+        // the same label the artifact below records.
+        expectedLabel: input.expectedLabel,
         data: {
           id: documentId,
           title: input.title,

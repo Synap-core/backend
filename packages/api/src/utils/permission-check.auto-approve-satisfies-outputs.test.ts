@@ -342,6 +342,82 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     expect(receiptData()).toMatchObject({ expectedLabel: "Summary" });
   });
 
+  /**
+   * BUG #9 (live session fc9dd524): four declared document slots, documents
+   * created in the order 2,1,3,4, each titled differently from its slot and
+   * each naming its slot through the door's `expectedLabel`. Before the
+   * declared rung the gate saw only the title, wrote no claim, and the stamp
+   * fell to the FIRST open document slot — documents 1 and 2 swapped slots.
+   * Driven through the real gate + the real stamper, one call per document,
+   * with each stamp fed back as the next call's session row.
+   */
+  it("each document's declared expectedLabel binds ITS slot, whatever the creation order", async () => {
+    const CURRENT =
+      "Current-state map: tracks, sessions, playbooks, agent dispatch, rooms, evaluation, documents/widgets, UI surfaces (file:line)";
+    const PRIOR =
+      "Prior-art study: how 8+ products run research→spec→task→agent→verify, and what they flagged as the wrong path";
+    const EFFECTS = "Effects and reuse map (what changes, what is reused)";
+    const PLAN = "Phased plan: waves, gates, owners";
+    let slots: Record<string, unknown>[] = [
+      { kind: "document", label: CURRENT },
+      { kind: "document", label: PRIOR },
+      { kind: "document", label: EFFECTS },
+      { kind: "document", label: PLAN },
+    ];
+    const order = [
+      { id: "doc-prior", title: "Prior art — 8 products", label: PRIOR },
+      { id: "doc-current", title: "Where we are today", label: CURRENT },
+      { id: "doc-effects", title: "Effects", label: EFFECTS },
+      { id: "doc-plan", title: "The plan", label: PLAN },
+    ];
+    for (const doc of order) {
+      sessionRow.current = openSessionWith(slots);
+      governanceRow.current = declares(slots);
+      mockReturning.mockResolvedValueOnce([{ id: `receipt-${doc.id}` }]);
+      await checkPermissionOrPropose({
+        ...OPTS,
+        expectedLabel: doc.label,
+        data: { id: doc.id, title: doc.title },
+      });
+      slots = updatedSets.at(-1)!.expectedOutputs as Record<string, unknown>[];
+    }
+
+    expect(updatedSets).toHaveLength(4);
+    expect(slots.map((s) => [s.label, s.satisfiedByProposalId])).toEqual([
+      [CURRENT, "receipt-doc-current"],
+      [PRIOR, "receipt-doc-prior"],
+      [EFFECTS, "receipt-doc-effects"],
+      [PLAN, "receipt-doc-plan"],
+    ]);
+  });
+
+  it("a declared expectedLabel never claims a slot of another kind, nor the human's", async () => {
+    const slots = [
+      { kind: "entity", label: "Client record" },
+      { kind: "document", label: "Brief", owner: "human" },
+      { kind: "document", label: "Spec" },
+    ];
+    for (const label of ["Client record", "Brief"]) {
+      vi.clearAllMocks();
+      mockReturning.mockResolvedValue([{ id: "receipt-1" }]);
+      mockValues.mockReturnValue({ returning: mockReturning });
+      updatedSets.length = 0;
+      sessionRow.current = openSessionWith(slots);
+      governanceRow.current = declares(slots);
+      await checkPermissionOrPropose({
+        ...OPTS,
+        expectedLabel: label,
+        data: { id: "doc-xyz", title: "Untitled draft" },
+      });
+      expect(receiptData()).not.toHaveProperty("expectedLabel");
+      const written = updatedSets[0]!.expectedOutputs as Record<
+        string,
+        unknown
+      >[];
+      expect(written[2]).toMatchObject({ label: "Spec", status: "done" });
+    }
+  });
+
   it("writes NO claim when the named slot is of another KIND", async () => {
     // A document write whose title happens to equal a declared ENTITY slot's
     // label. Claiming it would assert this change is that deliverable, and the

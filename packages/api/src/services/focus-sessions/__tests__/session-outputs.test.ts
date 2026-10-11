@@ -341,6 +341,69 @@ describe("joinSessionOutputs — declared label", () => {
   });
 });
 
+describe("joinSessionOutputs — lineage vs the object's own claim (BUG #9)", () => {
+  const P1 = "55555555-5555-4555-8555-555555555555";
+  const P2 = "66666666-6666-4666-8666-666666666666";
+  // The LIVE rows of session fc9dd524: the approvals carried no claim and were
+  // stamped first-of-kind, so lineage CROSSES the two documents, while each
+  // document's artifact names its own slot.
+  const crossed = (claims: [string | undefined, string | undefined]) =>
+    joinSessionOutputs({
+      ...empty,
+      artifacts: [
+        artifact({
+          kind: "document",
+          refId: DOC_A,
+          createdAt: t(1),
+          expectedLabel: claims[0],
+        }),
+        artifact({
+          kind: "document",
+          refId: DOC_B,
+          createdAt: t(2),
+          expectedLabel: claims[1],
+        }),
+      ],
+      expectedOutputs: [
+        {
+          kind: "document",
+          label: "Current-state map",
+          satisfiedByProposalId: P1,
+        },
+        {
+          kind: "document",
+          label: "Prior-art study",
+          satisfiedByProposalId: P2,
+        },
+      ],
+      proposals: [
+        { id: P1, targetType: "document", targetId: DOC_A, agentUserId: null },
+        { id: P2, targetType: "document", targetId: DOC_B, agentUserId: null },
+      ],
+    });
+  const bound = (r: ReturnType<typeof crossed>) =>
+    Object.fromEntries(r.outputs.map((o) => [o.refId, o.expected?.label]));
+
+  it("an object's claim on ANOTHER declared slot outranks crossed lineage", () => {
+    // DOC_A is the prior-art doc (created first), DOC_B the current-state doc.
+    expect(bound(crossed(["prior-art study ", "Current-state map"]))).toEqual({
+      [DOC_A]: "Prior-art study",
+      [DOC_B]: "Current-state map",
+    });
+  });
+
+  it("lineage still decides when the object claimed nothing, or a stale label", () => {
+    expect(bound(crossed([undefined, undefined]))).toEqual({
+      [DOC_A]: "Current-state map",
+      [DOC_B]: "Prior-art study",
+    });
+    expect(bound(crossed(["A since-reworded slot", undefined]))).toEqual({
+      [DOC_A]: "Current-state map",
+      [DOC_B]: "Prior-art study",
+    });
+  });
+});
+
 /**
  * `automation` and `playbook` joined the `artifacts.kind` enum in 0246. A
  * session whose whole point was "set up the follow-up rule" produced an

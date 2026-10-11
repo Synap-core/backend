@@ -52,6 +52,7 @@ import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { UUID_RE } from "./session-metadata.js";
 import { deriveSlotKeys } from "./slot-keys.js";
+import { normalizeExpectedLabel } from "./expected-label.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
   resolveEntityProfileRefs,
@@ -286,9 +287,10 @@ export function joinSessionOutputs(
   for (const a of input.artifacts) {
     const refId = artifactRefId(a);
     const id = coordinate(a.kind, refId);
-    if (a.expectedLabel && !byExpectedLabel.has(a.expectedLabel)) {
-      byExpectedLabel.set(a.expectedLabel, id);
-      labelClaimOf.set(id, a.expectedLabel);
+    const claimedLabel = normalizeExpectedLabel(a.expectedLabel);
+    if (claimedLabel && !byExpectedLabel.has(claimedLabel)) {
+      byExpectedLabel.set(claimedLabel, id);
+      labelClaimOf.set(id, claimedLabel);
     }
     if (a.expectedKey && !byExpectedKey.has(a.expectedKey)) {
       byExpectedKey.set(a.expectedKey, id);
@@ -338,11 +340,43 @@ export function joinSessionOutputs(
     });
   }
 
+  /**
+   * Whether output `id` may sit on the slot (`label`, `key`): it claimed this
+   * slot, or claimed none. An output that claimed a DIFFERENT slot is not up
+   * for a guess — otherwise the first declared slot swallows it before its own
+   * label is reached and the claim is inert. Labels compare trim + casefold.
+   */
+  const claimsThisSlot = (
+    id: string,
+    label: string,
+    key: string | undefined
+  ): boolean => {
+    const ownLabel = normalizeExpectedLabel(label);
+    return (
+      (labelClaimOf.get(id) ?? ownLabel) === ownLabel &&
+      (keyClaimOf.get(id) ?? key) === key
+    );
+  };
+
+  const slotKeys = deriveSlotKeys(input.expectedOutputs);
+  const declaredLabels = new Set(
+    input.expectedOutputs.map((e) => normalizeExpectedLabel(e.label))
+  );
+  const declaredKeys = new Set(slotKeys);
+  /** Whether output `id` carries a claim that names a slot declared here. */
+  const claimsADeclaredSlot = (id: string): boolean => {
+    const label = labelClaimOf.get(id);
+    const key = keyClaimOf.get(id);
+    return (
+      (label !== undefined && declaredLabels.has(label)) ||
+      (key !== undefined && declaredKeys.has(key))
+    );
+  };
+
   const proposalById = new Map(input.proposals.map((p) => [p.id, p]));
   const claimed = new Set<string>();
   const pendingExpected: ExpectedOutput[] = [];
 
-  const slotKeys = deriveSlotKeys(input.expectedOutputs);
   for (const [index, e] of input.expectedOutputs.entries()) {
     const slotKey = slotKeys[index] ?? undefined;
     // (2) Lineage first — an approved proposal names the object it produced.
@@ -354,7 +388,20 @@ export function joinSessionOutputs(
       const candidate = byId.get(
         coordinate(proposal.targetType, proposal.targetId)
       );
-      if (candidate && !claimed.has(candidate.id)) target = candidate;
+      // Lineage yields to the object's OWN claim on ANOTHER declared slot: an
+      // approval filed without a claim was stamped onto the first slot of its
+      // kind (a guess), and the producer's declared label is the evidence of
+      // which deliverable it is (live session fc9dd524: slots 1 and 2 swapped).
+      // A claim naming no declared slot (a since-reworded label) is stale and
+      // does not outrank lineage.
+      if (
+        candidate &&
+        !claimed.has(candidate.id) &&
+        (claimsThisSlot(candidate.id, e.label, slotKey) ||
+          !claimsADeclaredSlot(candidate.id))
+      ) {
+        target = candidate;
+      }
     }
     // (3) Declared slot — an explicit claim from the producer, by KEY first
     // and then by label. Allowed even when a proposal exists but did not
@@ -365,7 +412,9 @@ export function joinSessionOutputs(
       if (candidate && !claimed.has(candidate.id)) target = candidate;
     }
     if (!target) {
-      const claimedId = byExpectedLabel.get(e.label);
+      const claimedId = byExpectedLabel.get(
+        normalizeExpectedLabel(e.label) ?? ""
+      );
       const candidate = claimedId ? byId.get(claimedId) : undefined;
       // A label claim yields to the same artifact's KEY claim on another slot.
       if (
@@ -386,8 +435,7 @@ export function joinSessionOutputs(
           // An output that claimed a DIFFERENT slot is not up for guessing.
           // Otherwise the first declared slot would swallow it before its own
           // label was ever reached, and the claim would be inert.
-          (labelClaimOf.get(o.id) ?? e.label) === e.label &&
-          (keyClaimOf.get(o.id) ?? slotKey) === slotKey
+          claimsThisSlot(o.id, e.label, slotKey)
       );
     }
     if (!target) {

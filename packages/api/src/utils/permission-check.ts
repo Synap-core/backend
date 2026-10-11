@@ -96,6 +96,7 @@ import {
 } from "../services/agent-identity-service.js";
 import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expected-output.js";
 import { slotKeyAt } from "../services/focus-sessions/slot-keys.js";
+import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
@@ -264,9 +265,10 @@ interface SessionGovernanceContext {
 /**
  * The SLOT CLAIM — which declared deliverable of the ambient session this change
  * is for, resolved by GOVERNANCE reading the session rather than trusted from the
- * caller (founder decision, 2026-09-07). No create door carries an
- * `expectedLabel` today, and a caller-supplied one would be an agent naming its
- * own slot; the session row is the only place the declared labels actually live.
+ * caller (founder decision, 2026-09-07); the session row is the only place the
+ * declared labels actually live. Since then the create doors carry an
+ * `expectedLabel`: it is resolved AGAINST that row (rung 0, `opts.expectedLabel`,
+ * never read from `data`), so it can only name a slot the session declared.
  *
  * The rule is deliberately narrow: the change's OWN name (`goal` / `title` /
  * `name` / `displayName` / `label` — the same inline fields
@@ -305,13 +307,15 @@ function resolveSessionSlotClaim(
   expectedOutputs: ExpectedOutput[],
   data: Record<string, unknown> | undefined,
   targetType: string | null | undefined,
-  actingAgentType?: string
+  actingAgentType?: string,
+  declaredLabel?: string
 ): SessionSlotClaim | undefined {
   const index = resolveSessionSlotClaimIndex(
     expectedOutputs,
     data,
     targetType,
-    actingAgentType
+    actingAgentType,
+    declaredLabel
   );
   if (index === -1) return undefined;
   const label = expectedOutputs[index]?.label;
@@ -330,16 +334,36 @@ function resolveSessionSlotClaimIndex(
   expectedOutputs: ExpectedOutput[],
   data: Record<string, unknown> | undefined,
   targetType: string | null | undefined,
-  actingAgentType?: string
+  actingAgentType?: string,
+  declaredLabel?: string
 ): number {
   if (expectedOutputs.length === 0) return -1;
 
-  // The kind floor, applied to BOTH rungs below.
+  // The kind floor, applied to EVERY rung below.
   const targetKind = normalizeObjectKind(targetType);
   const ofKind = (o: ExpectedOutput) =>
     normalizeObjectKind(o.kind) === targetKind;
-  /** The ownership floor, applied to BOTH rungs below. */
+  /** The ownership floor, applied to EVERY rung below. */
   const notTheHumans = (o: ExpectedOutput) => o.owner !== "human";
+
+  // RUNG 0 — the caller DECLARED the slot (`expectedLabel`, exact, trim +
+  // casefold). The create doors carry it and record it on the artifact
+  // (`artifacts.props.expectedLabel`); without it here the approval had only
+  // the title rung, so a document titled differently from its slot fell to the
+  // FIRST-of-kind guess — documents created in order 2,1,3,4 stamped slot 1
+  // with document 2 and vice versa, and the lineage then outranked the
+  // artifact's own claim in the outputs join (live session fc9dd524). Same
+  // trust as rung 1 (the agent chooses its title too) and the same floors.
+  const declared = normalizeExpectedLabel(declaredLabel);
+  if (declared) {
+    const named = expectedOutputs.findIndex(
+      (o) =>
+        normalizeExpectedLabel(o.label) === declared &&
+        ofKind(o) &&
+        notTheHumans(o)
+    );
+    if (named !== -1) return named;
+  }
 
   // RUNG 1 — the change NAMES the slot (and is of its kind).
   const candidate = data
@@ -930,6 +954,15 @@ export interface PermissionCheckBaseOpts {
   sourceMessageId?: string;
   /** Session ID to link proposals to the active focus session */
   sessionId?: string;
+  /**
+   * The declared output slot this write fulfils, as the CALLER named it
+   * (`synap_create_document`'s `expectedLabel`, "exactly as declared on the
+   * session"). Never trusted as-is: it only becomes the proposal's slot claim
+   * when it names a slot of the ambient session's row under the same kind and
+   * ownership floors as every other rung — see `resolveSessionSlotClaimIndex`.
+   * Kept OUT of `data`, so the receipt's strip of a `data.expectedLabel` stands.
+   */
+  expectedLabel?: string;
   /** How `sessionId` was arrived at — see `SessionSource` (@synap/database). */
   sessionSource?: "explicit" | "derived";
   /** Active project lens → proposals.project_id → belongs_to_project at materialize */
@@ -1693,7 +1726,9 @@ async function evaluatePermission(
       ? resolveSessionSlotClaim(
           sessionGovernance.expectedOutputs,
           data,
-          subjectType
+          subjectType,
+          undefined,
+          opts.expectedLabel
         )
       : undefined;
     // DELEGATED claim (rung 2). Second read, and only on the narrow path that

@@ -1140,6 +1140,9 @@ export const createProcs = {
         sourceMessageId: ctx.sourceMessageId ?? undefined,
         sessionId: ctx.sessionId ?? undefined,
         projectId: resolvedProjectId ?? undefined,
+        // The declared slot this entity fulfils — the claim the approval
+        // stamps by, the same label the session artifact records.
+        expectedLabel: input.expectedLabel,
         data: {
           id: entityId,
           profileSlug,
