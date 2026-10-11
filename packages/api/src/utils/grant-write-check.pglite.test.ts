@@ -162,6 +162,49 @@ describe("the write gate enforces the key's grant (W1d)", () => {
     expect(await denial(write({ permissions: [] }, {}))).not.toBeNull();
   });
 
+  // A session is granted as `session` (catalog, reads); its write door is
+  // `focus_session`. Rules out the two spellings never meeting.
+  it("session.create permits starting a session; session.read does not", async () => {
+    const start = {
+      subjectType: "focus_session",
+      action: "create",
+      data: {},
+    } as const;
+    expect(
+      (await grantRequestForWrite({ ...start, workspaceId: WS })).subject
+    ).toBe("session");
+    const allowed = await write(
+      { permissions: ["session.create"] },
+      start
+    ).catch(() => ({}));
+    expect(await denial(Promise.resolve(allowed))).toBeNull();
+    expect(
+      await denial(write({ permissions: ["session.read"] }, start))
+    ).toContain('"session.create"');
+  });
+
+  // Founder decision 2026-10-11: a bare subject is read/create/update/delete
+  // only. Rules out the prefix rule letting `entity` restore or `session`
+  // grant a capability.
+  it("a bare subject never covers a gate verb; naming it does", async () => {
+    expect(
+      await denial(write({ permissions: ["entity"] }, { action: "restore" }))
+    ).toContain("entity.knowledge.restore");
+    const named = await write(
+      { permissions: ["entity.*.restore"] },
+      { action: "restore" }
+    ).catch(() => ({}));
+    expect(await denial(Promise.resolve(named))).toBeNull();
+    expect(
+      await denial(
+        write(
+          { permissions: ["session"] },
+          { subjectType: "focus_session", action: "grant_capability", data: {} }
+        )
+      )
+    ).toContain('"session.grant_capability"');
+  });
+
   it("does NOT deny on the grant rung when the grant permits the write", async () => {
     const r = await write(
       { permissions: ["entity.knowledge.update"], workspaceIds: [WS] },

@@ -9,7 +9,9 @@
  *
  * The request key is derived HERE, server-side, from the gate's own
  * subject/action plus the object's kind — a caller never names it:
- *   subject   = the gate subjectType (plural spelling folded: workspaces → workspace)
+ *   subject   = the gate subjectType, folded to the grant subject a person
+ *               grants and reads (GRANT_SUBJECT_ALIASES: workspaces → workspace,
+ *               focus_session → session)
  *   qualifier = for `entity`: data.profileSlug / data.type, else the stored kind
  *               of data.id / data.entityId (profiles.slug, then entities.type)
  *   workspace = the gate's workspaceId
@@ -43,13 +45,22 @@ async function storedKind(entityId: string): Promise<string | undefined> {
   return row?.slug ?? row?.type ?? undefined;
 }
 
+/**
+ * Gate subjectTypes whose grant subject is spelled differently. A session is
+ * `session` in the grant catalog and on reads (access/grant-read.ts); its
+ * write door is `focus_session`.
+ */
+const GRANT_SUBJECT_ALIASES: Readonly<Record<string, string>> = {
+  workspaces: "workspace",
+  focus_session: "session",
+};
+
 /** The server-derived request a grant is checked against. */
 export async function grantRequestForWrite(
   input: GrantWriteInput
 ): Promise<GrantRequest> {
   const data = input.data ?? {};
-  const subject =
-    input.subjectType === "workspaces" ? "workspace" : input.subjectType;
+  const subject = GRANT_SUBJECT_ALIASES[input.subjectType] ?? input.subjectType;
   const entityId = str(data.id) ?? str(data.entityId);
   let qualifier: string | undefined;
   if (subject === "entity") {
