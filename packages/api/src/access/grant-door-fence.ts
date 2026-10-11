@@ -66,8 +66,12 @@ export function grantBoundsDoor(
 ): boolean {
   if (!door || door.bound === "refused") return false;
   if (door.bound === "seamed") return true;
-  return grant.scopes.some((scope) =>
-    door.subjects.every((s) => scopeReadsUnbounded(scope, s))
+  // A deny-all scope (`permissions: []`) reads nothing — `every` over a door
+  // that declares no subject would otherwise let it through.
+  return grant.scopes.some(
+    (scope) =>
+      scope.permissions.length > 0 &&
+      door.subjects.every((s) => scopeReadsUnbounded(scope, s))
   );
 }
 
@@ -200,7 +204,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "view",
     "track"
   ),
-  // Skills are not a grant subject (system + the person's own runbooks).
+  // Skills have no read subject in the read hook (system + the person's own
+  // runbooks): any key that holds a live permission may load one.
   synap_load_skill: READS(),
   synap_diagnose: REFUSED("Pod internals across every subject."),
 };

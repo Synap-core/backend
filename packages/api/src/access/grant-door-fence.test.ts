@@ -114,6 +114,14 @@ describe("mcpToolAllowed / trpcProcedureAllowed", () => {
     ).toBe(true);
     expect(mcpToolAllowed("synap_diagnose", true, AI)).toBe(false);
   });
+  it("a deny-all key passes no declared door, even one that reads no subject", () => {
+    const denyAll = key({ permissions: [] });
+    expect(mcpToolAllowed("synap_load_skill", true, denyAll)).toBe(false);
+    expect(mcpToolAllowed("synap_ask", true, denyAll)).toBe(false);
+    expect(restDoorAllowed("POST", "/knowledge/ask", denyAll)).toBe(false);
+    expect(mcpToolAllowed("synap_load_skill", true, DOC_ONLY)).toBe(true);
+    expect(mcpToolAllowed("synap_load_skill", true, AI)).toBe(true);
+  });
   it("hub POST reads follow the same declaration", () => {
     expect(restDoorAllowed("POST", "/knowledge/ask", AI)).toBe(true);
     expect(restDoorAllowed("POST", "/knowledge/ask", DOC_ONLY)).toBe(false);
