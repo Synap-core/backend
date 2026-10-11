@@ -38,7 +38,11 @@ import {
   type UnifiedKey,
 } from "../(admin)/trust-keys/_lib/api-keys-section";
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
-import { summarizeGrant } from "@synap-core/types/grants";
+import {
+  describeKeyAccess,
+  type KeyAccess,
+  type KeyAccessGrant,
+} from "@synap-core/types/grants";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import { appMode, appReach } from "@synap-core/types/apps/app-view";
 import {
@@ -58,15 +62,13 @@ const LIST_CAP = 6;
 const CONNECT_COMMAND = "synap app connect";
 
 /**
- * What a key may touch, in the words every grant surface uses
- * (`summarizeGrant` — the same model `<GrantSummary>` renders in the apps).
- * A key with no grant is bounded only by what you can do yourself.
+ * A key as `apiKeys.list` returns it: `access` + every live grant. Both are on
+ * the wire but not yet in the generated api-types, so they are typed here.
  */
-function grantLine(grant: UnifiedKey["grant"]): string {
-  if (!grant) return "No grant: everything you can do";
-  const s = summarizeGrant(grant);
-  return [s.what, ...s.where].join(" · ");
-}
+type ConnectionKey = UnifiedKey & {
+  access: KeyAccess;
+  grants: KeyAccessGrant[];
+};
 
 /** Human label for a key's `hubId` — mirrors ConnectForm's integration list. */
 function connectionLabel(hubId: string | null | undefined): string {
@@ -286,7 +288,7 @@ export default function MyConnectionsPage() {
     );
   }
 
-  const all = (keys.data ?? []) as UnifiedKey[];
+  const all = (keys.data ?? []) as UnifiedKey[] as ConnectionKey[];
   const active = all.filter((k) => k.isActive);
   const revoked = all.filter((k) => !k.isActive);
 
@@ -481,7 +483,7 @@ function KeyCard({
   isRevoking = false,
   onRevoke,
 }: {
-  apiKey: UnifiedKey;
+  apiKey: ConnectionKey;
   isRevoking?: boolean;
   onRevoke?: () => void;
 }) {
@@ -533,7 +535,7 @@ function KeyCard({
         {apiKey.isActive ? (
           <p className="text-xs text-foreground/70">
             <span className="text-foreground/55">Can: </span>
-            {grantLine(apiKey.grant)}
+            {describeKeyAccess(apiKey).sentence}
           </p>
         ) : null}
         <p className="text-xs text-foreground/55">{meta}</p>
