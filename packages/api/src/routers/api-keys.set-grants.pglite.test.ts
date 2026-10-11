@@ -59,7 +59,6 @@ import { grantWriteDenial } from "../utils/grant-write-check.js";
 const HUMAN = "human-setgrants";
 const OTHER = "someone-else";
 const WS = "33333333-3333-4333-8333-333333333333";
-const DAY = 86_400_000;
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;

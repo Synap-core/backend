@@ -24,7 +24,6 @@ import {
   eq,
   and,
   inArray,
-  isNull,
   count,
   apiKeys,
   apiKeyExternalUsers,
@@ -47,7 +46,6 @@ import {
   GUEST_REFUSED_BODY,
   isGuestPrincipal,
 } from "../../../access/guest-containment.js";
-import { assertPodAdmin } from "../../../trpc.js";
 import {
   createAdminUser,
   ensureUserRow,
