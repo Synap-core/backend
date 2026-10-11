@@ -119,6 +119,7 @@ import {
   createNameResolvers,
   stringProp,
   displayNameForUser,
+  displayLabelFromRecord,
   linkEndpointsFromPayload,
   resolveLinkEndpointName,
   referencedNameIds,
@@ -130,7 +131,7 @@ import {
 // `services/focus-sessions/participants.ts`) are unaffected by moving the
 // canonical implementations into `helper-functions.js` (done to let that
 // module use them without importing back into this one, which imports it).
-export { stringProp, displayNameForUser };
+export { stringProp, displayNameForUser, displayLabelFromRecord };
 
 type ProposalRow = typeof proposals.$inferSelect;
 
@@ -2483,17 +2484,6 @@ export function uniqueStrings(
 ): string[] {
   return Array.from(
     new Set(values.filter((value): value is string => Boolean(value)))
-  );
-}
-
-export function displayLabelFromRecord(
-  record: Record<string, unknown> | undefined
-): string | undefined {
-  return (
-    stringProp(record, "title") ??
-    stringProp(record, "name") ??
-    stringProp(record, "displayName") ??
-    stringProp(record, "label")
   );
 }
 

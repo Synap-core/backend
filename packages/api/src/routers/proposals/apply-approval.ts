@@ -48,6 +48,8 @@ import {
   isRequestShapedProposalData,
   opRef,
   buildApprovalComment,
+  buildRequestFromProposal,
+  type Proposal,
 } from "@synap-core/types/proposals";
 import type { IdentityResolutionInput } from "./executors/identity-resolution.js";
 import type {
@@ -135,6 +137,7 @@ import {
 } from "../../services/focus-sessions/satisfy-expected-output.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
 import { readProposalExpectedKey } from "../../services/focus-sessions/slot-keys.js";
+import { displayLabelFromRecord } from "./helper-functions.js";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "proposals" });
@@ -626,13 +629,15 @@ export async function applyProposalApproval(args: {
         userId: args.userId,
         kind: normalizeObjectKind(args.proposal.targetType ?? "entity") as any,
         refId: args.proposal.targetId ?? "",
-        // The slot CLAIM the proposal carried — the same label the
-        // `satisfyExpectedOutputs` call above matched against. The proposal
-        // row has no `title` column; the display layer derives the name from
-        // the payload (`displayLabelFromRecord`), so the artifact reads the
-        // same field. Falls back to "Untitled output" when neither exists.
-        title:
-          readProposalExpectedLabel(args.proposal.data) ?? "Untitled output",
+        // The slot CLAIM the proposal carried first — the same label the
+        // `satisfyExpectedOutputs` call above matched against. Then the name
+        // the proposal gives its target, read the way the proposal card reads
+        // it (`targetName`, then `displayLabelFromRecord` over the request's
+        // payload): a track create carries no slot label, only `data.name`, and
+        // stamping "Untitled output" over it is what every such session showed.
+        // The outputs read prefers the object's LIVE name where it has one
+        // (`resolveTitles`); this stored title is what it falls back to.
+        title: approvedOutputTitle(args.proposal),
         agentUserId: args.ctx.agentUserId ?? null,
         // Forward the claim, so the room joins this output to the slot the
         // approval just satisfied (key first, label as the alias).
@@ -648,6 +653,22 @@ export async function applyProposalApproval(args: {
   }
 
   return result;
+}
+
+/**
+ * The stored title of the session output an approval records: the slot claim,
+ * else the name the proposal gives its target, else "Untitled output".
+ */
+function approvedOutputTitle(proposal: Proposal): string {
+  const label = readProposalExpectedLabel(proposal.data);
+  if (label) return label;
+  const request = buildRequestFromProposal(proposal);
+  const payload =
+    request.data && typeof request.data === "object"
+      ? (request.data as Record<string, unknown>)
+      : undefined;
+  const named = request.targetName?.trim() || displayLabelFromRecord(payload);
+  return named || "Untitled output";
 }
 
 async function applyProposalApprovalInner(

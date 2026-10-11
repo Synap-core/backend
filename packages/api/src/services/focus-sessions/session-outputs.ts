@@ -36,6 +36,9 @@ import {
   views,
   automations,
   playbooks,
+  projectTracks,
+  projects,
+  workspaces,
   sessionEvaluations,
   and,
   eq,
@@ -585,7 +588,7 @@ async function joinOne(
 /**
  * THE three-ledger fetch + join for a SET of sessions, in a FIXED number of
  * queries whatever the set size: one artifacts read, one produced-edge read,
- * one satisfying-proposal read and the five batched title reads — never one
+ * one satisfying-proposal read and the batched title reads — never one
  * per session. Each session is joined on its own by `joinSessionOutputs`
  * (pure, unchanged), so a batch answers exactly what N single-session calls
  * would.
@@ -735,8 +738,8 @@ function readExpectedLabel(props: unknown): string | null {
 }
 
 /**
- * Live titles for every referenced object, FIVE queries total (one per backing
- * table) — never one per output — plus ONE profiles read for the entities'
+ * Live titles for every referenced object, ONE query per backing table that
+ * the refs actually name — never one per output — plus ONE profiles read for the entities'
  * kinds (`resolveEntityProfileRefs`, skipped when no entity names a profile). Keyed by the same `<kind>:<refId>` coordinate
  * the join uses. A kind with no backing table here (cell, url) simply has no
  * entry and keeps the artifact's own title.
@@ -745,8 +748,19 @@ function readExpectedLabel(props: unknown): string | null {
  * ONLY because the write doors now refuse a `refId` the caller cannot already
  * see (`assert-output-ref-visible.ts`). Before that floor existed, posting any
  * uuid to your own session and re-reading the room turned this join into a
- * title oracle over the whole pod. If a sixth kind is added here, add it to the
+ * title oracle over the whole pod. If a kind is added here, add it to the
  * door's floor in the same change.
+ *
+ * `track`, `project` and `workspace` are named here too, because an APPROVED
+ * proposal records its target as a session output (`apply-approval.ts`), and a
+ * session that started a track used to read "Untitled output" forever — the
+ * create carries no slot label, and nothing read the live row. Their refs reach
+ * the ledgers only through doors that already floor them: the approval writes
+ * the target the approver just applied, the `links` door adjudicates a `track`
+ * / `project` / `workspace` endpoint through its registered rule
+ * (`link-endpoint-visibility.ts`), and the attach-output doors refuse all three
+ * (`isOutputRefVisible`'s default arm). Reading the LIVE name also means a
+ * renamed track shows its new name, and rows written before this heal.
  */
 async function resolveTitles(
   database: typeof db,
@@ -772,45 +786,74 @@ async function resolveTitles(
   // these two keys are the canonical kinds the join's coordinates already use.
   const automationIds = [...(byKind.get("automation") ?? [])];
   const playbookIds = [...(byKind.get("playbook") ?? [])];
+  const trackIds = [...(byKind.get("track") ?? [])];
+  const projectIds = [...(byKind.get("project") ?? [])];
+  const workspaceIds = [...(byKind.get("workspace") ?? [])];
 
-  const [entityRows, documentRows, viewRows, automationRows, playbookRows] =
-    await Promise.all([
-      entityIds.length
-        ? database
-            .select({
-              id: entities.id,
-              title: entities.title,
-              type: entities.type,
-              profileId: entities.profileId,
-            })
-            .from(entities)
-            .where(inArray(entities.id, entityIds))
-        : Promise.resolve([]),
-      documentIds.length
-        ? database
-            .select({ id: documents.id, title: documents.title })
-            .from(documents)
-            .where(inArray(documents.id, documentIds))
-        : Promise.resolve([]),
-      viewIds.length
-        ? database
-            .select({ id: views.id, name: views.name })
-            .from(views)
-            .where(inArray(views.id, viewIds))
-        : Promise.resolve([]),
-      automationIds.length
-        ? database
-            .select({ id: automations.id, name: automations.name })
-            .from(automations)
-            .where(inArray(automations.id, automationIds))
-        : Promise.resolve([]),
-      playbookIds.length
-        ? database
-            .select({ id: playbooks.id, name: playbooks.name })
-            .from(playbooks)
-            .where(inArray(playbooks.id, playbookIds))
-        : Promise.resolve([]),
-    ]);
+  const [
+    entityRows,
+    documentRows,
+    viewRows,
+    automationRows,
+    playbookRows,
+    trackRows,
+    projectRows,
+    workspaceRows,
+  ] = await Promise.all([
+    entityIds.length
+      ? database
+          .select({
+            id: entities.id,
+            title: entities.title,
+            type: entities.type,
+            profileId: entities.profileId,
+          })
+          .from(entities)
+          .where(inArray(entities.id, entityIds))
+      : Promise.resolve([]),
+    documentIds.length
+      ? database
+          .select({ id: documents.id, title: documents.title })
+          .from(documents)
+          .where(inArray(documents.id, documentIds))
+      : Promise.resolve([]),
+    viewIds.length
+      ? database
+          .select({ id: views.id, name: views.name })
+          .from(views)
+          .where(inArray(views.id, viewIds))
+      : Promise.resolve([]),
+    automationIds.length
+      ? database
+          .select({ id: automations.id, name: automations.name })
+          .from(automations)
+          .where(inArray(automations.id, automationIds))
+      : Promise.resolve([]),
+    playbookIds.length
+      ? database
+          .select({ id: playbooks.id, name: playbooks.name })
+          .from(playbooks)
+          .where(inArray(playbooks.id, playbookIds))
+      : Promise.resolve([]),
+    trackIds.length
+      ? database
+          .select({ id: projectTracks.id, name: projectTracks.name })
+          .from(projectTracks)
+          .where(inArray(projectTracks.id, trackIds))
+      : Promise.resolve([]),
+    projectIds.length
+      ? database
+          .select({ id: projects.id, name: projects.name })
+          .from(projects)
+          .where(inArray(projects.id, projectIds))
+      : Promise.resolve([]),
+    workspaceIds.length
+      ? database
+          .select({ id: workspaces.id, name: workspaces.name })
+          .from(workspaces)
+          .where(inArray(workspaces.id, workspaceIds))
+      : Promise.resolve([]),
+  ]);
 
   for (const r of entityRows) {
     if (r.title) titles.set(`entity:${r.id}`, r.title);
@@ -819,6 +862,9 @@ async function resolveTitles(
   for (const r of viewRows) titles.set(`view:${r.id}`, r.name);
   for (const r of automationRows) titles.set(`automation:${r.id}`, r.name);
   for (const r of playbookRows) titles.set(`playbook:${r.id}`, r.name);
+  for (const r of trackRows) titles.set(`track:${r.id}`, r.name);
+  for (const r of projectRows) titles.set(`project:${r.id}`, r.name);
+  for (const r of workspaceRows) titles.set(`workspace:${r.id}`, r.name);
 
   const entityProfiles = new Map<string, EntityProfileRef>();
   for (const [id, ref] of await resolveEntityProfileRefs(

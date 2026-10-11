@@ -371,3 +371,19 @@ export function createNameResolvers(ctx: NameResolutionContext) {
     },
   };
 }
+
+/**
+ * The name a proposal payload gives its object — `title`, `name`,
+ * `displayName`, then `label`. Lives here (not in `display.ts`) so the approval
+ * door can read it without pulling the whole display read graph.
+ */
+export function displayLabelFromRecord(
+  record: Record<string, unknown> | undefined
+): string | undefined {
+  return (
+    stringProp(record, "title") ??
+    stringProp(record, "name") ??
+    stringProp(record, "displayName") ??
+    stringProp(record, "label")
+  );
+}
