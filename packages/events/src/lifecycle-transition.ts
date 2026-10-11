@@ -118,7 +118,11 @@ export async function emitLifecycleTransition(
     sessionId: t.sessionId,
     eventId,
     automationContext: opts.automationContext,
-    data,
+    // `data` is an untyped record, so the catalog-declared filter key is
+    // named HERE, at the emit, where the tripwire
+    // `entity-emits-carry-declared-filter-keys` can see it — the entity's
+    // KIND (a role's move carries the role in `role` / `lifecycleProfile`).
+    data: { ...data, profileSlug: t.profileSlug },
   } as SideEffectPayload);
 
   if (DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS && t.role === null) {
