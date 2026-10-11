@@ -2876,18 +2876,18 @@ start it, and a person decides at the moments that commit the business. The refe
 (`synap_create_playbook`, `synap_define_kind`, …) is **pod-local**: it never reaches the catalog. To make it
 official, write it into the catalog file and publish.
 
-| Field | Where | Rule |
-|---|---|---|
-| `subjectProfile.profileSlug` + `statusProperty` | playbook | The kind the process runs and its lifecycle property. One process owns one property. |
-| `stages[].subjectStatus` | stage | Entering the stage writes this status. Must be an **existing option** of the property — never invent one. |
-| `stages[].gate` | stage | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status. |
-| `stages[].onFail` | stage | `{toStage: <key>}` — where a rejected gate sends the run (rework loop). |
-| `stages[].criteria` | stage | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human. |
-| `expectedOutputs[]` | stage or playbook | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this. |
-| `activators[]` | playbook | `{on: created \| enters_status, status?, mode: propose \| run}`. Default `propose`; `run` only when cheap and safe. Compiled to a governed rule the owner can pause. |
-| `humanOnlyStatuses` | playbook | Statuses no stage owns, set only by a person (e.g. Idea, Archived). Together with the stages they must cover every option of the property. |
-| `goalTemplate` | playbook | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy). |
-| `params` | playbook | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string. |
+| Field                                           | Where             | Rule                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subjectProfile.profileSlug` + `statusProperty` | playbook          | The kind the process runs and its lifecycle property. One process owns one property.                                                                                                                                                                                                                                                   |
+| `stages[].subjectStatus`                        | stage             | Entering the stage writes this status. Must be an **existing option** of the property — never invent one.                                                                                                                                                                                                                              |
+| `stages[].gate`                                 | stage             | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status. |
+| `stages[].onFail`                               | stage             | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                |
+| `stages[].criteria`                             | stage             | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                  |
+| `expectedOutputs[]`                             | stage or playbook | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                   |
+| `activators[]`                                  | playbook          | `{on: created \| enters_status, status?, mode: propose \| run}`. Default `propose`; `run` only when cheap and safe. Compiled to a governed rule the owner can pause.                                                                                                                                                                   |
+| `humanOnlyStatuses`                             | playbook          | Statuses no stage owns, set only by a person (e.g. Idea, Archived). Together with the stages they must cover every option of the property.                                                                                                                                                                                             |
+| `goalTemplate`                                  | playbook          | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                   |
+| `params`                                        | playbook          | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                    |
 
 Human moments use an `ask` on an owed slot: `confirm` / `choose` (one `recommended`) / `form` / `act` / `provide`
 (connection, file or secret through the vault). Never ask for a secret in a form.
@@ -2908,16 +2908,28 @@ lifecycle property exactly.
   "params": [{ "name": "post", "type": "entity", "required": true }],
   "subjectProfileSlug": "post",
   "statusProperty": "post-status",
-  "activators": [{ "on": "enters_status", "status": "Briefed", "mode": "propose" }],
+  "activators": [
+    { "on": "enters_status", "status": "Briefed", "mode": "propose" }
+  ],
   "humanOnlyStatuses": ["Idea", "Archived"],
   "stages": [
     {
-      "key": "draft", "name": "Draft", "category": "started",
+      "key": "draft",
+      "name": "Draft",
+      "category": "started",
       "subjectStatus": "Drafting",
-      "expectedOutputs": [{ "kind": "document", "label": "Draft", "relationToSubject": "made_for" }]
+      "expectedOutputs": [
+        {
+          "kind": "document",
+          "label": "Draft",
+          "relationToSubject": "made_for"
+        }
+      ]
     },
     {
-      "key": "review", "name": "Review", "category": "started",
+      "key": "review",
+      "name": "Review",
+      "category": "started",
       "subjectStatus": "Ready",
       "gate": { "kind": "human" },
       "onFail": { "toStage": "draft" }
