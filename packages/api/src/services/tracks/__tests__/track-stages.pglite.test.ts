@@ -26,6 +26,18 @@
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const M0317 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0317_project_tracks_live_name_unique.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -313,10 +325,9 @@ beforeAll(async () => {
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     );
-    create unique index uniq_project_tracks_live_method
-      on project_tracks (project_id, playbook_id)
-      where status <> 'archived' and playbook_id is not null;
   `);
+  // The live-name unique index (0317) — the REAL migration.
+  await h.client!.exec(M0317);
   await q(
     `insert into projects (id, user_id, workspace_id, name, status) values
       ($1, $2, null, 'Launch', 'active'), ($3, $2, null, 'Gated', 'active'),

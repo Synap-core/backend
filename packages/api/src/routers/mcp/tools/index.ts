@@ -3305,7 +3305,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Start a METHOD on a project as a new track. The method is a playbook with scope 'project' (find one with synap_list_playbooks); a session-scoped playbook is REFUSED — start it as a session instead. Idempotent: if that method already runs on the project, the existing track comes back with status='exists'. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+          "Start a METHOD on a project as a new track. The method is a playbook with scope 'project' (find one with synap_list_playbooks); a session-scoped playbook is REFUSED — start it as a session instead. Idempotent per track NAME (the name defaults to the method's): if a live track of this method already holds that name on the project, it comes back with status='exists'; pass another `name` to run the same method a second time. A live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3317,7 +3317,7 @@ export const tools = {
             name: {
               type: "string",
               description:
-                "Optional display name; defaults to the method's name.",
+                "Optional display name; defaults to the method's name. The track's identity on the project: a new name runs the method again as a second track.",
             },
             params: {
               type: "object",

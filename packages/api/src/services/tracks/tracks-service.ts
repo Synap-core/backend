@@ -69,6 +69,7 @@ import type {
   ProjectTrackKpi,
   ProjectTrackStatus,
 } from "@synap/database/schema";
+import { LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
@@ -614,9 +615,13 @@ export type StartTrackResult = (
 };
 
 /**
- * Start a method on a project. Idempotent: a live (non-archived) track of the
- * same method on the same project is returned as `exists`, and nothing is
- * filed or written.
+ * Start a method on a project. A LIVE track's identity on its project is its
+ * NAME (0317, founder D1), and the name defaults to the method's: starting the
+ * same method again under the same (or no) name returns the live track as
+ * `exists`, and nothing is filed or written; under another name it starts a
+ * second track. Completed and archived tracks hold no name. A live track of
+ * ANOTHER method already holding the name is refused (CONFLICT) — never
+ * handed back as if it were this method.
  */
 export async function startTrack(
   input: StartTrackInput
@@ -670,20 +675,24 @@ export async function startTrack(
     version: playbook.version,
   };
 
+  const trackName = input.name?.trim() || playbook.name;
+
   // IDEMPOTENT before governance: an agent asking for a track that already
-  // runs gets it back, rather than a proposal to create what exists.
+  // runs under this name gets it back, rather than a proposal to create what
+  // exists. The same predicate as `uniq_project_tracks_live_name`.
   const [live] = await db
     .select()
     .from(projectTracks)
     .where(
       and(
         eq(projectTracks.projectId, project.id),
-        eq(projectTracks.playbookId, playbook.id),
-        ne(projectTracks.status, "archived")
+        drizzleSql`lower(btrim(${projectTracks.name})) = lower(btrim(${trackName}))`,
+        inArray(projectTracks.status, [...LIVE_PROJECT_TRACK_STATUSES])
       )
     )
     .limit(1);
   if (live) {
+    assertNameHeldBySameMethod(live as ProjectTrack, playbook);
     return {
       status: "exists",
       track: live as ProjectTrack,
@@ -691,8 +700,6 @@ export async function startTrack(
       missingDomains,
     };
   }
-
-  const trackName = input.name?.trim() || playbook.name;
   const trackId = input.id ?? randomUUID();
 
   // DECISION 2a — the step spaces this track will work in (the SAME resolver
@@ -795,6 +802,9 @@ export async function startTrack(
     actor.userId
   );
 
+  // A concurrent start of ANOTHER method under the same name won the insert.
+  if (!created) assertNameHeldBySameMethod(track, playbook);
+
   if (created) {
     // Provenance edge — the same `instantiated_from` shape the proto-track
     // wrote, so every reader of `project --instantiated_from--> playbook`
@@ -832,6 +842,34 @@ export async function startTrack(
     playbook: playbookRef,
     missingDomains,
   };
+}
+
+/** Postgres unique_violation (23505), also when wrapped as a driver error's cause. */
+function isUniqueViolation(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; current && depth < 4; depth++) {
+    if ((current as { code?: unknown }).code === "23505") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * A live track holding the requested name is "this method, already running"
+ * ONLY when it runs this method; otherwise the name is taken by another track
+ * and the caller must choose another one.
+ */
+function assertNameHeldBySameMethod(
+  live: ProjectTrack,
+  playbook: { id: string; name: string }
+): void {
+  if (live.playbookId === playbook.id) return;
+  throw new TRPCError({
+    code: "CONFLICT",
+    message:
+      `A live track on this project is already named "${live.name}" and does ` +
+      `not run "${playbook.name}" — pass another name to start it.`,
+  });
 }
 
 /** The agent's name for the consent sentence — never its id. */
@@ -907,7 +945,7 @@ async function loadTrackForWrite(
  * the `track/update` approval replay: a proposal filed while the move was
  * legal can be approved after the track moved on (archived, say) — replaying
  * it unchecked would revive an archived track and collide with a newer live
- * track of the same method.
+ * track of the same name.
  */
 export function assertTrackTransition(
   track: Pick<ProjectTrack, "name" | "status">,
@@ -979,22 +1017,33 @@ export async function applyTrackStatus(
   status: ProjectTrackStatus,
   userId: string
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
-  const updated = await (
-    await repo()
-  ).transitionStatus(
-    track.id,
-    {
-      from: track.status,
-      to: status,
-      dropMetadataKey: CHECK_GATE_METADATA_KEY,
-      // Decision 2a: completing/archiving ENDS the track's space grant — a
-      // stamp, so a later reopen does not revive it.
-      ...(status === "completed" || status === "archived"
-        ? { metadataPatch: endTrackSpaceGrant(track.metadata, status) }
-        : {}),
-    },
-    userId
-  );
+  let updated: ProjectTrack | null;
+  try {
+    updated = await (
+      await repo()
+    ).transitionStatus(
+      track.id,
+      {
+        from: track.status,
+        to: status,
+        dropMetadataKey: CHECK_GATE_METADATA_KEY,
+        // Decision 2a: completing/archiving ENDS the track's space grant — a
+        // stamp, so a later reopen does not revive it.
+        ...(status === "completed" || status === "archived"
+          ? { metadataPatch: endTrackSpaceGrant(track.metadata, status) }
+          : {}),
+      },
+      userId
+    );
+  } catch (err) {
+    // Reopening a completed track makes it LIVE again, and a completed track
+    // holds no name (0317) — a newer live track may have taken it since.
+    if (!isUniqueViolation(err)) throw err;
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Another live track on this project is named "${track.name}" — complete or archive it before reopening this one.`,
+    });
+  }
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",

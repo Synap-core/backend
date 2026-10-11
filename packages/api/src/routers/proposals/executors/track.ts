@@ -236,8 +236,9 @@ export function registerTrackExecutors(): void {
         if (track.status !== data.status) {
           // The table is re-checked at APPROVAL time: the proposal was legal
           // when filed, but the track may have moved since (archived, say).
-          // Replaying unchecked would revive it — and a revived live method
-          // collides with `uniq_project_tracks_live_method`.
+          // Replaying unchecked would revive it — and a revived live track
+          // can collide with `uniq_project_tracks_live_name` (a newer live
+          // track of the same name; `applyTrackStatus` refuses that CONFLICT).
           assertTrackTransition(track, data.status as ProjectTrackStatus);
           await applyTrackStatus(
             track,

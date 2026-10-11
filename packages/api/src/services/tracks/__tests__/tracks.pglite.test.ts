@@ -21,6 +21,18 @@
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const M0317 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0317_project_tracks_live_name_unique.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -222,7 +234,7 @@ beforeAll(async () => {
     `insert into users (id, email) values ('${USER}', '${USER}@example.test'), ('${STRANGER}', '${STRANGER}@example.test')`
   );
   // The REAL table shape for tracks — defaults, the status CHECK and the
-  // live-method unique index are what idempotency rides on.
+  // live-name unique index (0317, below) are what idempotency rides on.
   await h.client!.exec(`
     create table project_tracks (
       id uuid primary key default gen_random_uuid(),
@@ -243,12 +255,11 @@ beforeAll(async () => {
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     );
-    create unique index uniq_project_tracks_live_method
-      on project_tracks (project_id, playbook_id)
-      where status <> 'archived' and playbook_id is not null;
     create schema pgboss;
     create table pgboss.job (id uuid primary key default gen_random_uuid(), name text, state text, data jsonb);
   `);
+  // The live-name unique index idempotency rides on — the REAL migration.
+  await h.client!.exec(M0317);
 
   await q(
     `insert into projects (id, user_id, workspace_id, name, status) values
@@ -805,5 +816,130 @@ describe("Project Path — sessions born inside a track", () => {
     expect(bm.stages.find((s) => s.key === bm.currentStage)!.position).toBe(
       "active"
     );
+  });
+});
+
+describe("a live track's identity is its NAME (0317) — a method can run twice", () => {
+  const NAMED = randomUUID();
+  const liveCount = async () =>
+    (await trackRows(NAMED)).filter(
+      (r) => r.status === "active" || r.status === "paused"
+    ).length;
+
+  beforeAll(async () => {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Named', 'active')`,
+      [NAMED, USER]
+    );
+  });
+
+  it("the same method twice with NO name is one track (the name defaults to the method's)", async () => {
+    const first = await startTrack({
+      projectId: NAMED,
+      playbookId: METHOD,
+      actor: human,
+    });
+    expect(first.status).toBe("started");
+    const again = await startTrack({
+      projectId: NAMED,
+      playbookId: METHOD,
+      name: "  business MODEL ", // case- and space-insensitive, like the index
+      actor: human,
+    });
+    expect(again.status).toBe("exists");
+    if (first.status === "proposed" || again.status === "proposed") {
+      throw new Error("unreachable");
+    }
+    expect(again.track.id).toBe(first.track.id);
+    expect(await liveCount()).toBe(1);
+  });
+
+  it("the same method under ANOTHER name starts a second live track", async () => {
+    const second = await startTrack({
+      projectId: NAMED,
+      playbookId: METHOD,
+      name: "Business model — EU",
+      actor: human,
+    });
+    expect(second.status).toBe("started");
+    expect(await liveCount()).toBe(2);
+  });
+
+  it("a COMPLETED track holds no name: the same name starts anew", async () => {
+    const [first] = await trackRows(NAMED);
+    const done = await setTrackStatus({
+      trackId: first!.id,
+      status: "completed",
+      actor: human,
+    });
+    expect(done.status).toBe("updated");
+    const rerun = await startTrack({
+      projectId: NAMED,
+      playbookId: METHOD,
+      actor: human,
+    });
+    expect(rerun.status).toBe("started");
+    if (rerun.status === "proposed") throw new Error("unreachable");
+    expect(rerun.track.id).not.toBe(first!.id);
+    expect(rerun.track.name).toBe("Business model");
+    expect(await trackRows(NAMED)).toHaveLength(3);
+    expect(await liveCount()).toBe(2);
+  });
+
+  it("reopening the completed track while its name is held is a CONFLICT, and moves nothing", async () => {
+    const [first] = await trackRows(NAMED);
+    expect(first!.status).toBe("completed");
+    await expect(
+      setTrackStatus({ trackId: first!.id, status: "active", actor: human })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect((await trackRows(NAMED))[0]!.status).toBe("completed");
+  });
+
+  it("ANOTHER method under a name a live track holds is refused, never handed back as `exists`", async () => {
+    await expect(
+      startTrack({
+        projectId: NAMED,
+        playbookId: GATED_METHOD,
+        name: "Business model",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await trackRows(NAMED)).toHaveLength(3);
+  });
+
+  it("the migration renames pre-existing live name twins (oldest keeps it) and is re-runnable", async () => {
+    const DUP = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Dup', 'active')`,
+      [DUP, USER]
+    );
+    // The world 0272 allowed: two live tracks of DIFFERENT methods, one name.
+    await h.client!.exec(`drop index uniq_project_tracks_live_name`);
+    await q(
+      `insert into project_tracks (project_id, user_id, playbook_id, name, status, created_at) values
+        ($1, $2, $3, 'Plan', 'active', now() - interval '2 days'),
+        ($1, $2, $4, 'plan ', 'paused', now() - interval '1 day'),
+        ($1, $2, $4, 'Plan', 'archived', now())`,
+      [DUP, USER, METHOD, GATED_METHOD]
+    );
+    await h.client!.exec(M0317);
+    await h.client!.exec(M0317);
+    const names = (
+      await q<{ name: string; status: string }>(
+        `select name, status from project_tracks where project_id = $1 order by created_at`,
+        [DUP]
+      )
+    ).rows;
+    expect(names).toEqual([
+      { name: "Plan", status: "active" },
+      { name: "plan (2)", status: "paused" },
+      { name: "Plan", status: "archived" },
+    ]);
+    await expect(
+      q(
+        `insert into project_tracks (project_id, user_id, name, status) values ($1, $2, 'PLAN', 'active')`,
+        [DUP, USER]
+      )
+    ).rejects.toThrow(/uniq_project_tracks_live_name/);
   });
 });

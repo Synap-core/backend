@@ -33,6 +33,7 @@ import { entityExternalLinks } from "../schema/entity-external-links.js";
 import { notificationPreferences } from "../schema/notifications.js";
 import { documents } from "../schema/documents.js";
 import { workspaces } from "../schema/workspaces.js";
+import { projectTracks } from "../schema/project-tracks.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -1935,6 +1936,10 @@ const REQUIRED_INDEX_TABLES = [
   // unique indexes ARE the "one space per name / per template" rule; without
   // them a race mints a twin and every typed-conflict pre-check is advisory.
   workspaces,
+  // Track identity (0317): the live-name unique index IS "one live track per
+  // name on a project"; `TrackRepository.createOrGet` relies on it to turn a
+  // concurrent second start into `exists` instead of a twin.
+  projectTracks,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

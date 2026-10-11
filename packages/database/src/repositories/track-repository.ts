@@ -12,8 +12,11 @@
  * `track.update.completed` fact.
  */
 
-import { and, eq, ne, sql } from "drizzle-orm";
-import { projectTracks } from "../schema/project-tracks.js";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import {
+  LIVE_PROJECT_TRACK_STATUSES,
+  projectTracks,
+} from "../schema/project-tracks.js";
 import type {
   ProjectTrack,
   ProjectTrackDefinitionSnapshot,
@@ -75,7 +78,7 @@ export interface UpdateTrackInput {
 
 export interface CreateTrackResult {
   track: ProjectTrack;
-  /** False when a live track of the same method already existed (idempotent). */
+  /** False when a live track of the same name already existed (idempotent). */
   created: boolean;
 }
 
@@ -89,11 +92,13 @@ export class TrackRepository extends BaseRepository<
   }
 
   /**
-   * Insert a track, IDEMPOTENT on the live-method unique index
-   * (`uniq_project_tracks_live_method`): starting the same method twice on one
-   * project returns the existing non-archived track, `created: false`, and
-   * emits nothing. The INSERT itself is the arbiter (ON CONFLICT DO NOTHING),
-   * so two concurrent starts cannot both create.
+   * Insert a track, IDEMPOTENT on the live-name unique index
+   * (`uniq_project_tracks_live_name`, 0317): a second start under a name a
+   * LIVE track (active/paused) of the project already holds returns that
+   * track, `created: false`, and emits nothing — whatever its method; the
+   * caller decides what a same-name track of ANOTHER method means. The INSERT
+   * itself is the arbiter (ON CONFLICT DO NOTHING), so two concurrent starts
+   * cannot both create.
    */
   async createOrGet(
     data: CreateTrackInput,
@@ -136,24 +141,20 @@ export class TrackRepository extends BaseRepository<
       return { track: inserted as ProjectTrack, created: true };
     }
 
-    if (!data.playbookId) {
-      // A conflict with no method can only be a primary-key collision, which a
-      // defaultRandom id never produces. Say so rather than return nothing.
-      throw new Error("Track insert conflicted without a method to dedup on");
-    }
     const [existing] = await this.db
       .select()
       .from(projectTracks)
       .where(
         and(
           eq(projectTracks.projectId, data.projectId),
-          eq(projectTracks.playbookId, data.playbookId),
-          ne(projectTracks.status, "archived")
+          sql`lower(btrim(${projectTracks.name})) = lower(btrim(${data.name}))`,
+          inArray(projectTracks.status, [...LIVE_PROJECT_TRACK_STATUSES])
         )
       )
       .limit(1);
     if (!existing) {
-      throw new Error("Track insert conflicted but no live track was found");
+      // Not the live-name index, so a primary-key collision (a replayed id).
+      throw new Error("Track insert conflicted but no live track holds its name");
     }
     return { track: existing as ProjectTrack, created: false };
   }

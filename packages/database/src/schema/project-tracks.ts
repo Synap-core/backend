@@ -39,6 +39,14 @@ export const PROJECT_TRACK_STATUSES = [
   "archived",
 ] as const;
 export type ProjectTrackStatus = (typeof PROJECT_TRACK_STATUSES)[number];
+/**
+ * The statuses under which a track is LIVE and holds its name on its project
+ * (`uniq_project_tracks_live_name`, 0317 — whose predicate spells the same set).
+ */
+export const LIVE_PROJECT_TRACK_STATUSES = [
+  "active",
+  "paused",
+] as const satisfies readonly ProjectTrackStatus[];
 
 /**
  * What a track pinned from its method at start. Every key optional: a track
@@ -154,11 +162,12 @@ export const projectTracks = pgTable(
   (table) => ({
     projectIdIdx: index("idx_project_tracks_project_id").on(table.projectId),
     playbookIdIdx: index("idx_project_tracks_playbook_id").on(table.playbookId),
-    liveMethodUniq: uniqueIndex("uniq_project_tracks_live_method")
-      .on(table.projectId, table.playbookId)
-      .where(
-        sql`${table.status} <> 'archived' AND ${table.playbookId} IS NOT NULL`
-      ),
+    // A LIVE track's identity on its project is its NAME (0317, founder D1):
+    // the same method may run twice under two names. Completed and archived
+    // tracks hold nothing. Required at boot by `findMissingIndexes`.
+    liveNameUniq: uniqueIndex("uniq_project_tracks_live_name")
+      .on(table.projectId, sql`lower(btrim(${table.name}))`)
+      .where(sql`${table.status} IN ('active', 'paused')`),
   })
 );
 
