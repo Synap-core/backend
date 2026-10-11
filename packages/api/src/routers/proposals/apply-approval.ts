@@ -27,6 +27,7 @@ import {
   setChannelBranchPurpose,
   ChannelFirewallImmutableError,
   ProfileResolutionService,
+  drizzleSql,
   governanceRules,
   governanceCeilings,
   createGuideline,
@@ -46,6 +47,7 @@ import {
   normalizeProposalSource,
   isRequestShapedProposalData,
   opRef,
+  buildApprovalComment,
 } from "@synap-core/types/proposals";
 import type { IdentityResolutionInput } from "./executors/identity-resolution.js";
 import type {
@@ -563,6 +565,26 @@ export async function applyProposalApproval(args: {
 }): Promise<ProposalExecutorResult> {
   assertMayDecideProposal("approve");
   const result = await applyProposalApprovalInner(args);
+
+  // THE REVIEWER'S NOTE. `approve` / `batchApprove` accepted `comment` and,
+  // outside two executors' event payloads, dropped it: the proposal record
+  // never held it, so neither the page nor the agent (`synap_get_proposal`
+  // reads this row) could see what the person said. A rejection's words land
+  // on `rejectionReason`; an approval's land HERE, on the ONE door both
+  // approve paths share. Only once the approval applied — a note on a refused
+  // approval would read as an approval that happened, and a re-approve of a
+  // proposal already decided is not this reviewer's decision.
+  if (result.success && !result.alreadyApproved) {
+    const note = buildApprovalComment(args.input.comment, args.userId);
+    if (note) {
+      await db
+        .update(proposals)
+        .set({
+          comments: drizzleSql`COALESCE(${proposals.comments}, '[]'::jsonb) || ${JSON.stringify([note])}::jsonb`,
+        })
+        .where(eq(proposals.id, args.proposal.id));
+    }
+  }
 
   // HONEST DELIVERABLE SIGNAL. A session-scoped proposal that actually applied
   // is the one thing about a session's expected outputs a human really vouched
