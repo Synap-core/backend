@@ -1231,6 +1231,24 @@ export function applyOutputMutations(
   };
 }
 
+/**
+ * Do these criteria DIFFER from the stored list? Order-insensitive (keys are
+ * unique per session, so a list sorted by `key` is canonical) and deep: a
+ * changed statement, check or `required` is a change. Compared against the RAW
+ * stored jsonb, not `readCriteria`'s tolerant read — a stored entry that reader
+ * would drop makes any clean rewrite a change, which is the fail-closed side.
+ */
+function criteriaDiffer(stored: unknown, next: SessionCriterion[]): boolean {
+  if (!Array.isArray(stored)) return true;
+  const byKey = (list: readonly unknown[]) =>
+    [...list].sort((a, b) =>
+      String((a as { key?: unknown })?.key).localeCompare(
+        String((b as { key?: unknown })?.key)
+      )
+    );
+  return !isDeepStrictEqual(byKey(stored), byKey(next));
+}
+
 export async function updateFocusSession(
   params: UpdateFocusSessionParams
 ): Promise<UpdateFocusSessionResult> {
@@ -1260,6 +1278,14 @@ export async function updateFocusSession(
   ) {
     params = { ...params, projectId: undefined };
   }
+  // The same for CRITERIA: carried to the membrane only when they DIFFER from
+  // the stored list. An agent changing its own acceptance criteria is floored
+  // to a proposal (`CRITERIA_CHANGE`, see `isFocusSessionCriteriaUpdate`), and
+  // an MCP `outcomes` attach re-sends the whole merged list even when it left
+  // the criteria untouched — that unchanged list is not a contract change.
+  const criteriaChange =
+    params.criteria !== undefined &&
+    criteriaDiffer(existing.criteria, params.criteria);
 
   // AUTHORITY FLOOR, BEFORE THE MEMBRANE. The merge enforces this too — it is
   // the one door and it throws — but reaching it via governance would mean an
@@ -1443,7 +1469,7 @@ export async function updateFocusSession(
       ...(params.subjectEntityId !== undefined
         ? { subjectEntityId: params.subjectEntityId }
         : {}),
-      ...(params.criteria !== undefined ? { criteria: params.criteria } : {}),
+      ...(criteriaChange ? { criteria: params.criteria } : {}),
       // Carried so the approved filing is applied, not a silent no-op; `null`
       // (unfile) must survive, hence `!== undefined`.
       ...(params.projectId !== undefined

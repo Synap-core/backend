@@ -11,9 +11,11 @@
  * "approved criteria change on focus_session/update") — it simply never fired.
  *
  * WHAT IS ASSERTED, and why it discriminates. The fix is one predicate feeding
- * `forcePropose` (rung 2.1, a floor ABOVE rung 8), so the observable seam is the
- * `forcePropose` the gate hands `resolveAgentGovernanceDecision` — the SAME
- * engine call the real ladder makes. Four candidate rules are ruled out, one per
+ * `criteriaChange` (rung 2.1, a floor ABOVE rung 8, reason `CRITERIA_CHANGE`),
+ * so the observable seam is the `criteriaChange` the gate hands
+ * `resolveAgentGovernanceDecision` — the SAME engine call the real ladder
+ * makes. It must NOT ride `forcePropose`: that flag is scope/identity, and
+ * folding criteria into it filed every criteria proposal under the wrong why. Four candidate rules are ruled out, one per
  * fixture:
  *
  *   - "no predicate" (today)                 → ruled out by the criteria fixture;
@@ -125,7 +127,10 @@ const aiUpdate = (data: Record<string, unknown>) => ({
   data: { id: SESSION, goal: "Ship pricing", ...data },
 });
 
-/** The `forcePropose` the gate handed the ONE governance engine. */
+/** The `criteriaChange` the gate handed the ONE governance engine. */
+const criteriaChangeArg = () =>
+  (mockGov.mock.calls.at(-1)?.[0] as { criteriaChange?: boolean } | undefined)
+    ?.criteriaChange;
 const forceProposeArg = () =>
   (mockGov.mock.calls.at(-1)?.[0] as { forcePropose?: boolean } | undefined)
     ?.forcePropose;
@@ -146,9 +151,9 @@ describe("an AI update that writes CRITERIA is floored to a proposal", () => {
     // a mocked verdict — had the fixture mocked `propose`, it would pass with
     // or without the fix.
     mockGov.mockImplementation(
-      async (input: { forcePropose?: boolean; reason?: string }) =>
-        input.forcePropose
-          ? { decision: "propose", reason: "scope/identity change" }
+      async (input: { forcePropose?: boolean; criteriaChange?: boolean }) =>
+        input.forcePropose || input.criteriaChange
+          ? { decision: "propose", reason: "floored" }
           : { decision: "execute", explicitAutoApproveFor: ["*"] }
     );
   });
@@ -157,14 +162,16 @@ describe("an AI update that writes CRITERIA is floored to a proposal", () => {
     const perm = await checkPermissionOrPropose(
       aiUpdate({ criteria: [CRITERION] })
     );
-    expect(forceProposeArg()).toBe(true);
+    expect(criteriaChangeArg()).toBe(true);
+    // Its OWN reason — never scope/identity.
+    expect(forceProposeArg()).toBe(false);
     expect(mockInsertPendingProposal).toHaveBeenCalledTimes(1);
     expect(perm).toMatchObject({ granted: false, proposalId: "proposal-1" });
   });
 
   it("CLEARING the criteria is a contract change too, not an exemption", async () => {
     await checkPermissionOrPropose(aiUpdate({ criteria: [] }));
-    expect(forceProposeArg()).toBe(true);
+    expect(criteriaChangeArg()).toBe(true);
   });
 
   it("progress / stage / outputs keep auto-approving exactly as before", async () => {
@@ -175,7 +182,7 @@ describe("an AI update that writes CRITERIA is floored to a proposal", () => {
         expectedOutputs: [{ kind: "document", label: "Brief" }],
       })
     );
-    expect(forceProposeArg()).toBe(false);
+    expect(criteriaChangeArg()).toBe(false);
     expect(mockInsertPendingProposal).not.toHaveBeenCalled();
     expect(perm).toMatchObject({ granted: true });
   });
@@ -188,7 +195,7 @@ describe("an AI update that writes CRITERIA is floored to a proposal", () => {
       ...aiUpdate({ criteria: [CRITERION] }),
       action: "create" as const,
     });
-    expect(forceProposeArg()).toBe(false);
+    expect(criteriaChangeArg()).toBe(false);
     expect(mockInsertPendingProposal).not.toHaveBeenCalled();
   });
 

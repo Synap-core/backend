@@ -334,3 +334,102 @@ describe("an agent can only PROPOSE a filing", () => {
     expect(await projectOf(sessionId)).toBeNull();
   });
 });
+
+/**
+ * Same door, same rule as the project no-op above, for CRITERIA: they reach the
+ * membrane only when they DIFFER from the stored list. An MCP `outcomes` attach
+ * re-sends the whole merged list even when it left the criteria untouched; an
+ * agent changing a criterion is still proposed. The stub mirrors the gate's own
+ * predicate (`isFocusSessionCriteriaUpdate`: an AI write CARRYING `criteria`
+ * proposes) — the gate's half is proven in
+ * `utils/permission-check.focus-session-criteria.test.ts`; this pins the door's.
+ */
+describe("criteria reach the membrane only when they change", () => {
+  const C1 = {
+    key: "report",
+    statement: "A report exists",
+    check: { kind: "human" },
+  };
+  const C2 = {
+    key: "tests",
+    statement: "Tests pass",
+    check: { kind: "human" },
+  };
+
+  async function seedWithCriteria(): Promise<string> {
+    const sessionId = await seedSession();
+    await q(
+      `update focus_sessions set criteria = $2::jsonb, expected_outputs = $3::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify([C1, C2]),
+        JSON.stringify([
+          { kind: "document", label: "Brief", status: "pending" },
+        ]),
+      ]
+    );
+    return sessionId;
+  }
+  const row = async (sessionId: string) =>
+    (
+      await q<{
+        criteria: unknown;
+        expected_outputs: Array<Record<string, unknown>>;
+      }>(
+        `select criteria, expected_outputs from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows[0]!;
+
+  beforeEach(() => {
+    permSpy.mockImplementation(async (args) =>
+      args.agentUserId &&
+      (args.data as Record<string, unknown> | undefined)?.criteria !== undefined
+        ? { proposalId: randomUUID(), proposalType: "update" }
+        : {}
+    );
+  });
+
+  it("an agent's outcome attach re-sending UNCHANGED criteria applies — no proposal", async () => {
+    const sessionId = await seedWithCriteria();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      // The merged list, in a different order: still the same contract.
+      criteria: [C2, C1] as never,
+      completeOutput: "Brief",
+    });
+    expect(res.status).toBe("updated");
+    const gate = permSpy.mock.calls[0]![0].data as Record<string, unknown>;
+    expect(gate.criteria).toBeUndefined();
+    expect(gate.completeOutput).toBe("Brief");
+    expect((await row(sessionId)).expected_outputs[0]!.claimedDone).toBe(true);
+  });
+
+  it("an agent CHANGING a criterion is still proposed, and nothing is written", async () => {
+    const sessionId = await seedWithCriteria();
+    const changed = [{ ...C1, statement: "A signed report exists" }, C2];
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      criteria: changed as never,
+    });
+    expect(res.status).toBe("proposed");
+    const gate = permSpy.mock.calls[0]![0].data as Record<string, unknown>;
+    expect(gate.criteria).toEqual(changed);
+    expect((await row(sessionId)).criteria).toEqual([C1, C2]);
+  });
+
+  it("a person changing their own criteria writes them directly (unchanged path)", async () => {
+    const sessionId = await seedWithCriteria();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      criteria: [C1] as never,
+    });
+    expect(res.status).toBe("updated");
+    expect((await row(sessionId)).criteria).toEqual([C1]);
+  });
+});

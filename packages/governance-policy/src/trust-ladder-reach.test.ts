@@ -63,6 +63,11 @@ const FIXTURES: Record<keyof typeof PROPOSE_REASON, AgentPolicyInput> = {
     action: "update",
     forcePropose: true,
   },
+  CRITERIA_CHANGE: {
+    subjectType: "focus_session",
+    action: "update",
+    criteriaChange: true,
+  },
   DESTRUCTIVE_HARD_FLOOR: {
     subjectType: "entity",
     action: DESTRUCTIVE_ACTIONS[0]!,

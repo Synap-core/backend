@@ -165,7 +165,7 @@ export const NEXT_RUNG_VIA = {
  * engine routed with this reason code:
  *
  *   - `floor`   — decided ABOVE rung 2.8 (admin, human gate, shell, schema,
- *                 structure, scope/identity, destructive, untrusted origin,
+ *                 structure, scope/identity, criteria, destructive, untrusted origin,
  *                 daily ceiling, observation-by-kind, per-capability and
  *                 per-channel governance). No rule can change it.
  *   - `rule`    — decided BY rung 2.8 (a `propose` rule). A more specific
@@ -187,6 +187,7 @@ export const GOVERNANCE_REASON_RULE_REACH = {
   AGENT_SCHEMA_DEFINITION: "floor",
   AGENT_STRUCTURE_WRITE: "floor",
   SCOPE_IDENTITY_CHANGE: "floor",
+  CRITERIA_CHANGE: "floor",
   DESTRUCTIVE_HARD_FLOOR: "floor",
   UNTRUSTED_ORIGIN: "floor",
   DAILY_WRITE_CEILING: "floor",

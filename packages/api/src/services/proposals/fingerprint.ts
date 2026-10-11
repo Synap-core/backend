@@ -242,6 +242,8 @@ const ATTENTION_FLOOR_KEYS = [
   "DESTRUCTIVE_HARD_FLOOR",
   "AGENT_OWNED_DESTRUCTIVE",
   "SCOPE_IDENTITY_CHANGE",
+  // An agent rewriting the criteria its own work is graded against.
+  "CRITERIA_CHANGE",
   "UNTRUSTED_ORIGIN",
   "POD_ADMIN_SCHEMA_CHANGE",
   // D6: an agent defining a kind/role — the whole point is that a person looks.

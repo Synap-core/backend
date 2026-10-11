@@ -131,6 +131,7 @@ describe("nextRung", () => {
     for (const code of [
       ...NON_WIDENABLE_GOVERNANCE_REASONS,
       "SCOPE_IDENTITY_CHANGE",
+      "CRITERIA_CHANGE",
       "UNTRUSTED_ORIGIN",
       "DAILY_WRITE_CEILING",
       "CHANNEL_PROPOSE",

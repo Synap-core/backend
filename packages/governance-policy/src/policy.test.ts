@@ -771,6 +771,42 @@ describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
   });
 });
 
+describe("decideAgentPolicy — criteriaChange (an agent changing its own criteria)", () => {
+  it("floors focus_session.update to a proposal with its OWN reason, not scope/identity", () => {
+    // focus_session.update auto-approves via DEFAULT_AUTO_APPROVE (rung 8)
+    // and even under an explicit `*` autoApproveFor (rung 4).
+    const v = decideAgentPolicy({
+      subjectType: "focus_session",
+      action: "update",
+      autoApproveFor: ["*"],
+      governanceRuleVerdict: "auto",
+      criteriaChange: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.CRITERIA_CHANGE,
+      reasonCode: "CRITERIA_CHANGE",
+    });
+  });
+
+  it("absent → the same update executes (the floor is the only difference)", () => {
+    expect(
+      decideAgentPolicy({ subjectType: "focus_session", action: "update" })
+        .verdict
+    ).toBe("execute");
+  });
+
+  it("CBAC deny still wins over a criteria change", () => {
+    const v = decideAgentPolicy({
+      subjectType: "focus_session",
+      action: "update",
+      agentCapabilities: ["entity.read"],
+      criteriaChange: true,
+    });
+    expect(v.verdict).toBe("deny");
+  });
+});
+
 describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
   it("forces a proposal for an otherwise auto-approved write (entity.update)", () => {
     // entity.update auto-approves via DEFAULT_AUTO_APPROVE (step 8); forcePropose

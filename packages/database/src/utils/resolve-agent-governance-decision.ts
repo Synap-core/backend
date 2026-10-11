@@ -106,6 +106,8 @@ export interface ResolveAgentGovernanceInput {
   subjectUoValidated?: boolean | null;
   /** Force a proposal even on an otherwise auto-approved write (chat door). Automation omits. */
   forcePropose?: boolean;
+  /** Rung 2.1 (criteria) — an AI write that CHANGES a focus session's criteria (chat door). Automation omits. */
+  criteriaChange?: boolean;
   /**
    * Rung 2.07 — the write links a required field or a default onto a
    * pod-admin-owned kind and its principal is not a pod admin (chat door,
@@ -1412,6 +1414,7 @@ export async function resolveAgentGovernanceDecision(
     subjectProfileSlug: input.subjectProfileSlug,
     subjectUoValidated: input.subjectUoValidated,
     forcePropose: input.forcePropose,
+    criteriaChange: input.criteriaChange,
     podAdminSchemaChange: input.podAdminSchemaChange,
     governanceRuleVerdict: ruleMatch?.verdict,
     governanceRuleId: ruleMatch?.ruleId,
@@ -1683,6 +1686,8 @@ function reasonToRung(reason: string): string {
       return "admin-actions";
     case PROPOSE_REASON.SCOPE_IDENTITY_CHANGE:
       return "force-propose";
+    case PROPOSE_REASON.CRITERIA_CHANGE:
+      return "criteria-change";
     case PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE:
       return "pod-admin-schema-change";
     case PROPOSE_REASON.AGENT_SCHEMA_DEFINITION:

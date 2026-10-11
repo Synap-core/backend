@@ -170,7 +170,8 @@ function isFocusSessionLifecycleClose(
  * are the standard the work is GRADED against, and an agent that writes both
  * the standard and the grade is the self-assessment this replaces. The founder's
  * rule is *proposed by the agent, validated by the person*, so a criteria-bearing
- * AI update is floored to a PROPOSAL at rung 2.1 (`forcePropose`) and the
+ * AI update is floored to a PROPOSAL at rung 2.1 (`criteriaChange`, reason
+ * `CRITERIA_CHANGE` — never filed under scope/identity) and the
  * already-built `focus_session/update` executor applies `data.criteria` on
  * approval — with `synap_revise_proposal` letting the person rewrite them first.
  *
@@ -180,13 +181,16 @@ function isFocusSessionLifecycleClose(
  *    but a plan is approved as ONE proposal, so those criteria are ALREADY
  *    validated by that approval and must not be gated a second time.
  *  - only when the payload CARRIES `criteria`. Every gating door composes `data`
- *    field-by-field from what the caller actually patched (`...(params.criteria
- *    !== undefined ? { criteria } : {})`), so a progress/stage/outputs tick does
- *    not carry the key and keeps auto-approving exactly as before. The gate
- *    cannot diff against the stored list — its one session read is keyed on the
- *    AMBIENT session (`ctx.sessionId`), not on `data.id` — so "carries criteria"
- *    is the honest predicate, and a rewrite to the identical list proposing is
- *    the fail-CLOSED side of that limit.
+ *    field-by-field from what the caller actually patched, so a progress/stage/
+ *    outputs tick does not carry the key and keeps auto-approving exactly as
+ *    before. The gate cannot diff against the stored list — its one session
+ *    read is keyed on the AMBIENT session (`ctx.sessionId`), not on `data.id` —
+ *    so the DOOR does: `updateFocusSession` (the one door every session-update
+ *    caller passes through, MCP outcomes included) carries `criteria` only when
+ *    they DIFFER from the stored list (`criteriaDiffer`), because an outcome
+ *    attach re-sends the whole merged list unchanged. "Carries criteria" stays
+ *    the gate's predicate, and a door that forwards an unchanged list still
+ *    fails CLOSED (proposes) — the safe side.
  *  - only for AI writes (applied at the call site). A person writing their own
  *    criteria needs no proposal to themselves; the human tRPC door
  *    (`focusSessionsRouter.update`) writes `set.criteria` directly and never
@@ -196,7 +200,7 @@ function isFocusSessionLifecycleClose(
  * call site leaves the whole suite GREEN — verified by mutation. That is not a
  * hole in the rule, it is where the rule is redundant: a plain human write
  * returns `{ granted: true }` from the unconditional step below WITHOUT ever
- * reading `effectiveForcePropose`, so no reachable caller can discriminate the
+ * reading `isAgentCriteriaChange`, so no reachable caller can discriminate the
  * guard. It is kept because the AI/human split is the founder's rule and a
  * future rung that DOES read the flag on the human path would otherwise start
  * proposing a person's own criteria to themselves. No fixture can pin it until
@@ -1120,6 +1124,8 @@ interface AnonymousPolicyFacts {
   subjectUoValidated: boolean | undefined;
   /** rung 2.1 — the caller's / session's force-propose signal. */
   forcePropose: boolean;
+  /** rung 2.1 (criteria) — an AI write that changes a session's criteria. */
+  criteriaChange: boolean;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
   podAdminSchemaChange: boolean;
   /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
@@ -1164,6 +1170,7 @@ type ExhaustiveAgentPolicyInput = AgentPolicyInput &
  *   2.07 POD-ADMIN SCHEMA  — FIRES. Resolved by 4d on `userId`, the human the
  *                            write acts for — not on an agent row.
  *   2.1  forcePropose      — FIRES (previously hand-mirrored here).
+ *   2.1  criteriaChange    — FIRES (an AI write changing a session's criteria).
  *   2.5  DESTRUCTIVE       — FIRES (previously hand-mirrored here).
  *   2.55 UNTRUSTED ORIGIN  — FIRES. **THIS IS THE FIX.** This path never
  *                            resolved an acting channel at all, so a write from
@@ -1217,6 +1224,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     subjectProfileSlug: facts.subjectProfileSlug,
     subjectUoValidated: facts.subjectUoValidated,
     forcePropose: facts.forcePropose,
+    criteriaChange: facts.criteriaChange,
     podAdminSchemaChange: facts.podAdminSchemaChange,
     governanceRuleVerdict: facts.governanceRuleVerdict,
     governanceRuleId: facts.governanceRuleId,
@@ -1703,16 +1711,15 @@ async function evaluatePermission(
     // An AI write that sets the session's CRITERIA is the agent proposing the
     // standard its own work will be graded against — a contract change, not the
     // orchestration `focus_session.update` is whitelisted for. Floored to a
-    // proposal here (rung 2.1) so the person validates or rewrites it; every
-    // other `focus_session.update` is untouched. See
-    // `isFocusSessionCriteriaUpdate` for why this is narrow on all three axes.
+    // proposal (rung 2.1, its own `CRITERIA_CHANGE` reason) so the person
+    // validates or rewrites it; every other `focus_session.update` is
+    // untouched. See `isFocusSessionCriteriaUpdate` for why this is narrow on
+    // all three axes.
     const isAgentCriteriaChange =
       isAiWrite && isFocusSessionCriteriaUpdate(subjectType, action, data);
 
     const effectiveForcePropose =
-      opts.forcePropose === true ||
-      isLooseningSettingsChange ||
-      isAgentCriteriaChange
+      opts.forcePropose === true || isLooseningSettingsChange
         ? true
         : sessionGovernance && !opts.ignoreSessionForcePropose
           ? sessionGovernance.forceProposeWrites
@@ -1809,6 +1816,7 @@ async function evaluatePermission(
               : null,
         subjectUoValidated,
         forcePropose: effectiveForcePropose,
+        criteriaChange: isAgentCriteriaChange,
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
@@ -2224,6 +2232,7 @@ async function evaluatePermission(
           subjectProfileSlug,
           subjectUoValidated,
           forcePropose: effectiveForcePropose,
+          criteriaChange: isAgentCriteriaChange,
           podAdminSchemaChange,
           governanceRuleVerdict: ruleMatch?.verdict,
           governanceRuleId: ruleMatch?.ruleId,

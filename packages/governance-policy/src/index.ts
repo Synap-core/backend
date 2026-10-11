@@ -1139,6 +1139,15 @@ export interface AgentPolicyInput {
    */
   forcePropose?: boolean;
   /**
+   * An agent is CHANGING a focus session's acceptance criteria — the standard
+   * its own work is graded against. Same floor as `forcePropose` (rung 2.1:
+   * after CBAC and ADMIN, before every execute path), but its OWN reason,
+   * `CRITERIA_CHANGE`, so "the agent rewrote its contract" is never filed
+   * under scope/identity. The caller sets it only when the criteria actually
+   * DIFFER from the stored ones. Absent/false → no effect.
+   */
+  criteriaChange?: boolean;
+  /**
    * The write adds a REQUIRED field or a DEFAULT to a kind the pod administrator
    * owns (a system kind, or a shared kind with no home workspace), and the
    * principal behind it is NOT a pod admin — rung 2.07. Such a link applies to
@@ -1288,6 +1297,8 @@ export const PROPOSE_REASON = {
   CAPABILITY_PROPOSE: "Capability execution requires human approval.",
   SCOPE_IDENTITY_CHANGE:
     "This change alters the record's scope or identity and requires human approval.",
+  CRITERIA_CHANGE:
+    "An agent is changing the acceptance criteria its own work is graded against; a person must approve them.",
   DESTRUCTIVE_HARD_FLOOR:
     "Destructive action (delete/archive/purge/merge) always requires human approval.",
   GOVERNANCE_RULE: "Matched a governance rule requiring human approval.",
@@ -1436,6 +1447,15 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
       reasonCode: "SCOPE_IDENTITY_CHANGE",
+    };
+  }
+  // 2.1 (criteria) — an agent changing its own acceptance criteria. Same floor,
+  // own reason: the agent writing the standard it is graded against.
+  if (input.criteriaChange === true) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.CRITERIA_CHANGE,
+      reasonCode: "CRITERIA_CHANGE",
     };
   }
 
@@ -1793,7 +1813,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "facet/update": "reversible",
   "focus_session/create": "reversible",
   "focus_session/grant_capability": "disruptive", // egress
-  "focus_session/update": "reversible", // criteria are forcePropose'd (2.1)
+  "focus_session/update": "reversible", // a criteria change is floored (2.1)
   "link/create": "reversible",
   "link/delete": "disruptive", // destroy (and un-filing)
   "playbook/archive": "disruptive", // destroy
