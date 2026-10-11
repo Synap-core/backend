@@ -61,6 +61,14 @@ import {
   type AgentOrigin,
 } from "@synap-core/types/agents";
 import { AccessContext, scopedDb } from "../access/index.js";
+import {
+  InvalidPermissionError,
+  MAX_GRANT_PERMISSIONS,
+  agentKeyGrantPermissions,
+  parsePermission,
+} from "@synap-core/types/grants";
+import { reapplyAgentKeyGrants } from "../services/agent-identity-service.js";
+import { pendingAgentConnectProposals } from "../services/agent-connect.js";
 import { links, tools } from "@synap/database/schema";
 import { createLink } from "../services/links/links-service.js";
 import { redispatchAfterAgentBound } from "../services/agent-dispatch/redispatch-on-choice.js";
@@ -331,6 +339,28 @@ async function applyAskFirstScope(input: {
   }
 }
 
+/**
+ * Capabilities are the agent's key grant (`agentKeyGrantPermissions`), so they
+ * must be grant patterns and fit one grant. `*.*` is the legacy full-access
+ * spelling and stays accepted. 400 before anything is written or proposed.
+ */
+function assertAgentCapabilities(capabilities: readonly string[]): void {
+  const patterns = capabilities.filter((c) => c.trim() !== "*.*");
+  try {
+    for (const p of patterns) parsePermission(p);
+  } catch (err) {
+    if (err instanceof InvalidPermissionError)
+      throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    throw err;
+  }
+  const count = agentKeyGrantPermissions(capabilities).permissions.length;
+  if (count > MAX_GRANT_PERMISSIONS)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `These limits come to ${count} separate permissions; an agent holds at most ${MAX_GRANT_PERMISSIONS}. Tick a broader row instead of many single ones.`,
+    });
+}
+
 export const agentUsersRouter = router({
   /**
    * Create an AI agent user and add it to a workspace
@@ -589,12 +619,23 @@ export const agentUsersRouter = router({
       // THE binding reader (`services/agent-dispatch`), batched. A broken
       // binding renders as a binding carrying `error`, never as "not bound".
       const dispatch = await loadAgentDispatchSummaries(rows.map((r) => r.id));
-      return rows.map((r) => ({
-        ...withViewerVerbs(withAgentOrigin(r), viewer),
-        operatedByViewer: operated.has(r.id),
-        reach: dispatch.get(r.id)?.reach ?? ("pull" as const),
-        binding: dispatch.get(r.id)?.binding ?? null,
-      }));
+      // `pendingProposalId` — its open `agent/connect` request, the native
+      // approval door (Relay's card); offered to the same viewer as approveUrl.
+      const pendingConnect = await pendingAgentConnectProposals(
+        rows.map((r) => r.id)
+      );
+      return rows.map((r) => {
+        const verbs = withViewerVerbs(withAgentOrigin(r), viewer);
+        return {
+          ...verbs,
+          pendingProposalId: verbs.viewerCanDisconnect
+            ? (pendingConnect.get(r.id) ?? null)
+            : null,
+          operatedByViewer: operated.has(r.id),
+          reach: dispatch.get(r.id)?.reach ?? ("pull" as const),
+          binding: dispatch.get(r.id)?.binding ?? null,
+        };
+      });
     }),
 
   /**
@@ -741,6 +782,7 @@ export const agentUsersRouter = router({
       // Capabilities are security-sensitive: changing them always goes through
       // the proposal flow (agent.updateCapabilities is in ADMIN_ACTIONS).
       if (input.capabilities !== undefined) {
+        assertAgentCapabilities(input.capabilities);
         const perm = await checkPermissionOrPropose({
           userId: ctx.userId,
           workspaceId: input.workspaceId,
@@ -785,6 +827,15 @@ export const agentUsersRouter = router({
         .update(users)
         .set(updates)
         .where(eq(users.id, input.agentUserId));
+
+      // Its ONE limit: every key it holds carries its capabilities, so a
+      // narrowing binds the live keys at once.
+      if (input.capabilities !== undefined) {
+        await reapplyAgentKeyGrants({
+          agentUserId: input.agentUserId,
+          createdBy: ctx.userId,
+        });
+      }
 
       // "Require approval for writes" — NOT the raw rung-5 flag any more (the
       // pod default at rung 2.8 outranks it). ON = this agent's `ask-first`

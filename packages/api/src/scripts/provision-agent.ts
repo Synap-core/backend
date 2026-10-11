@@ -40,6 +40,7 @@ import {
   type AgentMetadata,
 } from "@synap/database/schema";
 import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
+import { attachAgentKeyGrant } from "../services/agent-identity-service.js";
 
 const serviceType = process.env.SERVICE_TYPE;
 const workspaceIdEnv = process.env.WORKSPACE_ID;
@@ -434,7 +435,7 @@ async function run() {
 
     const rotateLinkedUserId = await findWorkspaceOwner(db, workspaceId);
 
-    await apiKeyRepo.create(
+    const rotated = await apiKeyRepo.create(
       {
         keyName: `${e.displayName} — workspace ${workspaceId} (rotated)`,
         keyPrefix,
@@ -447,6 +448,13 @@ async function run() {
       },
       "system"
     );
+    await attachAgentKeyGrant({
+      apiKeyId: rotated.id,
+      agentUserId: agent.id,
+      onBehalfOf: rotateLinkedUserId ?? ownerUserId ?? agent.id,
+      expiresAt: rotated.expiresAt ?? null,
+      createdBy: ownerUserId ?? agent.id,
+    });
 
     console.log(`✅ ${e.displayName} API key rotated`);
     console.log(`   New SYNAP_HUB_API_KEY="${plainKey}"`);
@@ -532,7 +540,7 @@ async function run() {
   const eventRepo = new EventRepository(sql);
   const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
 
-  await apiKeyRepo.create(
+  const minted = await apiKeyRepo.create(
     {
       keyName: `${e.displayName} — workspace ${workspaceId}`,
       keyPrefix,
@@ -545,6 +553,13 @@ async function run() {
     },
     "system"
   );
+  await attachAgentKeyGrant({
+    apiKeyId: minted.id,
+    agentUserId: agentId,
+    onBehalfOf: linkedUserId,
+    expiresAt: minted.expiresAt ?? null,
+    createdBy: ownerUserId,
+  });
 
   console.log(`✅ ${e.displayName} agent provisioned`);
   console.log("");

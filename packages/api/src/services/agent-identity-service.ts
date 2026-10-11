@@ -22,6 +22,7 @@ import {
   proposals,
   EventRepository,
   ApiKeyRepository,
+  GrantRepository,
   type ApiKeyScope,
   drizzleSql,
   getRequestClientKey,
@@ -36,6 +37,8 @@ import {
   createAndVerifyHubInboundKey,
   type RegistrationResult,
 } from "./external-registration.js";
+import { agentKeyGrantPermissions } from "@synap-core/types/grants";
+import { attachGrantOrRevoke } from "./key-grant.js";
 import {
   AGENT_KEY_TTL_DAYS,
   AGENT_KEY_ROTATION_LEAD_DAYS,
@@ -603,6 +606,93 @@ export async function findOrCreateServiceAgentUser(opts: {
 }
 
 /**
+ * The grant every key an agent holds carries: its capabilities
+ * (`users.agent_metadata.capabilities`), the agent's ONE limit, read through
+ * `agentKeyGrantPermissions` (full stays `*`; otherwise its patterns plus every
+ * read). A capability that does not parse is left out — narrower, never wider.
+ */
+export async function agentKeyGrant(
+  agentUserId: string,
+  logger?: ProvisionLogger
+): Promise<{ permissions: string[] }> {
+  const row = await db.query.users.findFirst({
+    where: eq(users.id, agentUserId),
+    columns: { agentMetadata: true },
+  });
+  const capabilities = (row?.agentMetadata as AgentMetadata | null | undefined)
+    ?.capabilities;
+  const { permissions, dropped } = agentKeyGrantPermissions(capabilities);
+  if (dropped.length > 0)
+    logger?.warn(
+      { agentUserId, dropped },
+      "agentKeyGrant: capabilities that are not grant patterns were left out of the key's grant"
+    );
+  return { permissions };
+}
+
+/**
+ * Attach the agent's grant to a key just minted for it. A key that cannot carry
+ * it is REVOKED (`attachGrantOrRevoke`) — an agent key never survives without
+ * its limits.
+ */
+export async function attachAgentKeyGrant(args: {
+  apiKeyId: string;
+  agentUserId: string;
+  /** The human the key acts for; the creator for a pod-wide key. */
+  onBehalfOf: string;
+  expiresAt: Date | null;
+  createdBy: string;
+  logger?: ProvisionLogger;
+}): Promise<void> {
+  await attachGrantOrRevoke({
+    apiKeyId: args.apiKeyId,
+    principalUserId: args.agentUserId,
+    onBehalfOf: args.onBehalfOf,
+    grant: await agentKeyGrant(args.agentUserId, args.logger),
+    expiresAt: args.expiresAt,
+    createdBy: args.createdBy,
+  });
+}
+
+/**
+ * Re-apply an agent's capabilities to every key it holds that is not revoked
+ * (live and pending), replacing each key's grant set (`attachMany`). Called
+ * after its capabilities change, so a narrowing binds its live keys at once.
+ * Returns how many keys were re-granted.
+ */
+export async function reapplyAgentKeyGrants(args: {
+  agentUserId: string;
+  createdBy: string;
+}): Promise<number> {
+  const keys = await db
+    .select({
+      id: apiKeys.id,
+      linkedUserId: apiKeys.linkedUserId,
+      expiresAt: apiKeys.expiresAt,
+    })
+    .from(apiKeys)
+    .where(
+      and(eq(apiKeys.userId, args.agentUserId), isNull(apiKeys.revokedAt))
+    );
+  if (keys.length === 0) return 0;
+  const grant = await agentKeyGrant(args.agentUserId);
+  const repo = new GrantRepository(db);
+  for (const key of keys) {
+    await repo.attachMany([
+      {
+        apiKeyId: key.id,
+        principalUserId: args.agentUserId,
+        onBehalfOf: key.linkedUserId ?? args.createdBy,
+        permissions: grant.permissions,
+        expiresAt: key.expiresAt ?? null,
+        createdBy: args.createdBy,
+      },
+    ]);
+  }
+  return keys.length;
+}
+
+/**
  * Creates a named agent user (userType="agent") and issues a Hub Protocol
  * API key for it. Idempotent by (agentType + createdByUserId): if an agent
  * of the same type already exists for this user, a fresh key is issued for
@@ -668,6 +758,13 @@ export async function createNamedAgent(opts: {
       `Agent key mint failed verification: ${registration.verificationError ?? registration.outcome}`
     );
   }
+  await attachAgentKeyGrant({
+    apiKeyId: registration.apiKey.id,
+    agentUserId,
+    onBehalfOf: opts.createdByUserId,
+    expiresAt: registration.apiKey.expiresAt ?? null,
+    createdBy: opts.createdByUserId,
+  });
 
   return { agentUserId, email, apiKey: registration.plainKey };
 }
@@ -950,6 +1047,14 @@ export async function provisionSurfaceAgentKey(
     agentUserId,
     agentUserId
   );
+  await attachAgentKeyGrant({
+    apiKeyId: registration.apiKey.id,
+    agentUserId,
+    onBehalfOf: resolvedLinkedUserId ?? creatorId,
+    expiresAt: registration.apiKey.expiresAt ?? null,
+    createdBy: creatorId,
+    logger,
+  });
 
   return {
     agentUserId,

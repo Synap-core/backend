@@ -132,6 +132,8 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // An Application asking for reach (POST /apps/:id/connect): approving it
   // records what the app may touch, and its key is minted from exactly that.
   "app/connect",
+  // An AI's pending key asking to connect (`services/agent-connect.ts`).
+  "agent/connect",
   // What an agent principal is permitted to do.
   "agent/updateCapabilities",
   // A capability granted to a running session — the same question, narrower

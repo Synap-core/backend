@@ -2138,6 +2138,12 @@ export const GATE_WRITE_DOORS = {
  * pair it finds must appear in one of these two maps.
  */
 export const DIRECT_PROPOSAL_DOORS = {
+  // An AI's PENDING key asking to connect (`POST /setup/agent` with
+  // requireApproval, `services/agent-connect.ts`). Filed directly — the gate
+  // could answer `granted` and activate a key with no review. Approved by
+  // `routers/proposals/executors/agent.ts` (activates that key with the
+  // approved, never wider, reach).
+  "agent/connect": "direct",
   "capability/capability.install": "direct",
   // Lane E: an agent hitting an installed-but-not-enabled pack files ONE
   // enable request (never auto-enables); executor already registered.

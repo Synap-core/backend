@@ -88,6 +88,12 @@ vi.mock("@synap/database", async (importOriginal) => {
           }),
         },
       },
+      // No `agent/connect` proposal on file for these keys (pre-P2 keys).
+      select: () => ({
+        from: () => ({
+          where: () => ({ orderBy: () => ({ limit: async () => [] }) }),
+        }),
+      }),
       update: () => ({
         set: () => ({
           where: () => ({

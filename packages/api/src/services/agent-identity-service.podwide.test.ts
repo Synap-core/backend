@@ -74,11 +74,20 @@ vi.mock("./external-registration.js", () => ({
   ),
 }));
 
+/** Captures the grant attached to the minted key (its capabilities). */
+let lastGrant: Record<string, unknown> | undefined;
+vi.mock("./key-grant.js", () => ({
+  attachGrantOrRevoke: vi.fn(async (args: Record<string, unknown>) => {
+    lastGrant = args;
+  }),
+}));
+
 import { provisionSurfaceAgentKey } from "./agent-identity-service.js";
 
 describe("provisionSurfaceAgentKey — pod-wide opt-in", () => {
   beforeEach(() => {
     lastMintInput = undefined;
+    lastGrant = undefined;
   });
 
   it("DEFAULT (no podWide): mints the key linked to the creator, never null", async () => {
@@ -93,6 +102,13 @@ describe("provisionSurfaceAgentKey — pod-wide opt-in", () => {
     expect(lastMintInput?.keyType).toBe("hub_inbound");
     // The key owner is the agent-user principal (governed by #1a).
     expect(lastMintInput?.userId).toBe("agent-user-1");
+    // P2: the minted key carries the agent's limits (no capabilities = `*`).
+    expect(lastGrant).toMatchObject({
+      apiKeyId: "minted-key-id",
+      principalUserId: "agent-user-1",
+      onBehalfOf: "human-1",
+      grant: { permissions: ["*"] },
+    });
   });
 
   it("OPT-IN (podWide): mints the key with linkedUserId = null, owned by the agent-user", async () => {

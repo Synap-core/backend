@@ -57,6 +57,7 @@ import { registerWidgetExecutors } from "./executors/widget.js";
 import { registerPodHygieneExecutors } from "./executors/pod-hygiene.js";
 import { registerVaultExecutors } from "./executors/vault.js";
 import { registerAppExecutors } from "./executors/app.js";
+import { registerAgentExecutors } from "./executors/agent.js";
 import { registerCatchAllExecutor } from "./executors/catch-all.js";
 
 let registered = false;
@@ -103,6 +104,7 @@ export function registerApproveExecutors(): void {
   registerPodHygieneExecutors();
   registerVaultExecutors();
   registerAppExecutors();
+  registerAgentExecutors();
   // Wildcard catch-all — registered LAST (see module docstring).
   registerCatchAllExecutor();
 }

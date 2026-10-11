@@ -73,6 +73,13 @@ import {
   toRegistrationTrace,
 } from "../../../services/external-registration.js";
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
+import {
+  approvePendingAgentKey,
+  canDecidePendingConnection,
+  fileAgentConnectProposal,
+  rejectPendingAgentKey,
+  settleRejectedAgentConnect,
+} from "../../../services/agent-connect.js";
 import { disconnectAllUserConnections } from "../../../services/capabilities/capability-nango-sync.js";
 import {
   API_KEY_SCOPES,
@@ -1095,12 +1102,34 @@ export function registerSetupRoutes(app: HubHono): void {
           .update(apiKeys)
           .set({ isActive: false })
           .where(eq(apiKeys.id, apiKey.id));
+        // Approving an AI is a proposal (`agent/connect`): the person decides
+        // on Relay's card or on the pod-admin page — one approval either way.
+        // A key whose request cannot be filed must not linger: it is revoked.
+        let pendingProposalId: string;
+        try {
+          ({ proposalId: pendingProposalId } = await fileAgentConnectProposal({
+            keyId: apiKey.id,
+            agentUserId,
+            ownerUserId: resolvedLinkedUserId ?? agentCreatorId!,
+            agentName: agentLabel,
+            agentType,
+            instanceId,
+            expiresAt: apiKey.expiresAt ?? null,
+          }));
+        } catch (err) {
+          await revokeApiKeys(db, {
+            where: eq(apiKeys.id, apiKey.id),
+            reason: "Connection request could not be filed — key revoked",
+          });
+          throw err;
+        }
         const reviewUrl = approvalPageUrl(c.req.url, apiKey.id, agentType);
         return c.json({
           agentUserId,
           workspaceId: ws?.id ?? null,
           hubApiKey: plainKey,
           pendingToken: apiKey.id,
+          pendingProposalId,
           reviewUrl,
           requiresApproval: true,
           registration: registrationTrace,
@@ -2106,24 +2135,6 @@ export function registerSetupRoutes(app: HubHono): void {
   }
 
   /**
-   * GOVERNANCE gate for deciding a pending agent connection: only the human the
-   * connection acts for (its `linkedUserId`) OR a pod admin may approve/reject —
-   * NOT any signed-in member. Reuses the canonical `assertPodAdmin` door.
-   */
-  async function canDecidePendingConnection(
-    approverId: string,
-    linkedUserId: string | null
-  ): Promise<boolean> {
-    if (linkedUserId && linkedUserId === approverId) return true;
-    try {
-      await assertPodAdmin(approverId);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * What a pending key would be allowed to do, as the approval pages show it:
    * its scopes, EVERY live grant scope (a key holds a set — `null` = never
    * granted, so only its scopes bound it) and its real expiry.
@@ -2247,45 +2258,9 @@ export function registerSetupRoutes(app: HubHono): void {
         "approved" | "already_active" | "rejected" | "not_found" | "forbidden";
     }> = [];
     for (const keyId of [...new Set(parsed.data.keyIds)]) {
-      const key = await db.query.apiKeys.findFirst({
-        where: eq(apiKeys.id, keyId),
-        columns: {
-          id: true,
-          isActive: true,
-          revokedAt: true,
-          linkedUserId: true,
-        },
-      });
-      if (!key) {
-        results.push({ keyId, outcome: "not_found" });
-        continue;
-      }
-      if (!(await canDecidePendingConnection(approverId, key.linkedUserId))) {
-        results.push({ keyId, outcome: "forbidden" });
-        continue;
-      }
-      if (key.revokedAt) {
-        results.push({ keyId, outcome: "rejected" });
-        continue;
-      }
-      if (key.isActive) {
-        results.push({ keyId, outcome: "already_active" });
-        continue;
-      }
-      const flipped = await db
-        .update(apiKeys)
-        .set({ isActive: true })
-        .where(
-          and(
-            eq(apiKeys.id, keyId),
-            eq(apiKeys.isActive, false),
-            isNull(apiKeys.revokedAt)
-          )
-        )
-        .returning({ id: apiKeys.id });
       results.push({
         keyId,
-        outcome: flipped.length > 0 ? "approved" : "rejected",
+        outcome: await approvePendingAgentKey({ keyId, approverId }),
       });
     }
     const approved = results.filter((r) => r.outcome === "approved").length;
@@ -2320,6 +2295,8 @@ export function registerSetupRoutes(app: HubHono): void {
     if (!key) return c.json({ error: "Not found" }, 404);
     if (key.revokedAt) return c.json({ status: "rejected" });
     if (key.isActive) return c.json({ status: "active" });
+    if (await settleRejectedAgentConnect(keyId))
+      return c.json({ status: "rejected" });
     return c.json({ status: "pending" });
   });
 
@@ -2343,25 +2320,14 @@ export function registerSetupRoutes(app: HubHono): void {
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
 
-    const key = await db.query.apiKeys.findFirst({
-      where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
-      columns: { id: true, revokedAt: true, linkedUserId: true },
-    });
-    if (!key || key.revokedAt)
+    const outcome = await approvePendingAgentKey({ keyId, approverId });
+    if (outcome === "forbidden")
+      return c.json({ error: "Not authorized to decide this connection" }, 403);
+    if (outcome !== "approved")
       return c.json(
         { error: "Pending key not found or already processed" },
         404
       );
-
-    if (!(await canDecidePendingConnection(approverId, key.linkedUserId)))
-      return c.json({ error: "Not authorized to decide this connection" }, 403);
-
-    await db
-      .update(apiKeys)
-      // Only flip a still-PENDING key — guard against a concurrent reject
-      // resurrecting a revoked key (matches the reject handler's compound where).
-      .set({ isActive: true })
-      .where(and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)));
     logger.info({ keyId, approverId }, "setup/agent/pending: approved");
     return c.json({ ok: true });
   });
@@ -2411,23 +2377,14 @@ export function registerSetupRoutes(app: HubHono): void {
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
 
-    const key = await db.query.apiKeys.findFirst({
-      where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
-      columns: { id: true, revokedAt: true, linkedUserId: true },
-    });
-    if (!key || key.revokedAt)
+    const outcome = await rejectPendingAgentKey({ keyId, approverId });
+    if (outcome === "forbidden")
+      return c.json({ error: "Not authorized to decide this connection" }, 403);
+    if (outcome !== "rejected")
       return c.json(
         { error: "Pending key not found or already processed" },
         404
       );
-
-    if (!(await canDecidePendingConnection(approverId, key.linkedUserId)))
-      return c.json({ error: "Not authorized to decide this connection" }, 403);
-
-    await revokeApiKeys(db, {
-      where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
-      reason: "Rejected at approval",
-    });
     logger.info({ keyId, approverId }, "setup/agent/pending: rejected");
     return c.json({ ok: true });
   });
