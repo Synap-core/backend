@@ -2392,6 +2392,10 @@ const captureBaseRouter = router({
             relations: structureResult.relations,
             dedupCandidates,
             dedupSkipped,
+            // The AI's project + workspace picks live on the RESPONSE only;
+            // a room reader (relay) never sees it, so the part carries them.
+            project: structured,
+            placement: structured.placement,
           });
         } catch (err) {
           logger.error(

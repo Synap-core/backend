@@ -39,9 +39,15 @@ import {
   CaptureResultPartSchema,
   readCapturePart,
   type CaptureResultPart,
+  type CaptureResultPlacement,
+  type CaptureResultProject,
   type CaptureResultRelation,
   type CaptureResultRow,
 } from "@synap-core/types/capture";
+import type {
+  CapturePlacement,
+  CaptureProjectOutcome,
+} from "@synap-core/types/capture-routing";
 import { createLogger } from "@synap-core/core";
 import { ensureSessionChannel } from "../focus-sessions/ensure-session-channel.js";
 import { deterministicUuidFromKey } from "../../utils/write-door-idempotency.js";
@@ -215,6 +221,90 @@ export function projectCaptureResultRows(input: {
   };
 }
 
+/** The structure response's project axis, as `capture.structure` returns it. */
+export interface CaptureResultProjectInput {
+  targetProjectId?: string | null;
+  targetProjectReason?: string | null;
+  targetProjectConfidence?: number | null;
+  targetProjectOutcome?: CaptureProjectOutcome | null;
+}
+
+const cutOrNull = (v: string | null | undefined, max: number) =>
+  typeof v === "string" ? v.slice(0, max) : null;
+const idOrNull = (v: string | null | undefined) =>
+  typeof v === "string" && v.length > 0
+    ? v.slice(0, CAPTURE_RESULT_LIMITS.routingIdMaxChars)
+    : null;
+const finiteOrNull = (v: number | null | undefined) =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
+
+/**
+ * Bound the structure response's project + placement blocks for the part.
+ * PURE. Values are COPIED, never re-derived: `targetProjectOutcome` comes from
+ * `deriveCaptureProjectOutcome` at the door and `placement` from
+ * `buildCapturePlacement` — the part only carries them so a reader of the room
+ * sees what the response said. Strings are cut to the part's bounds so a long
+ * AI reason can never make the whole part fail its schema.
+ */
+export function projectCaptureRoutingBlocks(input: {
+  project?: CaptureResultProjectInput | null;
+  placement?: CapturePlacement | null;
+}): { project?: CaptureResultProject; placement?: CaptureResultPlacement } {
+  const L = CAPTURE_RESULT_LIMITS;
+  const out: {
+    project?: CaptureResultProject;
+    placement?: CaptureResultPlacement;
+  } = {};
+  if (input.project) {
+    out.project = {
+      id: idOrNull(input.project.targetProjectId),
+      reason: cutOrNull(
+        input.project.targetProjectReason,
+        L.routingReasonMaxChars
+      ),
+      confidence: finiteOrNull(input.project.targetProjectConfidence),
+      outcome: input.project.targetProjectOutcome ?? null,
+    };
+  }
+  const pl = input.placement;
+  if (pl) {
+    const placement: CaptureResultPlacement = {
+      workspaceId: idOrNull(pl.workspaceId),
+      workspaceName: cutOrNull(pl.workspaceName, L.workspaceNameMaxChars),
+      deterministic: pl.deterministic === true,
+    };
+    const sg = pl.suggestion;
+    if (sg && typeof sg.workspaceId === "string" && sg.workspaceId) {
+      placement.suggestion = {
+        workspaceId: sg.workspaceId.slice(0, L.routingIdMaxChars),
+        workspaceName: (sg.workspaceName ?? "").slice(
+          0,
+          L.workspaceNameMaxChars
+        ),
+        reason: cutOrNull(sg.reason, L.routingReasonMaxChars),
+        alternatives: (sg.alternatives ?? [])
+          .filter(
+            (a) =>
+              typeof a.workspaceId === "string" &&
+              a.workspaceId.length > 0 &&
+              Number.isFinite(a.weight)
+          )
+          .slice(0, L.placementAlternativesMax)
+          .map((a) => ({
+            workspaceId: a.workspaceId.slice(0, L.routingIdMaxChars),
+            workspaceName: (a.workspaceName ?? "").slice(
+              0,
+              L.workspaceNameMaxChars
+            ),
+            weight: a.weight,
+          })),
+      };
+    }
+    out.placement = placement;
+  }
+  return out;
+}
+
 /** The readable line the result message carries in the room. */
 export function resultSummary(rowCount: number, truncated: boolean): string {
   const n = `${rowCount} record${rowCount === 1 ? "" : "s"}`;
@@ -248,6 +338,8 @@ function sansRound(part: CaptureResultPart) {
     ...(part.relations ? { relations: part.relations } : {}),
     truncated: part.truncated,
     notice: part.notice,
+    ...(part.project ? { project: part.project } : {}),
+    ...(part.placement ? { placement: part.placement } : {}),
   };
 }
 
@@ -293,6 +385,10 @@ export interface PersistCaptureResultInput {
   dedupCandidates: Record<string, ReadonlyArray<unknown>>;
   /** True when a dedup search threw: "not checked", never "no duplicates". */
   dedupSkipped: boolean;
+  /** The response's project axis (`targetProject*`), persisted on the part. */
+  project?: CaptureResultProjectInput | null;
+  /** The response's `placement` block, persisted on the part. */
+  placement?: CapturePlacement | null;
 }
 
 export interface PersistedCaptureResult {
@@ -345,6 +441,12 @@ export async function persistCaptureResult(
     ...(relations ? { relations } : {}),
     truncated,
     notice: input.dedupSkipped ? DEDUP_SKIPPED_NOTICE : null,
+    // Part of the verdict: a re-run that changed only WHERE it would file is
+    // a new verdict, and the reader must see the new destination.
+    ...projectCaptureRoutingBlocks({
+      project: input.project,
+      placement: input.placement,
+    }),
   };
 
   // NOTHING CHANGED ⇒ no new part. Checked on the VERDICT (rows, truncated,

@@ -96,3 +96,45 @@ describe("capture_result row properties/content", () => {
     ).toBe(true);
   });
 });
+
+describe("capture_result part-level project + placement", () => {
+  const project = {
+    id: "7c1e2b3a-4d5f-4a6b-8c7d-9e0f1a2b3c4d",
+    reason: "about the product",
+    confidence: 0.8,
+    outcome: "selected",
+  };
+  const placement = {
+    workspaceId: "w-ambient",
+    workspaceName: "Builder",
+    deterministic: false,
+    suggestion: {
+      workspaceId: "w-brand",
+      workspaceName: "Brand",
+      reason: null,
+      alternatives: [
+        { workspaceId: "w-brand", workspaceName: "Brand", weight: 0.7 },
+      ],
+    },
+  };
+
+  it("round-trips the values through the reader — not stripped", () => {
+    const p = { ...part(base), project, placement };
+    expect(readCapturePart({ capturePart: p })).toEqual(p);
+  });
+
+  it("an OLD part without either field still parses, and gains neither", () => {
+    const parsed = readCapturePart({ capturePart: part(base) });
+    expect(parsed).not.toBeNull();
+    expect(parsed).not.toHaveProperty("project");
+    expect(parsed).not.toHaveProperty("placement");
+  });
+
+  it("refuses an outcome outside the CaptureProjectOutcome vocabulary", () => {
+    const ok = (x: unknown) => CaptureResultPartSchema.safeParse(x).success;
+    expect(
+      ok({ ...part(base), project: { ...project, outcome: "maybe" } })
+    ).toBe(false);
+    expect(ok({ ...part(base), project: null, placement: null })).toBe(true);
+  });
+});

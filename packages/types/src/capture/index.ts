@@ -24,6 +24,11 @@ import {
   DynamicFormSpecSchema,
   isRefusedAskFieldType,
 } from "../ask/index.js";
+import {
+  CAPTURE_PROJECT_OUTCOMES,
+  type CapturePlacement,
+  type CaptureProjectOutcome,
+} from "../capture-routing-types.js";
 
 /**
  * The chip, form and answer-value schemas live in the shared ASK leaf
@@ -193,6 +198,14 @@ export const CAPTURE_RESULT_LIMITS = {
   /** Relations one part may carry (same budget as rows). */
   relationsMax: 40,
   relationTypeMaxChars: 200,
+  /** A workspace / project id carried on the part's routing blocks. */
+  routingIdMaxChars: 200,
+  /** A workspace name on the placement block. */
+  workspaceNameMaxChars: 200,
+  /** The AI's reason for a workspace or project pick. */
+  routingReasonMaxChars: 500,
+  /** "Why?" rows on a placement suggestion — the contract says at most 3. */
+  placementAlternativesMax: 3,
 } as const;
 
 /**
@@ -318,6 +331,89 @@ export const CaptureResultRelationSchema = z.object({
 });
 export type CaptureResultRelation = z.infer<typeof CaptureResultRelationSchema>;
 
+/**
+ * The AI's PROJECT pick for this structure run — the same four facts the
+ * `capture.structure` response carries as `targetProjectId` /
+ * `targetProjectReason` / `targetProjectConfidence` / `targetProjectOutcome`,
+ * persisted so a reader of the room (relay) can show and forward them.
+ * `outcome` is {@link CaptureProjectOutcome} — the ONE derivation
+ * (`deriveCaptureProjectOutcome`), never re-decided by a reader. Forward `id`
+ * to execute as the ADVISORY `aiProjectId`, never as the `projectId` pin.
+ */
+export const CaptureResultProjectSchema = z.object({
+  id: z.string().min(1).max(CAPTURE_RESULT_LIMITS.routingIdMaxChars).nullable(),
+  reason: z
+    .string()
+    .max(CAPTURE_RESULT_LIMITS.routingReasonMaxChars)
+    .nullable(),
+  confidence: z.number().finite().nullable(),
+  outcome: z.enum(CAPTURE_PROJECT_OUTCOMES).nullable(),
+});
+export type CaptureResultProject = z.infer<typeof CaptureResultProjectSchema>;
+
+/**
+ * WHERE the capture will land — the response's `placement` block
+ * ({@link CapturePlacement}, the destination SSOT that
+ * `deriveWorkspacePlacementView` reads), mirrored field for field. The legacy
+ * `targetWorkspace*` fields are deliberately NOT persisted: they mix the AI's
+ * pick with a deterministic placement and exist only for older clients.
+ */
+export const CaptureResultPlacementSchema = z.object({
+  workspaceId: z
+    .string()
+    .min(1)
+    .max(CAPTURE_RESULT_LIMITS.routingIdMaxChars)
+    .nullable(),
+  workspaceName: z
+    .string()
+    .max(CAPTURE_RESULT_LIMITS.workspaceNameMaxChars)
+    .nullable(),
+  deterministic: z.boolean(),
+  suggestion: z
+    .object({
+      workspaceId: z
+        .string()
+        .min(1)
+        .max(CAPTURE_RESULT_LIMITS.routingIdMaxChars),
+      workspaceName: z
+        .string()
+        .max(CAPTURE_RESULT_LIMITS.workspaceNameMaxChars),
+      reason: z
+        .string()
+        .max(CAPTURE_RESULT_LIMITS.routingReasonMaxChars)
+        .nullable(),
+      alternatives: z
+        .array(
+          z.object({
+            workspaceId: z
+              .string()
+              .min(1)
+              .max(CAPTURE_RESULT_LIMITS.routingIdMaxChars),
+            workspaceName: z
+              .string()
+              .max(CAPTURE_RESULT_LIMITS.workspaceNameMaxChars),
+            weight: z.number().finite(),
+          })
+        )
+        .max(CAPTURE_RESULT_LIMITS.placementAlternativesMax),
+    })
+    .optional(),
+});
+export type CaptureResultPlacement = z.infer<
+  typeof CaptureResultPlacementSchema
+>;
+
+// The persisted blocks ARE the response's types — a drift either way stops
+// the build (a field added to `CapturePlacement` must be added here too).
+type _Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const _placementSame: _Same<CaptureResultPlacement, CapturePlacement> = true;
+const _outcomeSame: _Same<
+  NonNullable<CaptureResultProject["outcome"]>,
+  CaptureProjectOutcome
+> = true;
+void _placementSame;
+void _outcomeSame;
+
 export const CaptureResultPartSchema = z.object({
   kind: z.literal("capture_result"),
   v: z.literal(1),
@@ -340,6 +436,14 @@ export const CaptureResultPartSchema = z.object({
   truncated: z.boolean(),
   /** A sentence the pod said that the user needs (a degraded pass). */
   notice: z.string().max(CAPTURE_RESULT_LIMITS.noticeMaxChars).nullable(),
+  /**
+   * The AI's project pick for this run. Optional AND nullable: parts written
+   * before this field existed still parse. Absent is NOT
+   * `outcome: "not_offered"` — absent means "this part does not say".
+   */
+  project: CaptureResultProjectSchema.nullable().optional(),
+  /** Where the capture will land (`CapturePlacement`). Optional + nullable. */
+  placement: CaptureResultPlacementSchema.nullable().optional(),
 });
 export type CaptureResultPart = z.infer<typeof CaptureResultPartSchema>;
 

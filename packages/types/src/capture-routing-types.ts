@@ -53,8 +53,13 @@ export interface WorkspaceDecisionRecord {
  * it. Backfilling a reason sentence for `unstated` would assert a judgement
  * that never happened — the "stamp you did not earn" defect.
  */
-export type CaptureProjectOutcome =
-  "not_offered" | "selected" | "declined" | "unstated";
+export const CAPTURE_PROJECT_OUTCOMES = [
+  "not_offered",
+  "selected",
+  "declined",
+  "unstated",
+] as const;
+export type CaptureProjectOutcome = (typeof CAPTURE_PROJECT_OUTCOMES)[number];
 
 /**
  * Derive {@link CaptureProjectOutcome} from facts the capture door already

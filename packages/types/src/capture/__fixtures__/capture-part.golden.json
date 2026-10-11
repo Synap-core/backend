@@ -446,6 +446,110 @@
         "truncated": false,
         "notice": null
       }
+    },
+    {
+      "name": "valid result carrying the AI's project pick and a placement WITH a suggestion",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "project": {
+          "id": "7c1e2b3a-4d5f-4a6b-8c7d-9e0f1a2b3c4d",
+          "reason": "the note is about the product",
+          "confidence": 0.8,
+          "outcome": "selected"
+        },
+        "placement": {
+          "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+          "workspaceName": "Builder",
+          "deterministic": false,
+          "suggestion": {
+            "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+            "workspaceName": "Brand",
+            "reason": "about the brand voice",
+            "alternatives": [
+              {
+                "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+                "workspaceName": "Brand",
+                "weight": 0.7
+              },
+              {
+                "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+                "workspaceName": "Builder",
+                "weight": 0.2
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "valid result with project and placement both null — nullable-tolerant",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "project": null,
+        "placement": null
+      }
+    },
+    {
+      "name": "valid result: deterministic placement without a suggestion, project not_offered with nulls",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "project": {
+          "id": null,
+          "reason": null,
+          "confidence": null,
+          "outcome": "not_offered"
+        },
+        "placement": {
+          "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+          "workspaceName": "Builder",
+          "deterministic": true
+        }
+      }
     }
   ],
   "invalid": [
@@ -1291,6 +1395,181 @@
         "relations": null,
         "truncated": false,
         "notice": null
+      }
+    },
+    {
+      "name": "result project outcome 'bogus'",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "project": {
+          "id": "7c1e2b3a-4d5f-4a6b-8c7d-9e0f1a2b3c4d",
+          "reason": "the note is about the product",
+          "confidence": 0.8,
+          "outcome": "bogus"
+        }
+      }
+    },
+    {
+      "name": "result project reason over 500 chars",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "project": {
+          "id": "7c1e2b3a-4d5f-4a6b-8c7d-9e0f1a2b3c4d",
+          "reason": "@@N501@@",
+          "confidence": 0.8,
+          "outcome": "selected"
+        }
+      }
+    },
+    {
+      "name": "result project missing outcome — nullable is not optional",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "project": {
+          "id": "7c1e2b3a-4d5f-4a6b-8c7d-9e0f1a2b3c4d",
+          "reason": "the note is about the product",
+          "confidence": 0.8
+        }
+      }
+    },
+    {
+      "name": "result placement missing deterministic",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "placement": {
+          "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+          "workspaceName": "Builder",
+          "suggestion": {
+            "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+            "workspaceName": "Brand",
+            "reason": "about the brand voice",
+            "alternatives": [
+              {
+                "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+                "workspaceName": "Brand",
+                "weight": 0.7
+              },
+              {
+                "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+                "workspaceName": "Builder",
+                "weight": 0.2
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "result placement suggestion with 4 alternatives — over the bound of 3",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "placement": {
+          "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+          "workspaceName": "Builder",
+          "deterministic": false,
+          "suggestion": {
+            "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+            "workspaceName": "Brand",
+            "reason": "about the brand voice",
+            "alternatives": [
+              {
+                "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+                "workspaceName": "Brand",
+                "weight": 0.7
+              },
+              {
+                "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+                "workspaceName": "Brand",
+                "weight": 0.7
+              },
+              {
+                "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+                "workspaceName": "Brand",
+                "weight": 0.7
+              },
+              {
+                "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+                "workspaceName": "Brand",
+                "weight": 0.7
+              }
+            ]
+          }
+        }
       }
     }
   ],
