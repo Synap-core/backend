@@ -42,6 +42,21 @@ export const t = initTRPC.context<Context>().create({
     // so a revision-guard CONFLICT (no such cause) does not pick this up.
     // Candidates are projected to {id,title,type}; other cause fields stay off the wire.
     const weakDedup = readWeakDedupWire(cause);
+    // A STALE status move (`moveStatus` compare-and-set, `LifecycleConflictError`)
+    // names the status the thing is in NOW, so the mover can say "moved
+    // meanwhile to X" without parsing the message. Duck-typed on `code`.
+    const lifecycleStale =
+      cause?.code === "LIFECYCLE_STALE"
+        ? {
+            reasonCode: "LIFECYCLE_STALE",
+            expectedStatus:
+              typeof cause.expectedFrom === "string"
+                ? cause.expectedFrom
+                : null,
+            currentStatus:
+              typeof cause.actual === "string" ? cause.actual : null,
+          }
+        : {};
 
     // A capability install that needs a HUMAN before it can apply is converted
     // by `errorCatchingMiddleware` into a coded TRPCError whose `cause` is the
@@ -79,6 +94,7 @@ export const t = initTRPC.context<Context>().create({
             }
           : {}),
         ...setupRequired,
+        ...lifecycleStale,
       },
     };
   },
