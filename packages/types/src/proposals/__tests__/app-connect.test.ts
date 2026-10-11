@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeAppConnectProposal,
   isAppConnectProposal,
+  isConnectProposal,
   summarizeAppConnectRequest,
 } from "../intent.js";
 
@@ -86,5 +87,31 @@ describe("app/connect proposal words", () => {
         data: { name: "x", requests: [{ permission: 3 }] },
       })
     ).toBeNull();
+  });
+
+  it("reads an AI's request, where `workspaceId: null` is anywhere", () => {
+    const AGENT = {
+      targetType: "agent",
+      proposalType: "connect",
+      data: {
+        agentUserId: "u1",
+        keyId: "k1",
+        name: "Claude Code",
+        requests: [
+          { permission: "entity.note.read", workspaceId: null },
+          { permission: "entity.person.create", workspaceId: "ws-sales" },
+        ],
+      },
+    };
+    expect(isConnectProposal(AGENT)).toBe(true);
+    expect(isAppConnectProposal(AGENT)).toBe(false);
+    const s = describeAppConnectProposal(AGENT, NAMES)!;
+    expect(s.sentence).toBe(
+      "Claude Code asks for access: Read Notes · Anywhere, Create People · Sales"
+    );
+    expect(s.lines[0]!.workspaceId).toBeNull();
+    expect(
+      isConnectProposal({ targetType: "entity", proposalType: "connect" })
+    ).toBe(false);
   });
 });

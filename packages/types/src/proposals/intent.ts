@@ -528,17 +528,18 @@ export function rollupComposite(
 }
 
 // ---------------------------------------------------------------------------
-// APP CONNECT — an app asking for access (`targetType "app"`, `proposalType
-// "connect"`, filed by Hub `POST /apps/:id/connect`). One wording for every
-// door the request shows at (phone, Connected app page, the CLI's review
-// link): "synap.live asks for access: Create People · Sales, Read Notes ·
-// Finance".
+// CONNECT — an app (`targetType "app"`, filed by Hub `POST /apps/:id/connect`)
+// or an AI (`targetType "agent"`, filed when an agent key needs approval)
+// asking for access, `proposalType "connect"`. One wording for every door the
+// request shows at (phone, Connected app page, the CLI's review link):
+// "synap.live asks for access: Create People · Sales, Read Notes · Finance".
 // ---------------------------------------------------------------------------
 
 /** One request as the proposal stores it (`data.requests[]`). */
 export interface AppConnectRequestLike {
   permission: string;
-  workspaceId: string;
+  /** The space it applies in; `null` = anywhere (an AI's request may be). */
+  workspaceId: string | null;
   /** The space's name, when the filer stored it. Preferred over `workspaceNames`. */
   workspaceName?: string | null;
 }
@@ -551,10 +552,11 @@ export interface AppConnectProposalLike {
 }
 
 export interface AppConnectLine {
-  workspaceId: string;
+  /** `null` = anywhere. */
+  workspaceId: string | null;
   /** "Create People" — `summarizeGrant(...).what` for this space's permissions. */
   what: string;
-  /** The space's name, or `summarizeGrant`'s "1 Space" when no name is known. */
+  /** The space's name, "Anywhere", or `summarizeGrant`'s "1 Space" when no name is known. */
   where: string;
   /** "Create People · Sales". */
   text: string;
@@ -574,6 +576,16 @@ export interface AppConnectSummary {
 export function isAppConnectProposal(p: AppConnectProposalLike): boolean {
   return p.targetType === "app" && p.proposalType === "connect";
 }
+
+/** Is this a request for access — an app's (`app/connect`) or an AI's (`agent/connect`)? */
+export function isConnectProposal(p: AppConnectProposalLike): boolean {
+  return (
+    p.proposalType === "connect" &&
+    (p.targetType === "app" || p.targetType === "agent")
+  );
+}
+
+const ANYWHERE = "Anywhere";
 
 function rec(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v)
@@ -596,9 +608,9 @@ export function summarizeAppConnectRequest(input: {
   requests: ReadonlyArray<AppConnectRequestLike>;
   workspaceNames?: Readonly<Record<string, string>>;
 }): AppConnectSummary {
-  const order: string[] = [];
+  const order: Array<string | null> = [];
   const bySpace = new Map<
-    string,
+    string | null,
     { permissions: string[]; name: string | null }
   >();
   for (const r of input.requests) {
@@ -612,15 +624,15 @@ export function summarizeAppConnectRequest(input: {
       entry.permissions.push(r.permission);
     entry.name =
       entry.name ??
-      r.workspaceName ??
-      input.workspaceNames?.[r.workspaceId] ??
-      null;
+      (r.workspaceId === null
+        ? ANYWHERE
+        : (r.workspaceName ?? input.workspaceNames?.[r.workspaceId] ?? null));
   }
   const lines = order.map((workspaceId) => {
     const entry = bySpace.get(workspaceId)!;
     const s = summarizeGrant({
       permissions: entry.permissions,
-      workspaceIds: [workspaceId],
+      workspaceIds: workspaceId === null ? null : [workspaceId],
       projectIds: null,
       entityIds: null,
     });
@@ -640,14 +652,15 @@ export function summarizeAppConnectRequest(input: {
 
 /**
  * {@link summarizeAppConnectRequest} straight off a proposal row, or `null`
- * when the row is not an app/connect request or its data is unreadable (a
- * caller then falls back to its generic title — never a half-read sentence).
+ * when the row is not a connect request (app or AI, `isConnectProposal`) or its
+ * data is unreadable (a caller then falls back to its generic title — never a
+ * half-read sentence).
  */
 export function describeAppConnectProposal(
   p: AppConnectProposalLike,
   workspaceNames?: Readonly<Record<string, string>>
 ): AppConnectSummary | null {
-  if (!isAppConnectProposal(p)) return null;
+  if (!isConnectProposal(p)) return null;
   const data = rec(p.data);
   const appName = typeof data?.name === "string" ? data.name : null;
   const raw = Array.isArray(data?.requests) ? data.requests : null;
@@ -658,12 +671,12 @@ export function describeAppConnectProposal(
     if (
       !r ||
       typeof r.permission !== "string" ||
-      typeof r.workspaceId !== "string"
+      (r.workspaceId != null && typeof r.workspaceId !== "string")
     )
       return null;
     requests.push({
       permission: r.permission,
-      workspaceId: r.workspaceId,
+      workspaceId: (r.workspaceId as string | null | undefined) || null,
       workspaceName:
         typeof r.workspaceName === "string" ? r.workspaceName : null,
     });
