@@ -230,8 +230,9 @@ export const TRACK_STATUS_TRANSITIONS: Readonly<
   active: ["paused", "completed", "archived"],
   paused: ["active", "completed", "archived"],
   completed: ["active", "archived"],
-  // Archived is FINAL: it frees the live-method slot, so reviving it could
-  // collide with a newer track of the same method. Start the method again.
+  // Archived is FINAL: it frees the track's live NAME (migration 0317), so
+  // reviving it could collide with a newer live track of that name. Start the
+  // method again instead.
   archived: [],
 };
 
