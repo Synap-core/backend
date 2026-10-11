@@ -219,8 +219,9 @@ async function createApiKey(
       },
       body: JSON.stringify({
         keyName: `Test API Key ${randomUUID()}`,
-        scope: ["preferences", "notes", "tasks"],
+        scope: ["hub-protocol.read", "hub-protocol.write"],
         expiresInDays: 365,
+        grant: { permissions: ["*"], label: "Full access" },
       }),
       signal: controller.signal,
     });

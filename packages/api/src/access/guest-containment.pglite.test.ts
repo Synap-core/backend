@@ -294,7 +294,11 @@ describe("B1 — a guest cannot become a participant", () => {
     const asG = await as(G);
     expect(
       await outcome(
-        asG.apiKeys.create({ keyName: "k", scope: ["hub-protocol.read"] })
+        asG.apiKeys.create({
+          keyName: "k",
+          scope: ["hub-protocol.read"],
+          grant: { permissions: ["*"] },
+        })
       )
     ).toBe("GUEST_REFUSED");
     expect(
