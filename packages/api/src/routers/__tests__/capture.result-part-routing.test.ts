@@ -35,6 +35,10 @@ const h = vi.hoisted(() => ({
   /** The profiles the person can see, and the workspace each read asked for. */
   profiles: [] as Array<Record<string, unknown>>,
   profileReads: [] as string[],
+  /** What the two next-step match doors answer (D6); a string = it throws. */
+  playbookMatches: [] as unknown[] | string,
+  ruleMatches: [] as unknown[] | string,
+  matchCalls: [] as Array<Record<string, unknown>>,
   /** What the ONE writer handed to the message insert — the persisted part. */
   written: [] as Array<{ id: string; part: unknown }>,
 }));
@@ -183,6 +187,23 @@ vi.mock("../../services/intake/capture-room.js", async (importOriginal) => ({
   readRestructureRoom: async () => h.room,
 }));
 
+const matchDoor = (pick: () => unknown[] | string) => ({
+  createCaller: () => ({
+    matchForEntity: async (input: Record<string, unknown>) => {
+      h.matchCalls.push(input);
+      const out = pick();
+      if (typeof out === "string") throw new Error(out);
+      return out;
+    },
+  }),
+});
+vi.mock("../playbooks.js", () => ({
+  playbooksRouter: matchDoor(() => h.playbookMatches),
+}));
+vi.mock("../automations.js", () => ({
+  automationsRouter: matchDoor(() => h.ruleMatches),
+}));
+
 import { captureRouter } from "../capture.js";
 import { readCapturePart } from "@synap-core/types/capture";
 
@@ -224,6 +245,9 @@ beforeEach(() => {
   h.isInputs = [];
   h.room = null;
   h.profileReads = [];
+  h.playbookMatches = [];
+  h.ruleMatches = [];
+  h.matchCalls = [];
   h.profiles = [{ id: "p-note", slug: "note", displayName: "Note" }];
   h.projectRows = PROJECTS;
   h.isBody = { entities: [ENTITY], relations: [], followUp: null };
@@ -446,5 +470,51 @@ describe("capture.structure — the row carries the structurer's signals (D10)",
     expect(row).not.toHaveProperty("description");
     expect(row).not.toHaveProperty("roles");
     expect(row!.confidence).toBe(0.9);
+  });
+});
+
+describe("capture.structure — next steps ride the part before anything is filed (D6)", () => {
+  const WS = "88888888-8888-4888-8888-888888888888";
+  const runIn = () =>
+    callerFor(`user-${randomUUID()}`, WS).structure({
+      text: "lunch with alice",
+    });
+
+  it("matched playbooks and rules arrive on the part, ranked, for the row's kind in the landing space", async () => {
+    h.playbookMatches = [
+      {
+        id: "pb-1",
+        name: "Follow up",
+        score: 4,
+        reason: "about lunch",
+        subjectProfileSlug: "note",
+      },
+    ];
+    h.ruleMatches = [{ id: "r-1", name: "Tag notes", score: 2 }];
+    await runIn();
+    expect(persisted().suggestions).toEqual([
+      {
+        kind: "playbook",
+        id: "pb-1",
+        title: "Follow up",
+        forTempId: "t1",
+        reason: "about lunch",
+      },
+      { kind: "rule", id: "r-1", title: "Tag notes", forTempId: "t1" },
+    ]);
+    expect(h.matchCalls[0]).toEqual({
+      profileSlug: "note",
+      workspaceId: WS,
+      intentText: "lunch with alice",
+    });
+  });
+
+  it("none found is an EMPTY list; a failed match is NO list", async () => {
+    await runIn();
+    expect(persisted().suggestions).toEqual([]);
+    h.written = [];
+    h.ruleMatches = "rules down";
+    await callerFor(`user-${randomUUID()}`, WS).structure({ text: "other" });
+    expect(persisted()).not.toHaveProperty("suggestions");
   });
 });

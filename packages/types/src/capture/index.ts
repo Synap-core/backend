@@ -208,6 +208,10 @@ export const CAPTURE_RESULT_LIMITS = {
   descriptionMaxChars: 280,
   /** Roles (facet profile slugs) a row proposes attaching (D10). */
   rolesMax: 6,
+  /** Next steps the part offers before anything is filed (D6). */
+  suggestionsMax: 6,
+  /** A next step's one-line reason. */
+  suggestionReasonMaxChars: 280,
   /** "Why?" rows on a placement suggestion — the contract says at most 3. */
   placementAlternativesMax: 3,
 } as const;
@@ -446,6 +450,26 @@ const _outcomeSame: _Same<
 void _placementSame;
 void _outcomeSame;
 
+/**
+ * A next step the pod found for this capture BEFORE anything is filed (D6): a
+ * playbook to run or a propose-mode rule to keep, matched from the row's kind +
+ * the note (`playbooks.matchForEntity` / `automations.matchForEntity`).
+ * `forTempId` names the row it needs filed first (`null` = it needs none).
+ */
+export const CaptureResultSuggestionSchema = z.object({
+  kind: z.enum(["playbook", "rule"]),
+  id: z.string().min(1).max(CAPTURE_RESULT_LIMITS.routingIdMaxChars),
+  title: z.string().min(1).max(CAPTURE_RESULT_LIMITS.titleMaxChars),
+  forTempId: z.string().min(1).max(200).nullable(),
+  reason: z
+    .string()
+    .max(CAPTURE_RESULT_LIMITS.suggestionReasonMaxChars)
+    .optional(),
+});
+export type CaptureResultSuggestion = z.infer<
+  typeof CaptureResultSuggestionSchema
+>;
+
 export const CaptureResultPartSchema = z.object({
   kind: z.literal("capture_result"),
   v: z.literal(1),
@@ -476,6 +500,14 @@ export const CaptureResultPartSchema = z.object({
   project: CaptureResultProjectSchema.nullable().optional(),
   /** Where the capture will land (`CapturePlacement`). Optional + nullable. */
   placement: CaptureResultPlacementSchema.nullable().optional(),
+  /**
+   * Next steps, ranked. ABSENT = not computed (an older pod, or the match read
+   * failed); `[]` = computed, none found. Never conflate the two.
+   */
+  suggestions: z
+    .array(CaptureResultSuggestionSchema)
+    .max(CAPTURE_RESULT_LIMITS.suggestionsMax)
+    .optional(),
 });
 export type CaptureResultPart = z.infer<typeof CaptureResultPartSchema>;
 

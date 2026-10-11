@@ -46,6 +46,7 @@ import {
   type CaptureResultProject,
   type CaptureResultRelation,
   type CaptureResultRow,
+  type CaptureResultSuggestion,
 } from "@synap-core/types/capture";
 import type {
   CapturePlacement,
@@ -425,6 +426,7 @@ function sansRound(part: CaptureResultPart) {
     notice: part.notice,
     ...(part.project ? { project: part.project } : {}),
     ...(part.placement ? { placement: part.placement } : {}),
+    ...(part.suggestions ? { suggestions: part.suggestions } : {}),
   };
 }
 
@@ -474,6 +476,8 @@ export interface PersistCaptureResultInput {
   project?: CaptureResultProjectInput | null;
   /** The response's `placement` block, persisted on the part. */
   placement?: CapturePlacement | null;
+  /** Next steps found before filing (D6). Absent = not computed. */
+  suggestions?: ReadonlyArray<CaptureResultSuggestion>;
 }
 
 export interface PersistedCaptureResult {
@@ -532,6 +536,14 @@ export async function persistCaptureResult(
       project: input.project,
       placement: input.placement,
     }),
+    ...(input.suggestions
+      ? {
+          suggestions: input.suggestions.slice(
+            0,
+            CAPTURE_RESULT_LIMITS.suggestionsMax
+          ),
+        }
+      : {}),
   };
 
   // NOTHING CHANGED ⇒ no new part. Checked on the VERDICT (rows, truncated,

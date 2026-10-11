@@ -165,3 +165,35 @@ describe("capture_result row signals (D10 + label)", () => {
     expect(ok({ label: "maybe" })).toBe(false);
   });
 });
+
+describe("capture_result suggestions (D6)", () => {
+  const withSuggestions = (suggestions: unknown) => ({
+    ...part(base),
+    suggestions,
+  });
+  it("round-trips ranked next steps; absent and [] are different facts", () => {
+    const p = withSuggestions([
+      {
+        kind: "playbook",
+        id: "pb-1",
+        title: "Produce",
+        forTempId: "t1",
+        reason: "a post",
+      },
+      { kind: "rule", id: "r-1", title: "Tag", forTempId: null },
+    ]);
+    expect(readCapturePart({ capturePart: p })).toEqual(p);
+    const none = readCapturePart({ capturePart: withSuggestions([]) });
+    expect(none?.kind === "capture_result" && none.suggestions).toEqual([]);
+    const absent = readCapturePart({ capturePart: part(base) });
+    expect(absent && "suggestions" in absent).toBe(false);
+  });
+
+  it("refuses more than six, or an unknown kind", () => {
+    const step = { kind: "playbook", id: "p", title: "T", forTempId: null };
+    const ok = (s: unknown) =>
+      CaptureResultPartSchema.safeParse(withSuggestions(s)).success;
+    expect(ok(Array(7).fill(step))).toBe(false);
+    expect(ok([{ ...step, kind: "agent" }])).toBe(false);
+  });
+});

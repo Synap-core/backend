@@ -46,11 +46,15 @@ import {
   type PersistedCaptureResult,
 } from "../services/intake/capture-result-part.js";
 import { readRestructureRoom } from "../services/intake/capture-room.js";
+import { findCaptureSuggestions } from "../services/intake/capture-suggestions.js";
 import {
   buildLinkedProfiles,
   type LinkableProfile,
 } from "../services/intake/capture-schema-linking.js";
-import { CaptureAnswerSchema } from "@synap-core/types/capture";
+import {
+  CaptureAnswerSchema,
+  type CaptureResultSuggestion,
+} from "@synap-core/types/capture";
 import {
   KNOWN_SOURCE_HASHES_MAX,
   PHOTO_RUN_MAX_ITEMS,
@@ -2419,6 +2423,42 @@ const captureBaseRouter = router({
       // its response and `captureResult` comes back null.
       let captureResult: PersistedCaptureResult | null = null;
       if (structured.sessionId) {
+        // Next steps BEFORE anything is filed (D6), matched in the space the
+        // capture lands in. A failed match stores NO suggestions (absent = not
+        // computed), never `[]` (= none found).
+        let suggestions: CaptureResultSuggestion[] | undefined;
+        const suggestWorkspaceId =
+          structured.placement?.workspaceId ?? workspaceId ?? null;
+        if (suggestWorkspaceId) {
+          try {
+            const [{ playbooksRouter }, { automationsRouter }] =
+              await Promise.all([
+                import("./playbooks.js"),
+                import("./automations.js"),
+              ]);
+            const lensCtx = { ...ctx, workspaceId: suggestWorkspaceId };
+            suggestions = await findCaptureSuggestions({
+              rows: structureResult.entities,
+              workspaceId: suggestWorkspaceId,
+              intentText: inputText,
+              doors: {
+                matchPlaybooks: (match) =>
+                  playbooksRouter
+                    .createCaller(lensCtx as never)
+                    .matchForEntity(match),
+                matchRules: (match) =>
+                  automationsRouter
+                    .createCaller(lensCtx as never)
+                    .matchForEntity(match),
+              },
+            });
+          } catch (err) {
+            logger.error(
+              { err, userId, sessionId: structured.sessionId },
+              "capture.structure: next steps NOT computed — the part carries no suggestions"
+            );
+          }
+        }
         try {
           captureResult = await persistCaptureResult({
             sessionId: structured.sessionId,
@@ -2432,6 +2472,7 @@ const captureBaseRouter = router({
             // a room reader (relay) never sees it, so the part carries them.
             project: structured,
             placement: structured.placement,
+            ...(suggestions ? { suggestions } : {}),
           });
         } catch (err) {
           logger.error(
