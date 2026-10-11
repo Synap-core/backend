@@ -14,7 +14,7 @@
  * editor schema, which lives in the client. So the SEED is done by one client,
  * and this module only tells the room what it needs. The shared contract is the
  * `synap-room` Y.Map below. The client mirror is
- * `synap-app/packages/features/document/src/roomMeta.ts`, and the two key sets
+ * `synap-app/packages/web/src/document/roomMeta.ts`, and the two key sets
  * must stay identical.
  *
  *   revision      the content_revision the room's content corresponds to. The

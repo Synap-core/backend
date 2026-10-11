@@ -224,8 +224,9 @@ describe("the freeze reads with the live chart's cap", () => {
         "..",
         "synap-app",
         "packages",
-        "synap-stores",
+        "hooks",
         "src",
+        "stores",
         "chartEntitiesQueryStore.ts"
       ),
       "utf8"

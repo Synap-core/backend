@@ -68,7 +68,7 @@
  * Deterministic for identical input. Inputs are never mutated.
  *
  * Classification reuses the bucket heuristic of
- * `synap-app/packages/views/bento/src/utils/default-entity-bento.ts`
+ * `synap-app/packages/web/src/bento-view/utils/default-entity-bento.ts`
  * (`classifyProperty`), with one correction: that function leads with
  * `uiHints.displayAs` on 5 of its 6 branches, and `displayAs` is populated on
  * 4 of 358 property defs (1.1%) on the live pod, so in practice it always fell

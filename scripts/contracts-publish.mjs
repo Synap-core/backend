@@ -13,7 +13,7 @@
  *   2. @synap-core/hub-protocol    → pnpm pack → tgz → copy into IS → repin file:
  *   3. @synap-core/hub-rest-client → pnpm pack → tgz → copy into IS → repin file:
  *   4. Re-pin @synap-core/api-types in synap-app (deps + catalog + overrides +
- *      synap-client) to whatever version CI published.
+ *      hooks/web layer packages) to whatever version CI published.
  *
  * The api-types version this script repins is read from package.json — CI is
  * the authority that SETS it. Do not bump it here; that would reintroduce a
@@ -363,14 +363,18 @@ if (!DRY) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STEP D — repin api-types in synap-app (deps + catalog + overrides + synap-client)
+// STEP D — repin api-types in synap-app (deps + catalog + overrides + hooks/web layers)
 // ─────────────────────────────────────────────────────────────────────────────
 step("D", "Repin @synap-core/api-types in synap-app");
 const appTargets = [
   { rel: "package.json", file: join(SYNAP_APP_DIR, "package.json") },
   {
-    rel: "packages/synap-client/package.json",
-    file: join(SYNAP_APP_DIR, "packages/synap-client/package.json"),
+    rel: "packages/hooks/package.json",
+    file: join(SYNAP_APP_DIR, "packages/hooks/package.json"),
+  },
+  {
+    rel: "packages/web/package.json",
+    file: join(SYNAP_APP_DIR, "packages/web/package.json"),
   },
 ];
 
@@ -438,7 +442,7 @@ if (existsSync(SYNAP_APP_DIR)) {
   log(" 3. synap-app:");
   log("      - pnpm install   (resolves the new @synap-core/api-types pin)");
   log(
-    `      - commit package.json + packages/synap-client/package.json (api-types → ${apiTypesPin})`
+    `      - commit package.json + packages/{hooks,web}/package.json (api-types → ${apiTypesPin})`
   );
   log("");
 }

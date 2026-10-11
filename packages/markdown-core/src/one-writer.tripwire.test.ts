@@ -137,7 +137,7 @@ const EMBED_WRITER = "synap-backend/packages/markdown-core/src/embeds.ts";
 const SECTION_WRITERS: Record<string, string> = {
   "synap-backend/packages/api/src/services/session-document/sections.ts":
     "the section door's splice (upsert by id)",
-  "synap-app/packages/core/markdown-engine/src/components/editor/extensions/synap-section.tsx":
+  "synap-app/packages/web/src/markdown-engine/components/editor/extensions/synap-section.tsx":
     "the editor's section node serializer",
 };
 
@@ -203,7 +203,8 @@ describe("tripwire scan is looking (non-vacuity)", () => {
     expect(inCore.some((t) => t.includes("${COLUMNS_DIRECTIVE}"))).toBe(true);
     expect(inCore.some((t) => t.includes("${COLUMN_DIRECTIVE}"))).toBe(true);
     for (const f of Object.keys(SECTION_WRITERS))
-      if (existsSync(join(MONOREPO, f))) expect(writers.has(f), f).toBe(true);
+      if (existsSync(join(MONOREPO, f.split("/")[0]!)))
+        expect(writers.has(f), f).toBe(true);
   });
 });
 
@@ -290,7 +291,7 @@ describe("tripwire: one markdown pipeline factory (pod side)", () => {
       pipelineFiles.filter((f) => f !== FACTORY && !(f in OTHER_PARSERS))
     ).toEqual([]);
     for (const f of Object.keys(OTHER_PARSERS))
-      if (existsSync(join(MONOREPO, f)))
+      if (existsSync(join(MONOREPO, f.split("/")[0]!)))
         expect(pipelineFiles, `stale: ${f}`).toContain(f);
   });
 });

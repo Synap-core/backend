@@ -13,7 +13,7 @@
  * badge dead (the frontend subscribed to names the backend never emitted).
  *
  * This const is the emitter half of the fix. The subscriber half lives in
- * `synap-app/packages/synap-client/src/socket/conversation-events.ts`
+ * `synap-app/packages/headless/src/client/socket/conversation-events.ts`
  * (`SUBSCRIBED_CONVERSATION_EVENTS`). A cross-repo tripwire
  * (`src/__tripwires__/socket-event-consistency.test.ts`) reads BOTH files and
  * fails if the frontend subscribes to a name this file does not emit — turning

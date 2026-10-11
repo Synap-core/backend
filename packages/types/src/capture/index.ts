@@ -274,7 +274,7 @@ export const CaptureResultRowSchema = z.object({
    * The enriched decision for this row — the SAME vocabulary as the capture
    * pipeline's `autoDecideAction` (`CaptureProposal.action`). OPTIONAL and, as
    * of this change, WRITTEN BY NOBODY on the pod: the decision lives in the
-   * client (`synap-app/packages/core/capture-pipeline/src/state.ts`), and a
+   * client (`synap-app/packages/headless/src/capture-pipeline/state.ts`), and a
    * pod-side copy would be a second rule. The field exists so a client that
    * owns the decision can persist it; readers must treat absence as "decide".
    */

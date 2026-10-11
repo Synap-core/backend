@@ -18,7 +18,7 @@ import { TEXT_TONES, WITHHELD_TEXT_TONES } from "./inline-format.js";
 const MONOREPO = join(import.meta.dirname, "..", "..", "..", "..");
 const TOKENS = join(
   MONOREPO,
-  "synap-app/packages/core/design-tokens/src/tokens/color.tokens.json"
+  "synap-app/packages/design-tokens/src/tokens/color.tokens.json"
 );
 const UNIT_STATE = join(
   MONOREPO,
@@ -51,7 +51,9 @@ function unitTones(): string[] {
 }
 
 // The token package lives in a sibling repo; absent ⇒ SKIPPED, never green.
-const HAVE_TOKENS = existsSync(TOKENS);
+// Skip ONLY when the synap-app repo is absent: a moved token file with the repo
+// present must fail (readFileSync ENOENT), not skip.
+const HAVE_TOKENS = existsSync(join(MONOREPO, "synap-app"));
 
 describe.skipIf(!HAVE_TOKENS)("tripwire: document tones = token tones", () => {
   const family = [...new Set([...tokenTones(), ...unitTones()])].sort();

@@ -5,7 +5,7 @@
  * ⚠️ TWO COPIES ON PURPOSE, BOUND BYTE-FOR-BYTE BY A TEST.
  * This file exists twice and the two copies are IDENTICAL:
  *   - synap-backend/packages/api/src/utils/template-references.ts  (runtime)
- *   - synap-app/packages/core/command-template/src/unresolved.ts   (authoring)
+ *   - synap-app/packages/headless/src/command-template/unresolved.ts   (authoring)
  * The authoring surfaces (PromptTemplateEditor, the playbooks app) run in the
  * browser and cannot import across the repo boundary — synap-backend is not a
  * dependency of synap-app and vice versa — so a shared module is not reachable

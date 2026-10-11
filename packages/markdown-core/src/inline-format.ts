@@ -39,7 +39,7 @@ import type { Diagnostic } from "./diagnostics.js";
 
 /**
  * The tones a writer may name. Each one is a `--synap-tone-<tone>-fill|ink`
- * pair in the design tokens (`synap-app/packages/core/design-tokens`), spelled
+ * pair in the design tokens (`synap-app/packages/design-tokens`), spelled
  * as the tone family's own names (`UnitTone`: `textMuted`, not `text-muted`).
  *
  * This package is published from synap-backend and cannot depend on the

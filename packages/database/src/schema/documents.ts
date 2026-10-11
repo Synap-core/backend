@@ -109,7 +109,7 @@ export const documents = pgTable(
  *
  * The literal set is `ai`, not `agent`, because the product's ONE declared
  * union for this field already reads `"user" | "ai" | "system"`
- * (`synap-app/packages/core/markdown-engine/.../types/advanced-editor.ts`) and
+ * (`synap-app/packages/web/src/markdown-engine/.../types/advanced-editor.ts`) and
  * its only discriminating reader tests `version.author === 'ai'`. A second
  * literal for the same concept is the drift this codebase keeps paying for.
  */

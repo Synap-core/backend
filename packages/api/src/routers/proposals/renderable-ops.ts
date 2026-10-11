@@ -69,7 +69,7 @@ export function assertEveryOperationRendered(
       `To make ${kinds.join("/")} reviewable, extend buildProposalGraph ` +
       `(packages/api/src/routers/proposals/display.ts) to emit a review item ` +
       `for them AND widen the ProposalReviewGraph contract ` +
-      `(synap-app/packages/core/proposal-types/src/types.ts) to carry it; this ` +
+      `(synap-app/packages/headless/src/proposal-types/types.ts) to carry it; this ` +
       `guard then stops firing on its own.`,
   });
 }

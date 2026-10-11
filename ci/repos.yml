@@ -86,18 +86,9 @@ changeset_exceptions:
 
 # Package names with exactly ONE home on disk. check.mjs rule 7 fails when any
 # other package.json — public or private, in any repo — declares the name.
-single_home:
-  - package: "@synap-core/control-plane-types"
-    home: synap-app/packages/core/control-plane-types
-    reason: >-
-      Resolved 2026-10-06. Two copies (synap-app 1.1.0, synap-control-plane-api
-      1.0.2) had drifted: browser compiled against the CP copy, relay and the
-      synap-app packages against synap-app's. synap-app is the home: the pnpm
-      workspace already resolved every consumer there, synap-app is the only repo
-      whose changesets workspace carries the name, and its standalone CI cannot
-      see a sibling repo. The CP — which produces these shapes but cannot import
-      the package (rootDir) — keeps its own derivation in src/lib and pins it to
-      this copy with src/lib/billing-state.parity.test.ts.
+single_home: []
+# (empty: @synap-core/control-plane-types was merged into @synap-core/headless
+# by the 2026-10 layer consolidation, so the package name no longer exists.)
 
 # Cross-repo invariants that no single repo can enforce on its own.
 open_conflicts:

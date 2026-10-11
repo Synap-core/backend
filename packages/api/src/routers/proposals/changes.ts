@@ -27,7 +27,7 @@ import {
  * title/description/profileSlug/documentId + `properties.*` keys.
  */
 // Cross-repo duplicate: intentionally kept in sync with `INFRA_KEYS` in
-// synap-app/packages/core/proposal-types/src/useProposalPresentation.ts. No
+// synap-app/packages/hooks/src/proposal-types/useProposalPresentation.ts. No
 // shared package exists across the backend/frontend repo boundary for this
 // constant — MUST stay byte-identical when either side changes.
 const NON_ENTITY_INFRA_KEYS = new Set([

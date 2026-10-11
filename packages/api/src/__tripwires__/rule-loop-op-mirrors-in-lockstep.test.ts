@@ -4,7 +4,7 @@
  * `CompositeProposalOperation` is declared TWICE:
  *   - `synap-backend/packages/types/src/proposals/index.ts` (server, owns the
  *     ref-resolution helpers and is what the materializer consumes),
- *   - `synap-app/packages/core/proposal-types/src/types.ts` (browser-safe, so
+ *   - `synap-app/packages/headless/src/proposal-types/types.ts` (browser-safe, so
  *     frontend packages can narrow without a runtime dep on the server entry).
  *
  * A vocabulary declared in two places where only one gets updated is this
@@ -47,7 +47,7 @@ const SERVER_TYPES = join(
 );
 const BROWSER_TYPES = join(
   REPO_ROOT,
-  "synap-app/packages/core/proposal-types/src/types.ts"
+  "synap-app/packages/headless/src/proposal-types/types.ts"
 );
 
 /** Mirrored on both sides on purpose with DIFFERENT shapes (see the header). */
@@ -83,7 +83,10 @@ function opFieldSignatures(file: string): Map<string, string[]> {
   return out;
 }
 
-const bothCheckedOut = existsSync(SERVER_TYPES) && existsSync(BROWSER_TYPES);
+// Skip ONLY when the synap-app REPO is absent; a moved BROWSER_TYPES with the
+// repo present must fail (opFieldSignatures reads it), not skip.
+const bothCheckedOut =
+  existsSync(SERVER_TYPES) && existsSync(join(REPO_ROOT, "synap-app"));
 
 describe("tripwire: mirrored composite ops mirror each other exactly", () => {
   it("the server declaration exists at the path this test parses", () => {

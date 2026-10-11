@@ -25,7 +25,7 @@ import { describeAiFailure } from "./ai-failure.js";
 
 /**
  * The client's gate, mirrored verbatim from
- * `synap-app/packages/core/chat-ui/src/components/StreamError.tsx:64`.
+ * `synap-app/packages/web/src/chat-ui/components/StreamError.tsx:64`.
  * Asserting through it (rather than on the raw field) is what makes these
  * tests fail if the frame ever renames the field the client actually reads —
  * emitting `retryable` instead of `recoverable` would typecheck, ship, and

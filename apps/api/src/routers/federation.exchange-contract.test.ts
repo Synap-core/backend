@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
  * generic fallback, so this test freezes the emitted set. If it fails: the
  * router's error codes changed — update EXPECTED here AND mirror the change in
  * the client's alias table + its coverage test
- * (synap-app/packages/core/auth/src/clients/federation-contract.test.ts).
+ * (synap-app/packages/headless/src/auth/clients/federation-contract.test.ts).
  *
  * Behind fix 5ae8e261: the issuer-trust gates emit ISSUER_APPROVAL_REQUIRED —
  * NOT APPLICATION_CONNECTION_APPROVAL_REQUIRED, which belongs only to the

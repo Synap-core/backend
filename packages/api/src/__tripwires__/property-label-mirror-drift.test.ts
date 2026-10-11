@@ -55,9 +55,9 @@ const SSOT_FILE = resolve(
   "..",
   "synap-app",
   "packages",
-  "core",
-  "property-renderer",
+  "headless",
   "src",
+  "property-renderer",
   "utils",
   "fieldFormatters.ts"
 );
