@@ -24,6 +24,7 @@ import {
 } from "../agents/index.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
 import {
+  CONNECTION_NOTIFY_LABELS,
   CONNECTION_STATE_LABELS,
   resolveActionLabel,
   resolveConnectionStateLabel,
@@ -193,6 +194,93 @@ export const CONNECTION_END_ACTION = {
   model: "remove",
   webhook: "remove",
 } as const satisfies Record<ConnectionKind, ConnectionAction>;
+
+/** What ending a connection DOES: the line beside its danger action, and the sentence inside its confirm. */
+export interface ConnectionEndConsequence {
+  note: string;
+  confirm: string;
+}
+
+export interface AppEndConsequenceInput {
+  state: ConnectionState;
+  /** The app's end verb (`CONNECTION_END_ACTION.app`), or `remove` — the revoked state's next step. */
+  action: "revoke" | "remove";
+  /** A live key exists. Absent = keys not read, so no key is claimed. */
+  hasKey?: boolean;
+  /** It holds approved reach. */
+  hasReach?: boolean;
+}
+
+/**
+ * What revoking or removing an app does, true to the pod: revoking withdraws
+ * a waiting request, stops its keys and drops its reach (`revokeApp`);
+ * removing hides a revoked app for good (`removeApp`) and re-registering the
+ * name brings it back. History stays in every case.
+ */
+export function resolveAppEndConsequence(
+  input: AppEndConsequenceInput
+): ConnectionEndConsequence {
+  const kept = "Its history stays, and you can add it again.";
+  if (input.action === "remove") {
+    return {
+      note: "It leaves your list for good. Its history stays.",
+      confirm:
+        "It leaves your list for good. Its history stays; registering the same name again brings it back.",
+    };
+  }
+  if (input.state === "asking") {
+    return {
+      note: "Cancels the request. Its history stays.",
+      confirm: `Cancels its request, so it gets nothing. ${kept}`,
+    };
+  }
+  if (input.hasKey) {
+    return {
+      note: "Its key stops working at once. Its history stays.",
+      confirm: `Its key stops working at once and everything it may touch is dropped. ${kept}`,
+    };
+  }
+  if (input.hasReach) {
+    return {
+      note: "Everything it may touch is dropped. Its history stays.",
+      confirm: `Everything it may touch is dropped. ${kept}`,
+    };
+  }
+  return {
+    note: "It can no longer ask for access. Its history stays.",
+    confirm: `It can no longer ask for access. ${kept}`,
+  };
+}
+
+// ── Notify levels ───────────────────────────────────────────────────────────
+
+/** What the person hears about one connection (`connectionPrefs`), in the pod's order. */
+export const CONNECTION_NOTIFY_LEVELS = [
+  "everything",
+  "problems",
+  "nothing",
+] as const;
+export type ConnectionNotifyLevel = (typeof CONNECTION_NOTIFY_LEVELS)[number];
+
+// Compile-time floor: a new level cannot ship without its words.
+type _NotifyLabelsCovered =
+  Exclude<
+    ConnectionNotifyLevel,
+    keyof typeof CONNECTION_NOTIFY_LABELS
+  > extends never
+    ? true
+    : never;
+const _notifyLabelsCovered: _NotifyLabelsCovered = true;
+void _notifyLabelsCovered;
+
+/** The notify choices as a picker shows them, in the pod's order. */
+export const CONNECTION_NOTIFY_OPTIONS: ReadonlyArray<{
+  id: ConnectionNotifyLevel;
+  label: string;
+}> = CONNECTION_NOTIFY_LEVELS.map((id) => ({
+  id,
+  label: CONNECTION_NOTIFY_LABELS[id],
+}));
 
 // ── The view ────────────────────────────────────────────────────────────────
 

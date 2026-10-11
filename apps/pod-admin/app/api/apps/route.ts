@@ -1,13 +1,15 @@
 /**
- * Apps proxy — `GET /api/apps` (list) and `DELETE /api/apps` (revoke), plus
+ * Apps proxy — `GET /api/apps` (list), `DELETE /api/apps` (revoke, or
+ * `{ action: "remove" }` to remove a revoked app for good), plus
  * `GET /api/apps?publicId=<id>` for ONE app (the detail page).
  *
- * The pod's `apps.list` / `apps.get` / `apps.revoke` tRPC procedures are the
+ * The pod's `apps.list` / `apps.get` / `apps.revoke` / `apps.remove` tRPC
+ * procedures are the
  * HUMAN door to a person's Applications (App Connect v1). They live behind the
  * pod's Kratos cookie, which the browser holds — but the browser cannot call
  * the pod's tRPC origin directly from here (server-owned origin), so this route
  * forwards the session cookie. `apps.*` is self-scoped to the authenticated
- * user, so this proxy can only ever read/revoke the caller's own apps.
+ * user, so this proxy can only ever read/revoke/remove the caller's own apps.
  *
  * It goes through the RAW pod caller (`callPodQuery` / `callPodMutation`)
  * rather than the typed client because a newly added procedure is invisible to
@@ -19,6 +21,12 @@ import { whoamiFromCookie } from "../../../lib/kratos";
 import { callPodMutation, callPodQuery } from "../../../lib/pod-trpc";
 
 export const dynamic = "force-dynamic";
+
+/** The only mutations this proxy forwards — an allowlist, never a passthrough. */
+const END_PROCEDURE = {
+  revoke: "apps.revoke",
+  remove: "apps.remove",
+} as const;
 
 interface AppRow {
   public_id: string;
@@ -64,13 +72,21 @@ export async function DELETE(req: Request) {
   }
   const body = (await req.json().catch(() => null)) as {
     publicId?: unknown;
+    action?: unknown;
   } | null;
   const publicId = body?.publicId;
   if (typeof publicId !== "string" || !publicId.trim()) {
     return Response.json({ error: "publicId is required" }, { status: 400 });
   }
-  const res = await callPodMutation<{ revoked: boolean }>(
-    "apps.revoke",
+  const action = body?.action ?? "revoke";
+  if (action !== "revoke" && action !== "remove") {
+    return Response.json(
+      { error: "action must be revoke or remove" },
+      { status: 400 }
+    );
+  }
+  const res = await callPodMutation<{ revoked?: boolean; removed?: boolean }>(
+    END_PROCEDURE[action],
     { publicId },
     cookie
   );

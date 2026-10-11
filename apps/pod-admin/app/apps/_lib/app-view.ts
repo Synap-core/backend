@@ -11,7 +11,6 @@
 
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
-import type { ConnectionState } from "@synap-core/types/membrane";
 import type { UnitTone } from "@synap-core/types/units";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -50,16 +49,4 @@ const CHIP_COLOR: Record<UnitTone, ChipColor> = {
 /** The HeroUI chip colour for a membrane tone token. */
 export function chipColor(tone: UnitTone): ChipColor {
   return CHIP_COLOR[tone];
-}
-
-/**
- * What Revoke does IN THIS STATE. True to the pod (`revokeApp`): a waiting
- * request is withdrawn, keys stop, reach is dropped, history stays.
- */
-export function revokeConsequence(state: ConnectionState): string {
-  if (state === "asking")
-    return "Cancels the request and cuts the app off. It can ask again later.";
-  if (state === "setting_up")
-    return "It has no access yet. This stops it from asking.";
-  return "This app loses access to this Pod and its key stops working.";
 }

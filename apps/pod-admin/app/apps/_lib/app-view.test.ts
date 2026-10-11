@@ -6,7 +6,7 @@ import {
   connectionView,
   resolveAppConnection,
 } from "@synap-core/types/membrane";
-import { chipColor, revokeConsequence, type AppRow } from "./app-view";
+import { chipColor, type AppRow } from "./app-view";
 
 const NOW = Date.parse("2026-10-08T00:00:00Z");
 const row = (over: Partial<AppRow> = {}): AppRow =>
@@ -47,10 +47,25 @@ describe("pod-admin reads an app's standing from the membrane", () => {
     expect(v.label).not.toMatch(/Has access|No access yet/);
   });
 
-  it("revoke says what it does in each state — asking cancels the request", () => {
-    expect(revokeConsequence("asking")).toMatch(/^Cancels the request/);
-    expect(revokeConsequence("setting_up")).toMatch(/no access yet/);
-    expect(revokeConsequence("ready")).not.toMatch(/request/);
+  it("what ending an app does is the shared membrane sentence on both pages", () => {
+    const root = join(__dirname, "..", "..");
+    for (const f of ["apps/[publicId]/page.tsx", "my-connections/page.tsx"]) {
+      const src = readFileSync(join(root, f), "utf8");
+      expect(src, f).toMatch(/resolveAppEndConsequence\(/);
+      expect(src, f).not.toMatch(/revokeConsequence|Its history stays\./);
+    }
+  });
+
+  it("the app page offers Remove for good on a revoked app only", () => {
+    const src = readFileSync(
+      join(__dirname, "..", "[publicId]", "page.tsx"),
+      "utf8"
+    );
+    expect(src).toMatch(
+      /const endAct: EndAct = revoked \? "remove" : "revoke";/
+    );
+    expect(src).toMatch(/onPress=\{\(\) => onEnd\(endAct\)\}/);
+    expect(src).toMatch(/body: JSON\.stringify\(\{ publicId: app\.public_id, action \}\)/);
   });
 
   it("no app page derives standing locally any more", () => {

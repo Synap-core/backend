@@ -47,13 +47,10 @@ import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import { appMode, appReach } from "@synap-core/types/apps/app-view";
 import {
   resolveAppConnection,
+  resolveAppEndConsequence,
   resolveConnectionAction,
 } from "@synap-core/types/membrane";
-import {
-  chipColor,
-  revokeConsequence,
-  type AppRow,
-} from "../apps/_lib/app-view";
+import { chipColor, type AppRow } from "../apps/_lib/app-view";
 
 /** How many rows a list shows before it offers "Show all N" (ui-composition §4). */
 const LIST_CAP = 6;
@@ -460,16 +457,15 @@ export default function MyConnectionsPage() {
         }}
         title={`${resolveConnectionAction("revoke").label} "${pendingRevokeApp?.name ?? "this app"}"?`}
         consequence={
-          <>
-            <p>
-              {pendingRevokeApp
-                ? revokeConsequence(resolveAppConnection(pendingRevokeApp).state)
-                : null}
-            </p>
-            <p className="mt-2 text-foreground/65">
-              Its history stays. Connecting it again needs a fresh approval.
-            </p>
-          </>
+          <p>
+            {pendingRevokeApp
+              ? resolveAppEndConsequence({
+                  state: resolveAppConnection(pendingRevokeApp).state,
+                  action: "revoke",
+                  hasReach: pendingRevokeApp.grants.length > 0,
+                }).confirm
+              : null}
+          </p>
         }
         confirmLabel={resolveConnectionAction("revoke").label}
         isPending={revokingApp === pendingRevokeApp?.public_id}

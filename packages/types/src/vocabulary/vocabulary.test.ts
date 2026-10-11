@@ -43,6 +43,10 @@ describe("capture vocabulary", () => {
     expect(resolveStatusLabel("not_structured")).toBe("Not structured");
   });
 
+  it("words the house AI's never-provisioned reach as its next step", () => {
+    expect(resolveStatusLabel("needs_provision")).toBe("Ready to activate");
+  });
+
   it("keys a dotted door by the WHOLE token, never its tail segment", () => {
     expect(resolveCaptureDoorLabel("capture.graph")).toBe("Agent or app");
     expect(humanizeToken("capture.graph")).toBe("Graph");

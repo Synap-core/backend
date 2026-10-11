@@ -959,6 +959,9 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   budget_paused: "Paused",
   provider_issue: "AI issue",
   service_down: "AI offline",
+  // HOUSE AI reach (`IntelligenceStatusKind`): subscribed, never provisioned.
+  // Humanized it read "Needs provision" — the person's next step is Activate.
+  needs_provision: "Ready to activate",
 };
 
 /**
@@ -1026,6 +1029,17 @@ export function resolveConnectionStateLabel(
     humanizeToken(state)
   );
 }
+
+/**
+ * What the person hears about one connection (`connectionPrefs`, 0316) — the
+ * words of each notify level. Keyed by every `ConnectionNotifyLevel`;
+ * `membrane/index.ts` holds the compile-time floor and the ordered options.
+ */
+export const CONNECTION_NOTIFY_LABELS = {
+  everything: "Everything",
+  problems: "Only problems",
+  nothing: "Nothing",
+} as const;
 
 /**
  * Where a capture came in — `documents.metadata.intakeSource.door`, as words.

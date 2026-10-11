@@ -95,7 +95,7 @@ export async function proxy(req: NextRequest) {
     path === "/my-connections" ||
     // An app's detail page (`/apps/<public_id>`) is the same self-service
     // object as the row it opens from `/my-connections`: `apps.get` /
-    // `apps.revoke` are already scoped to `ctx.userId` server-side, so this
+    // `apps.revoke` / `apps.remove` are already scoped to `ctx.userId` server-side, so this
     // grants no reach — it only stops a non-admin from being 403'd on a page
     // that shows their OWN app.
     path.startsWith("/apps/") ||

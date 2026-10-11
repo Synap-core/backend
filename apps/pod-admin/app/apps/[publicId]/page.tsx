@@ -6,7 +6,8 @@
  * The row in "Connected" (`/my-connections`) opens here. This is where an
  * app's full identity lives: its stable `public_id` (the `client_id` its grant
  * carries) with copy, what it may touch (its grants, in the words every grant
- * surface uses), when it was created and last used, and the Revoke door.
+ * surface uses), when it was created and last used, and its one danger door:
+ * Revoke while it is live, Remove for good once it is revoked.
  *
  * Read + one action. Auth is the pod_admin middleware's self-service allowlist
  * (`/apps/*` in proxy.ts); the data comes from the same-origin proxy
@@ -18,18 +19,15 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
-import { ArrowLeft, Ban } from "lucide-react";
+import { ArrowLeft, Ban, Trash2 } from "lucide-react";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
 import { formatRelative } from "../../(admin)/trust-keys/_lib/format";
-import {
-  chipColor,
-  revokeConsequence,
-  type AppDetailRow,
-} from "../_lib/app-view";
+import { chipColor, type AppDetailRow } from "../_lib/app-view";
 import { appMode, grantLines } from "@synap-core/types/apps/app-view";
 import {
   resolveAppConnection,
+  resolveAppEndConsequence,
   resolveConnectionAction,
 } from "@synap-core/types/membrane";
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
@@ -37,6 +35,19 @@ import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 
 
 type LoadState = "loading" | "ready" | "missing" | "error";
+
+/** The app's one danger act: Remove for good once revoked, Revoke before. */
+type EndAct = "revoke" | "remove";
+
+/** What ending this app does, from the ONE membrane sentence. */
+function endConsequence(app: AppDetailRow, action: EndAct) {
+  return resolveAppEndConsequence({
+    state: resolveAppConnection(app).state,
+    action,
+    hasKey: (app.keys ?? []).some((k) => k.isActive && !k.revokedAt),
+    hasReach: app.grants.length > 0,
+  });
+}
 
 export default function AppDetailPage() {
   const params = useParams<{ publicId: string }>();
@@ -46,8 +57,8 @@ export default function AppDetailPage() {
   const [app, setApp] = useState<AppDetailRow | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState<string | null>(null);
-  const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const [revoking, setRevoking] = useState(false);
+  const [confirming, setConfirming] = useState<EndAct | null>(null);
+  const [ending, setEnding] = useState(false);
 
   const load = useCallback(async () => {
     setState("loading");
@@ -93,41 +104,42 @@ export default function AppDetailPage() {
     void load();
   }, [load]);
 
-  async function doRevoke() {
+  async function doEnd(action: EndAct) {
     if (!app) return;
-    setRevoking(true);
+    const failed = `Couldn't ${resolveConnectionAction(action).label.toLowerCase()}`;
+    setEnding(true);
     try {
       const res = await fetch("/api/apps", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ publicId: app.public_id }),
+        body: JSON.stringify({ publicId: app.public_id, action }),
       });
       if (!res.ok) {
         const b = (await res.json().catch(() => null)) as {
           error?: string;
         } | null;
         addToast({
-          title: "Couldn't revoke",
+          title: failed,
           description: b?.error ?? "Try again.",
           color: "danger",
         });
         return;
       }
       addToast({
-        title: resolveConnectionAction("revoke").pastLabel,
+        title: resolveConnectionAction(action).pastLabel,
         color: "default",
       });
-      // The revoked app now lives under "Revoked apps" on the list.
+      // Revoked: it now lives under "Revoked apps". Removed: it is gone.
       router.push("/my-connections");
     } catch {
       addToast({
-        title: "Couldn't revoke",
+        title: failed,
         description: "Network error.",
         color: "danger",
       });
     } finally {
-      setRevoking(false);
-      setConfirmRevoke(false);
+      setEnding(false);
+      setConfirming(null);
     }
   }
 
@@ -160,32 +172,19 @@ export default function AppDetailPage() {
           onRetry={() => void load()}
         />
       ) : app ? (
-        <AppDetail
-          app={app}
-          onRevoke={() => setConfirmRevoke(true)}
-          revoking={revoking}
-        />
+        <AppDetail app={app} onEnd={setConfirming} ending={ending} />
       ) : null}
 
       <ConfirmModal
-        isOpen={confirmRevoke}
-        onClose={() => setConfirmRevoke(false)}
-        onConfirm={() => void doRevoke()}
-        title={`${resolveConnectionAction("revoke").label} "${app?.name ?? "this app"}"?`}
+        isOpen={confirming !== null}
+        onClose={() => setConfirming(null)}
+        onConfirm={() => confirming && void doEnd(confirming)}
+        title={`${resolveConnectionAction(confirming ?? "revoke").label} "${app?.name ?? "this app"}"?`}
         consequence={
-          <>
-            <p>
-              {app
-                ? revokeConsequence(resolveAppConnection(app).state)
-                : null}
-            </p>
-            <p className="mt-2 text-foreground/65">
-              Its history stays. Connecting it again needs a fresh approval.
-            </p>
-          </>
+          <p>{app ? endConsequence(app, confirming ?? "revoke").confirm : null}</p>
         }
-        confirmLabel={resolveConnectionAction("revoke").label}
-        isPending={revoking}
+        confirmLabel={resolveConnectionAction(confirming ?? "revoke").label}
+        isPending={ending}
       />
     </div>
   );
@@ -193,16 +192,17 @@ export default function AppDetailPage() {
 
 function AppDetail({
   app,
-  onRevoke,
-  revoking,
+  onEnd,
+  ending,
 }: {
   app: AppDetailRow;
-  onRevoke: () => void;
-  revoking: boolean;
+  onEnd: (action: EndAct) => void;
+  ending: boolean;
 }) {
   const view = resolveAppConnection(app);
   const lines = grantLines(app);
   const revoked = view.state === "revoked";
+  const endAct: EndAct = revoked ? "remove" : "revoke";
   const asked = app.pending_request
     ? summarizeAppConnectRequest({
         appName: app.name,
@@ -336,25 +336,23 @@ function AppDetail({
         )}
       </section>
 
-      {!revoked ? (
-        <div className="mt-8 border-t border-foreground/10 pt-5">
-          <Button
-            color="danger"
-            variant="flat"
-            size="sm"
-            className="min-h-10"
-            startContent={<Ban size={14} />}
-            isLoading={revoking}
-            onPress={onRevoke}
-          >
-            {resolveConnectionAction("revoke").label}
-          </Button>
-          <p className="mt-2 max-w-2xl text-[11.5px] text-foreground/50">
-            {revokeConsequence(view.state)} It does not delete the app from
-            this list — it moves under &ldquo;Revoked apps&rdquo;.
-          </p>
-        </div>
-      ) : null}
+      <div className="mt-8 border-t border-foreground/10 pt-5">
+        <Button
+          color="danger"
+          variant="flat"
+          size="sm"
+          className="min-h-10"
+          startContent={revoked ? <Trash2 size={14} /> : <Ban size={14} />}
+          isLoading={ending}
+          onPress={() => onEnd(endAct)}
+        >
+          {resolveConnectionAction(endAct).label}
+        </Button>
+        <p className="mt-2 max-w-2xl text-[11.5px] text-foreground/50">
+          {endConsequence(app, endAct).note}
+          {revoked ? null : <> It moves under &ldquo;Revoked apps&rdquo;.</>}
+        </p>
+      </div>
     </div>
   );
 }

@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   CONNECTION_ACTIONS,
   CONNECTION_KINDS,
+  CONNECTION_NOTIFY_LEVELS,
+  CONNECTION_NOTIFY_OPTIONS,
   CONNECTION_QUIET_AFTER_DAYS,
   CONNECTION_STATES,
   connectionView,
@@ -16,6 +18,7 @@ import {
   resolveAgentConnectionState,
   resolveAppConnection,
   resolveAppConnectionState,
+  resolveAppEndConsequence,
   resolveChannelConnectionState,
   resolveConnectionAction,
   resolveModelConnectionState,
@@ -659,5 +662,57 @@ describe("isAppPublicId", () => {
     expect(isAppPublicId("1e1e1e1e-0000-4000-8000-0000000000aa")).toBe(false);
     expect(isAppPublicId(null)).toBe(false);
     expect(isAppPublicId(undefined)).toBe(false);
+  });
+});
+
+describe("resolveAppEndConsequence — what revoking or removing an app does", () => {
+  // Each row rules out a rule that words by state alone, or by keys alone.
+  it("asking: cancels the request, even when the app holds a key", () => {
+    const c = resolveAppEndConsequence({
+      state: "asking",
+      action: "revoke",
+      hasKey: true,
+      hasReach: true,
+    });
+    expect(c.note).toMatch(/^Cancels the request/);
+    expect(c.confirm).not.toMatch(/key/);
+  });
+  it("a live key is named only when one was read", () => {
+    expect(
+      resolveAppEndConsequence({ state: "ready", action: "revoke", hasKey: true })
+        .confirm
+    ).toMatch(/key stops working/);
+    expect(
+      resolveAppEndConsequence({ state: "ready", action: "revoke", hasReach: true })
+        .confirm
+    ).not.toMatch(/key/);
+  });
+  it("no reach and no key: it can no longer ask", () => {
+    expect(
+      resolveAppEndConsequence({ state: "setting_up", action: "revoke" }).note
+    ).toMatch(/no longer ask/);
+  });
+  it("remove: leaves the list for good, history stays, the name brings it back", () => {
+    const c = resolveAppEndConsequence({
+      state: "revoked",
+      action: "remove",
+      hasReach: true,
+    });
+    expect(c.note).toMatch(/for good/);
+    expect(c.confirm).toMatch(/history stays/);
+    expect(c.confirm).toMatch(/same name again/);
+  });
+});
+
+describe("notify levels — one ordered list with words", () => {
+  it("every level, in the pod's order, worded", () => {
+    expect(CONNECTION_NOTIFY_OPTIONS.map((o) => o.id)).toEqual([
+      ...CONNECTION_NOTIFY_LEVELS,
+    ]);
+    expect(CONNECTION_NOTIFY_OPTIONS.map((o) => o.label)).toEqual([
+      "Everything",
+      "Only problems",
+      "Nothing",
+    ]);
   });
 });

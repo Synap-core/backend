@@ -23,16 +23,12 @@ import {
 } from "@synap/database";
 import {
   CONNECTION_KINDS,
+  CONNECTION_NOTIFY_LEVELS,
   type ConnectionKind,
+  type ConnectionNotifyLevel,
 } from "@synap-core/types/membrane";
 
-/** What the person hears about one connection. */
-export const CONNECTION_NOTIFY_LEVELS = [
-  "everything",
-  "problems",
-  "nothing",
-] as const;
-export type ConnectionNotifyLevel = (typeof CONNECTION_NOTIFY_LEVELS)[number];
+export { CONNECTION_NOTIFY_LEVELS, type ConnectionNotifyLevel };
 
 export interface ConnectionPref {
   pinned: boolean;
