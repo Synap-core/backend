@@ -1238,7 +1238,10 @@ export function applyOutputMutations(
  * stored jsonb, not `readCriteria`'s tolerant read — a stored entry that reader
  * would drop makes any clean rewrite a change, which is the fail-closed side.
  */
-function criteriaDiffer(stored: unknown, next: SessionCriterion[]): boolean {
+export function criteriaDiffer(
+  stored: unknown,
+  next: SessionCriterion[]
+): boolean {
   if (!Array.isArray(stored)) return true;
   const byKey = (list: readonly unknown[]) =>
     [...list].sort((a, b) =>
@@ -1555,7 +1558,10 @@ export async function updateFocusSession(
   // `undefined` leaves the filing; `null` unfiles.
   if (params.projectId !== undefined) set.projectId = params.projectId;
   if (trackFiling) Object.assign(set, trackFiling.set);
-  if (params.criteria !== undefined) set.criteria = params.criteria;
+  // Only a CHANGED list is written: an unchanged one (an outcome attach
+  // re-sends it) assigned here would overwrite a criteria change approved
+  // between this door's load and this write with the caller's stale copy.
+  if (criteriaChange) set.criteria = params.criteria;
 
   // Roster append goes through the ONE append door, which owns its own row lock
   // and its own idempotency. Deliberately NOT folded into `set` below: assigning

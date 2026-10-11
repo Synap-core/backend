@@ -422,6 +422,62 @@ describe("criteria reach the membrane only when they change", () => {
     expect((await row(sessionId)).criteria).toEqual([C1, C2]);
   });
 
+  it("an unchanged list never overwrites a criteria change approved meanwhile", async () => {
+    const sessionId = await seedWithCriteria();
+    const approved = [{ ...C1, statement: "A signed report exists" }, C2];
+    // The membrane runs between the door's (unlocked) load and its write: a
+    // person approving a criteria proposal lands exactly there.
+    permSpy.mockImplementationOnce(async () => {
+      await q(`update focus_sessions set criteria = $2::jsonb where id = $1`, [
+        sessionId,
+        JSON.stringify(approved),
+      ]);
+      return {};
+    });
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      // The agent's stale copy of the list it loaded, re-sent unchanged.
+      criteria: [C1, C2] as never,
+      completeOutput: "Brief",
+    });
+    expect(res.status).toBe("updated");
+    expect((await row(sessionId)).criteria).toEqual(approved);
+    expect((await row(sessionId)).expected_outputs[0]!.claimedDone).toBe(true);
+  });
+
+  it("MCP synap_update_session `outcomes` adding an output, criteria untouched — applied, no proposal", async () => {
+    const sessionId = await seedWithCriteria();
+    const { sessionHandlers } =
+      await import("../../../routers/mcp/handlers/session.js");
+    const out = await sessionHandlers.synap_update_session!({
+      toolName: "synap_update_session",
+      args: {
+        sessionId,
+        outcomes: [{ key: "summary", label: "Summary", kind: "document" }],
+      },
+      userId: USER,
+      agentUserId: AGENT,
+      apiKeyScopes: ["mcp.write", "mcp.read"],
+      workspaceAccessible: false,
+      caller: {} as never,
+      lensCaller: {} as never,
+    } as never);
+    const text = (out.content[0] as { text: string }).text;
+    expect(text).not.toMatch(/proposalId|"error"/);
+    // Through `resolveOutcomesUpdate` the handler re-sends the merged criteria
+    // list; the door drops it as unchanged, so the gate never sees criteria.
+    const gate = permSpy.mock.calls.at(-1)![0].data as Record<string, unknown>;
+    expect(gate.criteria).toBeUndefined();
+    const after = await row(sessionId);
+    expect(after.criteria).toEqual([C1, C2]);
+    expect(after.expected_outputs.map((o) => o.label)).toEqual([
+      "Brief",
+      "Summary",
+    ]);
+  });
+
   it("a person changing their own criteria writes them directly (unchanged path)", async () => {
     const sessionId = await seedWithCriteria();
     const res = await updateFocusSession({

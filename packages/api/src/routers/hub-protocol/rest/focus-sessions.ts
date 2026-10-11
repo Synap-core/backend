@@ -115,6 +115,7 @@ import {
   outputRefWireSchema,
   mergeExpectedOutputs,
   droppedAskWarnings,
+  criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -1362,6 +1363,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         patch.criteria = upserted.criteria as typeof patch.criteria;
       }
       delete patch.outcomes;
+      // Criteria ride on only when they DIFFER from the stored list — the
+      // rule `updateFocusSession` applies (`criteriaDiffer`): an outcome-only
+      // PATCH re-sends the merged list unchanged, and an AI write carrying
+      // criteria is proposed as a CRITERIA_CHANGE. An unchanged list is also
+      // never written, so it cannot overwrite a change approved meanwhile.
+      if (
+        patch.criteria !== undefined &&
+        !criteriaDiffer(existing.criteria, patch.criteria as SessionCriterion[])
+      ) {
+        delete patch.criteria;
+      }
 
       // Step 2b: VISIBILITY FLOOR on the subject anchor, before the membrane
       // for the same reason the output-ref floor sits there: an entity the
