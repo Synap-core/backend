@@ -17,8 +17,22 @@
  * `dryRun` stays for the on-demand "what exactly would change" preview.
  */
 
-import { db, and, eq, inArray, workspaces } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  inArray,
+  isNull,
+  skills,
+  workspaces,
+} from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
+import {
+  alwaysSkillBudgetWarning,
+  alwaysSkillOverBudget,
+  readSpaceBrief,
+} from "@synap-core/types/space-brief";
+import { candidateSlugs } from "./skills/template-skills.js";
 
 /**
  * Is `installed` behind `latest`? Plan option (a): CP mints content-hash
@@ -106,6 +120,56 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
   workspaceId: string;
   workspaceName: string;
   packageSlug: string | null;
+  /**
+   * Non-fatal template problems in this space — today, an `always` skill whose
+   * body is over the per-skill budget (it loads on demand instead). Empty when
+   * there are none.
+   */
+  warnings: string[];
+}
+
+/**
+ * Per workspace: a budget warning for every skill its brief links
+ * `mode: "always"` whose pod-wide row body is over the per-skill budget.
+ * One read for every linked slug across the whole set.
+ */
+async function alwaysSkillWarningsByWorkspace(
+  rows: Array<{ id: string; settings: unknown }>
+): Promise<Map<string, string[]>> {
+  const always = rows.map((r) => ({
+    id: r.id,
+    refs: (readSpaceBrief(r.settings)?.skills ?? []).filter(
+      (k) => k.mode === "always"
+    ),
+  }));
+  const wanted = [
+    ...new Set(
+      always.flatMap((w) => w.refs.flatMap((k) => candidateSlugs(k.slug)))
+    ),
+  ];
+  const out = new Map<string, string[]>();
+  if (wanted.length === 0) return out;
+  const skillRows = await db
+    .select({ slug: skills.slug, body: skills.body })
+    .from(skills)
+    .where(
+      and(
+        isNull(skills.workspaceId),
+        eq(skills.kind, "instruction"),
+        inArray(skills.slug, wanted)
+      )
+    );
+  const bodyBySlug = new Map(skillRows.map((r) => [r.slug as string, r.body]));
+  for (const w of always) {
+    const warnings: string[] = [];
+    for (const ref of w.refs) {
+      const slug = candidateSlugs(ref.slug).find((c) => bodyBySlug.has(c));
+      const over = slug ? alwaysSkillOverBudget(bodyBySlug.get(slug)) : null;
+      if (over) warnings.push(alwaysSkillBudgetWarning(ref.slug, over));
+    }
+    if (warnings.length) out.set(w.id, warnings);
+  }
+  return out;
 }
 
 /**
@@ -134,6 +198,7 @@ export async function listWorkspaceTemplateHealth(
       (r) => (r.settings as { packageSlug?: string } | null)?.packageSlug ?? ""
     )
   );
+  const warningsByWs = await alwaysSkillWarningsByWorkspace(active);
   return active.map((r) => {
     const s = (r.settings ?? {}) as {
       packageSlug?: unknown;
@@ -147,6 +212,7 @@ export async function listWorkspaceTemplateHealth(
       workspaceName: r.name,
       packageSlug: pkgSlug,
       ...templateHealthFor(pkgSlug, installedVersion, latestBySlug),
+      warnings: warningsByWs.get(r.id) ?? [],
     };
   });
 }

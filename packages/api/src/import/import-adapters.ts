@@ -87,6 +87,31 @@ export function extractInlineTags(body: string): string[] {
 }
 
 /**
+ * Frontmatter `tags` (or Obsidian's singular `tag`) ∪ inline `#tags`, as one
+ * de-duplicated list in first-seen order. Frontmatter may be a YAML list or a
+ * comma/space-separated string; a leading `#` is stripped either way.
+ */
+export function noteTags(
+  frontmatter: Record<string, unknown> | undefined,
+  inline: string[]
+): string[] {
+  const raw: unknown[] = [];
+  for (const key of ["tags", "tag"]) {
+    const v = frontmatter?.[key];
+    if (Array.isArray(v)) raw.push(...v);
+    else if (typeof v === "string") raw.push(...v.split(/[,\s]+/));
+  }
+  raw.push(...inline);
+  const out: string[] = [];
+  for (const t of raw) {
+    if (typeof t !== "string" && typeof t !== "number") continue;
+    const tag = String(t).trim().replace(/^#/, "");
+    if (tag && !out.includes(tag)) out.push(tag);
+  }
+  return out;
+}
+
+/**
  * Obsidian markdown note → ImportItem.
  *
  * @param path  Vault-relative path, e.g. "Projects/2026/Launch.md"
@@ -102,13 +127,16 @@ export function obsidianNoteToImportItem(
   const title = file.replace(/\.md$/i, "");
   const typeHint =
     typeof frontmatter?.type === "string" ? frontmatter.type : undefined;
+  const inline = extractInlineTags(body);
+  const tags = noteTags(frontmatter, inline);
   return {
     title,
     path: segments,
     metadata: frontmatter ?? {},
     body,
     links: extractWikilinks(body),
-    labels: extractInlineTags(body),
+    labels: inline,
+    ...(tags.length > 0 ? { tags } : {}),
     ...(typeHint ? { typeHint } : {}),
   };
 }
@@ -427,12 +455,7 @@ export function connectorRecordToImportItem(
 // ── Adapter registry ───────────────────────────────────────────────────────────
 
 export type ImportSource =
-  | "obsidian"
-  | "markdown"
-  | "csv"
-  | "bookmark"
-  | "json"
-  | "connector_sync";
+  "obsidian" | "markdown" | "csv" | "bookmark" | "json" | "connector_sync";
 
 /**
  * Resolve a batch of raw `{ path, content }` records to ImportItems for a given

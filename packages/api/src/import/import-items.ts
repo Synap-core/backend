@@ -40,6 +40,14 @@ export interface ImportItem {
   /** Free-form labels (e.g. tags). */
   labels: string[];
   /**
+   * The item's own TAGS, normalised — set only by sources that have real tags
+   * (markdown/obsidian: frontmatter `tags`/`tag` ∪ inline `#tags`). Lands on the
+   * entity's global `tags` property. Distinct from `labels`, which also carries
+   * structural signals (the folder) and, for bookmarks, export folders.
+   * Absent ⇒ the item's `tags` property is left exactly as the metadata had it.
+   */
+  tags?: string[];
+  /**
    * Caller-supplied type hint for this item, if the source knows it
    * (e.g. frontmatter `type`). Takes precedence over path-derived typing.
    */
@@ -173,6 +181,30 @@ export function importProposalToComposite(proposal: ImportProposal): {
   };
 }
 
+/** Cap for the metadata block sent to structuring (IS bulk `context` max 4000). */
+const METADATA_BLOCK_MAX = 3500;
+
+/**
+ * An item's frontmatter/metadata as a fenced, labelled block for the IS
+ * structure `context` field — so the model sees the note's header fields,
+ * which the body alone never carries. `undefined` when there is no metadata.
+ * Values are JSON-encoded per key (dates → ISO strings); truncated to stay
+ * under the IS bulk route's `context` cap.
+ */
+export function importItemMetadataBlock(item: ImportItem): string | undefined {
+  const metadata =
+    item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const lines = Object.entries(metadata)
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`);
+  if (lines.length === 0) return undefined;
+  let yaml = lines.join("\n");
+  if (yaml.length > METADATA_BLOCK_MAX) {
+    yaml = `${yaml.slice(0, METADATA_BLOCK_MAX)}\n# …truncated`;
+  }
+  return `Frontmatter (the note's own header fields — prefer them when mapping properties):\n\`\`\`yaml\n${yaml}\n\`\`\``;
+}
+
 /** Normalize an arbitrary label into a type slug. */
 export function toSlug(input: string): string {
   return input
@@ -292,6 +324,9 @@ export function buildImportProposal(
       ...metadata,
       ...(folder ? { folder } : {}),
       ...(item.body ? { content: item.body } : {}),
+      // Normalised tags (frontmatter ∪ inline) replace the raw frontmatter
+      // value, which may be a string or carry `#` prefixes.
+      ...(item.tags && item.tags.length > 0 ? { tags: item.tags } : {}),
     };
     const labels =
       folder && !item.labels.includes(folder)

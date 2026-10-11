@@ -25,8 +25,13 @@ import {
   getDb,
   eventRepository,
   WorkspaceRepository,
+  drizzleSql,
+  or,
 } from "@synap/database";
+import { createLogger } from "@synap-core/core";
 import {
+  alwaysSkillBudgetWarning,
+  alwaysSkillOverBudget,
   normalizeSpaceBrief,
   validateSpaceSkillDeclaration,
   type SpaceBriefSkillRef,
@@ -51,6 +56,40 @@ export interface TemplateSkillOutcome {
   slug: string;
   status: TemplateSkillStatus;
   reason?: string;
+  /**
+   * A non-fatal authoring problem with a LINKED skill — today, an `always`
+   * skill whose body is over the per-skill budget, so the IS will load it on
+   * demand instead of every turn. A warning, never a refusal: the link stands.
+   */
+  warning?: string;
+}
+
+const logger = createLogger({ module: "template-skills" });
+
+/**
+ * The spaces whose brief links a skill ROW `mode: "always"` — by any spelling a
+ * template may have declared it with (`system/a/b` or `a/b`, the inverse of
+ * {@link candidateSlugs}). For a warning when that row's body changes.
+ */
+export async function spacesLinkingAlways(
+  rowSlug: string
+): Promise<Array<{ id: string; name: string }>> {
+  const declared = rowSlug.startsWith("system/")
+    ? [rowSlug, rowSlug.slice("system/".length)]
+    : [rowSlug];
+  return db
+    .select({ id: workspaces.id, name: workspaces.name })
+    .from(workspaces)
+    .where(
+      or(
+        ...declared.map(
+          (slug) =>
+            drizzleSql`${workspaces.settings} @> ${JSON.stringify({
+              onboarding: { skills: [{ slug, mode: "always" }] },
+            })}::jsonb`
+        )
+      )
+    );
 }
 
 /**
@@ -81,6 +120,34 @@ export function linkedRowSlugs(
   refs: ReadonlyArray<{ slug: string }> | undefined
 ): string[] {
   return [...new Set((refs ?? []).flatMap((r) => candidateSlugs(r.slug)))];
+}
+
+/**
+ * After a skill's BODY changes: one warning per space that links it
+ * `mode: "always"` when the new body is over the per-skill budget. Logged here;
+ * returned for the caller. Never throws — a warning must not fail the edit, and
+ * a failed lookup is logged as a failed lookup, not as "no spaces".
+ */
+export async function alwaysSkillBudgetWarningsOnEdit(
+  rowSlug: string | null | undefined,
+  body: string | null | undefined
+): Promise<string[]> {
+  const over = alwaysSkillOverBudget(body);
+  if (!rowSlug || !over) return [];
+  try {
+    const spaces = await spacesLinkingAlways(rowSlug);
+    return spaces.map((ws) => {
+      const warning = `${alwaysSkillBudgetWarning(rowSlug, over)} in "${ws.name}"`;
+      logger.warn({ workspaceId: ws.id, slug: rowSlug, ...over }, warning);
+      return warning;
+    });
+  } catch (err) {
+    logger.warn(
+      { err, slug: rowSlug },
+      "could not check which spaces link this skill as always-on — budget warning skipped"
+    );
+    return [];
+  }
 }
 
 /** The shape rule is SHARED with the template validator — author time == install time. */
@@ -142,6 +209,7 @@ export async function applyTemplateSkills(input: {
       slug: skills.slug,
       approved: skills.approved,
       status: skills.status,
+      body: skills.body,
     })
     .from(skills)
     .where(
@@ -155,6 +223,7 @@ export async function applyTemplateSkills(input: {
 
   const outcomes: TemplateSkillOutcome[] = [...invalid];
   const linked: SpaceBriefSkillRef[] = [];
+  const warnings = new Map<string, string>();
   for (const decl of decls) {
     const row = candidateSlugs(decl.slug)
       .map((s) => bySlug.get(s))
@@ -174,6 +243,16 @@ export async function applyTemplateSkills(input: {
         reason: `the skill exists but is ${row.approved ? row.status : "not approved"}`,
       });
       continue;
+    }
+    const over =
+      decl.mode === "always" ? alwaysSkillOverBudget(row.body) : null;
+    if (over) {
+      const warning = alwaysSkillBudgetWarning(decl.slug, over);
+      warnings.set(decl.slug, warning);
+      logger.warn(
+        { workspaceId: input.workspaceId, slug: decl.slug, ...over },
+        warning
+      );
     }
     linked.push({
       slug: decl.slug,
@@ -216,7 +295,14 @@ export async function applyTemplateSkills(input: {
         return outcomes;
       }
     }
-    for (const l of linked) outcomes.push({ slug: l.slug, status: "linked" });
+    for (const l of linked) {
+      const warning = warnings.get(l.slug);
+      outcomes.push({
+        slug: l.slug,
+        status: "linked",
+        ...(warning ? { warning } : {}),
+      });
+    }
   }
 
   return outcomes;

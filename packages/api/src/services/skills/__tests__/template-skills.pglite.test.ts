@@ -52,8 +52,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { skills, workspaces } from "@synap/database/schema";
-import { applyTemplateSkills } from "../template-skills.js";
+import { cpCatalogCache, skills, workspaces } from "@synap/database/schema";
+import {
+  alwaysSkillBudgetWarningsOnEdit,
+  applyTemplateSkills,
+} from "../template-skills.js";
+import { listWorkspaceTemplateHealth } from "../../template-health.js";
 
 type ColumnLike = {
   name: string;
@@ -80,8 +84,10 @@ function ddlFor(table: PgTable): string {
     if (c.hasDefault) {
       const d = c.default;
       if (isArray) def = " default '{}'";
-      else if (typeof d === "number" || typeof d === "boolean") def = ` default ${d}`;
-      else if (typeof d === "string") def = ` default '${d.replace(/'/g, "''")}'`;
+      else if (typeof d === "number" || typeof d === "boolean")
+        def = ` default ${d}`;
+      else if (typeof d === "string")
+        def = ` default '${d.replace(/'/g, "''")}'`;
       else if (d && typeof d === "object" && !("queryChunks" in d))
         def = ` default '${JSON.stringify(d).replace(/'/g, "''")}'::jsonb`;
       else if (type === "uuid") def = " default gen_random_uuid()";
@@ -100,10 +106,11 @@ async function seedSkill(s: {
   status?: string;
   kind?: string;
   workspaceId?: string | null;
+  body?: string;
 }): Promise<void> {
   await h.client!.query(
-    `insert into skills (id, user_id, slug, kind, scope, name, status, approved, workspace_id)
-     values ($1,$2,$3,$4,'pod',$5,$6,$7,$8)`,
+    `insert into skills (id, user_id, slug, kind, scope, name, status, approved, workspace_id, body)
+     values ($1,$2,$3,$4,'pod',$5,$6,$7,$8,$9)`,
     [
       randomUUID(),
       "user-1",
@@ -113,6 +120,7 @@ async function seedSkill(s: {
       s.status ?? "active",
       s.approved ?? true,
       s.workspaceId ?? null,
+      s.body ?? null,
     ]
   );
 }
@@ -208,7 +216,11 @@ describe("applyTemplateSkills — a declared skill is LINKED to the space", () =
       skills: [{ slug: "system/synap/draft-skill", mode: "always" }],
     });
     expect(outcomes).toEqual([
-      { slug: "system/synap/draft-skill", status: "unapproved", reason: expect.any(String) },
+      {
+        slug: "system/synap/draft-skill",
+        status: "unapproved",
+        reason: expect.any(String),
+      },
     ]);
     expect(await briefSkills()).toBeNull();
   });
@@ -266,5 +278,81 @@ describe("applyTemplateSkills — a declared skill is LINKED to the space", () =
       skills: [{ slug: "system/synap/creative-director", mode: "always" }],
     });
     expect(await briefSkills()).toEqual(before);
+  });
+});
+
+describe("always-on budget — WARN, never refuse", () => {
+  // ~3k tokens at the shared ~4 chars/token estimate: over the 2k cap.
+  const BIG = "x".repeat(12_000);
+  const WARNING =
+    /system\/synap\/big is ~3k tokens, over the ~2k always-on budget — it will load on demand/;
+
+  beforeAll(async () => {
+    await h.client!.exec(ddlFor(cpCatalogCache));
+    await seedSkill({ slug: "system/synap/big", body: BIG });
+  });
+
+  it("links an over-budget `always` skill AND warns on its outcome", async () => {
+    await setBriefRaw({});
+    const outcomes = await applyTemplateSkills({
+      workspaceId: WS,
+      userId: "user-1",
+      skills: [
+        { slug: "system/synap/big", mode: "always" },
+        { slug: "system/synap/creative-director", mode: "always" },
+      ],
+    });
+    // Linked (never refused), with the warning on the oversized one only.
+    expect(outcomes).toEqual([
+      {
+        slug: "system/synap/big",
+        status: "linked",
+        warning: expect.stringMatching(WARNING),
+      },
+      { slug: "system/synap/creative-director", status: "linked" },
+    ]);
+    expect(await briefSkills()).toEqual([
+      { slug: "system/synap/big", mode: "always" },
+      { slug: "system/synap/creative-director", mode: "always" },
+    ]);
+  });
+
+  it("an `on-demand` link of the same skill does not warn — it never loads every turn", async () => {
+    await setBriefRaw({});
+    const outcomes = await applyTemplateSkills({
+      workspaceId: WS,
+      userId: "user-1",
+      skills: [{ slug: "system/synap/big", mode: "on-demand" }],
+    });
+    expect(outcomes).toEqual([{ slug: "system/synap/big", status: "linked" }]);
+  });
+
+  it("editing the body warns for every space that links it `always` — by either spelling", async () => {
+    await setBriefRaw({ skills: [{ slug: "synap/big", mode: "always" }] });
+    const warnings = await alwaysSkillBudgetWarningsOnEdit(
+      "system/synap/big",
+      BIG
+    );
+    expect(warnings).toEqual([expect.stringMatching(WARNING)]);
+    expect(warnings[0]).toContain('"Probe space"');
+    // A body back under the cap: nothing to say.
+    expect(
+      await alwaysSkillBudgetWarningsOnEdit("system/synap/big", "short")
+    ).toEqual([]);
+  });
+
+  it("template health lists the over-budget `always` skill as a warning", async () => {
+    await setBriefRaw({
+      skills: [
+        { slug: "system/synap/big", mode: "always" },
+        { slug: "system/synap/creative-director", mode: "always" },
+      ],
+    });
+    const [row] = await listWorkspaceTemplateHealth([WS]);
+    expect(row!.warnings).toEqual([
+      expect.stringMatching(
+        /^system\/synap\/big is ~3k tokens, over the ~2k always-on budget/
+      ),
+    ]);
   });
 });

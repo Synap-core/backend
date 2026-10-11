@@ -27,7 +27,7 @@ import {
   normalizeKnowledgeProperties,
 } from "@synap/database";
 import type { RoutingMemory } from "../services/routing-memory.js";
-import type { ImportItem } from "./import-items.js";
+import { importItemMetadataBlock, type ImportItem } from "./import-items.js";
 import {
   mergeStructureRunMeta,
   type StructureRunMeta,
@@ -41,6 +41,12 @@ import {
 export interface StructureCapableClient {
   structure(input: {
     text: string;
+    /**
+     * IS `context` field: rides in the prompt as "Additional context"; its
+     * FIRST line is matched by the IS source-aware import prompts
+     * (`resolveImportContextPrompt`). Carries the note's frontmatter block.
+     */
+    context?: string;
     /** Guideline-assembled bias (`assembleStructureContext`). */
     instructions?: string;
     hints?: {
@@ -444,9 +450,11 @@ export async function deepStructureImportItems(
       wave.map(async (i) => {
         const item = items[i];
         if (!item.body || !item.body.trim()) return;
+        const context = importItemMetadataBlock(item);
         const call = () =>
           client.structure({
             text: item.body,
+            ...(context ? { context } : {}),
             ...(opts.instructions ? { instructions: opts.instructions } : {}),
             hints: {
               availableProfiles: opts.availableProfiles,
@@ -540,6 +548,11 @@ export async function deepStructureImportItems(
             profileSlug: "note",
             title: items[i].title || "Imported note",
             content: items[i].body, // → versioned document on materialize
+            // The note's own tags (frontmatter ∪ inline #tags) on the global
+            // `tags` property — the provenance note IS the imported note.
+            ...(items[i].tags && items[i].tags!.length > 0
+              ? { properties: { tags: items[i].tags } }
+              : {}),
           },
           itemHome
         )

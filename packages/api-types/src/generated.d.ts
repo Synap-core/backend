@@ -5256,6 +5256,13 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 ];
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
 /**
+ * What a key may touch, as a key list shows it:
+ *   - `ungranted` — it never had a grant (bounded by its scopes only);
+ *   - `granted`   — `grants` holds every live one (a key holds a SET);
+ *   - `ended`     — it had grants and none is live: it may touch NOTHING.
+ */
+export type KeyAccess = "ungranted" | "granted" | "ended";
+/**
  * One of an app's keys, as the detail surface shows it. Carries no secret:
  * `api_keys` holds a bcrypt hash only. `keyPrefix` is the SCHEME
  * (`synap_hub_live_` …), not the key's own opening characters — those are not
@@ -7873,6 +7880,26 @@ export interface SubmitCaptureGraphResult {
 		entityIds?: string[];
 	};
 }
+/**
+ * Who drafted the draft a repeat confirm landed on. Drafts are workspace-shared
+ * by design, so the receipt must say whose it is: `isYou` ⇒ "You already
+ * drafted this"; otherwise "Already drafted by <name>". `name` is resolved
+ * here (never in a client); null only when the author's user row is gone.
+ */
+export interface ExistingDraftReceipt {
+	/** The playbook the confirm deduped onto (the door to open). */
+	id: string;
+	name: string;
+	draftedBy: {
+		userId: string;
+		name: string | null;
+		isYou: boolean;
+	};
+}
+/** The capture-graph receipt, plus `existingDraft` when the dedupe answered. */
+export type DraftProcessResult = SubmitCaptureGraphResult & {
+	existingDraft?: ExistingDraftReceipt;
+};
 export type DedupCandidate = {
 	entityId: string;
 	title: string;
@@ -10782,6 +10809,7 @@ export interface RosterAgent {
 	/** ISO; `null` = never seen. */
 	lastSeenAt: string | null;
 }
+export type GiveDelivery = "on_check_in" | "sent" | "awaiting_approval" | "not_sent";
 declare const CAPTURE_DOORS: readonly [
 	"capture",
 	"capture.execute",
@@ -13955,6 +13983,18 @@ export interface SessionExternalAgent {
 	/** When the status poll last read the task (ISO), `null` before the first read. */
 	polledAt: string | null;
 	startedAt: string;
+	/**
+	 * The newest sign of life (ISO): the newest AGENT post in the session room
+	 * since the start, else the start. Any agent counts — an external agent
+	 * reports through its own connector identity, not the bound agent's.
+	 */
+	lastNewsAt: string;
+	/**
+	 * The silence window after which the task reads "No news" — ONLY for a
+	 * binding with no `status` verb (nothing can be asked; the room is its only
+	 * voice). `null` = pollable, or no usable binding: never marked quiet.
+	 */
+	quietAfterMs: number | null;
 }
 export type PacketSection<T> = {
 	status: "ok";
@@ -17803,7 +17843,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				statusProperty?: string | undefined;
 				name?: string | undefined;
 			};
-			output: SubmitCaptureGraphResult;
+			output: DraftProcessResult;
 			meta: object;
 		}>;
 	}>>;
@@ -21744,21 +21784,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
-				id: string;
-				keyName: string;
-				keyPrefix: string;
-				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
-				hubId: string | null;
-				linkedUserId: string | null;
-				heldByAgent: boolean;
-				grant: {
-					permissions: string[];
-					workspaceIds: string[] | null;
-					projectIds: string[] | null;
-					entityIds: string[] | null;
-					label: string | null;
-					expiresAt: Date | null;
-				} | null;
 				scope: string[];
 				isActive: boolean;
 				expiresAt: Date | null;
@@ -21767,6 +21792,50 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				revokedAt: Date | null;
 				revokedReason: string | null;
+				access: KeyAccess;
+				grants: Pick<{
+					id: string;
+					createdAt: Date;
+					createdBy: string;
+					expiresAt: Date | null;
+					revokedAt: Date | null;
+					permissions: string[];
+					revokedBy: string | null;
+					apiKeyId: string;
+					principalUserId: string;
+					onBehalfOf: string;
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					roleId: string | null;
+				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label">[];
+				grant: Pick<{
+					id: string;
+					createdAt: Date;
+					createdBy: string;
+					expiresAt: Date | null;
+					revokedAt: Date | null;
+					permissions: string[];
+					revokedBy: string | null;
+					apiKeyId: string;
+					principalUserId: string;
+					onBehalfOf: string;
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					roleId: string | null;
+				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label">;
+				id: string;
+				keyName: string;
+				keyPrefix: string;
+				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
+				hubId: string | null;
+				linkedUserId: string | null;
+				heldByAgent: boolean;
 			}[];
 			meta: object;
 		}>;
@@ -22024,6 +22093,43 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listForWorkspace: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
+				access: KeyAccess;
+				grants: Pick<{
+					id: string;
+					createdAt: Date;
+					createdBy: string;
+					expiresAt: Date | null;
+					revokedAt: Date | null;
+					permissions: string[];
+					revokedBy: string | null;
+					apiKeyId: string;
+					principalUserId: string;
+					onBehalfOf: string;
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					roleId: string | null;
+				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label">[];
+				grant: Pick<{
+					id: string;
+					createdAt: Date;
+					createdBy: string;
+					expiresAt: Date | null;
+					revokedAt: Date | null;
+					permissions: string[];
+					revokedBy: string | null;
+					apiKeyId: string;
+					principalUserId: string;
+					onBehalfOf: string;
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					roleId: string | null;
+				}, "expiresAt" | "permissions" | "workspaceIds" | "projectIds" | "entityIds" | "label">;
 				id: string;
 				keyName: string;
 				keyPrefix: string;
@@ -22039,14 +22145,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revokedAt: Date | null;
 				revokedReason: string | null;
 				workspaceId: string | null;
-				grant: {
-					permissions: string[];
-					workspaceIds: string[] | null;
-					projectIds: string[] | null;
-					entityIds: string[] | null;
-					label: string | null;
-					expiresAt: Date | null;
-				} | null;
 			}[];
 			meta: object;
 		}>;
@@ -23225,7 +23323,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deduped: boolean;
 				agent: RosterAgent | null;
 				roster: RosterAgent[];
-				delivery: "on_check_in";
+				delivery: GiveDelivery;
 				line: string;
 			};
 			meta: object;

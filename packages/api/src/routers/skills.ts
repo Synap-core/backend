@@ -28,6 +28,7 @@ import {
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
+import { alwaysSkillBudgetWarningsOnEdit } from "../services/skills/template-skills.js";
 import { ruleNotExpiredWhere } from "../services/rules/expiry.js";
 import { ruleSentenceSchema } from "../services/rules/sentence-schema.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
@@ -1483,6 +1484,16 @@ export const skillsRouter = router({
         userId,
         workspaceId: existingSkill.workspaceId || undefined,
       });
+
+      // 5. Authoring warning (WARN, never refuse): a body now over the
+      // always-on budget, on a skill some space links `mode: "always"`, will
+      // load on demand there. Logged only — the output shape is in api-types.
+      if (updateData.body !== undefined) {
+        await alwaysSkillBudgetWarningsOnEdit(
+          existingSkill.slug,
+          updateData.body
+        );
+      }
 
       return {
         status: "updated" as const,

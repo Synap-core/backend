@@ -211,6 +211,51 @@ export function spaceSkillSlugCandidates(slug: string): string[] {
 }
 
 /**
+ * The per-skill budget for an `always` skill, in tokens. An `always` skill whose
+ * body is over it is NOT injected in full: the IS demotes it to a catalog line
+ * and it loads on demand (`dynamic-skill-loader.ts`, `SPACE_ALWAYS_EACH`).
+ *
+ * MIRRORED by the IS, which pins a PUBLISHED `@synap-core/types` and cannot
+ * import this leaf — a tripwire there reads this file and asserts the numbers
+ * match. Authoring tools only WARN on it: refusing would break installed
+ * templates, and the IS degrades an oversized skill safely anyway.
+ */
+export const SPACE_ALWAYS_SKILL_BUDGET_TOKENS = 2_500;
+
+/**
+ * Chars → tokens, ~4 chars per token. MIRROR of the IS `estimateTokens`
+ * (`apps/intelligence-hub/src/config/context-budget.ts`): `ceil(length / 4)`.
+ * An estimate, not a tokenizer — it only has to agree with the one the IS
+ * budgets with.
+ */
+export function estimateSkillTokens(text: string): number {
+  return Math.ceil((text?.length ?? 0) / 4);
+}
+
+/**
+ * Is an `always` skill's body over the per-skill budget? `null` when it fits.
+ * Measures the BODY; the IS also counts the skill's name + description
+ * heading, a few tokens more, so a body right at the cap may still demote.
+ */
+export function alwaysSkillOverBudget(
+  body: string | null | undefined
+): { tokens: number; cap: number } | null {
+  const tokens = estimateSkillTokens(body ?? "");
+  const cap = SPACE_ALWAYS_SKILL_BUDGET_TOKENS;
+  return tokens > cap ? { tokens, cap } : null;
+}
+
+/** The ONE wording for that warning — pod applier, template health, validator. */
+export function alwaysSkillBudgetWarning(
+  skill: string,
+  over: { tokens: number; cap: number }
+): string {
+  const k = (n: number) =>
+    n >= 1000 ? `${Math.round(n / 100) / 10}k` : String(n);
+  return `${skill} is ~${k(over.tokens)} tokens, over the ~${k(over.cap)} always-on budget — it will load on demand`;
+}
+
+/**
  * A declared skill AS STORED in the brief — the space's own copy.
  *
  * Unlike `SpaceBriefRuleRef`, which points at a rule ROW that carries the
