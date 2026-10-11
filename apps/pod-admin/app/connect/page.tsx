@@ -28,12 +28,18 @@
  *                       owner allowlisted via CONNECT_ALLOWED_HTTPS_ORIGINS.
  *   issuer_assertion  — one-shot assertion from a Pod-approved issuer. Read
  *                       ONLY to allowlist the redirect origin (see
- *                       trustedIssuerRedirectPrefix); never exchanged — the
+ *                       approvedIssuerRedirectPrefix, lib/connect-redirect.ts); never exchanged — the
  *                       pod Kratos session gating this page is the sign-in.
  */
 
 import { headers } from "next/headers";
 import { ConnectForm } from "./ConnectForm";
+import {
+  approvedIssuerRedirectPrefix,
+  toOriginPrefix,
+} from "../../lib/connect-redirect";
+
+const INTERNAL_POD_URL = process.env.POD_URL ?? "http://localhost:4000";
 
 interface ConnectPageProps {
   searchParams: Promise<{
@@ -54,20 +60,6 @@ export const dynamic = "force-dynamic";
  * DEFAULT_CONNECT_REDIRECT_PREFIXES (a published, cross-repo package) — this is a
  * pod-owner-controlled env, no package bump.
  */
-/** Normalize an https origin to a SAFE prefix: `https://host/` (trailing slash).
- * Without the slash, `startsWith("https://api.synap.live")` would also match
- * `https://api.synap.live.evil.com` — a prefix-confusion hole. The slash pins it
- * to paths UNDER that exact origin. */
-function toOriginPrefix(raw: string): string | null {
-  try {
-    const u = new URL(raw.trim());
-    if (u.protocol !== "https:") return null;
-    return `${u.origin}/`;
-  } catch {
-    return null;
-  }
-}
-
 function readAllowedHttpsOrigins(): string[] {
   return (process.env.CONNECT_ALLOWED_HTTPS_ORIGINS ?? "")
     .split(",")
@@ -76,27 +68,23 @@ function readAllowedHttpsOrigins(): string[] {
 }
 
 /**
- * The redirect the flow is allowed to deliver to is, by default, the origin of
- * the TRUSTED ISSUER that signed this connect assertion — NOT a hand-set env.
- * The assertion's `iss` is the control-plane issuer. This is why the CP-MCP
- * callback needs no per-pod env. We decode `iss` here WITHOUT verifying it.
- *
- * ⚠️ W6 (2026-10-11): this comment used to say the Pod verified the assertion
- * at `/api/federation/exchange` before minting, so a forged `iss` could not
- * deliver. That stopped being true when pod-admin stopped calling the exchange
- * (c8398873), and the endpoint is now deleted: nothing verifies `iss` before
- * it widens the redirect allowlist. OPEN — verify the signature against the
- * pod's approved `trusted_issuers` (or drop this path for the env allowlist).
+ * The pod's APPROVED Synap Cloud issuer, from its own public discovery. A
+ * failed read yields null: the assertion then widens nothing (fail closed) and
+ * only the owner's CONNECT_ALLOWED_HTTPS_ORIGINS apply.
  */
-function trustedIssuerRedirectPrefix(issuerAssertion: string): string | null {
-  if (!issuerAssertion) return null;
+async function readApprovedIssuerUrl(): Promise<string | null> {
   try {
-    const payload = issuerAssertion.split(".")[1];
-    if (!payload) return null;
-    const claims = JSON.parse(
-      Buffer.from(payload, "base64url").toString("utf8")
-    ) as { iss?: unknown };
-    return typeof claims.iss === "string" ? toOriginPrefix(claims.iss) : null;
+    const res = await fetch(`${INTERNAL_POD_URL}/api/federation/discovery`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      cloudSignIn?: { available?: boolean; issuerUrl?: string | null };
+    };
+    return body.cloudSignIn?.available
+      ? (body.cloudSignIn.issuerUrl ?? null)
+      : null;
   } catch {
     return null;
   }
@@ -109,10 +97,13 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
   const redirectUri = sp.redirect_uri ?? "";
   const issuerAssertion = sp.issuer_assertion ?? "";
 
-  // Allowed https redirect prefixes: the trusted issuer that signed THIS
-  // assertion (zero-config, the canonical path) PLUS any origins the pod owner
-  // pre-allowlisted via env (optional, for flows without an assertion).
-  const trustedPrefix = trustedIssuerRedirectPrefix(issuerAssertion);
+  // Allowed https redirect prefixes: the assertion's issuer ONLY when it is the
+  // pod's approved Synap Cloud issuer (lib/connect-redirect.ts) PLUS any origins
+  // the pod owner pre-allowlisted via env.
+  const trustedPrefix = approvedIssuerRedirectPrefix(
+    issuerAssertion,
+    await readApprovedIssuerUrl()
+  );
   const extraRedirectPrefixes = [
     ...(trustedPrefix ? [trustedPrefix] : []),
     ...readAllowedHttpsOrigins(),
