@@ -338,6 +338,20 @@ export interface ExpectedOutput {
   label: string;
   icon?: string;
   /**
+   * OPTIONAL: produce it when it applies, never owe it — e.g. a milestone
+   * invoice on an engagement billed at close. Absent ⇒ `false` (required).
+   * An optional slot is owed by NOBODY (`isDeliverableOutstanding`,
+   * `@synap-core/types/units`): no needs-you row, no reaper hold, never an
+   * unmet required outcome at a stage gate, never a `complete_session` warning.
+   * Filled, it is `done` and counts as produced like any other slot.
+   *
+   * A BIRTH declaration: set where the slot is declared (playbook, stage,
+   * the session's own declaration) and kept by the birth sanitizer; a patch
+   * can never change it on a stored slot (`SERVER_STAMPED_OUTPUT_FIELDS`), so
+   * an agent cannot excuse itself from a required deliverable after the fact.
+   */
+  optional?: boolean;
+  /**
    * The slot's STABLE identity — what every slot door joins on first (the
    * label stays the alias). SERVER-STAMPED: derived by the ONE function
    * `deriveSlotKeys` (`@synap-core/types/units`, a slug of the label, `-2`/`-3`

@@ -46,6 +46,7 @@ import {
   stampOpenWorkerTargets,
 } from "@synap/database";
 import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
+import { isDeliverableOutstanding } from "@synap-core/types/units";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { retirementForClose } from "./owed-outputs.js";
@@ -302,9 +303,11 @@ export async function completeFocusSession(
     await settleParentAutomationRunFromChild({ playbookRunId: run.id });
   }
 
+  // THE owed floor (`isDeliverableOutstanding`): a retired or OPTIONAL slot is
+  // owed by nobody, so it is no reason to warn.
   const unfinishedOutputs = (
-    (session.expectedOutputs as Array<{ status?: string }> | null) ?? []
-  ).filter((o) => o.status !== "done").length;
+    (session.expectedOutputs as ExpectedOutput[] | null) ?? []
+  ).filter((o) => isDeliverableOutstanding(o)).length;
 
   // CANCELLED retires the slots the human still owed — the obligation ends with
   // the work. Stamped, never deleted (see the header). Computed inside the

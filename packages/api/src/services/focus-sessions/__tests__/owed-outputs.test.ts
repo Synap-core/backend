@@ -123,7 +123,7 @@ describe("owedSlotOrder — the SQL ordering must agree with the TS sort", () =>
   it("shares the owed predicate with the WHERE clause, verbatim", () => {
     // Ordering on a different population than you filtered on is its own bug.
     const where = new PgDialect().sqlToQuery(owedSlotWhere()).sql;
-    expect(OWED_SLOT_CLAUSES.length).toBe(3);
+    expect(OWED_SLOT_CLAUSES.length).toBe(4);
     for (const clause of OWED_SLOT_CLAUSES) {
       expect(where).toContain(clause);
       expect(sql).toContain(clause);
@@ -280,9 +280,9 @@ describe("the owed predicate is a SET, not three strings that happen to appear",
     new Set([...text.matchAll(/slot->>?'([A-Za-z]+)'/g)].map((m) => m[1]));
 
   it("the constant is not vacuous and names the fields the rule is about", () => {
-    expect(OWED_SLOT_CLAUSES.length).toBe(3);
+    expect(OWED_SLOT_CLAUSES.length).toBe(4);
     expect(keysIn(OWED_SLOT_CLAUSES.join(" "))).toEqual(
-      new Set(["owner", "status", "retiredAt"])
+      new Set(["owner", "status", "retiredAt", "optional"])
     );
   });
 
@@ -316,6 +316,8 @@ describe("the owed predicate is a SET, not three strings that happen to appear",
       { owner: "human", retiredAt: "" },
       { owner: "human", retiredAt: null as never },
       { owner: "agent", retiredAt: "2026-09-08T13:00:00.000Z" },
+      { owner: "human", optional: true },
+      { owner: "human", optional: false },
     ];
     for (const row of rows) {
       const slot = { kind: "text", label: "x", ...row } as ExpectedOutput;

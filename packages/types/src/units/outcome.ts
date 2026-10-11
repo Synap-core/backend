@@ -291,7 +291,7 @@ export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
   /** Who yields it. */
   owner: "agent" | "human";
   verify: OutcomeVerify;
-  /** Absent on the criterion = true; a declared slot is always required. */
+  /** Absent on the criterion = true; a declared slot unless `optional`. */
   required: boolean;
   /** Delivered (slot stamped done) or proven (current verdict `pass`). */
   met: boolean;
@@ -502,7 +502,10 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
         : slot.owner === "human"
           ? "human"
           : "evidence",
-      required: criterion ? criterion.required !== false : true,
+      // An OPTIONAL slot never holds a gate; its folded criterion still can.
+      required: criterion
+        ? criterion.required !== false
+        : slot.optional !== true,
       met,
       metBy: !met ? null : delivered ? slotMetBy(slot) : "verdict",
       retired,

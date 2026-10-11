@@ -164,6 +164,55 @@ describe("deliverable state — the discriminating table", () => {
   });
 });
 
+/**
+ * OPTIONAL slots (`optional: true`, declared at birth). Each row names the
+ * rival it rules out:
+ *   O1. optional ignored — the unfilled slot reads owed ("needs you" / "working")
+ *   O2. optional folded into "done" — the unfilled slot reads delivered
+ *   O3. optional checked before `done` — a FILLED optional slot loses its mark
+ *   O4. `!optional` / truthy test — a non-`true` value (`"false"`) lets go
+ */
+describe("optional slots — owed by nobody, still produced when filled", () => {
+  it("an unfilled optional HUMAN slot is owed by nobody and reads not_started (O1, O2)", () => {
+    const slot = { owner: "human", optional: true };
+    expect(isDeliverableOutstanding(slot)).toBe(false);
+    expect(deliverableOwedBy(slot)).toBeNull();
+    expect(
+      resolveDeliverableState(slot, { sessionTerminal: false }).state
+    ).toBe("not_started");
+  });
+
+  it("an unfilled optional AGENT slot is not 'working' either (O1)", () => {
+    expect(deliverableOwedBy({ optional: true })).toBeNull();
+    expect(
+      resolveDeliverableState({ optional: true }, { sessionTerminal: false })
+        .state
+    ).toBe("not_started");
+  });
+
+  it("a FILLED optional slot reads done and counts as produced (O3)", () => {
+    const slot = { optional: true, status: "done" };
+    expect(
+      resolveDeliverableState(slot, { sessionTerminal: false }).state
+    ).toBe("done");
+    expect(tallyDeliverables([slot, { optional: true }, {}])).toEqual({
+      done: 1,
+      total: 2,
+      owedByYou: 0,
+    });
+  });
+
+  it("only a real `true` lets go — anything else is still owed (O4)", () => {
+    expect(
+      deliverableOwedBy({
+        owner: "human",
+        optional: "false" as unknown as boolean,
+      })
+    ).toBe("you");
+    expect(deliverableOwedBy({ owner: "human", optional: false })).toBe("you");
+  });
+});
+
 describe("tallyDeliverables", () => {
   it("counts done, done+owed, and the person's owed — a retired slot is in no count", () => {
     expect(

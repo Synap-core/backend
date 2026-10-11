@@ -4045,6 +4045,9 @@
                         "maxLength": 80,
                         "pattern": "^[a-z][a-z0-9_-]*$",
                         "description": "The relation slug written output → subject when the slot is filled (an existing relation type, e.g. made_for). Omit for none."
+                      },
+                      "optional": {
+                        "type": "boolean"
                       }
                     },
                     "required": ["kind", "label"],
@@ -4136,6 +4139,9 @@
                   "maxLength": 80,
                   "pattern": "^[a-z][a-z0-9_-]*$",
                   "description": "The relation slug written output → subject when the slot is filled (an existing relation type, e.g. made_for). Omit for none."
+                },
+                "optional": {
+                  "type": "boolean"
                 }
               },
               "required": ["kind", "label"],

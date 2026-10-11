@@ -40,9 +40,13 @@ export const OWED_SLOT_CLAUSES = [
   "slot->>'owner' = 'human'",
   "slot->>'status' IS DISTINCT FROM 'done'",
   "slot->>'retiredAt' IS NULL",
+  // An OPTIONAL slot is owed by nobody (`isDeliverableOutstanding`). `->>`
+  // renders a jsonb `true` as 'true'; only that lets go — absent, `false` or
+  // a string "false" stay owed, exactly as `optional !== true` reads them.
+  "slot->>'optional' IS DISTINCT FROM 'true'",
 ] as const;
 
-/** The three clauses as ONE fragment, over a row aliased `slot`. */
+/** The clauses as ONE fragment, over a row aliased `slot`. */
 export const owedSlotPredicateSql = drizzleSql.raw(
   OWED_SLOT_CLAUSES.join("\n      AND ")
 );

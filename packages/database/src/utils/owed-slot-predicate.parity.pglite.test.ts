@@ -83,6 +83,18 @@ const ROWS: ReadonlyArray<{ rulesOut: string; slot: Record<string, unknown> }> =
       rulesOut: "claim = delivered",
       slot: { owner: "human", claimedDone: true },
     },
+    {
+      rulesOut: "optional ignored (an unfilled optional slot reads owed)",
+      slot: { owner: "human", optional: true },
+    },
+    {
+      rulesOut: 'truthy optional (the string "false" lets go)',
+      slot: { owner: "human", optional: "false" },
+    },
+    {
+      rulesOut: "optional = false read as optional",
+      slot: { owner: "human", optional: false },
+    },
   ];
 
 let client: PGlite;
@@ -110,7 +122,7 @@ afterAll(async () => {
 
 describe("owed-slot SQL === deliverableOwedBy(slot) === 'you'", () => {
   it("non-vacuity: the table holds both answers and the clause set is real", async () => {
-    expect(OWED_SLOT_CLAUSES.length).toBe(3);
+    expect(OWED_SLOT_CLAUSES.length).toBe(4);
     const answers = ROWS.map(
       (r) => deliverableOwedBy(r.slot as never) === "you"
     );
