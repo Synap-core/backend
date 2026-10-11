@@ -2106,7 +2106,7 @@ export const tools = {
             followPlaybookId: {
               type: ["string", "null"],
               description:
-                "FOLLOW a playbook with this live session (optional) — the session BECOMES A RUN of it: it appears in that playbook's runs and leaves the plain work list. Its acceptance criteria and deliverables MERGE in (nothing you already have is overwritten or deleted); its title, goal and origin are left alone. Pass null to RELEASE the playbook — the merged criteria and deliverables STAY, and a release is refused while a stage gate is waiting. Find a playbook with synap_list_playbooks / synap_match_playbooks. The reply carries `follow` with what happened.",
+                "FOLLOW a playbook with this live session (optional) — the session appears in that playbook's runs and stays in the work list. Its acceptance criteria and deliverables MERGE in (nothing you already have is overwritten or deleted); its title, goal and origin are left alone. Pass null to RELEASE the playbook — the merged criteria and deliverables STAY, and a release is refused while a stage gate is waiting. Find a playbook with synap_list_playbooks / synap_match_playbooks. The reply carries `follow` with what happened.",
             },
             params: {
               type: "object",

@@ -159,10 +159,9 @@ export interface UpdateFocusSessionParams {
   /**
    * FOLLOW a playbook with this live session — or RELEASE it with `null`.
    *
-   * A followed session BECOMES A RUN of that playbook (`playbookId` is written,
-   * so `projectSessionKind` reclassifies it from `work` to `run`), joins the
-   * playbook's runs, and leaves the owner's default work lens. That consequence
-   * is intended and must be DISCLOSED by the surface before the act.
+   * A followed session joins that playbook's runs (`playbookId` is written and
+   * a `playbook_runs` row minted) and STAYS `work` in its owner's lens — follow
+   * ≠ run since 2026-10-12 (`session-kind.ts` `followedWorkWhere`).
    *
    * Applied by `followPlaybook` (`follow-playbook.ts`) — the ONE implementation
    * behind every door — AFTER the field write below, so the playbook's criteria

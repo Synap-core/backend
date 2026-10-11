@@ -2,13 +2,18 @@
  * FOLLOW A PLAYBOOK — bind a LIVE session to a playbook, or release it.
  *
  * ── What this is, and what it deliberately is not ───────────────────────────
- * A session that follows a playbook BECOMES A RUN of it: `playbookId` is
- * written, so `projectSessionKind` (`session-kind.ts`) reclassifies the row
- * from `work` to `run`, it joins that playbook's runs feed, and it leaves the
- * owner's default work lens. That is the founder's decision — "so we can easily
- * get every run of one playbook" — and it is the reason the UI contract
- * requires the consequence to be DISCLOSED before the act rather than explained
- * afterwards.
+ * A session that follows a playbook JOINS THAT PLAYBOOK'S RUNS and STAYS WORK.
+ * `playbookId` is written and a `playbook_runs` row is minted, so the session
+ * appears in the playbook's runs feed — the founder's reason for the 2026-09-20
+ * decision, "so we can easily get every run of one playbook", still holds.
+ *
+ * CHANGED 2026-10-12 (work model L5, follow ≠ run): until then the follow also
+ * reclassified the row from `work` to `run`, so it left its owner's work lens.
+ * It no longer does. `projectSessionKind` (`session-kind.ts`) reads the
+ * `followedVia` mark this door stamps and keeps the session `work`: a person
+ * opened it, and attaching a method does not make it a machine run. Only the
+ * kind changed; the runs-feed membership did not. `becameRun` is therefore
+ * always `false` now (kept on the wire for compatibility).
  *
  * It is NOT an instantiate. `instantiateSessionRow` (`playbook-lifecycle.ts`)
  * INSERTs a row built from the definition: it rebuilds `title`/`goal` from the
@@ -123,7 +128,10 @@ export interface FollowOutcome {
   playbookName: string | null;
   /** The stage this session is in. NULL unless the caller NAMED one. */
   stageKey: string | null;
-  /** Attach: `true` — the row is a run now. Detach: `false`. */
+  /**
+   * Always `false` since 2026-10-12: following no longer makes the row a run
+   * (see the header). Kept so older readers of the wire do not break.
+   */
   becameRun: boolean;
   mergedCriteria: number;
   mergedOutputs: number;
@@ -570,13 +578,13 @@ export async function followPlaybook(
       playbookId: playbook.id,
       playbookName: playbook.name,
       stageKey,
-      becameRun: true,
+      becameRun: false,
       mergedCriteria: addedCriteria,
       mergedOutputs: addedOutputs,
       runId,
       ...(blockGuidelines ? { blockGuidelines } : {}),
       note:
-        `This session is now a run of "${playbook.name}" — it appears in that playbook's runs and leaves the work list.` +
+        `This session now follows "${playbook.name}" — it appears in that playbook's runs and stays in the work list.` +
         (stageKey === null && validKeys.length > 0
           ? ` It is in no stage yet; name one with followStageKey (${validKeys.map((k) => `"${k}"`).join(", ")}).`
           : ""),
@@ -671,8 +679,8 @@ async function releasePlaybook(
       mergedCriteria: keptCriteria,
       mergedOutputs: keptOutputs,
       runId: run?.id ?? null,
-      note: `This session is work again, not a run${
-        playbook?.name ? ` of "${playbook.name}"` : ""
+      note: `This session no longer follows${
+        playbook?.name ? ` "${playbook.name}"` : " its playbook"
       }. Its ${keptCriteria} acceptance criteria and ${keptOutputs} deliverables STAY — they are the session's own now; delete any you do not want.`,
     },
   };

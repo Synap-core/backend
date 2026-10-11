@@ -4,8 +4,9 @@
  *
  * Real: `updateFocusSession` (the MCP door's service), `followPlaybook`,
  * `mergeExpectedOutputs` / `sanitizeDeclaredOutputs` / `mergeCriteria` /
- * `collectPlaybookCriteria`, `projectSessionKind` (the reclassification this
- * feature turns on), `createLinks`, the `playbook_runs` ledger write, and the
+ * `collectPlaybookCriteria`, `projectSessionKind` (a followed session stays
+ * `work` — follow ≠ run, 2026-10-12), `listRuns` (the playbook's runs feed),
+ * `createLinks`, the `playbook_runs` ledger write, and the
  * `focus_session/update` executor on the approved path. Tables are generated
  * from the Drizzle definitions.
  *
@@ -90,6 +91,7 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { updateFocusSession } from "../update-session.js";
 import { projectSessionKind } from "../session-kind.js";
+import { listRuns } from "../../runs/index.js";
 import { registerFocusSessionExecutors } from "../../../routers/proposals/executors/focus-session.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 
@@ -280,8 +282,8 @@ beforeEach(async () => {
   permSpy.mockImplementation(async () => ({}));
 });
 
-describe("attach: the session BECOMES A RUN of the playbook", () => {
-  it("writes playbookId, reclassifies work→run, and joins the playbook's runs", async () => {
+describe("attach: the session joins the playbook's runs and STAYS WORK", () => {
+  it("writes playbookId, stays `work`, and joins the playbook's runs feed", async () => {
     const sessionId = await seedSession();
     const playbookId = await seedPlaybook();
 
@@ -306,7 +308,7 @@ describe("attach: the session BECOMES A RUN of the playbook", () => {
       action: "attached",
       playbookId,
       playbookName: "Billing launch",
-      becameRun: true,
+      becameRun: false,
       stageKey: null,
     });
 
@@ -319,12 +321,20 @@ describe("attach: the session BECOMES A RUN of the playbook", () => {
         metadata: after.metadata,
         status: after.status,
       })
-    ).toBe("run");
+    ).toBe("work");
 
-    // It appears in the PLAYBOOK's runs — the founder's whole reason.
+    // It appears in the PLAYBOOK's runs — the founder's 09-20 reason, which
+    // follow ≠ run must keep true: the ledger row…
     const runs = await runsOf(playbookId);
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ session_id: sessionId, status: "running" });
+    // …and the runs FEED a playbook page reads, through its real reader.
+    const feed = await listRuns({
+      userId: USER,
+      flowType: "playbook",
+      flowId: playbookId,
+    });
+    expect(feed.map((r) => r.id)).toEqual([runs[0]!.id]);
 
     // …and carries the provenance edge an instantiate writes, so "every run of
     // this playbook" is ONE graph query however the run began.

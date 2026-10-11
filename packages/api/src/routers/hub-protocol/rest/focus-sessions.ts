@@ -354,8 +354,8 @@ const UpdateBodySchema = z.object({
   // the session's binary acceptance criteria (max 12).
   criteria: sessionCriteriaSchema.optional(),
   // FOLLOW a playbook with this live session; `null` RELEASES it. The session
-  // BECOMES A RUN of that playbook — it joins the playbook's runs and leaves
-  // the work lens. ONE implementation (`follow-playbook.ts`), shared with the
+  // joins that playbook's runs and STAYS in the work lens (follow ≠ run,
+  // 2026-10-12). ONE implementation (`follow-playbook.ts`), shared with the
   // tRPC and MCP doors and the approval executor.
   followPlaybookId: z.string().uuid().nullable().optional(),
   // Which stage the work is ALREADY in. Omitted ⇒ the stage is left alone
