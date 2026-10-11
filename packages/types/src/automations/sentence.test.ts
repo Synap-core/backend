@@ -662,6 +662,15 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
       },
     ],
     [
+      "id + project + track filing",
+      {
+        __playbookId: "66666666-6666-4666-8666-666666666666",
+        __projectId: "77777777-7777-4777-8777-777777777777",
+        __trackId: "88888888-8888-4888-8888-888888888888",
+        topic: "{{trigger.data.title}}",
+      },
+    ],
+    [
       "id + propose mode",
       {
         __playbookId: "55555555-5555-4555-8555-555555555555",
@@ -799,6 +808,28 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     expect(node!.data.paramsMapping).toEqual({
       topic: "{{trigger.data.title}}",
     });
+  });
+
+  it("filing keys land on data.projectId/trackId and never leak into params", () => {
+    const flow = toFlowDefinition([
+      {
+        type: null,
+        config: {
+          __nodeType: "playbook_run",
+          __playbookId: "11111111-1111-4111-8111-111111111111",
+          __projectId: "proj-1",
+          __trackId: "trk-1",
+          topic: "x",
+        },
+      },
+    ]);
+    const node = flow.nodes.find((n) => n.type === "playbook_run")!;
+    expect(node.data.projectId).toBe("proj-1");
+    expect(node.data.trackId).toBe("trk-1");
+    expect(node.data.paramsMapping).toEqual({ topic: "x" });
+    const back = flowToSentenceActions(flow)[0]!.config;
+    expect(back.__projectId).toBe("proj-1");
+    expect(back.__trackId).toBe("trk-1");
   });
 
   it("omits goalOverride entirely when the rule states no goal", () => {

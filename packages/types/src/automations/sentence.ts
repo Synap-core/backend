@@ -709,6 +709,15 @@ const PLAYBOOK_AGENT_TYPE_KEY = "__agentType";
  */
 const PLAYBOOK_GOAL_KEY = "__goal";
 /**
+ * FILING — the project / track the spawned session is born into. Bookkeeping
+ * (kept out of `paramsMapping`); lands on the node as `data.projectId` /
+ * `data.trackId`, which `executePlaybookRun` forwards to `runPlaybook`. Without
+ * these keys editing and re-saving a rule through the sentence grammar would
+ * silently drop the filing.
+ */
+const PLAYBOOK_PROJECT_KEY = "__projectId";
+const PLAYBOOK_TRACK_KEY = "__trackId";
+/**
  * MODE — what the `playbook_run` node materializes (`run` | `appointment` |
  * `propose`, `readPlaybookRunMode` in `./rule-run-policy`). The rule editor
  * writes `propose` here for "propose a playbook, I decide"; it lands on the
@@ -771,6 +780,8 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_NAME_KEY,
   PLAYBOOK_AGENT_TYPE_KEY,
   PLAYBOOK_GOAL_KEY,
+  PLAYBOOK_PROJECT_KEY,
+  PLAYBOOK_TRACK_KEY,
   PLAYBOOK_RUN_MODE_KEY,
 ];
 
@@ -1067,6 +1078,10 @@ function actionToFlowNode(
       data.agentType = cfg[PLAYBOOK_AGENT_TYPE_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_GOAL_KEY]))
       data.goalOverride = cfg[PLAYBOOK_GOAL_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_PROJECT_KEY]))
+      data.projectId = cfg[PLAYBOOK_PROJECT_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_TRACK_KEY]))
+      data.trackId = cfg[PLAYBOOK_TRACK_KEY];
     // Through the ONE normalizer: an unknown value is `run`, and `run` is
     // omitted, so only a real non-default mode reaches the node.
     const mode = readPlaybookRunMode(cfg[PLAYBOOK_RUN_MODE_KEY]);
@@ -1328,6 +1343,8 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       playbookName?: string;
       agentType?: string;
       goalOverride?: string;
+      projectId?: string;
+      trackId?: string;
       mode?: unknown;
       paramsMapping?: Record<string, unknown>;
     };
@@ -1344,6 +1361,9 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       config[PLAYBOOK_AGENT_TYPE_KEY] = pdata.agentType;
     if (nonEmptyStr(pdata.goalOverride))
       config[PLAYBOOK_GOAL_KEY] = pdata.goalOverride;
+    if (nonEmptyStr(pdata.projectId))
+      config[PLAYBOOK_PROJECT_KEY] = pdata.projectId;
+    if (nonEmptyStr(pdata.trackId)) config[PLAYBOOK_TRACK_KEY] = pdata.trackId;
     config[CAPABILITY_ACTION_KEY] =
       `playbook:${pdata.playbookId ?? pdata.playbookName ?? ""}`;
     return {
