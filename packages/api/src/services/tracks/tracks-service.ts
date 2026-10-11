@@ -86,6 +86,7 @@ import {
   readTrackStage,
   readTrackStageHistory,
   slotKeyBase,
+  CLOSED_TRACK_STATUSES,
   trackKpiJustReached,
   trackPausedBy,
   TRACK_DIRECTION_MAX,
@@ -172,6 +173,23 @@ type _SameStatuses = [ProjectTrackStatus] extends [TrackStatus]
   : never;
 const _sameStatuses: _SameStatuses = true;
 void _sameStatuses;
+
+// LIVE (`LIVE_PROJECT_TRACK_STATUSES`, @synap/database — the statuses that
+// hold a name, 0317's index predicate) and CLOSED (`CLOSED_TRACK_STATUSES`,
+// @synap-core/types/units — `isTrackClosed`) partition the statuses: their
+// union is every status and they share none. A status added to the enum and
+// classified in neither list, or in both, stops the build.
+type _LiveStatus = (typeof LIVE_PROJECT_TRACK_STATUSES)[number];
+type _ClosedStatus = (typeof CLOSED_TRACK_STATUSES)[number];
+type _LiveClosedPartition = [
+  Exclude<ProjectTrackStatus, _LiveStatus | _ClosedStatus>,
+] extends [never]
+  ? [Extract<_LiveStatus, _ClosedStatus>] extends [never]
+    ? true
+    : never
+  : never;
+const _liveClosedPartition: _LiveClosedPartition = true;
+void _liveClosedPartition;
 
 // The same pin for the KPI (0302): `ProjectTrackKpi` (@synap/database) and
 // `TrackKpi` (@synap-core/types/units) must describe ONE shape.
@@ -618,7 +636,7 @@ export type StartTrackResult = (
 
 /**
  * Start a method on a project. A LIVE track's identity on its project is its
- * NAME (0317, founder D1), and the name defaults to the method's: starting the
+ * NAME (0317), and the name defaults to the method's: starting the
  * same method again under the same (or no) name returns the live track as
  * `exists`, and nothing is filed or written; under another name it starts a
  * second track. Completed and archived tracks hold no name. A live track of
@@ -681,23 +699,14 @@ export async function startTrack(
 
   // IDEMPOTENT before governance: an agent asking for a track that already
   // runs under this name gets it back, rather than a proposal to create what
-  // exists. The same predicate as `uniq_project_tracks_live_name`.
-  const [live] = await db
-    .select()
-    .from(projectTracks)
-    .where(
-      and(
-        eq(projectTracks.projectId, project.id),
-        drizzleSql`lower(btrim(${projectTracks.name})) = lower(btrim(${trackName}))`,
-        inArray(projectTracks.status, [...LIVE_PROJECT_TRACK_STATUSES])
-      )
-    )
-    .limit(1);
+  // exists — read through the repository's live-name lookup, the index's
+  // predicate.
+  const live = await (await repo()).findLiveByName(project.id, trackName);
   if (live) {
-    assertNameHeldBySameMethod(live as ProjectTrack, playbook);
+    assertNameHeldBySameMethod(live, playbook);
     return {
       status: "exists",
-      track: live as ProjectTrack,
+      track: live,
       playbook: playbookRef,
       missingDomains,
     };

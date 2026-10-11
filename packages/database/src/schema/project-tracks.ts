@@ -162,7 +162,7 @@ export const projectTracks = pgTable(
   (table) => ({
     projectIdIdx: index("idx_project_tracks_project_id").on(table.projectId),
     playbookIdIdx: index("idx_project_tracks_playbook_id").on(table.playbookId),
-    // A LIVE track's identity on its project is its NAME (0317, founder D1):
+    // A LIVE track's identity on its project is its NAME (0317):
     // the same method may run twice under two names. Completed and archived
     // tracks hold nothing. Required at boot by `findMissingIndexes`.
     liveNameUniq: uniqueIndex("uniq_project_tracks_live_name")

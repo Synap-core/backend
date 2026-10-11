@@ -1,7 +1,7 @@
 -- 0317_project_tracks_live_name_unique.sql
 --
--- A project can run the same METHOD more than once (founder decision D1,
--- 2026-10-11): a track's identity on its project is its NAME, not its method.
+-- A project can run the same METHOD more than once: a track's identity on its
+-- project is its NAME, not its method.
 --
 --   before  uniq_project_tracks_live_method  (project_id, playbook_id)
 --           WHERE status <> 'archived' AND playbook_id IS NOT NULL

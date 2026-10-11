@@ -1263,7 +1263,7 @@ describe("0302 emergent stages", () => {
   });
 });
 
-describe("P0.3 — a step session belongs to the CLIENT that started it", () => {
+describe("a step session belongs to the CLIENT that started it", () => {
   let clientTrack = "";
   const sessionMeta = async (id: string) =>
     (

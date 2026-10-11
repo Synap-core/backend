@@ -141,22 +141,37 @@ export class TrackRepository extends BaseRepository<
       return { track: inserted as ProjectTrack, created: true };
     }
 
-    const [existing] = await this.db
+    const existing = await this.findLiveByName(data.projectId, data.name);
+    if (!existing) {
+      // Not the live-name index, so a primary-key collision (a replayed id).
+      throw new Error(
+        "Track insert conflicted but no live track holds its name"
+      );
+    }
+    return { track: existing as ProjectTrack, created: false };
+  }
+
+  /**
+   * The LIVE track holding `name` on the project, or `null`. The ONE spelling
+   * in TS of `uniq_project_tracks_live_name`'s predicate (0317): same project,
+   * `lower(btrim(name))`, status active/paused.
+   */
+  async findLiveByName(
+    projectId: string,
+    name: string
+  ): Promise<ProjectTrack | null> {
+    const [live] = await this.db
       .select()
       .from(projectTracks)
       .where(
         and(
-          eq(projectTracks.projectId, data.projectId),
-          sql`lower(btrim(${projectTracks.name})) = lower(btrim(${data.name}))`,
+          eq(projectTracks.projectId, projectId),
+          sql`lower(btrim(${projectTracks.name})) = lower(btrim(${name}))`,
           inArray(projectTracks.status, [...LIVE_PROJECT_TRACK_STATUSES])
         )
       )
       .limit(1);
-    if (!existing) {
-      // Not the live-name index, so a primary-key collision (a replayed id).
-      throw new Error("Track insert conflicted but no live track holds its name");
-    }
-    return { track: existing as ProjectTrack, created: false };
+    return (live as ProjectTrack | undefined) ?? null;
   }
 
   async create(data: CreateTrackInput, userId: string): Promise<ProjectTrack> {
