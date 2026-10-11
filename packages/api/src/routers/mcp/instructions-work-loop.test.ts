@@ -91,25 +91,32 @@ describe("MCP instructions teach the session work loop", () => {
     expect(text).toContain("your own chat may repeat them");
   });
 
-  it("teaches TRACKS at the door: a project's method is found, started and stepped through its own tools", () => {
+  it("teaches TRACKS at the door: a lasting goal is found, started, and worked with sessions filed into it", () => {
     // GRP agent-XP diagnosis 2026-09-28: the connector exposed every track
     // tool, but the always-on field never said "track" — so an agent asked to
-    // run a method on a project started a free session (or the superseded
-    // session-scoped twin) instead. The track path lives in the WORK reflex.
+    // pursue a project's goal started a free session instead. Work model W1
+    // (2026-10-11): a track is LASTING and needs no stages — work in it is
+    // `start_session` + `trackId`; the stage tools are legacy and never reach
+    // the always-on field.
     const work = text.split("\n").find((l) => l.startsWith("4. ")) ?? "";
     expect(work).toContain("TRACK");
     for (const token of [
       "`list_tracks`",
       "`start_track`",
-      "`start_stage_session`",
-      "`advance_track` only with the user",
+      "`start_session` + `trackId`",
     ]) {
       expect(work).toContain(token);
     }
-    // Find before start: an existing track is resumed, never duplicated.
+    // Find before start: an existing track is resumed, never duplicated…
     expect(work.indexOf("`list_tracks`")).toBeLessThan(
       work.indexOf("`start_track`")
     );
+    // …and work in it comes after starting it.
+    expect(work.indexOf("`start_track`")).toBeLessThan(
+      work.indexOf("`start_session` + `trackId`")
+    );
+    expect(work).not.toContain("`start_stage_session`");
+    expect(work).not.toContain("`advance_track`");
   });
 
   it("teaches a typed `ask` on the human-owned slot (not a bare 'I did this' button)", () => {

@@ -90,26 +90,23 @@ Walk this ladder instead. Every rung is a door that exists; do not invent one.
 
 A skill your plan creates IS resolvable in the same batch: the automation door looks a verb up by **skill name**, and skills materialize before automations. That is why a fact + a behaviour can ride in one proposal.
 
-### 2c. A new kind of work inside a project → a TRACK
+### 2c. A lasting goal inside a project → a TRACK
 
-A **track** runs a track template (a playbook with `scope: "project"`) inside ONE project; a project runs several (Business model, Content, Build). It pins its template version and has re-enterable steps (`stages`). A track owns no workspace: each step names the domain it works in (today its session lands in the project's home workspace). Work that repeats inside a track is an open-ended step plus a Rule that starts work into it each cycle. Definitions: `concepts`.
+A **track** is a lasting intent with a goal inside ONE project ("Grow the newsletter", "Win the first ten clients"); a project runs several. It holds a `direction` (one line, in the person's words) and, only if the person names a number, a `kpi` `{ label, unit?, target }`. It lasts: it is paused or archived, never "finished" for hitting a number. Work in it is ordinary sessions filed into it. Definitions: `concepts`.
 
-**Asked to work a method on a project** ("run the business-model track on X"): `synap_list_tracks` for the project → none? `synap_list_playbooks` (`scope: "project"` = track template) → `synap_start_track`; work each step with `synap_start_stage_session`; never `synap_advance_track` without the user.
+**Asked to pursue a goal in a project** ("keep growing the newsletter in Synap"): `synap_list_tracks` for the project (already running? resume it) → none? `synap_start_track` with `projectId`, a `name`, the `direction` and any `kpi` the person named — no method needed. Then work: `synap_start_session` with `trackId`, one session per sitting, as many as it takes.
 
-| The user needs…                               | Do this                                                                                                                                      |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| a **method** in an existing project           | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track`  |
-| no method fits                                | propose a track template: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once approved               |
-| one bounded piece of work in that method      | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`      |
-| the work of ONE stage (its goal is the brief) | `synap_start_stage_session` (`trackId`, optional `stageKey`) — idempotent, files the session at that stage with the stage's outputs/criteria |
-| new **kinds of things** no workspace owns     | a workspace (four-test, `workspace-design`) — never to represent a method                                                                    |
-| a new long-lived intent with its own gravity  | a project — never a twin project for a method of an existing one                                                                             |
+| The user needs…                                  | Do this                                                                                                                |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| a **lasting goal** in an existing project        | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `direction`, optional `kpi`)                     |
+| one piece of work toward it                      | a **session** born in the track: `synap_start_session` (or `synap_run_playbook` for a session template) with `trackId` |
+| a repeatable way to do that work                 | a session template (`synap_create_playbook`, default scope) run with `trackId` — not a track method                    |
+| new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a track                                               |
+| a new long-lived commitment with its own gravity | a project — never a twin project for a track of an existing one                                                        |
 
-**Offer, don't auto-start.** Advancing a track never starts work: `synap_advance_track` returns an `offer` (the entered stage's name, goal, suggested tasks). Show it — _"Build is next: build the MVP. Start a session for it?"_ — and call `synap_start_stage_session` only on a yes. A session is filed at the track's current stage unless you pass `trackStage`; the same goal at two stages is two sessions. The method's params (`params` on `synap_start_track`) are the track's onboarding: a required one nobody answered becomes a question owed to the person on the stage session, so stage 1 IS onboarding — never ask a separate questionnaire.
+**A track steers; its sessions verify.** Report progress with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it; never change the target yourself. While a track is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, archiving ends it. Pause, resume or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start tracks — start each one.
 
-**A track steers; its sessions verify.** Give it a `direction` (one line, may be unverifiable) and — only if the person names a number — a `kpi` `{ label, unit?, target }`, on `synap_start_track` or `synap_update_track`. Report progress with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person; never complete the track yourself. Work the method did not foresee is a new stage: `synap_add_track_stage` (name + goal), then `synap_advance_track` with the user. A stage's check gate passes when every closed session there met its required outcomes, so declare `outcomes` on the stage's session.
-
-Pause, resume (a check gate holds a track until at least one session filed at the stage being left is closed and passes its criteria, or until resumed), complete or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start its tracks yet — start each one.
+**Legacy: tracks with stages.** A track started from a track template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new track templates; a new track needs none.
 
 ### 3. Which skill to load next
 

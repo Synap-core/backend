@@ -38,7 +38,7 @@ When the session is done **and the work was a repeatable process** (not a one-of
 - Do this at the _end_, once the promised outputs are produced and verified.
 - Judge repeatability honestly: a bespoke, never-again investigation is not a template. "New-client onboarding" is a work template.
 - If it should **run on its own** ("a weekly competitor scan"), that is a **Rule** that starts the work each cycle (`create_rule`), not a template alone.
-- If the process spans **several steps over weeks**, each holding its own work, it is a **track template** (`create_playbook` with `scope: "project"`), run on a project with `start_track`.
+- If the work is a **lasting goal** worked over weeks, start a **track** for it on the project (`start_track`) and run this work template in it (`trackId`) — a track needs no template of its own.
 - Governed like the others — `promoted` (applied) or `proposed` (awaiting review) are both normal.
 
 ### The symmetry

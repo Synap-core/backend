@@ -50,7 +50,7 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 A project sometimes clearly needs something it lacks. Tell the two apart first:
 
-- **A method is missing** (the talk is about how to run sales, content, the business model… and `list_tracks` shows no track for it) → offer a **track**: _"This project isn't running a Content track yet — want me to start one?"_ Find a project-scoped playbook (`list_playbooks` / `match_playbooks`) and `start_track`.
+- **A lasting goal is missing** (the talk keeps returning to a goal — growing the newsletter, landing clients… — and `list_tracks` shows no track for it) → offer a **track**: _"This project has no track for the newsletter yet — want me to start one?"_ Then `start_track` with a `name` and `direction`; no method needed.
 - **A domain is missing** (new kinds of things must be recorded that no workspace owns — e.g. you are logging deals and there is no CRM) → offer a **workspace**, provisioned with the project lens active (see the `agent-os` skill). Never a workspace to stand for a method.
 
 Say it **once, at the end, in one line**. **Offer, don't auto-build.** One nudge per response, only when the gap is real — never a checklist of everything the project "could" have. **If the user has already declined it (this session or before), drop it — don't re-offer.**
