@@ -28467,7 +28467,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "table" | "map" | "all" | "bento" | "whiteboard" | "list" | "grid" | "flow" | "calendar" | "graph" | "sheet" | "gallery" | "kanban" | "matrix" | "masonry" | "gantt" | "timeline" | "branch_tree" | "mindmap" | "zoom_map" | undefined;
+				type?: "table" | "map" | "all" | "bento" | "whiteboard" | "list" | "grid" | "flow" | "calendar" | "graph" | "sheet" | "gallery" | "kanban" | "pipeline" | "matrix" | "masonry" | "gantt" | "timeline" | "branch_tree" | "mindmap" | "zoom_map" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -41258,6 +41258,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					days: number;
 				} | undefined;
 				firstN?: number | undefined;
+				column?: string | undefined;
+				cursor?: string | undefined;
+				limit?: number | undefined;
 			};
 			output: {
 				lifecycle: {
@@ -41296,7 +41299,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					days: number;
 					since: string;
 				};
+				nextCursor: string | null;
 			};
+			meta: object;
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				projectId?: string | undefined;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				profileSlug: string;
+				profileKind: "kind" | "role";
+				label: string;
+				live: number;
+				total: number;
+			}[];
 			meta: object;
 		}>;
 	}>>;
