@@ -8,7 +8,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { relationDefsRouter } from "../relation-defs.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 
 export const hubRelationDefsRouter = router({
@@ -47,7 +47,10 @@ export const hubRelationDefsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         (ctx as any).scopes ?? ["hub-protocol.write"],
-        input.workspaceId
+        input.workspaceId,
+        undefined,
+        undefined,
+        actingAgentUserId(ctx)
       );
       const caller = relationDefsRouter.createCaller(callerContext as any);
       return caller.create({

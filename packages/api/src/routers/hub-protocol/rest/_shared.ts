@@ -833,9 +833,13 @@ export async function getCaller(
     // it. Never read the raw header here: `c.get("sessionId")` is only set
     // after the ownership check.
     options?.sessionId ?? (c.get("sessionId") as string | undefined) ?? null,
-    // agentUserId — getCaller deliberately never sets it (reads ride the auth
-    // middleware's identity floor); pass undefined to reach the confinement args.
-    undefined,
+    // The authenticated agent, so a hub router's write is governed as the key's
+    // agent even when the body omits `agentUserId` (`actingAgentUserId`). Not for
+    // `is_internal`: the IS names the persona it runs in the body (B1), and its
+    // own key owner stays the request's acting agent as the fallback.
+    keyType === "is_internal"
+      ? undefined
+      : ((c.get("agentUserId") as string | undefined) ?? undefined),
     keyType,
     keyWorkspaceId
   );

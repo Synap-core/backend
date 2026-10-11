@@ -15,7 +15,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { config } from "@synap-core/core";
 import { db, eq, and, desc, isNull, sqlTemplate as sql } from "@synap/database";
@@ -518,7 +518,10 @@ export const signalsRouter = router({
         const callerContext = await createHubProtocolCallerContext(
           userId,
           ctx.scopes || [],
-          workspaceId
+          workspaceId,
+          undefined,
+          undefined,
+          actingAgentUserId(ctx)
         );
         const caller = regularEntitiesRouter.createCaller(callerContext);
 

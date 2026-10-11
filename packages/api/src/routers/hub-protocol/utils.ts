@@ -4,7 +4,7 @@
  * Shared utilities for creating tRPC callers to regular API endpoints
  */
 
-import { getDb } from "@synap/database";
+import { getActingAgentUserId, getDb } from "@synap/database";
 import type { Context } from "../../types/context.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
 
@@ -76,4 +76,23 @@ export async function createHubProtocolCallerContext(
   };
 
   return ctx;
+}
+
+/**
+ * The agent a hub write is governed as — the ONE resolution every hub-protocol
+ * tRPC router (and the automations create/trigger gate) uses instead of reading
+ * `input.agentUserId` (tripwire: `__tripwires__/hub-acting-agent-from-context`).
+ *
+ * The AUTHENTICATED agent wins: `ctx.agentUserId` is set by api-key-auth for an
+ * agent key (direct tRPC mount) and threaded by `getCaller` on the REST door. A
+ * body-supplied id may only attribute a write made with a key that is not
+ * itself an agent (the first-party IS naming the persona it runs). Last, the
+ * request's acting-agent scope entered by the key-auth doors, so omitting the
+ * field never turns an agent write into an ungoverned operator write.
+ */
+export function actingAgentUserId(
+  ctx: { agentUserId?: string | null },
+  requested?: string | null
+): string | undefined {
+  return ctx.agentUserId ?? requested ?? getActingAgentUserId() ?? undefined;
 }

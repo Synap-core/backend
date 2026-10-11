@@ -15,7 +15,7 @@ import {
   playbooksRouter as regularPlaybooksRouter,
   updateInputSchema,
 } from "../playbooks.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 
 export const hubPlaybooksRouter = router({
@@ -40,20 +40,21 @@ export const hubPlaybooksRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       assertMayActAs(ctx, input.userId);
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
         undefined,
         ctx.sourceMessageId ?? undefined,
         undefined,
-        input.agentUserId ?? undefined
+        agentUserId
       );
       const caller = regularPlaybooksRouter.createCaller(callerContext);
       return caller.promote({
         sessionId: input.sessionId,
         name: input.name,
         description: input.description,
-        agentUserId: input.agentUserId,
+        agentUserId,
         source: "intelligence",
         reasoning: input.reasoning,
       });
@@ -73,15 +74,16 @@ export const hubPlaybooksRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { userId, ...rest } = input;
       assertMayActAs(ctx, userId);
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       const callerContext = await createHubProtocolCallerContext(
         userId,
         ctx.scopes || [],
         undefined,
         ctx.sourceMessageId ?? undefined,
         undefined,
-        rest.agentUserId ?? undefined
+        agentUserId
       );
       const caller = regularPlaybooksRouter.createCaller(callerContext);
-      return caller.update(rest);
+      return caller.update({ ...rest, agentUserId });
     }),
 });

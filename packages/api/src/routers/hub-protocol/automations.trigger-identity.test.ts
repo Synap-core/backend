@@ -16,6 +16,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   triggerCalls: [] as Array<Record<string, unknown>>,
+  createCalls: [] as Array<Record<string, unknown>>,
+  ctxAgents: [] as Array<unknown>,
   triggerResult: { status: "triggered", runId: "run-1" } as Record<
     string,
     unknown
@@ -29,12 +31,20 @@ vi.mock("../automations.js", () => ({
         h.triggerCalls.push(input);
         return h.triggerResult;
       },
+      create: async (input: Record<string, unknown>) => {
+        h.createCalls.push(input);
+        return { id: "auto-1" };
+      },
     }),
   },
 }));
 
-vi.mock("./utils.js", () => ({
-  createHubProtocolCallerContext: async () => ({}),
+vi.mock("./utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils.js")>()),
+  createHubProtocolCallerContext: async (...args: unknown[]) => {
+    h.ctxAgents.push(args[5]);
+    return {};
+  },
 }));
 
 import { hubAutomationsRouter } from "./automations.js";
@@ -42,11 +52,13 @@ import type { Context } from "../../types/context.js";
 
 const AUTOMATION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const AGENT = "22222222-2222-4222-8222-222222222222";
+const OTHER_AGENT = "33333333-3333-4333-8333-333333333333";
 
-function caller() {
+function caller(agentUserId?: string) {
   return hubAutomationsRouter.createCaller({
     authenticated: true,
     userId: "user-1",
+    agentUserId,
     scopes: ["hub-protocol.write"],
     apiKeyId: "hub-protocol",
     apiKeyName: "Hub Protocol",
@@ -55,6 +67,8 @@ function caller() {
 
 beforeEach(() => {
   h.triggerCalls.length = 0;
+  h.createCalls.length = 0;
+  h.ctxAgents.length = 0;
   h.triggerResult = { status: "triggered", runId: "run-1" };
 });
 
@@ -104,5 +118,43 @@ describe("hubAutomationsRouter.triggerAutomation — agent identity threading", 
 
     expect(h.triggerCalls).toHaveLength(1);
     expect(h.triggerCalls[0]?.agentUserId).toBeUndefined();
+  });
+});
+
+describe("hub automations — the identity comes from the authenticated key", () => {
+  it("an agent key omitting agentUserId still triggers AS that agent", async () => {
+    await caller(AGENT).triggerAutomation({
+      userId: "user-1",
+      id: AUTOMATION_ID,
+    });
+
+    expect(h.triggerCalls[0]?.agentUserId).toBe(AGENT);
+    expect(h.ctxAgents).toEqual([AGENT]);
+  });
+
+  it("an agent key naming another agent is still governed as itself", async () => {
+    await caller(AGENT).triggerAutomation({
+      userId: "user-1",
+      id: AUTOMATION_ID,
+      agentUserId: OTHER_AGENT,
+    });
+
+    expect(h.triggerCalls[0]?.agentUserId).toBe(AGENT);
+  });
+
+  it("an agent key omitting agentUserId creates AS that agent (status cannot skip the gate)", async () => {
+    await caller(AGENT).createAutomation({
+      userId: "user-1",
+      name: "Planted",
+      triggerType: "event",
+      flowDefinition: { nodes: [], edges: [] },
+      status: "active",
+    });
+
+    expect(h.createCalls[0]).toMatchObject({
+      agentUserId: AGENT,
+      source: "agent",
+    });
+    expect(h.ctxAgents).toEqual([AGENT]);
   });
 });

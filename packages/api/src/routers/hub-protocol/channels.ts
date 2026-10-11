@@ -56,6 +56,7 @@ import type { OpenClawPlatform } from "@synap-core/types/events";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { assertMayActAs } from "./guard.js";
+import { actingAgentUserId } from "./utils.js";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -366,11 +367,12 @@ export const channelsRouter = router({
       checkHubRateLimit(ctx.apiKeyId, "sendExternalMessage");
 
       // Verify agentUserId is a member of the workspace (prevents cross-workspace posting)
-      if (input.agentUserId) {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      if (agentUserId) {
         await assertAgentInWorkspace(
-          input.agentUserId,
+          agentUserId,
           input.workspaceId,
-          ctx.userId ?? input.agentUserId
+          ctx.userId ?? agentUserId
         );
       }
 
@@ -512,11 +514,12 @@ export const channelsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       checkHubRateLimit(ctx.apiKeyId, "postToA2AIChannel");
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId)!;
       // Verify agentUserId is a member of the workspace
       await assertAgentInWorkspace(
-        input.agentUserId,
+        agentUserId,
         input.workspaceId,
-        ctx.userId ?? input.agentUserId
+        ctx.userId ?? agentUserId
       );
 
       // Verify channel exists and is A2AI type
@@ -543,7 +546,7 @@ export const channelsRouter = router({
       // Membership is read from channel_members (source of truth) so the
       // per-member capability flags govern A2AI writes like every other channel.
       const participants: string[] = await getA2AIMemberIds(input.channelId);
-      const isKnownParticipant = participants.includes(input.agentUserId);
+      const isKnownParticipant = participants.includes(agentUserId);
 
       // Enforce closed channel access
       if (visibility === "closed" && !isKnownParticipant) {
@@ -560,16 +563,16 @@ export const channelsRouter = router({
 
         const perm = await checkPermissionOrPropose({
           userId,
-          agentUserId: input.agentUserId,
+          agentUserId,
           workspaceId: input.workspaceId,
           subjectType: "a2ai",
           action: "join",
           data: {
             channelId: input.channelId,
-            agentUserId: input.agentUserId,
+            agentUserId,
             topic: channelMeta.topic,
           },
-          reasoning: `Agent ${input.agentUserId} wants to join A2AI channel "${channel.title ?? channelMeta.topic}"`,
+          reasoning: `Agent ${agentUserId} wants to join A2AI channel "${channel.title ?? channelMeta.topic}"`,
         });
 
         if ("proposalId" in perm) {
@@ -594,7 +597,7 @@ export const channelsRouter = router({
           .insert(channelMembers)
           .values({
             channelId: input.channelId,
-            memberId: input.agentUserId,
+            memberId: agentUserId,
             memberKind: ChannelMemberKind.AI_AGENT,
             role: ChannelMemberRole.MEMBER,
             addedBy: channel.userId,
@@ -622,7 +625,7 @@ export const channelsRouter = router({
         previousHash: "",
         hash,
         metadata: {
-          agentUserId: input.agentUserId,
+          agentUserId,
           source: "hub-protocol",
           ...(input.metadata ?? {}),
         } as Record<
@@ -645,7 +648,7 @@ export const channelsRouter = router({
         channelId: input.channelId,
         messageId,
         workspaceId: input.workspaceId,
-        data: { agentUserId: input.agentUserId },
+        data: { agentUserId },
       });
 
       // Emit — triggers Synap IS to respond
@@ -662,7 +665,7 @@ export const channelsRouter = router({
             timestamp: new Date(),
             previousHash: "",
             hash,
-            metadata: { agentUserId: input.agentUserId },
+            metadata: { agentUserId },
           },
           userId: channel.userId,
         },
@@ -687,7 +690,7 @@ export const channelsRouter = router({
           {
             channelId: input.channelId,
             messageId,
-            sourceAgentUserId: input.agentUserId,
+            sourceAgentUserId: agentUserId,
             reason: triggerSkipReason,
           }
         );
@@ -698,7 +701,7 @@ export const channelsRouter = router({
           channelId: input.channelId,
           userMessageId: messageId,
           content: input.content,
-          sourceUserId: input.agentUserId,
+          sourceUserId: agentUserId,
         });
         if (!triggerQueued) {
           triggerSkipReason = "intelligence_service_unresolved_or_queue_failed";
@@ -708,7 +711,7 @@ export const channelsRouter = router({
               channelId: input.channelId,
               messageId,
               workspaceId: channel.workspaceId,
-              sourceAgentUserId: input.agentUserId,
+              sourceAgentUserId: agentUserId,
               reason: triggerSkipReason,
             }
           );

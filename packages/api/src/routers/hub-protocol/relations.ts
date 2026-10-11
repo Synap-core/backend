@@ -14,7 +14,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { relationsRouter as regularRelationsRouter } from "../relations.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 
 export const hubRelationsRouter = router({
@@ -143,7 +143,7 @@ export const hubRelationsRouter = router({
         // governance membrane. relations.create now reads ctx.agentUserId.
         // (`reasoning` is still declared with no channel — relations.create has
         // no reasoning input and drops metadata before the gate.)
-        input.agentUserId ?? undefined
+        actingAgentUserId(ctx, input.agentUserId)
       );
       const caller = regularRelationsRouter.createCaller(callerContext);
 
@@ -181,7 +181,9 @@ export const hubRelationsRouter = router({
         input.userId,
         ctx.scopes || [],
         input.workspaceId,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        undefined,
+        actingAgentUserId(ctx, input.agentUserId)
       );
       const caller = regularRelationsRouter.createCaller(callerContext);
 

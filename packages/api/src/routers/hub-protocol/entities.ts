@@ -12,7 +12,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 
@@ -204,6 +204,7 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       // Use the real user (input.userId), not ctx.userId (API key owner).
       //
       // `ambientWorkspaceId` is the caller's governance/ambient workspace — it
@@ -225,7 +226,8 @@ export const entitiesRouter = router({
         ctx.scopes || [],
         ambientWorkspaceId,
         ctx.sourceMessageId ?? undefined,
-        ctx.sessionId ?? undefined
+        ctx.sessionId ?? undefined,
+        agentUserId
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -253,7 +255,7 @@ export const entitiesRouter = router({
         source: input.source ?? "intelligence",
         // Only pass agentUserId when explicitly provided — ctx.userId is the API key
         // owner ("system") which is not a valid UUID and would fail Zod validation.
-        agentUserId: input.agentUserId,
+        agentUserId,
         // Kind + Facets: the door owns facet-attach now (the ONE place) — it
         // attaches each role AFTER the entity materializes (or onto a dedup
         // match), through the governed `attachFacet` door, and reports a per-role
@@ -375,6 +377,7 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       // Use the real user (input.userId), not ctx.userId (API key owner)
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
@@ -382,7 +385,8 @@ export const entitiesRouter = router({
         ctx.scopes || [],
         ctx.workspaceId ?? undefined,
         ctx.sourceMessageId ?? undefined,
-        ctx.sessionId ?? undefined
+        ctx.sessionId ?? undefined,
+        agentUserId
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -395,7 +399,7 @@ export const entitiesRouter = router({
         reasoning: input.reasoning,
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
         source: "intelligence",
-        agentUserId: input.agentUserId,
+        agentUserId,
       });
 
       if (result.status === "proposed" && result.proposalId) {
@@ -460,6 +464,7 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       // Use the real user (input.userId), not ctx.userId (API key owner).
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
@@ -467,7 +472,8 @@ export const entitiesRouter = router({
         ctx.scopes || [],
         ctx.workspaceId ?? undefined,
         ctx.sourceMessageId ?? undefined,
-        ctx.sessionId ?? undefined
+        ctx.sessionId ?? undefined,
+        agentUserId
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -476,7 +482,7 @@ export const entitiesRouter = router({
         reasoning: input.reasoning,
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
         source: "intelligence",
-        agentUserId: input.agentUserId,
+        agentUserId,
       });
 
       // proposalId only exists on the proposed branch — narrow before access.
@@ -539,13 +545,15 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
         ctx.workspaceId ?? undefined,
         ctx.sourceMessageId ?? undefined,
-        ctx.sessionId ?? undefined
+        ctx.sessionId ?? undefined,
+        agentUserId
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -564,7 +572,7 @@ export const entitiesRouter = router({
         reasoning: input.reasoning,
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
         source: input.source ?? "intelligence",
-        agentUserId: input.agentUserId,
+        agentUserId,
       });
 
       return {
@@ -595,13 +603,15 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
         ctx.workspaceId ?? undefined,
         ctx.sourceMessageId ?? undefined,
-        ctx.sessionId ?? undefined
+        ctx.sessionId ?? undefined,
+        agentUserId
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -615,7 +625,7 @@ export const entitiesRouter = router({
         reasoning: input.reasoning,
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
         source: input.source ?? "intelligence",
-        agentUserId: input.agentUserId,
+        agentUserId,
       });
 
       return {
@@ -642,13 +652,15 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
         ctx.workspaceId ?? undefined,
         ctx.sourceMessageId ?? undefined,
-        ctx.sessionId ?? undefined
+        ctx.sessionId ?? undefined,
+        agentUserId
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -657,7 +669,7 @@ export const entitiesRouter = router({
         reasoning: input.reasoning,
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
         source: input.source ?? "intelligence",
-        agentUserId: input.agentUserId,
+        agentUserId,
       });
 
       return {

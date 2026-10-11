@@ -9,7 +9,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { automationsRouter as regularAutomationsRouter } from "../automations.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 
 export const hubAutomationsRouter = router({
@@ -39,11 +39,14 @@ export const hubAutomationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       assertMayActAs(ctx, input.userId);
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
         input.workspaceId ?? null,
-        input.sourceMessageId
+        input.sourceMessageId,
+        undefined,
+        agentUserId
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
 
@@ -57,8 +60,8 @@ export const hubAutomationsRouter = router({
         status: input.status,
         metadata: input.metadata,
         state: input.state,
-        agentUserId: input.agentUserId,
-        source: input.agentUserId ? "agent" : "intelligence",
+        agentUserId,
+        source: agentUserId ? "agent" : "intelligence",
       });
     }),
 
@@ -148,7 +151,10 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId ?? null
+        input.workspaceId ?? null,
+        undefined,
+        undefined,
+        actingAgentUserId(ctx)
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.update({
@@ -182,7 +188,10 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId ?? null
+        input.workspaceId ?? null,
+        undefined,
+        undefined,
+        actingAgentUserId(ctx)
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.activate({
@@ -208,7 +217,10 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId ?? null
+        input.workspaceId ?? null,
+        undefined,
+        undefined,
+        actingAgentUserId(ctx)
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.pause({
@@ -234,7 +246,10 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId ?? null
+        input.workspaceId ?? null,
+        undefined,
+        undefined,
+        actingAgentUserId(ctx)
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.delete({
@@ -260,17 +275,21 @@ export const hubAutomationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       assertMayActAs(ctx, input.userId);
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId ?? null
+        input.workspaceId ?? null,
+        undefined,
+        undefined,
+        agentUserId
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.trigger({
         id: input.id,
         workspaceId: input.workspaceId ?? null,
         payload: input.payload,
-        agentUserId: input.agentUserId,
+        agentUserId,
         reasoning: input.reasoning,
       });
     }),

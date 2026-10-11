@@ -14,7 +14,7 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { viewsRouter as regularViewsRouter } from "../views.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -137,6 +137,7 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       // The session handle rides on the caller context so `views.create`'s
       // governance gate resolves the caller's slot claim against the session
@@ -146,7 +147,8 @@ export const hubViewsRouter = router({
         ctx.scopes || [],
         input.workspaceId ?? null,
         ctx.sourceMessageId ?? undefined,
-        ctx.sessionId ?? undefined
+        ctx.sessionId ?? undefined,
+        agentUserId
       );
       const caller = regularViewsRouter.createCaller(callerContext);
 
@@ -159,7 +161,7 @@ export const hubViewsRouter = router({
         metadata: input.metadata,
         initialContent: input.initialContent,
         source: "intelligence",
-        agentUserId: input.agentUserId,
+        agentUserId,
         reasoning: input.reasoning,
         expectedLabel: input.expectedLabel,
         ...(input.projectId ? { projectId: input.projectId } : {}),
@@ -188,7 +190,7 @@ export const hubViewsRouter = router({
           kind: "view",
           refId: createdView.id,
           title: createdView.name ?? input.name,
-          agentUserId: input.agentUserId,
+          agentUserId,
           expectedLabel: input.expectedLabel,
         });
       }
@@ -215,6 +217,7 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const db = await getDb();
@@ -242,7 +245,7 @@ export const hubViewsRouter = router({
       // Governance check — view.update is NOT in auto-approve whitelist
       const perm = await checkPermissionOrPropose({
         userId,
-        agentUserId: input.agentUserId,
+        agentUserId,
         workspaceId,
         subjectType: "view",
         action: "update",
@@ -281,7 +284,9 @@ export const hubViewsRouter = router({
         userId,
         ctx.scopes || [],
         workspaceId,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        undefined,
+        agentUserId
       );
       const caller = regularViewsRouter.createCaller(callerContext);
 
@@ -317,6 +322,7 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       const db = await getDb();
       const view = await db.query.views.findFirst({
@@ -333,7 +339,7 @@ export const hubViewsRouter = router({
       // Permission check — bento.arrange is in DEFAULT_AUTO_APPROVE
       const perm = await checkPermissionOrPropose({
         userId,
-        agentUserId: input.agentUserId,
+        agentUserId,
         workspaceId: input.workspaceId,
         subjectType: "bento",
         action: "arrange",
@@ -446,6 +452,7 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const db = await getDb();
@@ -515,7 +522,7 @@ export const hubViewsRouter = router({
       // Governance check — view.updateContent is NOT in auto-approve whitelist
       const perm = await checkPermissionOrPropose({
         userId,
-        agentUserId: input.agentUserId,
+        agentUserId,
         workspaceId,
         subjectType: "view",
         action: "updateContent",
@@ -557,7 +564,9 @@ export const hubViewsRouter = router({
         userId,
         ctx.scopes || [],
         workspaceId,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        undefined,
+        agentUserId
       );
       const caller = regularViewsRouter.createCaller(callerContext);
 
@@ -584,7 +593,7 @@ export const hubViewsRouter = router({
           kind: "view",
           refId: result.viewId,
           title: `${view.name} (content update)`,
-          agentUserId: input.agentUserId,
+          agentUserId,
           expectedLabel: input.expectedLabel,
         });
       }

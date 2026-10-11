@@ -21,7 +21,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { profilesRouter as regularProfilesRouter } from "../profiles.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
@@ -143,7 +143,9 @@ export const migrationRouter = router({
         userId,
         ctx.scopes || [],
         workspaceId,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        undefined,
+        actingAgentUserId(ctx)
       );
 
       let profilesCreated = 0;

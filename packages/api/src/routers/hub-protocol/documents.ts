@@ -13,7 +13,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { documentsRouter as regularDocumentsRouter } from "../documents.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import {
   db,
   normalizeDocumentType,
@@ -112,8 +112,8 @@ export const documentsRouter = router({
       if (decodedTitle !== input.title) input.title = decodedTitle;
       const userId = ctx.userId!;
       const documentId = randomUUID();
-      // Prefer explicit agentUserId from request; API key owner is a system account.
-      const agentUserId = input.agentUserId ?? userId;
+      const actingAgent = actingAgentUserId(ctx, input.agentUserId);
+      const agentUserId = actingAgent ?? userId;
       const correlationId = randomUUID();
 
       // ── ACK INTEGRITY (C1) — content-hash idempotency ─────────────────────────
@@ -171,7 +171,7 @@ export const documentsRouter = router({
         userId: agentUserId,
         workspaceId: input.workspaceId ?? undefined,
         correlationId,
-        source: input.agentUserId ? "intelligence" : "api",
+        source: actingAgent ? "intelligence" : "api",
         data: {
           title: input.title,
           type: input.type,
@@ -277,7 +277,7 @@ export const documentsRouter = router({
             workspaceId: input.workspaceId ?? null,
             createdByKind: "ai_agent",
             createdByUserId: userId,
-            agentUserId: input.agentUserId,
+            agentUserId: actingAgent,
             correlationId,
           },
           userId
@@ -301,7 +301,7 @@ export const documentsRouter = router({
           kind: "document",
           refId: created.id,
           title: created.title,
-          agentUserId: input.agentUserId,
+          agentUserId: actingAgent,
           expectedLabel: input.expectedLabel,
         });
         // Undo record — the created id, read off the row (see the helper).
@@ -336,7 +336,7 @@ export const documentsRouter = router({
         provenance: {
           createdByKind: "ai_agent",
           createdByUserId: userId,
-          agentUserId: input.agentUserId,
+          agentUserId: actingAgent,
           correlationId,
         },
       });
@@ -356,7 +356,7 @@ export const documentsRouter = router({
         kind: "document",
         refId: created.id,
         title: created.title,
-        agentUserId: input.agentUserId,
+        agentUserId: actingAgent,
         expectedLabel: input.expectedLabel,
       });
       // Undo record for the auto-approved create: the id of the row written,
@@ -439,8 +439,7 @@ export const documentsRouter = router({
       applyDocumentPatch({
         userId: ctx.userId!,
         // The authenticated agent key's identity when the body names none.
-        agentUserId:
-          input.agentUserId ?? (ctx.agentUserId as string | undefined) ?? null,
+        agentUserId: actingAgentUserId(ctx, input.agentUserId) ?? null,
         documentId: input.documentId,
         ...(input.baseRevision !== undefined
           ? { baseRevision: input.baseRevision }
@@ -483,8 +482,7 @@ export const documentsRouter = router({
         (await loadPatchDocument(input.documentId)).contentRevision;
       return applyDocumentPatch({
         userId,
-        agentUserId:
-          input.agentUserId ?? (ctx.agentUserId as string | undefined) ?? null,
+        agentUserId: actingAgentUserId(ctx, input.agentUserId) ?? null,
         documentId: input.documentId,
         baseRevision,
         ops: [{ op: "replace_all", content: input.proposedContent }],
@@ -530,8 +528,7 @@ export const documentsRouter = router({
         userId: ctx.userId!,
         // The authenticated agent key's identity when the body names none — a
         // body-only agent id is how agent writes previously ran as the human.
-        agentUserId:
-          input.agentUserId ?? (ctx.agentUserId as string | undefined) ?? null,
+        agentUserId: actingAgentUserId(ctx, input.agentUserId) ?? null,
         sessionId: input.sessionId,
         ambientSessionId: ctx.sessionId ?? null,
         sectionId: input.sectionId,

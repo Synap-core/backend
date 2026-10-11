@@ -341,7 +341,7 @@ export function registerSessionsRoutes(app: HubHono): void {
         sessionId,
         ...body,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err, sessionId }, "sessions.update failed");
       return c.json(

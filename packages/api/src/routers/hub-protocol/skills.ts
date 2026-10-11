@@ -9,7 +9,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { skillsRouter as regularSkillsRouter } from "../skills.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 
 export const skillsRouter = router({
@@ -132,10 +132,15 @@ export const skillsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
-        ctx.scopes || []
+        ctx.scopes || [],
+        undefined,
+        undefined,
+        undefined,
+        agentUserId
       );
       const caller = regularSkillsRouter.createCaller(callerContext);
 
@@ -146,7 +151,7 @@ export const skillsRouter = router({
         parameters: input.parameters,
         category: input.category,
         workspaceId: input.workspaceId,
-        agentUserId: input.agentUserId,
+        agentUserId,
       });
 
       return { id: result.id };

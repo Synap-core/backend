@@ -24,6 +24,7 @@ import { TRPCError } from "@trpc/server";
 // SECURITY: `compileWidgetSource` is UN-ROUTED from this door — its only caller
 // was the `native` branch below. Kept on disk at utils/widget-compiler.ts.
 import { assertMayActAs } from "./guard.js";
+import { actingAgentUserId } from "./utils.js";
 import { listRenderables } from "../../services/cells/renderables.js";
 import {
   assertMayWriteNamespacedTypeKey,
@@ -127,6 +128,7 @@ export const hubWidgetDefinitionsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       // Identity floor: `input.userId` is the acting identity fed to
       // checkPermissionOrPropose — a hub PAT may act only as its own owner.
       assertMayActAs(ctx, input.userId);
@@ -146,7 +148,7 @@ export const hubWidgetDefinitionsRouter = router({
       // Governance check — widget.register is NOT auto-approved
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
-        agentUserId: input.agentUserId,
+        agentUserId,
         workspaceId: input.workspaceId ?? undefined,
         subjectType: "widget",
         action: "register",

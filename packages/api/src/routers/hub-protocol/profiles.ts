@@ -41,7 +41,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { profilesRouter as regularProfilesRouter } from "../profiles.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
@@ -196,12 +196,15 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       assertMayActAs(ctx, input.userId);
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
         input.workspaceId,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        undefined,
+        agentUserId
       );
       const caller = regularProfilesRouter.createCaller(callerContext);
 
@@ -214,7 +217,7 @@ export const hubProfilesRouter = router({
         reasoning: input.reasoning,
         scope: "workspace",
         source: "intelligence",
-        agentUserId: input.agentUserId,
+        agentUserId,
         ...(input.profileKind ? { profileKind: input.profileKind } : {}),
         ...(input.applicableKinds
           ? { applicableKinds: input.applicableKinds }
@@ -353,6 +356,7 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       // Identity floor: `input.userId` is the acting identity fed to
       // checkPermissionOrPropose and the setProfileRenderer write — a hub PAT may
       // act only as its own owner.
@@ -379,7 +383,7 @@ export const hubProfilesRouter = router({
 
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
-        agentUserId: input.agentUserId,
+        agentUserId,
         workspaceId,
         subjectType: "profile",
         action: "renderer.set",
@@ -472,6 +476,7 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       // Identity floor: `input.userId` is the acting identity fed to
       // checkPermissionOrPropose and the createAndLinkPropertyDef write
       // (auto-approved → a live schema write into the target workspace) — a hub
@@ -490,7 +495,7 @@ export const hubProfilesRouter = router({
 
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
-        agentUserId: input.agentUserId,
+        agentUserId,
         workspaceId: input.workspaceId,
         subjectType: "property_def",
         action: "create",
@@ -619,6 +624,7 @@ export const hubProfilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       // Identity floor — same rule as createPropertyDef: a hub PAT may act
       // only as its own owner.
       assertMayActAs(ctx, input.userId);
@@ -667,7 +673,7 @@ export const hubProfilesRouter = router({
 
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
-        agentUserId: input.agentUserId,
+        agentUserId,
         workspaceId: input.workspaceId,
         subjectType: "property_def",
         action: "update",

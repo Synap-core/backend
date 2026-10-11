@@ -24,6 +24,7 @@ import {
 } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { assertMayActAs } from "./guard.js";
+import { actingAgentUserId } from "./utils.js";
 
 const relationshipTypeEnum = z.enum([
   "used_as_context",
@@ -73,7 +74,7 @@ export const linkingRouter = router({
       }
 
       const workspaceId = channel.workspaceId ?? undefined;
-      const agentUserId = input.agentUserId;
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
 
       // Governance: "context.link" is auto-approved by default whitelist.
       // Still verifies workspace membership for the acting user.
@@ -171,7 +172,7 @@ export const linkingRouter = router({
       }
 
       const workspaceId = channel.workspaceId ?? undefined;
-      const agentUserId = input.agentUserId;
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
 
       // Governance: "context.link" is auto-approved by default whitelist.
       // Still verifies workspace membership for the acting user.

@@ -110,6 +110,7 @@ import {
   selectRunChannelBranch,
 } from "@synap/jobs/utils/post-run-summary.js";
 import { subjectEntityIdFromPayload } from "@synap/jobs/utils/run-subject.js";
+import { actingAgentUserId } from "./hub-protocol/utils.js";
 import { TRPCError } from "@trpc/server";
 import {
   decodeDefinitionCursor,
@@ -2326,7 +2327,10 @@ export const automationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
-      const createdBy = input.agentUserId ?? ctx.userId!;
+      // The authenticated agent governs, never only the input (an agent key
+      // omitting `agentUserId` must still propose / be bounded by its grant).
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      const createdBy = agentUserId ?? ctx.userId!;
 
       await prepareAutomationForMaterialization(database, input, createdBy);
 
@@ -2339,10 +2343,10 @@ export const automationsRouter = router({
       // install would otherwise be gated as AI and routed to a proposal. Approved
       // AI creates are materialized separately with their original provenance;
       // RBAC is still enforced on the operator path, which never proposes.
-      if (input.agentUserId) {
+      if (agentUserId) {
         const perm = await checkPermissionOrPropose({
           userId: ctx.userId,
-          agentUserId: input.agentUserId,
+          agentUserId,
           workspaceId: input.workspaceId ?? null,
           subjectType: "automation",
           action: "create",
@@ -2354,7 +2358,7 @@ export const automationsRouter = router({
           // Widened (object-proposal manifest W1): carry the FULL create input so
           // an approved proposal materializes a real automation via
           // automationsRouter.create — not just a labelled shell. This branch is
-          // the AI/agent-only governance path (guarded by `if (input.agentUserId)`
+          // the AI/agent-only governance path (guarded by `if (agentUserId)`
           // above), and only the PROPOSED (pending) row's stored data changes; the
           // operator direct-create insert below is byte-untouched.
           data: {
@@ -2408,7 +2412,7 @@ export const automationsRouter = router({
       // through to a firing state, so force draft regardless of the
       // requested `status`. The operator's own direct create (no
       // agentUserId) keeps its requested status untouched.
-      const forceDraft = Boolean(input.agentUserId);
+      const forceDraft = Boolean(agentUserId);
       const automationId = await insertAutomationAfterGovernance(
         database,
         input,
@@ -3071,7 +3075,7 @@ export const automationsRouter = router({
       // UI/CLI "run now" to a proposal. RBAC for the operator path is unchanged
       // (assertWorkspaceWrite above); the agent path additionally runs the gate,
       // which owns the agent's own RBAC + propose/execute decision.
-      const agentUserId = input.agentUserId ?? ctx.agentUserId ?? undefined;
+      const agentUserId = actingAgentUserId(ctx, input.agentUserId);
 
       // ── An AGENT may not run a lapsed rule's behaviour, even by proposal ──
       // The matcher and the cron scheduler already refuse to FIRE an expired

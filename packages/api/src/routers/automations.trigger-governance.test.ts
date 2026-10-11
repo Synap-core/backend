@@ -76,10 +76,12 @@ vi.mock("@synap/jobs", () => ({
   }),
 }));
 
+import { runWithActingAgent } from "@synap/database";
 import { automationsRouter } from "./automations.js";
 import type { Context } from "../types/context.js";
 
 const AGENT = "22222222-2222-4222-8222-222222222222";
+const OTHER_AGENT = "33333333-3333-4333-8333-333333333333";
 
 function caller(ctx: Partial<Context> = {}) {
   return automationsRouter.createCaller({
@@ -146,6 +148,26 @@ describe("automations.trigger — agent caller is governed", () => {
 
     expect(h.gateCalls).toHaveLength(1);
     expect(h.gateCalls[0]).toMatchObject({ agentUserId: AGENT });
+  });
+
+  it("the authenticated agent wins over an input naming another agent", async () => {
+    await caller({ agentUserId: AGENT }).trigger({
+      id: h.automation.id as string,
+      agentUserId: OTHER_AGENT,
+    });
+
+    expect(h.gateCalls).toHaveLength(1);
+    expect(h.gateCalls[0]).toMatchObject({ agentUserId: AGENT });
+  });
+
+  it("an agent key's request scope governs even when ctx and input omit it", async () => {
+    const result = await runWithActingAgent(AGENT, () =>
+      caller().trigger({ id: h.automation.id as string })
+    );
+
+    expect(h.gateCalls).toHaveLength(1);
+    expect(h.gateCalls[0]).toMatchObject({ agentUserId: AGENT });
+    expect(result).toMatchObject({ status: "triggered" });
   });
 
   it("hard-denies (FORBIDDEN) without enqueuing when the gate denies", async () => {

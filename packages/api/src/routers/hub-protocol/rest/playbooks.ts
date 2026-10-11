@@ -465,7 +465,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         // It was dropped here, so no Hub caller could make a playbook a method.
         scope: body.scope as "session" | "project" | undefined,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "playbooks.update failed");
       return c.json(
